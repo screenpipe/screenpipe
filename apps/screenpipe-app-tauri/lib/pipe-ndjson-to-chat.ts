@@ -177,6 +177,20 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
           pendingLastTs = msgTs;
         }
         const toolBlocks = Array.isArray(content) ? extractToolCalls(content, i) : [];
+        // Extract thinking blocks from the content array so their
+        // duration is absorbed by collapseHiddenWorkGroups
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === "thinking") {
+              pendingBlocks.push({
+                type: "thinking",
+                text: block.thinking || block.text || "",
+                isThinking: false,
+                durationMs: undefined,
+              });
+            }
+          }
+        }
         if (text.trim()) {
           pendingBlocks.push({ type: "text", text: text.trim() });
           pendingTexts.push(text.trim());

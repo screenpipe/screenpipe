@@ -212,6 +212,12 @@ export function StandaloneChat({
     } else {
       activePresetRef.current = preset;
       setActivePreset(preset);
+      // Persist to localStorage so the preset survives full navigation
+      // (settings → home). Only for direct user selection, not the
+      // lifecycle fallback which uses the function form.
+      if (preset?.id) {
+        try { localStorage.setItem("chat-active-preset-id", preset.id); } catch {}
+      }
     }
   }, []);
   const isStreamingRef = useRef(false);

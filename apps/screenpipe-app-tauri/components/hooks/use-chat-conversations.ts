@@ -488,7 +488,20 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // during startNewConversation (setConversationId(null) → … →
     // setConversationId(newSid)); without the fallback the save would mint
     // a fresh uuid and duplicate the conversation.
-    const convId = conversationId || piSessionIdRef.current || crypto.randomUUID();
+    //
+    // Never mint a fresh id here (issue #4719). If `conversationId` and the
+    // ref are both transiently empty (the null-id window inside
+    // startNewConversation), fall back to the store's `currentId` — the last
+    // stable id the panel published — and if even that is missing, SKIP the
+    // save rather than invent one. A `crypto.randomUUID()` fallback would
+    // persist a phantom twin file for what is really one conversation, which
+    // is exactly the cross-window duplicate this issue tracks.
+    const { useChatStore } = await import("@/lib/stores/chat-store");
+    const convId =
+      conversationId ||
+      piSessionIdRef.current ||
+      useChatStore.getState().currentId;
+    if (!convId) return;
 
     // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");

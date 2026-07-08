@@ -171,6 +171,20 @@ describe("AppEntitlementGate", () => {
     await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
   });
 
+  it("does not trust cloud_subscribed when app entitlement is explicitly denied", async () => {
+    mocks.state.user = baseUser({
+      cloud_subscribed: true,
+      app_entitled: false,
+      subscription_plan: "none",
+      entitlement: null,
+    });
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByText(/subscription required/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
+  });
+
   it("renders the app for a fresh entitled account without stopping capture", () => {
     mocks.state.user = baseUser({
       app_entitled: true,

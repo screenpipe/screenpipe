@@ -973,12 +973,6 @@ pub struct SettingsStore {
     #[serde(rename = "translucentSidebar", default)]
     pub translucent_sidebar: bool,
 
-    /// When true (default), hide model "thinking" reasoning blocks in the chat
-    /// transcript. The model still emits them server-side; we just don't
-    /// render the collapsible block in the UI.
-    #[serde(rename = "hideThinkingBlocks", default = "default_true")]
-    pub hide_thinking_blocks: bool,
-
     /// UI theme: "light", "dark", or "system".
     #[serde(rename = "uiTheme", default = "default_ui_theme")]
     pub ui_theme: String,
@@ -1403,7 +1397,6 @@ Rules:
             translucent_sidebar: true,
             #[cfg(not(target_os = "macos"))]
             translucent_sidebar: false,
-            hide_thinking_blocks: true,
             ui_theme: "system".to_string(),
             minimize_to_tray_on_close: false,
             extra: std::collections::HashMap::new(),
@@ -1590,54 +1583,29 @@ impl SettingsStore {
             return true;
         }
 
-        // Legacy cloud subscribers keep working during rollout.
-        if self.user.cloud_subscribed == Some(true) {
-            return true;
-        }
+        self.has_current_app_entitlement()
+    }
 
+    fn has_current_app_entitlement(&self) -> bool {
         let Some(entitlement) = self.user.entitlement.as_ref() else {
             return false;
         };
 
-        let has_app_feature =
-            self.user.app_entitled == Some(true) || entitlement_feature(entitlement, "app");
+        let has_app_feature = self.user.app_entitled != Some(false)
+            && (self.user.app_entitled == Some(true) || entitlement_feature(entitlement, "app"));
         if !has_app_feature {
             return false;
         }
 
-        // Perpetual (lifetime) grants and server-issued offline grace windows stay
-        // valid even when the cached entitlement is stale. A local-first app must
-        // not stop recording just because it could not reach the server for a few
-        // days.
         if entitlement_is_lifetime(entitlement) || entitlement_has_future_grace(entitlement) {
             return true;
         }
 
-        // Otherwise require a recent check confirming the plan is still active.
         entitlement_checked_recently(entitlement) && entitlement_active(entitlement)
     }
 
     fn cloud_transcription_entitled(&self) -> bool {
-        // Legacy cloud subscribers keep working during the paid-plan rollout.
-        if self.user.cloud_subscribed == Some(true) {
-            return true;
-        }
-
-        let Some(entitlement) = self.user.entitlement.as_ref() else {
-            return false;
-        };
-
-        let has_app_feature =
-            self.user.app_entitled == Some(true) || entitlement_feature(entitlement, "app");
-        if !has_app_feature {
-            return false;
-        }
-
-        if entitlement_is_lifetime(entitlement) || entitlement_has_future_grace(entitlement) {
-            return true;
-        }
-
-        entitlement_checked_recently(entitlement) && entitlement_active(entitlement)
+        self.has_current_app_entitlement()
     }
 
     pub fn audio_engine_resolution(&self) -> AudioEngineResolution {
@@ -2052,6 +2020,50 @@ mod tests {
     }
 
     #[test]
+    fn stale_legacy_cloud_subscribed_does_not_count_as_app_entitled() {
+        let mut store = SettingsStore::default();
+        store.user.token = Some("token".to_string());
+        store.user.cloud_subscribed = Some(true);
+        store.user.entitlement = None;
+
+        assert!(!store.has_current_app_entitlement());
+    }
+
+    #[test]
+    fn fresh_app_entitlement_counts_as_app_entitled() {
+        let mut store = SettingsStore::default();
+        store.user.token = Some("token".to_string());
+        store.user.cloud_subscribed = Some(false);
+        store.user.app_entitled = Some(true);
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "standard",
+            "source": "subscription",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true, "cloud": false }
+        }));
+
+        assert!(store.has_current_app_entitlement());
+    }
+
+    #[test]
+    fn explicit_app_entitlement_denial_overrides_cached_entitlement_blob() {
+        let mut store = SettingsStore::default();
+        store.user.token = Some("token".to_string());
+        store.user.cloud_subscribed = Some(true);
+        store.user.app_entitled = Some(false);
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "pro",
+            "source": "subscription",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true, "cloud": true }
+        }));
+
+        assert!(!store.has_current_app_entitlement());
+    }
+
+    #[test]
     fn screenpipe_cloud_falls_back_when_not_logged_in() {
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
@@ -2108,7 +2120,7 @@ mod tests {
     }
 
     #[test]
-    fn screenpipe_cloud_stays_active_for_subscribed_users() {
+    fn screenpipe_cloud_falls_back_for_stale_legacy_cloud_subscribed_without_entitlement() {
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
         store.user.token = Some("token".to_string());
@@ -2116,8 +2128,11 @@ mod tests {
 
         let resolution = store.audio_engine_resolution();
 
-        assert_eq!(resolution.active, "screenpipe-cloud");
-        assert_eq!(resolution.fallback_reason, None);
+        assert_eq!(resolution.active, FALLBACK_ENGINE);
+        assert_eq!(
+            resolution.fallback_reason,
+            Some(AudioEngineFallbackReason::NotSubscribed)
+        );
     }
 
     #[test]

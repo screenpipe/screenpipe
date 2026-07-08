@@ -36,6 +36,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { localFetch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 type RetentionMode = "media" | "lean" | "all";
 type EffectiveMode = "off" | RetentionMode;
@@ -63,6 +64,15 @@ const RECENT_DELETE_OPTIONS = [
   { minutes: 60, label: "last hour" },
 ];
 
+const COMPACT_FREE_SPACE_MULTIPLIER = 2;
+const COMPACT_FREE_SPACE_HEADROOM = 512 * 1024 * 1024;
+
+interface RetentionSettingsProps {
+  availableBytes?: number;
+  databaseBytes?: number;
+  onStorageChanged?: () => void;
+}
+
 function formatRelativeTime(isoString: string): string {
   const date = new Date(isoString);
   const now = new Date();
@@ -84,7 +94,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-export function RetentionSettings() {
+export function RetentionSettings({
+  availableBytes,
+  databaseBytes,
+  onStorageChanged,
+}: RetentionSettingsProps) {
   const { settings, updateSettings } = useSettings();
   const { toast } = useToast();
   const [status, setStatus] = useState<RetentionStatus | null>(null);
@@ -105,6 +119,15 @@ export function RetentionSettings() {
   const mode: RetentionMode =
     (settings.localRetentionMode as RetentionMode | undefined) ?? "media";
   const effective: EffectiveMode = enabled ? mode : "off";
+  const compactRequiredBytes =
+    databaseBytes && databaseBytes > 0
+      ? databaseBytes * COMPACT_FREE_SPACE_MULTIPLIER +
+        COMPACT_FREE_SPACE_HEADROOM
+      : null;
+  const compactHasEnoughSpace =
+    compactRequiredBytes === null ||
+    availableBytes === undefined ||
+    availableBytes >= compactRequiredBytes;
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -268,6 +291,7 @@ export function RetentionSettings() {
         description: `${total.toLocaleString()} records, ${files} files removed from disk`,
       });
       fetchStatus();
+      onStorageChanged?.();
     } catch (e: any) {
       toast({
         title: "failed to delete recent data",
@@ -297,6 +321,7 @@ export function RetentionSettings() {
             ? `reclaimed ${formatBytes(reclaimed)} of disk space.`
             : "already compact — nothing to reclaim right now.",
       });
+      onStorageChanged?.();
     } catch (e: any) {
       toast({
         title: "failed to compact database",
@@ -317,7 +342,10 @@ export function RetentionSettings() {
         throw new Error(err.error || "failed to trigger cleanup");
       }
       toast({ title: "cleanup triggered" });
-      setTimeout(fetchStatus, 3000);
+      setTimeout(() => {
+        fetchStatus();
+        onStorageChanged?.();
+      }, 3000);
     } catch (e: any) {
       toast({
         title: "failed to trigger cleanup",
@@ -339,9 +367,8 @@ export function RetentionSettings() {
             <div>
               <p className="text-sm font-medium">erase recent activity</p>
               <p className="text-xs text-muted-foreground">
-                wipe the last few minutes if something was captured by
-                mistake. removes clips, audio, transcripts, and ocr. asks
-                first.
+                wipe the last few minutes if something was captured by mistake.
+                removes clips, audio, transcripts, and ocr. asks first.
               </p>
             </div>
           </div>
@@ -502,13 +529,27 @@ export function RetentionSettings() {
                 drive. cleanup keeps the database from growing; compacting is
                 what actually shrinks the file.
               </p>
+              {compactRequiredBytes !== null &&
+                availableBytes !== undefined && (
+                  <p
+                    className={cn(
+                      "text-xs",
+                      compactHasEnoughSpace
+                        ? "text-muted-foreground"
+                        : "text-destructive",
+                    )}
+                  >
+                    needs about {formatBytes(compactRequiredBytes)} free while
+                    it runs; you have {formatBytes(availableBytes)}.
+                  </p>
+                )}
             </div>
             <Button
               variant="outline"
               size="sm"
               className="h-8 text-xs"
               onClick={() => setPendingCompact(true)}
-              disabled={compacting}
+              disabled={compacting || !compactHasEnoughSpace}
             >
               {compacting ? (
                 <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
@@ -533,9 +574,11 @@ export function RetentionSettings() {
             <AlertDialogTitle>compact the database?</AlertDialogTitle>
             <AlertDialogDescription>
               screenpipe will rebuild db.sqlite to return freed space to your
-              drive. recording briefly pauses while it runs, and it needs free
-              disk space roughly equal to the current database size. larger
-              databases take longer.
+              drive. recording briefly pauses while it runs, and the data size
+              may temporarily grow before dropping when compaction finishes.
+              {compactRequiredBytes !== null && availableBytes !== undefined
+                ? ` needs about ${formatBytes(compactRequiredBytes)} free; you have ${formatBytes(availableBytes)}.`
+                : " larger databases take longer."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -629,7 +672,10 @@ export function RetentionSettings() {
                     {preview.file_count.toLocaleString()} files.
                   </>
                 ) : preview ? (
-                  <>nothing past the cutoff right now — first cleanup will run when data ages in.</>
+                  <>
+                    nothing past the cutoff right now — first cleanup will run
+                    when data ages in.
+                  </>
                 ) : null}
               </span>
             </AlertDialogDescription>
@@ -659,7 +705,9 @@ export function RetentionSettings() {
             </Select>
           </div>
           <AlertDialogFooter>
-            <AlertDialogCancel data-testid="retention-mode-cancel">cancel</AlertDialogCancel>
+            <AlertDialogCancel data-testid="retention-mode-cancel">
+              cancel
+            </AlertDialogCancel>
             <AlertDialogAction
               data-testid="retention-mode-confirm"
               onClick={confirmEnable}

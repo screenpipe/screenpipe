@@ -59,8 +59,10 @@ async fn pragma_text(pool: &SqlitePool, name: &str) -> String {
 
 /// THE GUARANTEE. The engine pool and the secret-store pool, opened over the same
 /// file, must report byte-for-byte identical WAL-affecting pragmas. Any drift is a
-/// `-shm` WAL-index desync waiting to happen (the code-11 corruption). Without the
-/// fix this fails on `wal_autocheckpoint` (engine 4000 vs secret 1000).
+/// `-shm` WAL-index desync waiting to happen (the code-11 corruption). Both must
+/// now report `wal_autocheckpoint = 0` (inline auto-checkpoint disabled; the
+/// maintenance task owns checkpointing). The original bug was one side inheriting
+/// SQLite's default 1000 while the engine used a non-zero threshold.
 #[tokio::test]
 async fn engine_and_secret_pools_agree_on_wal_safety_pragmas() {
     let (_guard, path) = temp_db();
@@ -97,12 +99,18 @@ async fn engine_and_secret_pools_agree_on_wal_safety_pragmas() {
         );
     }
 
-    // Pin the exact value that was the historical bug so a future change to the
-    // engine default can't silently re-open the gap on only one side.
+    // Pin the exact value so a future change can't silently re-open the gap on
+    // only one side. 0 = inline auto-checkpoint DISABLED on every pool; the
+    // single maintenance task owns all checkpointing (inline auto-checkpoint on
+    // a committing connection under load could copy a desynced -shm frame onto
+    // the wrong page). The historical bug was one side inheriting SQLite's
+    // default 1000 while the other used a different value; pinning 0 on both
+    // keeps them from ever racing the shared -shm WAL-index.
     assert_eq!(
         pragma_i64(&secret_pool, "wal_autocheckpoint").await,
-        4000,
-        "secret pool must use wal_autocheckpoint=4000, not SQLite's default 1000",
+        0,
+        "secret pool must use wal_autocheckpoint=0 (inline auto-checkpoint disabled), \
+         not SQLite's default 1000",
     );
     assert_eq!(
         pragma_i64(&db.pool, "mmap_size").await,

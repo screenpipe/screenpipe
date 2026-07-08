@@ -42,6 +42,33 @@ describe("useEventListener", () => {
     addSpy.mockRestore();
   });
 
+  it("supports custom (non-DOM-map) event names", () => {
+    const handler = vi.fn();
+    renderHook(() => useEventListener("try-in-chat", handler));
+    window.dispatchEvent(new CustomEvent("try-in-chat", { detail: 42 }));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect((handler.mock.calls[0][0] as CustomEvent).detail).toBe(42);
+  });
+
+  it("disables via a null target and attaches/detaches as it flips", () => {
+    const handler = vi.fn();
+    const { rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useEventListener("resize", handler, enabled ? window : null),
+      { initialProps: { enabled: false } },
+    );
+    window.dispatchEvent(new Event("resize"));
+    expect(handler).not.toHaveBeenCalled(); // null target → not bound
+
+    rerender({ enabled: true });
+    window.dispatchEvent(new Event("resize"));
+    expect(handler).toHaveBeenCalledTimes(1); // enabled
+
+    rerender({ enabled: false });
+    window.dispatchEvent(new Event("resize"));
+    expect(handler).toHaveBeenCalledTimes(1); // detached again
+  });
+
   it("attaches to a provided element target", () => {
     const el = document.createElement("div");
     const handler = vi.fn();

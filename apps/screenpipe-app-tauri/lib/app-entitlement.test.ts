@@ -21,7 +21,7 @@ function user(overrides: Record<string, any>) {
   return {
     token: "token",
     cloud_subscribed: false,
-    app_entitled: false,
+    app_entitled: null,
     subscription_plan: "standard",
     ...overrides,
   } as any;
@@ -84,8 +84,11 @@ describe("app entitlement", () => {
     ).toBe(true);
   });
 
-  it("keeps legacy cloud subscribers working during rollout", () => {
-    expect(hasAppEntitlement(user({ cloud_subscribed: true, entitlement: null }))).toBe(true);
+  it("does not trust a stale legacy cloud_subscribed flag by itself", () => {
+    expect(hasAppEntitlement(user({ cloud_subscribed: true, entitlement: null }))).toBe(false);
+    expect(
+      needsAppEntitlementRefresh(user({ cloud_subscribed: true, entitlement: null })),
+    ).toBe(false);
   });
 
   it("separates consumer subscriptions from enterprise-only app grants", () => {
@@ -129,6 +132,7 @@ describe("app entitlement", () => {
   });
 
   it("does not unlock new cloud features from stale entitlement data", () => {
+    expect(hasCloudEntitlement(user({ cloud_subscribed: true, entitlement: null }))).toBe(false);
     expect(
       hasCloudEntitlement(
         user({
@@ -159,6 +163,58 @@ describe("app entitlement", () => {
       features: { app: true, cloud: false },
     });
     expect(hasAppEntitlement(normalized)).toBe(true);
+  });
+
+  it("normalizes fresh legacy cloud subscribers into checked app entitlements", () => {
+    const normalized = normalizeAppUser(
+      {
+        subscription_plan: "pro",
+        cloud_subscribed: true,
+      },
+      "token",
+    );
+
+    expect(normalized.app_entitled).toBe(true);
+    expect(normalized.entitlement).toMatchObject({
+      active: true,
+      checked_at: NOW.toISOString(),
+      features: { app: true, cloud: true },
+    });
+    expect(hasAppEntitlement(normalized)).toBe(true);
+    expect(hasCloudEntitlement(normalized)).toBe(true);
+  });
+
+  it("does not let cloud_subscribed override explicit server app denial", () => {
+    const normalized = normalizeAppUser(
+      {
+        app_entitled: false,
+        subscription_plan: "none",
+        cloud_subscribed: true,
+      },
+      "token",
+    );
+
+    expect(normalized.app_entitled).toBe(false);
+    expect(normalized.entitlement).toMatchObject({
+      active: false,
+      checked_at: NOW.toISOString(),
+      features: { app: false, cloud: true },
+    });
+    expect(hasAppEntitlement(normalized)).toBe(false);
+
+    expect(
+      hasAppEntitlement(
+        user({
+          cloud_subscribed: true,
+          app_entitled: false,
+          entitlement: {
+            active: true,
+            checked_at: NOW.toISOString(),
+            features: { app: true, cloud: true },
+          },
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("keeps lifetime grants working offline even when the cache is stale", () => {
@@ -246,7 +302,6 @@ describe("isTokenHydrationPending", () => {
 
 describe("hasPersistedEntitlementEvidence", () => {
   it("trusts store.bin signals that survive a token-hydration failure", () => {
-    expect(hasPersistedEntitlementEvidence(user({ cloud_subscribed: true }))).toBe(true);
     expect(hasPersistedEntitlementEvidence(user({ app_entitled: true }))).toBe(true);
     expect(
       hasPersistedEntitlementEvidence(user({ entitlement: { features: { app: true } } })),
@@ -255,6 +310,7 @@ describe("hasPersistedEntitlementEvidence", () => {
   });
 
   it("is false for an account with no entitlement evidence", () => {
+    expect(hasPersistedEntitlementEvidence(user({ cloud_subscribed: true }))).toBe(false);
     expect(
       hasPersistedEntitlementEvidence(
         user({ cloud_subscribed: false, app_entitled: false, entitlement: null }),

@@ -21,12 +21,12 @@ describe("shouldShowModelUpsell (fail-open gate for the upsell UI)", () => {
     expect(
       shouldShowModelUpsell(user({ cloud_subscribed: false, app_entitled: false }), true),
     ).toBe(true);
+    expect(shouldShowModelUpsell(user({ cloud_subscribed: true }), true)).toBe(true);
   });
 
   it("fails OPEN — never shows to anyone carrying persisted paid evidence", () => {
     // This is the guard against the past incident: a transient tier flicker on
     // a paying customer must NOT surface a paywall.
-    expect(shouldShowModelUpsell(user({ cloud_subscribed: true }), true)).toBe(false);
     expect(shouldShowModelUpsell(user({ app_entitled: true }), true)).toBe(false);
     expect(
       shouldShowModelUpsell(user({ entitlement: { features: { app: true } } } as Partial<AppUser>), true),

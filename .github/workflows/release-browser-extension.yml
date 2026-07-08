@@ -32,6 +32,11 @@ on:
         required: false
         default: true
 
+concurrency:
+  # Serialize releases — aborting a release mid-flight is worse than waiting.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-24.04

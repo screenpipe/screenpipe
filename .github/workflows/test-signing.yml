@@ -8,6 +8,11 @@ name: Test Code Signing
 on:
   workflow_dispatch:
 
+concurrency:
+  # Only one manual test run at a time.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   test-signing:
     runs-on: windows-2022

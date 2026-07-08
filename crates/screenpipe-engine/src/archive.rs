@@ -185,111 +185,22 @@ pub struct DownloadProgress {
 // Handlers
 // ============================================================================
 
+fn cloud_archive_removed_response() -> (StatusCode, JsonResponse<Value>) {
+    (
+        StatusCode::GONE,
+        JsonResponse(json!({
+            "error": "cloud archive has been removed from Storage settings"
+        })),
+    )
+}
+
 /// POST /archive/init — initialize the archive system.
 #[oasgen]
 pub async fn archive_init(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<ArchiveInitRequest>,
+    State(_state): State<Arc<AppState>>,
+    Json(_request): Json<ArchiveInitRequest>,
 ) -> Result<JsonResponse<ArchiveInitResponse>, (StatusCode, JsonResponse<Value>)> {
-    // Check if already initialized
-    {
-        let guard = state.archive_state.inner.read().await;
-        if guard.is_some() {
-            return Err((
-                StatusCode::CONFLICT,
-                JsonResponse(json!({"error": "archive already initialized"})),
-            ));
-        }
-    }
-
-    let retention_days = request.retention_days.unwrap_or(7);
-
-    // Use persistent machine ID
-    let machine_id = screenpipe_core::sync::get_or_create_machine_id();
-
-    // Archive uses its OWN encryption keys, completely independent of cloud sync.
-    // Keys are derived deterministically from the user's token so they're
-    // consistent across restarts without needing server-side key storage.
-    let manager = {
-        let device_name = hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "Unknown".to_string());
-        let device_os = std::env::consts::OS.to_string();
-
-        let config = SyncClientConfig::new(
-            request.token.clone(),
-            machine_id.clone(),
-            device_name,
-            device_os,
-        );
-
-        let mgr = SyncManager::new(config).map_err(|e| {
-            error!("archive: failed to create sync manager: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": format!("failed to create sync manager: {}", e)})),
-            )
-        })?;
-
-        // Derive encryption keys locally from the token — no server call,
-        // no dependency on sync's key storage.
-        let password = archive_password(&request.token);
-
-        mgr.initialize_local(&password).await.map_err(|e| {
-            error!("archive: failed to derive encryption keys: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": format!("failed to initialize encryption: {}", e)})),
-            )
-        })?;
-
-        Arc::new(mgr)
-    };
-
-    let archive_config = ArchiveConfig {
-        enabled: true,
-        retention_days,
-    };
-
-    // Initial watermark: epoch (nothing uploaded yet)
-    let watermark = DateTime::<Utc>::MIN_UTC;
-    let run_now = Arc::new(tokio::sync::Notify::new());
-
-    // Spawn cleanup loop
-    let task_handle = spawn_archive_loop(
-        state.db.clone(),
-        manager.clone(),
-        machine_id.clone(),
-        archive_config.clone(),
-        state.archive_state.inner.clone(),
-        run_now.clone(),
-    );
-
-    let runtime = ArchiveRuntime {
-        manager,
-        machine_id: machine_id.clone(),
-        config: archive_config,
-        watermark,
-        task_handle,
-        last_error: None,
-        last_cleanup: None,
-        storage_used: 0,
-        storage_limit: 0,
-        is_uploading: false,
-        chunks_uploaded: 0,
-        media_files_uploaded: 0,
-        media_files_pending: 0,
-        run_now,
-    };
-
-    *state.archive_state.inner.write().await = Some(runtime);
-
-    info!("archive: initialized, retention={}d", retention_days);
-
-    Ok(JsonResponse(ArchiveInitResponse {
-        success: true,
-        machine_id,
-    }))
+    Err(cloud_archive_removed_response())
 }
 
 /// POST /archive/configure — update retention or disable.
@@ -298,6 +209,10 @@ pub async fn archive_configure(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ArchiveConfigureRequest>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
+    if request.enabled == Some(true) {
+        return Err(cloud_archive_removed_response());
+    }
+
     let mut guard = state.archive_state.inner.write().await;
 
     let runtime = match guard.as_mut() {
@@ -357,27 +272,9 @@ pub async fn archive_configure(
 /// POST /archive/run — trigger an immediate archive run.
 #[oasgen]
 pub async fn archive_run(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
-    let guard = state.archive_state.inner.read().await;
-    let runtime = guard.as_ref().ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "archive not initialized"})),
-        )
-    })?;
-
-    if !runtime.config.enabled {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "archive is disabled"})),
-        ));
-    }
-
-    runtime.run_now.notify_one();
-    info!("archive: manual run triggered");
-
-    Ok(JsonResponse(json!({"success": true})))
+    Err(cloud_archive_removed_response())
 }
 
 /// GET /archive/status — return current state.

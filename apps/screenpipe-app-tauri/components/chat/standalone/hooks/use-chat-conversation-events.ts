@@ -4,7 +4,8 @@
 
 import { useEffect } from "react";
 import type * as React from "react";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 interface UseChatConversationEventsOptions {
@@ -16,12 +17,9 @@ export function useChatConversationEvents({
   conversationId,
   inputRef,
 }: UseChatConversationEventsOptions) {
-  useEffect(() => {
-    const unlisten = listen("chat-focus-input", () => {
-      inputRef.current?.focus();
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [inputRef]);
+  useTauriEvent("chat-focus-input", () => {
+    inputRef.current?.focus();
+  });
 
   useEffect(() => {
     if (!conversationId) return;

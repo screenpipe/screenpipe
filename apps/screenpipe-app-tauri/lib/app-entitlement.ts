@@ -163,7 +163,19 @@ function hasEntitlementFeature(user: AppUser | null | undefined, feature: keyof 
 }
 
 export function hasLegacyPaidAccess(user: AppUser | null | undefined) {
-  return user?.cloud_subscribed === true;
+  if (user?.cloud_subscribed !== true) return false;
+
+  const entitlement = asEntitlement(user.entitlement);
+  if (!entitlement) return false;
+
+  const hasAppFeature =
+    user.app_entitled !== false &&
+    (user.app_entitled === true || entitlement.features?.app === true);
+  if (!hasAppFeature) return false;
+
+  if (isLifetimeEntitlement(entitlement) || hasFutureGrace(entitlement)) return true;
+
+  return isEntitlementFresh(entitlement) && entitlement.active === true;
 }
 
 export function hasAppEntitlement(user: AppUser | null | undefined) {
@@ -174,7 +186,9 @@ export function hasAppEntitlement(user: AppUser | null | undefined) {
   const entitlement = asEntitlement(user.entitlement);
   if (!entitlement) return false;
 
-  const hasAppFeature = user.app_entitled === true || entitlement.features?.app === true;
+  const hasAppFeature =
+    user.app_entitled !== false &&
+    (user.app_entitled === true || entitlement.features?.app === true);
   if (!hasAppFeature) return false;
 
   // Perpetual (lifetime) grants and server-issued offline grace windows stay
@@ -199,15 +213,17 @@ export function hasConsumerAppSubscription(user: AppUser | null | undefined) {
     return hasAppEntitlement(user);
   }
 
-  // Legacy users may only have cloud_subscribed/app_entitled persisted locally.
-  // If the account also carries an enterprise-app requirement, that boolean may
+  // Legacy users may arrive from /api/user with cloud_subscribed but no
+  // entitlement object; normalizeAppUser turns that fresh server response into
+  // a checked entitlement. Never let the old persisted boolean alone count.
+  // If the account also carries an enterprise-app requirement, the app grant may
   // be the enterprise org grant, so do not treat it as a separate consumer sub.
   const enterpriseAccount = getEnterpriseAccount(user);
   return hasLegacyPaidAccess(user) && enterpriseAccount?.requires_enterprise_app !== true;
 }
 
 export function hasCloudEntitlement(user: AppUser | null | undefined) {
-  return user?.cloud_subscribed === true || hasEntitlementFeature(user, "cloud");
+  return hasEntitlementFeature(user, "cloud");
 }
 
 // Whether the account UI should treat this user as a *signed-in* cloud subscriber
@@ -238,20 +254,18 @@ export function isTokenHydrationPending(user: AppUser | null | undefined): boole
   return !!user && !!user.id && !user.token;
 }
 
-// store.bin keeps these entitlement signals even when the token doesn't hydrate,
-// so they're evidence the (now tokenless) account was a paying user — used to
-// fail the recording gate OPEN on a transient token loss instead of walling a
-// subscriber out mid-session.
+// store.bin keeps these entitlement signals even when the token doesn't hydrate.
+// They are evidence the (now tokenless) account was a paying user — unlike the
+// old cloud_subscribed boolean, which can linger after a refund/cancel.
 export function hasPersistedEntitlementEvidence(user: AppUser | null | undefined): boolean {
   if (!user) return false;
-  if (user.cloud_subscribed === true) return true;
   if (user.app_entitled === true) return true;
   const entitlement = asEntitlement(user.entitlement);
   return entitlement?.features?.app === true || entitlement?.active === true;
 }
 
 export function needsAppEntitlementRefresh(user: AppUser | null | undefined) {
-  if (!user?.token || hasLegacyPaidAccess(user)) return false;
+  if (!user?.token) return false;
 
   const entitlement = asEntitlement(user.entitlement);
   // Lifetime grants and active grace windows are already honored offline, so
@@ -299,17 +313,20 @@ export function planDisplayName(
 export function normalizeAppUser(rawUser: any, token: string): AppUser {
   const checkedAt = new Date().toISOString();
   const rawEntitlement = asEntitlement(rawUser?.entitlement);
+  const cloudSubscribed = rawUser?.cloud_subscribed === true;
   const appEntitled =
     typeof rawUser?.app_entitled === "boolean"
       ? rawUser.app_entitled
-      : hasLegacyPaidAccess(rawUser);
+      : rawEntitlement
+        ? rawEntitlement.features?.app === true
+        : cloudSubscribed;
   const subscriptionPlan =
     rawUser?.subscription_plan ??
-    (rawUser?.cloud_subscribed === true ? "pro" : appEntitled ? "standard" : null);
+    (cloudSubscribed ? "pro" : appEntitled ? "standard" : null);
   const entitlement =
     rawEntitlement
       ? { ...rawEntitlement, checked_at: rawEntitlement.checked_at ?? checkedAt }
-      : typeof rawUser?.app_entitled === "boolean"
+      : typeof rawUser?.app_entitled === "boolean" || cloudSubscribed
         ? {
             active: appEntitled,
             plan: subscriptionPlan,
@@ -317,7 +334,7 @@ export function normalizeAppUser(rawUser: any, token: string): AppUser {
             checked_at: checkedAt,
             features: {
               app: appEntitled,
-              cloud: rawUser?.cloud_subscribed === true,
+              cloud: cloudSubscribed,
             },
           }
         : null;

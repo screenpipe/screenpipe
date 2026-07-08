@@ -23,6 +23,8 @@ const RESERVED_SIDEBAR_GROUP_NAMES = new Set([
   "other",
   "upcoming",
   "archived",
+  "pipes",
+  "automations",
 ]);
 
 export interface SidebarGroupNameValidationOptions {

@@ -237,6 +237,7 @@ export function useChatMessageActions({
     onConnectConnectionAction,
     onContinueConnectionAction: (prompt, label) => sendMessage(prompt, label),
     onDismissConnectionAction: dismissConnectionAction,
+    onAskUserReply: (reply, label) => sendMessage(reply, label),
     suppressSourceFooters: true,
   };
 

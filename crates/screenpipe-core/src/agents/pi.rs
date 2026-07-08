@@ -704,10 +704,10 @@ impl PiExecutor {
         Ok(())
     }
 
-    /// Install or remove the web-search extension based on provider and offline mode.
+    /// Install or remove the web-search extension based on provider.
     /// Web search uses the screenpipe cloud backend, so we only enable it
     /// for screenpipe-cloud to avoid sending data to our backend when the
-    /// user chose a local/custom provider. Always removed in offline mode.
+    /// user chose a local/custom provider.
     pub fn ensure_web_search_extension(project_dir: &Path, provider: Option<&str>) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         let ext_path = ext_dir.join("web-search.ts");
@@ -1121,14 +1121,14 @@ impl PiExecutor {
     /// `Ok(model)`  → the requested model is allowed (or we can't validate).
     /// `Err(model)` → requested not allowed; the returned value is the fallback.
     fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
-        // No catalog, or only the offline/degraded fallback sentinel → we
+        // No catalog, or only the gateway fallback sentinel → we
         // couldn't actually validate, so don't second-guess the requested
         // model. Without the sentinel check the `["auto"]` list returned by
         // `fallback_cloud_models` when the gateway is unreachable would
         // masquerade as a one-model tier and spuriously downgrade a
         // deliberately-chosen premium model, firing a bogus `model_fallback`
-        // notice on every offline run.
-        if allowed.is_empty() || Self::is_offline_fallback_catalog(allowed) {
+        // notice on every degraded run.
+        if allowed.is_empty() || Self::is_gateway_fallback_catalog(allowed) {
             return Ok(requested.to_string());
         }
         // "auto" is always valid: the gateway picks an allowed model server-side.
@@ -1145,7 +1145,7 @@ impl PiExecutor {
         Err(fallback)
     }
 
-    /// `true` when `allowed` is exactly the offline/degraded fallback catalog
+    /// `true` when `allowed` is exactly the unvalidated gateway fallback catalog
     /// (`["auto"]`) produced by [`fallback_cloud_models`] when the gateway's
     /// `/v1/models` is unreachable. It carries no real tier information, so we
     /// treat it like an empty catalog and never let it drive a downgrade.
@@ -1155,7 +1155,7 @@ impl PiExecutor {
     /// concrete model ids), and even if one appeared `auto` is always accepted
     /// by the gateway, so passing the requested model through for its
     /// server-side auto-pick stays correct.
-    fn is_offline_fallback_catalog(allowed: &[String]) -> bool {
+    fn is_gateway_fallback_catalog(allowed: &[String]) -> bool {
         allowed.len() == 1 && allowed[0] == "auto"
     }
 
@@ -3305,22 +3305,22 @@ mod tests {
             Ok("claude-opus-4".to_string())
         );
 
-        // Offline sentinel ["auto"] (gateway unreachable → fallback_cloud_models)
+        // Gateway fallback sentinel ["auto"] (gateway unreachable → fallback_cloud_models)
         // must be treated like an empty catalog: it is NOT a one-model tier, so
         // a deliberately-chosen premium model passes through unchanged instead
         // of being spuriously downgraded. This is the #3763 offline regression.
-        let offline_sentinel = vec!["auto".to_string()];
+        let gateway_fallback = vec!["auto".to_string()];
         assert_eq!(
-            PiExecutor::pick_allowed_model("claude-opus-4", &offline_sentinel),
+            PiExecutor::pick_allowed_model("claude-opus-4", &gateway_fallback),
             Ok("claude-opus-4".to_string())
         );
         assert_eq!(
-            PiExecutor::pick_allowed_model("auto", &offline_sentinel),
+            PiExecutor::pick_allowed_model("auto", &gateway_fallback),
             Ok("auto".to_string())
         );
-        assert!(PiExecutor::is_offline_fallback_catalog(&offline_sentinel));
+        assert!(PiExecutor::is_gateway_fallback_catalog(&gateway_fallback));
         // A real single-model tier on a concrete id is NOT the sentinel.
-        assert!(!PiExecutor::is_offline_fallback_catalog(&[
+        assert!(!PiExecutor::is_gateway_fallback_catalog(&[
             "claude-haiku-4-5".to_string()
         ]));
     }

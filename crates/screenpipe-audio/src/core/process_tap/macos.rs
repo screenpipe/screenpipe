@@ -196,26 +196,33 @@ mod exclusions {
     /// AudioObjectID. The result is sorted+deduped so snapshots can be
     /// compared with `==`.
     pub fn resolve_to_audio_object_ids(bundle_ids: &[String]) -> Vec<u32> {
-        let mut out = Vec::new();
-        for bid in bundle_ids {
-            let bid_ns = ns::String::with_str(bid);
-            let apps = ns::RunningApp::with_bundle_id(&bid_ns);
-            for app in apps.iter() {
-                let pid = app.pid();
-                if let Ok(proc) = ca::Process::with_pid(pid) {
-                    // ca::Process(pub Obj) where Obj(pub u32) is #[repr(transparent)].
-                    // The inner u32 is the AudioObjectID that the tap descriptor
-                    // expects (wrapped in ns::Number, see build_object_id_array).
-                    let audio_obj_id = proc.0 .0;
-                    if audio_obj_id != 0 {
-                        out.push(audio_obj_id);
+        // Wrap in an autorelease pool — `ns::RunningApp::with_bundle_id` returns
+        // autoreleased NSRunningApplication objects (+ NSLock/LaunchServices
+        // LSASN when their pid is read). Without draining they accumulate on the
+        // caller's thread across tap rebuilds. Same leak class as owner_metadata
+        // in meeting_processes.rs and get_frontmost_pid in screenpipe-screen.
+        cidre::objc::ar_pool(|| {
+            let mut out = Vec::new();
+            for bid in bundle_ids {
+                let bid_ns = ns::String::with_str(bid);
+                let apps = ns::RunningApp::with_bundle_id(&bid_ns);
+                for app in apps.iter() {
+                    let pid = app.pid();
+                    if let Ok(proc) = ca::Process::with_pid(pid) {
+                        // ca::Process(pub Obj) where Obj(pub u32) is #[repr(transparent)].
+                        // The inner u32 is the AudioObjectID that the tap descriptor
+                        // expects (wrapped in ns::Number, see build_object_id_array).
+                        let audio_obj_id = proc.0 .0;
+                        if audio_obj_id != 0 {
+                            out.push(audio_obj_id);
+                        }
                     }
                 }
             }
-        }
-        out.sort_unstable();
-        out.dedup();
-        out
+            out.sort_unstable();
+            out.dedup();
+            out
+        })
     }
 
     /// Convert AudioObjectIDs into the `ns::Array<ns::Number>` shape the tap

@@ -69,6 +69,10 @@ screenpipe-app-tauri/src-tauri/.next/
 
 # Claude Code
 .claude/worktrees/
+# Claude desktop app runs `git worktree add` with `-c core.hooksPath=/dev/null`;
+# on Windows git-lfs resolves that as a relative path and drops its hooks into
+# a literal dev/null/ dir at the worktree root. Harmless but noisy — ignore it.
+/dev/null/
 .claude/*.local* # local changes are specific to the individual developer, let's not check them in for everyone.
 .claude/*.lock
 apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-arm64-1.19.2/

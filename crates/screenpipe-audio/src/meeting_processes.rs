@@ -186,13 +186,119 @@ mod platform {
         let Some(pid) = pid else {
             return (None, None);
         };
-        let Some(app) = ns::RunningApp::with_pid(pid) else {
-            return (None, None);
-        };
-        (
-            app.localized_name().map(|s| s.to_string()),
-            app.bundle_id().map(|s| s.to_string()),
-        )
+        // Wrap in an autorelease pool — `ns::RunningApp::with_pid` returns an
+        // autoreleased NSRunningApplication, and reading its name/bundle-id
+        // lazily allocates an NSLock + a LaunchServices LSASN. Without draining,
+        // every poll of the audio-process meeting watcher leaks one such object
+        // triple: ACTIVE_POLL_INTERVAL is 1s and screenpipe's own always-on mic
+        // process is always in the input list, so this runs ~1x/sec and grew to
+        // ~49k retained instances over ~14.5h. Same precedent as get_frontmost_pid
+        // in screenpipe-screen. See leak_repro below.
+        cidre::objc::ar_pool(|| {
+            let Some(app) = ns::RunningApp::with_pid(pid) else {
+                return (None, None);
+            };
+            (
+                app.localized_name().map(|s| s.to_string()),
+                app.bundle_id().map(|s| s.to_string()),
+            )
+        })
+    }
+
+    /// Reproduction + regression guard for the NSRunningApplication autorelease
+    /// leak (2026-07-04). Phase 1 drives the pre-fix (unwrapped) body; phase 2
+    /// drives the fixed [`owner_metadata`]. Peak RSS (`ru_maxrss`) climbs in
+    /// phase 1 and stays flat in phase 2.
+    ///
+    /// `#[ignore]` because it's a memory/perf repro, not a fast unit test. Run:
+    ///   cargo test -p screenpipe-audio --lib meeting_processes::platform::leak_repro -- --ignored --nocapture
+    #[cfg(test)]
+    mod leak_repro {
+        use cidre::{ns, objc};
+
+        /// Peak resident memory in bytes (`ru_maxrss` is bytes on Darwin,
+        /// despite the rusage man page claiming KB).
+        fn peak_rss_bytes() -> u64 {
+            unsafe {
+                let mut ru: libc::rusage = std::mem::zeroed();
+                libc::getrusage(libc::RUSAGE_SELF, &mut ru);
+                ru.ru_maxrss as u64
+            }
+        }
+
+        fn fmt_mb(b: u64) -> String {
+            format!("{:.1} MB", (b as f64) / (1024.0 * 1024.0))
+        }
+
+        /// The pre-fix body, verbatim, so the test can prove the leak the fix
+        /// removes (unwrapped `with_pid` + property reads, no `ar_pool`).
+        fn owner_metadata_unwrapped(pid: i32) -> (Option<String>, Option<String>) {
+            let Some(app) = ns::RunningApp::with_pid(pid) else {
+                return (None, None);
+            };
+            (
+                app.localized_name().map(|s| s.to_string()),
+                app.bundle_id().map(|s| s.to_string()),
+            )
+        }
+
+        #[test]
+        #[ignore = "macOS NSRunningApplication autorelease-leak repro; prints RSS deltas"]
+        fn owner_metadata_autorelease_leak() {
+            const N: usize = 30_000;
+
+            // Cycle over the real running-app pids (collected inside a pool so the
+            // enumeration itself doesn't pollute the measurement). Falls back to
+            // self pid on a bare host with no other apps.
+            let pids: Vec<i32> = objc::ar_pool(|| {
+                let ws = ns::Workspace::shared();
+                let apps = ws.running_apps();
+                (0..apps.len()).map(|i| apps[i].pid()).collect()
+            });
+            let pids = if pids.is_empty() {
+                vec![std::process::id() as i32]
+            } else {
+                pids
+            };
+
+            // Warm one-time LaunchServices caches so they don't count as "leak".
+            for &pid in &pids {
+                let _ = super::owner_metadata(Some(pid));
+                let _ = owner_metadata_unwrapped(pid);
+            }
+
+            // -- Phase 1: pre-fix body (no ar_pool) — should leak --
+            let before1 = peak_rss_bytes();
+            for i in 0..N {
+                let _ = owner_metadata_unwrapped(pids[i % pids.len()]);
+            }
+            let delta1 = peak_rss_bytes().saturating_sub(before1);
+            eprintln!("[repro] {N} calls WITHOUT ar_pool: +{}", fmt_mb(delta1));
+
+            // -- Phase 2: fixed owner_metadata (ar_pool) — should stay flat --
+            let before2 = peak_rss_bytes();
+            for i in 0..N {
+                let _ = super::owner_metadata(Some(pids[i % pids.len()]));
+            }
+            let delta2 = peak_rss_bytes().saturating_sub(before2);
+            eprintln!("[repro] {N} calls WITH    ar_pool: +{}", fmt_mb(delta2));
+            eprintln!(
+                "[repro] leak delta (phase1 - phase2): {}",
+                fmt_mb(delta1.saturating_sub(delta2))
+            );
+
+            assert!(
+                delta1 > 2 * 1024 * 1024,
+                "expected >2 MB growth without ar_pool; got {} — leak not reproduced",
+                fmt_mb(delta1)
+            );
+            assert!(
+                delta1 > 3 * delta2.max(1),
+                "fixed path should leak <=1/3 of unwrapped; phase1={}, phase2={}",
+                fmt_mb(delta1),
+                fmt_mb(delta2)
+            );
+        }
     }
 }
 

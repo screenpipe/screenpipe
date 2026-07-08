@@ -1318,7 +1318,10 @@ impl DatabaseManager {
         let restore_steps = [
             "PRAGMA synchronous = NORMAL;",
             "PRAGMA journal_mode = WAL;",
-            "PRAGMA wal_autocheckpoint = 1000;",
+            // 0 = no inline auto-checkpoint (matches WAL_SAFETY_PRAGMAS); the
+            // maintenance task owns checkpointing. Must NOT re-enable inline
+            // auto-checkpoint here or a repaired DB re-opens the corruption path.
+            "PRAGMA wal_autocheckpoint = 0;",
             "PRAGMA cache_size = -2000;", // Back to 2MB cache
             "PRAGMA locking_mode = NORMAL;",
             "PRAGMA busy_timeout = 5000;", // Back to 5s timeout
@@ -1352,13 +1355,33 @@ impl DatabaseManager {
         }
     }
 
-    /// Spawn a background task that runs `PRAGMA wal_checkpoint(TRUNCATE)` every 5 minutes.
-    /// This prevents unbounded WAL growth when long-running readers block auto-checkpoint.
+    /// Spawn the background task that owns ALL WAL checkpointing.
+    ///
+    /// Since `wal_autocheckpoint = 0` (see [`WAL_SAFETY_PRAGMAS`]) no committing
+    /// connection ever checkpoints inline — that under-load path could copy a
+    /// desynced `-shm` frame onto the wrong main-DB page. This task is therefore
+    /// the SOLE checkpointer, and it must (a) run often enough to keep the WAL
+    /// small and (b) never let the WAL grow without bound when readers keep a
+    /// plain `TRUNCATE` busy. It does a normal `TRUNCATE` each tick, and if the
+    /// WAL is over a hard page cap while still busy it escalates to the
+    /// serialized exclusive checkpoint (hold the single write permit so writers
+    /// queue, bump `busy_timeout` to wait out short-lived readers) — the same
+    /// reliable mechanism `compact()` uses. That escalation is the ceiling that
+    /// keeps `autocheckpoint = 0` from trading the corruption cliff for an
+    /// unbounded-WAL cliff on the heaviest install.
     pub fn start_wal_maintenance(&self) {
         let pool = self.pool.clone();
         let shutdown = self.close_token.clone();
+        let write_semaphore = std::sync::Arc::clone(&self.write_semaphore);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            // 60s (not 300s): with inline auto-checkpoint off, the WAL grows for
+            // the whole interval between ticks, so check more often to keep it
+            // small under sustained write load.
+            const INTERVAL: Duration = Duration::from_secs(60);
+            // ~40k pages * 4KB ≈ 160MB. Above this we force the checkpoint
+            // through rather than tolerate more growth.
+            const WAL_HARD_CAP_PAGES: i32 = 40_000;
+            let mut interval = tokio::time::interval(INTERVAL);
             loop {
                 tokio::select! {
                     _ = interval.tick() => {}
@@ -1378,8 +1401,45 @@ impl DatabaseManager {
                         let busy: i32 = row.get(0);
                         let log_pages: i32 = row.get(1);
                         let checkpointed: i32 = row.get(2);
-                        if busy == 1 {
+                        if busy == 1 && log_pages > WAL_HARD_CAP_PAGES {
+                            // Readers kept the plain TRUNCATE busy and the WAL is
+                            // over the cap. Force it: hold the single write
+                            // permit (writers queue — a brief pause, like the
+                            // compact path) and wait out short-lived readers.
                             warn!(
+                                "wal checkpoint: busy with {} pages (> {} cap) — forcing exclusive checkpoint",
+                                log_pages, WAL_HARD_CAP_PAGES
+                            );
+                            let _write_guard = write_semaphore.acquire().await.ok();
+                            match pool.acquire().await {
+                                Ok(mut conn) => {
+                                    let _ = sqlx::query("PRAGMA busy_timeout = 60000")
+                                        .execute(&mut *conn)
+                                        .await;
+                                    match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                                        .fetch_one(&mut *conn)
+                                        .await
+                                    {
+                                        Ok(r2) => {
+                                            let b2: i32 = r2.get(0);
+                                            let lp2: i32 = r2.get(1);
+                                            warn!(
+                                                "forced wal checkpoint done: busy={}, {} pages remain",
+                                                b2, lp2
+                                            );
+                                        }
+                                        Err(e) => warn!("forced wal checkpoint failed: {}", e),
+                                    }
+                                    // Restore the default busy_timeout before the
+                                    // connection returns to the pool.
+                                    let _ = sqlx::query("PRAGMA busy_timeout = 5000")
+                                        .execute(&mut *conn)
+                                        .await;
+                                }
+                                Err(e) => warn!("forced wal checkpoint: acquire failed: {}", e),
+                            }
+                        } else if busy == 1 {
+                            debug!(
                                 "wal checkpoint: busy (could not truncate), {} pages in WAL",
                                 log_pages
                             );

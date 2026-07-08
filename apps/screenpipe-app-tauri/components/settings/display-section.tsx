@@ -283,30 +283,6 @@ export function DisplaySection() {
                 <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Hide Thinking Blocks
-                    <HelpTooltip text="Don't render the collapsible model-reasoning blocks in chat. The model still emits them; this just hides them from the transcript." />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">Hide model reasoning in chat transcript</p>
-                </div>
-              </div>
-              <Switch
-                checked={settings?.hideThinkingBlocks ?? true}
-                onCheckedChange={(checked) =>
-                  handleSettingsChange({ hideThinkingBlocks: checked })
-                }
-                className="ml-4"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Show Chat Suggestions
                     <HelpTooltip text="Show the follow-up questions and suggested-prompt chips above the chat input. The X on the chips hides them too." />
                   </h3>

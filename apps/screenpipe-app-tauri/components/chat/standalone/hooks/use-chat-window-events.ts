@@ -393,11 +393,19 @@ export function useChatE2EGlobals({
     (window as unknown as {
       __e2eSeedAssistantMessage?: (
         sid: string,
-        payload: { content?: string; sourceCitations?: unknown[] },
+        payload: {
+          content?: string;
+          contentBlocks?: Message["contentBlocks"];
+          sourceCitations?: unknown[];
+        },
       ) => void;
     }).__e2eSeedAssistantMessage = (
       sid: string,
-      payload: { content?: string; sourceCitations?: unknown[] },
+      payload: {
+        content?: string;
+        contentBlocks?: Message["contentBlocks"];
+        sourceCitations?: unknown[];
+      },
     ) => {
       const id = `e2e-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       seedE2eSessionMessage(
@@ -406,6 +414,7 @@ export function useChatE2EGlobals({
           id,
           role: "assistant",
           content: payload.content ?? "",
+          contentBlocks: payload.contentBlocks,
           timestamp: Date.now(),
           sourceCitations: payload.sourceCitations as Message["sourceCitations"],
         },

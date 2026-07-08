@@ -183,6 +183,16 @@
       "notes": "Composer draft isolation across conversations."
     },
     {
+      "spec": "chat-ask-user-tool-card.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat", "chat-tools", "pi-ask-user"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path."
+    },
+    {
       "spec": "chat-newchat-duplicate.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],
@@ -361,6 +371,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Clicks through Home, Pipes, Timeline, Help, and Settings."
+    },
+    {
+      "spec": "pi-extensions.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "settings"],
+      "features": ["connections", "pi-extensions", "agent-extensions"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens Home -> Connections, opens Pi extensions, verifies catalog and warning copy, filters package search, and captures a screenshot. Read-only smoke: does not install packages."
     },
     {
       "spec": "macos-ui-performance.spec.ts",

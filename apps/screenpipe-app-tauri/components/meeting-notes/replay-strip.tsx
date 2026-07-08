@@ -296,7 +296,13 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
   if (sampleSorted.length === 0) return null;
 
   const speakerLabel = activeChunk?.speakerName || (activeChunk?.isInput ? "me" : "speaker");
-  const showSpeakerPopover = !!activeChunk?.audioChunkId && !!activeChunk?.audioFilePath;
+  // Only a real (positive) audio_chunk_id can be reassigned via
+  // /speakers/reassign — audioFilePath is merely for the optional playback
+  // preview inside the popover and can legitimately be empty (e.g. a
+  // background chunk with a corrupted file_path) without blocking renaming.
+  // Live-only rows get a synthetic negative audioChunkId (see
+  // fetchRoutedMeetingTranscript) and must stay excluded.
+  const showSpeakerPopover = (activeChunk?.audioChunkId ?? 0) > 0;
 
   return (
     <section className="border-t border-border pt-5">

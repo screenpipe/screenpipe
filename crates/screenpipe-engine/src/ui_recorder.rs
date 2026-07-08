@@ -47,6 +47,43 @@ impl EventBatch {
         self.events.push(event);
         self.correlation_ids.push(correlation_id);
     }
+
+    fn try_merge_click_context(&mut self, event: &InsertUiEvent) -> bool {
+        if !is_click_context_enrichment(event) {
+            return false;
+        }
+
+        let Some(candidate) = self
+            .events
+            .iter_mut()
+            .rev()
+            .find(|candidate| click_context_merge_candidate(candidate, event))
+        else {
+            return false;
+        };
+
+        merge_optional(&mut candidate.app_name, event.app_name.clone());
+        merge_optional(&mut candidate.window_title, event.window_title.clone());
+        merge_optional(&mut candidate.browser_url, event.browser_url.clone());
+        merge_optional(&mut candidate.element_role, event.element_role.clone());
+        merge_optional(&mut candidate.element_name, event.element_name.clone());
+        merge_optional(&mut candidate.element_value, event.element_value.clone());
+        merge_optional(
+            &mut candidate.element_description,
+            event.element_description.clone(),
+        );
+        merge_optional(
+            &mut candidate.element_automation_id,
+            event.element_automation_id.clone(),
+        );
+        merge_optional(&mut candidate.element_bounds, event.element_bounds.clone());
+        merge_optional(
+            &mut candidate.element_ancestors,
+            event.element_ancestors.clone(),
+        );
+        true
+    }
+
     fn len(&self) -> usize {
         debug_assert_eq!(self.events.len(), self.correlation_ids.len());
         self.events.len()
@@ -64,6 +101,50 @@ impl EventBatch {
         self.events.drain(..n);
         self.correlation_ids.drain(..n);
     }
+}
+
+fn merge_optional<T>(dst: &mut Option<T>, src: Option<T>) {
+    if src.is_some() {
+        *dst = src;
+    }
+}
+
+fn is_click_context_enrichment(event: &InsertUiEvent) -> bool {
+    event.event_type == screenpipe_db::UiEventType::Click
+        && (event.element_role.is_some()
+            || event.element_name.is_some()
+            || event.element_value.is_some()
+            || event.element_description.is_some()
+            || event.element_automation_id.is_some()
+            || event.element_bounds.is_some()
+            || event.element_ancestors.is_some())
+}
+
+fn click_context_merge_candidate(candidate: &InsertUiEvent, enrichment: &InsertUiEvent) -> bool {
+    candidate.event_type == screenpipe_db::UiEventType::Click
+        && candidate.x == enrichment.x
+        && candidate.y == enrichment.y
+        && compatible_text_context(&candidate.app_name, &enrichment.app_name)
+        && compatible_text_context(&candidate.window_title, &enrichment.window_title)
+        && click_enrichment_follows_candidate(candidate, enrichment)
+}
+
+fn compatible_text_context(a: &Option<String>, b: &Option<String>) -> bool {
+    match (a.as_deref(), b.as_deref()) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
+fn click_enrichment_follows_candidate(
+    candidate: &InsertUiEvent,
+    enrichment: &InsertUiEvent,
+) -> bool {
+    let delta = enrichment
+        .timestamp
+        .signed_duration_since(candidate.timestamp)
+        .num_milliseconds();
+    (0..=100).contains(&delta)
 }
 
 /// Configuration for UI event capture
@@ -769,6 +850,9 @@ pub async fn start_ui_recording(
                             record_clipboard_events,
                             record_click_events,
                         );
+                    if should_record_event && batch.try_merge_click_context(&db_event) {
+                        continue;
+                    }
 
                     // Decide whether this event warrants a capture and, if so,
                     // mint a correlation id that travels with the trigger AND
@@ -1259,7 +1343,7 @@ fn next_ui_event_recv_timeout_at(
 #[cfg(test)]
 mod event_batch_tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{Duration as ChronoDuration, Utc};
     use screenpipe_db::UiEventType;
 
     fn evt() -> InsertUiEvent {
@@ -1290,6 +1374,17 @@ mod event_batch_tests {
             element_ancestors: None,
             frame_id: None,
         }
+    }
+
+    fn click_at(x: i32, y: i32) -> InsertUiEvent {
+        let mut e = evt();
+        e.x = Some(x);
+        e.y = Some(y);
+        e.button = Some(0);
+        e.click_count = Some(1);
+        e.app_name = Some("Arc".to_string());
+        e.window_title = Some("screenpipe".to_string());
+        e
     }
 
     #[test]
@@ -1324,6 +1419,114 @@ mod event_batch_tests {
         assert!(b.is_empty());
         assert_eq!(b.events.len(), 0);
         assert_eq!(b.correlation_ids.len(), 0);
+    }
+
+    #[test]
+    fn enriched_click_merges_into_pending_raw_click_and_keeps_corr_id() {
+        let mut b = EventBatch::with_capacity(4);
+        let raw = click_at(10, 20);
+        let raw_ts = raw.timestamp;
+        b.push(raw, Some(42));
+
+        let mut enriched = click_at(10, 20);
+        enriched.timestamp = raw_ts + ChronoDuration::milliseconds(5);
+        enriched.element_role = Some("AXButton".to_string());
+        enriched.element_name = Some("Continue".to_string());
+        enriched.element_bounds = Some(r#"{"x":1.0,"y":2.0,"width":3.0,"height":4.0}"#.to_string());
+        enriched.element_ancestors =
+            Some(r#"[{"role":"AXWindow","name":"screenpipe"}]"#.to_string());
+
+        assert!(b.try_merge_click_context(&enriched));
+        assert_eq!(b.len(), 1, "supplemental click should not add a row");
+        assert_eq!(
+            b.correlation_ids,
+            vec![Some(42)],
+            "raw click linkage survives"
+        );
+
+        let merged = &b.events[0];
+        assert_eq!(merged.x, Some(10));
+        assert_eq!(merged.y, Some(20));
+        assert_eq!(merged.button, Some(0));
+        assert_eq!(merged.click_count, Some(1));
+        assert_eq!(merged.app_name.as_deref(), Some("Arc"));
+        assert_eq!(merged.window_title.as_deref(), Some("screenpipe"));
+        assert_eq!(merged.element_role.as_deref(), Some("AXButton"));
+        assert_eq!(merged.element_name.as_deref(), Some("Continue"));
+        assert_eq!(
+            merged.element_ancestors.as_deref(),
+            Some(r#"[{"role":"AXWindow","name":"screenpipe"}]"#)
+        );
+    }
+
+    #[test]
+    fn enriched_click_with_missing_context_keeps_raw_app_window() {
+        let mut b = EventBatch::with_capacity(4);
+        let raw = click_at(33, 44);
+        let raw_ts = raw.timestamp;
+        b.push(raw, Some(7));
+
+        let mut enriched = click_at(33, 44);
+        enriched.timestamp = raw_ts + ChronoDuration::milliseconds(3);
+        enriched.app_name = None;
+        enriched.window_title = None;
+        enriched.click_count = Some(0);
+        enriched.element_role = Some("Button".to_string());
+
+        assert!(b.try_merge_click_context(&enriched));
+        assert_eq!(b.len(), 1);
+        assert_eq!(b.events[0].app_name.as_deref(), Some("Arc"));
+        assert_eq!(b.events[0].window_title.as_deref(), Some("screenpipe"));
+        assert_eq!(b.events[0].click_count, Some(1));
+        assert_eq!(b.events[0].element_role.as_deref(), Some("Button"));
+    }
+
+    #[test]
+    fn enriched_click_replaces_approximate_context_without_losing_linkage() {
+        let mut b = EventBatch::with_capacity(4);
+        let mut raw = click_at(50, 60);
+        raw.element_role = Some("FocusedElement".to_string());
+        raw.element_name = Some("Nearby".to_string());
+        let raw_ts = raw.timestamp;
+        b.push(raw, Some(99));
+
+        let mut enriched = click_at(50, 60);
+        enriched.timestamp = raw_ts + ChronoDuration::milliseconds(8);
+        enriched.app_name = None;
+        enriched.window_title = None;
+        enriched.click_count = Some(0);
+        enriched.element_role = Some("Button".to_string());
+        enriched.element_name = Some("Save".to_string());
+        enriched.element_ancestors = Some(r#"[{"role":"Window","name":"screenpipe"}]"#.to_string());
+
+        assert!(b.try_merge_click_context(&enriched));
+        assert_eq!(b.len(), 1);
+        assert_eq!(b.correlation_ids, vec![Some(99)]);
+        assert_eq!(b.events[0].app_name.as_deref(), Some("Arc"));
+        assert_eq!(b.events[0].window_title.as_deref(), Some("screenpipe"));
+        assert_eq!(b.events[0].click_count, Some(1));
+        assert_eq!(b.events[0].element_role.as_deref(), Some("Button"));
+        assert_eq!(b.events[0].element_name.as_deref(), Some("Save"));
+        assert_eq!(
+            b.events[0].element_ancestors.as_deref(),
+            Some(r#"[{"role":"Window","name":"screenpipe"}]"#)
+        );
+    }
+
+    #[test]
+    fn enriched_click_does_not_merge_unrelated_raw_click() {
+        let mut b = EventBatch::with_capacity(4);
+        let raw = click_at(10, 20);
+        let raw_ts = raw.timestamp;
+        b.push(raw, Some(42));
+
+        let mut enriched = click_at(10, 20);
+        enriched.timestamp = raw_ts + ChronoDuration::milliseconds(300);
+        enriched.element_role = Some("AXButton".to_string());
+
+        assert!(!b.try_merge_click_context(&enriched));
+        assert_eq!(b.len(), 1);
+        assert!(b.events[0].element_role.is_none());
     }
 
     #[test]

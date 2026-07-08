@@ -216,6 +216,15 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
 
+        // Skip apps whose in-process UIA providers crash the host process when an
+        // external client materializes their full subtree (Outlook Classic on Sent
+        // Items) — same exemption as the periodic worker path. OCR still captures
+        // the on-screen content for these apps.
+        if crate::platform::windows_uia::is_fragile_uia_tree_provider(&app_name) {
+            debug!(app = %app_name, pid, "a11y: skipped — fragile UIA tree provider (crash-prone)");
+            return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
+        }
+
         // Get window title
         let window_name = unsafe {
             let mut buf = [0u16; 512];
@@ -275,11 +284,18 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             return Ok(TreeWalkResult::NotFound);
         }
 
-        // Capture the accessibility tree
-        let root = match uia.capture_window_tree(hwnd, effective_max_nodes) {
-            Some(tree) => tree,
-            None => return Ok(TreeWalkResult::NotFound),
-        };
+        // Capture the accessibility tree, bounded by the remaining wall-clock
+        // budget. The in-walk deadline truncates the per-element TreeWalker
+        // fallback (Chromium/Electron), which is serviced synchronously on the
+        // target app's UI thread and freezes it for the duration of the walk.
+        let remaining_budget = effective_timeout.saturating_sub(start.elapsed());
+        let captured =
+            match uia.capture_window_tree_bounded(hwnd, effective_max_nodes, remaining_budget) {
+                Some(captured) => captured,
+                None => return Ok(TreeWalkResult::NotFound),
+            };
+        let root = captured.root;
+        let truncation_reason = captured.truncation;
 
         // Get monitor dimensions for normalizing element bounds to 0-1 coords
         let monitor_rect = get_monitor_rect(hwnd);
@@ -342,7 +358,6 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             walk_duration
         );
 
-        // Windows walker doesn't have timeout-based truncation yet — report as complete
         // Per-app document_path resolution from on-disk state files
         // (Obsidian config + VS Code-fork state.vscdb). Returns None
         // for any unknown app or any failure — never panics.
@@ -360,8 +375,8 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             walk_duration,
             content_hash,
             simhash,
-            truncated: false,
-            truncation_reason: super::TruncationReason::None,
+            truncated: truncation_reason != super::TruncationReason::None,
+            truncation_reason,
             max_depth_reached: 0,
         }))
     }
@@ -1019,9 +1034,11 @@ mod tests {
     #[test]
     fn test_incognito_detection() {
         use crate::incognito::is_title_private;
-        assert!(is_title_private("Enter Password - Chrome"));
         assert!(is_title_private("Private Browsing - Firefox"));
         assert!(is_title_private("New Tab - Google Chrome (Incognito)"));
         assert!(!is_title_private("Calculator"));
+        // Bare "password"/"private" words are deliberately NOT incognito
+        // indicators (false-positive reduction — see incognito/titles.rs).
+        assert!(!is_title_private("Enter Password - Chrome"));
     }
 }

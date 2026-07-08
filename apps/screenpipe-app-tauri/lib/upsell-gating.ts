@@ -25,7 +25,7 @@ export const MODEL_UPSELL_FLAG = "model_gating_upsell";
  * Fails OPEN on two axes so we never nag a paying customer:
  *   1. Off entirely unless the PostHog flag is on.
  *   2. Never shown to a user carrying persisted evidence of a paid plan
- *      (cloud_subscribed / app_entitled), so a transient tier flicker — the
+ *      (app_entitled / entitlement), so a transient tier flicker — the
  *      exact failure mode behind past "gate fired on payers" complaints —
  *      can't false-lock them even if the live signal momentarily says free.
  */

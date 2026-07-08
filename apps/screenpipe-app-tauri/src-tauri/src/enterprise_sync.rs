@@ -323,9 +323,18 @@ mod imp {
         }
 
         async fn fetch_latest_snapshot(&self) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
-            // Step 1: ask /search for the latest OCR frame to learn its
-            // frame_id + timestamp + apparent app context.
-            let search_url = format!("{}/search?content_type=ocr&limit=1", self.api_url_base);
+            // Step 1: ask /search for the most recent OCR frames. We request a
+            // small page rather than just limit=1 because the single newest
+            // frame is usually still in the in-progress (unfinalized) video
+            // segment, so `/frames/{id}` 404s for it. Grabbing only the newest
+            // frame therefore failed on every tick — snapshots never synced and
+            // each tick logged a "snapshot fetch failed" WARN. A short page lets
+            // us fall back to a slightly older, already-flushed frame.
+            const SNAPSHOT_CANDIDATES: u32 = 12;
+            let search_url = format!(
+                "{}/search?content_type=ocr&limit={}",
+                self.api_url_base, SNAPSHOT_CANDIDATES
+            );
             let resp = self
                 .auth(self.http.get(&search_url))
                 .send()
@@ -342,64 +351,78 @@ mod imp {
                 .json()
                 .await
                 .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
-            let (frame_id, ts) = match body.data.into_iter().next() {
-                Some(LocalSearchItem::OCR(o)) => (o.frame_id, o.timestamp),
-                _ => return Ok(None),
-            };
 
-            // Step 2: fetch the frame's image bytes.
-            let img_url = format!("{}/frames/{}", self.api_url_base, frame_id);
-            let resp = self
-                .auth(self.http.get(&img_url))
-                .send()
+            // Newest first, so we snapshot the freshest frame that decodes.
+            let mut candidates: Vec<(i64, chrono::DateTime<chrono::Utc>)> = body
+                .data
+                .into_iter()
+                .filter_map(|item| match item {
+                    LocalSearchItem::OCR(o) => Some((o.frame_id, o.timestamp)),
+                    _ => None,
+                })
+                .collect();
+            candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+            for (frame_id, ts) in candidates {
+                // Step 2: fetch the frame's image bytes. A non-success status is
+                // expected here — a 404 means the frame is still in the
+                // unfinalized video segment (too fresh) or has expired from
+                // local retention. Skip to the next (older) candidate instead of
+                // failing the tick, mirroring `fetch_frame_jpeg`'s Ok(None)
+                // contract for unavailable frames.
+                let img_url = format!("{}/frames/{}", self.api_url_base, frame_id);
+                let resp = self
+                    .auth(self.http.get(&img_url))
+                    .send()
+                    .await
+                    .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                if !resp.status().is_success() {
+                    continue;
+                }
+                let bytes = match resp.bytes().await {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+
+                // Step 3: decode → resize 320×180 → JPEG @ Q60 → base64.
+                // Done in spawn_blocking — image decoding is CPU-bound and we
+                // don't want to monopolize the tokio runtime. Bounded box: if
+                // anything goes wrong, fall through to the next candidate.
+                let bytes_vec = bytes.to_vec();
+                let encoded = tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
+                    let img = image::load_from_memory(&bytes_vec).ok()?;
+                    let resized = img.resize(320, 180, image::imageops::FilterType::Triangle);
+                    let (w, h) = (resized.width(), resized.height());
+                    let mut buf = Vec::with_capacity(40 * 1024);
+                    let mut cursor = std::io::Cursor::new(&mut buf);
+                    let encoder =
+                        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 60);
+                    resized.into_rgb8().write_with_encoder(encoder).ok()?;
+                    Some((buf, w, h))
+                })
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
-            if !resp.status().is_success() {
-                return Err(EnterpriseSyncError::LocalApi(format!(
-                    "GET {} -> {}",
-                    img_url,
-                    resp.status()
-                )));
+                .ok()
+                .flatten();
+
+                let (jpeg, w, h) = match encoded {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let image_b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+
+                return Ok(Some(SnapshotRow {
+                    frame_id,
+                    timestamp: ts.to_rfc3339(),
+                    mime: "image/jpeg".to_string(),
+                    image_b64,
+                    width: w,
+                    height: h,
+                }));
             }
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
 
-            // Step 3: decode → resize 320×180 → JPEG @ Q60 → base64.
-            // Done in spawn_blocking — image decoding is CPU-bound and we
-            // don't want to monopolize the tokio runtime. Bounded box: if
-            // anything goes wrong, return Ok(None) so the rest of the
-            // batch still ships.
-            let bytes_vec = bytes.to_vec();
-            let encoded = tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
-                let img = image::load_from_memory(&bytes_vec).ok()?;
-                let resized = img.resize(320, 180, image::imageops::FilterType::Triangle);
-                let (w, h) = (resized.width(), resized.height());
-                let mut buf = Vec::with_capacity(40 * 1024);
-                let mut cursor = std::io::Cursor::new(&mut buf);
-                let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 60);
-                resized.into_rgb8().write_with_encoder(encoder).ok()?;
-                Some((buf, w, h))
-            })
-            .await
-            .ok()
-            .flatten();
-
-            let (jpeg, w, h) = match encoded {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            let image_b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
-
-            Ok(Some(SnapshotRow {
-                frame_id,
-                timestamp: ts.to_rfc3339(),
-                mime: "image/jpeg".to_string(),
-                image_b64,
-                width: w,
-                height: h,
-            }))
+            // No recent frame was decodable (all still too fresh or expired).
+            // Skip this tick quietly — a later tick will catch a flushed frame.
+            Ok(None)
         }
 
         async fn fetch_frame_jpeg(

@@ -70,6 +70,26 @@ describe('injectCacheBreakpoints — clients without cache management', () => {
 		expect(countCacheBreakpoints(captured.body)).toBe(2);
 	});
 
+	it('adds a tool-schema marker before system/history markers when tools are present', async () => {
+		const captured = captureForwarded();
+		await proxyToAnthropic(makeRequest({
+			model: 'claude-opus-4-8',
+			max_tokens: 100,
+			system: 'short system prompt',
+			tools: [
+				{ name: 'search', input_schema: { type: 'object', properties: { q: { type: 'string' } } } },
+				{ name: 'read_file', input_schema: { type: 'object', properties: { path: { type: 'string' } } } },
+			],
+			messages: [{ role: 'user', content: [{ type: 'text', text: 'q1' }] }],
+		}), 'sk-test');
+
+		expect(captured.body.tools[0].cache_control).toBeUndefined();
+		expect(captured.body.tools[1].cache_control).toEqual({ type: 'ephemeral' });
+		expect(captured.body.system[0].cache_control).toEqual({ type: 'ephemeral' });
+		expect(captured.body.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
+		expect(countCacheBreakpoints(captured.body)).toBe(3);
+	});
+
 	it('converts string message content to block form to attach the marker', async () => {
 		const captured = captureForwarded();
 		await proxyToAnthropic(makeRequest({
@@ -159,6 +179,21 @@ describe('injectCacheBreakpoints — clients that manage their own caching', () 
 		injectCacheBreakpoints(body);
 		const markers = body.system.filter((b: any) => b.cache_control).length;
 		expect(markers).toBe(1);
+	});
+
+	it('keeps an existing tool marker instead of double-marking tool schemas', () => {
+		const body = {
+			tools: [
+				{ name: 'search', input_schema: {}, cache_control: { type: 'ephemeral', ttl: '1h' } },
+				{ name: 'read_file', input_schema: {} },
+			],
+			messages: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
+		};
+		injectCacheBreakpoints(body);
+		expect((body.tools[0] as any).cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+		expect((body.tools[1] as any).cache_control).toBeUndefined();
+		expect((body.messages[0].content[0] as any).cache_control).toEqual({ type: 'ephemeral' });
+		expect(countCacheBreakpoints(body)).toBe(2);
 	});
 });
 

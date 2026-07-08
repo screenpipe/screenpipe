@@ -858,29 +858,30 @@ describe("Windows user journey", function () {
 
     await waitForBodyText(
       (bodyText) =>
-        bodyText.includes("local disk, cloud archive, and sync") &&
+        bodyText.includes("local disk usage and storage controls") &&
         bodyText.includes("storage policy") &&
         bodyText.includes("drop video + audio"),
       "Storage settings did not show the local retention controls",
     );
 
+    const retentionModeOff = await $('[data-testid="retention-mode-off"]');
+    await retentionModeOff.waitForExist({ timeout: t(20_000) });
+    const retentionModeMedia = await $('[data-testid="retention-mode-media"]');
+    await retentionModeMedia.waitForExist({ timeout: t(20_000) });
+
     // Fresh installs default to media retention, and selecting the already
     // active mode early-returns without a dialog. Switch to "off" first
     // (idempotent when already off) so the media click below always opens
     // the confirmation dialog.
-    const offRetentionMode = await $('[data-testid="retention-mode-off"]');
-    await offRetentionMode.waitForExist({ timeout: t(20_000) });
-    await offRetentionMode.scrollIntoView();
-    await offRetentionMode.click();
+    await retentionModeOff.scrollIntoView();
+    await retentionModeOff.click();
     await waitForBodyText(
       (bodyText) => bodyText.includes("currently: keeping everything forever."),
       "Storage settings did not switch retention off before the media preview",
     );
 
-    const mediaRetentionMode = await $('[data-testid="retention-mode-media"]');
-    await mediaRetentionMode.waitForExist({ timeout: t(20_000) });
-    await mediaRetentionMode.scrollIntoView();
-    await mediaRetentionMode.click();
+    await retentionModeMedia.scrollIntoView();
+    await retentionModeMedia.click();
 
     const confirmation = await $('[data-testid="retention-mode-confirm-dialog"]');
     await confirmation.waitForDisplayed({ timeout: t(20_000) });

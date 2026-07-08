@@ -75,4 +75,24 @@ pub mod stream_invalidation {
     pub fn monitor_frame_seq(monitor_id: u32) -> Option<u64> {
         sck_rs::monitor_frame_seq(monitor_id)
     }
+
+    /// Latest RGBA frame from the persistent ~2fps SCK stream, if one is running.
+    pub fn peek_monitor_frame(monitor_id: u32) -> Option<image::RgbaImage> {
+        sck_rs::peek_latest_frame(monitor_id)
+    }
+
+    /// Ensure a persistent SCK stream exists for this monitor (creates one if needed).
+    pub async fn ensure_monitor_stream(
+        monitor_id: u32,
+        width: u32,
+        height: u32,
+        excluded_window_ids: &[u32],
+    ) -> bool {
+        if peek_monitor_frame(monitor_id).is_some() {
+            return true;
+        }
+        sck_rs::capture_monitor_persistent(monitor_id, width, height, excluded_window_ids)
+            .await
+            .is_ok()
+    }
 }

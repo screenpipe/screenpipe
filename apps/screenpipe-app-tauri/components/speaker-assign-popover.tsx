@@ -315,24 +315,28 @@ export function SpeakerAssignPopover({
 						</div>
 					)}
 
-					{/* Audio preview toggle */}
-					<div className="pt-2 border-t">
-						<Button
-							variant="ghost"
-							size="sm"
-							className="w-full justify-start text-xs"
-							onClick={() => setShowAudioPreview(!showAudioPreview)}
-						>
-							<Volume2 className="h-3 w-3 mr-2" />
-							{showAudioPreview ? "Hide audio preview" : "Play audio to confirm"}
-						</Button>
+					{/* Audio preview toggle — only offered when we actually have a file
+					    to play; audioFilePath can be empty (e.g. a corrupted
+					    file_path) even though the chunk itself is still assignable. */}
+					{audioFilePath && (
+						<div className="pt-2 border-t">
+							<Button
+								variant="ghost"
+								size="sm"
+								className="w-full justify-start text-xs"
+								onClick={() => setShowAudioPreview(!showAudioPreview)}
+							>
+								<Volume2 className="h-3 w-3 mr-2" />
+								{showAudioPreview ? "Hide audio preview" : "Play audio to confirm"}
+							</Button>
 
-						{showAudioPreview && (
-							<div className="mt-2">
-								<MediaComponent filePath={audioFilePath} />
-							</div>
-						)}
-					</div>
+							{showAudioPreview && (
+								<div className="mt-2">
+									<MediaComponent filePath={audioFilePath} />
+								</div>
+							)}
+						</div>
+					)}
 
 					{/* Mark as noise button */}
 					{speakerId && (

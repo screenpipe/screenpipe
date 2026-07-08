@@ -344,10 +344,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// position. We CANNOT read this from inside the setCurrentIndex updater
 	// because React defers functional updaters until render — a value captured
 	// there is not yet set when the subscriber needs it.
+	// Assigned during render (not in an effect): the ref is read only from the
+	// store subscriber callback below, never during this component's render.
 	const currentIndexRef = useRef(currentIndex);
-	useEffect(() => {
-		currentIndexRef.current = currentIndex;
-	}, [currentIndex]);
+	currentIndexRef.current = currentIndex;
 
 	useEffect(() => {
 		let prevTs = 0;

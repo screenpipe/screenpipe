@@ -363,6 +363,17 @@ impl Default for EventDrivenCaptureConfig {
 /// during meetings.
 const MEETING_IDLE_CAPTURE_INTERVAL_MS: u64 = 5_000;
 
+/// Debounce floor for soft-checkpoint triggers (`KeyPress`, `TypingPause`,
+/// `Clipboard`). These fire from a raw, unspaced per-keystroke/paste event
+/// stream, so full debounce exemption (the treatment hard checkpoints get)
+/// turned continuous typing into a back-to-back capture storm — each
+/// keystroke chaining a full screenshot + tree walk + OCR-if-thin + DB write
+/// (#4844). A fixed const rather than a config field — no plumbing needed,
+/// and it can graduate to tunable if telemetry ever calls for it. See
+/// `is_soft_checkpoint_trigger` and the deferral logic in
+/// `event_driven_capture_loop`.
+const CHECKPOINT_MIN_INTERVAL_MS: u64 = 1_500;
+
 pub struct EventDrivenCapture {
     config: EventDrivenCaptureConfig,
     /// Time of last capture
@@ -418,6 +429,17 @@ impl EventDrivenCapture {
     /// Check if enough time has passed since the last capture (debounce).
     pub fn can_capture(&self) -> bool {
         self.last_capture.elapsed() >= Duration::from_millis(self.config.min_capture_interval_ms)
+    }
+
+    /// Check if enough time has passed since the last capture for a
+    /// soft-checkpoint trigger's own floor. Deliberately independent of
+    /// `min_capture_interval_ms` — that value can be *longer* than
+    /// `CHECKPOINT_MIN_INTERVAL_MS` under an aggressive power profile (up to
+    /// 2s) or *shorter* under an HD override, and a soft checkpoint should
+    /// neither wait for a stricter battery-saver floor nor get held back
+    /// once HD is no longer active. See `CHECKPOINT_MIN_INTERVAL_MS`.
+    pub fn can_capture_checkpoint(&self) -> bool {
+        self.last_capture.elapsed() >= Duration::from_millis(CHECKPOINT_MIN_INTERVAL_MS)
     }
 
     /// Record that a capture just happened.
@@ -719,6 +741,17 @@ pub async fn event_driven_capture_loop(
     let mut last_warm_visual_check = Instant::now()
         .checked_sub(Duration::from_secs(10))
         .unwrap_or_else(Instant::now);
+
+    // Deferred soft checkpoint (#4844): when a KeyPress/TypingPause/Clipboard
+    // trigger arrives before `CHECKPOINT_MIN_INTERVAL_MS` has elapsed, its
+    // kind (latest wins) and correlation ids are stashed here instead of
+    // either firing a full capture pipeline immediately or being dropped.
+    // Promoted once the floor elapses with nothing more urgent pending, or
+    // merged into whatever capture happens next — see the trigger-handling
+    // block below. Cleared on loop exit via `report_triggers_dropped` so the
+    // originating `ui_events` rows never sit at `frame_id=NULL`.
+    let mut pending_checkpoint: Option<CaptureTrigger> = None;
+    let mut pending_checkpoint_corr_ids: Vec<crate::frame_linker::CorrelationId> = Vec::new();
 
     // Track content hash for dedup across captures
     let mut last_content_hash: Option<i64> = None;
@@ -1296,6 +1329,26 @@ pub async fn event_driven_capture_loop(
             }
         }
 
+        // Promote a deferred soft checkpoint (#4844) once its floor has
+        // elapsed and nothing more urgent showed up this tick. Must run
+        // before the visual-change check below, which only fires when
+        // `trigger` is still `None` — a promoted checkpoint should suppress
+        // it exactly like any other trigger would. Worst-case added latency
+        // past the floor is one `poll_interval` (250ms).
+        if trigger.is_none() {
+            if let Some(pending) = pending_checkpoint.take() {
+                match checkpoint_gate(state.can_capture_checkpoint(), hd_active) {
+                    CheckpointGate::Proceed => {
+                        trigger = Some(pending);
+                        correlation_ids.append(&mut pending_checkpoint_corr_ids);
+                    }
+                    CheckpointGate::Defer => {
+                        pending_checkpoint = Some(pending);
+                    }
+                }
+            }
+        }
+
         // Visual change detection: periodically screenshot + frame diff
         // Re-check DRM pause before touching SCK — the flag may have been set
         // between the top-of-loop check and here.
@@ -1353,6 +1406,36 @@ pub async fn event_driven_capture_loop(
                 last_elements_cache.remove(&device_name);
             }
 
+            // Soft-checkpoint coalescing (#4844): KeyPress/TypingPause/
+            // Clipboard fire from a raw, unspaced event stream — continuous
+            // typing chains dozens of these with no natural spacing. Defer
+            // rather than drop when the floor hasn't elapsed: stash the
+            // latest kind and its correlation ids so a later tick (via the
+            // promotion above) or whatever capture happens next still lands
+            // the end-of-burst state. A straight drop-and-link-to-last-frame
+            // (the treatment a plain debounced trigger gets, below) could
+            // leave that state uncaptured for up to 30s, since visual-change
+            // checks are suppressed while the keyboard is active and small
+            // text edits rarely trip the pixel threshold. `hd_active` still
+            // bypasses the floor entirely — HD wants dense capture.
+            if is_soft_checkpoint_trigger(&trigger)
+                && checkpoint_gate(state.can_capture_checkpoint(), hd_active)
+                    == CheckpointGate::Defer
+            {
+                debug!(
+                    "event capture deferring soft checkpoint (trigger={}, monitor={})",
+                    trigger.as_str(),
+                    monitor_id
+                );
+                defer_checkpoint(
+                    &mut pending_checkpoint,
+                    &mut pending_checkpoint_corr_ids,
+                    trigger,
+                    &mut correlation_ids,
+                );
+                continue;
+            }
+
             let can_capture = state.can_capture();
             let debounce_exempt = is_workflow_checkpoint_trigger(&trigger);
             if can_capture || debounce_exempt {
@@ -1362,6 +1445,17 @@ pub async fn event_driven_capture_loop(
                         trigger.as_str(),
                         monitor_id
                     );
+                }
+
+                // Merge in any checkpoint deferred on an earlier tick: this
+                // capture (whatever triggered it) reflects the current
+                // screen state, so it *is* the checkpoint those events were
+                // waiting for. Runs before the DRM gate so a DRM-blocked
+                // capture still releases these ids via the
+                // `report_triggers_dropped` call right below instead of
+                // leaking them.
+                if pending_checkpoint.take().is_some() {
+                    correlation_ids.append(&mut pending_checkpoint_corr_ids);
                 }
 
                 // Pre-capture DRM gate: check BEFORE any SCK call.
@@ -1699,6 +1793,17 @@ pub async fn event_driven_capture_loop(
         // include bounded sleeps.
     }
 
+    // Release any soft checkpoint still waiting to be promoted/merged so its
+    // `ui_events` rows don't sit at `frame_id=NULL` until the linker's 60s
+    // pending-expiry (#4844).
+    if !pending_checkpoint_corr_ids.is_empty() {
+        report_triggers_dropped(
+            linker_tx.as_ref(),
+            std::mem::take(&mut pending_checkpoint_corr_ids),
+            crate::frame_linker::DropReason::Other,
+        );
+    }
+
     info!(
         "event-driven capture loop exited for monitor {}",
         monitor_id
@@ -1911,6 +2016,7 @@ fn is_ocr_heavy_app(app_name: &str) -> bool {
         || contains_ascii_case_insensitive(app_name, "hyper")
         || contains_ascii_case_insensitive(app_name, "warp")
         || app_name.eq_ignore_ascii_case("obsidian")
+        || app_name.eq_ignore_ascii_case("obsidian.exe")
 }
 
 fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
@@ -1928,6 +2034,11 @@ fn is_lock_screen_app(app_name: &str) -> bool {
     app_name.eq_ignore_ascii_case("loginwindow")
         || app_name.eq_ignore_ascii_case("screensaverengine")
         || app_name.eq_ignore_ascii_case("lockscreen")
+        // Windows: LockApp.exe hosts the lock screen UI, LogonUI.exe the
+        // credential prompt. Both must be recognized here — an unrecognized
+        // Some(app) would otherwise clear the global screen-locked flag.
+        || app_name.eq_ignore_ascii_case("lockapp.exe")
+        || app_name.eq_ignore_ascii_case("logonui.exe")
 }
 
 /// How long the persistent stream's frame-delivery sequence may stay flat
@@ -2027,9 +2138,18 @@ impl StreamLivenessWatch {
 ///   hash dedup would otherwise drop. While HD is on we capture every change
 ///   at the HD interval and let the visual-change trigger + `min_capture_
 ///   interval_ms` debounce be the only rate limiters.
-/// - semantic workflow-boundary triggers: focus changes, typing/scroll stops,
-///   clipboard actions, and shortcut keypresses must leave a durable checkpoint
-///   even when visible text is unchanged.
+/// - hard-checkpoint triggers (see `is_hard_checkpoint_trigger`): focus
+///   changes, scroll stops, idle, and manual captures must leave a durable
+///   checkpoint even when visible text is unchanged. `Idle` in particular
+///   must stay dedup-exempt — the meeting idle floor
+///   (`MEETING_IDLE_CAPTURE_INTERVAL_MS`) relies on writing through even when
+///   the AX hash is unchanged. Soft checkpoints (`TypingPause`/`KeyPress`/
+///   `Clipboard`) used to be exempted here too, but they fire from a raw,
+///   unspaced keystroke/paste stream, so an unchanged AX hash there really
+///   does mean "nothing new to store" (a modifier-only KeyPress, copying the
+///   same text twice, …) — exempting them just chained redundant
+///   OCR-if-thin + DB writes during continuous typing (#4844). They're now
+///   dedup-eligible like any content-driven trigger.
 /// - the 30s time-floor has elapsed: forces a write even if the hash matches.
 /// - `in_meeting` + a `VisualChange` trigger: while a meeting is detected, a
 ///   visual change means the shared screen / slide / video moved pixels even
@@ -2049,22 +2169,82 @@ fn dedup_applies(
     let meeting_visual_change = in_meeting && matches!(trigger, CaptureTrigger::VisualChange);
     !hd_active
         && !meeting_visual_change
-        && !is_workflow_checkpoint_trigger(trigger)
+        && !is_hard_checkpoint_trigger(trigger)
         && since_last_db_write < Duration::from_secs(30)
 }
 
-fn is_workflow_checkpoint_trigger(trigger: &CaptureTrigger) -> bool {
+/// Checkpoint triggers whose semantics justify skipping debounce and dedup
+/// unconditionally: they're context-defining and, even in pathological cases
+/// (alt-tab spam, scroll flicks), fire far less densely than a raw keystroke
+/// stream. See `is_soft_checkpoint_trigger` for the other half of the split.
+fn is_hard_checkpoint_trigger(trigger: &CaptureTrigger) -> bool {
     matches!(
         trigger,
         CaptureTrigger::AppSwitch { .. }
             | CaptureTrigger::WindowFocus { .. }
-            | CaptureTrigger::TypingPause
             | CaptureTrigger::ScrollStop
-            | CaptureTrigger::KeyPress
-            | CaptureTrigger::Clipboard
             | CaptureTrigger::Idle
             | CaptureTrigger::Manual
     )
+}
+
+/// Checkpoint triggers driven by a raw, unspaced per-keystroke/paste event
+/// stream. Continuous typing/editing fires these with no natural spacing —
+/// full debounce/dedup exemption turned that into a back-to-back capture
+/// storm (#4844). See `CHECKPOINT_MIN_INTERVAL_MS` and the deferral logic in
+/// `event_driven_capture_loop`.
+fn is_soft_checkpoint_trigger(trigger: &CaptureTrigger) -> bool {
+    matches!(
+        trigger,
+        CaptureTrigger::TypingPause | CaptureTrigger::KeyPress | CaptureTrigger::Clipboard
+    )
+}
+
+/// Outcome of checking a soft-checkpoint trigger against its own debounce
+/// floor. Pulled out as a small pure function (rather than inlined at both
+/// call sites in `event_driven_capture_loop`) so the coalescing decision is
+/// unit-testable without the async capture loop, and so the initial
+/// defer-vs-proceed check and the later promotion check can't drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckpointGate {
+    /// The floor elapsed (or HD is active, which always wants dense capture)
+    /// — let the trigger through to a normal capture attempt.
+    Proceed,
+    /// The floor hasn't elapsed — stash it via `defer_checkpoint` instead of
+    /// dropping it or forcing an immediate capture.
+    Defer,
+}
+
+fn checkpoint_gate(floor_elapsed: bool, hd_active: bool) -> CheckpointGate {
+    if floor_elapsed || hd_active {
+        CheckpointGate::Proceed
+    } else {
+        CheckpointGate::Defer
+    }
+}
+
+/// Stash a deferred soft checkpoint. The latest trigger kind wins — it's the
+/// best proxy for the state a capture right now would actually show — while
+/// every correlation id from every deferred trigger in the burst accumulates,
+/// so none of their `ui_events` rows are orphaned once the checkpoint is
+/// finally promoted or merged into another capture (#4844).
+fn defer_checkpoint(
+    pending: &mut Option<CaptureTrigger>,
+    pending_corr_ids: &mut Vec<crate::frame_linker::CorrelationId>,
+    trigger: CaptureTrigger,
+    corr_ids: &mut Vec<crate::frame_linker::CorrelationId>,
+) {
+    *pending = Some(trigger);
+    pending_corr_ids.append(corr_ids);
+}
+
+/// Union of hard and soft checkpoints. Kept only for `trigger_reduce_priority`
+/// — when a drain batch mixes a checkpoint (of either kind) with trailing
+/// clicks/visual noise, the checkpoint should still win the "most recent
+/// trigger" slot. Debounce/dedup/throttle decisions use the hard/soft split
+/// directly instead of this union.
+fn is_workflow_checkpoint_trigger(trigger: &CaptureTrigger) -> bool {
+    is_hard_checkpoint_trigger(trigger) || is_soft_checkpoint_trigger(trigger)
 }
 
 fn bypasses_capture_throttles(trigger: &CaptureTrigger) -> bool {
@@ -2072,10 +2252,7 @@ fn bypasses_capture_throttles(trigger: &CaptureTrigger) -> bool {
         trigger,
         CaptureTrigger::AppSwitch { .. }
             | CaptureTrigger::WindowFocus { .. }
-            | CaptureTrigger::TypingPause
             | CaptureTrigger::ScrollStop
-            | CaptureTrigger::KeyPress
-            | CaptureTrigger::Clipboard
             | CaptureTrigger::Manual
     )
 }
@@ -2598,7 +2775,54 @@ fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Windows: `GetForegroundWindow` + cached process-name lookup — no UIA/COM.
+/// The app name matches what the tree walker reports (both go through
+/// `get_effective_app_name`), so the walk budget's per-app cost tracking keys
+/// line up across `should_walk` and `record_walk`.
+///
+/// **Caching**: capture triggers fire on every click / typing pause / visual
+/// change, and the focused window rarely changes between triggers. A 1-second
+/// TTL bounds staleness below human perception while collapsing the common
+/// case to a single atomic load — same rationale as the macOS implementation.
+#[cfg(target_os = "windows")]
+fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
+    use arc_swap::ArcSwap;
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+
+    const CACHE_TTL: Duration = Duration::from_secs(1);
+
+    static CACHE: OnceLock<ArcSwap<(Option<LightweightFocusedMetadata>, Instant)>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        // Seed with an already-expired timestamp. Windows `Instant` counts
+        // from boot, so subtracting can fail in the first seconds after boot
+        // (autostart) — fall back to "fresh", costing one stale-second at most.
+        let expired = Instant::now()
+            .checked_sub(CACHE_TTL + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        ArcSwap::from_pointee((None, expired))
+    });
+
+    let now = Instant::now();
+    {
+        let snap = cache.load();
+        if now.duration_since(snap.1) < CACHE_TTL {
+            return snap.0.clone();
+        }
+    }
+
+    let fresh = screenpipe_a11y::platform::windows::get_focused_app_window_lightweight().map(
+        |(app_name, window_name)| LightweightFocusedMetadata {
+            app_name: Some(app_name),
+            window_name,
+        },
+    );
+    cache.store(std::sync::Arc::new((fresh.clone(), now)));
+    fresh
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
     None
 }
@@ -3032,6 +3256,8 @@ mod tests {
 
     #[test]
     fn workflow_checkpoint_trigger_classification() {
+        // The union still covers everything the old single class did — only
+        // `trigger_reduce_priority` reads this now.
         assert!(is_workflow_checkpoint_trigger(&CaptureTrigger::AppSwitch {
             app_name: "Code".into(),
             target: None,
@@ -3056,6 +3282,160 @@ mod tests {
         assert!(!is_workflow_checkpoint_trigger(
             &CaptureTrigger::VisualChange
         ));
+    }
+
+    #[test]
+    fn hard_vs_soft_checkpoint_trigger_split() {
+        // Hard checkpoints (#4844): rare, context-defining — unconditional
+        // debounce/dedup exemption.
+        assert!(is_hard_checkpoint_trigger(&CaptureTrigger::AppSwitch {
+            app_name: "Code".into(),
+            target: None,
+        }));
+        assert!(is_hard_checkpoint_trigger(&CaptureTrigger::WindowFocus {
+            window_name: "main.rs".into(),
+            target: None,
+        }));
+        assert!(is_hard_checkpoint_trigger(&CaptureTrigger::ScrollStop));
+        assert!(is_hard_checkpoint_trigger(&CaptureTrigger::Idle));
+        assert!(is_hard_checkpoint_trigger(&CaptureTrigger::Manual));
+        assert!(!is_hard_checkpoint_trigger(&CaptureTrigger::TypingPause));
+        assert!(!is_hard_checkpoint_trigger(&CaptureTrigger::KeyPress));
+        assert!(!is_hard_checkpoint_trigger(&CaptureTrigger::Clipboard));
+        assert!(!is_hard_checkpoint_trigger(&CaptureTrigger::Click {
+            x: 10,
+            y: 20,
+        }));
+        assert!(!is_hard_checkpoint_trigger(&CaptureTrigger::VisualChange));
+
+        // Soft checkpoints (#4844): raw, unspaced keystroke/paste stream —
+        // get their own debounce floor and are dedup-eligible.
+        assert!(is_soft_checkpoint_trigger(&CaptureTrigger::TypingPause));
+        assert!(is_soft_checkpoint_trigger(&CaptureTrigger::KeyPress));
+        assert!(is_soft_checkpoint_trigger(&CaptureTrigger::Clipboard));
+        assert!(!is_soft_checkpoint_trigger(&CaptureTrigger::AppSwitch {
+            app_name: "Code".into(),
+            target: None,
+        }));
+        assert!(!is_soft_checkpoint_trigger(&CaptureTrigger::WindowFocus {
+            window_name: "main.rs".into(),
+            target: None,
+        }));
+        assert!(!is_soft_checkpoint_trigger(&CaptureTrigger::ScrollStop));
+        assert!(!is_soft_checkpoint_trigger(&CaptureTrigger::Idle));
+        assert!(!is_soft_checkpoint_trigger(&CaptureTrigger::Manual));
+
+        // The two classes partition every checkpoint with no overlap.
+        for hard in [
+            CaptureTrigger::AppSwitch {
+                app_name: "Code".into(),
+                target: None,
+            },
+            CaptureTrigger::WindowFocus {
+                window_name: "main.rs".into(),
+                target: None,
+            },
+            CaptureTrigger::ScrollStop,
+            CaptureTrigger::Idle,
+            CaptureTrigger::Manual,
+        ] {
+            assert!(!is_soft_checkpoint_trigger(&hard));
+        }
+        for soft in [
+            CaptureTrigger::TypingPause,
+            CaptureTrigger::KeyPress,
+            CaptureTrigger::Clipboard,
+        ] {
+            assert!(!is_hard_checkpoint_trigger(&soft));
+        }
+    }
+
+    #[test]
+    fn checkpoint_gate_proceeds_on_floor_or_hd_active() {
+        // Neither condition met — defer.
+        assert_eq!(checkpoint_gate(false, false), CheckpointGate::Defer);
+        // Floor elapsed — proceed regardless of HD.
+        assert_eq!(checkpoint_gate(true, false), CheckpointGate::Proceed);
+        // HD active — proceed even if the floor hasn't elapsed; HD wants
+        // dense capture and the checkpoint floor doesn't apply to it.
+        assert_eq!(checkpoint_gate(false, true), CheckpointGate::Proceed);
+        assert_eq!(checkpoint_gate(true, true), CheckpointGate::Proceed);
+    }
+
+    #[test]
+    fn defer_checkpoint_keeps_latest_trigger_and_accumulates_corr_ids() {
+        let mut pending: Option<CaptureTrigger> = None;
+        let mut pending_corr_ids: Vec<crate::frame_linker::CorrelationId> = Vec::new();
+
+        // First deferred trigger in the burst.
+        defer_checkpoint(
+            &mut pending,
+            &mut pending_corr_ids,
+            CaptureTrigger::KeyPress,
+            &mut vec![1],
+        );
+        assert_eq!(pending, Some(CaptureTrigger::KeyPress));
+        assert_eq!(pending_corr_ids, vec![1]);
+
+        // A second deferred trigger arrives before promotion: the latest
+        // kind replaces the stashed trigger, but corr ids from both
+        // accumulate — every triggering row must still reach a frame.
+        defer_checkpoint(
+            &mut pending,
+            &mut pending_corr_ids,
+            CaptureTrigger::Clipboard,
+            &mut vec![2, 3],
+        );
+        assert_eq!(pending, Some(CaptureTrigger::Clipboard));
+        assert_eq!(pending_corr_ids, vec![1, 2, 3]);
+
+        // A third, with no corr id (an internally-generated soft checkpoint
+        // would have none) — kind still updates, ids list is untouched.
+        defer_checkpoint(
+            &mut pending,
+            &mut pending_corr_ids,
+            CaptureTrigger::TypingPause,
+            &mut vec![],
+        );
+        assert_eq!(pending, Some(CaptureTrigger::TypingPause));
+        assert_eq!(pending_corr_ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn checkpoint_debounce_floor_is_independent_of_min_capture_interval() {
+        // Even under an aggressive power profile whose min_capture_interval_ms
+        // (up to 2s) is *longer* than CHECKPOINT_MIN_INTERVAL_MS (1.5s), the
+        // checkpoint floor is its own clock — a soft checkpoint shouldn't wait
+        // for a stricter battery-saver floor (#4844).
+        let config = EventDrivenCaptureConfig {
+            min_capture_interval_ms: 2_000,
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+
+        assert!(!state.can_capture());
+        assert!(!state.can_capture_checkpoint());
+
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(1_600))
+            .unwrap();
+        assert!(!state.can_capture()); // still short of the 2s power-profile floor
+        assert!(state.can_capture_checkpoint()); // but past the 1.5s checkpoint floor
+
+        // And under an HD-shortened interval, the checkpoint floor doesn't
+        // fire early just because the base interval is now tiny.
+        state.config.min_capture_interval_ms = 16;
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(200))
+            .unwrap();
+        assert!(state.can_capture());
+        assert!(!state.can_capture_checkpoint());
+
+        // mark_captured() re-arms both clocks together (they share the same
+        // timestamp).
+        state.mark_captured();
+        assert!(!state.can_capture());
+        assert!(!state.can_capture_checkpoint());
     }
 
     #[test]
@@ -3096,24 +3476,29 @@ mod tests {
             recent
         ));
         assert!(!dedup_applies(
-            &CaptureTrigger::TypingPause,
-            false,
-            false,
-            recent
-        ));
-        assert!(!dedup_applies(
             &CaptureTrigger::ScrollStop,
             false,
             false,
             recent
         ));
-        assert!(!dedup_applies(
+
+        // Soft checkpoints (TypingPause/KeyPress/Clipboard, #4844) are
+        // dedup-eligible like any content-driven trigger — unlike hard
+        // checkpoints, they fire from a raw, unspaced keystroke/paste stream
+        // where an unchanged AX hash really does mean nothing new happened.
+        assert!(dedup_applies(
+            &CaptureTrigger::TypingPause,
+            false,
+            false,
+            recent
+        ));
+        assert!(dedup_applies(
             &CaptureTrigger::KeyPress,
             false,
             false,
             recent
         ));
-        assert!(!dedup_applies(
+        assert!(dedup_applies(
             &CaptureTrigger::Clipboard,
             false,
             false,
@@ -3182,11 +3567,14 @@ mod tests {
             window_name: "main.rs".into(),
             target: None,
         }));
-        assert!(bypasses_capture_throttles(&CaptureTrigger::TypingPause));
         assert!(bypasses_capture_throttles(&CaptureTrigger::ScrollStop));
-        assert!(bypasses_capture_throttles(&CaptureTrigger::KeyPress));
-        assert!(bypasses_capture_throttles(&CaptureTrigger::Clipboard));
         assert!(bypasses_capture_throttles(&CaptureTrigger::Manual));
+
+        // Soft checkpoints (#4844) no longer bypass the terminal OCR 30s cap
+        // or the walk budget — that's the storm this issue is about.
+        assert!(!bypasses_capture_throttles(&CaptureTrigger::TypingPause));
+        assert!(!bypasses_capture_throttles(&CaptureTrigger::KeyPress));
+        assert!(!bypasses_capture_throttles(&CaptureTrigger::Clipboard));
 
         assert!(!bypasses_capture_throttles(&CaptureTrigger::Click {
             x: 10,
@@ -3222,7 +3610,11 @@ mod tests {
         assert!(is_ocr_heavy_app("WezTerm"));
         assert!(is_ocr_heavy_app("com.mitchellh.ghostty.WARP"));
         assert!(is_ocr_heavy_app("Obsidian"));
+        // Windows process names carry the extension.
+        assert!(is_ocr_heavy_app("Obsidian.exe"));
+        assert!(is_ocr_heavy_app("wezterm-gui.exe"));
         assert!(!is_ocr_heavy_app("Chrome"));
+        assert!(!is_ocr_heavy_app("chrome.exe"));
     }
 
     #[test]
@@ -3230,7 +3622,12 @@ mod tests {
         assert!(is_lock_screen_app("loginwindow"));
         assert!(is_lock_screen_app("ScreenSaverEngine"));
         assert!(is_lock_screen_app("LOCKSCREEN"));
+        // Windows lock screen host + credential UI. Must be recognized or a
+        // Some(app) at the lock screen clears the global screen-locked flag.
+        assert!(is_lock_screen_app("LockApp.exe"));
+        assert!(is_lock_screen_app("LogonUI.exe"));
         assert!(!is_lock_screen_app("Finder"));
+        assert!(!is_lock_screen_app("explorer.exe"));
     }
 
     #[test]

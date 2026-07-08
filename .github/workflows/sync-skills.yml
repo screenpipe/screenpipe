@@ -20,6 +20,11 @@ on:
       - "crates/screenpipe-core/assets/skills/**"
   workflow_dispatch:
 
+concurrency:
+  # Serialize sync runs so parallel pushes don't race the commit.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
