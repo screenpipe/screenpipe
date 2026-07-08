@@ -5,6 +5,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEventListener } from "@/lib/hooks/use-event-listener";
 import {
   ViewerFileContent,
   viewerDisplayText,
@@ -101,30 +102,26 @@ export default function ViewerPage() {
     }
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const mod = isMacPlatform() ? e.metaKey : e.ctrlKey;
-      if (e.key === "Escape") {
-        e.preventDefault();
-        void closeWindow();
-        return;
-      }
-      if (!mod) return;
-      const k = e.key.toLowerCase();
-      if (k === "r") {
-        e.preventDefault();
-        void revealInFinder();
-      } else if (k === "l") {
-        e.preventDefault();
-        void copyPath();
-      } else if (k === "c" && e.shiftKey) {
-        e.preventDefault();
-        void copyContent();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [revealInFinder, copyPath, copyContent, closeWindow]);
+  useEventListener("keydown", (e) => {
+    const mod = isMacPlatform() ? e.metaKey : e.ctrlKey;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      void closeWindow();
+      return;
+    }
+    if (!mod) return;
+    const k = e.key.toLowerCase();
+    if (k === "r") {
+      e.preventDefault();
+      void revealInFinder();
+    } else if (k === "l") {
+      e.preventDefault();
+      void copyPath();
+    } else if (k === "c" && e.shiftKey) {
+      e.preventDefault();
+      void copyContent();
+    }
+  });
 
   const fileName = viewerDisplayName(path, content);
   const breadcrumb = useMemo(() => viewerPathBreadcrumb(path), [path]);
