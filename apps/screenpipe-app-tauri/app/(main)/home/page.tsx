@@ -126,8 +126,7 @@ function HomeContent() {
 
   // One-time in-app first-run guide. Gate on isSettingsLoaded so the overlay
   // never flashes before the store hydrates the (already-done) flag.
-  // TODO: restore gate before merging: isSettingsLoaded && !settings.firstRunGuideDone
-  const showFirstRunGuide = isSettingsLoaded;
+  const showFirstRunGuide = isSettingsLoaded && !settings.firstRunGuideDone;
   const markFirstRunGuideDone = useCallback(() => {
     void updateSettings({ firstRunGuideDone: true });
   }, [updateSettings]);

@@ -6,7 +6,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Zap } from "lucide-react";
+import { Sparkles, Zap, ArrowRight, Loader } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { localFetch } from "@/lib/api";
@@ -15,14 +15,13 @@ import posthog from "posthog-js";
 
 // One-time guided first run, shown on the Home window right after onboarding.
 // It does NOT replace the chat — it guides the REAL chat:
-//   1. ASK     — drops a recall prompt into the real composer (chat-prefill
-//                event) and points the user at it: "hit send". The real chat
-//                answers with the real model.
-//   2. AUTOMATE — once the user sends (observed via the chat store), a coachmark
-//                offers one tap to enable a real, prebuilt pipe (digital-clone).
-//                this is the moment "automation" maps to "pipe".
-//   3. DONE     — dismiss to the Automations (Pipes) tab; "pipe" is revealed as
-//                a wink, only after value is delivered.
+//   1. ASK       — drops a recall prompt into the real composer (chat-prefill
+//                  event) and points the user at it: "hit send". The real chat
+//                  answers with the real model.
+//   2. AUTOMATE  — once the AI finishes responding, show a contextual next step:
+//                  • pipe already enabled (from onboarding) → soft nudge to
+//                    explore pipes tab
+//                  • pipe NOT installed → offer one-tap to enable digital-clone
 // Gating + persistence lives in app/home/page.tsx (settings.firstRunGuideDone).
 
 interface FirstRunGuideProps {
@@ -102,11 +101,31 @@ export default function FirstRunGuide({
   const [phase, setPhase] = useState<Phase>("ask");
   const phaseRef = useRef<Phase>("ask");
   phaseRef.current = phase;
+  // Whether digital-clone is already installed+enabled (from onboarding pick-pipe)
+  const [pipeAlreadyEnabled, setPipeAlreadyEnabled] = useState<boolean | null>(null);
+  const [enabling, setEnabling] = useState(false);
   // Use wall-clock time as baseline, not store state — the store hydrates
   // sessions from disk asynchronously, so reading maxUserMessageAt() at mount
   // often returns 0. When the hydrated sessions arrive a moment later their
   // old lastUserMessageAt values all exceed 0, instantly advancing the phase.
   const sendBaselineRef = useRef(Date.now());
+
+  // On mount: check if digital-clone is already enabled from onboarding.
+  useEffect(() => {
+    localFetch("/pipes")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((json) => {
+        const pipes: Array<{ config: { enabled?: boolean; source_slug?: string; name?: string } }> =
+          json.data || [];
+        const clone = pipes.find(
+          (p) =>
+            p.config.source_slug === AUTOMATION_SLUG ||
+            p.config.name === AUTOMATION_SLUG,
+        );
+        setPipeAlreadyEnabled(!!clone?.config.enabled);
+      })
+      .catch(() => setPipeAlreadyEnabled(false));
+  }, []);
 
   // On mount: show the chat, drop the prompt into the REAL composer, and start
   // watching for the user to send it.
@@ -213,17 +232,32 @@ export default function FirstRunGuide({
     onDone();
   }, [onDone]);
 
-  const createAutomation = useCallback(() => {
+  const createAutomation = useCallback(async () => {
+    if (enabling) return;
+    setEnabling(true);
     posthog.capture("firstrun_automation_clicked");
-    // Stop rendering immediately
+    try {
+      await enablePipe(AUTOMATION_SLUG);
+      posthog.capture("firstrun_automation_created", { slug: AUTOMATION_SLUG });
+    } catch {
+      // still navigate — best effort
+    }
     setPhase("dismissed");
-    // Close guide and navigate
     onDone();
     onGoToAutomations();
-    // Fire and forget — the pipe will appear in the pipes list when ready
-    enablePipe(AUTOMATION_SLUG)
-      .then(() => posthog.capture("firstrun_automation_created", { slug: AUTOMATION_SLUG }))
-      .catch(() => {});
+  }, [enabling, onDone, onGoToAutomations]);
+
+  const explorePipes = useCallback(() => {
+    posthog.capture("firstrun_explore_clicked");
+    setPhase("dismissed");
+    onDone();
+    onGoToAutomations();
+    // Switch to the Discover tab inside PipeStoreView (small delay so it mounts first)
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("switch-pipes-tab", { detail: { tab: "discover" } }),
+      );
+    }, 100);
   }, [onDone, onGoToAutomations]);
 
   // Tag the document so CSS can lift elements above the scrim per phase.
@@ -330,7 +364,7 @@ export default function FirstRunGuide({
             </motion.div>
           )}
 
-          {/* BEAT 2: AUTOMATE */}
+          {/* BEAT 2: AUTOMATE — contextual based on pipe status */}
           {phase === "automate" && (
             <motion.div
               key="automate"
@@ -339,23 +373,52 @@ export default function FirstRunGuide({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
             >
-              <div className="flex items-start gap-2.5 mb-3">
-                <Zap className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
-                <div>
-                  <p className="font-mono text-xs font-semibold lowercase text-foreground">
-                    nice — turn this into an automation
-                  </p>
-                  <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
-                    keep a running picture of your work in the background — no asking
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={createAutomation}
-                className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
-              >
-                <Sparkles className="w-3 h-3" strokeWidth={2} /> create automation
-              </button>
+              {pipeAlreadyEnabled ? (
+                <>
+                  <div className="flex items-start gap-2.5 mb-3">
+                    <Zap className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
+                    <div>
+                      <p className="font-mono text-xs font-semibold lowercase text-foreground">
+                        screenpipe is watching in the background
+                      </p>
+                      <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                        your ai twin is already building a picture of your work — explore what else is possible
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={explorePipes}
+                    className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
+                  >
+                    explore automations <ArrowRight className="w-3 h-3" strokeWidth={2} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-start gap-2.5 mb-3">
+                    <Zap className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
+                    <div>
+                      <p className="font-mono text-xs font-semibold lowercase text-foreground">
+                        nice — turn this into an automation
+                      </p>
+                      <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                        keep a running picture of your work in the background — no asking
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={createAutomation}
+                    disabled={enabling}
+                    className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {enabling ? (
+                      <><Loader className="w-3 h-3 animate-spin" strokeWidth={2} /> setting up...</>
+                    ) : (
+                      <><Sparkles className="w-3 h-3" strokeWidth={2} /> create automation</>
+                    )}
+                  </button>
+                </>
+              )}
               <button
                 onClick={skip}
                 className="mt-3 w-full text-center font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase"
