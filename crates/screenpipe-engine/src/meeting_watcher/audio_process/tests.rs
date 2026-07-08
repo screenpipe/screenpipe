@@ -1068,3 +1068,460 @@ fn ax_resolution_only_runs_before_a_meeting_is_active() {
         is_browser: true,
     }));
 }
+
+// ---------------------------------------------------------------------------
+// Call signal gate tests (#4776) — WhatsApp/Signal/Telegram voice note phantom
+// meeting prevention.
+// ---------------------------------------------------------------------------
+
+fn whatsapp_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:500:input:built-in-mic".to_string()),
+        audio_object_id: Some(500),
+        pid: Some(99),
+        bundle_id: Some("net.whatsapp.WhatsApp".to_string()),
+        // macOS prepends U+200E LEFT-TO-RIGHT MARK to WhatsApp's localized name.
+        process_name: Some("\u{200e}WhatsApp".to_string()),
+        owner_app_name: Some("\u{200e}WhatsApp".to_string()),
+        owner_bundle_id: Some("net.whatsapp.WhatsApp".to_string()),
+        first_seen_at_ms: None,
+    }
+}
+
+/// Signal call: uses the .helper.Renderer subprocess (real WebRTC call).
+fn signal_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:115:input:BuiltInMicrophoneDevice".to_string()),
+        audio_object_id: Some(115),
+        pid: Some(63225),
+        bundle_id: Some("org.whispersystems.signal-desktop.helper.Renderer".to_string()),
+        process_name: None,
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+/// Signal voice note: uses the .helper subprocess (no .Renderer suffix).
+fn signal_voice_note_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:116:input:BuiltInMicrophoneDevice".to_string()),
+        audio_object_id: Some(116),
+        pid: Some(63247),
+        bundle_id: Some("org.whispersystems.signal-desktop.helper".to_string()),
+        process_name: None,
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+fn telegram_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:700:input:built-in-mic".to_string()),
+        audio_object_id: Some(700),
+        pid: Some(102),
+        bundle_id: Some("ru.keepcoder.Telegram".to_string()),
+        process_name: Some("Telegram".to_string()),
+        owner_app_name: Some("Telegram".to_string()),
+        owner_bundle_id: Some("ru.keepcoder.Telegram".to_string()),
+        first_seen_at_ms: None,
+    }
+}
+
+#[test]
+fn unicode_ltr_mark_stripped_from_whatsapp_identity() {
+    // macOS returns "\u{200e}WhatsApp" — verify process_identity_fields strips it.
+    let process = whatsapp_process();
+    let fields = process_identity_fields(&process);
+    assert!(
+        fields.iter().any(|f| f == "whatsapp"),
+        "Unicode LTR mark should be stripped: {fields:?}"
+    );
+    assert!(
+        !fields.iter().any(|f| f.contains('\u{200e}')),
+        "No identity field should contain U+200E: {fields:?}"
+    );
+}
+
+#[test]
+fn whatsapp_resolves_to_native_with_profile_index() {
+    // WhatsApp must fall through `known_native_bundle_platform` and match via
+    // the profile loop, which returns a profile index. Without the index,
+    // `requires_call_signal` can never be consulted.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "WhatsApp should resolve as native");
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "WhatsApp");
+    assert!(
+        profile_index.is_some(),
+        "WhatsApp must have a profile index for call signal gating"
+    );
+    let profile = &profiles[profile_index.unwrap()];
+    assert!(
+        profile.requires_call_signal,
+        "WhatsApp profile must have requires_call_signal = true"
+    );
+}
+
+#[test]
+fn signal_resolves_to_native_without_gate() {
+    let profiles = load_detection_profiles();
+    let process = signal_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "Signal should resolve as native");
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "Signal");
+    // Signal resolves via known_native_bundle_platform (no profile index)
+    // because its Electron AX tree is opaque — requires_call_signal is
+    // false and the gate is not needed.
+    assert!(
+        profile_index.is_none(),
+        "Signal should resolve via known_native_bundle_platform, not profile loop"
+    );
+}
+
+#[test]
+fn signal_voice_note_blocked_by_renderer_gate() {
+    // Signal voice notes use the .helper subprocess (no .Renderer suffix).
+    // The bundle-based gate should block them as NonMeeting.
+    let profiles = load_detection_profiles();
+    let process = signal_voice_note_process();
+    let session_key = ProcessKey::from_process(&process).unwrap();
+    let result = resolve_process_candidate(
+        session_key,
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(result, ResolvedMeetingCandidate::NonMeeting),
+        "Signal voice note (.helper) should be blocked: got {:?}",
+        result
+    );
+}
+
+#[test]
+fn signal_call_passes_renderer_gate() {
+    // Signal calls use the .helper.Renderer subprocess.
+    // The bundle-based gate should allow them as Native.
+    let profiles = load_detection_profiles();
+    let process = signal_process();
+    let session_key = ProcessKey::from_process(&process).unwrap();
+    let result = resolve_process_candidate(
+        session_key,
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(result, ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "Signal"),
+        "Signal call (.helper.Renderer) should resolve as Native Signal: got {:?}",
+        result
+    );
+}
+
+#[test]
+fn telegram_resolves_to_native_with_profile_index() {
+    let profiles = load_detection_profiles();
+    let process = telegram_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "Telegram should resolve as native");
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "Telegram");
+    assert!(
+        profile_index.is_some(),
+        "Telegram must have a profile index for call signal gating"
+    );
+    let profile = &profiles[profile_index.unwrap()];
+    assert!(
+        profile.requires_call_signal,
+        "Telegram profile must have requires_call_signal = true"
+    );
+}
+
+#[test]
+fn zoom_unaffected_by_call_signal_gate() {
+    // Call-first apps must NOT have requires_call_signal. This is a regression
+    // guard: if Zoom is accidentally flagged, every Zoom call would need AX
+    // evidence before starting.
+    let profiles = load_detection_profiles();
+    let process = zoom_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some());
+    let (platform, _) = result.unwrap();
+    assert_eq!(platform, "Zoom");
+    // Zoom resolves via known_native_bundle_platform (no profile index), which
+    // is fine — it should never be gated.
+}
+
+#[test]
+fn teams_unaffected_by_call_signal_gate() {
+    let profiles = load_detection_profiles();
+    let teams = AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:800:input:built-in-mic".to_string()),
+        audio_object_id: Some(800),
+        pid: Some(103),
+        bundle_id: Some("com.microsoft.teams2".to_string()),
+        process_name: Some("Microsoft Teams".to_string()),
+        owner_app_name: Some("Microsoft Teams".to_string()),
+        owner_bundle_id: Some("com.microsoft.teams2".to_string()),
+        first_seen_at_ms: None,
+    };
+    let result = resolve_native_platform(&teams, &profiles);
+    assert!(result.is_some());
+    let (platform, _) = result.unwrap();
+    assert_eq!(platform, "Microsoft Teams");
+}
+
+#[test]
+fn whatsapp_without_call_signal_blocked_by_gate() {
+    // Voice note scenario: WhatsApp holds the mic but no Calling_Window is
+    // present. The candidate resolves to Native{WhatsApp} but the call signal
+    // gate should block it.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    // Without the gate (which runs in build_candidates), resolution succeeds.
+    assert!(
+        matches!(
+            candidate,
+            ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "WhatsApp"
+        ),
+        "WhatsApp should resolve to Native before the gate: {candidate:?}"
+    );
+
+    // Simulate what build_candidates does: check call_evidence with no call signals.
+    let call_evidence = vec![CallSignalEvidence {
+        platform: "whatsapp".to_string(),
+        is_in_call: false,
+        matched_signals: vec![],
+    }];
+    let mut candidates = vec![candidate];
+    candidates.retain(|c| {
+        if let ResolvedMeetingCandidate::Native { platform, .. } = c {
+            let platform_lower = platform.to_lowercase();
+            if let Some(evidence) = call_evidence.iter().find(|e| e.platform == platform_lower) {
+                return evidence.is_in_call;
+            }
+        }
+        true
+    });
+    assert!(
+        candidates.is_empty(),
+        "WhatsApp without call signals should be blocked"
+    );
+}
+
+#[test]
+fn whatsapp_with_call_signal_passes_gate() {
+    // Real call scenario: WhatsApp holds the mic AND Calling_Window is present.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(
+        candidate,
+        ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "WhatsApp"
+    ));
+
+    let call_evidence = vec![CallSignalEvidence {
+        platform: "whatsapp".to_string(),
+        is_in_call: true,
+        matched_signals: vec!["AutomationIdContains(Calling_Window)".to_string()],
+    }];
+    let mut candidates = vec![candidate];
+    candidates.retain(|c| {
+        if let ResolvedMeetingCandidate::Native { platform, .. } = c {
+            let platform_lower = platform.to_lowercase();
+            if let Some(evidence) = call_evidence.iter().find(|e| e.platform == platform_lower) {
+                return evidence.is_in_call;
+            }
+        }
+        true
+    });
+    assert_eq!(
+        candidates.len(),
+        1,
+        "WhatsApp with call signal should pass the gate"
+    );
+}
+
+#[test]
+fn zoom_not_filtered_by_call_signal_gate() {
+    // Zoom should never appear in call_evidence (requires_call_signal = false),
+    // so it must pass through the retain filter untouched.
+    let profiles = load_detection_profiles();
+    let process = zoom_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(
+        candidate,
+        ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "Zoom"
+    ));
+
+    // No call_evidence for Zoom (scan_messaging_call_signals skips it).
+    let call_evidence: Vec<CallSignalEvidence> = vec![];
+    let mut candidates = vec![candidate];
+    candidates.retain(|c| {
+        if let ResolvedMeetingCandidate::Native { platform, .. } = c {
+            let platform_lower = platform.to_lowercase();
+            if let Some(evidence) = call_evidence.iter().find(|e| e.platform == platform_lower) {
+                return evidence.is_in_call;
+            }
+        }
+        true
+    });
+    assert_eq!(
+        candidates.len(),
+        1,
+        "Zoom must not be affected by call signal gate"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #4998 review: Windows identity shape for WhatsApp/Telegram, and the Signal
+// bundle-id gate must not fail closed on Windows (where bundle_id/
+// owner_bundle_id are structurally absent, not merely non-"renderer").
+// ---------------------------------------------------------------------------
+
+/// Windows-shaped WhatsApp process: no bundle_id/owner_bundle_id (those are
+/// macOS-only fields), identity carried entirely by the `.exe` process name.
+fn whatsapp_process_windows() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("wasapi:whatsapp.exe:99".to_string()),
+        audio_object_id: None,
+        pid: Some(99),
+        bundle_id: None,
+        process_name: Some("whatsapp.exe".to_string()),
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+/// Windows-shaped Telegram process: same shape as above.
+fn telegram_process_windows() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("wasapi:telegram.exe:102".to_string()),
+        audio_object_id: None,
+        pid: Some(102),
+        bundle_id: None,
+        process_name: Some("telegram.exe".to_string()),
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+/// Windows-shaped Signal process: same shape as above (a real call — Windows
+/// has no `.helper`/`.helper.Renderer` bundle-id distinction to gate on).
+fn signal_process_windows() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("wasapi:signal.exe:200".to_string()),
+        audio_object_id: None,
+        pid: Some(200),
+        bundle_id: None,
+        process_name: Some("signal.exe".to_string()),
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+#[test]
+fn whatsapp_resolves_to_native_on_windows_identity_shape() {
+    // Windows never populates bundle_id/owner_bundle_id, so identity is
+    // carried only by `process_name` = "whatsapp.exe". Before the #4998
+    // review fix, the profile-matching fallback loop only checked
+    // `macos_app_names` ("whatsapp"), which never matches "whatsapp.exe",
+    // so WhatsApp (and real WhatsApp calls, not just voice notes) could never
+    // resolve as a Native candidate on Windows at all.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process_windows();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(
+        result.is_some(),
+        "WhatsApp should resolve as native from Windows process_name alone"
+    );
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "WhatsApp");
+    assert!(
+        profile_index.is_some(),
+        "WhatsApp must still get a profile index on Windows for call signal gating"
+    );
+}
+
+#[test]
+fn telegram_resolves_to_native_on_windows_identity_shape() {
+    let profiles = load_detection_profiles();
+    let process = telegram_process_windows();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(
+        result.is_some(),
+        "Telegram should resolve as native from Windows process_name alone"
+    );
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "Telegram");
+    assert!(
+        profile_index.is_some(),
+        "Telegram must still get a profile index on Windows for call signal gating"
+    );
+}
+
+#[test]
+fn signal_windows_call_not_blocked_by_macos_only_renderer_gate() {
+    // On Windows, bundle_id/owner_bundle_id are always None (structurally
+    // absent, not merely "not containing renderer"). Before the #4998 review
+    // fix, `unwrap_or("")` fed into `.contains("renderer")` always evaluated
+    // to false, so this gate silently blocked EVERY Signal session on
+    // Windows, including real calls. It must fail open there instead.
+    let profiles = load_detection_profiles();
+    let process = signal_process_windows();
+    let session_key = ProcessKey::from_process(&process).unwrap();
+    let result = resolve_process_candidate(
+        session_key,
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(result, ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "Signal"),
+        "Signal on Windows should resolve as Native (fail open, no bundle-id \
+         discriminator available on this platform): got {:?}",
+        result
+    );
+}

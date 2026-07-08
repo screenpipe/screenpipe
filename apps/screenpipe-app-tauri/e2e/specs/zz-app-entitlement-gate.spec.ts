@@ -168,35 +168,60 @@ describe('App entitlement gate', () => {
   });
 
   it('blocks an unentitled session and restores access when cleared', async () => {
-    // 1. Force the gate on. With no entitled user, the paywall must show and the
-    //    app navigation must be hidden.
-    await setForceGate(true);
+    try {
+      // 1. Force the gate on. With no entitled user, the paywall must show and the
+      //    app navigation must be hidden.
+      await setForceGate(true);
 
-    const choosePlan = await $('button*=choose plan');
-    await choosePlan.waitForExist({ timeout: t(15000) });
-    expect(await choosePlan.isExisting()).toBe(true);
-    expect(await (await $('[data-testid="nav-home"]')).isExisting()).toBe(false);
+      const choosePlan = await $('button*=choose plan');
+      await choosePlan.waitForExist({ timeout: t(15000) });
+      expect(await choosePlan.isExisting()).toBe(true);
+      expect(await (await $('[data-testid="nav-home"]')).isExisting()).toBe(false);
 
-    // 2. Clear the flag (back to the bypassed e2e build) and the app returns.
-    await setForceGate(false);
+      // 2. Clear the flag (back to the bypassed e2e build) and the app returns.
+      await setForceGate(false);
 
-    const navHome = await $('[data-testid="nav-home"]');
-    await navHome.waitForExist({ timeout: t(15000) });
-    expect(await navHome.isExisting()).toBe(true);
-    expect(await (await $('button*=choose plan')).isExisting()).toBe(false);
+      const navHome = await $('[data-testid="nav-home"]');
+      await navHome.waitForExist({ timeout: t(15000) });
+      expect(await navHome.isExisting()).toBe(true);
+      expect(await (await $('button*=choose plan')).isExisting()).toBe(false);
+    } finally {
+      await setForceGate(false).catch(() => {});
+    }
   });
 
   it('blocks a cloud_subscribed account when the server denies app entitlement', async () => {
-    await setForceGate(true);
-    await patchFetchForCloudSubscribedAppDeniedUser();
-    await emitDeepLink(`screenpipe://login?api_key=${FAKE_DENIED_TOKEN}`);
+    try {
+      await setForceGate(true);
+      await patchFetchForCloudSubscribedAppDeniedUser();
+      await emitDeepLink(`screenpipe://login?api_key=${FAKE_DENIED_TOKEN}`);
 
-    const title = await $('h1=subscription required');
-    await title.waitForExist({ timeout: t(15000) });
-    expect(await title.isExisting()).toBe(true);
-    expect(await (await $('[data-testid="nav-home"]')).isExisting()).toBe(false);
+      await browser.waitUntil(
+        async () => {
+          const state = (await browser.execute((email: string) => {
+            const body = document.body.innerText.toLowerCase();
+            return {
+              hasSubscriptionRequired: body.includes("subscription required"),
+              hasDeniedEmail: body.includes(email.toLowerCase()),
+              hasNavHome: Boolean(document.querySelector('[data-testid="nav-home"]')),
+            };
+          }, FAKE_DENIED_EMAIL)) as {
+            hasSubscriptionRequired: boolean;
+            hasDeniedEmail: boolean;
+            hasNavHome: boolean;
+          };
 
-    await restoreFetch();
-    await setForceGate(false);
+          return state.hasSubscriptionRequired && state.hasDeniedEmail && !state.hasNavHome;
+        },
+        {
+          timeout: t(15000),
+          interval: 250,
+          timeoutMsg: "Cloud-subscribed but app-denied account did not stay behind the entitlement gate",
+        },
+      );
+    } finally {
+      await restoreFetch().catch(() => {});
+      await setForceGate(false).catch(() => {});
+    }
   });
 });

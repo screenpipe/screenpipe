@@ -224,8 +224,20 @@ export function AppEntitlementGate({ children }: { children: React.ReactNode }) 
       reason: shouldGateForEnterpriseLogin ? "enterprise_login_required" : "app_entitlement",
       plan: user?.subscription_plan ?? null,
       app_entitled: user?.app_entitled ?? null,
+      // Diagnostics for the enterprise post-update loop (SCR-132): tell a
+      // transient token-hydration miss (where the fail-open cushion should
+      // hold) apart from a real, durable gate.
+      enterprise: isEnterprise,
+      token_pending: tokenPending,
+      ever_entitled: everEntitledRef.current,
+      transient_fail_open: failOpenForTransientAccessLoss,
+      gate_path: shouldGateForEnterpriseLogin
+        ? "enterprise_login"
+        : shouldGateForEnterpriseApp
+          ? "enterprise_app"
+          : "entitlement",
     });
-  }, [isSettingsLoaded, shouldGate, shouldGateForEnterpriseLogin, user?.app_entitled, user?.subscription_plan, user?.token]);
+  }, [isSettingsLoaded, shouldGate, shouldGateForEnterpriseLogin, shouldGateForEnterpriseApp, isEnterprise, tokenPending, failOpenForTransientAccessLoss, user?.app_entitled, user?.subscription_plan, user?.token]);
 
   // When failing open on a pending token, keep trying to re-read it from the
   // secret store. Once the store heals (the periodic WAL checkpoint clears the

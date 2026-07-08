@@ -1249,10 +1249,9 @@ impl InputWorker {
             }
         }
 
-        let scroll_due = self
-            .scroll_aggregator
-            .as_ref()
-            .is_some_and(|agg| agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS);
+        let scroll_due = self.scroll_aggregator.as_ref().is_some_and(|agg| {
+            agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS
+        });
         if scroll_due {
             if let Some(agg) = self.scroll_aggregator.take() {
                 emit_aggregated_scroll(&self.tx, agg);
@@ -2588,7 +2587,11 @@ mod tests {
         // Healthy: hooks fired recently.
         assert!(!watchdog_should_reinstall(100, 100, None));
         // Dead: system input flowing but hooks silent.
-        assert!(watchdog_should_reinstall(100, WATCHDOG_HOOK_SILENT_MS, None));
+        assert!(watchdog_should_reinstall(
+            100,
+            WATCHDOG_HOOK_SILENT_MS,
+            None
+        ));
         // Idle system: hooks silent but no input either — not dead.
         assert!(!watchdog_should_reinstall(60_000, 60_000, None));
         // Backoff: too soon after the previous reinstall.

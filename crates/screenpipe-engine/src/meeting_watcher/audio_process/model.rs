@@ -215,6 +215,22 @@ pub(crate) struct ResolvedSession {
     pub(crate) live_evidence: bool,
 }
 
+/// Result of scanning a messaging app's AX tree for call UI evidence.
+///
+/// When a native platform has `requires_call_signal: true`, the audio-process
+/// detector runs this scan before promoting the candidate to `Native`. If
+/// `is_in_call` is false the candidate is downgraded to `NonMeeting`,
+/// blocking phantom meetings from voice notes (#4776).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CallSignalEvidence {
+    /// Lowercased platform name (e.g. "whatsapp", "signal", "telegram").
+    pub platform: String,
+    /// Whether the AX scan found call signals confirming a real call.
+    pub is_in_call: bool,
+    /// Human-readable descriptions of which signals matched (for debug logging).
+    pub matched_signals: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SuppressedSession {
     pub(crate) session_key: ProcessKey,

@@ -76,6 +76,7 @@ fn zoom_test_profile() -> MeetingDetectionProfile {
         call_signals: vec![],
         min_signals_required: 1,
         ignore_window_titles: &[],
+        requires_call_signal: false,
     }
 }
 

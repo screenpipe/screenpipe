@@ -749,8 +749,14 @@ if (platform == 'windows') {
 		if (winArch === 'arm64') {
 			// Resolve download URL dynamically from GitHub API (daily autobuilds change filenames)
 			const apiUrl = `https://api.github.com/repos/${config.windows.ffmpegArm64GithubRepo}/releases/latest`
-			const releaseResp = await fetch(apiUrl)
+			const githubToken = process.env.GITHUB_TOKEN
+			const releaseResp = await fetch(apiUrl, {
+				headers: githubToken ? { Authorization: `Bearer ${githubToken}` } : {},
+			})
 			const releaseData = await releaseResp.json()
+			if (!releaseResp.ok) {
+				throw new Error(`GitHub API request failed (${releaseResp.status}) for ${apiUrl}: ${releaseData.message ?? 'unknown error'}`)
+			}
 			const asset = releaseData.assets?.find((a) => config.windows.ffmpegArm64AssetPattern.test(a.name))
 			if (!asset) throw new Error(`No matching ffmpeg ARM64 asset found in ${apiUrl}`)
 			const arm64Url = asset.browser_download_url

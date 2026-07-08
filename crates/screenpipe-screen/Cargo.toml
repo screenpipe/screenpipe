@@ -95,6 +95,20 @@ windows = { workspace = true, features = [
   "Storage",
   "Storage_Streams",
   "Foundation_Collections",
+  # Direct WGC integration for wgc_capture.rs (bypasses xcap's persistent video
+  # recorder, which CPU-converts every compositor frame — see issue #4840).
+  "Graphics_Capture",
+  "Graphics_DirectX_Direct3D11",
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_System_WinRT_Direct3D11",
+  "Win32_System_WinRT_Graphics_Capture",
+  # CPU-time sampling in examples/wgc_cpu_probe.rs (issue #4840 before/after tool).
+  "Win32_System_Threading",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -11,7 +11,7 @@
 # strategy and actually runs the init under a 60s deadline — exit 1 == HANG.
 #
 # Covers the two platforms that lacked any ONNX init coverage (macOS Intel via
-# macos-13, Windows ARM64 via windows-11-arm) plus the rest.
+# macos-15-intel, Windows ARM64 via windows-11-arm) plus the rest.
 name: ORT init smoke
 
 on:
@@ -45,7 +45,12 @@ jobs:
           - { label: linux-x64, runner: ubuntu-latest }
           - { label: windows-x64, runner: windows-2022 }
           - { label: windows-arm64, runner: windows-11-arm }
-          - { label: macos-intel, runner: macos-13 }
+          # macos-13 was retired by GitHub in Dec 2025 (actions/runner-images#13046);
+          # macos-15-intel is the current — and per runner-images#13027, final —
+          # hosted x86_64 macOS image. A job pinned to macos-13 doesn't fail fast:
+          # it just queues for 24h waiting on a runner that will never come, then
+          # gets cancelled.
+          - { label: macos-intel, runner: macos-15-intel }
           - { label: macos-arm64, runner: macos-latest }
     steps:
       - uses: actions/checkout@v4

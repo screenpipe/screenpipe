@@ -212,6 +212,12 @@ export function StandaloneChat({
     } else {
       activePresetRef.current = preset;
       setActivePreset(preset);
+      // Persist to localStorage so the preset survives full navigation
+      // (settings → home). Only for direct user selection, not the
+      // lifecycle fallback which uses the function form.
+      if (preset?.id) {
+        try { localStorage.setItem("chat-active-preset-id", preset.id); } catch {}
+      }
     }
   }, []);
   const isStreamingRef = useRef(false);
@@ -969,41 +975,6 @@ export function StandaloneChat({
     (window as any).__e2eStopChat = handleStop;
   }
 
-  const openInlineConnectionCard = useCallback((connectionId: string) => {
-    if (connectionId === "connections") {
-      openConnectionSetup(connectionId);
-      return;
-    }
-
-    const connection = allConnectionItems.find((item) => item.id === connectionId);
-    const connectionName = connection?.name || connectionId;
-    const message: Message = {
-      id: `connection-action-${connectionId}-${Date.now()}`,
-      role: "assistant",
-      content: "",
-      timestamp: Date.now(),
-      contentBlocks: [
-        {
-          type: "connection_action",
-          connectionId,
-          connectionName,
-          icon: connection?.icon || connectionId,
-          description: connection?.description,
-          pendingActionLabel: `continue with ${connectionName}`,
-          pendingActionPrompt: `${connectionName} is connected now. Continue the action we were discussing, but ask me for confirmation before writing to ${connectionName}.`,
-        },
-      ],
-    };
-
-    setMessages((prev) => {
-      const alreadyVisible = prev.some((row) =>
-        row.contentBlocks?.some(
-          (block) => block.type === "connection_action" && block.connectionId === connectionId,
-        ),
-      );
-      return alreadyVisible ? prev : [...prev, message];
-    });
-  }, [allConnectionItems, openConnectionSetup]);
 
   const answerPiExtensionUiRequest = useCallback(async (
     requestId: string | undefined,
@@ -1404,7 +1375,7 @@ export function StandaloneChat({
         }}
         summaryCardsProps={{
           onSendMessage: sendMessage,
-          onOpenConnection: openInlineConnectionCard,
+          onOpenConnection: openConnectionSetup,
           connectionSetupSuggestions,
           autoSuggestions: connectionAwareSuggestions,
           suggestionsRefreshing,

@@ -16,4 +16,20 @@ fn main() {
         // the vision/capture Swift bridges live in this directory.
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     }
+
+    // Windows: raise the main-thread stack reserve from the 1 MiB PE default to
+    // 8 MiB, matching the Linux/macOS main-thread defaults. The #[tokio::main]
+    // future for the ~2300-line async main in src/bin/screenpipe-engine.rs sits
+    // by value in main's stack frame; unoptimized (debug) it is ~1.1 MiB, so the
+    // prologue's __chkstk faults with STATUS_STACK_OVERFLOW before any code runs
+    // (even `--help`). Stack reserve is address space, committed on demand, so
+    // this costs nothing at runtime.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+        } else {
+            // windows-gnu (ld)
+            println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
+        }
+    }
 }

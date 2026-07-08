@@ -301,6 +301,80 @@ export function isSessionForeground(
   return state.currentId === id || state.panelSessionId === id;
 }
 
+/** Payload of the backend `chat-session-activity` event — a lightweight
+ *  overlay-side activity mirror (status + preview + title), never full
+ *  message bodies. */
+export interface ChatSessionActivityPayload {
+  id: string;
+  status?: SessionStatus;
+  preview?: string;
+  title?: string;
+  updatedAt: number;
+  lastError?: string;
+  unreadHint?: boolean;
+}
+
+/** Merge a `chat-session-activity` event into the sidebar store.
+ *
+ * Extracted verbatim from the home page's listener so the upsert-vs-patch,
+ * staleness (`existing.updatedAt > updatedAt`), title/preview/status merge,
+ * and unread-hint branches are unit-testable in isolation. `now` is injected
+ * so the `lastContentAt` write is deterministic under test.
+ */
+export function applyChatSessionActivity(
+  store: Pick<ChatStore, "sessions" | "currentId" | "panelSessionId" | "actions">,
+  payload: ChatSessionActivityPayload | undefined,
+  now: number = Date.now(),
+): void {
+  const { id, status, preview, title, updatedAt, lastError, unreadHint } =
+    payload ?? ({} as Partial<ChatSessionActivityPayload>);
+  if (!id || !updatedAt) return;
+  const existing = store.sessions[id];
+  if (!existing) {
+    store.actions.upsert({
+      id,
+      title: title?.trim() || "untitled",
+      preview: preview ?? "",
+      status: status ?? "idle",
+      lastError,
+      messageCount: 0,
+      createdAt: updatedAt,
+      updatedAt,
+      pinned: false,
+      hidden: false,
+      unread: false,
+    });
+  } else {
+    if (existing.updatedAt > updatedAt) return;
+    const nextTitle = title?.trim() || existing.title;
+    const nextPreview = preview ?? existing.preview;
+    const nextStatus = status ?? existing.status;
+    const nextLastError =
+      lastError !== undefined
+        ? lastError || undefined
+        : nextStatus === "error"
+          ? existing.lastError
+          : undefined;
+    if (
+      existing.title === nextTitle &&
+      existing.preview === nextPreview &&
+      existing.status === nextStatus &&
+      existing.lastError === nextLastError &&
+      existing.updatedAt === updatedAt
+    ) return;
+    store.actions.patch(id, {
+      title: nextTitle,
+      preview: nextPreview,
+      status: nextStatus,
+      lastError: nextLastError,
+      updatedAt,
+    });
+  }
+  if (unreadHint && !isSessionForeground(store, id)) {
+    store.actions.patch(id, { lastContentAt: now });
+  }
+}
+
 /** Compute unread from timestamps — immune to non-content writes.
  *  A session is unread when its most recent real message append happened
  *  AFTER the last time the user viewed it. Falls back to

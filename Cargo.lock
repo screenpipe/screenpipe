@@ -1792,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/screenpipe/cpal.git?rev=c7a610aee5c6037c9c69dc5bf7f2a850da8d8b12#c7a610aee5c6037c9c69dc5bf7f2a850da8d8b12"
+source = "git+https://github.com/EzraEllette/cpal.git?rev=93647b9b5de39d6d4fd9f0a8224fbc0921e1e6bd#93647b9b5de39d6d4fd9f0a8224fbc0921e1e6bd"
 dependencies = [
  "alsa",
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",

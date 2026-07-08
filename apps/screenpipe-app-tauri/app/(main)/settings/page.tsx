@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
+import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { useQueryState } from "nuqs";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AccountSection, searchIndex as accountSearchIndex } from "@/components/settings/account-section";
@@ -360,8 +360,10 @@ function SettingsContent() {
     }
   };
 
+  // The outer flex row (sidebar shell + content) lives in the shared
+  // (main)/layout.tsx so the sidebar width survives navigation to /home.
   return (
-    <div className={cn("flex h-screen overflow-hidden", isTranslucent ? "bg-transparent" : "bg-background")}>
+    <>
       {/* Drag region */}
       <div className="absolute top-0 left-0 right-0 h-8 z-10" data-tauri-drag-region />
 
@@ -494,20 +496,18 @@ function SettingsContent() {
           {renderSection()}
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
 export default function SettingsPage() {
   return (
     <Suspense fallback={
-      <div className="h-screen bg-background flex items-center justify-center">
+      <div className="flex-1 min-w-0 h-full bg-background flex items-center justify-center">
         <div className="text-muted-foreground text-sm">Loading...</div>
       </div>
     }>
-      <SidebarProvider>
-        <SettingsContent />
-      </SidebarProvider>
+      <SettingsContent />
     </Suspense>
   );
 }

@@ -4,7 +4,12 @@
 
 use anyhow::{Context, Result};
 use ndarray::{ArrayBase, Axis, IxDyn, ViewRepr};
-use std::{cmp::Ordering, collections::VecDeque, path::Path, sync::Arc, sync::Mutex};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, VecDeque},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+};
 use tracing::error;
 
 use super::{embedding::EmbeddingExtractor, embedding_manager::EmbeddingManager};
@@ -166,14 +171,49 @@ fn handle_new_segment(
     }
 }
 
+/// A segmentation ONNX session shared across chunks.
+///
+/// `output_name` is the model's output node ("output", or "y" on older
+/// exports; see `super::resolve_output_name`), resolved once at load.
+struct SegSession {
+    session: Mutex<ort::session::Session>,
+    output_name: String,
+}
+
+/// Process-wide cache of segmentation sessions, keyed by model path.
+///
+/// Previously `SegmentIterator::new` called `create_session` on EVERY audio
+/// chunk — loading the ~5.7MB model and building a Level3-optimized graph each
+/// time. Under the pipeline's mixed-size allocation churn the freed session
+/// buffers were not returned to the OS, so `phys_footprint` climbed for the
+/// life of the process (RSS-flat / phys-climbing). The embedding extractor was
+/// already cached and reused; the segmentation session was not. Cache + reuse
+/// one session per model path so the per-chunk allocation churn disappears.
+static SEG_SESSION_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<SegSession>>>> = OnceLock::new();
+
+fn cached_seg_session(model_path: &Path) -> Result<Arc<SegSession>> {
+    let cache = SEG_SESSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = model_path.to_path_buf();
+    if let Some(existing) = cache.lock().unwrap().get(&key) {
+        return Ok(existing.clone());
+    }
+    // Build outside the lock (create_session runs under a watchdog and can be
+    // slow); if another thread wins the race, `or_insert` keeps the first one.
+    let session = super::create_session(model_path)?;
+    let output_name = super::resolve_output_name(&super::session_output_names(&session), "output")?;
+    let built = Arc::new(SegSession {
+        session: Mutex::new(session),
+        output_name,
+    });
+    let mut map = cache.lock().unwrap();
+    Ok(map.entry(key).or_insert(built).clone())
+}
+
 pub struct SegmentIterator {
     samples: Vec<f32>,
     sample_rate: u32,
-    session: ort::session::Session,
-    // Output node name of the segmentation model, resolved once at load time.
-    // Canonical exports name it "output"; older exports name it "y" — see
-    // `super::resolve_output_name`.
-    output_name: String,
+    /// Shared, cached segmentation session (see `cached_seg_session`).
+    seg: Arc<SegSession>,
     embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
     embedding_manager: Arc<Mutex<EmbeddingManager>>,
     current_position: usize,
@@ -196,9 +236,7 @@ impl SegmentIterator {
         embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
         embedding_manager: Arc<Mutex<EmbeddingManager>>,
     ) -> Result<Self> {
-        let session = super::create_session(model_path.as_ref())?;
-        let output_name =
-            super::resolve_output_name(&super::session_output_names(&session), "output")?;
+        let seg = cached_seg_session(model_path.as_ref())?;
         let window_size = (sample_rate * 10) as usize;
 
         let padded_samples = {
@@ -210,8 +248,7 @@ impl SegmentIterator {
         Ok(Self {
             samples,
             sample_rate,
-            session,
-            output_name,
+            seg,
             embedding_extractor,
             embedding_manager,
             current_position: 0,
@@ -260,12 +297,12 @@ impl SegmentIterator {
             .to_owned();
 
         let inputs = ort::inputs![ort::value::TensorRef::from_array_view(array.view())?];
-        let ort_outs = self
-            .session
+        let mut sess_guard = self.seg.session.lock().unwrap();
+        let ort_outs = sess_guard
             .run(inputs)
             .context("Failed to run the session")?;
         let ort_out = ort_outs
-            .get(&self.output_name)
+            .get(&self.seg.output_name)
             .context("Output tensor not found")?;
 
         let ort_out = ort_out
@@ -279,6 +316,9 @@ impl SegmentIterator {
             }
         }
         drop(ort_outs);
+        // Release the shared session before the mutation loop below (which
+        // borrows &mut self via flush_speeching_segment); the run is done.
+        drop(sess_guard);
 
         for max_index in frame_classes {
             if max_index != 0 {

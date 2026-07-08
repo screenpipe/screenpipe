@@ -1388,7 +1388,13 @@ async fn main() {
                             }
                         },
                         async {
-                            match screenpipe_audio::speaker::models::get_or_download_model(
+                            // File-only fetch — NOT get_or_download_model, which also builds
+                            // an ORT session. That session would be immediately discarded here
+                            // and would compete for CPU with the real session build that
+                            // SegmentationManager does moments later for the same file (root
+                            // cause of the "ort session init: timed out after 30s" boot warning
+                            // observed on the macos-15-intel CI runner).
+                            match screenpipe_audio::speaker::models::ensure_model_file(
                                 screenpipe_audio::speaker::models::PyannoteModel::Segmentation
                             ).await {
                                 Ok(p) => info!("segmentation model pre-download complete: {:?}", p),
@@ -1396,7 +1402,7 @@ async fn main() {
                             }
                         },
                         async {
-                            match screenpipe_audio::speaker::models::get_or_download_model(
+                            match screenpipe_audio::speaker::models::ensure_model_file(
                                 screenpipe_audio::speaker::models::PyannoteModel::Embedding
                             ).await {
                                 Ok(p) => info!("embedding model pre-download complete: {:?}", p),

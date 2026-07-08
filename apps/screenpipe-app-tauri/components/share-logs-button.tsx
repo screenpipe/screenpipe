@@ -221,11 +221,15 @@ export const ShareLogsButton = ({
   };
 
   const sendLogs = async () => {
-    const logFiles = await getLogFiles();
-    if (!logFiles.length) return;
-
     setIsSending(true);
     try {
+      // Log files are best-effort. If none are found (fresh install, or an
+      // unreadable/misconfigured data dir — common on Windows), we still send
+      // the feedback text, screenshot, settings and console logs, which are
+      // valuable on their own. Bailing here silently was the original bug:
+      // clicking the button did nothing, with no toast and no spinner.
+      const logFiles = await getLogFiles();
+
       const BASE_URL = "https://screenpipe.com";
       const identifier = settings.user?.id || machineId;
       const type = settings.user?.id ? "user" : "machine";

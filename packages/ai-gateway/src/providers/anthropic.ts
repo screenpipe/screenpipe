@@ -55,6 +55,10 @@ function anthropicStopReasonToOpenAI(reason: unknown): string {
 	}
 }
 
+type AnthropicToolWithCache = AnthropicTool & {
+	cache_control?: { type: 'ephemeral'; ttl?: string };
+};
+
 export class AnthropicProvider implements AIProvider {
 	supportsTools = true;
 	supportsVision = true;
@@ -69,6 +73,8 @@ export class AnthropicProvider implements AIProvider {
 	 * Build the system prompt from system messages and response_format.
 	 *
 	 * Caching layout (prefix caching — see Anthropic prompt-caching docs):
+	 * - The last tool definition gets a cache breakpoint in `formatTools`, so
+	 *   stable tool schemas still cache when there is no system prompt.
 	 * - One block per system message, so when a client sends a shared base
 	 *   prompt followed by per-user additions as separate system messages,
 	 *   the shared block can cache-hit across users.
@@ -348,17 +354,24 @@ export class AnthropicProvider implements AIProvider {
 	// SCREENPIPE-AI-PROXY-K (`Cannot read properties of undefined (reading
 	// 'name')`). Drop tools that don't have a usable name rather than 500.
 	private formatTools(tools: Tool[]): AnthropicTool[] {
-		const out: AnthropicTool[] = [];
+		const out: AnthropicToolWithCache[] = [];
 		for (const tool of tools || []) {
 			if (!tool) continue;
 			const fn: any = (tool as any).function ?? tool;
 			const name = fn?.name;
 			if (!name) continue;
-			out.push({
+			const formatted: AnthropicToolWithCache = {
 				name,
 				description: fn.description,
 				input_schema: fn.parameters ?? fn.input_schema,
-			});
+			};
+			out.push(formatted);
+		}
+		if (out.length > 0 && !out.some((tool) => tool.cache_control)) {
+			out[out.length - 1] = {
+				...out[out.length - 1],
+				cache_control: { type: 'ephemeral' },
+			};
 		}
 		return out;
 	}

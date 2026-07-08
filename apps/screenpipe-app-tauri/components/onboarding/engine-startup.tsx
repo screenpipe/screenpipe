@@ -286,10 +286,22 @@ export default function EngineStartup({
 
   // Live feed: poll search for recent activity + thumbnails
   const emptyPollCountRef = useRef(0);
+  // Auth-race: /search 401s when _apiKey in lib/api.ts hasn't propagated to
+  // the webview yet (ensureInitialized retries getLocalApiConfig up to 30×
+  // 500ms; on corp-VDI Windows 11 that init sometimes exhausts before the
+  // engine binds its key). Surface it explicitly instead of leaving the user
+  // staring at "no activity" for the full 15s.
+  const [authNotReady, setAuthNotReady] = useState(false);
+  // Tracks the last-logged value of authNotReady so the 401 warning only
+  // fires on the false->true transition, not on every 2s poll while the
+  // race persists. A ref (not the state var) because `poll` is captured
+  // once by this effect and never sees state updates from later renders.
+  const authNotReadyLoggedRef = useRef(false);
 
   useEffect(() => {
     if (state !== "live-feed") return;
     emptyPollCountRef.current = 0;
+    authNotReadyLoggedRef.current = false;
 
     const poll = async () => {
       try {
@@ -316,6 +328,30 @@ export default function EngineStartup({
               ).catch(() => null)
             : Promise.resolve(null),
         ]);
+
+        // Detect the auth-key propagation race: if lib/api.ts _apiKey hasn't
+        // landed yet, /search returns 401. Surface it so the copy tells the
+        // user this is an auth issue, not a data-flow issue.
+        if (mainRes?.status === 401 || audioRes?.status === 401) {
+          if (!authNotReadyLoggedRef.current) {
+            console.warn(
+              "onboarding live-feed: /search returned 401 — api key not yet propagated to webview"
+            );
+            authNotReadyLoggedRef.current = true;
+          }
+          setAuthNotReady(true);
+        }
+
+        // Clear the hint on any successful response — auth has recovered as
+        // soon as the key propagates, independent of whether this poll
+        // happened to find anything to show (e.g. idle machine, no
+        // activity yet, but auth is fine). Evaluated separately from the
+        // items.length check below so an all-empty-but-200 poll still
+        // clears a stuck "auth still initializing" hint.
+        if (mainRes?.ok || audioRes?.ok) {
+          authNotReadyLoggedRef.current = false;
+          setAuthNotReady(false);
+        }
 
         const items: ActivityItem[] = [];
         const seen = new Set<string>();
@@ -915,7 +951,7 @@ if the input is sparse, just describe what little you have warmly. don't apologi
 
           {/* Streaming prose — sans-serif body, soft and readable */}
           <div
-            className="w-full min-h-[140px] flex items-start"
+            className="w-full min-h-[140px] flex flex-col items-start"
             role="status"
             aria-live="polite"
             aria-atomic="true"
@@ -956,6 +992,16 @@ if the input is sparse, just describe what little you have warmly. don't apologi
                   />
                 )}
               </motion.p>
+            )}
+            {/* Auth-race hint — identical whether we're showing the
+                "no activity yet" copy or the "settling in" copy, so it's
+                rendered once here instead of duplicated inside both
+                branches above. */}
+            {authNotReady && (noActivityYet || showWaiting) && (
+              <span className="block text-xs text-muted-foreground/60 mt-2 text-center w-full">
+                auth still initializing — if this persists, quit and relaunch
+                screenpipe
+              </span>
             )}
           </div>
 

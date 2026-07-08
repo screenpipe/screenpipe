@@ -81,6 +81,13 @@ pub struct MeetingDetectionProfile {
     /// messaging chrome (e.g. "Leave space"/"Leave team") trips the bare `leave`
     /// signal and starts a phantom meeting. See issue #4145.
     pub ignore_window_titles: &'static [&'static str],
+    /// When true, the audio-process detector must find call UI evidence in the
+    /// AX tree before starting a meeting — mic-hold + app identity alone is not
+    /// enough. This gates messaging-first platforms (WhatsApp, Signal, Telegram)
+    /// where a voice note holds the mic exactly like a call, causing phantom
+    /// meetings (#4776). Call-first platforms (Zoom, Meet, Teams, etc.) set this
+    /// to false and are completely unaffected.
+    pub requires_call_signal: bool,
 }
 
 /// Known browser app names (lowercase).
@@ -138,6 +145,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
         // Zoom Desktop
         // Note: Zoom on macOS does NOT expose AXWindow — only AXMenuBar.
@@ -211,6 +219,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
         // Google Meet (browser)
         // NOTE: "google meet" removed from url_patterns — it's too broad and matches
@@ -240,6 +249,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
         // Slack Huddle (browser + desktop)
         MeetingDetectionProfile {
@@ -261,6 +271,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
         // FaceTime
         MeetingDetectionProfile {
@@ -282,6 +293,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
         // Webex
         MeetingDetectionProfile {
@@ -322,6 +334,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             // title, so a window-title guard could never catch it. Kept because a
             // window titled exactly `Webex` is unambiguously the messaging shell.
             ignore_window_titles: &["webex"],
+            requires_call_signal: false,
         },
         // Discord in browser — require BOTH "Voice Connected" bar AND "Disconnect"
         // button. Either alone can appear without being in a call (e.g. seeing other
@@ -342,11 +355,13 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 2,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
         // Signal — voice/video calls
-        // macOS: "Signal" app with "End Call" / "Hang Up" button during active calls.
-        // Windows: "Signal.exe" Electron app, same button patterns.
-        // Signal also shows a call status bar with duration when a call is active.
+        // macOS: Signal is an Electron app whose AX tree is opaque — buttons
+        // show title="-" with no useful text, so we cannot distinguish calls
+        // from voice notes via AX scanning. requires_call_signal is false
+        // until Signal exposes call UI in its accessibility tree (#4776).
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["signal"],
@@ -377,8 +392,25 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
         // WhatsApp — voice/video calls
+        // requires_call_signal: true — WhatsApp grabs the mic for voice notes
+        // just like a call; without this gate, every voice note starts a phantom
+        // meeting (#4776).
+        //
+        // Signal selection rationale (from live AX tree investigation):
+        //   - NameContains("End call") is UNUSABLE: WhatsApp has a permanent
+        //     "End Call" AXMenuItem in its menu bar at ALL times (idle, voice
+        //     note, and call). It cannot discriminate.
+        //   - RoleWithName { AXButton, "end call" } NEVER MATCHES: WhatsApp
+        //     exposes no AXButton for call controls on macOS.
+        //   - AutomationIdContains("Calling_Window") is the PRIMARY signal:
+        //     during a real call WhatsApp opens a second AXWindow containing an
+        //     AXGroup with id="Calling_Window". This is locale-independent and
+        //     only present during active calls (voice or video).
+        //   - RoleWithName { AXButton, "leave call" } is the SECONDARY signal:
+        //     an AXButton with desc="leave call" inside the Calling_Window.
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["whatsapp"],
@@ -387,24 +419,32 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 browser_title_patterns: &[],
             },
             call_signals: vec![
+                // macOS: locale-independent AXGroup id, only present during
+                // active voice/video calls (never during voice notes or idle).
+                CallSignal::AutomationIdContains("Calling_Window"),
+                // macOS: AXButton inside the call window.
                 CallSignal::RoleWithName {
                     role: "AXButton",
-                    name_contains: "end call",
+                    name_contains: "leave call",
                 },
-                CallSignal::RoleWithName {
-                    role: "AXButton",
-                    name_contains: "hang up",
-                },
-                CallSignal::NameContains("End call"),
+                // Windows UIA button patterns
                 CallSignal::RoleWithName {
                     role: "Button",
                     name_contains: "End call",
                 },
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "Hang up",
+                },
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: true,
         },
         // Telegram — voice/video calls
+        // requires_call_signal: true — Telegram grabs the mic for voice notes
+        // just like a call; without this gate, every voice note starts a phantom
+        // meeting (#4776).
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["telegram"],
@@ -430,6 +470,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: true,
         },
         // Generic fallback — catches apps like Skype, Around, Whereby, etc.
         MeetingDetectionProfile {
@@ -532,6 +573,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
             ignore_window_titles: &[],
+            requires_call_signal: false,
         },
     ];
     profiles.extend(crate::meeting_watcher::ui_scan::discord_profile());

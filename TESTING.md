@@ -210,6 +210,7 @@ commits: `6dd5d98e`, `831ad258`
 - [ ] **OCR bounding boxes normalized on Windows/Linux** — On Windows and Linux, verify that OCR bounding boxes are correctly normalized to the 0-1 range, ensuring consistent text overlay and interaction. (`aba74513`)
 - [ ] **Debounced monitor capture errors** — Simulate transient monitor capture errors. Verify that these errors are debounced and do not lead to excessive error logging or app crashes.
 - [ ] **Focus-aware capture** — Enable "Only record focused monitor" in settings. Verify that Screenpipe only captures frames and runs OCR for the monitor that currently has the focused window. (`886b5c05d`)
+- [ ] **no stranded WGC session after persistent-capture disable (Windows)** — Force repeated persistent WGC init failures on one monitor (e.g. flaky driver, monitor sleep during init) while captures overlap (event-driven engine's capture timeout drops the future but the detached blocking closure keeps running, so two closures can race on the same monitor's shared state). After the "persistent capture disabled for monitor N" warning, verify no live WGC session remains: GPU usage for the app drops to per-frame-capture levels and no `CopyResource` work continues for that monitor. The disable path drains any concurrently stored session under the mutex, and the store path re-checks the disable flag under the same mutex — a session stored behind `persistent_capture_disabled == true` would otherwise leak GPU textures until refresh/stream release.
 
 ### 6. Battery Saver Mode
 

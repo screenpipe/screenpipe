@@ -465,6 +465,21 @@ fn main() {
         }
     }
 
+    // Windows: raise the main-thread stack reserve from the 1 MiB PE default to
+    // 8 MiB, matching the Linux/macOS main-thread defaults. Debug builds place
+    // large unoptimized futures/frames on the main thread's stack (the CLI's
+    // async main hit STATUS_STACK_OVERFLOW in its prologue before any code ran);
+    // same guard here. Reserve is address space, committed on demand — no
+    // runtime cost. Same host-vs-target caveat as the msvc check above.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+        } else {
+            // windows-gnu (ld)
+            println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
+        }
+    }
+
     tauri_build::build()
 }
 

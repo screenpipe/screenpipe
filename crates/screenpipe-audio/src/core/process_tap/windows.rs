@@ -54,7 +54,10 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, IAgileObject, IAgileObject_Impl, CLSCTX_ALL,
     COINIT_MULTITHREADED,
 };
-use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::Win32::System::Threading::{
+    CreateEventW, GetCurrentThread, SetThreadPriority, WaitForSingleObject,
+    THREAD_PRIORITY_TIME_CRITICAL,
+};
 
 use crate::core::stream::AudioStreamConfig;
 use crate::utils::audio::audio_to_mono;
@@ -332,6 +335,13 @@ fn run_capture_loop(
     is_disconnected: Arc<AtomicBool>,
     label: &str,
 ) {
+    // Insulates this capture thread from the process's BELOW_NORMAL priority
+    // class (and foreground contention generally) the same way cpal's WASAPI
+    // backend does for its own capture threads.
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    }
+
     while !is_disconnected.load(Ordering::Relaxed) {
         let wait = unsafe { WaitForSingleObject(capture.sample_ready.0, CAPTURE_WAIT_MS) };
         if wait == WAIT_TIMEOUT {

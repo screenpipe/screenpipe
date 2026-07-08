@@ -88,7 +88,7 @@ pub fn detect_tier() -> DeviceTier {
 /// Database configuration tuned per device tier.
 ///
 /// Controls SQLite PRAGMA values and connection pool sizes.
-/// `Default` returns the High-tier values matching the previous hardcoded settings.
+/// `Default` returns the High-tier channel caps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DbConfig {
     /// SQLite `mmap_size` pragma in bytes.
@@ -192,7 +192,7 @@ pub const WAL_SAFETY_PRAGMAS: [(&str, &str); 4] = [
 /// Audio/transcription channel capacities tuned per device tier.
 ///
 /// Controls the `crossbeam::channel::bounded` sizes in `AudioManager`.
-/// `Default` returns the High-tier values matching the previous hardcoded settings.
+/// `Default` returns the High-tier channel caps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelConfig {
     /// Capacity for the audio recording channel.
@@ -207,23 +207,26 @@ impl ChannelConfig {
         match tier {
             DeviceTier::High => Self::default(),
             DeviceTier::Mid => Self {
-                recording_capacity: 500,
-                transcription_capacity: 500,
+                recording_capacity: 12,
+                transcription_capacity: 12,
             },
             DeviceTier::Low => Self {
-                recording_capacity: 100,
-                transcription_capacity: 100,
+                recording_capacity: 8,
+                transcription_capacity: 8,
             },
         }
     }
 }
 
 impl Default for ChannelConfig {
-    /// High-tier defaults — identical to the previous hardcoded values (1000).
+    /// High-tier cap for the audio recording + transcription channels.
+    /// Items are multi-MB audio segments; the previous 1000 allowed ~24GB of
+    /// buffered audio to accumulate when transcription lagged. Bounded low so a
+    /// slow transcriber drops old audio instead of leaking memory.
     fn default() -> Self {
         Self {
-            recording_capacity: 1000,
-            transcription_capacity: 1000,
+            recording_capacity: 16,
+            transcription_capacity: 16,
         }
     }
 }
