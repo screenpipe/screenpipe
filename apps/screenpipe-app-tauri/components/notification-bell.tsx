@@ -5,6 +5,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, Fragment, type ReactNode } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Bell, Check, ChevronRight, ChevronDown, Copy, ExternalLink, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
@@ -169,9 +170,8 @@ export function NotificationBell() {
 
   useEffect(() => {
     loadHistory();
-    const interval = setInterval(loadHistory, 5000);
-    return () => clearInterval(interval);
   }, [loadHistory]);
+  useInterval(loadHistory, 5000);
 
   const unreadCount = history.filter((n) => !n.read).length;
 

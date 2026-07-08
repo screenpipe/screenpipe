@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
@@ -40,9 +41,8 @@ export function PermissionBanner() {
   // Check on mount and poll every 5 seconds
   useEffect(() => {
     checkPermissions();
-    const interval = setInterval(checkPermissions, 5000);
-    return () => clearInterval(interval);
   }, [checkPermissions]);
+  useInterval(checkPermissions, 5000);
 
   // Also listen for permission-lost events for instant response
   useTauriEvent("permission-lost", () => {

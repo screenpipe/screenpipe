@@ -4,6 +4,7 @@
 "use client";
 
 import { useToast } from "@/components/ui/use-toast";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { listen } from "@tauri-apps/api/event";
 import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -22,11 +23,8 @@ export function ModelDownloadTracker() {
   const [ffmpegToastRef, setFfmpegToastRef] = useState<any>(null);
 
   // Update progress on a timer for active downloads
-  useEffect(() => {
-    if (Object.keys(activeDownloads).length === 0) return;
-
-    const interval = setInterval(() => {
-      Object.keys(activeDownloads).forEach((model) => {
+  useInterval(() => {
+    Object.keys(activeDownloads).forEach((model) => {
         // Get current progress
 
         let progress = downloadProgress[model] || 5;
@@ -59,11 +57,8 @@ export function ModelDownloadTracker() {
             });
           }
         }
-      });
-    }, 3000); // Update every 3 seconds
-
-    return () => clearInterval(interval);
-  }, [activeDownloads, toastRefs, downloadProgress]);
+    });
+  }, Object.keys(activeDownloads).length === 0 ? null : 3000);
 
   useEffect(() => {
     // Patterns to look for in logs
