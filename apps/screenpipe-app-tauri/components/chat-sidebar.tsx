@@ -32,6 +32,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import {
   Pin,
   Archive,
@@ -189,32 +190,20 @@ function useVisibleChatSections(): {
  */
 function useQueueDepths(): Map<string, number> {
   const [depths, setDepths] = useState<Map<string, number>>(() => new Map());
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      const u = await listen<{ sessionId?: string; session_id?: string; queued?: { id: string }[] }>(
-        "pi-queue-changed",
-        (e) => {
-          if (cancelled) return;
-          const { sessionId, queued } = normalizeQueueEventPayload(e.payload);
-          if (!sessionId) return;
-          setDepths((prev) => {
-            const next = new Map(prev);
-            const count = queued?.length ?? 0;
-            if (count === 0) next.delete(sessionId);
-            else next.set(sessionId, count);
-            return next;
-          });
-        }
-      );
-      unlisten = u;
-    })();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
+  useTauriEvent<{ sessionId?: string; session_id?: string; queued?: { id: string }[] }>(
+    "pi-queue-changed",
+    (e) => {
+      const { sessionId, queued } = normalizeQueueEventPayload(e.payload);
+      if (!sessionId) return;
+      setDepths((prev) => {
+        const next = new Map(prev);
+        const count = queued?.length ?? 0;
+        if (count === 0) next.delete(sessionId);
+        else next.set(sessionId, count);
+        return next;
+      });
+    },
+  );
   return depths;
 }
 
@@ -253,21 +242,9 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   // panel itself), it emits this event so the sidebar can highlight the
   // matching row. Without this the sidebar would silently disagree with
   // the chat about "which session is current".
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      const u = await listen<{ id: string }>("chat-current-session", (e) => {
-        if (cancelled) return;
-        actions.setCurrent(e.payload.id);
-      });
-      unlistenFn = u;
-    })();
-    return () => {
-      cancelled = true;
-      unlistenFn?.();
-    };
-  }, [actions]);
+  useTauriEvent<{ id: string }>("chat-current-session", (e) => {
+    actions.setCurrent(e.payload.id);
+  });
 
   // Cross-window sidebar sync. The home sidebar and the standalone chat can
   // live in separate WebViews with separate zustand stores, so a chat saved
