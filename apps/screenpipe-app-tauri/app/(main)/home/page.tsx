@@ -64,6 +64,7 @@ import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
+import FirstRunGuide from "@/components/onboarding/first-run-guide";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
@@ -120,8 +121,17 @@ function HomeContent() {
   });
   const [connectionFocusRequest, setConnectionFocusRequest] = useState<ConnectionFocusRequest | null>(null);
 
-  const { settings } = useSettings();
+  const { settings, updateSettings, isSettingsLoaded } = useSettings();
   const { isTranslucent } = useSidebarContext();
+
+  // One-time in-app first-run guide. Gate on isSettingsLoaded so the overlay
+  // never flashes before the store hydrates the (already-done) flag.
+  // TODO: restore gate before merging: isSettingsLoaded && !settings.firstRunGuideDone
+  const showFirstRunGuide = isSettingsLoaded;
+  const markFirstRunGuideDone = useCallback(() => {
+    void updateSettings({ firstRunGuideDone: true });
+  }, [updateSettings]);
+
   const teamState = useTeam();
   const { isSectionHidden, isSettingLocked, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
   const runningPipes = useRunningPipes();
@@ -1187,6 +1197,14 @@ function HomeContent() {
             )}
 
           </div>
+
+          {showFirstRunGuide && (
+            <FirstRunGuide
+              onDone={markFirstRunGuideDone}
+              onGoToAutomations={() => setActiveSection("pipes")}
+              onEnsureChatVisible={() => setActiveSection("home")}
+            />
+          )}
     </>
   );
 }
