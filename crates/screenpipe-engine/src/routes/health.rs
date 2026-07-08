@@ -1650,10 +1650,20 @@ mod tests {
 
         // Small backlog within the freshness window — never a stall, even if no
         // recent write (10 min of in-flight audio is expected).
-        assert!(!audio_backlog_is_stalled(5, freshness / 2, no_progress, false));
+        assert!(!audio_backlog_is_stalled(
+            5,
+            freshness / 2,
+            no_progress,
+            false
+        ));
 
         // Big count but young enough — not a stall yet.
-        assert!(!audio_backlog_is_stalled(200, freshness, no_progress, false));
+        assert!(!audio_backlog_is_stalled(
+            200,
+            freshness,
+            no_progress,
+            false
+        ));
 
         // Never-written engine (last_db_write_ts == 0 → u64::MAX age) with a
         // deep old backlog IS a genuine stall (e.g. engine came up but writes
