@@ -53,6 +53,7 @@ import { Button } from "@/components/ui/button";
 import { FilePreviewSidebar } from "@/components/file-preview-sidebar";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import {
   isForeignNavigation,
   isMismatchedNavigation,
@@ -483,81 +484,65 @@ export function BrowserSidebar({
     };
   }, [persistState, conversationId, agentSessionId]);
 
-  useEffect(() => {
-    const unlistenPromise = listen<SessionAccessEvent>(
-      SESSION_ACCESS_REQUEST_EVENT,
-      (e) => {
-        const payload = e.payload;
-        const requestId = payload?.requestId ?? payload?.request_id;
-        if (!requestId || !payload?.url || !payload?.host) return;
-        // Same ownership gate as the navigate event — a background pipe's
-        // cookie-consent prompt must not surface in another chat.
-        if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
-        if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
-        const request = {
-          requestId,
-          url: payload.url,
-          host: payload.host,
-          alreadyGranted:
-            payload.alreadyGranted ?? payload.already_granted ?? false,
-          navigationId: payload.navigationId!,
-          owner: payload.owner ?? null,
-        };
-        setSessionAccessRequest(request);
-        setSessionAccessAnswer(null);
-        setV20CookieBlock(null);
-        setVisible(true);
-        setCollapsed(false);
-        setCurrentUrl(request.url);
-        setCurrentOwner(request.owner);
-        setCurrentNavigationId(request.navigationId);
-        setCurrentTitle(null);
-        setLoading(true);
-        persistState({ url: request.url, collapsed: false });
-        commands.ownedBrowserHide().catch(() => {});
-      },
-    );
-    return () => {
-      unlistenPromise.then((fn) => fn()).catch(() => {});
+  useTauriEvent<SessionAccessEvent>(SESSION_ACCESS_REQUEST_EVENT, (e) => {
+    const payload = e.payload;
+    const requestId = payload?.requestId ?? payload?.request_id;
+    if (!requestId || !payload?.url || !payload?.host) return;
+    // Same ownership gate as the navigate event — a background pipe's
+    // cookie-consent prompt must not surface in another chat.
+    if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
+    if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
+    const request = {
+      requestId,
+      url: payload.url,
+      host: payload.host,
+      alreadyGranted:
+        payload.alreadyGranted ?? payload.already_granted ?? false,
+      navigationId: payload.navigationId!,
+      owner: payload.owner ?? null,
     };
-  }, [persistState, conversationId, currentNavigationId, agentSessionId]);
+    setSessionAccessRequest(request);
+    setSessionAccessAnswer(null);
+    setV20CookieBlock(null);
+    setVisible(true);
+    setCollapsed(false);
+    setCurrentUrl(request.url);
+    setCurrentOwner(request.owner);
+    setCurrentNavigationId(request.navigationId);
+    setCurrentTitle(null);
+    setLoading(true);
+    persistState({ url: request.url, collapsed: false });
+    commands.ownedBrowserHide().catch(() => {});
+  });
 
-  useEffect(() => {
-    const unlistenPromise = listen<V20CookieBlockEvent>(
-      V20_COOKIE_BLOCK_EVENT,
-      (e) => {
-        const payload = e.payload;
-        if (!payload?.url || !payload?.host) return;
-        if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
-        if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
-        const block = {
-          url: payload.url,
-          host: payload.host,
-          rows: payload.rows ?? 0,
-          v20Count: payload.v20Count ?? payload.v20_count ?? 0,
-          sources: payload.sources ?? [],
-          reason: payload.reason ?? "v20",
-          navigationId: payload.navigationId!,
-          owner: payload.owner ?? null,
-        };
-        setSessionAccessRequest(null);
-        setSessionAccessAnswer(null);
-        setV20CookieBlock(block);
-        setVisible(true);
-        setCollapsed(false);
-        setCurrentUrl(block.url);
-        setCurrentOwner(block.owner);
-        setCurrentNavigationId(block.navigationId);
-        setCurrentTitle(null);
-        setLoading(false);
-        persistState({ url: block.url, collapsed: false });
-        commands.ownedBrowserHide().catch(() => {});
-      },
-    );
-    return () => {
-      unlistenPromise.then((fn) => fn()).catch(() => {});
+  useTauriEvent<V20CookieBlockEvent>(V20_COOKIE_BLOCK_EVENT, (e) => {
+    const payload = e.payload;
+    if (!payload?.url || !payload?.host) return;
+    if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
+    if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
+    const block = {
+      url: payload.url,
+      host: payload.host,
+      rows: payload.rows ?? 0,
+      v20Count: payload.v20Count ?? payload.v20_count ?? 0,
+      sources: payload.sources ?? [],
+      reason: payload.reason ?? "v20",
+      navigationId: payload.navigationId!,
+      owner: payload.owner ?? null,
     };
-  }, [persistState, conversationId, currentNavigationId, agentSessionId]);
+    setSessionAccessRequest(null);
+    setSessionAccessAnswer(null);
+    setV20CookieBlock(block);
+    setVisible(true);
+    setCollapsed(false);
+    setCurrentUrl(block.url);
+    setCurrentOwner(block.owner);
+    setCurrentNavigationId(block.navigationId);
+    setCurrentTitle(null);
+    setLoading(false);
+    persistState({ url: block.url, collapsed: false });
+    commands.ownedBrowserHide().catch(() => {});
+  });
 
   useEffect(() => {
     sessionAccessActiveRef.current =
@@ -614,39 +599,34 @@ export function BrowserSidebar({
     };
   }, [v20CookieBlock]);
 
-  useEffect(() => {
-    const unlistenPromise = listen<OwnedBrowserStateEvent>(STATE_EVENT, (e) => {
-      const payload = e.payload;
-      if (!payload || typeof payload !== "object") return;
-      // Native page-state updates reflect the singleton webview's *current*
-      // content. When a background pipe drives it, these still fire — ignore
-      // them so the foreign URL/title isn't persisted into this chat (the
-      // sticky half of the leak: without this the URL is restored on reopen
-      // even though the panel never visibly popped).
-      if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
-      if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
+  useTauriEvent<OwnedBrowserStateEvent>(STATE_EVENT, (e) => {
+    const payload = e.payload;
+    if (!payload || typeof payload !== "object") return;
+    // Native page-state updates reflect the singleton webview's *current*
+    // content. When a background pipe drives it, these still fire — ignore
+    // them so the foreign URL/title isn't persisted into this chat (the
+    // sticky half of the leak: without this the URL is restored on reopen
+    // even though the panel never visibly popped).
+    if (isForeignNavigation(payload.owner, conversationId, agentSessionId)) return;
+    if (isMismatchedNavigation(payload.navigationId, currentNavigationId)) return;
 
-      if (typeof payload.url === "string" && payload.url.length > 0) {
-        if (payload.url !== currentUrl) {
-          setCurrentTitle(null);
-        }
-        setCurrentUrl(payload.url);
-        setCurrentOwner(payload.owner ?? conversationId ?? null);
-        setCurrentNavigationId(payload.navigationId!);
-        persistState({ url: payload.url });
+    if (typeof payload.url === "string" && payload.url.length > 0) {
+      if (payload.url !== currentUrl) {
+        setCurrentTitle(null);
       }
-      if (typeof payload.title === "string") {
-        const title = payload.title.trim();
-        setCurrentTitle(title.length > 0 ? title : null);
-      }
-      if (typeof payload.loading === "boolean") {
-        setLoading(payload.loading);
-      }
-    });
-    return () => {
-      unlistenPromise.then((fn) => fn()).catch(() => {});
-    };
-  }, [currentNavigationId, currentUrl, persistState, conversationId, agentSessionId]);
+      setCurrentUrl(payload.url);
+      setCurrentOwner(payload.owner ?? conversationId ?? null);
+      setCurrentNavigationId(payload.navigationId!);
+      persistState({ url: payload.url });
+    }
+    if (typeof payload.title === "string") {
+      const title = payload.title.trim();
+      setCurrentTitle(title.length > 0 ? title : null);
+    }
+    if (typeof payload.loading === "boolean") {
+      setLoading(payload.loading);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // Per-conversation restore
