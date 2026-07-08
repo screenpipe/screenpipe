@@ -997,6 +997,10 @@ impl SCServer {
                     axum::routing::get(crate::routes::pipe_store::pipe_store_search),
                 )
                 .route(
+                    "/store/packs",
+                    axum::routing::get(crate::routes::pipe_store::pipe_store_packs),
+                )
+                .route(
                     "/store/publish",
                     axum::routing::post(crate::routes::pipe_store::pipe_store_publish),
                 )

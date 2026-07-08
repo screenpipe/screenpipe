@@ -111,6 +111,23 @@ pub async fn pipe_store_search(Query(query): Query<StoreSearchQuery>) -> Json<Va
     }
 }
 
+/// GET /pipes/store/packs
+///
+/// Browse curated pipe packs from the registry.
+pub async fn pipe_store_packs() -> Json<Value> {
+    let base = api_base_url();
+    let client = &*REGISTRY_CLIENT;
+
+    let url = format!("{}/api/pipes/store/packs", base);
+    match client.get(&url).send().await {
+        Ok(resp) => match resp.json::<Value>().await {
+            Ok(body) => Json(body),
+            Err(e) => Json(json!({ "error": format!("failed to parse registry response: {}", e) })),
+        },
+        Err(e) => Json(json!({ "error": format!("failed to reach registry: {}", e) })),
+    }
+}
+
 /// GET /pipes/store/:slug
 ///
 /// Get a single pipe's detail from the registry.
