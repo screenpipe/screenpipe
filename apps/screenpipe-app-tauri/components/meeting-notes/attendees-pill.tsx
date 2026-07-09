@@ -4,7 +4,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CornerDownLeft, Loader2, Plus, Users, X } from "lucide-react";
+import { CornerDownLeft, Loader2, Plus, Search, Users, X } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -202,107 +202,119 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-80 p-2 z-[9999] border border-border rounded-none shadow-none"
+        className="w-80 p-0 z-[9999] border border-border rounded-none shadow-none"
         align="start"
       >
-        <div className="space-y-2">
-          {/* Token field: chips + inline input on one line */}
-          <div
-            className="flex min-h-9 w-full cursor-text flex-wrap items-center gap-1.5 border border-border bg-background px-2 py-1.5 focus-within:border-foreground"
-            onClick={() => inputRef.current?.focus()}
-          >
-            {attendees.map((name) => (
-              <span
-                key={name}
-                className="inline-flex items-center gap-1 border border-border bg-foreground/[0.04] py-0.5 pl-1 pr-1 text-xs"
-              >
-                <Initial name={name} />
-                <span className="max-w-[120px] truncate">{name}</span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeAttendee(name);
-                  }}
-                  className="flex h-4 w-4 items-center justify-center text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-            <input
-              ref={inputRef}
-              value={searchTerm}
-              placeholder={attendees.length ? "add another…" : "add attendee…"}
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              data-1p-ignore
-              data-lpignore
-              // eslint-disable-next-line jsx-a11y/no-autofocus
-              autoFocus
-              onChange={(e) => {
-                const v = e.target.value;
-                // Typing a comma commits the token, like most tag inputs.
-                if (v.includes(",")) {
-                  const parts = v.split(",");
-                  const last = parts.pop() ?? "";
-                  addAttendees(parts);
-                  setSearchTerm(last.trimStart());
-                } else {
-                  setSearchTerm(v);
-                }
-              }}
-              onKeyDown={handleKeyDown}
-              className="min-w-[100px] flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-            />
-            {isSearching && (
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-            )}
-          </div>
-
-          {/* Suggestions + create, keyboard-navigable */}
-          {searchTerm.trim() && options.length > 0 && (
-            <div className="max-h-[180px] overflow-y-auto border border-border">
-              {options.map((opt, i) => (
-                <button
-                  key={`${opt.kind}-${opt.id}-${opt.name}`}
-                  type="button"
-                  onMouseEnter={() => setActiveIndex(i)}
-                  onClick={() => commit(i)}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm",
-                    activeIndex === i && "bg-accent",
-                  )}
-                >
-                  {opt.kind === "create" ? (
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">
-                      <Plus className="h-3.5 w-3.5" />
-                    </span>
-                  ) : (
-                    <Initial name={opt.name} />
-                  )}
-                  <span className="flex-1 truncate">
-                    {opt.kind === "create" ? (
-                      <>
-                        Add &quot;
-                        <span className="font-medium">{opt.name}</span>
-                        &quot;
-                      </>
-                    ) : (
-                      opt.name
-                    )}
-                  </span>
-                  {activeIndex === i && (
-                    <CornerDownLeft className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  )}
-                </button>
-              ))}
-            </div>
+        {/* Pinned search / add input */}
+        <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            value={searchTerm}
+            placeholder="search or add attendee…"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            onChange={(e) => {
+              const v = e.target.value;
+              // Typing a comma commits the token, like most tag inputs.
+              if (v.includes(",")) {
+                const parts = v.split(",");
+                const last = parts.pop() ?? "";
+                addAttendees(parts);
+                setSearchTerm(last.trimStart());
+              } else {
+                setSearchTerm(v);
+              }
+            }}
+            onKeyDown={handleKeyDown}
+            className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+          />
+          {isSearching && (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
           )}
         </div>
+
+        {/* Suggestions + create, keyboard-navigable (only while typing) */}
+        {searchTerm.trim() && options.length > 0 && (
+          <div className="max-h-[180px] overflow-y-auto border-b border-border">
+            {options.map((opt, i) => (
+              <button
+                key={`${opt.kind}-${opt.id}-${opt.name}`}
+                type="button"
+                onMouseEnter={() => setActiveIndex(i)}
+                onClick={() => commit(i)}
+                className={cn(
+                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm",
+                  activeIndex === i && "bg-accent",
+                )}
+              >
+                {opt.kind === "create" ? (
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">
+                    <Plus className="h-3.5 w-3.5" />
+                  </span>
+                ) : (
+                  <Initial name={opt.name} />
+                )}
+                <span className="flex-1 truncate">
+                  {opt.kind === "create" ? (
+                    <>
+                      Add &quot;
+                      <span className="font-medium">{opt.name}</span>
+                      &quot;
+                    </>
+                  ) : (
+                    opt.name
+                  )}
+                </span>
+                {activeIndex === i && (
+                  <CornerDownLeft className="h-3 w-3 shrink-0 text-muted-foreground" />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Current attendees — scrollable chip cloud, bounded height */}
+        {attendees.length > 0 ? (
+          <>
+            <div className="px-2.5 pt-2 text-[11px] lowercase text-muted-foreground">
+              {attendees.length}{" "}
+              {attendees.length === 1 ? "attendee" : "attendees"}
+            </div>
+            <div className="flex max-h-[140px] flex-wrap gap-1.5 overflow-y-auto p-2.5">
+              {attendees.map((name) => (
+                <span
+                  key={name}
+                  title={name}
+                  className="inline-flex items-center gap-1 border border-border bg-foreground/[0.04] py-0.5 pl-1 pr-1 text-xs"
+                >
+                  <Initial name={name} />
+                  <span className="max-w-[140px] truncate">{name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${name}`}
+                    onClick={() => removeAttendee(name)}
+                    className="flex h-4 w-4 items-center justify-center text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          </>
+        ) : (
+          !searchTerm.trim() && (
+            <div className="px-2.5 py-3 text-xs text-muted-foreground">
+              no attendees yet — type a name to add
+            </div>
+          )
+        )}
       </PopoverContent>
     </Popover>
   );
