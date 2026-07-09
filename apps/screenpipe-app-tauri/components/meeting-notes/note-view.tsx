@@ -20,6 +20,7 @@ import {
   Loader2,
   Mic2,
   Play,
+  Plus,
   RefreshCw,
   Sparkles,
   Square,
@@ -1794,7 +1795,6 @@ function Pill({
 
 function AttendeesPill({
   value,
-  count,
   onChange,
 }: {
   value: string;
@@ -1802,41 +1802,203 @@ function AttendeesPill({
   onChange: (v: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [inputValue, setInputValue] = useState("");
+  const [speakers, setSpeakers] = useState<{ id: number; name: string }[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
+  const attendees = useMemo(
+    () => value.split(",").map((s) => s.trim()).filter(Boolean),
+    [value]
+  );
+
+  // search speakers on input change
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (!inputValue || inputValue.length < 1) {
+      setSpeakers([]);
+      setIsSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    const search = async () => {
+      setIsSearching(true);
+      try {
+        const response = await localFetch(
+          `/speakers/search?name=${encodeURIComponent(inputValue)}&limit=5`,
+          { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) }
+        );
+        if (response.ok) {
+          setSpeakers(await response.json());
+        }
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          console.error("error searching speakers:", error);
+        }
+      } finally {
+        setIsSearching(false);
+      }
+    };
+    const timeout = setTimeout(search, 300);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [inputValue]);
+
+  // reset highlight when speakers change
+  useEffect(() => {
+    setHighlightIdx(0);
+  }, [speakers]);
+
+  const addAttendee = useCallback(
+    (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      // avoid duplicates (case-insensitive)
+      if (attendees.some((a) => a.toLowerCase() === trimmed.toLowerCase())) return;
+      const next = [...attendees, trimmed];
+      onChange(next.join(", "));
+      setInputValue("");
+      setSpeakers([]);
+    },
+    [attendees, onChange]
+  );
+
+  const removeAttendee = useCallback(
+    (idx: number) => {
+      const next = attendees.filter((_, i) => i !== idx);
+      onChange(next.join(", "));
+    },
+    [attendees, onChange]
+  );
+
+  // close dropdown on outside click
+  useEffect(() => {
+    if (!editing) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setEditing(false);
+        setInputValue("");
+        setSpeakers([]);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
   }, [editing]);
 
-  if (editing) {
+  const exactMatch = speakers.some(
+    (s) => s.name.toLowerCase() === inputValue.trim().toLowerCase()
+  );
+  const showCreateOption = inputValue.trim().length > 0 && !exactMatch;
+  const dropdownItems = [
+    ...speakers.map((s) => ({ kind: "speaker" as const, name: s.name })),
+    ...(showCreateOption
+      ? [{ kind: "create" as const, name: inputValue.trim() }]
+      : []),
+  ];
+
+  if (!editing) {
     return (
-      <span className="inline-flex h-7 items-center gap-1.5 border border-foreground bg-background px-2.5 text-xs">
+      <button
+        onClick={() => {
+          setEditing(true);
+          setTimeout(() => inputRef.current?.focus(), 0);
+        }}
+        className="inline-flex h-7 items-center gap-1.5 border border-border bg-background px-2.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+      >
         <Users className="h-3.5 w-3.5" />
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onBlur={() => setEditing(false)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "Escape") setEditing(false);
-          }}
-          placeholder="comma separated"
-          className="bg-transparent focus:outline-none text-xs min-w-[180px]"
-        />
-      </span>
+        {attendees.length === 0
+          ? "add attendees"
+          : `${attendees.length} ${attendees.length === 1 ? "attendee" : "attendees"}`}
+      </button>
     );
   }
 
   return (
-    <button
-      onClick={() => setEditing(true)}
-      className="inline-flex h-7 items-center gap-1.5 border border-border bg-background px-2.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
-    >
-      <Users className="h-3.5 w-3.5" />
-      {count === 0
-        ? "add attendees"
-        : `${count} ${count === 1 ? "attendee" : "attendees"}`}
-    </button>
+    <div ref={containerRef} className="relative inline-block">
+      <div
+        className="inline-flex min-h-[28px] flex-wrap items-center gap-1 border border-foreground bg-background px-2 py-1 text-xs cursor-text"
+        onClick={() => inputRef.current?.focus()}
+      >
+        <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        {attendees.map((name, i) => (
+          <span
+            key={i}
+            className="inline-flex items-center gap-0.5 rounded-sm bg-muted px-1.5 py-0.5 text-xs"
+          >
+            {name}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                removeAttendee(i);
+              }}
+              className="ml-0.5 rounded-sm hover:bg-muted-foreground/20"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Backspace" && inputValue === "" && attendees.length > 0) {
+              removeAttendee(attendees.length - 1);
+            } else if (e.key === "Escape") {
+              setEditing(false);
+              setInputValue("");
+              setSpeakers([]);
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              if (dropdownItems.length > 0) {
+                addAttendee(dropdownItems[highlightIdx]?.name ?? inputValue.trim());
+              } else if (inputValue.trim()) {
+                addAttendee(inputValue.trim());
+              }
+            } else if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setHighlightIdx((prev) => Math.min(prev + 1, dropdownItems.length - 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setHighlightIdx((prev) => Math.max(prev - 1, 0));
+            }
+          }}
+          placeholder={attendees.length === 0 ? "type to search speakers…" : ""}
+          className="bg-transparent focus:outline-none text-xs min-w-[120px] flex-1"
+        />
+        {isSearching && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
+      </div>
+      {dropdownItems.length > 0 && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-full min-w-[200px] overflow-hidden rounded-md border border-border bg-popover py-1 shadow-md">
+          {dropdownItems.map((item, i) => (
+            <button
+              key={`${item.kind}-${item.name}`}
+              className={cn(
+                "flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-left transition-colors hover:bg-accent",
+                i === highlightIdx && "bg-accent"
+              )}
+              onMouseEnter={() => setHighlightIdx(i)}
+              onMouseDown={(e) => {
+                e.preventDefault(); // prevent blur
+                addAttendee(item.name);
+              }}
+            >
+              {item.kind === "speaker" ? (
+                <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="truncate">
+                {item.kind === "create" ? `create "${item.name}"` : item.name}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
