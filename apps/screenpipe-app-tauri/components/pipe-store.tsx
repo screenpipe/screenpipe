@@ -99,6 +99,7 @@ interface StorePipe {
 interface StorePack {
   slug: string;
   title: string;
+  icon?: string;
   description: string;
   outcome: string;
   category: string;
@@ -160,11 +161,12 @@ const SORT_OPTIONS = [
   { value: "newest", label: "Newest" },
 ];
 
-const PACK_ICONS = {
-  "company-brain": Brain,
-  "workflow-intelligence": Workflow,
-  "sales-memory": Users,
-  "developer-loop": Code2,
+const PACK_ICON_COMPONENTS = {
+  brain: Brain,
+  workflow: Workflow,
+  users: Users,
+  code: Code2,
+  "package-check": PackageCheck,
 } as const;
 
 const PERMISSION_LABELS: { key: string; label: string; icon: React.ReactNode }[] = [
@@ -351,6 +353,7 @@ function normalizePack(raw: any): StorePack {
   return {
     slug: raw?.slug || "",
     title: raw?.title || raw?.slug || "pipe pack",
+    icon: raw?.icon || "package-check",
     description: raw?.description || "",
     outcome: raw?.outcome || "",
     category: raw?.category || "other",
@@ -1323,7 +1326,8 @@ function PipePackCard({
   onSelect: () => void;
 }) {
   const Icon =
-    PACK_ICONS[pack.slug as keyof typeof PACK_ICONS] || PackageCheck;
+    PACK_ICON_COMPONENTS[pack.icon as keyof typeof PACK_ICON_COMPONENTS] ||
+    PackageCheck;
   const visiblePipes = pack.pipes.slice(0, 3);
   const extraCount = Math.max(0, pack.available_count - visiblePipes.length);
   const pipeCount =
