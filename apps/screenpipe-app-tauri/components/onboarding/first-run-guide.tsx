@@ -271,12 +271,13 @@ export default function FirstRunGuide({
   // Dismissed — render nothing while onDone propagates
   if (phase === "dismissed") return null;
 
-  // Full-screen scrim dims everything. pointer-events-none so the chat stays
-  // interactive. Injected styles lift specific elements above the scrim per phase:
+  // Full-screen scrim blocks all clicks. Only the elements lifted above it
+  // (z-42) stay interactive — everything else is locked until the user
+  // completes or skips the guide.
   //
-  // ASK phase:   textarea + send button bright, everything else dimmed
-  // AUTOMATE phase: entire chat pane bright (user is reading the AI response),
-  //                 sidebar stays dimmed
+  // ASK phase:       textarea + send button lifted above scrim
+  // STREAMING phase: message area lifted (user reads the response), form dimmed
+  // AUTOMATE phase:  message area lifted, form dimmed
   const scrim = (phase === "ask" || phase === "streaming" || phase === "automate") ? (
     <>
       <style dangerouslySetInnerHTML={{ __html: `
@@ -306,10 +307,10 @@ export default function FirstRunGuide({
           pointer-events: none;
         }
       `}} />
-      <div className="fixed inset-0 z-40 bg-background/55 pointer-events-none" />
+      <div className="fixed inset-0 z-40 bg-background/55" />
     </>
   ) : (
-    <div className="fixed inset-0 z-40 bg-background/70 pointer-events-none" />
+    <div className="fixed inset-0 z-40 bg-background/70" />
   );
 
   return (
