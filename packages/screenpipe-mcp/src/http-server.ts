@@ -25,6 +25,11 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import {
+  captureMcpException,
+  flushMcpTelemetry,
+  initMcpTelemetry,
+} from "./telemetry";
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 
@@ -372,6 +377,8 @@ export function buildHttpServer(config: CliConfig) {
  * below.
  */
 export function runFromArgv(argv: string[]): void {
+  initMcpTelemetry({ transport: "http" });
+
   let config: CliConfig;
   try {
     config = parseArgs(argv);
@@ -384,6 +391,10 @@ export function runFromArgv(argv: string[]): void {
   }
 
   const server = buildHttpServer(config);
+  server.on("error", async (error) => {
+    captureMcpException(error, { phase: "http_server" });
+    await flushMcpTelemetry();
+  });
   server.listen(config.mcpPort, config.host, () => {
     const printable = config.host === "0.0.0.0" ? "0.0.0.0 (LAN)" : config.host;
     console.log(`Screenpipe MCP HTTP server listening on ${printable}:${config.mcpPort}`);

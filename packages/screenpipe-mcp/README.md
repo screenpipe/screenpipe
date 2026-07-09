@@ -190,8 +190,9 @@ Get accessibility text, parsed tree nodes, and extracted URLs for a specific fra
 ## Privacy Policy
 
 The Screenpipe MCP server is a local-only bridge between Claude and your
-local Screenpipe instance. It does not collect, transmit, or store any
-data on its own.
+local Screenpipe instance. It does not collect, transmit, or store tool
+results, recordings, OCR text, audio transcripts, screenshots, or UI events
+on its own.
 
 ### What this MCP server does
 When Claude invokes a tool (`search-content`, `activity-summary`, etc.)
@@ -200,7 +201,16 @@ Screenpipe daemon running on your machine — and returns the response.
 That's the entire data path.
 
 ### Data collection
-**None by this MCP server.** No analytics, no telemetry, no usage tracking.
+The MCP server sends privacy-preserving crash and error reports to Screenpipe's
+Sentry project so we can diagnose startup failures like "server disconnected"
+or "could not attach to MCP server". These reports include the MCP package
+version, runtime, transport mode, and sanitized exception details. They do not
+include tool arguments, tool results, screen content, audio, transcripts,
+screenshots, API tokens, or your home-directory path.
+
+To disable crash/error reporting, set any of:
+`SCREENPIPE_MCP_SENTRY_DISABLED=1`, `SCREENPIPE_TELEMETRY_DISABLED=1`, or
+`SCREENPIPE_DISABLE_TELEMETRY=1` in the MCP launch environment.
 
 ### Data usage
 Tool calls are passed straight through to your local Screenpipe daemon
@@ -215,8 +225,9 @@ whatever you configure inside the Screenpipe app — typically you
 control it via the storage settings panel.
 
 ### Third-party sharing
-None. The MCP server only talks to `localhost:3030`. It does not
-contact Anthropic, Screenpipe's servers, or any other external service.
+The MCP server talks to `localhost:3030` for tool calls and to Screenpipe's
+Sentry project for sanitized crash/error reports unless disabled as above.
+It does not contact Anthropic or send recorded content to Screenpipe's servers.
 If you choose to enable optional cloud features inside the Screenpipe
 app itself (e.g. cloud sync, cloud AI), those are governed by the
 Screenpipe app's privacy policy, not this MCP server's data flow.
