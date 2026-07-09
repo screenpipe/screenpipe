@@ -34,7 +34,10 @@ import {
   AlertCircle,
   Copy,
   Star,
+  CheckSquare,
+  X,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { usePipeFavorites } from "@/lib/hooks/use-pipe-favorites";
 import {
   type AvailableConnection,
@@ -1063,6 +1066,10 @@ export function PipesSection() {
   const [connectionModal, setConnectionModal] = useState<{ pipeName: string; connections: string[] } | null>(null);
   const [availableUpdates, setAvailableUpdates] = useState<Record<string, { latest_version: number; installed_version: number; locally_modified: boolean }>>({});
   const [updatingPipe, setUpdatingPipe] = useState<string | null>(null);
+  const [selectedPipes, setSelectedPipes] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [updateDialog, setUpdateDialog] = useState<{
     pipeName: string;
     slug: string;
@@ -1862,7 +1869,56 @@ export function PipesSection() {
     posthog.capture("pipe_deleted", { pipe: name });
     await fetch(`${apiBase}/pipes/${name}`, { method: "DELETE" });
     setExpanded(null);
+    setSelectedPipes((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
     fetchPipes();
+  };
+
+  const toggleSelectPipe = (name: string) => {
+    setSelectedPipes((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedPipes(new Set());
+    setSelectMode(false);
+  };
+
+  const selectAllVisible = () => {
+    setSelectedPipes(new Set(filteredPipes.map((p) => p.config.name)));
+  };
+
+  const bulkDeletePipes = async () => {
+    setBulkDeleting(true);
+    try {
+      const results = await Promise.allSettled(
+        Array.from(selectedPipes).map((name) => {
+          posthog.capture("pipe_deleted", { pipe: name, bulk: true });
+          return fetch(`${apiBase}/pipes/${name}`, { method: "DELETE" });
+        })
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) {
+        toast({
+          title: "some pipes failed to delete",
+          description: `${failed} of ${selectedPipes.size} pipes could not be deleted`,
+          variant: "destructive",
+        });
+      }
+      setExpanded(null);
+      await fetchPipes();
+    } finally {
+      setBulkDeleting(false);
+      clearSelection();
+    }
   };
 
   const toggleExpand = (name: string) => {
@@ -2023,72 +2079,106 @@ export function PipesSection() {
 
   return (
     <div className="space-y-4" data-testid="section-pipes">
-      {/* Single toolbar: search + type filter + favorites + refresh */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input
-            placeholder="search pipes..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-8 h-8 text-sm"
-            spellCheck={false}
-            autoCorrect="off"
+      {/* Toolbar: swaps between search bar and selection bar */}
+      {selectMode ? (
+        <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-md bg-muted/50">
+          <Checkbox
+            checked={filteredPipes.length > 0 && selectedPipes.size === filteredPipes.length ? true : selectedPipes.size > 0 ? "indeterminate" : false}
+            onCheckedChange={(checked) => {
+              if (checked) selectAllVisible();
+              else setSelectedPipes(new Set());
+            }}
           />
+          <span className="text-sm text-muted-foreground">
+            {selectedPipes.size} selected
+          </span>
+          <div className="flex-1" />
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-7 text-xs"
+            disabled={bulkDeleting || selectedPipes.size === 0}
+            onClick={() => setBulkDeleteConfirm(true)}
+          >
+            {bulkDeleting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Trash2 className="h-3 w-3 mr-1" />}
+            delete
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={clearSelection}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
-              {pipeTypeFilter === "cloud" ? "cloud" : `${pipeTypeFilter} (${tabCounts[pipeTypeFilter]})`}
-              <ChevronDown className="h-3 w-3 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {([
-              "automated",
-              "manual",
-              ...(isEnterpriseBuild ? (["cloud"] as const) : []),
-            ] as const).map((tab) => (
-              <DropdownMenuItem
-                key={tab}
-                onClick={() => setPipeTypeFilter(tab)}
-                className={cn("capitalize gap-2", pipeTypeFilter === tab && "font-medium")}
-              >
-                <span className="flex-1">{tab}</span>
-                {tab !== "cloud" && (
-                  <span className="text-muted-foreground text-xs">{tabCounts[tab]}</span>
-                )}
-                {pipeTypeFilter === tab && <Check className="h-3.5 w-3.5 ml-1" />}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
-          variant="outline"
-          size="icon"
-          className="h-8 w-8"
-          onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
-          title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
-        >
-          <Star
-            className={cn(
-              "h-3.5 w-3.5",
-              pipeFavorites.showOnly && "fill-foreground"
-            )}
-          />
-        </Button>
-        <Button variant="outline" size="icon" className={`h-8 w-8 ${refreshing ? "pointer-events-none opacity-70" : ""}`} onClick={async () => {
-          if (refreshing) return;
-          setRefreshing(true);
-          await Promise.all([
-            fetchPipes(),
-            new Promise((r) => setTimeout(r, 2000)),
-          ]);
-          setRefreshing(false);
-        }}>
-          {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <RefreshCw className="h-3.5 w-3.5" />}
-        </Button>
-      </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="search pipes..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-8 h-8 text-sm"
+              spellCheck={false}
+              autoCorrect="off"
+            />
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
+                {pipeTypeFilter === "cloud" ? "cloud" : `${pipeTypeFilter} (${tabCounts[pipeTypeFilter]})`}
+                <ChevronDown className="h-3 w-3 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {([
+                "automated",
+                "manual",
+                ...(isEnterpriseBuild ? (["cloud"] as const) : []),
+              ] as const).map((tab) => (
+                <DropdownMenuItem
+                  key={tab}
+                  onClick={() => setPipeTypeFilter(tab)}
+                  className={cn("capitalize gap-2", pipeTypeFilter === tab && "font-medium")}
+                >
+                  <span className="flex-1">{tab}</span>
+                  {tab !== "cloud" && (
+                    <span className="text-muted-foreground text-xs">{tabCounts[tab]}</span>
+                  )}
+                  {pipeTypeFilter === tab && <Check className="h-3.5 w-3.5 ml-1" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
+            title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
+          >
+            <Star
+              className={cn(
+                "h-3.5 w-3.5",
+                pipeFavorites.showOnly && "fill-foreground"
+              )}
+            />
+          </Button>
+          <Button variant="outline" size="icon" className={`h-8 w-8 ${refreshing ? "pointer-events-none opacity-70" : ""}`} onClick={async () => {
+            if (refreshing) return;
+            setRefreshing(true);
+            await Promise.all([
+              fetchPipes(),
+              new Promise((r) => setTimeout(r, 2000)),
+            ]);
+            setRefreshing(false);
+          }}>
+            {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+      )}
 
       {pipeTypeFilter === "cloud" ? (
         // Cloud pipes: the team's shared pipes running on screenpipe-managed
@@ -2267,11 +2357,15 @@ export function PipesSection() {
                 title={expanded === pipe.config.name ? "collapse" : "open — runs, config, logs"}
                 className="flex items-center gap-2.5 px-4 pt-3 pb-1 cursor-pointer select-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                {/* Disclosure chevron — the row's "you can open this" cue.
-                    Doubles as a status tint: red when the last run failed,
-                    pulses while running. Replaces the old standalone dot so
-                    status lives in one obvious place, not a mystery square. */}
-                {expanded === pipe.config.name ? (
+                {/* In select mode, show a checkbox instead of the chevron */}
+                {selectMode ? (
+                  <Checkbox
+                    checked={selectedPipes.has(pipe.config.name)}
+                    onCheckedChange={() => toggleSelectPipe(pipe.config.name)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="shrink-0 h-4 w-4"
+                  />
+                ) : expanded === pipe.config.name ? (
                   <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-colors" />
                 ) : (
                   <ChevronRight
@@ -2626,19 +2720,34 @@ export function PipesSection() {
                           publish to store
                         </DropdownMenuItem>
                       )}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => {
+                          if (selectedPipes.has(pipe.config.name)) {
+                            toggleSelectPipe(pipe.config.name);
+                          } else {
+                            if (!selectMode) setSelectMode(true);
+                            setSelectedPipes((prev) => {
+                              const next = new Set(prev);
+                              next.add(pipe.config.name);
+                              return next;
+                            });
+                          }
+                        }}
+                      >
+                        <CheckSquare className="h-3.5 w-3.5 mr-2" />
+                        {selectedPipes.has(pipe.config.name) ? "deselect" : "select"}
+                      </DropdownMenuItem>
                       {/* Delete is hidden while a team share is active (the
                           sync would reinstall it) but allowed once unshared. */}
                       {(!isReceivedTeamPipe(pipe) || isUnsharedLeftover(pipe)) && (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={() => deletePipe(pipe.config.name)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 mr-2" />
-                            delete
-                          </DropdownMenuItem>
-                        </>
+                        <DropdownMenuItem
+                          className="text-destructive"
+                          onClick={() => deletePipe(pipe.config.name)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 mr-2" />
+                          delete
+                        </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -3381,6 +3490,33 @@ export function PipesSection() {
               }}
             >
               update & discard my edits
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bulkDeleteConfirm} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteConfirm(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>delete {selectedPipes.size} pipe{selectedPipes.size !== 1 ? "s" : ""}?</DialogTitle>
+            <DialogDescription>
+              this will permanently remove the selected pipes and their configurations. this action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" disabled={bulkDeleting} onClick={() => setBulkDeleteConfirm(false)}>
+              cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={bulkDeleting}
+              onClick={async () => {
+                await bulkDeletePipes();
+                setBulkDeleteConfirm(false);
+              }}
+            >
+              {bulkDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
+              delete
             </Button>
           </DialogFooter>
         </DialogContent>
