@@ -1050,6 +1050,14 @@ function createSettingsStore() {
 			}
 		}
 
+		// Migration: backfill disabledShortcuts for installs that predate the
+		// field. Several call sites assume it's always an array (`.includes(...)`)
+		// and crash with "Cannot read properties of undefined" when it's missing.
+		if (!Array.isArray(settings.disabledShortcuts)) {
+			settings.disabledShortcuts = [];
+			needsUpdate = true;
+		}
+
 		// Save migrations if needed
 		if (needsUpdate) {
 			await setSettingsStripped(store, settings);

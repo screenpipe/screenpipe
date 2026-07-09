@@ -786,20 +786,31 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
 }
 
 /**
- * "+ new chat" semantics. If the user already has an empty chat
- * (no user message sent yet), return its id instead of spawning a
+ * "+ new chat" semantics. If the user already has a blank chat
+ * (no message sent yet), return its id instead of spawning a
  * new one — repeatedly clicking the button otherwise floods the
  * sidebar with empty rows. Picks the panel's current session first
  * (most likely the one the user is staring at), then falls back to
- * any other empty session newest-first.
+ * any other blank chat newest-first.
+ *
+ * A session is only reusable when it is a genuine blank CHAT draft:
+ *   - `kind` is "chat" (or unset) — never a `pipe-run` / `pipe-watch`.
+ *   - `messageCount === 0` — this is what excludes on-disk-hydrated
+ *     sidebar rows. Those carry no in-memory `messages` array (see the
+ *     SessionRecord doc), so a naive `messages.length === 0` check would
+ *     treat every real conversation on disk as "empty" and make "+ new
+ *     chat" hop through the sidebar instead of opening a fresh one (#4719).
+ *   - no loaded `user` message — belt-and-suspenders for a foreground
+ *     draft that already has an unsent user turn before its count updates.
  *
  * Returns `{ id, isNew }` so callers can decide whether to upsert.
  */
 export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
   const state = useChatStore.getState();
-  const isEmpty = (s: SessionRecord) => {
+  const isReusableBlankChat = (s: SessionRecord) => {
+    if (s.kind && s.kind !== "chat") return false;
+    if (s.messageCount > 0) return false;
     const msgs = (s.messages as Array<{ role?: string }> | undefined) ?? [];
-    if (msgs.length === 0) return true;
     return !msgs.some((m) => m?.role === "user");
   };
 
@@ -807,12 +818,12 @@ export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
   const panelId = state.panelSessionId;
   if (panelId) {
     const panel = state.sessions[panelId];
-    if (panel && isEmpty(panel)) return { id: panelId, isNew: false };
+    if (panel && isReusableBlankChat(panel)) return { id: panelId, isNew: false };
   }
 
-  // Otherwise any other empty session, newest first by createdAt.
+  // Otherwise any other blank chat, newest first by createdAt.
   const empties = Object.values(state.sessions)
-    .filter(isEmpty)
+    .filter(isReusableBlankChat)
     .sort((a, b) => b.createdAt - a.createdAt);
   if (empties.length > 0) return { id: empties[0].id, isNew: false };
 

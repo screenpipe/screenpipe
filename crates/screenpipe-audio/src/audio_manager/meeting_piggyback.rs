@@ -70,6 +70,14 @@ use std::collections::HashSet;
 
 pub(crate) const MAX_TAP_STRIKES: u32 = 3;
 pub(crate) const TAP_RETRY_COOLDOWN_SECS: u64 = 60;
+/// Delay before the far end rebuilds a live tap over a changed mic-holder pid
+/// set. Observed live (2026-07-08, Zoom join): rebuilding screenpipe's own
+/// CoreAudio process tap the instant the OS reports a holder-set change
+/// competes with the other app for the same mic right when it's trying to
+/// acquire it. This delay gives that app a couple of quiet seconds to finish
+/// grabbing the mic before screenpipe reacts. Cancelled outright (not just
+/// paused) the moment the pid set reverts to what the tap already has.
+pub(crate) const RETAP_DELAY_MS: u64 = 2_000;
 
 // NOTE: the piggyback deliberately has NO mic capture-health / silence
 // machinery (removed by product decision). We track the meeting app's own
@@ -494,14 +502,26 @@ pub(crate) struct PiggybackObservation {
     /// mic-holder set changing mid-meeting (manual meetings track it live)
     /// and rebuild the tap over the new set.
     pub tap_built_pids: Vec<i32>,
+    /// Delayed view of the mic-holder pid set for the far-end rebuild
+    /// decision only (see [`RETAP_DELAY_MS`]). Equal to `tap_built_pids`
+    /// while a change is still within its delay — so the decider sees no
+    /// move and leaves the live tap alone — and equal to the fresh pid set
+    /// once the delay has elapsed. Distinct from `meeting` (used for the
+    /// piggybacking gate, cold-start `StartTap`, and mic resolution, none of
+    /// which should be delayed) so only the disruptive rebuild waits.
+    pub retap_target_pids: Vec<i32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PiggybackAction {
-    StartTap { pids: Vec<i32> },
+    StartTap {
+        pids: Vec<i32>,
+    },
     /// Stop + immediately restart the tap over a new pid set — a deliberate
     /// rebuild, NOT a failure: no strike, no cooldown gap, suspensions kept.
-    RetapForPidChange { pids: Vec<i32> },
+    RetapForPidChange {
+        pids: Vec<i32>,
+    },
     StopSessionDevice(String),
     Suspend(String),
     Resume(String),
@@ -524,6 +544,18 @@ pub(crate) fn decide_piggyback(obs: &PiggybackObservation) -> Vec<PiggybackActio
     // session stream and lift every suspension → exactly today's stable path.
     let piggybacking = engaged && obs.tap_available && !meeting_pids.is_empty();
     if !piggybacking {
+        // Only the "flag on, tap available, but this tick's pid went empty"
+        // case is a surprise — flag-off and no-meeting are the normal quiet
+        // paths. This is the OTHER silent teardown site (RetapForPidChange
+        // and the "not streaming" branch below both log; this one never
+        // did), and it fires on a single empty-pid tick with no persistence
+        // gate at all, unlike the manual-meeting holder-set adoption.
+        if engaged && obs.tap_available && !obs.session_devices.is_empty() {
+            tracing::info!(
+                "[MEETING_PIGGYBACK] meeting pid went empty this tick, tearing down session devices {:?}",
+                obs.session_devices
+            );
+        }
         for dev in &obs.session_devices {
             actions.push(PiggybackAction::StopSessionDevice(dev.clone()));
         }
@@ -542,6 +574,14 @@ pub(crate) fn decide_piggyback(obs: &PiggybackObservation) -> Vec<PiggybackActio
     let tap_streaming = obs.session_streaming.contains(&tap);
     if tap_registered && !tap_streaming {
         // Tap died (app-quit exit sets is_disconnected; supervisor gave up).
+        // Logged here (not just at the StartTap/Retap sites) because this is
+        // the ONLY branch that silently tears the tap down — the generic
+        // StopSessionDevice dispatch has no reason string, so without this
+        // line the far-end death is invisible in the logs.
+        tracing::info!(
+            "[MEETING_PIGGYBACK] tap over {:?} registered but not streaming, tearing down",
+            obs.tap_built_pids
+        );
         actions.push(PiggybackAction::StopSessionDevice(tap.clone()));
         for dev in &obs.suspended {
             if dev.ends_with("(output)") {
@@ -561,13 +601,14 @@ pub(crate) fn decide_piggyback(obs: &PiggybackObservation) -> Vec<PiggybackActio
                 actions.push(PiggybackAction::Resume(dev.clone()));
             }
         }
-    } else if !obs.tap_built_pids.is_empty() && obs.tap_built_pids != meeting_pids {
+    } else if !obs.tap_built_pids.is_empty() && obs.tap_built_pids != obs.retap_target_pids {
         // Tap is healthy but the pid set moved under it (a mic-holding app
         // joined or left a MANUAL meeting; the sweep already damped the set
-        // with persistence-gated adoption). Deliberate rebuild over the new set —
-        // suspensions stay, no failure strike, no cooldown gap.
+        // with persistence-gated adoption, and delayed the rebuild itself by
+        // `RETAP_DELAY_MS` — see `retap_target_pids`). Deliberate rebuild over
+        // the new set — suspensions stay, no failure strike, no cooldown gap.
         actions.push(PiggybackAction::RetapForPidChange {
-            pids: meeting_pids.to_vec(),
+            pids: obs.retap_target_pids.clone(),
         });
     } else {
         // Tap is streaming: the stable global capture is redundant (double
@@ -630,6 +671,12 @@ pub(crate) struct PiggybackState {
     /// streams costs a rebuild. Reset on meeting end.
     pub manual_pids_adopted: Vec<i32>,
     pub manual_pids_candidate: Option<(Vec<i32>, u64)>,
+    /// The mic-holder pid set currently waiting out [`RETAP_DELAY_MS`] before
+    /// the live tap is rebuilt over it (target set, wall ms first seen).
+    /// `None` when the tap already matches the current pid set. Cleared
+    /// outright (not just paused) the instant the pid set reverts back to
+    /// the tap's current set, or on meeting end.
+    pub retap_delay_candidate: Option<(Vec<i32>, u64)>,
     /// One-shot per meeting: the MANUAL-meeting mic-holder enumeration
     /// returned an error (or reported unsupported) and the sweep logged it.
     /// Errored ticks keep the previously adopted pid set in force instead of
@@ -646,6 +693,41 @@ pub(crate) struct PiggybackState {
     /// `Drop` also clears, so listeners cannot outlive the monitor task.
     #[cfg(target_os = "macos")]
     pub listeners: super::piggyback_listeners::PiggybackListenerGuard,
+}
+
+/// Delays the far-end tap rebuild by [`RETAP_DELAY_MS`] when the mic-holder
+/// pid set moves under a live tap: returns `tap_built_pids` unchanged while
+/// the fresh set is still within its delay (so the decider sees no move and
+/// leaves the live tap alone), and returns `fresh` once the delay has
+/// elapsed. If the fresh set reverts back to `tap_built_pids` before the
+/// delay is up, the pending candidate is cleared outright — there is nothing
+/// left to delay. Time-based rather than tick-counted for the same reason as
+/// [`MANUAL_PID_ADOPT_HOLDOFF_MS`]. Pure state transition — unit-tested
+/// directly.
+pub(crate) fn delay_retap_pids(
+    candidate: &mut Option<(Vec<i32>, u64)>,
+    tap_built_pids: &[i32],
+    fresh: Vec<i32>,
+    now_ms: u64,
+) -> Vec<i32> {
+    if fresh == tap_built_pids {
+        *candidate = None;
+        return fresh;
+    }
+    match candidate {
+        Some((c, first_seen_ms)) if *c == fresh => {
+            if now_ms.saturating_sub(*first_seen_ms) >= RETAP_DELAY_MS {
+                *candidate = None;
+                fresh
+            } else {
+                tap_built_pids.to_vec()
+            }
+        }
+        _ => {
+            *candidate = Some((fresh, now_ms));
+            tap_built_pids.to_vec()
+        }
+    }
 }
 
 /// Persistence-damped adoption for a MANUAL meeting's mic-holder pid set: a
@@ -931,7 +1013,9 @@ pub(crate) async fn run_meeting_piggyback_sweep(
     state: &mut PiggybackState,
 ) -> bool {
     use super::now_ms;
-    use crate::core::device::{parse_audio_device, AudioDevice, DeviceType, MEETING_TAP_DEVICE_NAME};
+    use crate::core::device::{
+        parse_audio_device, AudioDevice, DeviceType, MEETING_TAP_DEVICE_NAME,
+    };
     use screenpipe_events::AudioCaptureHealthEvent;
     use tracing::{error, info, warn};
 
@@ -1053,6 +1137,19 @@ pub(crate) async fn run_meeting_piggyback_sweep(
     let cooldown_elapsed = state
         .last_tap_attempt
         .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(TAP_RETRY_COOLDOWN_SECS));
+    // Far-end rebuild delay: while a tap is already live, hold a changed pid
+    // set for RETAP_DELAY_MS before handing it to the decider as a rebuild
+    // target — no tap yet (cold start) skips the delay entirely.
+    let retap_target_pids = if state.tap_pids.is_empty() {
+        meeting_pids.clone()
+    } else {
+        delay_retap_pids(
+            &mut state.retap_delay_candidate,
+            &state.tap_pids,
+            meeting_pids.clone(),
+            now_ms(),
+        )
+    };
     let stable_outputs = stable_output_names(audio_manager, &session_devices);
     // A meeting is "seen" whenever the detector reports one, pid set or not —
     // the telemetry gate and the meeting-end edge below key off this, and
@@ -1070,6 +1167,7 @@ pub(crate) async fn run_meeting_piggyback_sweep(
         tap_strikes: state.tap_strikes,
         tap_cooldown_elapsed: cooldown_elapsed,
         tap_built_pids: state.tap_pids.clone(),
+        retap_target_pids,
     };
 
     let tap_device_str = format!("{} (output)", MEETING_TAP_DEVICE_NAME);
@@ -1098,9 +1196,8 @@ pub(crate) async fn run_meeting_piggyback_sweep(
         telemetry
             .mic_resolved_devices
             .extend(resolved_inputs.iter().cloned());
-        telemetry.mic_session_started |= resolved_inputs
-            .iter()
-            .any(|d| session_devices.contains(d));
+        telemetry.mic_session_started |=
+            resolved_inputs.iter().any(|d| session_devices.contains(d));
     }
 
     // 5. Apply actions in the decider's order. Suspend sets the flag BEFORE
@@ -1251,8 +1348,7 @@ pub(crate) async fn run_meeting_piggyback_sweep(
                                         let ev = AudioCaptureHealthEvent::mic_capture_failed(
                                             e.to_string(),
                                         );
-                                        let _ =
-                                            screenpipe_events::send_event(ev.event_name(), ev);
+                                        let _ = screenpipe_events::send_event(ev.event_name(), ev);
                                         state.mic_fail_reported = true;
                                     } else {
                                         warn!(
@@ -1363,6 +1459,7 @@ pub(crate) async fn run_meeting_piggyback_sweep(
         state.manual_pids_adopted = Vec::new();
         state.manual_pids_candidate = None;
         state.manual_enum_error_logged = false;
+        state.retap_delay_candidate = None;
     }
     state.last_meeting_seen = meeting_now;
 
@@ -1449,13 +1546,16 @@ mod tests {
     #[test]
     fn pid_set_change_rebuilds_live_tap_without_strike() {
         // The mic-holder set moved under a healthy tap (an app joined a
-        // manual meeting): rebuild deliberately — no failure strike, no
-        // teardown of suspensions.
+        // manual meeting) and the rebuild delay has already elapsed (the
+        // sweep only hands the decider a changed `retap_target_pids` once
+        // RETAP_DELAY_MS has passed): rebuild deliberately — no failure
+        // strike, no teardown of suspensions.
         let mut obs = base();
         obs.meeting = Some(vec![100, 200]);
         obs.session_devices = [tap_name()].into();
         obs.session_streaming = [tap_name()].into();
         obs.tap_built_pids = vec![100];
+        obs.retap_target_pids = vec![100, 200];
         let actions = decide_piggyback(&obs);
         assert!(actions.contains(&PiggybackAction::RetapForPidChange {
             pids: vec![100, 200]
@@ -1465,12 +1565,30 @@ mod tests {
     }
 
     #[test]
+    fn pid_set_change_within_delay_does_not_retap_yet() {
+        // The mic-holder set just moved under a healthy tap, but the rebuild
+        // delay hasn't elapsed — the sweep still hands the decider the OLD
+        // pid set as `retap_target_pids`, so it must see no move at all.
+        let mut obs = base();
+        obs.meeting = Some(vec![100, 200]);
+        obs.session_devices = [tap_name()].into();
+        obs.session_streaming = [tap_name()].into();
+        obs.tap_built_pids = vec![100];
+        obs.retap_target_pids = vec![100];
+        let actions = decide_piggyback(&obs);
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, PiggybackAction::RetapForPidChange { .. })));
+    }
+
+    #[test]
     fn unchanged_pid_set_never_retaps() {
         let mut obs = base();
         obs.meeting = Some(vec![100, 200]);
         obs.session_devices = [tap_name()].into();
         obs.session_streaming = [tap_name()].into();
         obs.tap_built_pids = vec![100, 200];
+        obs.retap_target_pids = vec![100, 200];
         let actions = decide_piggyback(&obs);
         assert!(!actions
             .iter()
@@ -1514,6 +1632,49 @@ mod tests {
             vec![10, 30]
         );
         assert!(state.manual_pids_candidate.is_none());
+    }
+
+    #[test]
+    fn delay_retap_pids_holds_target_until_delay_elapses() {
+        let mut candidate = None;
+        let tap_built = vec![100];
+        let t0 = 10_000u64;
+        // First sighting of the moved set: decider still sees the OLD set.
+        assert_eq!(
+            delay_retap_pids(&mut candidate, &tap_built, vec![100, 200], t0),
+            vec![100]
+        );
+        // Still within the delay.
+        assert_eq!(
+            delay_retap_pids(&mut candidate, &tap_built, vec![100, 200], t0 + 1_000),
+            vec![100]
+        );
+        // Delay elapsed: decider now sees the new set.
+        assert_eq!(
+            delay_retap_pids(
+                &mut candidate,
+                &tap_built,
+                vec![100, 200],
+                t0 + RETAP_DELAY_MS
+            ),
+            vec![100, 200]
+        );
+    }
+
+    #[test]
+    fn delay_retap_pids_cancels_outright_on_revert() {
+        // The pid set flaps back to what the tap already has before the
+        // delay is up — nothing left to delay, not a reset-the-clock retry.
+        let mut candidate = None;
+        let tap_built = vec![100];
+        let t0 = 10_000u64;
+        delay_retap_pids(&mut candidate, &tap_built, vec![100, 200], t0);
+        assert!(candidate.is_some());
+        assert_eq!(
+            delay_retap_pids(&mut candidate, &tap_built, vec![100], t0 + 500),
+            vec![100]
+        );
+        assert!(candidate.is_none());
     }
 
     #[test]
@@ -1759,7 +1920,9 @@ mod tests {
         // CoreAudio, so there is nothing left to wait for.
         assert_eq!(
             m.tick(&obs),
-            vec![MicFollowAction::OpenSessionInput("Rode NT (input)".to_string())]
+            vec![MicFollowAction::OpenSessionInput(
+                "Rode NT (input)".to_string()
+            )]
         );
         assert!(!m.note_open_result("Rode NT (input)", true, obs.now_ms));
         assert!(m.is_capturing("Rode NT (input)"));
@@ -1805,9 +1968,12 @@ mod tests {
         obs.running_inputs = vec![mic.clone(), other.clone()];
         obs.running_streaming = [mic.clone()].into();
         // First pass: adopt + latch displacement of the other mic.
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::SuspendInput(other.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::SuspendInput(other.clone())]
+        );
         obs.running_inputs = vec![mic.clone()]; // the sweep stopped `other`
-        // 25 ticks (~50s) of liveness flapping: strictly zero actions.
+                                                // 25 ticks (~50s) of liveness flapping: strictly zero actions.
         for i in 0..25 {
             obs.now_ms += TICK_MS;
             if i % 2 == 0 {
@@ -1828,7 +1994,10 @@ mod tests {
         let mic = "Rode NT (input)".to_string();
         let mut obs = mf_obs(TICK_MS);
         obs.resolved_inputs = vec![mic.clone()];
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::OpenSessionInput(mic.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::OpenSessionInput(mic.clone())]
+        );
         assert!(!m.note_open_result(&mic, false, obs.now_ms));
 
         // An event wake inside the retry floor must NOT duplicate the open —
@@ -1880,7 +2049,10 @@ mod tests {
             }
             obs.now_ms += TICK_MS;
         }
-        assert_eq!(warned, 1, "persistent-failure warning must fire exactly once");
+        assert_eq!(
+            warned, 1,
+            "persistent-failure warning must fire exactly once"
+        );
 
         // Fast window: every retry inside the first MIC_PERSISTENT_WINDOW_MS
         // arrived at tick cadence (2s) — never slower.
@@ -1902,7 +2074,10 @@ mod tests {
             .filter(|w| w[0] >= start + MIC_PERSISTENT_WINDOW_MS + 2 * TICK_MS)
             .map(|w| w[1] - w[0])
             .collect();
-        assert!(slow_gaps.len() >= 2, "expected slow-cadence retries: {opens:?}");
+        assert!(
+            slow_gaps.len() >= 2,
+            "expected slow-cadence retries: {opens:?}"
+        );
         assert!(
             slow_gaps.iter().all(|gap| *gap >= MIC_PERSISTENT_RETRY_MS),
             "persistent failures must retry no faster than {}s: {slow_gaps:?}",
@@ -1924,15 +2099,21 @@ mod tests {
         // Stream dies: exactly one close…
         obs.now_ms += TICK_MS;
         obs.session_streaming.clear();
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::CloseSessionInput(mic.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::CloseSessionInput(mic.clone())]
+        );
         obs.session_devices.clear(); // the sweep closed it
-        // …no duplicate open inside the retry floor (event-wake burst)…
+                                     // …no duplicate open inside the retry floor (event-wake burst)…
         obs.now_ms += MIC_RETRY_FLOOR_MS / 2;
         assert!(m.tick(&obs).is_empty(), "floor holds after a death");
         // …then reopen on the very next tick — fast reacquisition, not a
         // 10-60s backoff.
         obs.now_ms = 2 * TICK_MS + TICK_MS;
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::OpenSessionInput(mic.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::OpenSessionInput(mic.clone())]
+        );
         assert!(!m.note_open_result(&mic, true, obs.now_ms));
         assert!(m.is_capturing(&mic));
     }
@@ -1950,14 +2131,20 @@ mod tests {
         obs.session_devices = [mic.clone()].into();
         obs.session_streaming = [mic.clone()].into();
         // First pass: already open → Capturing + delivering → latch.
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::SuspendInput(other.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::SuspendInput(other.clone())]
+        );
         obs.running_inputs.clear();
         let last_delivering = obs.now_ms;
 
         // Capture dies for good.
         obs.now_ms += TICK_MS;
         obs.session_streaming.clear();
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::CloseSessionInput(mic.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::CloseSessionInput(mic.clone())]
+        );
         obs.session_devices.clear();
 
         // Until the holdoff elapses: reopen attempts only (fast retries, then
@@ -2078,7 +2265,10 @@ mod tests {
         obs.resolved_inputs = vec![mic.clone()];
         obs.running_inputs = vec![mic.clone(), other.clone()];
         obs.running_streaming = [mic.clone()].into();
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::SuspendInput(other.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::SuspendInput(other.clone())]
+        );
         obs.running_inputs = vec![mic.clone()];
 
         // The app hangs up its mic (meeting still detected): after the release
@@ -2101,7 +2291,10 @@ mod tests {
         obs.running_inputs = vec![mic.clone(), other.clone()];
         obs.running_streaming = [mic.clone()].into();
         // Adopt + latch.
-        assert_eq!(m.tick(&obs), vec![MicFollowAction::SuspendInput(other.clone())]);
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::SuspendInput(other.clone())]
+        );
         obs.now_ms += TICK_MS;
         assert!(m.tick(&obs).is_empty(), "latched: no repeat suspend");
         m.reset();

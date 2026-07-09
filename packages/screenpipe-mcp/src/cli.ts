@@ -24,8 +24,15 @@
  * working one-liner they expected.
  */
 
+import {
+  captureMcpException,
+  flushMcpTelemetry,
+  initMcpTelemetry,
+} from "./telemetry.js";
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+  initMcpTelemetry({ transport: argv.includes("--http") ? "http" : "stdio" });
 
   if (argv.includes("--http")) {
     const { runFromArgv } = await import("./http-server.js");
@@ -40,7 +47,9 @@ async function main(): Promise<void> {
   await import("./index.js");
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  captureMcpException(error, { phase: "cli_startup" });
+  await flushMcpTelemetry();
   console.error("Fatal error:", error);
   process.exit(1);
 });

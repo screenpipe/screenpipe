@@ -1600,7 +1600,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "quit" => {
             debug!("Quit requested");
-            process_exit::request_app_quit(app_handle.clone());
+            process_exit::confirm_and_request_app_quit(app_handle.clone());
         }
         _ => debug!("Unhandled menu event: {:?}", event.id()),
     }

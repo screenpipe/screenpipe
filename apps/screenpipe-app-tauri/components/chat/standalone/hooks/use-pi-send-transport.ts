@@ -61,6 +61,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendDispatchInFlightRef,
     sendMessageRef,
     setAttachedDocs,
+    setConversationId,
     setInput,
     setIsLoading,
     setIsStreaming,
@@ -225,6 +226,17 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     piRateLimitRetries.current = 0;
     lastUserMessageRef.current = userMessage;
 
+    // The id this turn is dispatched and streamed under — the single source of
+    // truth for the whole turn's persistence (#4719).
+    const turnSessionId = piSessionIdRef.current;
+    // Pull `conversationId` (React state, used by the edge/streaming auto-saves
+    // in useChatConversations) into lockstep with the dispatched session id. If
+    // it lags, those later saves write under a SECOND id and the sidebar
+    // upserts a duplicate row (the summary/todo card twin). Setting it here
+    // makes every save for this turn — immediate, streaming, and edge — land on
+    // one id.
+    setConversationId(turnSessionId);
+
     let nextRowsAfterUserAppend: Message[] | null = null;
     setMessages((prev) => {
       const next = [...prev, newUserMessage];
@@ -232,7 +244,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       return next;
     });
     if (nextRowsAfterUserAppend) {
-      void saveConversation(nextRowsAfterUserAppend, { refreshHistory: false });
+      // conversationId state hasn't committed yet this tick, so force the
+      // immediate save under the same id explicitly.
+      void saveConversation(nextRowsAfterUserAppend, {
+        refreshHistory: false,
+        idOverride: turnSessionId,
+      });
     }
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";

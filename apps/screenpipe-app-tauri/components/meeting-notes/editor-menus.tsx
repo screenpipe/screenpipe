@@ -10,6 +10,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { createPortal } from "react-dom";
 import { useEditorState, type Editor } from "@tiptap/react";
 import { NodeSelection } from "@tiptap/pm/state";
@@ -188,9 +189,9 @@ export function SlashCommandMenu({ editor }: { editor: Editor | null }) {
 
   // Intercept navigation keys before ProseMirror sees them (window capture
   // phase runs ahead of the contenteditable's own handlers).
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
+  useEventListener(
+    "keydown",
+    (event) => {
       if (event.isComposing) return;
       switch (event.key) {
         case "ArrowDown":
@@ -219,10 +220,10 @@ export function SlashCommandMenu({ editor }: { editor: Editor | null }) {
         default:
           break;
       }
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, items, selectedIndex, execute, slash]);
+    },
+    open ? window : null,
+    true,
+  );
 
   const { ref, pos } = useAnchoredPosition(
     open,

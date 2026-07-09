@@ -354,8 +354,7 @@ end tell"#;
                         break;
                     }
                     let window = *window as AXUIElementRef;
-                    let _ =
-                        AXUIElementSetMessagingTimeout(window, AX_PROBE_MESSAGING_TIMEOUT_SECS);
+                    let _ = AXUIElementSetMessagingTimeout(window, AX_PROBE_MESSAGING_TIMEOUT_SECS);
                     // The focused window shows up here too; string dedupe
                     // keeps the list clean without AX element comparisons.
                     if let Some(url) = self.window_document_url(window) {

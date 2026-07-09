@@ -1047,7 +1047,7 @@ async fn main() {
                             });
                         }
                         "quit_app" => {
-                            process_exit::request_app_quit(app_handle.clone());
+                            process_exit::confirm_and_request_app_quit(app_handle.clone());
                         }
                         _ => {}
                     }
@@ -1128,10 +1128,9 @@ async fn main() {
                 env::set_var("TESSDATA_PREFIX", tessdata_path);
             }
 
-            // mlx.metallib is now placed at Contents/MacOS/mlx.metallib at
-            // build time (see "Inject mlx.metallib into Contents/MacOS/" step
-            // in .github/workflows/release-app.yml), then signed as part of
-            // the normal codesign pass.
+            // mlx.metallib and libonnxruntime.dylib are placed at Contents/MacOS/ at
+            // build time via bundle.macOS.files (see build.rs stage_macos_sidecar_libs),
+            // then signed as part of the normal codesign pass.
             //
             // Previously this block created a symlink at Contents/MacOS/mlx.metallib
             // pointing at Contents/Resources/mlx.metallib on first launch. Apple
@@ -2019,6 +2018,10 @@ async fn main() {
             let app_handle_dock = app.app_handle().clone();
             dock_menu::setup_dock_menu(app_handle_dock);
         }
+
+        // Route native terminate: (dock Quit, AppleScript quit) through the
+        // quit confirmation — tao never surfaces it as ExitRequested.
+        process_exit::setup_terminate_interceptor(app.app_handle().clone());
     }
 
     app.run(|app_handle, event| {
@@ -2052,8 +2055,23 @@ async fn main() {
                     } else if process_exit::QUIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("ExitRequested event — quit was requested, allowing exit");
                     } else {
-                        info!("ExitRequested event — preventing (app stays in tray)");
-                        api.prevent_exit();
+                        // Note: native terminate: (dock Quit, AppleScript quit)
+                        // never reaches this event on tao 0.35 — it is
+                        // intercepted by process_exit::setup_terminate_interceptor.
+                        // This branch only fires for unexpected programmatic
+                        // exits (e.g. a stray app.exit()), so ask instead of
+                        // silently dying or silently staying alive.
+                        #[cfg(target_os = "macos")]
+                        {
+                            info!("ExitRequested event — preventing, showing quit confirmation");
+                            api.prevent_exit();
+                            process_exit::confirm_and_request_app_quit(app_handle.app_handle().clone());
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            info!("ExitRequested event — preventing (app stays in tray)");
+                            api.prevent_exit();
+                        }
                     }
                 }
 

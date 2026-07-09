@@ -82,16 +82,16 @@ jobs:
           target: ${{ matrix.target }}
           rustflags: ""
 
-      # sccache disabled temporarily due to GitHub Actions cache outage
-      # - name: Setup sccache
-      #   uses: mozilla-actions/sccache-action@v0.0.7
-      #   with:
-      #     version: "v0.8.2"
-
-      # - name: Configure sccache
-      #   run: |
-      #     echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-      #     echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      # Re-enabled on the shared R2 backend (the old GHA backend was
+      # disabled during a GitHub Actions cache outage and never came back).
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - name: Cache Homebrew packages
         uses: actions/cache@v4
@@ -279,17 +279,18 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # sccache disabled temporarily due to GitHub Actions cache outage
-      # - name: Setup sccache
-      #   uses: mozilla-actions/sccache-action@v0.0.7
-      #   with:
-      #     version: "v0.8.2"
-
-      # - name: Configure sccache
-      #   shell: bash
-      #   run: |
-      #     echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-      #     echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      # Re-enabled on the shared R2 backend (the old GHA backend was
+      # disabled during a GitHub Actions cache outage and never came back).
+      # This job has no target-dir cache at all, so before this the Windows
+      # CLI release built essentially cold every run.
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - uses: actions/cache@v4
         with:
@@ -507,16 +508,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # sccache disabled temporarily due to GitHub Actions cache outage
-      # - name: Setup sccache
-      #   uses: mozilla-actions/sccache-action@v0.0.7
-      #   with:
-      #     version: "v0.8.2"
-
-      # - name: Configure sccache
-      #   run: |
-      #     echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-      #     echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      # Re-enabled on the shared R2 backend (the old GHA backend was
+      # disabled during a GitHub Actions cache outage and never came back).
+      # This job has no target-dir cache at all, so before this the Linux
+      # CLI release built essentially cold every run.
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - name: Install dependencies
         run: |

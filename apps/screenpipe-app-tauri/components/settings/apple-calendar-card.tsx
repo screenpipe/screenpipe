@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
@@ -123,15 +124,9 @@ export function AppleCalendarCard({
     };
   }, [refresh]);
 
-  useEffect(() => {
-    if (connected || busy !== null) return;
-
-    const interval = window.setInterval(() => {
-      if (document.visibilityState !== "hidden") void refresh();
-    }, 1500);
-
-    return () => window.clearInterval(interval);
-  }, [busy, connected, refresh]);
+  useInterval(() => {
+    if (document.visibilityState !== "hidden") void refresh();
+  }, connected || busy !== null ? null : 1500);
 
   const handleConnect = async () => {
     if (actionInFlightRef.current) return;

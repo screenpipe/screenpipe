@@ -499,6 +499,24 @@ export function StandaloneChat({
     initialSessionIdRef.current,
   );
 
+  // Single source of truth for the active chat id (#4719). The panel mints
+  // `initialSessionIdRef` and seeds `conversationId` / `piSessionIdRef` from
+  // it, and `panelSessionId` follows `conversationId` via
+  // useChatConversationEvents — but the store's `currentId` was never set at
+  // mount, so it diverged from the id the panel is actually rendering. Publish
+  // the panel's id to `currentId` once so all four sources agree from message
+  // 0. Guarded on `!currentId` so a pending cross-window restore (which runs
+  // its own async load + setCurrent) is never clobbered. The panel is mounted
+  // once for the app's lifetime (hidden via display:none on non-chat sections,
+  // never unmounted), so this runs exactly once and can't fork on remount.
+  useEffect(() => {
+    const store = useChatStore.getState();
+    if (!store.currentId) {
+      store.actions.setCurrent(initialSessionIdRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Pipe-watch sessions keep their messages in the chat store, not in this
   // component's local state. Read them from the store directly and fall back to
   // the local buffer for regular sessions, instead of an effect that mirrored
@@ -886,6 +904,7 @@ export function StandaloneChat({
     activePresetRef,
     attachedDocsRef,
     autoSendBypassRef,
+    setConversationId,
     buildProviderConfig,
     canChat,
     cancelStreamingMessageRender,
@@ -947,6 +966,15 @@ export function StandaloneChat({
     takeQueuedDisplayById,
     turnIntentLedgerRef,
   });
+
+  // E2E-only: expose the stop action so specs can end a turn and drive sends
+  // back-to-back without the Pi subprocess staying busy. Render assignment (the
+  // repo's preferred pattern over mirror effects); harmless no-op in production.
+  // `handleStop` closes over stable refs, so no cleanup is needed.
+  if (typeof window !== "undefined") {
+    (window as any).__e2eStopChat = handleStop;
+  }
+
 
   const answerPiExtensionUiRequest = useCallback(async (
     requestId: string | undefined,

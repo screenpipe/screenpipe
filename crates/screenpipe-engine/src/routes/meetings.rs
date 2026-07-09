@@ -694,13 +694,11 @@ pub(crate) async fn start_meeting_handler(
         // publish the identity with `manual: true` — the piggyback sweep
         // derives its tap targets from the live mic-holder enumeration for
         // manual meetings instead of riding the stable path.
-        detector.set_active_meeting(Some(
-            screenpipe_audio::meeting_detector::ActiveMeeting {
-                pid: None,
-                bundle_id: None,
-                manual: true,
-            },
-        ));
+        detector.set_active_meeting(Some(screenpipe_audio::meeting_detector::ActiveMeeting {
+            pid: None,
+            bundle_id: None,
+            manual: true,
+        }));
     }
 
     if let Ok(status) = resolve_meeting_status(&state).await {

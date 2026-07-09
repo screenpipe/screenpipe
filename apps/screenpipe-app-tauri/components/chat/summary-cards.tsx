@@ -211,6 +211,7 @@ export function SummaryCards({
         {featured.map((pipe) => (
           <button
             key={pipe.name}
+            data-testid={`summary-card-${pipe.name}`}
             onClick={() => handleCardClick(pipe)}
             className="group text-left p-2 border border-border/40 bg-muted/20 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
           >

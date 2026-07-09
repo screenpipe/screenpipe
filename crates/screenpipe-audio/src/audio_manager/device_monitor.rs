@@ -1087,9 +1087,7 @@ pub async fn start_device_monitor(
                                         // then mis-logged as "restored" with a
                                         // backoff reset — a 2s log/reset storm.
                                         // Skip this tick entirely, no log, no reset.
-                                        if audio_manager
-                                            .suspended_devices()
-                                            .contains(&device_name)
+                                        if audio_manager.suspended_devices().contains(&device_name)
                                         {
                                             // leave backoff untouched
                                         } else if user_disabled.contains(&device_name) {
@@ -1196,9 +1194,7 @@ pub async fn start_device_monitor(
                                         // log, no reset (must NOT `continue`, which
                                         // would skip the rest of the monitor pass
                                         // incl. the piggyback sweep itself).
-                                        if audio_manager
-                                            .suspended_devices()
-                                            .contains(&device_name)
+                                        if audio_manager.suspended_devices().contains(&device_name)
                                         {
                                             // leave backoff untouched
                                         } else {
@@ -1206,7 +1202,8 @@ pub async fn start_device_monitor(
                                                 "[DEVICE_RECOVERY] no output device running (attempt {}), starting default: {}",
                                                 output_recovery_backoff.attempts, device_name
                                             );
-                                            match audio_manager.start_device(&default_output).await {
+                                            match audio_manager.start_device(&default_output).await
+                                            {
                                                 Ok(()) => {
                                                     failed_devices.remove(&device_name);
                                                     default_tracker.last_output =
@@ -1716,11 +1713,12 @@ pub async fn start_device_monitor(
                 // meetings (experimental flag). Owns its own fallback — every
                 // failure path lands on the stable capture. Pure decider in
                 // meeting_piggyback.rs; this call only applies side effects.
-                let piggyback_far_end_active = super::meeting_piggyback::run_meeting_piggyback_sweep(
-                    &audio_manager,
-                    &mut piggyback_state,
-                )
-                .await;
+                let piggyback_far_end_active =
+                    super::meeting_piggyback::run_meeting_piggyback_sweep(
+                        &audio_manager,
+                        &mut piggyback_state,
+                    )
+                    .await;
 
                 // Capture whichever render endpoint audio actually plays
                 // through, and notify if a meeting's speaker audio isn't

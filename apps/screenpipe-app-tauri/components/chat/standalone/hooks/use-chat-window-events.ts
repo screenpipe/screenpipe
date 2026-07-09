@@ -178,6 +178,14 @@ export function useChatPrefillListener({
             const newSid = crypto.randomUUID();
             piSessionIdRef.current = newSid;
             setConversationId(newSid);
+            // Publish the new id to the store as the active session (#4719).
+            // Without this, an autoSend prefill left `store.currentId` pointing
+            // at the previous chat while `piSessionIdRef` / `conversationId`
+            // moved on — a divergence that feeds the cross-window duplicate
+            // race. `panelSessionId` follows `conversationId` via
+            // useChatConversationEvents, so setting currentId here keeps all
+            // four id sources in lockstep from message 0.
+            useChatStore.getState().actions.setCurrent(newSid);
             piSessionSyncedRef.current = true;
             autoSendBypassRef.current = true;
             await new Promise((resolve) => setTimeout(resolve, 200));

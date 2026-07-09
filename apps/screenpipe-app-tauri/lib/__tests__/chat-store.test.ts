@@ -258,6 +258,68 @@ describe("chat-store: getOrCreateEmptyChatId (no spam on +new)", () => {
     expect(id).toBe("newEmpty");
     expect(isNew).toBe(false);
   });
+
+  it("does NOT reuse on-disk-hydrated conversations that carry no in-memory messages (#4719 regression)", () => {
+    // Disk-synced sidebar rows have no `messages` array but a real
+    // messageCount. A naive messages.length check treated them as empty,
+    // making "+ new chat" hop through the sidebar instead of opening fresh.
+    useChatStore.setState({
+      sessions: {
+        diskChat: baseRecord({
+          id: "diskChat",
+          kind: "chat",
+          messageCount: 6,
+          messages: undefined,
+        }),
+      },
+      currentId: null,
+      panelSessionId: null,
+    });
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(isNew).toBe(true);
+    expect(id).not.toBe("diskChat");
+  });
+
+  it("does NOT reuse pipe-run / pipe-watch sessions (#4719 regression)", () => {
+    useChatStore.setState({
+      sessions: {
+        pipeRun: baseRecord({
+          id: "pipeRun",
+          kind: "pipe-run",
+          messageCount: 0,
+          messages: [],
+        }),
+      },
+      currentId: null,
+      panelSessionId: "pipeRun",
+    });
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(isNew).toBe(true);
+    expect(id).not.toBe("pipeRun");
+  });
+
+  it("repeated '+ new chat' (via the entry-point flow) never floods empty rows (#4719)", () => {
+    // Mirrors app/home/page.tsx startNewChat: get-or-create, upsert a draft
+    // only when new, then set current. Clicking "+ new chat" N times with no
+    // message sent must leave exactly ONE empty session, not N.
+    const clickNewChat = () => {
+      const store = useChatStore.getState();
+      const { id, isNew } = getOrCreateEmptyChatId();
+      if (isNew) {
+        store.actions.upsert(baseRecord({ id, messages: [], draft: true }));
+      }
+      store.actions.setCurrent(id);
+      return id;
+    };
+
+    const first = clickNewChat();
+    const second = clickNewChat();
+    const third = clickNewChat();
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(Object.keys(useChatStore.getState().sessions)).toEqual([first]);
+  });
 });
 
 describe("chat-store: setCurrent clears unread atomically", () => {

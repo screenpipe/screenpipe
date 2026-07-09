@@ -24,7 +24,6 @@ import {
   Sparkles,
   Square,
   Trash2,
-  Users,
   Video,
   Volume2,
   X,
@@ -59,6 +58,7 @@ import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
   formatClock,
   formatDuration,
+  parseAttendees,
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
 import type {
@@ -82,6 +82,7 @@ import {
   type CalendarMeetingLink,
 } from "@/lib/utils/calendar";
 import { cn } from "@/lib/utils";
+import { AttendeesPill } from "./attendees-pill";
 import { Receipts } from "./receipts";
 import { ReplayStrip } from "./replay-strip";
 import { ListeningSticks } from "./listening-sticks";
@@ -922,10 +923,7 @@ export function NoteView({
     }
   };
 
-  const attendeeCount = attendees
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean).length;
+  const attendeeCount = parseAttendees(attendees).length;
   const englishOnly =
     settings.languages.length === 1 && settings.languages[0] === "english";
   const dockDuration = isLive
@@ -1789,54 +1787,6 @@ function Pill({
       {icon}
       {children}
     </span>
-  );
-}
-
-function AttendeesPill({
-  value,
-  count,
-  onChange,
-}: {
-  value: string;
-  count: number;
-  onChange: (v: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
-
-  if (editing) {
-    return (
-      <span className="inline-flex h-7 items-center gap-1.5 border border-foreground bg-background px-2.5 text-xs">
-        <Users className="h-3.5 w-3.5" />
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onBlur={() => setEditing(false)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "Escape") setEditing(false);
-          }}
-          placeholder="comma separated"
-          className="bg-transparent focus:outline-none text-xs min-w-[180px]"
-        />
-      </span>
-    );
-  }
-
-  return (
-    <button
-      onClick={() => setEditing(true)}
-      className="inline-flex h-7 items-center gap-1.5 border border-border bg-background px-2.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
-    >
-      <Users className="h-3.5 w-3.5" />
-      {count === 0
-        ? "add attendees"
-        : `${count} ${count === 1 ? "attendee" : "attendees"}`}
-    </button>
   );
 }
 

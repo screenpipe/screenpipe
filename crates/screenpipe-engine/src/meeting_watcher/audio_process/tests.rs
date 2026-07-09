@@ -392,18 +392,18 @@ fn meet_code_title_shape_is_strict() {
     // Anything looser is rejected.
     for title in [
         "",
-        "abc-defg-hi",              // last group too short
-        "abc-defg-hijk",            // last group too long
-        "ab-cdefg-hij",             // first group too short
-        "ABC-DEFG-HIJ",             // uppercase
-        "abc-defg-hi1",             // digit
-        "abc_defg_hij",             // wrong separator
-        "abc-defg-hij ",            // trailing whitespace (caller trims)
-        "Meet - abc-defg-hij",      // code embedded in a longer title
-        "meet.google.com",          // domain, not a code
-        "one-two-three-four",       // hyphenated slug
-        "new-doc-nov",              // 3-3-3 dashed doc name
-        "\u{0430}bc-defg-hij",      // non-ASCII lookalike (Cyrillic а)
+        "abc-defg-hi",         // last group too short
+        "abc-defg-hijk",       // last group too long
+        "ab-cdefg-hij",        // first group too short
+        "ABC-DEFG-HIJ",        // uppercase
+        "abc-defg-hi1",        // digit
+        "abc_defg_hij",        // wrong separator
+        "abc-defg-hij ",       // trailing whitespace (caller trims)
+        "Meet - abc-defg-hij", // code embedded in a longer title
+        "meet.google.com",     // domain, not a code
+        "one-two-three-four",  // hyphenated slug
+        "new-doc-nov",         // 3-3-3 dashed doc name
+        "\u{0430}bc-defg-hij", // non-ASCII lookalike (Cyrillic а)
     ] {
         assert_eq!(arc_window_title_meet_code(title), None, "{:?}", title);
     }

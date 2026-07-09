@@ -440,9 +440,7 @@ fn supervisor_policy(exit: CaptureExit) -> SupervisorStep {
     match exit {
         CaptureExit::Disconnected | CaptureExit::TargetExited => SupervisorStep::Stop,
         CaptureExit::EndpointChanged => SupervisorStep::RebuildNow,
-        CaptureExit::WaitFailed | CaptureExit::DrainFailed => {
-            SupervisorStep::RebuildAfterCooldown
-        }
+        CaptureExit::WaitFailed | CaptureExit::DrainFailed => SupervisorStep::RebuildAfterCooldown,
     }
 }
 

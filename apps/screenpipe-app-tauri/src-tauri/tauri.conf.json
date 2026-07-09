@@ -37,7 +37,6 @@
     ],
     "resources": [
       "assets/*",
-      "mlx.metallib",
       "PermissionFlow_PermissionFlow.bundle"
     ],
     "macOS": {

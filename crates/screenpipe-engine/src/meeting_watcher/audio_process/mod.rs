@@ -366,7 +366,12 @@ pub async fn run_audio_process_meeting_detection_loop(
                 }
             }
         }
-        sync_meeting_flag(active_now, current_active_meeting, &in_meeting_flag, &detector);
+        sync_meeting_flag(
+            active_now,
+            current_active_meeting,
+            &in_meeting_flag,
+            &detector,
+        );
         interval = if processes.is_empty() {
             IDLE_POLL_INTERVAL
         } else {

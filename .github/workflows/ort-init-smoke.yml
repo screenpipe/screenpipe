@@ -57,6 +57,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # This matrix had no compile cache at all before this.
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
+
       - name: Set up MSVC
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1

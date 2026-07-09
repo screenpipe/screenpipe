@@ -281,8 +281,7 @@ pub(crate) async fn apply_state_action(
                     // here stripped the manual piggyback and false-fired the
                     // sweep's meeting-end edge for one tick. Preserve whatever
                     // the detector currently holds (None if nothing published).
-                    let current_active_meeting =
-                        detector.as_ref().and_then(|d| d.active_meeting());
+                    let current_active_meeting = detector.as_ref().and_then(|d| d.active_meeting());
                     sync_meeting_flag(true, current_active_meeting, in_meeting_flag, detector);
                     if let Ok(status) = resolve_meeting_status_from(db, manual_meeting).await {
                         emit_meeting_status_changed(&status);

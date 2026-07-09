@@ -1784,12 +1784,7 @@ impl AudioManager {
         // Defensive: never clean up a session device here. `check_stale_recording_handles`
         // already omits them from the stale list (the only caller), but guard the
         // public entry point too — only `stop_session_device` may tear these down.
-        if self
-            .session_devices
-            .read()
-            .unwrap()
-            .contains(device_name)
-        {
+        if self.session_devices.read().unwrap().contains(device_name) {
             debug!(
                 "cleanup_stale_device({device_name}): session device, leaving intact (only stop_session_device may cull it)"
             );

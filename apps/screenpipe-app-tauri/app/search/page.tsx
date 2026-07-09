@@ -5,6 +5,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { SearchModal } from "@/components/rewind/search-modal";
 import { emit, listen } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
@@ -42,17 +43,13 @@ export default function SearchPage() {
 	}, []);
 
 	// Close on click outside
-	useEffect(() => {
-		const handleBlur = () => {
-			setTimeout(() => {
-				if (!document.hasFocus()) {
-					commands.closeWindow({ Search: { query: null } });
-				}
-			}, 100);
-		};
-		window.addEventListener("blur", handleBlur);
-		return () => window.removeEventListener("blur", handleBlur);
-	}, []);
+	useEventListener("blur", () => {
+		setTimeout(() => {
+			if (!document.hasFocus()) {
+				commands.closeWindow({ Search: { query: null } });
+			}
+		}, 100);
+	});
 
 	useEffect(() => {
 		const handleRecentChatSwitcherHandoff = async (event: KeyboardEvent) => {

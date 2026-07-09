@@ -956,13 +956,9 @@ mod little_arc_exclusion_tests {
         let profiles = load_detection_profiles();
         let ax_titles = titles(&["My Docs - Notion", "abc-defg-hij"]);
         let applescript_titles = titles(&["My Docs - Notion"]);
-        let candidate = little_arc_meet_candidate_excluding(
-            "Arc",
-            &ax_titles,
-            &applescript_titles,
-            &profiles,
-        )
-        .expect("Little Arc code title should resolve");
+        let candidate =
+            little_arc_meet_candidate_excluding("Arc", &ax_titles, &applescript_titles, &profiles)
+                .expect("Little Arc code title should resolve");
         assert_eq!(
             candidate.meeting_url.as_deref(),
             Some("https://meet.google.com/abc-defg-hij")
@@ -989,8 +985,7 @@ mod little_arc_exclusion_tests {
     fn empty_exclusion_matches_plain_fallback() {
         let profiles = load_detection_profiles();
         let ax_titles = titles(&["abc-defg-hij"]);
-        let with_empty =
-            little_arc_meet_candidate_excluding("Arc", &ax_titles, &[], &profiles);
+        let with_empty = little_arc_meet_candidate_excluding("Arc", &ax_titles, &[], &profiles);
         let plain = little_arc_meet_candidate("Arc", &ax_titles, &profiles);
         assert_eq!(with_empty.is_some(), plain.is_some());
         assert!(with_empty.is_some());

@@ -359,6 +359,20 @@ pub async fn get_cpal_device_and_config(
             .ok_or_else(|| anyhow!("No supported output configurations found"))?;
 
         (*best_config).with_sample_rate(best_config.max_sample_rate())
+    } else if let Ok(default_config) = cpal_audio_device.default_input_config() {
+        // Input devices are shared hardware — another app (a meeting app,
+        // for instance) can be using the SAME physical mic at the same time.
+        // On macOS, opening a stream at a rate other than the device's
+        // CURRENT nominal sample rate makes cpal write
+        // `kAudioDevicePropertyNominalSampleRate`, which is a device-wide
+        // property, not scoped to our stream — every other client sharing
+        // the device gets yanked through that reconfiguration too (observed
+        // live: a meeting app's own mic stream stalling right as screenpipe
+        // opens the shared mic). Requesting the device's own default config
+        // means the rate already matches, so cpal skips that write entirely.
+        // Output devices don't share this failure mode the same way, so they
+        // keep picking the highest-quality config below.
+        default_config
     } else {
         let configs: Vec<_> = cpal_audio_device.supported_input_configs()?.collect();
         let best_config = configs

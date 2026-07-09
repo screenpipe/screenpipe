@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import {
+  getOrCreateEmptyChatId,
   applyChatSessionActivity,
   sessionRecordFromMeta,
   useChatStore,
@@ -142,23 +143,30 @@ function HomeContent() {
   }, [setActiveSection]);
 
   const startNewChat = useCallback(() => {
-    const id = crypto.randomUUID();
     const store = useChatStore.getState();
+    // Reuse an existing empty chat instead of minting a fresh uuid every
+    // time (#4719). Repeatedly hitting "+ new chat" otherwise floods the
+    // sidebar with stray untitled rows and mints ids that the panel and the
+    // other window then have to reconcile.
+    const { id, isNew } = getOrCreateEmptyChatId();
+    // Clean up any *other* stray empty drafts, keeping the one we reuse.
     Object.values(store.sessions).forEach((s) => {
-      if (s.draft) store.actions.drop(s.id);
+      if (s.draft && s.id !== id) store.actions.drop(s.id);
     });
-    store.actions.upsert({
-      id,
-      title: "untitled",
-      preview: "",
-      status: "idle",
-      messageCount: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      pinned: false,
-      unread: false,
-      draft: true,
-    });
+    if (isNew) {
+      store.actions.upsert({
+        id,
+        title: "untitled",
+        preview: "",
+        status: "idle",
+        messageCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        pinned: false,
+        unread: false,
+        draft: true,
+      });
+    }
     store.actions.setCurrent(id);
     void emit("chat-load-conversation", { conversationId: id });
   }, [setActiveSection]);
