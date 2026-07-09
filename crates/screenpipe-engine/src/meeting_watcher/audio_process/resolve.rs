@@ -44,11 +44,40 @@ pub(crate) async fn resolve_tracked_candidates(
 /// meeting platform. Once a meeting is `Active` — or already winding down in
 /// `Ending` — the platform is settled, so re-walking the tree every
 /// `ACTIVE_POLL_INTERVAL` for the rest of the call is pure overhead.
+///
+/// EXCEPTION: a meeting reattached after a capture restart carries a synthetic
+/// `reattached:` key and a published `ActiveMeeting { pid: None }` — the
+/// platform is settled but the PROCESS identity isn't, and the piggyback
+/// sweep (per-process tap + mic-follow) stays disengaged until it heals. A
+/// browser meeting on a static call screen produces no fresh frame evidence,
+/// so the active-tab probe / AX sweep is the only thing that can re-attribute
+/// it. Keep resolving until the state adopts a real key (see the reattached
+/// branch of `matching_session_key`); the extra per-poll cost is exactly the
+/// pre-meeting cost and stops as soon as the identity heals.
 pub(crate) fn needs_ax_resolution(state: &AudioProcessMeetingState) -> bool {
-    !matches!(
-        state,
-        AudioProcessMeetingState::Active { .. } | AudioProcessMeetingState::Ending { .. }
-    )
+    match state {
+        AudioProcessMeetingState::Active { session_key, .. }
+        | AudioProcessMeetingState::Ending { session_key, .. } => session_key.is_reattached(),
+        _ => true,
+    }
+}
+
+/// Live process identity for the given platform, from this tick's resolved
+/// candidates. The detection loop uses this to heal a pid-less published
+/// `ActiveMeeting` (post-restart reattach) so the piggyback sweep re-engages:
+/// only a candidate RESOLVED to the meeting's own platform counts — an
+/// unresolved browser merely holding the mic could be any WebRTC page, and
+/// tapping the wrong process would replace the stable capture with the wrong
+/// app's audio.
+pub(crate) fn resolved_platform_identity(
+    candidates: &[ResolvedMeetingCandidate],
+    platform: &str,
+) -> Option<(i32, Option<String>)> {
+    candidates
+        .iter()
+        .filter_map(ResolvedMeetingCandidate::resolved_session)
+        .find(|session| session.platform == platform && session.pid.is_some())
+        .and_then(|session| session.pid.map(|pid| (pid, session.bundle_id)))
 }
 
 pub(crate) async fn should_use_ax_fallback(
@@ -120,6 +149,79 @@ pub(crate) fn resolve_active_tab_url_candidate(
             None
         }
     })
+}
+
+/// Return the Google Meet meeting code if a window title IS one: exactly
+/// `xxx-yyyy-zzz`, lowercase ASCII letters (the regex `^[a-z]{3}-[a-z]{4}-[a-z]{3}$`).
+///
+/// Nothing looser: this shape is used as standalone meeting evidence for
+/// Little Arc (see `little_arc_meet_candidate`), so a hyphenated slug, a
+/// dashed document name, uppercase, digits, or the code embedded in a longer
+/// title must all be rejected.
+pub(crate) fn arc_window_title_meet_code(title: &str) -> Option<&str> {
+    let bytes = title.as_bytes();
+    if bytes.len() != 12 {
+        return None;
+    }
+    let shape_ok = bytes.iter().enumerate().all(|(i, &b)| match i {
+        3 | 8 => b == b'-',
+        _ => b.is_ascii_lowercase(),
+    });
+    shape_ok.then_some(title)
+}
+
+/// Little Arc fallback: accept a mic-holding Arc process as Google Meet
+/// evidence when one of its AX window titles is a bare Meet meeting code.
+///
+/// Little Arc mini windows are invisible to every other evidence path: they
+/// are not in Arc's AppleScript `windows` collection and expose no AXDocument
+/// — the title (the bare meeting code) is their entire AX footprint. Gated to
+/// Arc AND the strict code shape (`arc_window_title_meet_code`), and routed
+/// through `resolve_active_tab_url_candidate` with the canonical
+/// `https://meet.google.com/<code>` URL so the candidate shape (profile
+/// matching, ignore filtering, live evidence) is identical to the URL probe's.
+///
+/// `excluded_titles` are the AppleScript-visible FULL-window titles: those
+/// windows' active-tab URLs were just resolved by the AppleScript probe (and
+/// did NOT match a meeting, or we wouldn't be in this fallback), so a full
+/// window whose tab title merely LOOKS like a meeting code (a lowercase 3-4-3
+/// kebab slug) must not fabricate a Meet meeting here. Little Arc windows are
+/// absent from Arc's AppleScript `windows` collection, so their titles
+/// survive the subtraction. Titles are trim-compared.
+pub(crate) fn little_arc_meet_candidate_excluding(
+    browser_app: &str,
+    window_titles: &[String],
+    excluded_titles: &[String],
+    profiles: &[MeetingDetectionProfile],
+) -> Option<AxResolvedCandidate> {
+    if !browser_app.eq_ignore_ascii_case("arc") {
+        return None;
+    }
+    window_titles.iter().find_map(|title| {
+        let title = title.trim();
+        if excluded_titles
+            .iter()
+            .any(|excluded| excluded.trim() == title)
+        {
+            return None;
+        }
+        let code = arc_window_title_meet_code(title)?;
+        let url = format!("https://meet.google.com/{}", code);
+        resolve_active_tab_url_candidate(browser_app, &url, profiles)
+    })
+}
+
+/// `little_arc_meet_candidate_excluding` with no exclusions. Kept under the
+/// original name so existing callers/tests of the plain fallback stay valid;
+/// the live probe (`active_tab_url_candidates`) passes the AppleScript window
+/// titles through the `_excluding` variant.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn little_arc_meet_candidate(
+    browser_app: &str,
+    window_titles: &[String],
+    profiles: &[MeetingDetectionProfile],
+) -> Option<AxResolvedCandidate> {
+    little_arc_meet_candidate_excluding(browser_app, window_titles, &[], profiles)
 }
 
 pub(crate) async fn db_find_browser_evidence(
@@ -631,8 +733,13 @@ pub(crate) fn acquire_input_processes(
             );
             *unsupported_logged = true;
         }
+        // This is a flag resync, not a fresh transition — preserve whatever
+        // identity is already published rather than clobbering it with
+        // `None` on every idle tick while the platform sensor is unsupported.
+        let current_active_meeting = detector.as_ref().and_then(|d| d.active_meeting());
         sync_meeting_flag(
             matches!(state, AudioProcessMeetingState::Active { .. }),
+            current_active_meeting,
             in_meeting_flag,
             detector,
         );
@@ -812,4 +919,90 @@ pub(crate) async fn build_candidates(
         .cloned()
         .collect();
     (candidates, live_candidates)
+}
+
+#[cfg(test)]
+mod little_arc_exclusion_tests {
+    use super::*;
+    use crate::meeting_watcher::shared::profiles::load_detection_profiles;
+
+    fn titles(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn full_window_slug_title_is_excluded() {
+        // A FULL Arc window whose active-tab title happens to be a lowercase
+        // 3-4-3 kebab slug: the AppleScript probe already resolved that
+        // window's URL as non-meeting, so its title must not fabricate a
+        // Meet meeting via the Little Arc fallback.
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["abc-defg-hij"]);
+        let applescript_titles = titles(&["abc-defg-hij"]);
+        assert!(little_arc_meet_candidate_excluding(
+            "Arc",
+            &ax_titles,
+            &applescript_titles,
+            &profiles
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn little_arc_window_survives_exclusion() {
+        // Little Arc windows are absent from Arc's AppleScript `windows`
+        // collection: the AX title set contains the meeting-code window plus
+        // full windows, the exclusion list only the full windows' titles.
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["My Docs - Notion", "abc-defg-hij"]);
+        let applescript_titles = titles(&["My Docs - Notion"]);
+        let candidate = little_arc_meet_candidate_excluding(
+            "Arc",
+            &ax_titles,
+            &applescript_titles,
+            &profiles,
+        )
+        .expect("Little Arc code title should resolve");
+        assert_eq!(
+            candidate.meeting_url.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+    }
+
+    #[test]
+    fn exclusion_is_trim_compared() {
+        // AX and AppleScript may disagree on surrounding whitespace for the
+        // same window title; the subtraction must still hit.
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["  abc-defg-hij  "]);
+        let applescript_titles = titles(&["abc-defg-hij "]);
+        assert!(little_arc_meet_candidate_excluding(
+            "Arc",
+            &ax_titles,
+            &applescript_titles,
+            &profiles
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn empty_exclusion_matches_plain_fallback() {
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["abc-defg-hij"]);
+        let with_empty =
+            little_arc_meet_candidate_excluding("Arc", &ax_titles, &[], &profiles);
+        let plain = little_arc_meet_candidate("Arc", &ax_titles, &profiles);
+        assert_eq!(with_empty.is_some(), plain.is_some());
+        assert!(with_empty.is_some());
+    }
+
+    #[test]
+    fn non_arc_browsers_never_resolve() {
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["abc-defg-hij"]);
+        assert!(
+            little_arc_meet_candidate_excluding("Google Chrome", &ax_titles, &[], &profiles)
+                .is_none()
+        );
+    }
 }

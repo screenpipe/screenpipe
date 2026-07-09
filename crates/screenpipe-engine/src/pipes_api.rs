@@ -51,11 +51,13 @@ pub struct ConfigUpdateRequest {
 #[derive(Deserialize)]
 pub struct ExecutionsQuery {
     pub limit: Option<i32>,
+    pub before_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
 pub struct ListPipesQuery {
     pub include_executions: Option<bool>,
+    pub execution_limit: Option<i32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +76,8 @@ pub async fn list_pipes(
         tracing::warn!("failed to reload pipes from disk: {}", e);
     }
     if query.include_executions.unwrap_or(false) {
-        let pipes_with_execs = mgr.list_pipes_with_executions(5).await;
+        let execution_limit = query.execution_limit.unwrap_or(5).clamp(1, 100);
+        let pipes_with_execs = mgr.list_pipes_with_executions(execution_limit).await;
         let total = pipes_with_execs.len();
         let data: Vec<Value> = pipes_with_execs
             .into_iter()
@@ -267,8 +270,8 @@ pub async fn get_pipe_executions(
     Query(query): Query<ExecutionsQuery>,
 ) -> Json<Value> {
     let mgr = pm.lock().await;
-    let limit = query.limit.unwrap_or(20).min(100);
-    match mgr.get_executions(&id, limit).await {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    match mgr.get_executions(&id, limit, query.before_id).await {
         Ok(executions) => Json(json!({ "data": executions })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
@@ -280,7 +283,7 @@ pub async fn get_pipe_session(
     Path((id, exec_id)): Path<(String, i64)>,
 ) -> (StatusCode, Json<Value>) {
     let mgr = pm.lock().await;
-    let execs = match mgr.get_executions(&id, 100).await {
+    let execs = match mgr.get_executions(&id, 1, exec_id.checked_add(1)).await {
         Ok(e) => e,
         Err(e) => {
             return (

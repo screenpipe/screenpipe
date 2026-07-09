@@ -36,7 +36,7 @@ const RECONCILIATION_CHUNKS_PER_SWEEP: i64 = 50;
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::metrics::AudioPipelineMetrics;
 use crate::segmentation::segmentation_manager::SegmentationManager;
-use crate::speaker::segment::{get_segments, SpeechSegment};
+use crate::speaker::segment::{get_segments_without_samples, SpeechSegment};
 use crate::transcription::engine::{TranscriptionEngine, TranscriptionSession};
 use crate::transcription::get_or_create_speaker_from_embedding;
 use crate::transcription::{AudioInsertCallback, AudioInsertInfo, TranscriptionDiarizationSegment};
@@ -1275,7 +1275,7 @@ async fn extract_local_diarization_segments(
         }
     };
 
-    let segments = match get_segments(
+    let segments = match get_segments_without_samples(
         samples,
         sample_rate,
         segmentation_model_path,
@@ -1405,7 +1405,7 @@ async fn extract_speaker_id(
         }
     };
 
-    let segments = match get_segments(
+    let segments = match get_segments_without_samples(
         samples,
         sample_rate,
         segmentation_model_path,

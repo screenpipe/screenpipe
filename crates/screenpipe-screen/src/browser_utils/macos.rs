@@ -4,8 +4,8 @@
 
 use accessibility_sys::{
     kAXChildrenAttribute, kAXDocumentAttribute, kAXFocusedWindowAttribute, kAXRoleAttribute,
-    kAXTextFieldRole, kAXValueAttribute, AXUIElementCopyAttributeValue,
-    AXUIElementCreateApplication, AXUIElementRef,
+    kAXTextFieldRole, kAXValueAttribute, kAXWindowsAttribute, AXUIElementCopyAttributeValue,
+    AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetMessagingTimeout,
 };
 use anyhow::Result;
 use core_foundation::{
@@ -17,6 +17,23 @@ use tracing::debug;
 use url::Url;
 
 use super::{titles_match, BrowserUrlDetector};
+
+/// Cap on how many AX windows the all-window URL probe inspects. Each
+/// AXDocument read is a synchronous cross-process AX IPC; the probe call site
+/// runs under a 3s timeout, so a pathological many-window session must not eat
+/// the whole budget on one browser.
+const MAX_PROBED_WINDOWS: usize = 16;
+
+/// Per-element AX messaging timeout for the all-window probe, replacing the
+/// ~6s system default. Budget math: the probe issues up to 17 synchronous AX
+/// IPCs (1 windows-list read + up to `MAX_PROBED_WINDOWS` AXDocument reads),
+/// so 17 × 1s worst case still exceeds the caller's 3s tokio timeout — but
+/// that timeout only *abandons* the blocking thread, it cannot stop it. With
+/// the default, a hung browser pinned the thread ~6s per IPC while the
+/// 1s-cadence caller kept spawning more; with 1s it fails fast on the FIRST
+/// call. The focused-window fast path (`get_url_via_accessibility`) is
+/// unchanged.
+const AX_PROBE_MESSAGING_TIMEOUT_SECS: f32 = 1.0;
 
 pub struct MacOSUrlDetector;
 
@@ -31,9 +48,39 @@ impl MacOSUrlDetector {
         Self
     }
 
+    /// Read one window's AXDocument attribute. This returns the *loaded page*
+    /// URL (not the address bar text), so it's naturally consistent with the
+    /// rendered content. Works well for Safari.
+    ///
+    /// `window` is borrowed — the caller keeps ownership of the AX element.
+    unsafe fn window_document_url(&self, window: AXUIElementRef) -> Option<String> {
+        let mut doc_value: CFTypeRef = std::ptr::null_mut();
+        let doc_status = AXUIElementCopyAttributeValue(
+            window,
+            CFString::from_static_string(kAXDocumentAttribute).as_concrete_TypeRef(),
+            &mut doc_value,
+        );
+
+        if doc_status != accessibility_sys::kAXErrorSuccess || doc_value.is_null() {
+            return None;
+        }
+
+        let cf_doc = CFString::wrap_under_create_rule(doc_value as _);
+        let doc_str = cf_doc.to_string();
+
+        // AXDocument often returns file:// URLs for the page, or the actual URL
+        // Filter to only http/https URLs
+        if (doc_str.starts_with("http://") || doc_str.starts_with("https://"))
+            && Url::parse(&doc_str).is_ok()
+        {
+            debug!("got URL via AXDocument: {}", doc_str);
+            Some(doc_str)
+        } else {
+            None
+        }
+    }
+
     /// Try to get the document URL from the focused window's AXDocument attribute.
-    /// This returns the *loaded page* URL (not the address bar text), so it's
-    /// naturally consistent with the rendered content. Works well for Safari.
     unsafe fn get_document_url(&self, process_id: i32) -> Option<String> {
         let app_element = AXUIElementCreateApplication(process_id);
 
@@ -49,33 +96,7 @@ impl MacOSUrlDetector {
             return None;
         }
 
-        // Try AXDocument attribute on the window
-        let mut doc_value: CFTypeRef = std::ptr::null_mut();
-        let doc_status = AXUIElementCopyAttributeValue(
-            focused_window as AXUIElementRef,
-            CFString::from_static_string(kAXDocumentAttribute).as_concrete_TypeRef(),
-            &mut doc_value,
-        );
-
-        let result = if doc_status == accessibility_sys::kAXErrorSuccess && !doc_value.is_null() {
-            let cf_doc = CFString::wrap_under_create_rule(doc_value as _);
-            let doc_str = cf_doc.to_string();
-
-            // AXDocument often returns file:// URLs for the page, or the actual URL
-            // Filter to only http/https URLs
-            if doc_str.starts_with("http://") || doc_str.starts_with("https://") {
-                if Url::parse(&doc_str).is_ok() {
-                    debug!("got URL via AXDocument: {}", doc_str);
-                    Some(doc_str)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let result = self.window_document_url(focused_window as AXUIElementRef);
 
         CFRelease(focused_window);
         CFRelease(app_element as CFTypeRef);
@@ -226,6 +247,130 @@ end tell"#;
             Ok(result)
         }
     }
+
+    /// URL of the active tab of EVERY Arc window in one AppleScript call.
+    /// AppleScript's `windows` collection is ordered front-to-back, so the
+    /// focused window's URL comes first (same fast path as `get_active_url`).
+    /// Little Arc mini windows are NOT in the `windows` collection — they have
+    /// no AppleScript footprint at all (handled by the caller via AX titles).
+    fn get_arc_all_window_urls(&self) -> Result<Vec<String>> {
+        let script = r#"tell application "Arc"
+    set out to ""
+    repeat with w in windows
+        try
+            set out to out & (URL of active tab of w) & linefeed
+        end try
+    end repeat
+    return out
+end tell"#;
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+        let raw = String::from_utf8(output.stdout)?;
+        let mut urls: Vec<String> = Vec::new();
+        for line in raw.lines() {
+            let url = line.trim();
+            if !url.is_empty() && !urls.iter().any(|u| u == url) {
+                urls.push(url.to_string());
+            }
+        }
+        Ok(urls)
+    }
+
+    /// Title of EVERY Arc window in one AppleScript call, mirroring
+    /// `get_arc_all_window_urls` (per-window `try` guard, front-to-back
+    /// order). Like the URL enumeration, Little Arc mini windows are NOT in
+    /// the `windows` collection — so this is exactly the set of full windows
+    /// whose active-tab URL the AppleScript probe can (and did) resolve,
+    /// which is what the meeting probe subtracts from the AX title set before
+    /// its Little Arc meeting-code fallback.
+    fn get_arc_all_window_titles(&self) -> Result<Vec<String>> {
+        let script = r#"tell application "Arc"
+    set out to ""
+    repeat with w in windows
+        try
+            set out to out & (name of w) & linefeed
+        end try
+    end repeat
+    return out
+end tell"#;
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+        let raw = String::from_utf8(output.stdout)?;
+        Ok(raw
+            .lines()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// All-window URL enumeration for the meeting probe.
+    ///
+    /// The focused window keeps the full `get_active_url` path (AXDocument,
+    /// then the address-bar tree walk); the remaining windows are
+    /// AXDocument-only — a tree walk per window would multiply the dominant
+    /// AX IPC cost by the window count, and the probe call site runs under a
+    /// 3s timeout.
+    fn get_window_urls_via_accessibility(&self, process_id: i32) -> Result<Vec<String>> {
+        let mut urls: Vec<String> = Vec::new();
+        if let Ok(Some(url)) = self.get_url_via_accessibility(process_id) {
+            urls.push(url);
+        }
+
+        unsafe {
+            let app_element = AXUIElementCreateApplication(process_id);
+            // See AX_PROBE_MESSAGING_TIMEOUT_SECS: bound each synchronous AX
+            // IPC so a hung browser fails fast instead of pinning the
+            // abandoned blocking thread ~6s (system default) per call. The
+            // timeout is per AXUIElement, so the window elements below need
+            // their own.
+            let _ = AXUIElementSetMessagingTimeout(app_element, AX_PROBE_MESSAGING_TIMEOUT_SECS);
+
+            let mut windows_ref: CFTypeRef = std::ptr::null_mut();
+            let status = AXUIElementCopyAttributeValue(
+                app_element,
+                CFString::from_static_string(kAXWindowsAttribute).as_concrete_TypeRef(),
+                &mut windows_ref,
+            );
+
+            if status == accessibility_sys::kAXErrorSuccess && !windows_ref.is_null() {
+                // +1 retained — create_rule releases the array on drop
+                let windows =
+                    CFArray::<*const std::ffi::c_void>::wrap_under_create_rule(windows_ref as _);
+                for (i, window) in windows.iter().enumerate() {
+                    if i >= MAX_PROBED_WINDOWS {
+                        break;
+                    }
+                    let window = *window as AXUIElementRef;
+                    let _ =
+                        AXUIElementSetMessagingTimeout(window, AX_PROBE_MESSAGING_TIMEOUT_SECS);
+                    // The focused window shows up here too; string dedupe
+                    // keeps the list clean without AX element comparisons.
+                    if let Some(url) = self.window_document_url(window) {
+                        if !urls.contains(&url) {
+                            urls.push(url);
+                        }
+                    }
+                }
+            }
+
+            CFRelease(app_element as CFTypeRef);
+        }
+
+        Ok(urls)
+    }
 }
 
 impl BrowserUrlDetector for MacOSUrlDetector {
@@ -265,6 +410,46 @@ impl BrowserUrlDetector for MacOSUrlDetector {
             }
         } else {
             self.get_url_via_accessibility(process_id)
+        }
+    }
+
+    /// Meeting-probe path: URLs from every window, not just the focused one.
+    /// A Meet call in a pop-out / secondary window holds the mic while the
+    /// focused window shows something else entirely, so focused-only probing
+    /// leaves the browser unresolvable forever. `get_active_url` (screen
+    /// capture) keeps its focused-window semantics untouched.
+    fn get_window_urls(&self, app_name: &str, process_id: i32) -> Result<Vec<String>> {
+        if app_name == "Arc" {
+            match self.get_arc_all_window_urls() {
+                Ok(urls) => Ok(urls),
+                Err(e) => {
+                    debug!(
+                        "Arc all-window URL fetch failed, falling back to front window: {}",
+                        e
+                    );
+                    let script =
+                        r#"tell application "Arc" to return URL of active tab of front window"#;
+                    Ok(self
+                        .get_url_via_applescript(script)?
+                        .filter(|url| !url.trim().is_empty())
+                        .into_iter()
+                        .collect())
+                }
+            }
+        } else {
+            self.get_window_urls_via_accessibility(process_id)
+        }
+    }
+
+    /// Titles of the windows visible to Arc's AppleScript `windows`
+    /// collection (the same windows `get_window_urls` resolves URLs for).
+    /// Other browsers keep the default empty answer — the meeting probe only
+    /// needs this for Arc's Little Arc exclusion.
+    fn get_window_titles(&self, app_name: &str, _process_id: i32) -> Result<Vec<String>> {
+        if app_name == "Arc" {
+            self.get_arc_all_window_titles()
+        } else {
+            Ok(Vec::new())
         }
     }
 }

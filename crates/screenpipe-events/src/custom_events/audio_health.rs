@@ -14,6 +14,13 @@
 //!
 //! `recovered` is published when speaker audio resumes after a
 //! `speaker_silent` was emitted, so subscribers can clear any banner.
+//!
+//! The mic side has exactly ONE state: `mic_capture_failed`, published when
+//! the meeting-piggyback mic capture path errors out entirely (e.g. the
+//! device is busy or was removed). There are deliberately NO mic-silence
+//! states — the piggyback never acts on silence (a silent meeting mic is the
+//! user's own in-meeting feedback loop; they fix it in the app and the
+//! piggyback's device tracking follows).
 
 use serde::{Deserialize, Serialize};
 
@@ -26,10 +33,13 @@ pub enum AudioCaptureHealthState {
     SpeakerSilent,
     /// Speaker audio resumed after a `SpeakerSilent` event.
     Recovered,
+    /// The mic capture path failed outright (e.g. device busy or removed).
+    MicCaptureFailed,
 }
 
-/// Published as `"audio_capture_health_speaker_silent"` or
-/// `"audio_capture_health_recovered"`. Names are split by state so
+/// Published as `"audio_capture_health_speaker_silent"`,
+/// `"audio_capture_health_recovered"`, or
+/// `"audio_capture_health_mic_capture_failed"`. Names are split by state so
 /// subscribers can filter without inspecting the payload — same convention
 /// as `audio_device_fallback_engaged` / `audio_device_fallback_cleared`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +52,15 @@ pub struct AudioCaptureHealthEvent {
     /// Output devices screenpipe is currently capturing
     /// (e.g. `["Speakers (Realtek(R) Audio) (output)"]`).
     pub captured_outputs: Vec<String>,
+    /// Input devices screenpipe is currently capturing
+    /// (e.g. `["Rode NT (input)"]`). Mic-side counterpart to
+    /// `captured_outputs`.
+    #[serde(default)]
+    pub capturing_inputs: Vec<String>,
+    /// Human-readable failure reason for `MicCaptureFailed`
+    /// (e.g. `"device busy"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl AudioCaptureHealthEvent {
@@ -50,6 +69,8 @@ impl AudioCaptureHealthEvent {
             state: AudioCaptureHealthState::SpeakerSilent,
             rendering_endpoints,
             captured_outputs,
+            capturing_inputs: Vec::new(),
+            reason: None,
         }
     }
 
@@ -58,6 +79,18 @@ impl AudioCaptureHealthEvent {
             state: AudioCaptureHealthState::Recovered,
             rendering_endpoints,
             captured_outputs,
+            capturing_inputs: Vec::new(),
+            reason: None,
+        }
+    }
+
+    pub fn mic_capture_failed(reason: String) -> Self {
+        Self {
+            state: AudioCaptureHealthState::MicCaptureFailed,
+            rendering_endpoints: Vec::new(),
+            captured_outputs: Vec::new(),
+            capturing_inputs: Vec::new(),
+            reason: Some(reason),
         }
     }
 
@@ -66,6 +99,29 @@ impl AudioCaptureHealthEvent {
         match self.state {
             AudioCaptureHealthState::SpeakerSilent => "audio_capture_health_speaker_silent",
             AudioCaptureHealthState::Recovered => "audio_capture_health_recovered",
+            AudioCaptureHealthState::MicCaptureFailed => "audio_capture_health_mic_capture_failed",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mic_states_have_split_event_names() {
+        assert_eq!(
+            AudioCaptureHealthEvent::mic_capture_failed("device busy".into()).event_name(),
+            "audio_capture_health_mic_capture_failed"
+        );
+    }
+
+    #[test]
+    fn legacy_speaker_payloads_still_deserialize() {
+        // Additive-field compat: an old payload without the new fields parses.
+        let old = r#"{"state":"speaker_silent","rendering_endpoints":[],"captured_outputs":[]}"#;
+        let ev: AudioCaptureHealthEvent = serde_json::from_str(old).unwrap();
+        assert_eq!(ev.state, AudioCaptureHealthState::SpeakerSilent);
+        assert!(ev.capturing_inputs.is_empty());
     }
 }

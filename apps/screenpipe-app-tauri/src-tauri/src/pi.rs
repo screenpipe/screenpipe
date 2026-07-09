@@ -1939,7 +1939,10 @@ pub async fn pi_start_inner(
                 path
             };
 
-            cmd.env("PATH", new_path);
+            let path_for_pi =
+                screenpipe_core::agents::pi::pi_child_path(std::ffi::OsStr::new(&new_path))
+                    .unwrap_or_else(|| std::ffi::OsString::from(new_path));
+            cmd.env("PATH", path_for_pi);
             debug!("Injected bun dir into PATH for pi: {}", bun_dir.display());
         }
     }

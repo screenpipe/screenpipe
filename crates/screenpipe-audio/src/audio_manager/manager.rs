@@ -122,6 +122,16 @@ struct MeetingEventData {
 type RecordingHandlesMap = DashMap<AudioDevice, Arc<Mutex<JoinHandle<Result<()>>>>>;
 const MEETING_AUDIO_FRAME_BUFFER: usize = 512;
 
+/// Wall-clock milliseconds since the Unix epoch (0 if the clock predates it).
+/// Local to the audio manager so the receiver-loop stamping and the piggyback
+/// sweep share one monotonic-enough source without a cross-module dependency.
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct AudioManager {
     options: Arc<RwLock<AudioManagerOptions>>,
@@ -157,6 +167,19 @@ pub struct AudioManager {
     /// The device monitor must never auto-start devices in this set.
     /// Cleared on global start/stop but preserved across reconnects.
     user_disabled_devices: Arc<RwLock<HashSet<String>>>,
+    /// Meeting-lifetime session streams (e.g. the Meeting Tap, a piggyback
+    /// mic). Registered by `start_session_device`, removed by
+    /// `stop_session_device`. NEVER persisted to `enabled_devices` (those are
+    /// user intent). Read inside the blocking audio-receiver loop to bypass the
+    /// meetings-only drop gate, so this is a `std::sync::RwLock` (not tokio):
+    /// the guard is taken, the set membership checked, and the guard dropped —
+    /// never held across an `.await`.
+    session_devices: Arc<std::sync::RwLock<HashSet<String>>>,
+    /// Devices the piggyback sweep has suspended for the duration of a meeting
+    /// (a session stream stands in for them). Nothing else may start a device
+    /// in this set; the sweep resumes it on meeting end / fallback. Same
+    /// `std::sync::RwLock` discipline as `session_devices`.
+    suspended_devices: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 /// Result of checking / restarting the two central handler tasks.
@@ -243,6 +266,8 @@ impl AudioManager {
             reconciliation_handle: Arc::new(RwLock::new(None)),
             drm_stopped_devices: Arc::new(RwLock::new(Vec::new())),
             user_disabled_devices: Arc::new(RwLock::new(HashSet::new())),
+            session_devices: Arc::new(std::sync::RwLock::new(HashSet::new())),
+            suspended_devices: Arc::new(std::sync::RwLock::new(HashSet::new())),
         };
 
         Ok(manager)
@@ -653,6 +678,21 @@ impl AudioManager {
             return Ok(());
         }
 
+        // Suspended by the piggyback sweep for the duration of a meeting (a
+        // session stream replaces this device). The sweep resumes it on
+        // meeting end / fallback; nothing else may start it meanwhile. This is
+        // the single choke point so every monitor path that could restart a
+        // suspended device is blocked at once.
+        if self
+            .suspended_devices
+            .read()
+            .unwrap()
+            .contains(&device.to_string())
+        {
+            debug!("skipping start of piggyback-suspended device: {}", device);
+            return Ok(());
+        }
+
         if let Err(e) = self.device_manager.start_device(device).await {
             let err_str = e.to_string();
 
@@ -681,6 +721,103 @@ impl AudioManager {
         }
 
         Ok(())
+    }
+
+    /// Start a meeting-session stream. Mirrors `start_device` but: never
+    /// touches `enabled_devices` (session streams are meeting-lifetime, not
+    /// user intent), registers in `session_devices` (drop-gate bypass +
+    /// sweep bookkeeping), and can carry tap pids for the Meeting Tap device.
+    pub async fn start_session_device(
+        &self,
+        device: &AudioDevice,
+        tap_pids: Option<Vec<i32>>,
+    ) -> Result<()> {
+        if self.options.read().await.is_disabled {
+            return Ok(());
+        }
+        // Insert BEFORE starting: the audio-receiver drop-gate bypass must see
+        // this device from the very first chunk. Rolled back on failure below.
+        self.session_devices
+            .write()
+            .unwrap()
+            .insert(device.to_string());
+        let start_result = match tap_pids {
+            Some(pids) => {
+                self.device_manager
+                    .start_device_with_tap_pids(device, pids)
+                    .await
+            }
+            None => self.device_manager.start_device(device).await,
+        };
+        if let Err(e) = start_result {
+            let err_str = e.to_string();
+            if !err_str.contains("already running") {
+                self.session_devices
+                    .write()
+                    .unwrap()
+                    .remove(&device.to_string());
+                return Err(e);
+            }
+        }
+        if !self.recording_handles.contains_key(device) {
+            if let Some(is_running) = self.device_manager.is_running_mut(device) {
+                is_running.store(true, Ordering::Relaxed);
+            }
+            match self.record_device(device).await {
+                Ok(handle) => {
+                    self.recording_handles
+                        .insert(device.clone(), Arc::new(Mutex::new(handle)));
+                }
+                Err(e) => {
+                    self.session_devices
+                        .write()
+                        .unwrap()
+                        .remove(&device.to_string());
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Tear down a meeting-session stream. Never touches `enabled_devices`.
+    pub async fn stop_session_device(&self, device: &AudioDevice) -> Result<()> {
+        self.session_devices
+            .write()
+            .unwrap()
+            .remove(&device.to_string());
+        self.stop_device_recording(device).await
+    }
+
+    /// Snapshot of the currently-registered meeting-session device names.
+    pub fn session_devices(&self) -> HashSet<String> {
+        self.session_devices.read().unwrap().clone()
+    }
+
+    /// Suspend a device for the duration of a meeting: nothing may start it
+    /// until `unsuspend_device`. Used by the piggyback sweep when a session
+    /// stream stands in for a normally-captured device.
+    ///
+    /// NOTE: the resume counterpart is `unsuspend_device`, NOT `resume_device`.
+    /// `resume_device` already exists as the user-facing un-pause flow (it
+    /// operates on `user_disabled_devices` and calls `start_device`), a
+    /// different concept from meeting suspension; reusing that name would be a
+    /// duplicate-method compile error.
+    pub fn suspend_device(&self, name: &str) {
+        self.suspended_devices
+            .write()
+            .unwrap()
+            .insert(name.to_string());
+    }
+
+    /// Lift a suspension set by `suspend_device`.
+    pub fn unsuspend_device(&self, name: &str) {
+        self.suspended_devices.write().unwrap().remove(name);
+    }
+
+    /// Snapshot of the currently-suspended device names.
+    pub fn suspended_devices(&self) -> HashSet<String> {
+        self.suspended_devices.read().unwrap().clone()
     }
 
     pub async fn use_all_devices(&self) -> bool {
@@ -801,6 +938,9 @@ impl AudioManager {
         let db = self.db.clone();
         let shared_engine = self.engine.clone();
         let on_insert_session = self.on_transcription_insert.clone();
+        // Session streams (Meeting Tap, piggyback mic) bypass the meetings-only
+        // drop gate below — they exist only during a meeting by construction.
+        let session_devices = self.session_devices.clone();
 
         // Build unified transcription engine — only loads the needed model
         let engine = TranscriptionEngine::new(
@@ -845,6 +985,12 @@ impl AudioManager {
                 metrics.record_chunk_received();
                 debug!("received audio from device: {:?}", audio.device.name);
 
+                // RMS feeds the meeting detector's activity gate below.
+                let rms = {
+                    let sum_sq: f32 = audio.data.iter().map(|&x| x * x).sum();
+                    (sum_sq / audio.data.len() as f32).sqrt()
+                };
+
                 // Audio-based call detection: update meeting detector with speech activity.
                 // Output devices (SCK on macOS) produce much quieter audio than mic input,
                 // so we use a lower threshold. Empirical data from real SCK captures:
@@ -855,10 +1001,6 @@ impl AudioManager {
                     // monitor's speaker watchdog uses this to tell a dead
                     // loopback stream apart from a quiet one.
                     meeting.on_audio_chunk(&audio.device.device_type);
-                    let rms = {
-                        let sum_sq: f32 = audio.data.iter().map(|&x| x * x).sum();
-                        (sum_sq / audio.data.len() as f32).sqrt()
-                    };
                     let has_activity = match audio.device.device_type {
                         crate::core::device::DeviceType::Output => rms > 0.001,
                         crate::core::device::DeviceType::Input => rms > 0.05,
@@ -873,11 +1015,18 @@ impl AudioManager {
                 // cannot tell whether we're in a meeting, so we keep capturing rather
                 // than silently dropping everything.
                 if audio_capture_mode == AudioCaptureMode::MeetingsOnly {
+                    // Session streams exist only during a meeting by
+                    // construction — never drop them, even if the detector
+                    // flaps mid-meeting.
+                    let is_session_stream = session_devices
+                        .read()
+                        .unwrap()
+                        .contains(&audio.device.to_string());
                     let in_session = meeting_detector
                         .as_ref()
                         .map(|m| m.is_in_audio_session())
                         .unwrap_or(true);
-                    if !in_session {
+                    if !is_session_stream && !in_session {
                         debug!(
                             "meetings-only capture: no active meeting, dropping audio chunk from {:?}",
                             audio.device.name
@@ -1191,6 +1340,15 @@ impl AudioManager {
             .collect::<Vec<AudioDevice>>()
     }
 
+    /// True when `device` has a live, non-disconnected stream. Thin wrapper over
+    /// the device monitor's [`super::is_device_actively_streaming`] so callers
+    /// that only hold an `AudioManager` (the piggyback sweep) can distinguish a
+    /// registered-but-dead stream from one actually delivering audio — without
+    /// reaching into the private `device_manager` or duplicating the check.
+    pub(crate) fn is_device_actively_streaming(&self, device: &AudioDevice) -> bool {
+        super::is_device_actively_streaming(&self.device_manager, device)
+    }
+
     /// Non-blocking read of the *configured* transcription mode. Returns `None`
     /// if the options lock is momentarily contended, so callers such as
     /// `/health` never block on it.
@@ -1292,6 +1450,16 @@ impl AudioManager {
     /// Returns the current capture-owned meeting detector, if enabled.
     pub async fn meeting_detector(&self) -> Option<Arc<MeetingDetector>> {
         self.meeting_detector.read().await.clone()
+    }
+
+    /// Whether the meeting piggyback ("smart recording") flag is on. Consumed
+    /// by the device monitor's piggyback sweep (`meeting_piggyback.rs`) — the
+    /// `options` field is private to this module, so the sweep can't read it
+    /// directly. Deliberately independent of `audio_capture_mode`: the flag
+    /// takes precedence over everything, so a detected meeting engages the
+    /// piggyback in continuous ("always") capture just as in meetings-only.
+    pub(crate) async fn piggyback_enabled(&self) -> bool {
+        self.options.read().await.experimental_meeting_piggyback
     }
 
     /// Returns the shared WhisperContext for backward compatibility, if loaded.
@@ -1504,10 +1672,20 @@ impl AudioManager {
     /// Returns device names that need to be cleaned up and restarted
     pub async fn check_stale_recording_handles(&self) -> Vec<String> {
         let mut stale_devices = Vec::new();
+        let session_devices = self.session_devices.read().unwrap().clone();
 
         for pair in self.recording_handles.iter() {
             let device = pair.key();
             let handle = pair.value();
+
+            // Session devices are virtual / meeting-lifetime and absent from
+            // both enabled_devices and the available-device list. If the monitor
+            // culled a stale session handle it would then try to restart it via
+            // start_device (losing the tap pids AND leaking the name into
+            // enabled_devices). Only stop_session_device may cull them.
+            if session_devices.contains(&device.to_string()) {
+                continue;
+            }
 
             // Check if the JoinHandle has finished (task completed/crashed)
             if handle.lock().await.is_finished() {
@@ -1603,6 +1781,21 @@ impl AudioManager {
     /// Clean up a stale device that had its recording handle crash/timeout
     /// This prepares the device for restart by the device monitor
     pub async fn cleanup_stale_device(&self, device_name: &str) -> anyhow::Result<()> {
+        // Defensive: never clean up a session device here. `check_stale_recording_handles`
+        // already omits them from the stale list (the only caller), but guard the
+        // public entry point too — only `stop_session_device` may tear these down.
+        if self
+            .session_devices
+            .read()
+            .unwrap()
+            .contains(device_name)
+        {
+            debug!(
+                "cleanup_stale_device({device_name}): session device, leaving intact (only stop_session_device may cull it)"
+            );
+            return Ok(());
+        }
+
         let device = match parse_audio_device(device_name) {
             Ok(device) => device,
             Err(_) => return Err(anyhow!("Device {} not found", device_name)),

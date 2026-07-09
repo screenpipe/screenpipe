@@ -18,6 +18,9 @@
 
 #![cfg(feature = "enterprise-build")]
 
+#[path = "../../../../ee/desktop-rust/enterprise_policy.rs"]
+mod enterprise_policy;
+
 #[path = "../../../../ee/desktop-rust/enterprise_sync.rs"]
 mod ee_sync;
 

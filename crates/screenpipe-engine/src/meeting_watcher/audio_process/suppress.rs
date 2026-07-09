@@ -5,36 +5,74 @@
 
 use super::*;
 
+/// Boolean facade over [`matching_session_key`] for callers that only need
+/// presence, not the (possibly adopted) key.
+#[allow(dead_code)]
 pub(crate) fn session_present(
     candidates: &[ResolvedMeetingCandidate],
     session_key: &ProcessKey,
     platform: &str,
     meeting_url: Option<&str>,
 ) -> bool {
+    matching_session_key(candidates, session_key, platform, meeting_url).is_some()
+}
+
+/// Returns the session key the live state should carry when some candidate
+/// keeps this meeting alive, or `None` when nothing does. Exact-key matches
+/// (and reattached sessions) return the EXISTING key unchanged; the
+/// platform-only native fallback returns the MATCHING CANDIDATE's key so the
+/// state ADOPTS the re-keyed session.
+pub(crate) fn matching_session_key(
+    candidates: &[ResolvedMeetingCandidate],
+    session_key: &ProcessKey,
+    platform: &str,
+    meeting_url: Option<&str>,
+) -> Option<ProcessKey> {
     // A reattached meeting (adopted from the DB after a restart) has a synthetic
     // session key and no real process/url to reconcile against — and a browser
     // meeting (e.g. Google Meet) can take several poll cycles to re-resolve its
     // platform after restart, surfacing as an `UnresolvedBrowser` in the gap.
     // Keep it alive while *any* live meeting session is present; genuine
     // disappearance still flows through the normal ending grace.
+    //
+    // The moment a candidate RESOLVES to this meeting's own platform, ADOPT its
+    // real key (mirroring the native re-key adoption below): the state stops
+    // being keyed to a synthetic string that matches any mic holder,
+    // end-of-meeting suppression targets the live session, the per-poll AX /
+    // active-tab probing gated on `is_reattached` stops, and the detection
+    // loop can republish the candidate's pid so the piggyback sweep
+    // (per-process tap + mic-follow) re-engages after a capture restart.
     if session_key.is_reattached() {
-        return candidates.iter().any(|candidate| {
-            matches!(
-                candidate,
-                ResolvedMeetingCandidate::Native { .. }
-                    | ResolvedMeetingCandidate::Browser { .. }
-                    | ResolvedMeetingCandidate::UnresolvedBrowser { .. }
-            )
-        });
+        if let Some(adopted) = candidates
+            .iter()
+            .filter_map(ResolvedMeetingCandidate::resolved_session)
+            .find(|session| session.platform == platform)
+            .map(|session| session.session_key)
+        {
+            return Some(adopted);
+        }
+        return candidates
+            .iter()
+            .any(|candidate| {
+                matches!(
+                    candidate,
+                    ResolvedMeetingCandidate::Native { .. }
+                        | ResolvedMeetingCandidate::Browser { .. }
+                        | ResolvedMeetingCandidate::UnresolvedBrowser { .. }
+                )
+            })
+            .then(|| session_key.clone());
     }
-    // Non-reattached sessions must match on the real process key (the
-    // `is_reattached()` branch above is the only place a synthetic key matches).
-    candidates.iter().any(|candidate| match candidate {
+    // Non-reattached sessions match on the real process key first (the
+    // `is_reattached()` branch above is the only place a synthetic key
+    // matches); an exact match takes precedence over the platform-only native
+    // fallback below and keeps the existing key.
+    let exact_match = candidates.iter().any(|candidate| match candidate {
         ResolvedMeetingCandidate::Native {
             platform: candidate_platform,
             session_key: key,
             ..
-        } => meeting_url.is_none() && key == session_key && candidate_platform == platform,
+        } => meeting_url.is_none() && candidate_platform == platform && key == session_key,
         // A confirmed browser meeting is keyed by its audio session. Once it is
         // live, the same browser audio session still holding the mic is sufficient
         // proof the call is ongoing — so keep it alive on the `session_key` alone.
@@ -55,6 +93,32 @@ pub(crate) fn session_present(
             session_key: key, ..
         } => key == session_key,
         _ => false,
+    });
+    if exact_match {
+        return Some(session_key.clone());
+    }
+    // A native meeting's session key is NOT stable across the app switching
+    // input devices: macOS synthesized it from the device set the process
+    // records from (fixed to pid-keying now, but stale keys can persist in
+    // live state), and Windows WASAPI sessions are per-endpoint, so picking a
+    // different mic mints a new GUID. Ending a live call over that rotation —
+    // Active → Ending → 20s grace → EndMeeting, then an instant "new" meeting
+    // under the new key — tears capture down for ~20s per mic switch. The same
+    // native platform holding ANY mic is proof the call is ongoing, so
+    // keep-alive matches on platform alone; keys still gate meeting START.
+    // (One audio-holding process per native platform is the operating
+    // assumption, and back-to-back calls in the same app were already glued by
+    // the ending grace.) Crucially the state ADOPTS the matching candidate's
+    // key: keeping the stale key would make the eventual end-of-meeting
+    // suppression target a dead session, letting the live one instantly
+    // restart the meeting the user just stopped.
+    candidates.iter().find_map(|candidate| match candidate {
+        ResolvedMeetingCandidate::Native {
+            platform: candidate_platform,
+            session_key: key,
+            ..
+        } if meeting_url.is_none() && candidate_platform == platform => Some(key.clone()),
+        _ => None,
     })
 }
 

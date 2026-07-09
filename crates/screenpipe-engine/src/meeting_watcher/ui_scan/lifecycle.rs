@@ -17,6 +17,19 @@ pub(crate) fn sync_meeting_flag(
     flag.store(in_meeting, Ordering::Relaxed);
     if let Some(ref det) = detector {
         det.set_v2_in_meeting(in_meeting);
+        // The UI-scan sensor detects meeting *apps*, not audio-input
+        // processes, so it never has a pid to publish. `pid: None` here is
+        // a legal, expected state — the piggyback layer falls back to the
+        // stable capture path for it.
+        det.set_active_meeting(if in_meeting {
+            Some(screenpipe_audio::meeting_detector::ActiveMeeting {
+                pid: None,
+                bundle_id: None,
+                manual: false,
+            })
+        } else {
+            None
+        });
     }
 }
 

@@ -129,6 +129,18 @@ import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
 import { Monitor, Wifi, WifiOff, ScanSearch } from "lucide-react";
 import { requestPipeStop } from "@/lib/pipe-stop";
 
+const PIPE_EXECUTIONS_PAGE_LIMIT = 100;
+
+function pipeExecutionsUrl(apiBase: string, pipeName: string, beforeId?: number) {
+  const params = new URLSearchParams({
+    limit: String(PIPE_EXECUTIONS_PAGE_LIMIT),
+  });
+  if (beforeId != null) {
+    params.set("before_id", String(beforeId));
+  }
+  return `${apiBase}/pipes/${encodeURIComponent(pipeName)}/executions?${params.toString()}`;
+}
+
 const PIPE_CREATION_PROMPT = `create a screenpipe pipe that does the following.
 
 ## what is screenpipe?
@@ -1018,6 +1030,8 @@ export function PipesSection() {
   const [logs, setLogs] = useState<PipeRunLog[]>([]);
   const [executions, setExecutions] = useState<PipeExecution[]>([]);
   const [executionsLoading, setExecutionsLoading] = useState(false);
+  const [hasMoreExecutions, setHasMoreExecutions] = useState(false);
+  const [loadingMoreExecutions, setLoadingMoreExecutions] = useState(false);
   // Per-pipe recent executions (always fetched for all pipes)
   const [pipeExecutions, setPipeExecutions] = useState<Record<string, PipeExecution[]>>({});
   const [loading, setLoading] = useState(true);
@@ -1640,9 +1654,11 @@ export function PipesSection() {
       const exp = expandedRef.current;
       if (exp) {
         try {
-          const execRes = await fetch(`${apiBase}/pipes/${exp}/executions?limit=20`);
+          const execRes = await fetch(pipeExecutionsUrl(apiBase, exp));
           const execData = await execRes.json();
-          setExecutions(execData.data || []);
+          const nextExecutions = execData.data || [];
+          setExecutions(nextExecutions);
+          setHasMoreExecutions(nextExecutions.length === PIPE_EXECUTIONS_PAGE_LIMIT);
           const finishedKeys = (execData.data || [])
             .filter((e: PipeExecution) => e.status !== "running")
             .map((e: PipeExecution) => `${e.pipe_name}:${e.id}`);
@@ -1688,15 +1704,44 @@ export function PipesSection() {
 
   const fetchExecutions = async (name: string) => {
     setExecutionsLoading(true);
+    setHasMoreExecutions(false);
     try {
-      const res = await fetch(`${apiBase}/pipes/${name}/executions?limit=20`);
+      const res = await fetch(pipeExecutionsUrl(apiBase, name));
       const data = await res.json();
-      setExecutions(data.data || []);
+      const nextExecutions = data.data || [];
+      setExecutions(nextExecutions);
+      setHasMoreExecutions(nextExecutions.length === PIPE_EXECUTIONS_PAGE_LIMIT);
     } catch (e) {
       // Executions endpoint may not exist on older servers — fall back silently
       setExecutions([]);
+      setHasMoreExecutions(false);
     } finally {
       setExecutionsLoading(false);
+    }
+  };
+
+  const loadMoreExecutions = async (name: string) => {
+    if (loadingMoreExecutions || executions.length === 0) return;
+    const oldestId = executions[executions.length - 1]?.id;
+    if (oldestId == null) return;
+
+    setLoadingMoreExecutions(true);
+    try {
+      const res = await fetch(pipeExecutionsUrl(apiBase, name, oldestId));
+      const data = await res.json();
+      const olderExecutions: PipeExecution[] = data.data || [];
+      setExecutions((prev) => {
+        const seen = new Set(prev.map((exec) => exec.id));
+        return [
+          ...prev,
+          ...olderExecutions.filter((exec) => !seen.has(exec.id)),
+        ];
+      });
+      setHasMoreExecutions(olderExecutions.length === PIPE_EXECUTIONS_PAGE_LIMIT);
+    } catch (e) {
+      console.error("failed to fetch older executions:", e);
+    } finally {
+      setLoadingMoreExecutions(false);
     }
   };
 
@@ -2797,7 +2842,8 @@ export function PipesSection() {
                               no runs yet — click ▶ to run manually
                             </p>
                           ) : executions.length > 0 ? (
-                            executions.map((exec) => (
+                            <>
+                              {executions.map((exec) => (
                               // contain: layout paint isolates the markdown
                               // subtree's reflow cost from page-wide layout
                               // passes. Without it, opening the device /
@@ -2866,8 +2912,25 @@ export function PipesSection() {
                                     </pre>
                                   );
                                 })()}
-                              </div>
-                            ))
+                                </div>
+                              ))}
+                              {hasMoreExecutions && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="w-full h-8 text-xs"
+                                  disabled={loadingMoreExecutions}
+                                  onClick={() => loadMoreExecutions(pipe.config.name)}
+                                >
+                                  {loadingMoreExecutions ? (
+                                    <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                                  ) : (
+                                    <ChevronDown className="h-3.5 w-3.5 mr-2" />
+                                  )}
+                                  load older runs
+                                </Button>
+                              )}
+                            </>
                           ) : (
                             logs.slice().reverse().map((log, i) => (
                               // see contain: layout paint comment above

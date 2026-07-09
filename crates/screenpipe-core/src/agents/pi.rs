@@ -11,6 +11,7 @@ use super::{install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle};
 use anyhow::{anyhow, Result};
 use arc_swap::ArcSwap;
 use serde_json::json;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -2292,6 +2293,46 @@ fn pi_local_install_dir() -> Option<PathBuf> {
     Some(crate::paths::default_screenpipe_data_dir().join("pi-agent"))
 }
 
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+/// Build the PATH inherited by Pi and any subagents it launches.
+///
+/// The local `.bin` directory must come before user-global npm/bun bins so
+/// nested `pi` invocations resolve to screenpipe's pinned Pi package, not an
+/// older global install.
+pub fn pi_child_path(existing_path: &OsStr) -> Option<OsString> {
+    let mut paths = Vec::new();
+
+    if let Some(dir) = pi_local_install_dir() {
+        push_unique_path(&mut paths, dir.join("node_modules").join(".bin"));
+    }
+
+    if let Some(bun_path) = find_bun_executable() {
+        if let Some(bun_dir) = Path::new(&bun_path).parent() {
+            push_unique_path(&mut paths, bun_dir.to_path_buf());
+        }
+    }
+
+    for path in std::env::split_paths(existing_path) {
+        if !path.as_os_str().is_empty() {
+            push_unique_path(&mut paths, path);
+        }
+    }
+
+    std::env::join_paths(paths).ok()
+}
+
+fn apply_pi_child_path(cmd: &mut tokio::process::Command) {
+    let current_path = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(path) = pi_child_path(&current_path) {
+        cmd.env("PATH", path);
+    }
+}
+
 /// Check whether the locally-installed Pi version matches `PI_PACKAGE`.
 fn is_local_pi_version_current() -> bool {
     let dir = match pi_local_install_dir() {
@@ -2587,7 +2628,9 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                     debug!("injected bash dir into PATH for pi: {}", bash_dir);
                 }
 
-                cmd.env("PATH", new_path);
+                let path_for_pi = pi_child_path(OsStr::new(&new_path))
+                    .unwrap_or_else(|| OsString::from(new_path));
+                cmd.env("PATH", path_for_pi);
                 debug!("injected bun dir into PATH for pi: {}", bun_dir.display());
             }
         }
@@ -2599,14 +2642,16 @@ fn build_async_command(path: &str) -> tokio::process::Command {
     }
     #[cfg(not(windows))]
     {
-        if let Some(bun) = find_bun_executable() {
+        let mut cmd = if let Some(bun) = find_bun_executable() {
             let mut cmd = tokio_bun_command(&bun);
             cmd.arg(path);
             cmd
         } else {
             // Fallback: run pi directly (requires node in PATH)
             tokio::process::Command::new(path)
-        }
+        };
+        apply_pi_child_path(&mut cmd);
+        cmd
     }
 }
 
@@ -2992,6 +3037,28 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pi_child_path_prefers_screenpipe_local_pi() {
+        let existing_a = std::path::PathBuf::from("existing-a");
+        let existing_b = std::path::PathBuf::from("existing-b");
+        let existing_path = std::env::join_paths([existing_a.clone(), existing_b.clone()]).unwrap();
+
+        let child_path = pi_child_path(&existing_path).expect("child path");
+        let parts = std::env::split_paths(&child_path).collect::<Vec<_>>();
+
+        assert_eq!(
+            parts.first(),
+            Some(
+                &crate::paths::default_screenpipe_data_dir()
+                    .join("pi-agent")
+                    .join("node_modules")
+                    .join(".bin")
+            )
+        );
+        assert!(parts.iter().any(|path| path == &existing_a));
+        assert!(parts.iter().any(|path| path == &existing_b));
+    }
 
     #[test]
     fn clear_screenpipe_auth_preserves_other_provider_tokens() {

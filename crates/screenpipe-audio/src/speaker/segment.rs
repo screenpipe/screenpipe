@@ -57,6 +57,7 @@ fn create_speech_segment_from_range(
     padded_samples: &[f32],
     embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
     embedding_manager: &Arc<Mutex<EmbeddingManager>>,
+    retain_samples: bool,
 ) -> Result<SpeechSegment> {
     let mut segment_vec;
 
@@ -98,7 +99,11 @@ fn create_speech_segment_from_range(
     Ok(SpeechSegment {
         start: start_idx as f64 / sample_rate as f64,
         end: end_idx as f64 / sample_rate as f64,
-        samples: segment_samples.to_vec(),
+        samples: if retain_samples {
+            segment_samples.to_vec()
+        } else {
+            Vec::new()
+        },
         speaker,
         embedding,
         sample_rate,
@@ -109,16 +114,17 @@ fn create_speech_segments(
     start_offset: f64,
     offset: i32,
     sample_rate: u32,
-    samples: &[f32],
+    sample_len: usize,
     padded_samples: &[f32],
     embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
     embedding_manager: &Arc<Mutex<EmbeddingManager>>,
+    retain_samples: bool,
 ) -> Result<Vec<SpeechSegment>> {
     let max_segment_samples = ((sample_rate as f64) * MAX_EMBEDDING_SEGMENT_SECONDS) as usize;
     let mut start_idx = start_offset
         .max(0.0)
-        .min((samples.len().saturating_sub(1)) as f64) as usize;
-    let end_idx = (offset.max(0) as usize).min(samples.len());
+        .min((sample_len.saturating_sub(1)) as f64) as usize;
+    let end_idx = (offset.max(0) as usize).min(sample_len);
     let mut segments = Vec::new();
 
     while start_idx < end_idx {
@@ -140,6 +146,7 @@ fn create_speech_segments(
             padded_samples,
             embedding_extractor.clone(),
             embedding_manager,
+            retain_samples,
         )?);
         start_idx = split_end_idx;
     }
@@ -210,7 +217,7 @@ fn cached_seg_session(model_path: &Path) -> Result<Arc<SegSession>> {
 }
 
 pub struct SegmentIterator {
-    samples: Vec<f32>,
+    sample_len: usize,
     sample_rate: u32,
     /// Shared, cached segmentation session (see `cached_seg_session`).
     seg: Arc<SegSession>,
@@ -226,6 +233,7 @@ pub struct SegmentIterator {
     current_segment: Option<SpeechSegment>,
     pending_segments: VecDeque<SpeechSegment>,
     padded_samples: Vec<f32>,
+    retain_samples: bool,
 }
 
 impl SegmentIterator {
@@ -236,17 +244,32 @@ impl SegmentIterator {
         embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
         embedding_manager: Arc<Mutex<EmbeddingManager>>,
     ) -> Result<Self> {
+        Self::new_with_sample_payload(
+            samples,
+            sample_rate,
+            model_path,
+            embedding_extractor,
+            embedding_manager,
+            true,
+        )
+    }
+
+    fn new_with_sample_payload<P: AsRef<Path>>(
+        mut samples: Vec<f32>,
+        sample_rate: u32,
+        model_path: P,
+        embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
+        embedding_manager: Arc<Mutex<EmbeddingManager>>,
+        retain_samples: bool,
+    ) -> Result<Self> {
         let seg = cached_seg_session(model_path.as_ref())?;
         let window_size = (sample_rate * 10) as usize;
+        let sample_len = samples.len();
 
-        let padded_samples = {
-            let mut padded = samples.clone();
-            padded.extend(vec![0.0; window_size - (samples.len() % window_size)]);
-            padded
-        };
+        samples.extend(vec![0.0; window_size - (sample_len % window_size)]);
 
         Ok(Self {
-            samples,
+            sample_len,
             sample_rate,
             seg,
             embedding_extractor,
@@ -260,7 +283,8 @@ impl SegmentIterator {
             active_overlap: None,
             current_segment: None,
             pending_segments: VecDeque::new(),
-            padded_samples,
+            padded_samples: samples,
+            retain_samples,
         })
     }
 
@@ -269,10 +293,11 @@ impl SegmentIterator {
             self.start_offset,
             self.offset,
             self.sample_rate,
-            &self.samples,
+            self.sample_len,
             &self.padded_samples,
             self.embedding_extractor.clone(),
             &self.embedding_manager,
+            self.retain_samples,
         )?;
 
         for new_segment in new_segments {
@@ -408,6 +433,23 @@ pub fn get_segments<P: AsRef<Path>>(
     )
 }
 
+pub(crate) fn get_segments_without_samples<P: AsRef<Path>>(
+    samples: &[f32],
+    sample_rate: u32,
+    model_path: P,
+    embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
+    embedding_manager: Arc<Mutex<EmbeddingManager>>,
+) -> Result<SegmentIterator> {
+    SegmentIterator::new_with_sample_payload(
+        samples.to_vec(),
+        sample_rate,
+        model_path,
+        embedding_extractor,
+        embedding_manager,
+        false,
+    )
+}
+
 fn get_speaker_embedding(
     embedding_extractor: Arc<Mutex<EmbeddingExtractor>>,
     samples: &[f32],
@@ -433,7 +475,18 @@ pub fn get_speaker_from_embedding(
 
 #[cfg(test)]
 mod tests {
-    use super::is_overlap_class;
+    use super::{handle_new_segment, is_overlap_class, SpeechSegment};
+
+    fn test_segment(start: f64, end: f64, sample_count: usize, speaker: &str) -> SpeechSegment {
+        SpeechSegment {
+            start,
+            end,
+            samples: vec![0.25; sample_count],
+            speaker: speaker.to_string(),
+            embedding: vec![0.0; 192],
+            sample_rate: 16_000,
+        }
+    }
 
     #[test]
     fn pyannote_powerset_overlap_classes_start_after_single_speaker_classes() {
@@ -444,5 +497,31 @@ mod tests {
         assert!(is_overlap_class(4));
         assert!(is_overlap_class(5));
         assert!(is_overlap_class(6));
+    }
+
+    #[test]
+    fn metadata_only_same_speaker_merge_retains_no_audio_payload() {
+        let segment_count = 50usize;
+
+        let mut current_segment = None;
+        let mut flushed_segments = Vec::new();
+        let mut start = 0.0;
+
+        for _ in 0..segment_count {
+            let end = start + 2.0;
+            let segment = test_segment(start, end, 0, "speaker-1");
+            current_segment = handle_new_segment(current_segment, segment, &mut flushed_segments);
+
+            let current_samples = current_segment
+                .as_ref()
+                .map(|segment| segment.samples.len())
+                .unwrap_or_default();
+            assert_eq!(current_samples, 0);
+
+            start = end + 0.01;
+        }
+
+        assert!(flushed_segments.is_empty());
+        assert_eq!(current_segment.unwrap().samples.len(), 0);
     }
 }

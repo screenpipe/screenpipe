@@ -460,7 +460,7 @@ pub async fn run_record_and_transcribe(
             }
 
             while collected_audio.len() < max_samples && is_running.load(Ordering::Relaxed) {
-                match recv_audio_chunk(
+                let received = match recv_audio_chunk(
                     &mut receiver,
                     &audio_stream,
                     &device_name,
@@ -469,8 +469,20 @@ pub async fn run_record_and_transcribe(
                     &mut last_non_zero_at,
                     &mut sck_watchdog,
                 )
-                .await?
+                .await
                 {
+                    Ok(received) => received,
+                    // A deliberate stop (piggyback suspension, pause, shutdown)
+                    // can land while we're parked in recv: the input
+                    // recv-timeout then reads as a stream death and, if
+                    // propagated, discards everything collected this segment —
+                    // up to a full chunk of already-captured real audio. The
+                    // stream is being torn down either way, so break out and
+                    // let the flushes below persist what we have.
+                    Err(_) if !is_running.load(Ordering::Relaxed) => break,
+                    Err(e) => return Err(e),
+                };
+                match received {
                     Some(chunk) => {
                         source_buffer.push(chunk);
                         let drained = source_buffer.drain_all();

@@ -13,7 +13,7 @@ use anyhow::{anyhow, Result};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use ca::aggregate_device_keys as agg_keys;
 use ca::sub_device_keys as sub_keys;
@@ -46,13 +46,7 @@ static MACOS_VERSION: OnceLock<Option<(u64, u64, u64)>> = OnceLock::new();
 /// **hard floor of macOS 14.4**. Below that (and on non-macOS) the tap cannot be
 /// built and the resolver/probe fall back to empty results.
 ///
-// TODO(meeting-piggyback): the experimental_meeting_piggyback flag MUST NOT be
-// enabled on < macOS 14.4. Before the wiring follow-up ships, gate the setting
-// on this check — either (a) hide/disable the toggle in the UI when
-// `!is_process_tap_available()`, or (b) at runtime, when the flag is on but the
-// tap is unavailable, fall back to the stable capture path (default device +
-// global tap) instead of silently capturing nothing, and surface a one-time
-// "requires macOS 14.4+" notice to the user.
+// Availability gating + stable-path fallback live in audio_manager/meeting_piggyback.rs (decide_piggyback).
 pub fn is_process_tap_available() -> bool {
     let version = MACOS_VERSION.get_or_init(detect_os_version);
     match version {
@@ -75,6 +69,14 @@ pub fn is_process_tap_available() -> bool {
             false
         }
     }
+}
+
+/// Cached OS version as "major.minor.patch" for telemetry. None if detection
+/// failed (same cache `is_process_tap_available` uses — no extra syscalls).
+pub(crate) fn macos_version_string() -> Option<String> {
+    MACOS_VERSION
+        .get_or_init(detect_os_version)
+        .map(|(maj, min, patch)| format!("{maj}.{min}.{patch}"))
 }
 
 fn detect_os_version() -> Option<(u64, u64, u64)> {
@@ -341,6 +343,11 @@ static TAP_GENERATION: AtomicU64 = AtomicU64::new(0);
 struct TapCallbackCtx {
     tx: broadcast::Sender<Vec<f32>>,
     channels: u16,
+    /// Per-capture silence-watchdog counters. Owned by this ctx (not a
+    /// process-global static) so concurrent taps — the stable global tap and
+    /// an experimental per-process meeting tap — never share/corrupt each
+    /// other's silence window via a shared swap(0).
+    watchdog: std::sync::Arc<super::WatchdogCounters>,
     // Deliberately no is_running — it's initialized false by device_manager
     // and only flipped true AFTER AudioStream::from_device returns, which
     // races with the IO callback (drops every frame for the first tick)
@@ -381,11 +388,6 @@ struct TapCallbackCtx {
 static TAP_CALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static TAP_LAST_LOG_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static TAP_MAX_AMP_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-// Rolling peak for the silence watchdog. Separate from TAP_MAX_AMP_BITS
-// (which is zeroed each log tick) so the spawn thread can observe peak
-// amplitude across a longer window independently of log cadence.
-static TAP_WATCHDOG_AMP_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-static TAP_WATCHDOG_CALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Monotonic max update for the atomic peak-amplitude trackers. f32 values
 /// are non-negative (callers pass abs()), so bit-ordering matches numeric
@@ -416,12 +418,12 @@ extern "C" fn tap_io_proc(
     ctx: Option<&mut TapCallbackCtx>,
 ) -> os::Status {
     TAP_CALLBACKS.fetch_add(1, Ordering::Relaxed);
-    TAP_WATCHDOG_CALLBACKS.fetch_add(1, Ordering::Relaxed);
 
     let ctx = match ctx {
         Some(c) => c,
         None => return Default::default(),
     };
+    ctx.watchdog.count_callback();
 
     // RAII active-call guard. Mark this callback in-flight before doing any
     // work and clear it on every return path. Teardown waits for the count to
@@ -465,7 +467,7 @@ extern "C" fn tap_io_proc(
     let local_max = samples.iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
     let local_max_bits = local_max.to_bits();
     bump_max_amp(&TAP_MAX_AMP_BITS, local_max, local_max_bits);
-    bump_max_amp(&TAP_WATCHDOG_AMP_BITS, local_max, local_max_bits);
+    ctx.watchdog.record_peak(local_max);
 
     // Throttled log every 10s, emitted at INFO so it lands in every user's
     // default log. The per-callback SystemTime::now() syscall is the only
@@ -616,7 +618,6 @@ impl Drop for ProcessTapCapture {
 
 /// Translate OS pids into CoreAudio process object AudioObjectIDs, dropping any
 /// that don't resolve (not running, or not a translatable process).
-#[allow(dead_code)] // wired into the live pipeline in the reconcile follow-up
 fn resolve_pids_to_audio_object_ids(pids: &[i32]) -> Vec<u32> {
     let mut out = Vec::new();
     for &pid in pids {
@@ -637,7 +638,6 @@ fn resolve_pids_to_audio_object_ids(pids: &[i32]) -> Vec<u32> {
 /// using ("copy whatever output the app is using"). Queries `PROCESS_DEVICES`
 /// in the OUTPUT scope and returns the first output device across the pids.
 /// `None` when nothing resolves — the caller falls back to the default output.
-#[allow(dead_code)] // wired into the live pipeline in the reconcile follow-up
 fn resolve_meeting_output_device(pids: &[i32]) -> Option<ca::Device> {
     for &pid in pids {
         let Ok(process) = ca::Process::with_pid(pid) else {
@@ -664,7 +664,6 @@ fn resolve_meeting_output_device(pids: &[i32]) -> Option<ca::Device> {
 /// Reuses `build_capture_from_desc`, so the aggregate/IO-proc plumbing is
 /// identical to the stable global tap; only WHAT we tap and WHICH device we
 /// clock against differ.
-#[allow(dead_code)] // wired into the live pipeline in the reconcile follow-up
 fn build_inclusion_capture(
     pids: &[i32],
     tx: broadcast::Sender<Vec<f32>>,
@@ -689,13 +688,18 @@ fn build_inclusion_capture(
         ids.len(),
         pids
     );
-    build_capture_from_desc(
+    // The watchdog counters are dropped here on purpose: the per-process
+    // Meeting Tap never acts on silence (a silent tap is the user's own
+    // in-meeting feedback loop — they notice and fix it in the app, and our
+    // pid/device tracking follows). Only the GLOBAL tap drains its watchdog.
+    let (capture, config, output_uid_str, _watchdog) = build_capture_from_desc(
         tx,
         is_disconnected,
         &tap_desc,
         &output_device,
         "per-process",
-    )
+    )?;
+    Ok((capture, config, output_uid_str))
 }
 
 /// Build a fresh global (system-wide) Process Tap capture against the current
@@ -715,6 +719,7 @@ fn build_capture(
     AudioStreamConfig,
     String,
     exclusions::Snapshot,
+    Arc<super::WatchdogCounters>,
 )> {
     let output_device = ca::System::default_output_device()
         .map_err(|s| anyhow!("No default output device: {:?}", s))?;
@@ -737,9 +742,9 @@ fn build_capture(
     }
     let tap_desc = ca::TapDesc::with_stereo_global_tap_excluding_processes(&excluded_array);
 
-    let (capture, config, output_uid_str) =
+    let (capture, config, output_uid_str, watchdog) =
         build_capture_from_desc(tx, is_disconnected, &tap_desc, &output_device, "global")?;
-    Ok((capture, config, output_uid_str, snapshot))
+    Ok((capture, config, output_uid_str, snapshot, watchdog))
 }
 
 /// Generic tap plumbing shared by the stable global tap and the experimental
@@ -753,7 +758,12 @@ fn build_capture_from_desc(
     tap_desc: &ca::TapDesc,
     output_device: &ca::Device,
     label: &str,
-) -> Result<(ProcessTapCapture, AudioStreamConfig, String)> {
+) -> Result<(
+    ProcessTapCapture,
+    AudioStreamConfig,
+    String,
+    Arc<super::WatchdogCounters>,
+)> {
     let output_uid = output_device
         .uid()
         .map_err(|s| anyhow!("Failed to get output device UID: {:?}", s))?;
@@ -820,9 +830,11 @@ fn build_capture_from_desc(
     let generation = TAP_GENERATION
         .fetch_add(1, Ordering::Relaxed)
         .wrapping_add(1);
+    let watchdog = super::WatchdogCounters::new();
     let mut ctx = Box::new(TapCallbackCtx {
         tx,
         channels,
+        watchdog: watchdog.clone(),
         is_disconnected,
         generation,
         stopping: AtomicBool::new(false),
@@ -848,7 +860,7 @@ fn build_capture_from_desc(
         generation,
     };
 
-    Ok((capture, config, output_uid_str))
+    Ok((capture, config, output_uid_str, watchdog))
 }
 
 fn current_process_audio_object_id() -> Option<u32> {
@@ -918,7 +930,7 @@ pub fn spawn_process_tap_capture(
     is_disconnected: Arc<AtomicBool>,
 ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
     info!("Creating CoreAudio Process Tap for system audio");
-    let (capture, config, initial_uid, initial_snapshot) =
+    let (capture, config, initial_uid, initial_snapshot, initial_watchdog) =
         build_capture(tx.clone(), is_disconnected.clone())?;
     info!(
         "Process Tap capture started (device: {}, exclusions: {})",
@@ -930,6 +942,7 @@ pub fn spawn_process_tap_capture(
         let mut current: Option<ProcessTapCapture> = Some(capture);
         let mut current_uid = initial_uid;
         let mut current_snapshot = initial_snapshot;
+        let mut watchdog = initial_watchdog;
 
         // ~500ms poll: responsive enough that a device switch is inaudible
         // in the downstream pipeline (30s segment window dominates), cheap
@@ -976,8 +989,7 @@ pub fn spawn_process_tap_capture(
             std::thread::sleep(POLL);
 
             // Watchdog: drain the peak-amp window and decide if we're silent.
-            let window_callbacks = TAP_WATCHDOG_CALLBACKS.swap(0, Ordering::Relaxed);
-            let window_peak = f32::from_bits(TAP_WATCHDOG_AMP_BITS.swap(0, Ordering::Relaxed));
+            let (window_callbacks, window_peak) = watchdog.drain();
             let got_real_audio = window_callbacks > 0 && window_peak > SILENCE_AMP_EPS;
 
             if got_real_audio {
@@ -1131,7 +1143,7 @@ pub fn spawn_process_tap_capture(
             current = None;
 
             match build_capture(tx.clone(), is_disconnected.clone()) {
-                Ok((cap, _cfg, uid, snapshot)) => {
+                Ok((cap, _cfg, uid, snapshot, new_watchdog)) => {
                     info!(
                         "Process Tap re-anchored to '{}' (exclusions: {})",
                         uid,
@@ -1140,6 +1152,7 @@ pub fn spawn_process_tap_capture(
                     current = Some(cap);
                     current_uid = uid;
                     current_snapshot = snapshot;
+                    watchdog = new_watchdog;
                     silence_started = None;
                     last_rebuild = Some(std::time::Instant::now());
                 }
@@ -1184,7 +1197,6 @@ pub fn spawn_process_tap_capture(
 ///
 /// `is_running` is accepted for signature parity with the cpal path and is not
 /// read (see the `TapCallbackCtx` comment).
-#[allow(dead_code)] // wired into the live pipeline in the reconcile follow-up
 pub fn spawn_process_tap_capture_for_pids(
     pids: Vec<i32>,
     tx: broadcast::Sender<Vec<f32>>,
@@ -1200,7 +1212,25 @@ pub fn spawn_process_tap_capture_for_pids(
         let mut current_uid = initial_uid;
 
         const POLL: std::time::Duration = std::time::Duration::from_millis(500);
+        /// After this many CONSECUTIVE failed output-switch rebuilds, give up
+        /// and exit the loop instead of looping with `current = None`. A
+        /// failed rebuild leaves no live capture yet the stream still looks
+        /// "actively streaming" to the sweep (it never latched
+        /// `is_disconnected`), so the sweep keeps the stable far-end output
+        /// suspended → far-end audio is lost until a later retry happens to
+        /// succeed. Breaking here hits the exit path that sets
+        /// `is_disconnected`, so the sweep's dead-tap arm falls back to the
+        /// stable path within a tick. Reset to 0 on any successful rebuild.
+        const MAX_CONSECUTIVE_REBUILD_FAILURES: u32 = 3;
 
+        let mut consecutive_rebuild_failures: u32 = 0;
+
+        // NOTE: deliberately NO silence watchdog here. We track the meeting
+        // app's own devices; a silent tap is the user's in-meeting feedback
+        // loop (they notice they can't hear/be heard and fix the device in the
+        // app), and our device-follow below tracks that fix. Silence must
+        // never rebuild, probe, or restart this tap. Death handling remains:
+        // pids gone (below) and external disconnects.
         while !is_disconnected.load(Ordering::Relaxed) {
             std::thread::sleep(POLL);
 
@@ -1232,15 +1262,34 @@ pub fn spawn_process_tap_capture_for_pids(
                 Ok((cap, _cfg, uid)) => {
                     current = Some(cap);
                     current_uid = uid;
+                    consecutive_rebuild_failures = 0;
                 }
                 Err(e) => {
-                    warn!("Per-process tap rebuild failed: {e}");
+                    consecutive_rebuild_failures += 1;
+                    warn!(
+                        "Per-process tap rebuild failed ({}/{}): {e}",
+                        consecutive_rebuild_failures, MAX_CONSECUTIVE_REBUILD_FAILURES
+                    );
                     current_uid = new_uid;
+                    // Persistent failure: stop looping with a dead (None)
+                    // capture that the sweep still reads as "streaming". Break
+                    // → the exit path latches `is_disconnected`, and the sweep
+                    // falls back to the stable far end within a tick.
+                    if consecutive_rebuild_failures >= MAX_CONSECUTIVE_REBUILD_FAILURES {
+                        error!(
+                            "piggyback_tap_latched_dead: giving up per-process tap after {} consecutive rebuild failures (pids {:?})",
+                            MAX_CONSECUTIVE_REBUILD_FAILURES, pids
+                        );
+                        break;
+                    }
                 }
             }
         }
 
         drop(current);
+        // Signal upstream (piggyback sweep) that this capture is over — covers
+        // the pids-gone exit, not just external disconnects.
+        is_disconnected.store(true, Ordering::Relaxed);
         debug!("Per-process tap capture thread exited");
     });
 

@@ -297,6 +297,12 @@ export type Settings = SettingsStore & {
 	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
 	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
 	experimentalCoreaudioSystemAudio?: boolean;
+	/** Beta ("Smart recording" in the app): during meetings, capture only the meeting app's audio
+	 *  and the microphone it actually uses (per-process piggyback). Off by default. Engages in ANY
+	 *  audio capture mode — takes precedence over the configured devices for the meeting's
+	 *  duration. Requires the meeting detector. Falls back to standard capture automatically if
+	 *  unavailable. */
+	experimentalMeetingPiggyback?: boolean;
 	/** Experimental: request Windows WASAPI microphone AEC when supported. */
 	windowsInputAecEnabled?: boolean;
 	/** Experimental: request Apple VoiceProcessingIO AEC on the default macOS microphone. */
@@ -678,6 +684,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableClickCapture: false,
 			keepComputerAwake: false,
 			experimentalCoreaudioSystemAudio: false,
+			experimentalMeetingPiggyback: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,
 			screenpipeAecEnabled: false,

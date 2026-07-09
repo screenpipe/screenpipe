@@ -107,7 +107,31 @@ impl DeviceManager {
     }
 
     pub async fn start_device(&self, device: &AudioDevice) -> Result<()> {
-        if !self.devices().await.contains(device) {
+        self.start_device_inner(device, None).await
+    }
+
+    /// Start a device whose stream is backed by the per-process meeting tap
+    /// (`spawn_process_tap_capture_for_pids`) for `tap_pids`. Only meaningful
+    /// for the Meeting Tap virtual output device; other devices ignore the pids
+    /// in `AudioStream::from_device`.
+    pub async fn start_device_with_tap_pids(
+        &self,
+        device: &AudioDevice,
+        tap_pids: Vec<i32>,
+    ) -> Result<()> {
+        self.start_device_inner(device, Some(tap_pids)).await
+    }
+
+    async fn start_device_inner(
+        &self,
+        device: &AudioDevice,
+        tap_pids: Option<Vec<i32>>,
+    ) -> Result<()> {
+        // The meeting tap is a virtual device synthesized from pids
+        // (spawn_process_tap_capture_for_pids); it is deliberately never in
+        // list_audio_devices(), so skip the availability check on the tap path.
+        // Every other device must still be a real, currently-listed device.
+        if tap_pids.is_none() && !self.devices().await.contains(device) {
             return Err(anyhow!("device {device} not found"));
         }
 
@@ -122,6 +146,7 @@ impl DeviceManager {
             self.use_coreaudio_tap.load(Ordering::Relaxed),
             self.windows_input_aec.load(Ordering::Relaxed),
             self.effective_macos_input_vpio(device),
+            tap_pids,
         )
         .await
         {

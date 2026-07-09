@@ -690,6 +690,17 @@ pub(crate) async fn start_meeting_handler(
     }
     if let Some(detector) = state.audio_manager.meeting_detector().await {
         detector.set_v2_in_meeting(true);
+        // No sensor will ever attribute a process to a manual meeting, so
+        // publish the identity with `manual: true` — the piggyback sweep
+        // derives its tap targets from the live mic-holder enumeration for
+        // manual meetings instead of riding the stable path.
+        detector.set_active_meeting(Some(
+            screenpipe_audio::meeting_detector::ActiveMeeting {
+                pid: None,
+                bundle_id: None,
+                manual: true,
+            },
+        ));
     }
 
     if let Ok(status) = resolve_meeting_status(&state).await {
@@ -789,6 +800,7 @@ pub(crate) async fn stop_meeting_handler(
     }
     if let Some(detector) = state.audio_manager.meeting_detector().await {
         detector.set_v2_in_meeting(false);
+        detector.set_active_meeting(None);
     }
     // Signal the detector loop to drop tracking immediately (skip grace period).
     // The app comes from the already-resolved status so this needs no DB read

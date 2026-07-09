@@ -21,7 +21,7 @@
 //!   3. Talk / have the other side talk — the meter should move with THEIR audio.
 //!   4. While it runs, switch your output device (Speakers <-> headset).
 //!      macOS should keep moving and log:
-//!        "Per-process tap: app output changed (... -> ...), rebuilding"
+//!      "Per-process tap: app output changed (... -> ...), rebuilding"
 //!      Windows build 20348+ should keep moving without an endpoint rebuild.
 //!   5. Ctrl-C to stop.
 

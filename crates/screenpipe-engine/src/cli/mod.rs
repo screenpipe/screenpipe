@@ -412,6 +412,11 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub experimental_coreaudio_system_audio: bool,
 
+    /// Beta: meeting-driven per-process audio capture (piggyback; "Smart
+    /// recording" in the app). Engages during meetings in any capture mode.
+    #[arg(long, default_value_t = false)]
+    pub experimental_meeting_piggyback: bool,
+
     /// [experimental, Windows] Request WASAPI microphone AEC when supported.
     /// Ignored on non-Windows platforms and unsupported endpoints.
     #[arg(long, default_value_t = false)]
@@ -790,6 +795,7 @@ pub struct RecordArgSources {
     pub audio_device: bool,
     pub use_system_default_audio: bool,
     pub experimental_coreaudio_system_audio: bool,
+    pub experimental_meeting_piggyback: bool,
     pub windows_input_aec_enabled: bool,
     pub macos_input_vpio_enabled: bool,
     pub screenpipe_aec_enabled: bool,
@@ -846,6 +852,10 @@ impl RecordArgSources {
                 record,
                 "experimental_coreaudio_system_audio",
             ),
+            experimental_meeting_piggyback: from_command_line(
+                record,
+                "experimental_meeting_piggyback",
+            ),
             windows_input_aec_enabled: from_command_line(record, "windows_input_aec_enabled"),
             macos_input_vpio_enabled: from_command_line(record, "macos_input_vpio_enabled"),
             screenpipe_aec_enabled: from_command_line(record, "screenpipe_aec_enabled"),
@@ -894,6 +904,7 @@ impl RecordArgSources {
             || self.audio_device
             || self.use_system_default_audio
             || self.experimental_coreaudio_system_audio
+            || self.experimental_meeting_piggyback
             || self.windows_input_aec_enabled
             || self.macos_input_vpio_enabled
             || self.screenpipe_aec_enabled
@@ -1073,6 +1084,7 @@ impl RecordArgs {
             audio_devices: self.audio_device.clone(),
             use_system_default_audio: self.use_system_default_audio,
             experimental_coreaudio_system_audio: self.experimental_coreaudio_system_audio,
+            experimental_meeting_piggyback: self.experimental_meeting_piggyback,
             windows_input_aec_enabled: aec_mode == screenpipe_config::AecMode::Windows,
             macos_input_vpio_enabled: aec_mode == screenpipe_config::AecMode::Macos,
             screenpipe_aec_enabled: aec_mode == screenpipe_config::AecMode::Screenpipe,
@@ -1302,6 +1314,9 @@ impl RecordArgs {
         }
         if sources.experimental_coreaudio_system_audio {
             settings.experimental_coreaudio_system_audio = self.experimental_coreaudio_system_audio;
+        }
+        if sources.experimental_meeting_piggyback {
+            settings.experimental_meeting_piggyback = self.experimental_meeting_piggyback;
         }
         if sources.screenpipe_aec_enabled && self.screenpipe_aec_enabled {
             settings.aec_mode = screenpipe_config::AecMode::Screenpipe;

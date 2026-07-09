@@ -562,6 +562,18 @@ async fn restore_interrupted_meeting_for_capture_restart(
     }
     if let Some(detector) = server.audio_manager.meeting_detector().await {
         detector.set_v2_in_meeting(true);
+        // Restore the manual identity immediately so the piggyback sweep can
+        // re-engage without waiting for the watcher's 5s manual-skip tick
+        // (auto meetings re-publish via the reattach path instead).
+        if interrupted.manual {
+            detector.set_active_meeting(Some(
+                screenpipe_audio::meeting_detector::ActiveMeeting {
+                    pid: None,
+                    bundle_id: None,
+                    manual: true,
+                },
+            ));
+        }
     }
 
     info!(

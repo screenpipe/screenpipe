@@ -375,11 +375,21 @@ fn sample_render_endpoints() -> Vec<EndpointSample> {
 /// applies their actions through the [`super::AudioManager`]. Called from
 /// the device monitor's 2s loop; no-op outside Windows (see
 /// [`sample_render_endpoints`]).
+///
+/// `piggyback_far_end_active` short-circuits the whole sweep: when the meeting
+/// piggyback tap is the active far end, following render endpoints here would
+/// double-capture the same audio. The in-meeting speaker watchdog is skipped
+/// too — Meeting Tap chunks stamp `on_audio_chunk(Output)`, so it would stay
+/// quiet anyway, and skipping avoids restart side effects fighting the sweep.
 pub(crate) async fn run_output_follow_sweep(
+    piggyback_far_end_active: bool,
     audio_manager: &super::AudioManager,
     follow: &mut FollowState,
     watchdog: &mut WatchdogState,
 ) {
+    if piggyback_far_end_active {
+        return;
+    }
     use crate::core::device::{parse_audio_device, DeviceType};
     use screenpipe_events::AudioCaptureHealthEvent;
     use tracing::{info, warn};

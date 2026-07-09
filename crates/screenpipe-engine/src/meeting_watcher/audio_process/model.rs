@@ -153,6 +153,7 @@ impl ResolvedMeetingCandidate {
                 platform,
                 session_key,
                 first_seen_at,
+                process,
                 ..
             } => Some(ResolvedSession {
                 platform: platform.clone(),
@@ -163,6 +164,8 @@ impl ResolvedMeetingCandidate {
                 // A native app holding the mic is by definition a live
                 // observation of the current snapshot.
                 live_evidence: true,
+                pid: process.pid,
+                bundle_id: process.bundle_id.clone(),
             }),
             Self::Browser {
                 platform,
@@ -170,6 +173,7 @@ impl ResolvedMeetingCandidate {
                 session_key,
                 first_seen_at,
                 live_evidence,
+                process,
                 ..
             } => Some(ResolvedSession {
                 platform: platform.clone(),
@@ -178,6 +182,8 @@ impl ResolvedMeetingCandidate {
                 first_seen_at: *first_seen_at,
                 is_browser: true,
                 live_evidence: *live_evidence,
+                pid: process.pid,
+                bundle_id: process.bundle_id.clone(),
             }),
             _ => None,
         }
@@ -213,6 +219,10 @@ pub(crate) struct ResolvedSession {
     /// See [`ResolvedMeetingCandidate::Browser::live_evidence`]. Always true
     /// for native candidates.
     pub(crate) live_evidence: bool,
+    /// Meeting process identity, threaded from the resolved candidate's
+    /// `AudioInputProcess` through to the published `ActiveMeeting`.
+    pub(crate) pid: Option<i32>,
+    pub(crate) bundle_id: Option<String>,
 }
 
 /// Result of scanning a messaging app's AX tree for call UI evidence.

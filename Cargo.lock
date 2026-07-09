@@ -1792,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/EzraEllette/cpal.git?rev=93647b9b5de39d6d4fd9f0a8224fbc0921e1e6bd#93647b9b5de39d6d4fd9f0a8224fbc0921e1e6bd"
+source = "git+https://github.com/screenpipe/cpal.git?rev=e7edfa174466e87a467d1a58e3a4aec233ff8a21#e7edfa174466e87a467d1a58e3a4aec233ff8a21"
 dependencies = [
  "alsa",
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
@@ -8095,7 +8095,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=81855c0db45bde9390fc7765629ecc115b48711d#81855c0db45bde9390fc7765629ecc115b48711d"
+source = "git+https://github.com/screenpipe/sck-rs?rev=3d035cb51f0a9f71d8b716bc67d5380557976df6#3d035cb51f0a9f71d8b716bc67d5380557976df6"
 dependencies = [
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "image",

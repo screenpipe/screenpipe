@@ -193,10 +193,10 @@ async checkBrowsersAutomationPermission() : Promise<boolean> {
     return await TAURI_INVOKE("check_browsers_automation_permission");
 },
 /**
- * Returns true on macOS 14.4+ where the CoreAudio Process Tap API is
- * available. Used to gate the "experimental System Audio via CoreAudio"
- * toggle — we don't show it on platforms where flipping it would be a
- * no-op. False on Windows, Linux, and older macOS.
+ * Returns true on platforms where Screenpipe's process-audio tap backend is
+ * available. On macOS that means CoreAudio Process Tap (14.4+); on Windows it
+ * means WASAPI process loopback (build 20348+). Linux and older OS versions
+ * return false.
  */
 async checkCoreaudioProcessTapAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("check_coreaudio_process_tap_available");
@@ -2718,6 +2718,20 @@ useSystemDefaultAudio: boolean;
  * falls back to the SCK path automatically. Ignored on non-macOS platforms.
  */
 experimentalCoreaudioSystemAudio?: boolean;
+/**
+ * Beta ("Smart recording" in the app): during detected meetings, capture
+ * the meeting app's own audio via a per-process tap plus the microphone
+ * that app actually has open (instead of the global mix + assumed-default
+ * mic). Default `false`. Takes precedence over everything: it engages in
+ * ANY `audio_capture_mode` (continuous or meetings-only) and displaces
+ * the configured devices for the meeting's duration. Requires macOS 14.4+
+ * or Windows, plus the meeting detector (with `disable_meeting_detector`
+ * no meeting is ever observed, so this flag is inert); when the platform
+ * can't do it or the tap fails at runtime, capture automatically falls
+ * back to the stable path (default mic + global system audio) — never
+ * less capture than with the flag off.
+ */
+experimentalMeetingPiggyback?: boolean;
 /**
  * Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
  * Ignored on non-Windows platforms and fail-open when unsupported by device/driver.

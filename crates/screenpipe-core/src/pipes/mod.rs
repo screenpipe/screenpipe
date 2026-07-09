@@ -43,6 +43,7 @@ const PIPE_COMPLETED_EVENT_PREFIX: &str = "pipe_completed:";
 const PIPE_LOG_ACTIVE_KEEP_PER_PIPE: usize = 200;
 const PIPE_LOG_ARCHIVE_AFTER_DAYS: i64 = 14;
 const PIPE_LOG_ARCHIVE_DIR: &str = "archive";
+const PIPE_EXECUTION_KEEP_PER_PIPE: i32 = 500;
 
 // ---------------------------------------------------------------------------
 // Config & log types
@@ -1103,7 +1104,12 @@ pub trait PipeStore: Send + Sync {
     ) -> Result<()>;
 
     /// Get recent executions for a pipe (newest first).
-    async fn get_executions(&self, pipe_name: &str, limit: i32) -> Result<Vec<PipeExecution>>;
+    async fn get_executions(
+        &self,
+        pipe_name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>>;
 
     /// Mark any 'running' executions as failed (orphan recovery on startup).
     /// Returns the number of rows updated.
@@ -1978,7 +1984,7 @@ pub struct PipeManager {
     /// Loaded pipe configs keyed by pipe name: (config, prompt_body, raw_content).
     #[allow(clippy::type_complexity)]
     pipes: Arc<Mutex<HashMap<String, (PipeConfig, String, String)>>>,
-    /// Recent run logs per pipe (last 50).
+    /// Recent run logs per pipe.
     logs: Arc<Mutex<HashMap<String, VecDeque<PipeRunLog>>>>,
     /// Currently running pipe PIDs.
     running: Arc<Mutex<HashMap<String, ExecutionHandle>>>,
@@ -2175,10 +2181,13 @@ impl PipeManager {
         );
     }
 
-    /// Delete old pipe executions, keeping only the newest 50 per pipe.
+    /// Delete old pipe executions, keeping enough recent history for the UI.
     pub async fn cleanup_executions(&self) {
         if let Some(ref store) = self.store {
-            match store.cleanup_old_executions(50).await {
+            match store
+                .cleanup_old_executions(PIPE_EXECUTION_KEEP_PER_PIPE)
+                .await
+            {
                 Ok(count) => {
                     if count > 0 {
                         info!("pipe cleanup: deleted {} old executions", count);
@@ -2390,6 +2399,15 @@ impl PipeManager {
         for (name, mut status) in partial {
             if let Some(state) = states.get(&name) {
                 status.consecutive_failures = state.consecutive_failures;
+                if state
+                    .last_run_at
+                    .zip(status.last_run)
+                    .map(|(persisted, in_memory)| persisted > in_memory)
+                    .unwrap_or(status.last_run.is_none() && state.last_run_at.is_some())
+                {
+                    status.last_run = state.last_run_at;
+                    status.last_success = Some(state.consecutive_failures == 0);
+                }
             }
             result.push(status);
         }
@@ -2546,6 +2564,15 @@ impl PipeManager {
         if let Some(ref store) = self.store {
             if let Ok(Some(state)) = store.get_scheduler_state(name).await {
                 status.consecutive_failures = state.consecutive_failures;
+                if state
+                    .last_run_at
+                    .zip(status.last_run)
+                    .map(|(persisted, in_memory)| persisted > in_memory)
+                    .unwrap_or(status.last_run.is_none() && state.last_run_at.is_some())
+                {
+                    status.last_run = state.last_run_at;
+                    status.last_success = Some(state.consecutive_failures == 0);
+                }
             }
         }
         Some(status)
@@ -2560,7 +2587,10 @@ impl PipeManager {
         // Prefer database — it is the persistent source of truth and
         // survives process restarts (the in-memory HashMap does not).
         if let Some(ref store) = self.store {
-            if let Ok(executions) = store.get_executions(name, 50).await {
+            if let Ok(executions) = store
+                .get_executions(name, PIPE_LOG_ACTIVE_KEEP_PER_PIPE as i32, None)
+                .await
+            {
                 let db_logs: Vec<PipeRunLog> = executions
                     .into_iter()
                     .filter(|e| e.status != "queued" && e.status != "running")
@@ -2600,9 +2630,14 @@ impl PipeManager {
     }
 
     /// Get execution history from the DB store.
-    pub async fn get_executions(&self, name: &str, limit: i32) -> Result<Vec<PipeExecution>> {
+    pub async fn get_executions(
+        &self,
+        name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>> {
         if let Some(ref store) = self.store {
-            store.get_executions(name, limit).await
+            store.get_executions(name, limit, before_id).await
         } else {
             Ok(vec![])
         }
@@ -3142,7 +3177,7 @@ impl PipeManager {
             let mut l = logs_ref.lock().await;
             let entry = l.entry(log.pipe_name.clone()).or_insert_with(VecDeque::new);
             entry.push_back(log);
-            if entry.len() > 50 {
+            if entry.len() > PIPE_LOG_ACTIVE_KEEP_PER_PIPE {
                 entry.pop_front();
             }
             drop(l);
@@ -4508,7 +4543,7 @@ impl PipeManager {
                                         stdout: String::new(),
                                         stderr: message.clone(),
                                     });
-                                    if entry.len() > 50 {
+                                    if entry.len() > PIPE_LOG_ACTIVE_KEEP_PER_PIPE {
                                         entry.pop_back();
                                     }
                                 }
@@ -5048,7 +5083,7 @@ impl PipeManager {
                         let mut l = logs_ref.lock().await;
                         let entry = l.entry(log.pipe_name.clone()).or_insert_with(VecDeque::new);
                         entry.push_back(log);
-                        if entry.len() > 50 {
+                        if entry.len() > PIPE_LOG_ACTIVE_KEEP_PER_PIPE {
                             entry.pop_front();
                         }
                         drop(l);
@@ -5106,7 +5141,10 @@ impl PipeManager {
                 // Daily cleanup: prune old executions and archive old disk logs every 24h
                 if last_cleanup.elapsed() >= std::time::Duration::from_secs(86400) {
                     if let Some(ref store) = store {
-                        match store.cleanup_old_executions(50).await {
+                        match store
+                            .cleanup_old_executions(PIPE_EXECUTION_KEEP_PER_PIPE)
+                            .await
+                        {
                             Ok(count) if count > 0 => {
                                 info!("scheduler cleanup: deleted {} old executions", count);
                             }
@@ -5378,7 +5416,7 @@ impl PipeManager {
         let mut logs = self.logs.lock().await;
         let entry = logs.entry(name.to_string()).or_insert_with(VecDeque::new);
         entry.push_back(log.clone());
-        if entry.len() > 50 {
+        if entry.len() > PIPE_LOG_ACTIVE_KEEP_PER_PIPE {
             entry.pop_front();
         }
     }

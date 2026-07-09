@@ -76,7 +76,7 @@ pub(crate) fn handle_stop_signal(
         );
         *state = AudioProcessMeetingState::Idle;
         *last_explicit_stop_id = Some(stop_signal.meeting_id);
-        sync_meeting_flag(false, in_meeting_flag, detector);
+        sync_meeting_flag(false, None, in_meeting_flag, detector);
     }
 }
 
@@ -127,7 +127,7 @@ pub(crate) async fn handle_auto_end_request(
                 }
                 *state = AudioProcessMeetingState::Idle;
             }
-            sync_meeting_flag(false, in_meeting_flag, detector);
+            sync_meeting_flag(false, None, in_meeting_flag, detector);
             emit_ended_and_status(db, manual_meeting, request.meeting_id).await;
         }
         Err(e) => warn!(

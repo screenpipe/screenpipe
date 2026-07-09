@@ -2781,6 +2781,174 @@ fn test_non_meet_titles_do_not_match_google_meet_profile() {
     }
 }
 
+// ── ax_window_matches_meeting: per-window decision of the macOS AX sweep ────
+//
+// The sweep walks ALL windows of a mic-holding browser (secondary windows and
+// pop-outs included). These tests pin the evidence ordering: AXDocument URL
+// first, verbatim-domain title check, and anchored `browser_title_patterns`
+// only for windows that expose no page URL.
+
+fn google_meet_profile(profiles: &[MeetingDetectionProfile]) -> &MeetingDetectionProfile {
+    profiles
+        .iter()
+        .find(|p| {
+            p.app_identifiers
+                .browser_url_patterns
+                .contains(&"meet.google.com")
+        })
+        .expect("Google Meet profile not found")
+}
+
+#[test]
+fn ax_window_popout_title_matches_without_document_url() {
+    // Chrome/Edge Meet pop-outs expose no AXDocument; the window title is the
+    // only evidence ("Meet – abc-defg-hij"). The anchored title patterns must
+    // catch it — this was the secondary-window "never detected" gap.
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    let popout_titles = ["Meet – abc-defg-hij", "Meet - abc-defg-hij - Google Chrome"];
+    for title in &popout_titles {
+        assert!(
+            ax_window_matches_meeting(None, Some(title), meet),
+            "pop-out title {:?} with no page URL should match",
+            title
+        );
+    }
+}
+
+#[test]
+fn ax_window_title_fallback_requires_meeting_code() {
+    // The AX sweep is NOT gated on the browser holding the mic, so anchored
+    // titles that are ordinary pages must not become live meeting evidence.
+    // The URL-less title fallback additionally requires a standalone
+    // Meet-code-shaped token (see `title_contains_meeting_code`).
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    let anchored_but_ordinary_titles = [
+        "Meet the Team | Acme",
+        "Meet Kevin - YouTube",
+        "Meet: quarterly planning",
+        // Arc's bare "Meet" main-window title no longer resolves via the AX
+        // sweep; Arc keeps coverage through the mic-gated AppleScript URL
+        // probe, the Little Arc code-title fallback, and DB frame evidence
+        // (`browser_window_matches_meeting`, which is unchanged).
+        "Meet",
+    ];
+    for title in &anchored_but_ordinary_titles {
+        assert!(
+            !ax_window_matches_meeting(None, Some(title), meet),
+            "anchored non-call title {:?} must NOT match without a meeting code",
+            title
+        );
+    }
+}
+
+#[test]
+fn title_contains_meeting_code_requires_standalone_lowercase_token() {
+    // Real pop-out shapes.
+    assert!(title_contains_meeting_code("Meet – abc-defg-hij"));
+    assert!(title_contains_meeting_code(
+        "Meet - abc-defg-hij - Google Chrome"
+    ));
+    assert!(title_contains_meeting_code("abc-defg-hij"));
+
+    // No code at all.
+    assert!(!title_contains_meeting_code("Meet the Team | Acme"));
+    assert!(!title_contains_meeting_code("Meet Kevin - YouTube"));
+    assert!(!title_contains_meeting_code("Meet: quarterly planning"));
+    assert!(!title_contains_meeting_code("Meet"));
+
+    // Wrong shape: uppercase, digits, wrong segment lengths.
+    assert!(!title_contains_meeting_code("Meet – ABC-DEFG-HIJ"));
+    assert!(!title_contains_meeting_code("Meet – ab1-defg-hij"));
+    assert!(!title_contains_meeting_code("Meet – ab-defg-hij"));
+    assert!(!title_contains_meeting_code("Meet – abc-def-hij"));
+
+    // Code-shaped run embedded in a longer kebab slug or word is not
+    // standalone: `-` and alphanumerics extend the token on both sides.
+    assert!(!title_contains_meeting_code("how-to-run-fast-fyi"));
+    assert!(!title_contains_meeting_code("xabc-defg-hij"));
+    assert!(!title_contains_meeting_code("abc-defg-hijx"));
+    assert!(!title_contains_meeting_code("abc-defg-hij9"));
+}
+
+#[test]
+fn ax_window_title_patterns_not_consulted_when_url_known() {
+    // URL-first (#4246 family): when the window's page URL is known and is
+    // NOT a meeting URL, the title alone must not resolve a meeting.
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    assert!(!ax_window_matches_meeting(
+        Some("https://docs.google.com/document/d/123"),
+        Some("Meet – planning notes"),
+        meet
+    ));
+    // Whitespace-only doc counts as "no URL" — the title fallback applies.
+    assert!(ax_window_matches_meeting(
+        Some("  "),
+        Some("Meet – abc-defg-hij"),
+        meet
+    ));
+}
+
+#[test]
+fn ax_window_document_url_matches() {
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    assert!(ax_window_matches_meeting(
+        Some("https://meet.google.com/abc-defg-hij"),
+        None,
+        meet
+    ));
+    // Query/fragment stripped before matching (#4246): a meeting link carried
+    // as a parameter on an unrelated page is not the page you're on.
+    assert!(!ax_window_matches_meeting(
+        Some("https://example.com/redirect?to=https://meet.google.com/abc-defg-hij"),
+        None,
+        meet
+    ));
+}
+
+#[test]
+fn ax_window_dotted_domain_in_title_still_matches_with_url() {
+    // The verbatim-domain title check predates the anchored patterns and is
+    // kept regardless of AXDocument: a title literally carrying
+    // "meet.google.com" is unambiguous.
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    assert!(ax_window_matches_meeting(
+        Some("https://example.com"),
+        Some("meet.google.com/abc-defg-hij"),
+        meet
+    ));
+}
+
+#[test]
+fn ax_window_calendar_page_text_does_not_match() {
+    // Page-content text mentioning Meet (calendar events, reminders) must not
+    // resolve — the anchored matcher requires the pattern at position 0.
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    let non_meet_titles = [
+        "Join with Google Meet - Calendar - Google Chrome",
+        "Meeting reminders - Gmail",
+        "Google Calendar - Week of March 16, 2026",
+    ];
+    for title in &non_meet_titles {
+        assert!(
+            !ax_window_matches_meeting(None, Some(title), meet),
+            "non-Meet title {:?} should NOT match",
+            title
+        );
+    }
+}
+
 // ── role_matches cross-platform tolerance ──────────────────────────────────
 //
 // Profiles declare roles as macOS PascalCase (`AXButton`, `AXMenuItem`,

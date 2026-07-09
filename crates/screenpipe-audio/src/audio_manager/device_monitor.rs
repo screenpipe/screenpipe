@@ -36,7 +36,14 @@ fn is_legacy_display_output(device_name: &str) -> bool {
 /// the first audio frame — so we also require a live stream handle. Streams that
 /// failed to open never get inserted; streams that died (timeout, zero-fill hijack)
 /// set `is_disconnected` and are treated as not running so recovery can retry.
-fn is_device_actively_streaming(device_manager: &DeviceManager, device: &AudioDevice) -> bool {
+///
+/// `pub(crate)` so the piggyback sweep can observe stream liveness through the
+/// thin [`AudioManager::is_device_actively_streaming`] wrapper without
+/// duplicating this logic.
+pub(crate) fn is_device_actively_streaming(
+    device_manager: &DeviceManager,
+    device: &AudioDevice,
+) -> bool {
     if !device_manager.is_running(device) {
         return false;
     }
@@ -58,6 +65,26 @@ fn is_device_type_running(
             .ok()
             .filter(|d| d.device_type == device_type)
             .is_some_and(|d| is_device_actively_streaming(device_manager, &d))
+    })
+}
+
+/// True when a meeting-SESSION device of `device_type` is actively streaming.
+/// During a piggybacked meeting the normally-captured default input / "System
+/// Audio (output)" is suspended and its capture runs through a session stream
+/// (the resolved mic / Meeting Tap) that is NOT in `enabled_devices`. Without
+/// counting those, [`is_device_type_running`] reads "nothing running" and the
+/// recovery blocks below fire every 2s. Empty session set ⇒ this is a cheap
+/// `false`, so the non-piggyback path is byte-identical.
+fn is_session_type_streaming(
+    audio_manager: &AudioManager,
+    session_devices: &HashSet<String>,
+    device_type: DeviceType,
+) -> bool {
+    session_devices.iter().any(|name| {
+        parse_audio_device(name)
+            .ok()
+            .filter(|d| d.device_type == device_type)
+            .is_some_and(|d| audio_manager.is_device_actively_streaming(&d))
     })
 }
 
@@ -553,6 +580,11 @@ pub async fn start_device_monitor(
         // One-shot guard for the "no microphone available" alert (see the sweep).
         let mut pinned_input_unavailable_notified = false;
 
+        // Meeting piggyback state (experimental flag). Owns the per-process
+        // tap + resolved-mic capture during meetings, with total fallback to
+        // the stable path on any gap. Pure decider in `meeting_piggyback.rs`.
+        let mut piggyback_state = super::meeting_piggyback::PiggybackState::default();
+
         // Initialize tracker with current defaults
         let _ = default_tracker.check_input_changed();
         let _ = default_tracker.check_output_changed().await;
@@ -846,9 +878,21 @@ pub async fn start_device_monitor(
 
                             // Only stop the old inputs once the new one is live.
                             if new_started {
+                                // Never stop meeting-session or piggyback-suspended
+                                // devices during a default swap: they are not user
+                                // intent and the sweep owns their lifecycle. (They
+                                // are already absent from enabled_devices; this is a
+                                // belt-and-suspenders skip that also documents it.)
+                                let session = audio_manager.session_devices();
+                                let suspended = audio_manager.suspended_devices();
                                 for device_name in enabled_devices.iter() {
                                     if *device_name == new_default_input {
                                         continue; // don't stop the one we just started
+                                    }
+                                    if session.contains(device_name)
+                                        || suspended.contains(device_name)
+                                    {
+                                        continue;
                                     }
                                     if let Ok(device) = parse_audio_device(device_name) {
                                         if device.device_type == DeviceType::Input {
@@ -923,6 +967,13 @@ pub async fn start_device_monitor(
                                 // Don't stop the communications output device during swap
                                 #[cfg(target_os = "windows")]
                                 let comm_name = default_tracker.last_communications_output.clone();
+                                // Never stop the Meeting Tap or other meeting-session /
+                                // piggyback-suspended outputs during a default swap: they
+                                // are meeting-lifetime, not user intent, and the sweep owns
+                                // their teardown. Misattributing/stopping the Meeting Tap
+                                // here would drop far-end call audio mid-meeting.
+                                let session = audio_manager.session_devices();
+                                let suspended = audio_manager.suspended_devices();
                                 for device_name in audio_manager.enabled_devices().await.iter() {
                                     if *device_name == new_default_output {
                                         continue; // don't stop the one we just started
@@ -930,6 +981,11 @@ pub async fn start_device_monitor(
                                     #[cfg(target_os = "windows")]
                                     if comm_name.as_deref() == Some(device_name.as_str()) {
                                         continue; // don't stop the communications device
+                                    }
+                                    if session.contains(device_name)
+                                        || suspended.contains(device_name)
+                                    {
+                                        continue;
                                     }
                                     if let Ok(device) = parse_audio_device(device_name) {
                                         if device.device_type == DeviceType::Output {
@@ -998,9 +1054,18 @@ pub async fn start_device_monitor(
                     // probing audio hardware every monitor tick forever.
                     {
                         let current_enabled = audio_manager.enabled_devices().await;
+                        let session_devices = audio_manager.session_devices();
+                        // A piggybacked meeting captures the mic through a
+                        // session stream (the resolved mic) that isn't in
+                        // enabled_devices; count it so we don't declare "no
+                        // input" and storm recovery. Empty set ⇒ no-op.
                         let has_input = is_device_type_running(
                             &device_manager,
                             &current_enabled,
+                            DeviceType::Input,
+                        ) || is_session_type_streaming(
+                            &audio_manager,
+                            &session_devices,
                             DeviceType::Input,
                         );
                         if !has_input {
@@ -1015,7 +1080,19 @@ pub async fn start_device_monitor(
                                         let device_name = default_input.to_string();
                                         let user_disabled =
                                             audio_manager.user_disabled_devices().await;
-                                        if user_disabled.contains(&device_name) {
+                                        // Piggyback suspended the default input for
+                                        // the meeting (its capture rides a session
+                                        // stream). Starting it here would be
+                                        // silently no-op'd by the suspension guard,
+                                        // then mis-logged as "restored" with a
+                                        // backoff reset — a 2s log/reset storm.
+                                        // Skip this tick entirely, no log, no reset.
+                                        if audio_manager
+                                            .suspended_devices()
+                                            .contains(&device_name)
+                                        {
+                                            // leave backoff untouched
+                                        } else if user_disabled.contains(&device_name) {
                                             input_recovery_backoff.record_failure(true);
                                         } else {
                                             warn!(
@@ -1073,9 +1150,19 @@ pub async fn start_device_monitor(
                     {
                         let current_enabled = audio_manager.enabled_devices().await;
                         let user_disabled = audio_manager.user_disabled_devices().await;
+                        let session_devices = audio_manager.session_devices();
+                        // During a piggybacked meeting the far end is captured
+                        // by the "Meeting Tap (output)" session stream while the
+                        // stable "System Audio (output)" is suspended; count the
+                        // streaming session output so recovery doesn't storm.
+                        // Empty set ⇒ no-op.
                         let has_output = is_device_type_running(
                             &device_manager,
                             &current_enabled,
+                            DeviceType::Output,
+                        ) || is_session_type_streaming(
+                            &audio_manager,
+                            &session_devices,
                             DeviceType::Output,
                         );
                         // Don't try to recover if user explicitly disabled output
@@ -1099,27 +1186,44 @@ pub async fn start_device_monitor(
                                 match default_output_device().await {
                                     Ok(default_output) => {
                                         let device_name = default_output.to_string();
-                                        info!(
-                                            "[DEVICE_RECOVERY] no output device running (attempt {}), starting default: {}",
-                                            output_recovery_backoff.attempts, device_name
-                                        );
-                                        match audio_manager.start_device(&default_output).await {
-                                            Ok(()) => {
-                                                failed_devices.remove(&device_name);
-                                                default_tracker.last_output =
-                                                    Some(device_name.clone());
-                                                output_recovery_backoff.reset();
-                                                info!(
-                                                    "[DEVICE_RECOVERY] output device restored, device={}", device_name
-                                                );
-                                            }
-                                            Err(e) => {
-                                                output_recovery_backoff.record_failure(false);
-                                                warn!(
-                                                    "[DEVICE_RECOVERY] failed to start output device {} (attempt {}, next retry in {}s): {}",
-                                                    device_name, output_recovery_backoff.attempts,
-                                                    output_recovery_backoff.next_delay_secs(), e
-                                                );
+                                        // Piggyback suspended the stable output for
+                                        // the meeting (the Meeting Tap rides a
+                                        // session stream). Starting it here would be
+                                        // silently no-op'd by the suspension guard,
+                                        // then mis-logged as "restored" with a
+                                        // backoff reset — a 2s log/reset storm. Skip
+                                        // just the recovery attempt this tick: no
+                                        // log, no reset (must NOT `continue`, which
+                                        // would skip the rest of the monitor pass
+                                        // incl. the piggyback sweep itself).
+                                        if audio_manager
+                                            .suspended_devices()
+                                            .contains(&device_name)
+                                        {
+                                            // leave backoff untouched
+                                        } else {
+                                            info!(
+                                                "[DEVICE_RECOVERY] no output device running (attempt {}), starting default: {}",
+                                                output_recovery_backoff.attempts, device_name
+                                            );
+                                            match audio_manager.start_device(&default_output).await {
+                                                Ok(()) => {
+                                                    failed_devices.remove(&device_name);
+                                                    default_tracker.last_output =
+                                                        Some(device_name.clone());
+                                                    output_recovery_backoff.reset();
+                                                    info!(
+                                                        "[DEVICE_RECOVERY] output device restored, device={}", device_name
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    output_recovery_backoff.record_failure(false);
+                                                    warn!(
+                                                        "[DEVICE_RECOVERY] failed to start output device {} (attempt {}, next retry in {}s): {}",
+                                                        device_name, output_recovery_backoff.attempts,
+                                                        output_recovery_backoff.next_delay_secs(), e
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -1608,18 +1712,42 @@ pub async fn start_device_monitor(
                 )
                 .await;
 
+                // Meeting piggyback: per-process tap + resolved mic during
+                // meetings (experimental flag). Owns its own fallback — every
+                // failure path lands on the stable capture. Pure decider in
+                // meeting_piggyback.rs; this call only applies side effects.
+                let piggyback_far_end_active = super::meeting_piggyback::run_meeting_piggyback_sweep(
+                    &audio_manager,
+                    &mut piggyback_state,
+                )
+                .await;
+
                 // Capture whichever render endpoint audio actually plays
                 // through, and notify if a meeting's speaker audio isn't
                 // reaching the pipeline. Inert outside Windows — see
-                // `windows_output_follow.rs`.
+                // `windows_output_follow.rs`. Skipped entirely while the
+                // piggyback tap is the far end (would double-capture).
                 super::windows_output_follow::run_output_follow_sweep(
+                    piggyback_far_end_active,
                     &audio_manager,
                     &mut output_follow_state,
                     &mut speaker_watchdog_state,
                 )
                 .await;
             }
-            sleep(Duration::from_secs(2)).await;
+            // Event-driven wake (macOS): while the piggyback sweep is engaged
+            // it registers CoreAudio property listeners (default input device;
+            // the meeting processes' input-device-list / is-running-input)
+            // that poke this Notify the instant anything changes — so a mic
+            // switch in Meet/Zoom is followed on the very next pass instead
+            // of up to a poll interval later. The 2s tick remains as the
+            // reconciliation fallback and is the only wake source on Windows.
+            // A wake that fires mid-pass is stored (single permit) and drains
+            // here immediately, so no event is ever lost to timing.
+            tokio::select! {
+                _ = sleep(Duration::from_secs(2)) => {}
+                _ = super::piggyback_listeners::sweep_wake_notified() => {}
+            }
         }
     }));
     Ok(())

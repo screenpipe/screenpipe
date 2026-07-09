@@ -23,6 +23,11 @@ use tokio::sync::Mutex as AsyncMutex;
 #[cfg(target_os = "macos")]
 pub const MACOS_OUTPUT_AUDIO_DEVICE_NAME: &str = "System Audio";
 
+/// Virtual output device representing the per-process meeting tap. Session-
+/// scoped: started by the piggyback sweep during meetings, never advertised in
+/// device lists, never persisted to enabled_devices.
+pub const MEETING_TAP_DEVICE_NAME: &str = "Meeting Tap";
+
 #[derive(OaSchema, Clone, Debug)]
 pub struct DeviceControl {
     pub is_running: bool,
@@ -1192,6 +1197,23 @@ mod resolve_audio_tests {
             &["MacBook Pro Microphone (input)".to_string()],
             false
         ));
+    }
+}
+
+#[cfg(test)]
+mod meeting_tap_device_tests {
+    use super::{parse_audio_device, AudioDevice, DeviceType, MEETING_TAP_DEVICE_NAME};
+
+    /// The Meeting Tap virtual output device name must round-trip through
+    /// `parse_audio_device` in its display form `"Meeting Tap (output)"`, so a
+    /// session device started by the piggyback sweep can be parsed back from its
+    /// string form everywhere the pipeline stringifies devices.
+    #[test]
+    fn meeting_tap_display_name_round_trips() {
+        assert_eq!(
+            parse_audio_device("Meeting Tap (output)").unwrap(),
+            AudioDevice::new(MEETING_TAP_DEVICE_NAME.to_string(), DeviceType::Output)
+        );
     }
 }
 

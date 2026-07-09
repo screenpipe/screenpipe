@@ -1348,18 +1348,80 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          notary_auth=(
+            --apple-id "$APPLE_ID"
+            --password "$APPLE_PASSWORD"
+            --team-id "$APPLE_TEAM_ID"
+          )
+
+          submit_for_notarization() {
+            local artifact="$1"
+            local artifact_name
+            artifact_name="$(basename "$artifact")"
+            local attempt submit_output submission_id wait_seconds
+
+            for attempt in 1 2 3; do
+              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/3)" >&2
+              if submit_output="$(xcrun notarytool submit "$artifact" "${notary_auth[@]}" 2>&1)"; then
+                printf '%s\n' "$submit_output" >&2
+                submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+                if [ -z "$submission_id" ]; then
+                  echo "notarytool submit succeeded but did not print a submission id" >&2
+                  return 1
+                fi
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              printf '%s\n' "$submit_output" >&2
+              submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+              if [ -n "$submission_id" ]; then
+                echo "notarytool submit exited non-zero after upload; waiting on existing submission ${submission_id}" >&2
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              if [ "$attempt" -eq 3 ]; then
+                echo "notarytool submit failed after ${attempt} attempts" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool submit failed before a submission id; retrying in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
+
+          wait_for_notarization() {
+            local submission_id="$1"
+            local attempt wait_seconds
+
+            for attempt in 1 2 3 4; do
+              echo "Waiting for notarization ${submission_id} (attempt ${attempt}/4)"
+              if xcrun notarytool wait "$submission_id" "${notary_auth[@]}" --timeout 15m; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq 4 ]; then
+                echo "notarytool wait failed after ${attempt} attempts for ${submission_id}" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool wait failed; retrying same submission in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
 
           echo "=== Notarizing and stapling DMGs ==="
           for dmg in "${BUNDLE_DIR}"/dmg/*.dmg; do
             if [ -f "$dmg" ]; then
               echo "Notarizing: $(basename "$dmg")"
-              xcrun notarytool submit "$dmg" \
-                --apple-id "$APPLE_ID" \
-                --password "$APPLE_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" \
-                --wait --timeout 15m
+              submission_id="$(submit_for_notarization "$dmg")"
+              wait_for_notarization "$submission_id"
 
               echo "Stapling: $(basename "$dmg")"
               xcrun stapler staple "$dmg"
@@ -1376,11 +1438,78 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           MACOS_DIR="${BUNDLE_DIR}/macos"
+          notary_auth=(
+            --apple-id "$APPLE_ID"
+            --password "$APPLE_PASSWORD"
+            --team-id "$APPLE_TEAM_ID"
+          )
+
+          submit_for_notarization() {
+            local artifact="$1"
+            local artifact_name
+            artifact_name="$(basename "$artifact")"
+            local attempt submit_output submission_id wait_seconds
+
+            for attempt in 1 2 3; do
+              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/3)" >&2
+              if submit_output="$(xcrun notarytool submit "$artifact" "${notary_auth[@]}" 2>&1)"; then
+                printf '%s\n' "$submit_output" >&2
+                submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+                if [ -z "$submission_id" ]; then
+                  echo "notarytool submit succeeded but did not print a submission id" >&2
+                  return 1
+                fi
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              printf '%s\n' "$submit_output" >&2
+              submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+              if [ -n "$submission_id" ]; then
+                echo "notarytool submit exited non-zero after upload; waiting on existing submission ${submission_id}" >&2
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              if [ "$attempt" -eq 3 ]; then
+                echo "notarytool submit failed after ${attempt} attempts" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool submit failed before a submission id; retrying in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
+
+          wait_for_notarization() {
+            local submission_id="$1"
+            local attempt wait_seconds
+
+            for attempt in 1 2 3 4; do
+              echo "Waiting for notarization ${submission_id} (attempt ${attempt}/4)"
+              if xcrun notarytool wait "$submission_id" "${notary_auth[@]}" --timeout 15m; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq 4 ]; then
+                echo "notarytool wait failed after ${attempt} attempts for ${submission_id}" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool wait failed; retrying same submission in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
 
           # Gatekeeper context:
           # The DMG is notarized + stapled above, so fresh installs are fine.
@@ -1409,11 +1538,8 @@ jobs:
             # notarytool only accepts flat archives; zip the .app for submission.
             APP_ZIP="${MACOS_DIR}/${APP_NAME}.notarize.zip"
             /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" "$APP_ZIP"
-            xcrun notarytool submit "$APP_ZIP" \
-              --apple-id "${{ secrets.APPLE_ID }}" \
-              --password "${{ secrets.APPLE_PASSWORD }}" \
-              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-              --wait --timeout 15m
+            submission_id="$(submit_for_notarization "$APP_ZIP")"
+            wait_for_notarization "$submission_id"
             rm -f "$APP_ZIP"
 
             xcrun stapler staple "$app"

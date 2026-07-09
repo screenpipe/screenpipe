@@ -111,7 +111,17 @@ mod platform {
             }
 
             let audio_object_id = Some(process.0 .0);
-            let audio_session_id = audio_session_id(&process);
+            // Deliberately NO synthesized audio_session_id on macOS: CoreAudio
+            // has no real session identity, and the previous synthesis
+            // (`coreaudio-process:{object}:input:{device uids}`) embedded the
+            // device set the process records from — so switching the mic
+            // inside the meeting app rotated the id, the meeting watcher's
+            // ProcessKey changed, and every mic switch ended the live meeting
+            // after the 20s grace and restarted it as a "new" one (tearing
+            // down capture each time). With `None`, ProcessKey falls back to
+            // the pid — the only identity that is stable across device
+            // switches. Windows keeps real WASAPI session GUIDs.
+            let audio_session_id = None;
             let pid = process.pid().ok().map(|pid| pid as i32);
             let bundle_id = process.bundle_id().ok().map(|s| s.to_string());
             let (owner_app_name, owner_bundle_id) = owner_metadata(pid);
@@ -146,40 +156,6 @@ mod platform {
         }
 
         Ok(out)
-    }
-
-    fn audio_session_id(process: &ca::Process) -> Option<String> {
-        let object_id = process.0 .0;
-        if object_id == 0 {
-            return None;
-        }
-
-        let mut input_devices: Vec<String> = process
-            .prop_vec::<ca::Device>(&ca::PropSelector::PROCESS_DEVICES.input_addr())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|device| !device.is_unknown())
-            .map(|device| {
-                device
-                    .uid()
-                    .ok()
-                    .map(|uid| uid.to_string())
-                    .filter(|uid| !uid.trim().is_empty())
-                    .unwrap_or_else(|| device.0 .0.to_string())
-            })
-            .collect();
-        input_devices.sort();
-        input_devices.dedup();
-
-        if input_devices.is_empty() {
-            Some(format!("coreaudio-process:{}", object_id))
-        } else {
-            Some(format!(
-                "coreaudio-process:{}:input:{}",
-                object_id,
-                input_devices.join(",")
-            ))
-        }
     }
 
     fn owner_metadata(pid: Option<i32>) -> (Option<String>, Option<String>) {
@@ -546,8 +522,15 @@ mod platform {
                     _ => continue,
                 };
 
-                // Globally-unique, lifetime-stable session id → drives engine
-                // session identity / stickiness (ProcessKey).
+                // WASAPI SessionInstanceIdentifier: unique while the session
+                // lives, but PER-ENDPOINT — when the app switches input
+                // devices its session lands on a different endpoint and this
+                // id ROTATES. It feeds ProcessKey identity, so that rotation
+                // used to re-key the engine's meeting session on every in-app
+                // mic switch (riding the ending grace into an end/restart
+                // pair); the platform-based native keep-alive (67645e665) is
+                // what holds meetings together across it. Do NOT treat this
+                // id as lifetime-stable process identity.
                 let session_instance = control2
                     .GetSessionInstanceIdentifier()
                     .ok()

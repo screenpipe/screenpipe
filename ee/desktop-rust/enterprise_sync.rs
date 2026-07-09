@@ -73,6 +73,11 @@ const UPLOAD_STALL_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 /// most ~twice a day instead of every tick.
 const AUTO_LOG_COOLDOWN: Duration = Duration::from_secs(12 * 60 * 60);
 
+/// Admin-triggered log collection must keep working while telemetry sync is in
+/// exponential backoff. Otherwise the machines we most need logs from can sit
+/// on the request for up to an hour.
+const LOG_REQUEST_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Default endpoint. Overridable via `SCREENPIPE_ENTERPRISE_INGEST_URL` for
 /// staging / on-prem.
 pub const DEFAULT_INGEST_URL: &str = "https://screenpipe.com/api/enterprise/ingest";
@@ -1435,6 +1440,24 @@ async fn fulfill_log_requests(
     Some(requested_at)
 }
 
+async fn run_log_request_loop(
+    cfg: EnterpriseSyncConfig,
+    http: reqwest::Client,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let mut last_log_req: Option<String> = None;
+
+    loop {
+        if let Some(handled) = fulfill_log_requests(&cfg, &http, last_log_req.as_deref()).await {
+            last_log_req = Some(handled);
+        }
+
+        if sleep_or_shutdown(LOG_REQUEST_INTERVAL, &mut shutdown).await {
+            break;
+        }
+    }
+}
+
 pub async fn run(
     cfg: EnterpriseSyncConfig,
     local: Arc<dyn LocalApiClient>,
@@ -1452,6 +1475,11 @@ pub async fn run(
 
     let mut cursor = Cursor::load(&cfg.cursor_path);
     let mut backoff = BACKOFF_INITIAL;
+    let log_request_loop = tokio::spawn(run_log_request_loop(
+        cfg.clone(),
+        http.clone(),
+        shutdown.clone(),
+    ));
 
     // Stalled-upload watchdog state. `last_auto_submit` is persisted (wall-clock)
     // so the cooldown survives app restarts; the rest is in-memory (a fresh start
@@ -1460,9 +1488,6 @@ pub async fn run(
     let mut last_data_upload: Option<std::time::Instant> = None;
     let mut saw_failure_since_data = false;
     let mut last_auto_submit: Option<std::time::SystemTime> = load_last_auto_submit(&cfg);
-    // In-session dedup for admin-triggered log collection (the server gate
-    // handles cross-session; this stops re-upload if an ack POST is lost).
-    let mut last_log_req: Option<String> = None;
 
     loop {
         let result = run_one_sync(&cfg, &mut cursor, local.as_ref(), &http).await;
@@ -1498,15 +1523,6 @@ pub async fn run(
             let now = std::time::SystemTime::now();
             save_last_auto_submit(&cfg, now);
             last_auto_submit = Some(now);
-        }
-
-        // Admin-triggered on-demand log collection. Runs every tick — including
-        // on devices that can't ingest (centralized-data-off / auth-rejected),
-        // which are exactly the ones an admin needs logs from. Independent of
-        // the webview, so it works while the app is unfocused / minimized /
-        // run-hidden.
-        if let Some(handled) = fulfill_log_requests(&cfg, &http, last_log_req.as_deref()).await {
-            last_log_req = Some(handled);
         }
 
         match result {
@@ -1582,6 +1598,7 @@ pub async fn run(
         }
     }
 
+    log_request_loop.abort();
     info!("enterprise sync: shutdown signal received, exiting cleanly");
 }
 

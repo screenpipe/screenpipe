@@ -326,7 +326,7 @@ pub fn find_running_meeting_apps(
                 // Check browser URL patterns — only if this is a browser
                 if !profile.app_identifiers.browser_url_patterns.is_empty()
                     && BROWSER_NAMES.iter().any(|b| name_lower.contains(b))
-                    && has_browser_meeting_url(pid, profile.app_identifiers.browser_url_patterns)
+                    && has_browser_meeting_url(pid, profile)
                 {
                     results.push(RunningMeetingApp {
                         pid,
@@ -344,14 +344,14 @@ pub fn find_running_meeting_apps(
 }
 
 /// Check if a browser process has a window whose AXDocument (page URL) or tab
-/// title matches a meeting URL pattern.
+/// title matches the profile.
 ///
-/// We prefer AXDocument (the actual page URL) over window title because window
-/// titles can contain arbitrary page content (e.g. Google Calendar showing
-/// "Join with Google Meet" text). Window titles are only checked for patterns
-/// that look like domain names (contain a dot) to avoid false positives from
-/// page content text like "Google Meet" appearing in calendar events.
-pub(crate) fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
+/// The per-window decision lives in `ax_window_matches_meeting` (pure, shared,
+/// tested): AXDocument URL first, then a verbatim-domain title check, then the
+/// anchored `browser_title_patterns` — the last only for windows exposing no
+/// page URL, so a Meet pop-out titled "Meet – abc-defg-hij" (Chrome exposes no
+/// AXDocument) is caught without letting arbitrary page text match.
+pub(crate) fn has_browser_meeting_url(pid: i32, profile: &MeetingDetectionProfile) -> bool {
     cidre::objc::ar_pool(|| -> bool {
         let ax_app = cidre::ax::UiElement::with_app_pid(pid);
         let _ = ax_app.set_messaging_timeout_secs(0.3);
@@ -365,36 +365,38 @@ pub(crate) fn has_browser_meeting_url(pid: i32, url_patterns: &[&str]) -> bool {
             let window = &windows[i];
             let _ = window.set_messaging_timeout_secs(0.2);
 
-            // Primary: check AXDocument attribute (actual page URL, most reliable).
-            // Match only against the scheme+host+path, never the query/fragment:
-            // a meeting URL carried as a `?redirect=…` / `#…` parameter on an
-            // unrelated page is not the page you're on, and matching it makes the
-            // browser a phantom meeting candidate (#4246).
-            if let Some(doc) = get_ax_string_attr(window, cidre::ax::attr::document()) {
-                let doc_for_match = url_without_query_or_fragment(&doc);
-                if url_patterns
-                    .iter()
-                    .any(|p| browser_url_pattern_matches(doc_for_match, p))
-                {
-                    return true;
-                }
-            }
-
-            // Fallback: check window title, but ONLY for domain-like patterns
-            // (containing a dot, e.g. "meet.google.com") to avoid matching
-            // page content like "Join with Google Meet" on calendar pages.
-            if let Some(title) = get_ax_string_attr(window, cidre::ax::attr::title()) {
-                if url_patterns
-                    .iter()
-                    .filter(|p| p.contains('.'))
-                    .any(|p| browser_url_pattern_matches(&title, p))
-                {
-                    return true;
-                }
+            let doc = get_ax_string_attr(window, cidre::ax::attr::document());
+            let title = get_ax_string_attr(window, cidre::ax::attr::title());
+            if ax_window_matches_meeting(doc.as_deref(), title.as_deref(), profile) {
+                return true;
             }
         }
 
         false
+    })
+}
+
+/// Titles of all AX windows of a process (best-effort, bounded timeouts).
+///
+/// Used by the meeting probe's Little Arc fallback: Little Arc windows expose
+/// neither AXDocument nor an AppleScript `windows` entry — their only AX
+/// footprint is a window title carrying the bare Meet meeting code.
+pub(crate) fn browser_window_titles(pid: i32) -> Vec<String> {
+    cidre::objc::ar_pool(|| -> Vec<String> {
+        let ax_app = cidre::ax::UiElement::with_app_pid(pid);
+        let _ = ax_app.set_messaging_timeout_secs(0.3);
+
+        let mut titles = Vec::new();
+        if let Ok(windows) = ax_app.children() {
+            for i in 0..windows.len() {
+                let window = &windows[i];
+                let _ = window.set_messaging_timeout_secs(0.2);
+                if let Some(title) = get_ax_string_attr(window, cidre::ax::attr::title()) {
+                    titles.push(title);
+                }
+            }
+        }
+        titles
     })
 }
 

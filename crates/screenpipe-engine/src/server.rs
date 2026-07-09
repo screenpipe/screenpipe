@@ -590,6 +590,12 @@ impl SCServer {
                     }
                 }
             });
+
+            // Permanent subscriber that forwards allowlisted piggyback telemetry
+            // (meeting summaries + mic capture health) from the in-process events
+            // bus to PostHog. Runs in both CLI and app-embedded modes since it's
+            // spawned here rather than gated behind an app websocket connection.
+            crate::piggyback_telemetry::spawn_piggyback_telemetry_forwarder();
         }
 
         // Use pre-set hot frame cache or create a new one, then warm from DB.

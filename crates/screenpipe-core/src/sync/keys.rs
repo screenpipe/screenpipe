@@ -18,6 +18,21 @@ use super::error::{SyncError, SyncResult};
 /// Domain separation constants for key derivation
 const DATA_KEY_DOMAIN: &[u8] = b"screenpipe-sync-data-key-v1";
 const SEARCH_KEY_DOMAIN: &[u8] = b"screenpipe-sync-search-key-v1";
+const AUTO_SYNC_PASSWORD_DOMAIN: &str = "screenpipe-cloud-sync-v1";
+
+/// Derive the auto-managed cloud sync password for an account.
+///
+/// This preserves the legacy web/desktop derivation (`sha256(account_id +
+/// "screenpipe-cloud-sync-v1")`) so devices signed into the same account can
+/// unlock the same cloud sync key without inventing a per-device random secret.
+pub fn derive_auto_sync_password(account_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(account_id.as_bytes());
+    hasher.update(AUTO_SYNC_PASSWORD_DOMAIN.as_bytes());
+    hex::encode(hasher.finalize())
+}
 
 /// The complete set of keys needed for sync operations.
 ///
@@ -241,6 +256,19 @@ impl ExistingUserKeyData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_auto_sync_password_is_stable() {
+        assert_eq!(
+            derive_auto_sync_password("user_123"),
+            derive_auto_sync_password("user_123")
+        );
+        assert_ne!(
+            derive_auto_sync_password("user_123"),
+            derive_auto_sync_password("user_456")
+        );
+        assert_eq!(derive_auto_sync_password("user_123").len(), 64);
+    }
 
     #[test]
     fn test_new_user_key_generation() {

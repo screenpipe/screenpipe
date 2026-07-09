@@ -29,6 +29,35 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Identity of the currently-detected meeting process, published by the
+/// watcher alongside the `set_v2_in_meeting(true)` boolean.
+///
+/// `pid: None` is a legal published state meaning "a meeting is active but
+/// the sensor that detected it can't identify the process" (ui_scan, a
+/// post-restart reattach, or a `BlockedByActive` outcome where a different,
+/// already-active meeting owns the mic). For DETECTED meetings consumers
+/// must fall back to the stable (non-per-process) capture path in that
+/// case — this is not an error condition. The exception is `manual: true`:
+/// manual meetings never carry a sensor pid, and the piggyback sweep
+/// derives its tap targets from the live mic-holder enumeration instead of
+/// riding the stable path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveMeeting {
+    /// Detected meeting process. None when the sensor can't know one
+    /// (ui_scan, post-restart reattach) — the piggyback layer falls back
+    /// to the stable capture path then, EXCEPT when `manual` is true: a
+    /// manual meeting's pid is always None, and the sweep derives its tap
+    /// targets from the live mic-holder enumeration instead (see `manual`).
+    pub pid: Option<i32>,
+    pub bundle_id: Option<String>,
+    /// The user started this meeting manually — no sensor attributed a
+    /// process to it, and none will. Consumers needing process identity
+    /// (the piggyback sweep) derive their own: for manual meetings the
+    /// sweep taps EVERY process currently holding a microphone instead of
+    /// riding the stable path like the other `pid: None` cases.
+    pub manual: bool,
+}
+
 /// Lightweight meeting state holder for the audio pipeline.
 ///
 /// The v2 meeting detection system (UI scanning in `screenpipe-engine`) owns
@@ -55,6 +84,9 @@ pub struct MeetingDetector {
     /// detection loop can wake immediately and scan instead of waiting out a
     /// slow idle interval.
     audio_onset: Notify,
+    /// Identity of the currently-detected meeting process, published by the
+    /// v2 watcher alongside `v2_override`. See [`ActiveMeeting`].
+    active_meeting: std::sync::Mutex<Option<ActiveMeeting>>,
 }
 
 impl Default for MeetingDetector {
@@ -71,12 +103,23 @@ impl MeetingDetector {
             last_output_chunk_ms: AtomicU64::new(0),
             last_input_chunk_ms: AtomicU64::new(0),
             audio_onset: Notify::new(),
+            active_meeting: std::sync::Mutex::new(None),
         }
     }
 
     /// Set the v2 override flag. Called by the v2 meeting detection loop.
     pub fn set_v2_in_meeting(&self, in_meeting: bool) {
         self.v2_override.store(in_meeting, Ordering::Relaxed);
+    }
+
+    /// Publish which meeting is active (pid/bundle when the sensor knows it).
+    /// Set alongside `set_v2_in_meeting(true)`; cleared on every end path.
+    pub fn set_active_meeting(&self, meeting: Option<ActiveMeeting>) {
+        *self.active_meeting.lock().unwrap() = meeting;
+    }
+
+    pub fn active_meeting(&self) -> Option<ActiveMeeting> {
+        self.active_meeting.lock().unwrap().clone()
     }
 
     /// Get the v2 override flag reference (AtomicBool) for direct access.
@@ -260,5 +303,19 @@ mod tests {
         detector.on_audio_activity(&crate::core::device::DeviceType::Input, true);
         detector.set_v2_in_meeting(false);
         assert!(detector.audio_active_within(45_000));
+    }
+
+    #[test]
+    fn active_meeting_set_get_clear() {
+        let d = MeetingDetector::new();
+        assert!(d.active_meeting().is_none());
+        d.set_active_meeting(Some(ActiveMeeting {
+            pid: Some(4242),
+            bundle_id: Some("us.zoom.xos".into()),
+            manual: false,
+        }));
+        assert_eq!(d.active_meeting().unwrap().pid, Some(4242));
+        d.set_active_meeting(None);
+        assert!(d.active_meeting().is_none());
     }
 }

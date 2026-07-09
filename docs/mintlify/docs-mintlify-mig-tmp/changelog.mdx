@@ -11,6 +11,11 @@ icon: "newspaper"
 
 ## week of july 6, 2026
 
+### new features
+
+- **meeting piggyback: capture the app's audio and the right mic (experimental)** — turn on **meeting piggyback (experimental)** in **settings → recording** and, when screenpipe detects a meeting, capture follows the meeting: the app's own audio via a per-process tap (no music or notification bleed from the rest of your system) plus the mic the meeting app actually opened (right device even when it isn't your OS default). Any failure — unsupported OS, mic loss, tap death — falls back to your normal capture with no gap. Off by default; macOS 14.4+ only for now (Windows toggle is visible but currently defers to the stable path until the loopback supervisor ships). See [meeting transcription](/meeting-transcription).
+- **mic capture-health notifications** — screenpipe now watches for the case where the meeting app is clearly recording but your mic is delivering pure silence, silently restarts the stream first, and only notifies you if the problem persists (≥2 min of app-active silence, at most one alert every 30 min, never for muted mics). See [meeting transcription](/meeting-transcription).
+
 ### bug fixes
 
 - **fixed multi-GB memory leak in audio recording** — long recording sessions no longer balloon in memory usage. Speaker diarization now reuses a cached segmentation model instead of reloading it per chunk, and the speaker cluster store is bounded so it can't grow without limit. Expect noticeably lower RAM after extended meetings and all-day capture. See [meeting transcription](/meeting-transcription).
