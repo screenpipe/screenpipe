@@ -221,7 +221,14 @@ function discoverApiKey(): string {
       "",
     ].join("\n"),
   );
-  captureMcpMessage("api key discovery failed", "warning", { phase: "api_key_discovery" });
+  // This is a user-side misconfiguration (no key set + no desktop app / CLI /
+  // local DB), not a screenpipe defect — the stderr hint above tells the user
+  // how to fix it. Log it as `info` for activation signal, and throttle to one
+  // event per machine per day so a respawning MCP host can't escalate it.
+  captureMcpMessage("api key discovery failed", "info", {
+    phase: "api_key_discovery",
+    throttleKey: "api_key_discovery",
+  });
   return "";
 }
 
