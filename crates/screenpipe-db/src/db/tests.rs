@@ -563,3 +563,144 @@ fn test_cluster_mixed_scenario() {
     assert_eq!(groups[1].group_size, 2); // Gmail group
     assert_eq!(groups[2].group_size, 1); // Maps group 2 (separate visit)
 }
+
+/// Synthetic accessibility-tree JSON with `n` nodes in depth-first
+/// pre-order, branching factor `branch`, capped at depth 12 (real AX trees
+/// rarely go deeper). Mirrors the field set real captures serialize —
+/// container nodes carry no text, leaves do — so the batch insert exercises
+/// the same `properties`/`text`/`parent_id` shapes as production.
+#[cfg(test)]
+fn synth_ax_tree_json(n: usize, branch: usize) -> String {
+    fn rec(nodes: &mut Vec<serde_json::Value>, target: usize, depth: u8, branch: usize) {
+        if nodes.len() >= target {
+            return;
+        }
+        let is_leaf = depth >= 12 || branch == 0;
+        nodes.push(serde_json::json!({
+            "role": if is_leaf { "AXStaticText" } else { "AXGroup" },
+            "text": if is_leaf { format!("leaf-{}", nodes.len()) } else { String::new() },
+            "depth": depth,
+        }));
+        if is_leaf {
+            return;
+        }
+        for _ in 0..branch {
+            if nodes.len() >= target {
+                return;
+            }
+            rec(nodes, target, depth + 1, branch);
+        }
+    }
+    let mut nodes = Vec::with_capacity(n);
+    while nodes.len() < n {
+        rec(&mut nodes, n, 0, branch);
+    }
+    serde_json::to_string(&nodes).unwrap()
+}
+
+#[cfg(test)]
+async fn seed_frame_for_elements(db: &DatabaseManager) -> i64 {
+    sqlx::query("INSERT INTO video_chunks (file_path, device_name) VALUES ('/tmp/x.mp4', 'dev')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query_scalar(
+        "INSERT INTO frames (video_chunk_id, offset_index, timestamp) \
+         VALUES (1, 0, '2026-07-09T00:00:00Z') RETURNING id",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap()
+}
+
+/// Correctness: the batched insert must reproduce the exact tree shape
+/// (parent/child links, depth, sort_order) the old per-row
+/// `INSERT ... RETURNING id` path produced, including across bulk-chunk
+/// boundaries (chunk size is 70 — 200 nodes spans three flushes).
+#[tokio::test]
+async fn ax_bulk_insert_preserves_tree_shape_across_chunks() {
+    for n in [1usize, 69, 70, 71, 200, 574] {
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let frame_id = seed_frame_for_elements(&db).await;
+        let tree_json = synth_ax_tree_json(n, 4);
+
+        let mut conn = db.pool.acquire().await.unwrap();
+        DatabaseManager::insert_accessibility_elements(&mut conn, frame_id, &tree_json).await;
+        drop(conn);
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM elements WHERE frame_id = ?1")
+            .bind(frame_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count as usize, n, "row count mismatch for n={}", n);
+
+        // Every non-root row's parent_id must point at a row exactly one
+        // depth shallower that was already inserted (smaller id) — the
+        // FK would have already rejected forward references, but we also
+        // check depth semantics match the source tree.
+        let rows: Vec<(i64, Option<i64>, i32, i32)> = sqlx::query_as(
+            "SELECT id, parent_id, depth, sort_order FROM elements \
+             WHERE frame_id = ?1 ORDER BY sort_order ASC",
+        )
+        .bind(frame_id)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), n);
+        for (i, (id, parent_id, _depth, sort_order)) in rows.iter().enumerate() {
+            assert_eq!(
+                *sort_order, i as i32,
+                "sort_order mismatch for n={} idx={}",
+                n, i
+            );
+            if let Some(pid) = parent_id {
+                assert!(
+                    *pid < *id,
+                    "parent id must precede child id for n={} idx={}",
+                    n,
+                    i
+                );
+            }
+        }
+    }
+}
+
+/// Measures wall-clock time of the batched accessibility-element insert
+/// across realistic tree sizes. Not a pass/fail perf gate (CI hardware
+/// varies too much for a stable threshold) — run with
+/// `cargo test -p screenpipe-db --release -- --ignored --nocapture perf_ax_bulk_insert`
+/// to see the numbers.
+#[tokio::test]
+#[ignore = "manual perf measurement, see doc comment"]
+async fn perf_ax_bulk_insert_measurement() {
+    for n in [50usize, 200, 574, 2000, 5000] {
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let frame_id = seed_frame_for_elements(&db).await;
+        let tree_json = synth_ax_tree_json(n, 4);
+        let mut conn = db.pool.acquire().await.unwrap();
+
+        let start = std::time::Instant::now();
+        DatabaseManager::insert_accessibility_elements(&mut conn, frame_id, &tree_json).await;
+        let elapsed = start.elapsed();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM elements WHERE frame_id = ?1")
+            .bind(frame_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count as usize, n);
+
+        println!(
+            "n={:<5} elapsed={:>8.3}ms  ({:.3}us/node)",
+            n,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_secs_f64() * 1_000_000.0 / n as f64
+        );
+    }
+}

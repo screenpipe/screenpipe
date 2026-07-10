@@ -36,14 +36,39 @@ pub async fn get_or_download_model(model_type: PyannoteModel) -> Result<LoadedMo
     get_or_download_model_with_retries(model_type, MAX_RECOVERY_RETRIES).await
 }
 
+/// Ensure the model file is on disk without building an ORT session for it.
+///
+/// Callers that only want the file warmed in cache (e.g. main.rs's opportunistic
+/// boot-time pre-download) must use this instead of `get_or_download_model` —
+/// that one unconditionally calls `create_session`, which is a real CPU-bound
+/// ONNX Runtime graph load/optimize, not just a disk check. A pre-download call
+/// that builds (and immediately discards) a session competes for CPU with the
+/// *real* session build that `SegmentationManager`/`EmbeddingExtractor` does
+/// moments later on the same file, and on a CPU-constrained host that
+/// self-inflicted contention is enough to trip `ORT_INIT_TIMEOUT` on both sides
+/// (observed on GitHub's `macos-15-intel` runner: concurrent pre-download +
+/// on-demand session builds for the same model pushed session build time from
+/// the normal sub-second range past the 30s watchdog).
+pub async fn ensure_model_file(model_type: PyannoteModel) -> Result<PathBuf> {
+    let (url, filename, model_path_lock, downloading_flag) = model_state(model_type);
+    let cache_dir = get_cache_dir()?;
+    let downloader = ModelDownloader::new(
+        url.to_string(),
+        filename.to_string(),
+        cache_dir,
+        downloading_flag,
+        model_path_lock,
+    );
+    downloader.ensure_model_available().await
+}
+
 async fn get_or_download_model_with_retries(
     model_type: PyannoteModel,
     max_retries: u8,
 ) -> Result<LoadedModel> {
     let mut retry_count = 0;
     loop {
-        let (url, filename, model_path_lock, downloading_flag) = model_state(model_type);
-        let cache_dir = get_cache_dir()?;
+        let (_, filename, model_path_lock, _) = model_state(model_type);
 
         {
             let mut cached = model_path_lock.lock().await;
@@ -58,14 +83,7 @@ async fn get_or_download_model_with_retries(
             }
         }
 
-        let downloader = ModelDownloader::new(
-            url.to_string(),
-            filename.to_string(),
-            cache_dir,
-            downloading_flag,
-            model_path_lock,
-        );
-        let path = downloader.ensure_model_available().await?;
+        let path = ensure_model_file(model_type).await?;
 
         match create_session(&path) {
             Ok(session) => return Ok(LoadedModel { path, session }),

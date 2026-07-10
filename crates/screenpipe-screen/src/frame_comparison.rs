@@ -177,6 +177,9 @@ impl FrameComparer {
     /// * `0.0 - 1.0` - Difference score (higher = more different)
     /// * `1.0` - First frame (no previous to compare) or completely different
     pub fn compare(&mut self, current_image: &DynamicImage) -> f64 {
+        // Definitively-background compute (downscale + hash + structural
+        // compare): yield to the user's foreground apps while it runs (#4849).
+        let _dip = screenpipe_core::thread_priority::BackgroundWorkDip::new();
         self.comparison_count += 1;
 
         // Downscale once — shared between hash and comparison

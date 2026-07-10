@@ -145,6 +145,11 @@ impl AudioStream {
         #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] use_coreaudio_tap: bool,
         #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] windows_input_aec: bool,
         #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] macos_input_vpio: bool,
+        #[cfg_attr(
+            not(any(target_os = "macos", target_os = "windows")),
+            allow(unused_variables)
+        )]
+        tap_pids: Option<Vec<i32>>,
     ) -> Result<Self> {
         let (tx, _) = broadcast::channel::<Vec<f32>>(1000);
         let tx_clone = tx.clone();
@@ -184,7 +189,37 @@ impl AudioStream {
             #[cfg(not(target_os = "macos"))]
             let use_process_tap = false;
 
-            if use_process_tap {
+            // Per-process meeting tap: virtual device backed by
+            // spawn_process_tap_capture_for_pids. No inline fallback here — the
+            // piggyback sweep owns the fallback decision (it starts the stable
+            // global path instead when this errors), so a failure must surface
+            // as Err, not silently degrade into misattributed audio.
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let meeting_tap_pids = tap_pids.filter(|_| {
+                device.device_type == super::device::DeviceType::Output
+                    && device.name == super::device::MEETING_TAP_DEVICE_NAME
+            });
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let meeting_tap_pids: Option<Vec<i32>> = None;
+
+            if let Some(pids) = meeting_tap_pids {
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                {
+                    let (config, thread) = super::process_tap::spawn_process_tap_capture_for_pids(
+                        pids,
+                        tx.clone(),
+                        is_running.clone(),
+                        is_disconnected.clone(),
+                    )?;
+                    drop(stream_control_rx);
+                    // Process Tap backend → not SCK-backed.
+                    (config, thread, false)
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                {
+                    unreachable!()
+                }
+            } else if use_process_tap {
                 #[cfg(target_os = "macos")]
                 {
                     match super::process_tap::spawn_process_tap_capture(
@@ -1037,6 +1072,42 @@ mod from_wav_tests {
 
         // stop() must be a no-op clean shutdown for wav-backed streams.
         stream.stop().await.expect("stop");
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+mod meeting_tap_stream_tests {
+    use super::*;
+    use crate::core::device::DeviceType;
+
+    /// Live: the Meeting Tap virtual output device builds a working stream when
+    /// pointed at a live pid (our own process). Self-skips when the process tap
+    /// is unavailable (macOS < 14.4, or Windows below the loopback build floor),
+    /// mirroring the process_tap live tests. Proves the `tap_pids` arm in
+    /// `from_device` wires through to `spawn_process_tap_capture_for_pids`.
+    #[tokio::test]
+    async fn meeting_tap_stream_builds_for_own_pid() {
+        if !crate::core::process_tap::is_process_tap_available() {
+            eprintln!("skipping: process tap unavailable");
+            return;
+        }
+        let device = Arc::new(AudioDevice::new(
+            crate::core::device::MEETING_TAP_DEVICE_NAME.to_string(),
+            DeviceType::Output,
+        ));
+        let stream = AudioStream::from_device(
+            device,
+            Arc::new(AtomicBool::new(true)),
+            false,
+            false,
+            false,
+            Some(vec![std::process::id() as i32]),
+        )
+        .await
+        .expect("meeting tap stream should build for a live pid");
+        // `AudioStream::stop` takes no argument (see `from_wav_emits_chunks`); it
+        // flips is_disconnected and joins/aborts the tap thread.
+        stream.stop().await.expect("stop meeting tap stream");
     }
 }
 

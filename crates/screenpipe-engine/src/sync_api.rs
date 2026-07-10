@@ -14,9 +14,14 @@ use axum::{
     http::StatusCode,
     response::Json as JsonResponse,
 };
+use base64::{
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{
-    BlobType, SyncClientConfig, SyncManager, SyncService, SyncServiceConfig, SyncServiceHandle,
+    derive_auto_sync_password, BlobType, SyncClientConfig, SyncManager, SyncService,
+    SyncServiceConfig, SyncServiceHandle,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -26,7 +31,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::server::AppState;
 use crate::sync_provider::ScreenpipeSyncProvider;
-pub use crate::sync_provider::SyncChunk;
 
 // ============================================================================
 // Runtime Sync State
@@ -49,9 +53,8 @@ pub struct SyncRuntimeState {
     /// Cursor for downloads — only fetch blobs newer than this
     pub last_download_at: Arc<RwLock<Option<String>>>,
     /// Whether the OCR/Transcripts/Accessibility upload service is active.
-    /// `false` for runtimes started by the lazy connection-sync path (no screen
-    /// data egress); flipped to `true` when an explicit `/sync/init` upgrades a
-    /// connection-only runtime to full data sync.
+    /// Kept false for lazy connection/memory sync; the removed Storage
+    /// data-sync endpoint no longer flips this on.
     pub blob_upload_enabled: Arc<RwLock<bool>>,
 }
 
@@ -61,6 +64,15 @@ pub type SyncState = Arc<RwLock<Option<SyncRuntimeState>>>;
 /// Create a new empty sync state container
 pub fn new_sync_state() -> SyncState {
     Arc::new(RwLock::new(None))
+}
+
+fn cloud_data_sync_removed_response() -> (StatusCode, JsonResponse<Value>) {
+    (
+        StatusCode::GONE,
+        JsonResponse(json!({
+            "error": "cloud data sync has been removed from Storage settings"
+        })),
+    )
 }
 
 // ============================================================================
@@ -88,15 +100,13 @@ pub struct SyncInitResponse {
     pub machine_id: String,
 }
 
-/// Initialize sync at runtime with credentials.
+/// Removed Storage data-sync endpoint.
 #[oasgen]
 pub async fn sync_init(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<SyncInitRequest>,
+    State(_state): State<Arc<AppState>>,
+    Json(_request): Json<SyncInitRequest>,
 ) -> Result<JsonResponse<SyncInitResponse>, (StatusCode, JsonResponse<Value>)> {
-    sync_init_inner(state, request, true)
-        .await
-        .map(JsonResponse)
+    Err(cloud_data_sync_removed_response())
 }
 
 /// Build the sync runtime (manager + background upload/download/connection/
@@ -108,46 +118,23 @@ pub async fn sync_init(
 /// itself instead of returning "sync not initialized".
 ///
 /// `blob_upload` controls whether the OCR/Transcripts/Accessibility upload
-/// service runs. The `/sync/init` path (explicit data-sync intent) passes
-/// `true`; the lazy connection-sync path passes `false`, so enabling credential
-/// sync never starts uploading screen data. A later explicit `/sync/init`
-/// upgrades a connection-only runtime in place — see the already-initialized
-/// branch below.
+/// service runs. The lazy connection-sync path passes `false`, so enabling
+/// credential sync never starts uploading screen data. Storage data sync has
+/// been removed, so attempts to pass `true` are rejected.
 async fn sync_init_inner(
     state: Arc<AppState>,
     request: SyncInitRequest,
     blob_upload: bool,
 ) -> Result<SyncInitResponse, (StatusCode, JsonResponse<Value>)> {
-    // Already initialized? Either no-op (409) or, when an explicit /sync/init
-    // asks for blob upload and the live runtime is connection-only (started by
-    // the lazy path with upload off), upgrade it in place instead of erroring.
+    if blob_upload {
+        return Err(cloud_data_sync_removed_response());
+    }
+
+    // Already initialized? Treat as a no-op conflict. Storage data sync can no
+    // longer upgrade a connection-only runtime into a blob-uploading runtime.
     {
         let sync_state = state.sync_state.read().await;
-        if let Some(rt) = sync_state.as_ref() {
-            let already_uploading = *rt.blob_upload_enabled.read().await;
-            if blob_upload && !already_uploading {
-                info!("sync: upgrading connection-only runtime to full blob upload");
-                *rt.blob_upload_enabled.write().await = true;
-                let cfg = SyncServiceConfig {
-                    enabled: true,
-                    sync_interval_secs: request.sync_interval_secs.unwrap_or(300),
-                    sync_types: vec![
-                        BlobType::Ocr,
-                        BlobType::Transcripts,
-                        BlobType::Accessibility,
-                    ],
-                    max_blobs_per_cycle: 10,
-                    sync_on_startup: true,
-                };
-                let _ = rt.service_handle.update_config(cfg).await;
-                let _ = rt.service_handle.resume().await;
-                let _ = rt.service_handle.sync_now().await;
-                return Ok(SyncInitResponse {
-                    success: true,
-                    is_new_user: false,
-                    machine_id: rt.machine_id.clone(),
-                });
-            }
+        if sync_state.as_ref().is_some() {
             return Err((
                 StatusCode::CONFLICT,
                 JsonResponse(json!({"error": "sync already initialized"})),
@@ -187,7 +174,7 @@ async fn sync_init_inner(
         error!("failed to initialize sync: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            JsonResponse(json!({"error": format!("failed to initialize sync: {}", e)})),
+            JsonResponse(json!({"error": format_sync_init_error_message(&e.to_string())})),
         )
     })?;
 
@@ -474,20 +461,60 @@ async fn sync_init_inner(
 /// `/sync/init` path and the engine-driven [`ensure_sync_runtime`] path.
 const SYNC_MASTER_PASSWORD_KEY: &str = "sync.master_password";
 
-/// Generate a strong random password (256-bit, hex-encoded) used to derive the
-/// sync master key. Uses the sync crypto RNG so we add no new dependency.
-fn generate_sync_password() -> String {
-    let a = screenpipe_core::sync::generate_salt();
-    let b = screenpipe_core::sync::generate_salt();
-    a.iter()
-        .chain(b.iter())
-        .map(|byte| format!("{:02x}", byte))
-        .collect()
+/// Extract the Clerk account id from the unsigned JWT payload.
+///
+/// This is only a stable, non-secret account identifier for deriving the
+/// app-managed sync password. Cloud API requests still authenticate the token
+/// server-side.
+fn jwt_subject(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| URL_SAFE.decode(payload))
+        .ok()?;
+    let json: Value = serde_json::from_slice(&decoded).ok()?;
+    json.get("sub")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn auto_sync_password_from_token(token: &str) -> Option<String> {
+    jwt_subject(token).map(|subject| derive_auto_sync_password(&subject))
+}
+
+fn sync_init_error_text(err: &(StatusCode, JsonResponse<Value>)) -> Option<&str> {
+    err.1 .0.get("error").and_then(Value::as_str)
+}
+
+const SYNC_ACCOUNT_KEY_MISMATCH_MESSAGE: &str = concat!(
+    "failed to initialize sync: this account has existing cloud sync data encrypted ",
+    "with an older device-local key; open screenpipe on a device where sync still ",
+    "works and reset account sync from that device"
+);
+
+fn is_sync_password_decrypt_message(message: &str) -> bool {
+    message.contains("decryption failed (authentication error)")
+        || message.contains("aead::Error")
+        || message.contains("does not match this account's existing cloud sync key")
+        || message.contains("older device-local key")
+}
+
+fn format_sync_init_error_message(message: &str) -> String {
+    if is_sync_password_decrypt_message(message) {
+        SYNC_ACCOUNT_KEY_MISMATCH_MESSAGE.to_string()
+    } else {
+        format!("failed to initialize sync: {}", message)
+    }
+}
+
+fn is_sync_password_decrypt_error(err: &(StatusCode, JsonResponse<Value>)) -> bool {
+    sync_init_error_text(err).is_some_and(is_sync_password_decrypt_message)
 }
 
 /// Lazily initialize the sync runtime if it isn't already running.
 ///
-/// Connection- and memory-sync endpoints used to hard-fail with
+/// Connection-, pipe-, and memory-sync endpoints used to hard-fail with
 /// "sync not initialized" whenever the app hadn't already POSTed `/sync/init`
 /// — e.g. when the user enabled "connection sync across devices" from the
 /// account page, which flips a setting and calls `/sync/connections/*` but
@@ -547,45 +574,73 @@ pub async fn ensure_sync_runtime(
         Ok(Some(bytes)) => String::from_utf8(bytes).unwrap_or_default(),
         _ => String::new(),
     };
-    let password = if existing.is_empty() {
-        let generated = generate_sync_password();
-        if let Err(e) = secret_store
-            .set(SYNC_MASTER_PASSWORD_KEY, generated.as_bytes())
-            .await
-        {
-            error!("failed to persist sync master password: {}", e);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": "failed to persist sync password"})),
-            ));
+
+    let auto_password = auto_sync_password_from_token(&token);
+    if existing.is_empty() && auto_password.is_none() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            JsonResponse(json!({
+                "error": "cloud token is missing an account id; cannot initialize sync"
+            })),
+        ));
+    }
+
+    let mut candidates: Vec<(String, bool, &'static str)> = Vec::new();
+    if !existing.is_empty() {
+        candidates.push((existing.clone(), false, "stored legacy sync key"));
+    }
+    if let Some(auto_password) = auto_password {
+        if existing != auto_password {
+            candidates.push((auto_password, true, "account-managed sync key"));
         }
-        generated
-    } else {
-        existing
-    };
+    }
 
     let machine_id = screenpipe_core::sync::get_or_create_machine_id();
-
-    let request = SyncInitRequest {
-        token,
-        password,
-        machine_id: Some(machine_id),
-        sync_interval_secs: Some(300),
-    };
+    let mut last_password_error: Option<(StatusCode, JsonResponse<Value>)> = None;
 
     // blob_upload = false: connection/credential sync only. Enabling credential
     // sync must never start uploading OCR/transcripts/accessibility to the
-    // cloud — that requires an explicit /sync/init (data-sync intent), which
-    // upgrades this runtime in place.
-    match sync_init_inner(state.clone(), request, false).await {
-        Ok(_) => {
-            info!("sync auto-initialized (lazy) for connection/memory sync");
-            Ok(())
+    // cloud.
+    for (password, persist_on_success, source) in candidates {
+        let request = SyncInitRequest {
+            token: token.clone(),
+            password: password.clone(),
+            machine_id: Some(machine_id.clone()),
+            sync_interval_secs: Some(300),
+        };
+
+        match sync_init_inner(state.clone(), request, false).await {
+            Ok(_) => {
+                if persist_on_success {
+                    if let Err(e) = secret_store
+                        .set(SYNC_MASTER_PASSWORD_KEY, password.as_bytes())
+                        .await
+                    {
+                        warn!("failed to persist account-managed sync key: {}", e);
+                    }
+                }
+                info!(
+                    "sync auto-initialized (lazy) for connection/pipe/memory sync via {}",
+                    source
+                );
+                return Ok(());
+            }
+            // A concurrent caller initialized first — fine.
+            Err((StatusCode::CONFLICT, _)) => return Ok(()),
+            Err(e) if is_sync_password_decrypt_error(&e) => {
+                warn!("sync lazy init: {} could not unlock cloud keys", source);
+                last_password_error = Some(e);
+            }
+            Err(e) => return Err(e),
         }
-        // A concurrent caller initialized first — fine.
-        Err((StatusCode::CONFLICT, _)) => Ok(()),
-        Err(e) => Err(e),
     }
+
+    Err(last_password_error.unwrap_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": "failed to initialize sync"})),
+        )
+    }))
 }
 
 /// Response for sync status.
@@ -609,12 +664,13 @@ pub async fn sync_status(
     match sync_state.as_ref() {
         Some(runtime) => {
             let is_syncing = *runtime.is_syncing.read().await;
+            let enabled = *runtime.blob_upload_enabled.read().await;
             let last_sync = runtime.last_sync.read().await.clone();
             let last_error = runtime.last_error.read().await.clone();
             let last_download_at = runtime.last_download_at.read().await.clone();
 
             Ok(JsonResponse(SyncStatusResponse {
-                enabled: true,
+                enabled,
                 is_syncing,
                 last_sync,
                 last_error,
@@ -636,28 +692,9 @@ pub async fn sync_status(
 /// Trigger an immediate sync.
 #[oasgen]
 pub async fn sync_trigger(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
-    let sync_state = state.sync_state.read().await;
-
-    match sync_state.as_ref() {
-        Some(runtime) => {
-            runtime.service_handle.sync_now().await.map_err(|e| {
-                error!("failed to trigger sync: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    JsonResponse(json!({"error": format!("failed to trigger sync: {}", e)})),
-                )
-            })?;
-            Ok(JsonResponse(
-                json!({"success": true, "message": "sync triggered"}),
-            ))
-        }
-        None => Err((
-            StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "sync not initialized"})),
-        )),
-    }
+    Err(cloud_data_sync_removed_response())
 }
 
 /// Lock sync (stop service and clear state).
@@ -687,16 +724,8 @@ pub async fn sync_lock(
 }
 
 /// Request to download data from other devices.
-#[derive(Debug, Deserialize, OaSchema)]
-pub struct SyncDownloadRequest {
-    /// Time range in hours to download (default: 24)
-    #[serde(default = "default_hours")]
-    pub hours: u32,
-}
-
-fn default_hours() -> u32 {
-    24
-}
+#[derive(Debug, Default, Deserialize, OaSchema)]
+pub struct SyncDownloadRequest {}
 
 /// Response from download operation.
 #[derive(Debug, Serialize, Deserialize, OaSchema)]
@@ -709,95 +738,10 @@ pub struct SyncDownloadResponse {
 /// Download and import data from other devices.
 #[oasgen]
 pub async fn sync_download(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<SyncDownloadRequest>,
+    State(_state): State<Arc<AppState>>,
+    Json(_request): Json<SyncDownloadRequest>,
 ) -> Result<JsonResponse<SyncDownloadResponse>, (StatusCode, JsonResponse<Value>)> {
-    let sync_state = state.sync_state.read().await;
-
-    let runtime = sync_state.as_ref().ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "sync not initialized"})),
-        )
-    })?;
-
-    // Calculate time range
-    let end = chrono::Utc::now();
-    let start = end - chrono::Duration::hours(request.hours as i64);
-
-    // Download blobs from cloud
-    let blobs = runtime
-        .manager
-        .download_by_time_range(
-            Some(start.to_rfc3339()),
-            Some(end.to_rfc3339()),
-            None,
-            Some(100),
-        )
-        .await
-        .map_err(|e| {
-            error!("failed to download blobs: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": format!("failed to download: {}", e)})),
-            )
-        })?;
-
-    let blobs_downloaded = blobs.len();
-    let mut records_imported = 0;
-
-    // Import each blob
-    let provider = ScreenpipeSyncProvider::new(state.db.clone(), runtime.machine_id.clone());
-
-    for blob in blobs {
-        if blob.blob_type == BlobType::ConnectionConfig {
-            continue;
-        }
-        // Deserialize the chunk
-        let chunk: SyncChunk = match serde_json::from_slice(&blob.data) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("failed to deserialize chunk: {}", e);
-                continue;
-            }
-        };
-
-        // Schema version guard
-        if chunk.schema_version > crate::sync_provider::SCHEMA_VERSION {
-            warn!(
-                "sync download: skipping chunk with schema_version {} (local: {})",
-                chunk.schema_version,
-                crate::sync_provider::SCHEMA_VERSION
-            );
-            continue;
-        }
-
-        // Import it
-        match provider.import_chunk(&chunk).await {
-            Ok(result) => {
-                records_imported += result.imported_frames
-                    + result.imported_ocr
-                    + result.imported_transcriptions
-                    + result.imported_accessibility
-                    + result.imported_ui_events;
-            }
-            Err(e) => {
-                error!("failed to import chunk: {}", e);
-                // Continue with other chunks
-            }
-        }
-    }
-
-    info!(
-        "sync download complete: {} blobs, {} records imported",
-        blobs_downloaded, records_imported
-    );
-
-    Ok(JsonResponse(SyncDownloadResponse {
-        success: true,
-        blobs_downloaded,
-        records_imported,
-    }))
+    Err(cloud_data_sync_removed_response())
 }
 
 // ============================================================================
@@ -1099,6 +1043,8 @@ pub async fn sync_pipes_push(
 ) -> Result<JsonResponse<PipeSyncResponse>, (StatusCode, JsonResponse<Value>)> {
     use screenpipe_core::pipes::sync::*;
 
+    ensure_sync_runtime(&state).await?;
+
     let sync_state = state.sync_state.read().await;
     let runtime = sync_state.as_ref().ok_or_else(|| {
         (
@@ -1155,6 +1101,8 @@ pub async fn sync_pipes_pull(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<PipeSyncResponse>, (StatusCode, JsonResponse<Value>)> {
     use screenpipe_core::pipes::sync::*;
+
+    ensure_sync_runtime(&state).await?;
 
     let sync_state = state.sync_state.read().await;
     let runtime = sync_state.as_ref().ok_or_else(|| {
@@ -1672,6 +1620,8 @@ pub async fn sync_memories_push(
 ) -> Result<JsonResponse<MemoriesSyncResponse>, (StatusCode, JsonResponse<Value>)> {
     use screenpipe_core::memories::sync::*;
 
+    ensure_sync_runtime(&state).await?;
+
     let sync_state = state.sync_state.read().await;
     let runtime = sync_state.as_ref().ok_or_else(|| {
         (
@@ -1708,6 +1658,8 @@ pub async fn sync_memories_pull(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<MemoriesSyncResponse>, (StatusCode, JsonResponse<Value>)> {
     use screenpipe_core::memories::sync::*;
+
+    ensure_sync_runtime(&state).await?;
 
     let sync_state = state.sync_state.read().await;
     let runtime = sync_state.as_ref().ok_or_else(|| {
@@ -1817,14 +1769,27 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_sync_password() {
-        let a = generate_sync_password();
-        let b = generate_sync_password();
-        // Two SALT_SIZE (32-byte) salts hex-encoded => 128 chars, all hex.
-        assert_eq!(a.len(), 128);
-        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
-        // Random: two generations must not collide.
-        assert_ne!(a, b);
+    fn test_auto_sync_password_from_jwt_subject() {
+        let token = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyXzEyMyJ9.sig";
+
+        assert_eq!(jwt_subject(token).as_deref(), Some("user_123"));
+        assert_eq!(
+            auto_sync_password_from_token(token).as_deref(),
+            Some(derive_auto_sync_password("user_123").as_str())
+        );
+    }
+
+    #[test]
+    fn test_auto_sync_password_requires_jwt_subject() {
+        assert_eq!(jwt_subject("not-a-jwt"), None);
+        assert_eq!(auto_sync_password_from_token("not-a-jwt"), None);
+    }
+
+    #[test]
+    fn test_sync_decrypt_error_does_not_ask_for_password() {
+        let message = format_sync_init_error_message("crypto error: aead::Error");
+        assert!(message.contains("older device-local key"));
+        assert!(!message.contains("enter the password"));
     }
 
     #[test]
@@ -1947,10 +1912,9 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_download_request_defaults() {
-        let json = r#"{}"#;
-        let request: SyncDownloadRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(request.hours, 24); // Default value
+    fn test_sync_download_request_accepts_legacy_body() {
+        let json = r#"{"hours":24}"#;
+        let _request: SyncDownloadRequest = serde_json::from_str(json).unwrap();
     }
 
     #[test]

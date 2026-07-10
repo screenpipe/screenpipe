@@ -53,13 +53,15 @@ export function countCacheBreakpoints(body: any): number {
 /**
  * Inject prompt-caching breakpoints for clients that don't manage caching
  * themselves (the Agent SDK sets its own markers — those pass through
- * untouched). Two markers:
+ * untouched). Three markers:
  *
- * 1. System prompt → caches tools + system across requests. Unconditional on
+ * 1. Last tool definition → caches stable tool schemas even when a request has
+ *    no system prompt or when the system prompt changes per request.
+ * 2. System prompt → caches tools + system across requests. Unconditional on
  *    size: below-minimum prefixes are a free no-op, and the old 4096-char
  *    gate undershot the real model minimums anyway (4096 TOKENS on Opus 4.x
  *    and Haiku 4.5).
- * 2. Last cacheable block of the last message → caches the whole conversation
+ * 3. Last cacheable block of the last message → caches the whole conversation
  *    prefix, so each turn of an agentic loop re-reads history at ~0.1x input
  *    price instead of full price.
  *
@@ -68,7 +70,24 @@ export function countCacheBreakpoints(body: any): number {
 export function injectCacheBreakpoints(body: any): void {
 	let breakpoints = countCacheBreakpoints(body);
 
-	// 1. System prompt marker
+	// 1. Tool schema marker. Anthropic renders tools before system/messages;
+	// this gives large stable tool sets their own cache entry and keeps them
+	// cacheable even if the system prompt is absent or user-specific.
+	if (Array.isArray(body.tools) && breakpoints < 4) {
+		const hasToolMarker = body.tools.some((tool: any) => tool?.cache_control);
+		if (!hasToolMarker) {
+			for (let t = body.tools.length - 1; t >= 0; t--) {
+				const tool = body.tools[t];
+				if (tool && typeof tool === 'object') {
+					body.tools[t] = { ...tool, cache_control: { type: 'ephemeral' } };
+					breakpoints++;
+					break;
+				}
+			}
+		}
+	}
+
+	// 2. System prompt marker
 	if (body.system && breakpoints < 4) {
 		if (typeof body.system === 'string' && body.system.length > 0) {
 			body.system = [{ type: 'text', text: body.system, cache_control: { type: 'ephemeral' } }];
@@ -82,7 +101,7 @@ export function injectCacheBreakpoints(body: any): void {
 		}
 	}
 
-	// 2. Conversation-history marker — only when the client set none in
+	// 3. Conversation-history marker — only when the client set none in
 	// messages (a client that places its own markers knows what it's doing).
 	if (!Array.isArray(body.messages) || breakpoints >= 4) return;
 	const hasMessageMarker = body.messages.some(

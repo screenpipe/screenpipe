@@ -161,6 +161,23 @@ pub struct RecordingSettings {
     )]
     pub experimental_coreaudio_system_audio: bool,
 
+    /// Beta ("Smart recording" in the app): during detected meetings, capture
+    /// the meeting app's own audio via a per-process tap plus the microphone
+    /// that app actually has open (instead of the global mix + assumed-default
+    /// mic). Default `false`. Takes precedence over everything: it engages in
+    /// ANY `audio_capture_mode` (continuous or meetings-only) and displaces
+    /// the configured devices for the meeting's duration. Requires macOS 14.4+
+    /// or Windows, plus the meeting detector (with `disable_meeting_detector`
+    /// no meeting is ever observed, so this flag is inert); when the platform
+    /// can't do it or the tap fails at runtime, capture automatically falls
+    /// back to the stable path (default mic + global system audio) — never
+    /// less capture than with the flag off.
+    #[serde(
+        rename = "experimentalMeetingPiggyback",
+        default = "default_experimental_meeting_piggyback"
+    )]
+    pub experimental_meeting_piggyback: bool,
+
     /// Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
     /// Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
     #[serde(rename = "windowsInputAecEnabled", default)]
@@ -681,6 +698,7 @@ impl Default for RecordingSettings {
             audio_devices: vec![],
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
+            experimental_meeting_piggyback: false,
             windows_input_aec_enabled: false,
             macos_input_vpio_enabled: false,
             screenpipe_aec_enabled: false,
@@ -774,6 +792,13 @@ fn default_audio_capture_mode() -> String {
 /// output, so it's the right default for every user who uses call apps.
 /// Users who hit SCK's sleep/wake display-enumeration bug can still opt in.
 fn default_experimental_coreaudio_system_audio() -> bool {
+    false
+}
+
+/// Default OFF. The per-process tap must prove itself in the field behind this
+/// opt-in before it becomes the default capture choice (rollout decision
+/// 2026-07-01). Flip deliberately, in its own PR, with TESTING.md updated.
+fn default_experimental_meeting_piggyback() -> bool {
     false
 }
 
@@ -935,6 +960,15 @@ mod tests {
         let json = r#"{"unknownFutureField": true, "port": 4040}"#;
         let settings: RecordingSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.port, 4040);
+    }
+
+    #[test]
+    fn meeting_piggyback_defaults_off() {
+        let config = RecordingSettings::default();
+        assert!(!config.experimental_meeting_piggyback);
+        // Posture guard: promotion to default-on must be a deliberate flip of
+        // default_experimental_meeting_piggyback, reviewed on its own.
+        assert!(!default_experimental_meeting_piggyback());
     }
 
     #[test]

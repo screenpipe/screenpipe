@@ -7,8 +7,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { useRouter } from "next/navigation";
-import { listen } from "@tauri-apps/api/event";
 import { getIdentifier, getName } from "@tauri-apps/api/app";
+import { useTauriEvent } from "./use-tauri-event";
 import {
   type Announcement,
   areRemoteAnnouncementsDisabled,
@@ -130,20 +130,12 @@ export function useAnnouncement(): UseAnnouncementResult {
 
   // Listen for runtime pushes from `POST /notify` (announcement surface). The
   // rust side emits the `announcement` event with the announcement object.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("announcement", (event) => {
-      const a = parseAnnouncement(event.payload);
-      if (a) setTriggered(a);
-    })
-      .then((u) => {
-        unlisten = u;
-      })
-      .catch(() => {
-        // not running under tauri (e.g. tests) — nothing to listen to.
-      });
-    return () => unlisten?.();
-  }, []);
+  // The hook swallows a failed `listen()` (e.g. not running under Tauri in
+  // tests), matching the previous `.catch(() => {})` guard.
+  useTauriEvent("announcement", (event) => {
+    const a = parseAnnouncement(event.payload);
+    if (a) setTriggered(a);
+  });
 
   // Priority (triggered > preview > flag) lives in pickAnnouncement so it's
   // pure + unit-tested; the hook just feeds it the three sources.

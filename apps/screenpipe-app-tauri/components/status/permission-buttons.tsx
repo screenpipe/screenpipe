@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Button } from "@/components/ui/button";
 import { Check, Lock, Settings, X } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
@@ -40,21 +41,14 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
   }, [isMacOS]);
 
   // Poll microphone permission only (screen requires app restart)
-  useEffect(() => {
-    if (!isMacOS || type !== "audio") return;
-
-    const checkMicPermission = async () => {
-      try {
-        const micStatus = await commands.checkMicrophonePermission();
-        setPermissions(prev => prev ? { ...prev, microphone: micStatus } : null);
-      } catch (error) {
-        console.error("Failed to check mic permission:", error);
-      }
-    };
-
-    const intervalId = setInterval(checkMicPermission, 1000);
-    return () => clearInterval(intervalId);
-  }, [isMacOS, type]);
+  useInterval(async () => {
+    try {
+      const micStatus = await commands.checkMicrophonePermission();
+      setPermissions(prev => prev ? { ...prev, microphone: micStatus } : null);
+    } catch (error) {
+      console.error("Failed to check mic permission:", error);
+    }
+  }, isMacOS && type === "audio" ? 1000 : null);
 
   const handlePermissionButton = async () => {
     try {
@@ -143,11 +137,18 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
   return (
     <div className="flex items-center gap-2">
       {permissions && (
-        <span>
+        <span
+          role="img"
+          aria-label={
+            isPermitted(permissionStatus ?? "empty")
+              ? `${type} permission granted`
+              : `${type} permission denied`
+          }
+        >
           {isPermitted(permissionStatus ?? "empty") ? (
-            <Check className="h-4 w-4 text-green-500" />
+            <Check className="h-4 w-4 text-green-500" aria-hidden="true" />
           ) : (
-            <X className="h-4 w-4 text-red-500" />
+            <X className="h-4 w-4 text-red-500" aria-hidden="true" />
           )}
         </span>
       )}
@@ -169,9 +170,10 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         className="h-8 w-8"
         onClick={handleOpenPermissionSettings}
         title={`Open ${type} settings`}
+        aria-label={`Open ${type} permission settings`}
         disabled={isDisabled}
       >
-        <Settings className="h-4 w-4" />
+        <Settings className="h-4 w-4" aria-hidden="true" />
       </Button>
     </div>
   );

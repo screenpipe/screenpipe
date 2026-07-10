@@ -9,6 +9,13 @@ mod null;
 #[cfg(target_os = "windows")]
 mod windows;
 
+mod counters;
+// Only the macOS GLOBAL tap drains a watchdog; the per-pid Meeting Tap never
+// acts on silence (product decision: a silent meeting device is the user's own
+// in-meeting feedback loop — they fix it in the app and our tracking follows).
+#[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
+pub(crate) use counters::WatchdogCounters;
+
 #[cfg(target_os = "macos")]
 pub use macos::*;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

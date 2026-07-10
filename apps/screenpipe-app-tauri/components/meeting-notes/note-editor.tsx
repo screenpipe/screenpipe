@@ -105,6 +105,32 @@ export interface NoteEditorHandle {
   ) => void;
 }
 
+interface ImageTransferItemLike {
+  kind: string;
+  getAsFile?: () => File | null;
+}
+
+interface ImageTransferLike {
+  files?: ArrayLike<File> | null;
+  items?: ArrayLike<ImageTransferItemLike> | null;
+  getData?: (format: string) => string;
+}
+
+interface MeetingNotePastePayload {
+  files: File[];
+  html: string;
+  text: string;
+  htmlImageSources: string[];
+}
+
+type MeetingNoteEditorNode = {
+  type: string;
+  attrs?: Record<string, string>;
+  content?: Array<{ type: "text"; text: string }>;
+};
+
+type MeetingNotePasteTextContent = string | MeetingNoteEditorNode[];
+
 const PROSE_CLASSES = [
   "prose prose-sm dark:prose-invert max-w-none",
   "min-h-[40vh] focus:outline-none",
@@ -175,9 +201,9 @@ function NoteEditor(
   onChangeRef.current = onChange;
 
   const insertImages = useCallback(
-    (dataUrls: string[], at?: { clientX: number; clientY: number }) => {
+    (imageSources: string[], at?: { clientX: number; clientY: number }) => {
       const editor = editorRef.current;
-      const images = dataUrls.filter((src) => src.startsWith("data:image/"));
+      const images = imageSources.filter(isPasteableImageSource);
       if (!editor || images.length === 0) return;
 
       const content = images.flatMap((src) => [
@@ -211,6 +237,29 @@ function NoteEditor(
         if (dataUrl) dataUrls.push(dataUrl);
       }
       insertImages(dataUrls);
+    },
+    [insertImages],
+  );
+
+  const insertClipboardPaste = useCallback(
+    async (payload: MeetingNotePastePayload) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+
+      const textContent = meetingNotePasteTextContent(payload);
+      if (textContent) {
+        editor.chain().focus().insertContent(textContent).run();
+      }
+
+      const dataUrls: string[] = [];
+      for (const file of payload.files) {
+        const dataUrl = await imageFileToDataUrl(file);
+        if (dataUrl) dataUrls.push(dataUrl);
+      }
+
+      const imageSources =
+        dataUrls.length > 0 ? dataUrls : payload.htmlImageSources;
+      insertImages(imageSources);
     },
     [insertImages],
   );
@@ -272,10 +321,12 @@ function NoteEditor(
       scrollThreshold: { top: 80, bottom: 96, left: 0, right: 0 },
       scrollMargin: { top: 80, bottom: 96, left: 0, right: 0 },
       handlePaste(_view, event) {
-        const files = imageFilesFromTransfer(event.clipboardData);
-        if (files.length === 0) return false;
+        const payload = meetingNotePastePayloadFromTransfer(
+          event.clipboardData,
+        );
+        if (!payload) return false;
         event.preventDefault();
-        void insertImageFiles(files);
+        void insertClipboardPaste(payload);
         return true;
       },
       handleDrop(_view, event) {
@@ -373,15 +424,133 @@ function getMarkdown(editor: Editor): string {
   return storage?.getMarkdown?.() ?? "";
 }
 
-function imageFilesFromTransfer(
-  transfer: DataTransfer | null,
+export function imageFilesFromTransfer(
+  transfer: ImageTransferLike | null,
 ): File[] {
   if (!transfer) return [];
-  const files = Array.from(transfer.files ?? []).filter(isNoteImageFile);
-  if (files.length > 0) return files;
+  const files: File[] = [];
+  const seen = new Set<File>();
 
-  return Array.from(transfer.items ?? [])
-    .filter((item) => item.kind === "file")
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => !!file && isNoteImageFile(file));
+  const add = (file: File | null | undefined) => {
+    if (!file || seen.has(file) || !isNoteImageFile(file)) return;
+    files.push(file);
+    seen.add(file);
+  };
+
+  for (const item of Array.from(transfer.items ?? [])) {
+    if (item.kind === "file") add(item.getAsFile?.());
+  }
+
+  for (const file of Array.from(transfer.files ?? [])) {
+    add(file);
+  }
+
+  return files;
+}
+
+export function meetingNotePastePayloadFromTransfer(
+  transfer: ImageTransferLike | null,
+): MeetingNotePastePayload | null {
+  if (!transfer) return null;
+
+  const files = imageFilesFromTransfer(transfer);
+  const html = transferData(transfer, "text/html");
+  const text = transferData(transfer, "text/plain");
+  const htmlImageSources = imageSourcesFromHtml(html);
+
+  if (files.length === 0 && htmlImageSources.length === 0) return null;
+
+  return { files, html, text, htmlImageSources };
+}
+
+export function meetingNotePasteTextContent(
+  payload: MeetingNotePastePayload,
+): MeetingNotePasteTextContent | null {
+  const html = htmlWithoutImages(payload.html);
+  if (htmlHasReadableText(html)) return html;
+
+  const text = payload.text.replace(/\r\n?/g, "\n");
+  if (!text.trim()) return null;
+
+  const normalizedText = text.trim();
+  if (
+    payload.htmlImageSources.some((src) => src.trim() === normalizedText)
+  ) {
+    return null;
+  }
+
+  return plainTextToEditorContent(text);
+}
+
+export function imageSourcesFromHtml(html: string): string[] {
+  if (!html) return [];
+
+  const sources: string[] = [];
+  const add = (value: string | null | undefined) => {
+    const source = value?.trim();
+    if (!source || !isPasteableImageSource(source)) return;
+    if (!sources.includes(source)) sources.push(source);
+  };
+
+  if (typeof document !== "undefined") {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    template.content
+      .querySelectorAll("img[src]")
+      .forEach((img) => add(img.getAttribute("src")));
+    return sources;
+  }
+
+  for (const match of html.matchAll(/<img\b[^>]*\bsrc=(["'])(.*?)\1/gi)) {
+    add(match[2]);
+  }
+
+  return sources;
+}
+
+export function htmlWithoutImages(html: string): string {
+  if (!html) return "";
+
+  if (typeof document !== "undefined") {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    template.content.querySelectorAll("img").forEach((img) => img.remove());
+    return template.innerHTML.trim();
+  }
+
+  return html.replace(/<img\b[^>]*>/gi, "").trim();
+}
+
+function plainTextToEditorContent(text: string): MeetingNoteEditorNode[] {
+  return text.split("\n").map((line) => {
+    if (!line) return { type: "paragraph" };
+    return {
+      type: "paragraph",
+      content: [{ type: "text", text: line }],
+    };
+  });
+}
+
+function htmlHasReadableText(html: string): boolean {
+  if (!html) return false;
+
+  if (typeof document !== "undefined") {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    return (template.content.textContent ?? "").trim().length > 0;
+  }
+
+  return html.replace(/<[^>]+>/g, "").trim().length > 0;
+}
+
+function transferData(transfer: ImageTransferLike, format: string): string {
+  try {
+    return transfer.getData?.(format) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function isPasteableImageSource(src: string): boolean {
+  return src.startsWith("data:image/") || /^https?:\/\//i.test(src);
 }

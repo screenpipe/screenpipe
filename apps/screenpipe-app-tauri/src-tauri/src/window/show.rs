@@ -1775,7 +1775,11 @@ impl ShowRewindWindow {
         {
             return Ok(());
         }
-        let window = Self::create_search_window(app, None, false)?;
+        // Mark this as a prewarm so the React page keeps its polling, focus,
+        // and search effects suspended until the first `search-reset` event.
+        // A hidden WKWebView otherwise continues rendering and issuing IPC as
+        // if the search panel were visible.
+        let window = Self::create_search_window(app, Some("?prewarm=1"), false)?;
         #[cfg(target_os = "macos")]
         setup_content_process_handler(&window);
         #[cfg(not(target_os = "macos"))]
@@ -1901,6 +1905,10 @@ impl ShowRewindWindow {
         // which order_out avoids.
         if id.label() == RewindWindowId::Search.label() {
             if let Some(window) = id.get(app) {
+                // Let the retained webview suspend its focus/search effects
+                // before it is ordered out. We keep the WebView itself warm to
+                // preserve instant reopen, without leaving an active UI loop.
+                let _ = window.emit("search-hidden", ());
                 #[cfg(target_os = "macos")]
                 {
                     let window_clone = window.clone();

@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Battery, BatteryCharging, BatteryLow, Zap, Leaf, Gauge, MicOff, PauseCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -98,9 +99,8 @@ export function BatterySaverSection() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
   }, [fetchStatus]);
+  useInterval(fetchStatus, 5000);
 
   const setMode = async (mode: PowerMode) => {
     if (updating) return;

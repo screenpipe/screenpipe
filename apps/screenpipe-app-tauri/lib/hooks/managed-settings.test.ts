@@ -79,10 +79,10 @@ describe("computeManagedSettingUpdates", () => {
     ).toBe(false);
   });
 
-  it("ignores offlineMode — it has no device-side setting (tracked separately)", () => {
-    const r = computeManagedSettingUpdates({ offlineMode: "true" }, {});
-    expect(r.engineUpdates).not.toHaveProperty("offlineMode");
-    expect(r.liveUpdates).not.toHaveProperty("offlineMode");
+  it("ignores unknown policy keys", () => {
+    const r = computeManagedSettingUpdates({ retiredPolicyToggle: "true" }, {});
+    expect(r.engineUpdates).not.toHaveProperty("retiredPolicyToggle");
+    expect(r.liveUpdates).not.toHaveProperty("retiredPolicyToggle");
     expect(r.engineChanged).toBe(false);
     expect(r.liveChanged).toBe(false);
   });

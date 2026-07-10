@@ -460,7 +460,12 @@ export function usePiSteeringTransport(
             combinedImages.length > 0 ? combinedImages : null,
           )
           .then((result) => {
-            if (result.status !== "ok") {
+            if (result.status === "ok") {
+              // Clear the flag — this stop was an internal steering redirect,
+              // not a user-initiated stop. Without this the steered response
+              // inherits stoppedByUser=true when it completes.
+              piActiveStopRequestedRef.current = false;
+            } else {
               console.warn("[steer] piSteer returned non-ok:", result);
               revertFailedComposerSteer(
                 batch,

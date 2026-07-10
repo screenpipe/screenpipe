@@ -71,6 +71,10 @@ impl SnapshotWriter {
         let quality = self.quality.load(Ordering::Relaxed);
         let max_w = self.max_width.load(Ordering::Relaxed);
 
+        // Definitively-background compute (resize + JPEG encode): yield to
+        // the user's foreground apps while it runs (#4849).
+        let _dip = screenpipe_core::thread_priority::BackgroundWorkDip::new();
+
         // Downscale if image exceeds max_width (preserving aspect ratio).
         // Use a reference to avoid cloning the full image buffer when no resize is needed.
         let resized;

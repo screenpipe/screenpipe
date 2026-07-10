@@ -380,8 +380,9 @@ export function AIProviderConfig({
             }
           }
         } catch { /* ignore */ }
-        // Fallback: Codex models available via ChatGPT subscription
+        // Fallback: known models for ChatGPT connections when model discovery fails.
         setOpenAIModels([
+          { id: "gpt-5.6-terra" }, { id: "gpt-5.6" }, { id: "gpt-5.6-sol" }, { id: "gpt-5.6-luna" },
           { id: "gpt-5.5" }, { id: "gpt-5.5-codex" },
           { id: "gpt-5.4" }, { id: "gpt-5.3-codex" },
           { id: "gpt-5.2-codex" }, { id: "gpt-5.2" }, { id: "gpt-5.1-codex-max" },
@@ -488,7 +489,7 @@ export function AIProviderConfig({
                 ...formData,
                 provider: "openai-chatgpt",
                 url: "https://api.openai.com/v1",
-                model: "gpt-5.5",
+                model: "gpt-5.6-terra",
               });
             }}
           >
@@ -747,7 +748,7 @@ export function AIProviderConfig({
                 id="model"
                 type="text"
                 list="chatgpt-models"
-                placeholder="gpt-5.5"
+                placeholder="gpt-5.6-terra"
                 value={formData.model || ""}
                 onChange={(e) =>
                   setFormData({ ...formData, model: e.target.value })

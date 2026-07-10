@@ -380,8 +380,14 @@ impl DatabaseManager {
     /// Insert accessibility tree nodes from `tree_json` (serialized
     /// `Vec<AccessibilityTreeNode>`) into the `elements` table.
     ///
-    /// Nodes are inserted in depth-first order. A depth→parent_id stack is
-    /// used to resolve parent references.
+    /// Nodes are inserted in depth-first order. Ids are reserved up front
+    /// (contiguous block starting after `sqlite_sequence`'s current value
+    /// for `elements`) so a depth→parent_id stack can resolve parent
+    /// references before any row is written, letting the whole tree go in
+    /// as a handful of multi-row INSERTs instead of one `RETURNING id`
+    /// round-trip per node. Safe because the write queue serializes all
+    /// writes onto a single connection — nothing else can consume ids
+    /// between the reservation read and the batch insert below.
     ///
     /// Errors are logged and swallowed.
     pub(crate) async fn insert_accessibility_elements(
@@ -455,12 +461,35 @@ impl DatabaseManager {
             return;
         }
 
+        // Reserve a contiguous id block up front instead of RETURNING id
+        // per row. `elements.id` is AUTOINCREMENT, so sqlite_sequence holds
+        // the last assigned value; the next row (auto or explicit) is
+        // seq + 1, and explicit inserts above the current seq bump it for
+        // later auto-assigned rows (OCR elements, etc.) exactly as if they
+        // had been auto-assigned themselves.
+        let base_id: i64 = match sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'elements'), 0)",
+        )
+        .fetch_one(&mut **tx)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                debug!(
+                    "elements: AX id reservation failed for frame {}: {}",
+                    frame_id, e
+                );
+                return;
+            }
+        };
+
         // depth → most-recent element_id at that depth
         // parent of depth N = last id at depth N-1
         let mut depth_stack: Vec<(u8, i64)> = Vec::new();
-        let mut sort_order: i32 = 0;
+        let mut rows: Vec<AxRow<'_>> = Vec::with_capacity(nodes.len());
 
-        for node in &nodes {
+        for (i, node) in nodes.iter().enumerate() {
+            let id = base_id + 1 + i as i64;
             let depth = node.depth as i32;
             let text = if node.text.is_empty() {
                 None
@@ -558,37 +587,43 @@ impl DatabaseManager {
             // 20260502000000_add_elements_on_screen.sql skips legacy rows.
             let on_screen_int: Option<i64> = node.on_screen.map(|b| if b { 1 } else { 0 });
 
-            let result = sqlx::query_scalar::<_, i64>(
-                "INSERT INTO elements (frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, properties, on_screen) VALUES (?1, 'accessibility', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12) RETURNING id",
-            )
-            .bind(frame_id)
-            .bind(&node.role)
-            .bind(text)
-            .bind(parent_id)
-            .bind(depth)
-            .bind(left)
-            .bind(top)
-            .bind(width)
-            .bind(height)
-            .bind(sort_order)
-            .bind(&properties)
-            .bind(on_screen_int)
-            .fetch_one(&mut **tx)
-            .await;
+            // Trim stack to current depth, then push this node's reserved id
+            while depth_stack.last().is_some_and(|(d, _)| *d as i32 >= depth) {
+                depth_stack.pop();
+            }
+            depth_stack.push((node.depth, id));
 
-            match result {
-                Ok(id) => {
-                    // Trim stack to current depth, then push
-                    while depth_stack.last().is_some_and(|(d, _)| *d as i32 >= depth) {
-                        depth_stack.pop();
-                    }
-                    depth_stack.push((node.depth, id));
-                    sort_order += 1;
-                }
-                Err(e) => {
-                    debug!("elements: AX insert failed for frame {}: {}", frame_id, e);
-                    return;
-                }
+            rows.push(AxRow {
+                id,
+                role: &node.role,
+                text,
+                parent_id,
+                depth,
+                left,
+                top,
+                width,
+                height,
+                sort_order: i as i32,
+                properties,
+                on_screen: on_screen_int,
+            });
+        }
+
+        // 13 params per row × 70 rows = 910 params, well below SQLite's
+        // default SQLITE_LIMIT_VARIABLE_NUMBER (999 on older builds, 32766 on
+        // newer). Chunk boundaries never split a parent from a child that
+        // hasn't been inserted yet: node order is depth-first, so within
+        // each chunk (and across chunks, since earlier chunks are already
+        // executed) every parent id was assigned — and inserted — before
+        // any of its children.
+        const BULK_CHUNK: usize = 70;
+        for chunk in rows.chunks(BULK_CHUNK) {
+            if let Err(e) = flush_ax_bulk(tx, frame_id, chunk).await {
+                debug!(
+                    "elements: AX bulk insert failed for frame {}: {}",
+                    frame_id, e
+                );
+                return;
             }
         }
     }

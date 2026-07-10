@@ -13,7 +13,7 @@ import posthog from "posthog-js";
 import { cacheAnalyticsId } from "@/lib/analytics-id";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
-import { installAuthInterceptor } from "../auth-guard";
+import { installAuthInterceptor, stripSessionToken } from "../auth-guard";
 import { hasAppEntitlement, normalizeAppUser } from "@/lib/app-entitlement";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
@@ -297,6 +297,12 @@ export type Settings = SettingsStore & {
 	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
 	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
 	experimentalCoreaudioSystemAudio?: boolean;
+	/** Beta ("Smart recording" in the app): during meetings, capture only the meeting app's audio
+	 *  and the microphone it actually uses (per-process piggyback). Off by default. Engages in ANY
+	 *  audio capture mode — takes precedence over the configured devices for the meeting's
+	 *  duration. Requires the meeting detector. Falls back to standard capture automatically if
+	 *  unavailable. */
+	experimentalMeetingPiggyback?: boolean;
 	/** Experimental: request Windows WASAPI microphone AEC when supported. */
 	windowsInputAecEnabled?: boolean;
 	/** Experimental: request Apple VoiceProcessingIO AEC on the default macOS microphone. */
@@ -321,8 +327,6 @@ export type Settings = SettingsStore & {
 	localRetentionMode?: "media" | "lean" | "all";
 	/** Apply macOS vibrancy effect to sidebar for a translucent glass look */
 	translucentSidebar?: boolean;
-	/** Hide model "thinking" reasoning blocks in chat (default: true) */
-	hideThinkingBlocks?: boolean;
 	/** Show the chat suggestion chips above the input — the "follow up"
 	 *  questions and the connection-aware suggested prompts. The single inline
 	 *  X on the chips flips this to false; re-enable from Settings → Display.
@@ -675,6 +679,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableClickCapture: false,
 			keepComputerAwake: false,
 			experimentalCoreaudioSystemAudio: false,
+			experimentalMeetingPiggyback: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,
 			screenpipeAecEnabled: false,
@@ -1040,6 +1045,14 @@ function createSettingsStore() {
 			}
 		}
 
+		// Migration: backfill disabledShortcuts for installs that predate the
+		// field. Several call sites assume it's always an array (`.includes(...)`)
+		// and crash with "Cannot read properties of undefined" when it's missing.
+		if (!Array.isArray(settings.disabledShortcuts)) {
+			settings.disabledShortcuts = [];
+			needsUpdate = true;
+		}
+
 		// Save migrations if needed
 		if (needsUpdate) {
 			await setSettingsStripped(store, settings);
@@ -1190,7 +1203,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		installAuthInterceptor(
 			() => settingsRef.current.user?.token ?? undefined,
 			async () => {
-				await updateSettings({ user: null as any });
+				// Strip only the token — keep the profile + entitlement evidence so
+				// the entitlement gate's transient-loss cushion can hold instead of
+				// resetting onboarding (SCR-132). Because the user stays non-null,
+				// the explicit-logout invalidation in updateSettings ("user" in
+				// updates && !updates.user) intentionally does NOT fire: an
+				// in-flight loadUser that still succeeds may legitimately restore
+				// the session after a transient 401.
+				await updateSettings({
+					user: stripSessionToken(settingsRef.current.user) as any,
+				});
 				// Mirror the sign-out into the sidecar so the pi-agent and
 				// cloud_proxy.rs stop sending the now-revoked token on the
 				// next pipe run.

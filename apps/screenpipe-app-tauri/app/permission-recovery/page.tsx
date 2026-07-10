@@ -200,14 +200,6 @@ export default function PermissionRecoveryPage() {
 
             <div className="space-y-2">
               <PermissionRow
-                icon={<Monitor className="w-4 h-4" strokeWidth={1.5} />}
-                label="screen"
-                description="capture display"
-                status={screenStatus}
-                onFix={() => handleFix("screenRecording")}
-                testId="permission-row-screen"
-              />
-              <PermissionRow
                 icon={<Mic className="w-4 h-4" strokeWidth={1.5} />}
                 label="microphone"
                 description="transcribe audio"
@@ -225,6 +217,14 @@ export default function PermissionRecoveryPage() {
                   testId="permission-row-accessibility"
                 />
               )}
+              <PermissionRow
+                icon={<Monitor className="w-4 h-4" strokeWidth={1.5} />}
+                label="screen"
+                description="capture display"
+                status={screenStatus}
+                onFix={() => handleFix("screenRecording")}
+                testId="permission-row-screen"
+              />
               {isMacOS && keychainStatus === "denied" && (
                 <PermissionRow
                   icon={<Lock className="w-4 h-4" strokeWidth={1.5} />}

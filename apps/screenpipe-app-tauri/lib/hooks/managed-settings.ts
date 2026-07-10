@@ -64,10 +64,6 @@ export interface ManagedSettingUpdates {
 /**
  * Pure: given the policy `lockedSettings` and the device's current settings,
  * compute which managed values to write and whether a restart is needed.
- *
- * NOTE: `offlineMode` is intentionally absent — there is no device setting it
- * maps to (no engine/runtime reader), so it can't be enforced through the store
- * and is tracked as a separate issue rather than half-applied here.
  */
 export function computeManagedSettingUpdates(
   locked: Record<string, unknown>,

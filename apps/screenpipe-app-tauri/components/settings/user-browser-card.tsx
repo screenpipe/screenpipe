@@ -16,6 +16,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, Loader2 } from "lucide-react";
@@ -57,9 +58,8 @@ export function UserBrowserCard() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => clearInterval(t);
   }, [refresh]);
+  useInterval(refresh, POLL_INTERVAL_MS);
 
   const badge = (() => {
     switch (status.kind) {

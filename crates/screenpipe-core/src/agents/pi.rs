@@ -11,6 +11,7 @@ use super::{install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle};
 use anyhow::{anyhow, Result};
 use arc_swap::ArcSwap;
 use serde_json::json;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -19,6 +20,15 @@ const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
 const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
 const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
+
+/// Windows creation flags for background agent spawns: CREATE_NO_WINDOW
+/// (0x08000000) so no console flashes, plus BELOW_NORMAL_PRIORITY_CLASS
+/// (0x00004000) so the bun→pi→tool-call subtree yields CPU to whatever the
+/// user is doing (#4849) — children inherit the class. Interactive chat is
+/// NOT this path: the desktop app manages its own pi sidecar
+/// (src-tauri/src/pi.rs) at Normal.
+#[cfg(windows)]
+const BACKGROUND_SPAWN_FLAGS: u32 = 0x08000000 | 0x00004000;
 
 /// Bounded retries for provider rate limiting (HTTP 429) in streaming runs.
 const MAX_RATE_LIMIT_RETRIES: usize = 3;
@@ -114,8 +124,19 @@ async fn fetch_models_from_gateway(
     let body: serde_json::Value = resp.json().await.ok()?;
     let data = body.get("data")?.as_array()?;
 
-    let models: Vec<serde_json::Value> = data
-        .iter()
+    let models = gateway_models_to_pi_models(data);
+
+    info!("fetched {} models from gateway", models.len());
+    Some(json!(models))
+}
+
+/// Turn the gateway catalog into Pi's provider catalog. The gateway retains
+/// locked models for UI upgrade prompts, while Pi treats every listed model as
+/// selectable. Omit locked entries here so a pipe never appears to select a
+/// model only for the gateway to silently rewrite it to `auto`.
+fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    data.iter()
+        .filter(|m| !m.get("locked").and_then(|v| v.as_bool()).unwrap_or(false))
         .map(|m| {
             let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(id);
@@ -139,10 +160,7 @@ async fn fetch_models_from_gateway(
                 "maxTokens": 32000,
             })
         })
-        .collect();
-
-    info!("fetched {} models from gateway", models.len());
-    Some(json!(models))
+        .collect()
 }
 
 /// Minimal fallback when the gateway is unreachable.
@@ -704,10 +722,10 @@ impl PiExecutor {
         Ok(())
     }
 
-    /// Install or remove the web-search extension based on provider and offline mode.
+    /// Install or remove the web-search extension based on provider.
     /// Web search uses the screenpipe cloud backend, so we only enable it
     /// for screenpipe-cloud to avoid sending data to our backend when the
-    /// user chose a local/custom provider. Always removed in offline mode.
+    /// user chose a local/custom provider.
     pub fn ensure_web_search_extension(project_dir: &Path, provider: Option<&str>) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         let ext_path = ext_dir.join("web-search.ts");
@@ -1121,14 +1139,14 @@ impl PiExecutor {
     /// `Ok(model)`  → the requested model is allowed (or we can't validate).
     /// `Err(model)` → requested not allowed; the returned value is the fallback.
     fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
-        // No catalog, or only the offline/degraded fallback sentinel → we
+        // No catalog, or only the gateway fallback sentinel → we
         // couldn't actually validate, so don't second-guess the requested
         // model. Without the sentinel check the `["auto"]` list returned by
         // `fallback_cloud_models` when the gateway is unreachable would
         // masquerade as a one-model tier and spuriously downgrade a
         // deliberately-chosen premium model, firing a bogus `model_fallback`
-        // notice on every offline run.
-        if allowed.is_empty() || Self::is_offline_fallback_catalog(allowed) {
+        // notice on every degraded run.
+        if allowed.is_empty() || Self::is_gateway_fallback_catalog(allowed) {
             return Ok(requested.to_string());
         }
         // "auto" is always valid: the gateway picks an allowed model server-side.
@@ -1145,7 +1163,7 @@ impl PiExecutor {
         Err(fallback)
     }
 
-    /// `true` when `allowed` is exactly the offline/degraded fallback catalog
+    /// `true` when `allowed` is exactly the unvalidated gateway fallback catalog
     /// (`["auto"]`) produced by [`fallback_cloud_models`] when the gateway's
     /// `/v1/models` is unreachable. It carries no real tier information, so we
     /// treat it like an empty catalog and never let it drive a downgrade.
@@ -1155,7 +1173,7 @@ impl PiExecutor {
     /// concrete model ids), and even if one appeared `auto` is always accepted
     /// by the gateway, so passing the requested model through for its
     /// server-side auto-pick stays correct.
-    fn is_offline_fallback_catalog(allowed: &[String]) -> bool {
+    fn is_gateway_fallback_catalog(allowed: &[String]) -> bool {
         allowed.len() == 1 && allowed[0] == "auto"
     }
 
@@ -1254,10 +1272,7 @@ impl PiExecutor {
         }
 
         #[cfg(windows)]
-        {
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
+        cmd.creation_flags(BACKGROUND_SPAWN_FLAGS);
 
         let child = cmd.spawn()?;
         let pid = child.id();
@@ -1405,10 +1420,7 @@ impl PiExecutor {
         }
 
         #[cfg(windows)]
-        {
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
+        cmd.creation_flags(BACKGROUND_SPAWN_FLAGS);
 
         let mut child = cmd.spawn()?;
         let pid = child.id();
@@ -1842,8 +1854,8 @@ impl AgentExecutor for PiExecutor {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
+            // CPU/IO-heavy dependency install — background bootstrap work.
+            cmd.creation_flags(BACKGROUND_SPAWN_FLAGS);
         }
 
         let output = cmd.output().map_err(|e| {
@@ -2292,6 +2304,46 @@ fn pi_local_install_dir() -> Option<PathBuf> {
     Some(crate::paths::default_screenpipe_data_dir().join("pi-agent"))
 }
 
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+/// Build the PATH inherited by Pi and any subagents it launches.
+///
+/// The local `.bin` directory must come before user-global npm/bun bins so
+/// nested `pi` invocations resolve to screenpipe's pinned Pi package, not an
+/// older global install.
+pub fn pi_child_path(existing_path: &OsStr) -> Option<OsString> {
+    let mut paths = Vec::new();
+
+    if let Some(dir) = pi_local_install_dir() {
+        push_unique_path(&mut paths, dir.join("node_modules").join(".bin"));
+    }
+
+    if let Some(bun_path) = find_bun_executable() {
+        if let Some(bun_dir) = Path::new(&bun_path).parent() {
+            push_unique_path(&mut paths, bun_dir.to_path_buf());
+        }
+    }
+
+    for path in std::env::split_paths(existing_path) {
+        if !path.as_os_str().is_empty() {
+            push_unique_path(&mut paths, path);
+        }
+    }
+
+    std::env::join_paths(paths).ok()
+}
+
+fn apply_pi_child_path(cmd: &mut tokio::process::Command) {
+    let current_path = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(path) = pi_child_path(&current_path) {
+        cmd.env("PATH", path);
+    }
+}
+
 /// Check whether the locally-installed Pi version matches `PI_PACKAGE`.
 fn is_local_pi_version_current() -> bool {
     let dir = match pi_local_install_dir() {
@@ -2587,7 +2639,9 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                     debug!("injected bash dir into PATH for pi: {}", bash_dir);
                 }
 
-                cmd.env("PATH", new_path);
+                let path_for_pi = pi_child_path(OsStr::new(&new_path))
+                    .unwrap_or_else(|| OsString::from(new_path));
+                cmd.env("PATH", path_for_pi);
                 debug!("injected bun dir into PATH for pi: {}", bun_dir.display());
             }
         }
@@ -2599,14 +2653,16 @@ fn build_async_command(path: &str) -> tokio::process::Command {
     }
     #[cfg(not(windows))]
     {
-        if let Some(bun) = find_bun_executable() {
+        let mut cmd = if let Some(bun) = find_bun_executable() {
             let mut cmd = tokio_bun_command(&bun);
             cmd.arg(path);
             cmd
         } else {
             // Fallback: run pi directly (requires node in PATH)
             tokio::process::Command::new(path)
-        }
+        };
+        apply_pi_child_path(&mut cmd);
+        cmd
     }
 }
 
@@ -2994,6 +3050,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pi_child_path_prefers_screenpipe_local_pi() {
+        let existing_a = std::path::PathBuf::from("existing-a");
+        let existing_b = std::path::PathBuf::from("existing-b");
+        let existing_path = std::env::join_paths([existing_a.clone(), existing_b.clone()]).unwrap();
+
+        let child_path = pi_child_path(&existing_path).expect("child path");
+        let parts = std::env::split_paths(&child_path).collect::<Vec<_>>();
+
+        assert_eq!(
+            parts.first(),
+            Some(
+                &crate::paths::default_screenpipe_data_dir()
+                    .join("pi-agent")
+                    .join("node_modules")
+                    .join(".bin")
+            )
+        );
+        assert!(parts.iter().any(|path| path == &existing_a));
+        assert!(parts.iter().any(|path| path == &existing_b));
+    }
+
+    #[test]
     fn clear_screenpipe_auth_preserves_other_provider_tokens() {
         let dir = tempfile::tempdir().expect("tempdir");
         let auth_path = dir.path().join("auth.json");
@@ -3305,24 +3383,56 @@ mod tests {
             Ok("claude-opus-4".to_string())
         );
 
-        // Offline sentinel ["auto"] (gateway unreachable → fallback_cloud_models)
+        // Gateway fallback sentinel ["auto"] (gateway unreachable → fallback_cloud_models)
         // must be treated like an empty catalog: it is NOT a one-model tier, so
         // a deliberately-chosen premium model passes through unchanged instead
         // of being spuriously downgraded. This is the #3763 offline regression.
-        let offline_sentinel = vec!["auto".to_string()];
+        let gateway_fallback = vec!["auto".to_string()];
         assert_eq!(
-            PiExecutor::pick_allowed_model("claude-opus-4", &offline_sentinel),
+            PiExecutor::pick_allowed_model("claude-opus-4", &gateway_fallback),
             Ok("claude-opus-4".to_string())
         );
         assert_eq!(
-            PiExecutor::pick_allowed_model("auto", &offline_sentinel),
+            PiExecutor::pick_allowed_model("auto", &gateway_fallback),
             Ok("auto".to_string())
         );
-        assert!(PiExecutor::is_offline_fallback_catalog(&offline_sentinel));
+        assert!(PiExecutor::is_gateway_fallback_catalog(&gateway_fallback));
         // A real single-model tier on a concrete id is NOT the sentinel.
-        assert!(!PiExecutor::is_offline_fallback_catalog(&[
+        assert!(!PiExecutor::is_gateway_fallback_catalog(&[
             "claude-haiku-4-5".to_string()
         ]));
+    }
+
+    #[test]
+    fn gateway_catalog_omits_locked_models_from_pi() {
+        let models = gateway_models_to_pi_models(&[
+            json!({
+                "id": "auto",
+                "name": "Auto",
+                "context_window": 128000,
+                "intelligence": "standard",
+            }),
+            json!({
+                "id": "gpt-5.6-terra",
+                "name": "GPT-5.6 Terra",
+                "locked": true,
+                "context_window": 128000,
+                "intelligence": "highest",
+            }),
+            json!({
+                "id": "gpt-5.6-luna",
+                "name": "GPT-5.6 Luna",
+                "locked": null,
+                "context_window": 128000,
+                "intelligence": "high",
+            }),
+        ]);
+
+        let ids: Vec<&str> = models
+            .iter()
+            .filter_map(|model| model.get("id").and_then(|id| id.as_str()))
+            .collect();
+        assert_eq!(ids, vec!["auto", "gpt-5.6-luna"]);
     }
 
     #[test]

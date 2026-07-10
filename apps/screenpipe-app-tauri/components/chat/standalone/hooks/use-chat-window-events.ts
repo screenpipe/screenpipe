@@ -178,6 +178,14 @@ export function useChatPrefillListener({
             const newSid = crypto.randomUUID();
             piSessionIdRef.current = newSid;
             setConversationId(newSid);
+            // Publish the new id to the store as the active session (#4719).
+            // Without this, an autoSend prefill left `store.currentId` pointing
+            // at the previous chat while `piSessionIdRef` / `conversationId`
+            // moved on — a divergence that feeds the cross-window duplicate
+            // race. `panelSessionId` follows `conversationId` via
+            // useChatConversationEvents, so setting currentId here keeps all
+            // four id sources in lockstep from message 0.
+            useChatStore.getState().actions.setCurrent(newSid);
             piSessionSyncedRef.current = true;
             autoSendBypassRef.current = true;
             await new Promise((resolve) => setTimeout(resolve, 200));
@@ -393,11 +401,19 @@ export function useChatE2EGlobals({
     (window as unknown as {
       __e2eSeedAssistantMessage?: (
         sid: string,
-        payload: { content?: string; sourceCitations?: unknown[] },
+        payload: {
+          content?: string;
+          contentBlocks?: Message["contentBlocks"];
+          sourceCitations?: unknown[];
+        },
       ) => void;
     }).__e2eSeedAssistantMessage = (
       sid: string,
-      payload: { content?: string; sourceCitations?: unknown[] },
+      payload: {
+        content?: string;
+        contentBlocks?: Message["contentBlocks"];
+        sourceCitations?: unknown[];
+      },
     ) => {
       const id = `e2e-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       seedE2eSessionMessage(
@@ -406,6 +422,7 @@ export function useChatE2EGlobals({
           id,
           role: "assistant",
           content: payload.content ?? "",
+          contentBlocks: payload.contentBlocks,
           timestamp: Date.now(),
           sourceCitations: payload.sourceCitations as Message["sourceCitations"],
         },

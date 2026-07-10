@@ -6,20 +6,86 @@
 
 use crate::recording::{local_api_context_from_app, LocalApiContext};
 use crate::store::{CloudArchiveSettingsStore, CloudSyncSettingsStore, SettingsStore};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use chrono::Utc;
-use screenpipe_core::sync::{get_or_create_machine_id, SyncClientConfig, SyncManager};
+use screenpipe_core::sync::{get_or_create_machine_id, SyncManager};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+const CLOUD_STORAGE_BACKEND_REMOVED: &str =
+    "cloud sync and archive were removed from Storage settings";
+
 fn apply_local_api_auth(
     api: &LocalApiContext,
     request: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
     api.apply_auth(request)
+}
+
+async fn disable_persisted_cloud_sync(app: &AppHandle, state: &SyncState) {
+    *state.enabled.write().await = false;
+    *state.is_syncing.write().await = false;
+    *state.last_error.write().await = None;
+
+    let manager = state.manager.write().await.take();
+    if let Some(manager) = manager {
+        manager.lock().await;
+    }
+
+    let cloud_settings = CloudSyncSettingsStore {
+        enabled: false,
+        encrypted_password: String::new(),
+    };
+    if let Err(e) = cloud_settings.save(app) {
+        warn!("cloud sync: failed to persist disabled state: {}", e);
+    }
+}
+
+async fn disable_persisted_cloud_archive(app: &AppHandle) {
+    let retention_days = CloudArchiveSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|settings| settings.retention_days)
+        .or_else(|| {
+            SettingsStore::get(app).ok().flatten().and_then(|settings| {
+                settings
+                    .extra
+                    .get("cloudArchiveRetentionDays")
+                    .and_then(|value| value.as_u64())
+                    .map(|days| days as u32)
+            })
+        })
+        .unwrap_or(7);
+
+    let archive_settings = CloudArchiveSettingsStore {
+        enabled: false,
+        retention_days,
+    };
+    if let Err(e) = archive_settings.save(app) {
+        warn!("cloud archive: failed to persist disabled state: {}", e);
+    }
+
+    if let Ok(Some(mut settings)) = SettingsStore::get(app) {
+        settings.extra.insert(
+            "cloudArchiveEnabled".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        settings.extra.insert(
+            "cloudArchiveRetentionDays".to_string(),
+            serde_json::json!(retention_days),
+        );
+        if let Err(e) = settings.save(app) {
+            warn!("cloud archive: failed to clear legacy enabled flag: {}", e);
+        }
+    }
+
+    let client = reqwest::Client::new();
+    let api = local_api_context_from_app(app);
+    let _ = apply_local_api_auth(&api, client.post(api.url("/archive/configure")))
+        .json(&serde_json::json!({ "enabled": false }))
+        .send()
+        .await;
 }
 
 /// Sync state managed by Tauri.
@@ -164,6 +230,10 @@ pub async fn get_sync_status(
 #[tauri::command]
 #[specta::specta]
 pub async fn set_sync_enabled(state: State<'_, SyncState>, enabled: bool) -> Result<(), String> {
+    if enabled {
+        return Err(CLOUD_STORAGE_BACKEND_REMOVED.to_string());
+    }
+
     *state.enabled.write().await = enabled;
 
     if !enabled {
@@ -181,56 +251,8 @@ pub async fn set_sync_enabled(state: State<'_, SyncState>, enabled: bool) -> Res
 #[tauri::command]
 #[specta::specta]
 pub async fn trigger_sync(app: AppHandle, state: State<'_, SyncState>) -> Result<(), String> {
-    let enabled = *state.enabled.read().await;
-    if !enabled {
-        return Err("sync is not enabled".to_string());
-    }
-
-    let is_syncing = *state.is_syncing.read().await;
-    if is_syncing {
-        return Err("sync already in progress".to_string());
-    }
-
-    let manager_guard = state.manager.read().await;
-    if manager_guard.is_none() {
-        return Err("sync not initialized - enter password first".to_string());
-    }
-
-    // Mark as syncing
-    *state.is_syncing.write().await = true;
-
-    // Trigger sync via the screenpipe server endpoint
-    let is_syncing_clone = state.is_syncing.clone();
-    let last_sync_clone = state.last_sync.clone();
-    let last_error_clone = state.last_error.clone();
-    let api = local_api_context_from_app(&app);
-
-    tokio::spawn(async move {
-        let client = reqwest::Client::new();
-        let result = apply_local_api_auth(&api, client.post(api.url("/sync/trigger")))
-            .send()
-            .await;
-
-        match result {
-            Ok(response) if response.status().is_success() => {
-                *last_sync_clone.write().await = Some(Utc::now().to_rfc3339());
-                *last_error_clone.write().await = None;
-            }
-            Ok(response) => {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "unknown error".to_string());
-                *last_error_clone.write().await = Some(error_text);
-            }
-            Err(e) => {
-                *last_error_clone.write().await = Some(format!("failed to trigger sync: {}", e));
-            }
-        }
-        *is_syncing_clone.write().await = false;
-    });
-
-    Ok(())
+    disable_persisted_cloud_sync(&app, &state).await;
+    Err(CLOUD_STORAGE_BACKEND_REMOVED.to_string())
 }
 
 /// Get sync configuration.
@@ -253,6 +275,10 @@ pub async fn update_sync_config(
     state: State<'_, SyncState>,
     config: SyncConfig,
 ) -> Result<(), String> {
+    if config.enabled {
+        return Err(CLOUD_STORAGE_BACKEND_REMOVED.to_string());
+    }
+
     *state.enabled.write().await = config.enabled;
 
     let store = crate::store::get_store(&app, None).map_err(|e| e.to_string())?;
@@ -349,108 +375,10 @@ pub async fn init_sync(
     app: AppHandle,
     state: State<'_, SyncState>,
     _settings: State<'_, SettingsStore>,
-    password: String,
+    _password: String,
 ) -> Result<bool, String> {
-    // Get auth token from FRESH settings (not managed state which may be stale)
-    // The managed SettingsStore is loaded once at startup and doesn't update when user logs in
-    let fresh_settings = SettingsStore::get(&app)
-        .map_err(|e| format!("failed to read settings: {}", e))?
-        .ok_or_else(|| "settings not found".to_string())?;
-
-    let token = fresh_settings
-        .user
-        .token
-        .clone()
-        .ok_or_else(|| "not logged in - please log in first".to_string())?;
-
-    // Get device info
-    let device_name = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "Unknown".to_string());
-
-    let device_os = std::env::consts::OS.to_string();
-
-    // Create sync client config for local manager (used for device queries)
-    let config = SyncClientConfig::new(
-        token.clone(),
-        state.machine_id.clone(),
-        device_name,
-        device_os,
-    );
-
-    // Create local sync manager
-    let manager =
-        SyncManager::new(config).map_err(|e| format!("failed to create sync manager: {}", e))?;
-
-    // Initialize with password (this will either create new keys or derive from existing)
-    let is_new_user = manager
-        .initialize(&password)
-        .await
-        .map_err(|e| format!("failed to initialize sync: {}", e))?;
-
-    // Store the local manager
-    *state.manager.write().await = Some(Arc::new(manager));
-    *state.enabled.write().await = true;
-
-    info!(
-        "sync initialized for {} user",
-        if is_new_user { "new" } else { "existing" }
-    );
-
-    // Persist the master password to the encrypted SecretStore (always
-    // keychain-encrypted) rather than as base64 in store.bin. CloudSyncSettings
-    // keeps only the enabled flag for auto-start; the password lives in the
-    // secret store under the same key the engine reads.
-    if let Err(e) = crate::auth_token::store_sync_password(&password).await {
-        warn!("failed to persist sync password to secret store: {}", e);
-    }
-    let cloud_settings = CloudSyncSettingsStore {
-        enabled: true,
-        encrypted_password: String::new(),
-    };
-    if let Err(e) = cloud_settings.save(&app) {
-        warn!("failed to save cloud sync settings: {}", e);
-    }
-
-    // Now initialize the server's sync service
-    let client = reqwest::Client::new();
-    let api = local_api_context_from_app(&app);
-    let init_request = serde_json::json!({
-        "token": token,
-        "password": password,
-        "machine_id": state.machine_id.clone(),
-        "sync_interval_secs": 300
-    });
-
-    match apply_local_api_auth(&api, client.post(api.url("/sync/init")))
-        .json(&init_request)
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => {
-            info!("server sync service initialized");
-        }
-        Ok(response) if response.status().as_u16() == 409 => {
-            // Already initialized - that's fine
-            debug!("server sync service already initialized");
-        }
-        Ok(response) => {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            warn!(
-                "failed to initialize server sync ({}): {}",
-                status, error_text
-            );
-        }
-        Err(e) => {
-            warn!("failed to connect to server for sync init: {}", e);
-        }
-    }
-
-    Ok(is_new_user)
+    disable_persisted_cloud_sync(&app, &state).await;
+    Err(CLOUD_STORAGE_BACKEND_REMOVED.to_string())
 }
 
 /// Lock sync (clear keys from memory and stop server sync service).
@@ -464,9 +392,6 @@ pub async fn lock_sync(app: AppHandle, state: State<'_, SyncState>) -> Result<()
     }
     *state.enabled.write().await = false;
 
-    // Clear saved password (both the encrypted secret store and any legacy
-    // base64 copy in store.bin).
-    let _ = crate::auth_token::clear_sync_password().await;
     let cloud_settings = CloudSyncSettingsStore {
         enabled: false,
         encrypted_password: String::new(),
@@ -491,295 +416,16 @@ pub async fn lock_sync(app: AppHandle, state: State<'_, SyncState>) -> Result<()
     Ok(())
 }
 
-/// Auto-start cloud sync on app launch if previously enabled.
-/// Called from main.rs during startup.
+/// Disable cloud sync on app launch if old settings previously enabled it.
 pub async fn auto_start_sync(app: &AppHandle, state: &SyncState) {
-    // Only auto-start if the user previously enabled sync.
-    let settings = match CloudSyncSettingsStore::get(app) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            info!("cloud sync: no settings found, skipping auto-start");
-            return;
-        }
-        Err(e) => {
-            warn!("cloud sync: failed to read settings: {}", e);
-            return;
-        }
-    };
-    if !settings.enabled {
-        info!("cloud sync: not enabled, skipping auto-start");
-        return;
-    }
-
-    // Resolve the master password. Prefer the encrypted SecretStore; fall back
-    // to the legacy base64 copy in store.bin and migrate it (one-time) so the
-    // password is no longer kept as base64 outside the keychain-encrypted store.
-    let password = match crate::auth_token::load_sync_password().await {
-        Some(p) => p,
-        None => {
-            if settings.encrypted_password.is_empty() {
-                info!("cloud sync: enabled but no saved password, skipping auto-start");
-                return;
-            }
-            let legacy = match BASE64
-                .decode(&settings.encrypted_password)
-                .ok()
-                .and_then(|b| String::from_utf8(b).ok())
-            {
-                Some(p) => p,
-                None => {
-                    warn!("cloud sync: saved password is not valid base64/UTF-8");
-                    return;
-                }
-            };
-            // Migrate into the encrypted SecretStore and drop the base64 copy.
-            // On failure, keep the legacy copy so the next launch can retry
-            // rather than losing the password entirely.
-            match crate::auth_token::store_sync_password(&legacy).await {
-                Ok(()) => {
-                    let cleaned = CloudSyncSettingsStore {
-                        enabled: true,
-                        encrypted_password: String::new(),
-                    };
-                    let _ = cleaned.save(app);
-                    info!("cloud sync: migrated saved password from store.bin to the encrypted secret store");
-                }
-                Err(e) => {
-                    warn!(
-                        "cloud sync: failed to migrate password to secret store: {}",
-                        e
-                    );
-                }
-            }
-            legacy
-        }
-    };
-
-    let fresh_settings = match SettingsStore::get(app) {
-        Ok(Some(s)) => s,
-        _ => {
-            warn!("cloud sync: no settings found, skipping auto-start");
-            return;
-        }
-    };
-
-    let token = match fresh_settings
-        .user
-        .token
-        .clone()
-        .filter(|t| !t.is_empty())
-        .or_else(crate::auth_token::cached_cloud_token)
-    {
-        Some(t) => t,
-        None => {
-            info!("cloud sync: no auth token, skipping auto-start");
-            return;
-        }
-    };
-
-    let device_name = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "Unknown".to_string());
-    let device_os = std::env::consts::OS.to_string();
-
-    let config = SyncClientConfig::new(
-        token.clone(),
-        state.machine_id.clone(),
-        device_name,
-        device_os,
-    );
-
-    let manager = match SyncManager::new(config) {
-        Ok(m) => m,
-        Err(e) => {
-            warn!("cloud sync auto-start: failed to create manager: {}", e);
-            return;
-        }
-    };
-
-    match manager.initialize(&password).await {
-        Ok(is_new) => {
-            info!(
-                "cloud sync auto-started for {} user",
-                if is_new { "new" } else { "existing" }
-            );
-        }
-        Err(e) => {
-            warn!("cloud sync auto-start: failed to initialize: {}", e);
-            return;
-        }
-    }
-
-    *state.manager.write().await = Some(Arc::new(manager));
-    *state.enabled.write().await = true;
-
-    // Initialize the server's sync service
-    let client = reqwest::Client::new();
-    let api = local_api_context_from_app(app);
-    let init_request = serde_json::json!({
-        "token": token,
-        "password": password,
-        "machine_id": state.machine_id.clone(),
-        "sync_interval_secs": 300
-    });
-
-    match apply_local_api_auth(&api, client.post(api.url("/sync/init")))
-        .json(&init_request)
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => {
-            info!("cloud sync auto-start: server sync service initialized");
-        }
-        Ok(response) if response.status().as_u16() == 409 => {
-            info!("cloud sync auto-start: server sync already running");
-        }
-        Ok(response) => {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!(
-                "cloud sync auto-start: server init failed ({}): {}",
-                status, body
-            );
-        }
-        Err(e) => {
-            warn!("cloud sync auto-start: server not reachable: {}", e);
-        }
-    }
+    disable_persisted_cloud_sync(app, state).await;
+    info!("cloud sync: disabled because the Storage sync backend was removed");
 }
 
-/// Auto-start cloud archive on app launch if previously enabled.
-/// Called from main.rs during startup (after sync auto-start so archive can
-/// reuse the sync manager if available).
+/// Disable cloud archive on app launch if old settings previously enabled it.
 pub async fn auto_start_archive(app: &AppHandle) {
-    // Check dedicated cloud_archive store key first, then fall back to
-    // reading cloudArchiveEnabled from the main settings extra fields
-    // (for users who enabled archive before this auto-start was added).
-    let archive_settings = match CloudArchiveSettingsStore::get(app) {
-        Ok(Some(s)) if s.enabled => s,
-        _ => {
-            // Fallback: check main settings for cloudArchiveEnabled
-            match SettingsStore::get(app) {
-                Ok(Some(s)) => {
-                    let enabled = s
-                        .extra
-                        .get("cloudArchiveEnabled")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    if !enabled {
-                        return;
-                    }
-                    let days = s
-                        .extra
-                        .get("cloudArchiveRetentionDays")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(7) as u32;
-                    // Migrate: persist to dedicated key for future startups
-                    let migrated = CloudArchiveSettingsStore {
-                        enabled: true,
-                        retention_days: days,
-                    };
-                    let _ = migrated.save(app);
-                    migrated
-                }
-                _ => return,
-            }
-        }
-    };
-
-    // Get auth token from settings
-    let fresh_settings = match SettingsStore::get(app) {
-        Ok(Some(s)) => s,
-        _ => {
-            warn!("cloud archive: no settings found, skipping auto-start");
-            return;
-        }
-    };
-
-    let token = match fresh_settings
-        .user
-        .token
-        .clone()
-        .filter(|t| !t.is_empty())
-        .or_else(crate::auth_token::cached_cloud_token)
-    {
-        Some(t) => t,
-        None => {
-            info!("cloud archive: no auth token, skipping auto-start");
-            return;
-        }
-    };
-
-    let client = reqwest::Client::new();
-    let api = local_api_context_from_app(app);
-    let init_request = serde_json::json!({
-        "token": token,
-        "retention_days": archive_settings.retention_days,
-    });
-
-    // Retry up to 5 times with increasing delays if the server isn't ready yet.
-    // The server may still be starting when this runs (15s after app launch).
-    let retry_delays = [0, 5, 10, 15, 30]; // seconds
-    for (attempt, delay) in retry_delays.iter().enumerate() {
-        if *delay > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_secs(*delay)).await;
-        }
-
-        match apply_local_api_auth(&api, client.post(api.url("/archive/init")))
-            .json(&init_request)
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                info!(
-                    "cloud archive auto-started (retention={}d)",
-                    archive_settings.retention_days
-                );
-                return;
-            }
-            Ok(response) if response.status().as_u16() == 409 => {
-                info!("cloud archive: already initialized, re-enabling");
-                // Already initialized — make sure it's enabled
-                let enable_req = serde_json::json!({ "enabled": true });
-                if let Err(e) =
-                    apply_local_api_auth(&api, client.post(api.url("/archive/configure")))
-                        .json(&enable_req)
-                        .send()
-                        .await
-                {
-                    warn!("cloud archive: failed to re-enable: {}", e);
-                }
-                return;
-            }
-            Ok(response) => {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                warn!(
-                    "cloud archive auto-start: init failed ({}): {} (attempt {}/{})",
-                    status,
-                    body,
-                    attempt + 1,
-                    retry_delays.len()
-                );
-                // Non-transient error (auth, config), don't retry
-                return;
-            }
-            Err(e) => {
-                warn!(
-                    "cloud archive auto-start: server not reachable (attempt {}/{}): {}",
-                    attempt + 1,
-                    retry_delays.len(),
-                    e
-                );
-                // Transient — server may still be starting, retry
-            }
-        }
-    }
-
-    warn!(
-        "cloud archive auto-start: gave up after {} attempts",
-        retry_delays.len()
-    );
+    disable_persisted_cloud_archive(app).await;
+    info!("cloud archive: disabled because the Storage archive backend was removed");
 }
 
 /// Auto-start local data retention on app launch if previously enabled.

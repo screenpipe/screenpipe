@@ -22,6 +22,7 @@ export interface DiskUsedByMedia {
 
 export interface DiskUsedByOther {
   database_size: string;
+  database_size_bytes: number;
   logs_size: string;
   pipes_size: string;
   other_size: string;
@@ -59,7 +60,7 @@ export function useDiskUsage() {
       // Add a small delay to show loading state for very fast calculations
       const [res] = await Promise.all([
         commands.getDiskUsage(forceRefresh, dataDir),
-        new Promise(resolve => setTimeout(resolve, forceRefresh ? 300 : 500)) // Shorter delay on force refresh
+        new Promise((resolve) => setTimeout(resolve, forceRefresh ? 300 : 500)), // Shorter delay on force refresh
       ]);
 
       if (res.status === "error") throw new Error(res.error);
@@ -83,12 +84,21 @@ export function useDiskUsage() {
       }
 
       // Handle common error scenarios
-      if (errorMessage.includes("permission") || errorMessage.includes("access")) {
-        errorMessage = "Permission denied. Please check file access permissions.";
-      } else if (errorMessage.includes("not found") || errorMessage.includes("directory")) {
-        errorMessage = "Screenpipe data directory not found. Make sure Screenpipe has been initialized.";
+      if (
+        errorMessage.includes("permission") ||
+        errorMessage.includes("access")
+      ) {
+        errorMessage =
+          "Permission denied. Please check file access permissions.";
+      } else if (
+        errorMessage.includes("not found") ||
+        errorMessage.includes("directory")
+      ) {
+        errorMessage =
+          "Screenpipe data directory not found. Make sure Screenpipe has been initialized.";
       } else if (errorMessage.includes("timeout")) {
-        errorMessage = "Calculation timed out. Try again or check for very large datasets.";
+        errorMessage =
+          "Calculation timed out. Try again or check for very large datasets.";
       }
 
       setError(errorMessage);
@@ -116,4 +126,4 @@ export function useDiskUsage() {
     error,
     refetch: () => fetchDiskUsage(true), // Force refresh when user clicks refresh
   };
-} 
+}

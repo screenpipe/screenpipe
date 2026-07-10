@@ -25,10 +25,14 @@ function readStored(): number {
 /**
  * Resizable sidebar width with localStorage persistence.
  * Returns the live width (px), a drag-start handler for the resize edge,
- * and an `isResizing` flag for visual feedback.
+ * an `isResizing` flag for visual feedback, and a `hydrated` flag that
+ * flips true once the stored width has been applied — callers should
+ * suppress width transitions until then so the one-time default → stored
+ * correction snaps instead of visibly animating.
  */
 export function useSidebarWidth() {
   const [width, setWidth] = useState<number>(SIDEBAR_DEFAULT_WIDTH);
+  const [hydrated, setHydrated] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const startXRef = useRef(0);
   const startWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
@@ -36,6 +40,7 @@ export function useSidebarWidth() {
   // Hydrate from localStorage after mount to avoid SSR mismatch.
   useEffect(() => {
     setWidth(readStored());
+    setHydrated(true);
   }, []);
 
   // Persist when the user releases the handle, not on every move.
@@ -89,5 +94,5 @@ export function useSidebarWidth() {
     };
   }, [isResizing]);
 
-  return { width, isResizing, beginResize };
+  return { width, isResizing, hydrated, beginResize };
 }

@@ -5,6 +5,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useEventListener } from "@/lib/hooks/use-event-listener";
 // PipeMonitorView merged into PipesSection as device dropdown
 import { apiCache } from "@/lib/cache";
 import { localFetch } from "@/lib/api";
@@ -324,13 +325,9 @@ export function PipeStoreView() {
   const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">("my-pipes");
 
   // listen for tab switch events from empty state button
-  useEffect(() => {
-    const handler = ((e: CustomEvent<{ tab: "discover" | "my-pipes" }>) => {
-      setActiveTab(e.detail.tab);
-    }) as EventListener;
-    window.addEventListener('switch-pipes-tab', handler);
-    return () => window.removeEventListener('switch-pipes-tab', handler);
-  }, []);
+  useEventListener("switch-pipes-tab", (e) => {
+    setActiveTab((e as CustomEvent<{ tab: "discover" | "my-pipes" }>).detail.tab);
+  });
 
   // Read ?tab= from URL after mount, then strip it so it doesn't persist
   useEffect(() => {
@@ -1297,18 +1294,17 @@ function PipeDetailPanel({
     }
   };
 
-  // Cmd/Ctrl+S to save while editing
-  useEffect(() => {
-    if (!editing) return;
-    const handler = (e: KeyboardEvent) => {
+  // Cmd/Ctrl+S to save while editing (null target when not editing = detached)
+  useEventListener(
+    "keydown",
+    (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         republish();
       }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [editing, editReadme, editSource]); // eslint-disable-line react-hooks/exhaustive-deps
+    },
+    editing ? window : null,
+  );
 
   return (
     <div className="space-y-8">

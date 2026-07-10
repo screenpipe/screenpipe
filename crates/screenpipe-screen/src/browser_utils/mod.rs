@@ -12,6 +12,32 @@ pub trait BrowserUrlDetector {
         process_id: i32,
         window_title: &str,
     ) -> Result<Option<String>>;
+
+    /// Page URLs across ALL of the browser's windows, focused window first.
+    ///
+    /// Used by the meeting probe: a call can live in an unfocused pop-out or
+    /// secondary window that `get_active_url` (focused-window semantics, used
+    /// by screen capture to attribute the frame being captured — must not
+    /// change) is structurally blind to. Default falls back to the focused
+    /// window only, which keeps the Windows/Linux detectors behaving exactly
+    /// as before.
+    fn get_window_urls(&self, app_name: &str, process_id: i32) -> Result<Vec<String>> {
+        Ok(self
+            .get_active_url(app_name, process_id, "")?
+            .into_iter()
+            .collect())
+    }
+
+    /// Titles of the browser windows the detector can enumerate natively
+    /// (e.g. Arc's AppleScript `windows` collection on macOS).
+    ///
+    /// Used by the meeting probe to subtract full windows — whose active-tab
+    /// URL `get_window_urls` already resolved — from AX-title fallbacks that
+    /// only see windows invisible to the native enumeration (Little Arc).
+    /// Default: no native enumeration, nothing to subtract.
+    fn get_window_titles(&self, _app_name: &str, _process_id: i32) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 // Factory function

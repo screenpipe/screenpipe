@@ -297,12 +297,24 @@ const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
   return (
     <div className="aspect-video bg-muted relative overflow-hidden">
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2
+            className="h-4 w-4 animate-spin text-muted-foreground"
+            aria-hidden="true"
+          />
+          <span className="sr-only">loading frame</span>
         </div>
       )}
       {hasError ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-muted">
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-muted"
+          role="img"
+          aria-label={`${alt} unavailable`}
+        >
           <span className="text-xs text-muted-foreground">unavailable</span>
         </div>
       ) : (

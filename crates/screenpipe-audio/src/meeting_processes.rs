@@ -111,7 +111,17 @@ mod platform {
             }
 
             let audio_object_id = Some(process.0 .0);
-            let audio_session_id = audio_session_id(&process);
+            // Deliberately NO synthesized audio_session_id on macOS: CoreAudio
+            // has no real session identity, and the previous synthesis
+            // (`coreaudio-process:{object}:input:{device uids}`) embedded the
+            // device set the process records from — so switching the mic
+            // inside the meeting app rotated the id, the meeting watcher's
+            // ProcessKey changed, and every mic switch ended the live meeting
+            // after the 20s grace and restarted it as a "new" one (tearing
+            // down capture each time). With `None`, ProcessKey falls back to
+            // the pid — the only identity that is stable across device
+            // switches. Windows keeps real WASAPI session GUIDs.
+            let audio_session_id = None;
             let pid = process.pid().ok().map(|pid| pid as i32);
             let bundle_id = process.bundle_id().ok().map(|s| s.to_string());
             let (owner_app_name, owner_bundle_id) = owner_metadata(pid);
@@ -148,51 +158,123 @@ mod platform {
         Ok(out)
     }
 
-    fn audio_session_id(process: &ca::Process) -> Option<String> {
-        let object_id = process.0 .0;
-        if object_id == 0 {
-            return None;
-        }
-
-        let mut input_devices: Vec<String> = process
-            .prop_vec::<ca::Device>(&ca::PropSelector::PROCESS_DEVICES.input_addr())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|device| !device.is_unknown())
-            .map(|device| {
-                device
-                    .uid()
-                    .ok()
-                    .map(|uid| uid.to_string())
-                    .filter(|uid| !uid.trim().is_empty())
-                    .unwrap_or_else(|| device.0 .0.to_string())
-            })
-            .collect();
-        input_devices.sort();
-        input_devices.dedup();
-
-        if input_devices.is_empty() {
-            Some(format!("coreaudio-process:{}", object_id))
-        } else {
-            Some(format!(
-                "coreaudio-process:{}:input:{}",
-                object_id,
-                input_devices.join(",")
-            ))
-        }
-    }
-
     fn owner_metadata(pid: Option<i32>) -> (Option<String>, Option<String>) {
         let Some(pid) = pid else {
             return (None, None);
         };
-        let Some(app) = ns::RunningApp::with_pid(pid) else {
-            return (None, None);
-        };
-        (
-            app.localized_name().map(|s| s.to_string()),
-            app.bundle_id().map(|s| s.to_string()),
-        )
+        // Wrap in an autorelease pool — `ns::RunningApp::with_pid` returns an
+        // autoreleased NSRunningApplication, and reading its name/bundle-id
+        // lazily allocates an NSLock + a LaunchServices LSASN. Without draining,
+        // every poll of the audio-process meeting watcher leaks one such object
+        // triple: ACTIVE_POLL_INTERVAL is 1s and screenpipe's own always-on mic
+        // process is always in the input list, so this runs ~1x/sec and grew to
+        // ~49k retained instances over ~14.5h. Same precedent as get_frontmost_pid
+        // in screenpipe-screen. See leak_repro below.
+        cidre::objc::ar_pool(|| {
+            let Some(app) = ns::RunningApp::with_pid(pid) else {
+                return (None, None);
+            };
+            (
+                app.localized_name().map(|s| s.to_string()),
+                app.bundle_id().map(|s| s.to_string()),
+            )
+        })
+    }
+
+    /// Reproduction + regression guard for the NSRunningApplication autorelease
+    /// leak (2026-07-04). Phase 1 drives the pre-fix (unwrapped) body; phase 2
+    /// drives the fixed [`owner_metadata`]. Peak RSS (`ru_maxrss`) climbs in
+    /// phase 1 and stays flat in phase 2.
+    ///
+    /// `#[ignore]` because it's a memory/perf repro, not a fast unit test. Run:
+    ///   cargo test -p screenpipe-audio --lib meeting_processes::platform::leak_repro -- --ignored --nocapture
+    #[cfg(test)]
+    mod leak_repro {
+        use cidre::{ns, objc};
+
+        /// Peak resident memory in bytes (`ru_maxrss` is bytes on Darwin,
+        /// despite the rusage man page claiming KB).
+        fn peak_rss_bytes() -> u64 {
+            unsafe {
+                let mut ru: libc::rusage = std::mem::zeroed();
+                libc::getrusage(libc::RUSAGE_SELF, &mut ru);
+                ru.ru_maxrss as u64
+            }
+        }
+
+        fn fmt_mb(b: u64) -> String {
+            format!("{:.1} MB", (b as f64) / (1024.0 * 1024.0))
+        }
+
+        /// The pre-fix body, verbatim, so the test can prove the leak the fix
+        /// removes (unwrapped `with_pid` + property reads, no `ar_pool`).
+        fn owner_metadata_unwrapped(pid: i32) -> (Option<String>, Option<String>) {
+            let Some(app) = ns::RunningApp::with_pid(pid) else {
+                return (None, None);
+            };
+            (
+                app.localized_name().map(|s| s.to_string()),
+                app.bundle_id().map(|s| s.to_string()),
+            )
+        }
+
+        #[test]
+        #[ignore = "macOS NSRunningApplication autorelease-leak repro; prints RSS deltas"]
+        fn owner_metadata_autorelease_leak() {
+            const N: usize = 30_000;
+
+            // Cycle over the real running-app pids (collected inside a pool so the
+            // enumeration itself doesn't pollute the measurement). Falls back to
+            // self pid on a bare host with no other apps.
+            let pids: Vec<i32> = objc::ar_pool(|| {
+                let ws = ns::Workspace::shared();
+                let apps = ws.running_apps();
+                (0..apps.len()).map(|i| apps[i].pid()).collect()
+            });
+            let pids = if pids.is_empty() {
+                vec![std::process::id() as i32]
+            } else {
+                pids
+            };
+
+            // Warm one-time LaunchServices caches so they don't count as "leak".
+            for &pid in &pids {
+                let _ = super::owner_metadata(Some(pid));
+                let _ = owner_metadata_unwrapped(pid);
+            }
+
+            // -- Phase 1: pre-fix body (no ar_pool) — should leak --
+            let before1 = peak_rss_bytes();
+            for i in 0..N {
+                let _ = owner_metadata_unwrapped(pids[i % pids.len()]);
+            }
+            let delta1 = peak_rss_bytes().saturating_sub(before1);
+            eprintln!("[repro] {N} calls WITHOUT ar_pool: +{}", fmt_mb(delta1));
+
+            // -- Phase 2: fixed owner_metadata (ar_pool) — should stay flat --
+            let before2 = peak_rss_bytes();
+            for i in 0..N {
+                let _ = super::owner_metadata(Some(pids[i % pids.len()]));
+            }
+            let delta2 = peak_rss_bytes().saturating_sub(before2);
+            eprintln!("[repro] {N} calls WITH    ar_pool: +{}", fmt_mb(delta2));
+            eprintln!(
+                "[repro] leak delta (phase1 - phase2): {}",
+                fmt_mb(delta1.saturating_sub(delta2))
+            );
+
+            assert!(
+                delta1 > 2 * 1024 * 1024,
+                "expected >2 MB growth without ar_pool; got {} — leak not reproduced",
+                fmt_mb(delta1)
+            );
+            assert!(
+                delta1 > 3 * delta2.max(1),
+                "fixed path should leak <=1/3 of unwrapped; phase1={}, phase2={}",
+                fmt_mb(delta1),
+                fmt_mb(delta2)
+            );
+        }
     }
 }
 
@@ -440,8 +522,15 @@ mod platform {
                     _ => continue,
                 };
 
-                // Globally-unique, lifetime-stable session id → drives engine
-                // session identity / stickiness (ProcessKey).
+                // WASAPI SessionInstanceIdentifier: unique while the session
+                // lives, but PER-ENDPOINT — when the app switches input
+                // devices its session lands on a different endpoint and this
+                // id ROTATES. It feeds ProcessKey identity, so that rotation
+                // used to re-key the engine's meeting session on every in-app
+                // mic switch (riding the ending grace into an end/restart
+                // pair); the platform-based native keep-alive (67645e665) is
+                // what holds meetings together across it. Do NOT treat this
+                // id as lifetime-stable process identity.
                 let session_instance = control2
                     .GetSessionInstanceIdentifier()
                     .ok()

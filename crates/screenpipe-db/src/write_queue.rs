@@ -194,6 +194,9 @@ impl FatalRunEscalation {
 pub(crate) enum BatchOutcome {
     /// The batch committed, or only hit per-row errors — the connection path is fine.
     Healthy,
+    /// SQLite stayed locked after the bounded retry budget. The batch did not
+    /// commit, so this must not reset write-path health.
+    Contention,
     /// The batch failed with a fatal/recyclable connection-level error
     /// (disk I/O, malformed, pool lost). The write path is wedged.
     FatalConnection,
@@ -210,6 +213,8 @@ pub struct WriteQueueHealth {
 struct WriteQueueHealthInner {
     consecutive_fatal: std::sync::atomic::AtomicU64,
     total_fatal_batches: std::sync::atomic::AtomicU64,
+    consecutive_contention: std::sync::atomic::AtomicU64,
+    total_contention_batches: std::sync::atomic::AtomicU64,
     write_pool_reopens: std::sync::atomic::AtomicU64,
     persistent_failure_signals: std::sync::atomic::AtomicU64,
     degraded: AtomicBool,
@@ -217,13 +222,17 @@ struct WriteQueueHealthInner {
 }
 
 impl WriteQueueHealth {
-    /// True once writes have failed for `DEGRADED_AFTER`+ consecutive batches.
+    /// True once the write path has failed and needs operator attention.
     pub fn is_degraded(&self) -> bool {
         self.inner.degraded.load(Ordering::SeqCst)
     }
     /// Consecutive fatal batches right now (0 when healthy).
     pub fn consecutive_fatal_batches(&self) -> u64 {
         self.inner.consecutive_fatal.load(Ordering::SeqCst)
+    }
+    /// Consecutive batches that exceeded the SQLite lock retry budget.
+    pub fn consecutive_contention_batches(&self) -> u64 {
+        self.inner.consecutive_contention.load(Ordering::SeqCst)
     }
     /// How many times the write pool was reopened in-process.
     pub fn write_pool_reopens(&self) -> u64 {
@@ -240,6 +249,7 @@ impl WriteQueueHealth {
 
     fn record_success(&self) {
         self.inner.consecutive_fatal.store(0, Ordering::SeqCst);
+        self.inner.consecutive_contention.store(0, Ordering::SeqCst);
         self.inner.degraded.store(false, Ordering::SeqCst);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -253,6 +263,15 @@ impl WriteQueueHealth {
             .total_fatal_batches
             .fetch_add(1, Ordering::SeqCst);
         self.inner.consecutive_fatal.fetch_add(1, Ordering::SeqCst) + 1
+    }
+    fn record_contention(&self) -> u64 {
+        self.inner
+            .total_contention_batches
+            .fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .consecutive_contention
+            .fetch_add(1, Ordering::SeqCst)
+            + 1
     }
     fn set_degraded(&self) {
         self.inner.degraded.store(true, Ordering::SeqCst);
@@ -785,6 +804,19 @@ async fn drain_loop(
                     info!("write_queue: fatal run cleared");
                 }
             }
+            BatchOutcome::Contention => {
+                let consecutive_contention = health.record_contention();
+                warn!(
+                    "write_queue: SQLite write contention exceeded the retry budget ({} consecutive batch(es))",
+                    consecutive_contention
+                );
+
+                // A batch that outlives the five-second lock budget is already
+                // data loss for its caller. Restarting cannot release another
+                // SQLite writer, but this must surface immediately and recover
+                // only after a later successful batch.
+                health.set_degraded();
+            }
             BatchOutcome::FatalConnection => {
                 let now = std::time::Instant::now();
                 let fire_hook = escalation.on_fatal(now);
@@ -884,11 +916,15 @@ async fn execute_batch(
     };
 
     // Acquire connection and BEGIN IMMEDIATE with retry logic
-    let max_retries = 3;
+    const MAX_RETRIES: u32 = 3;
+    const MAX_BUSY_RETRIES: u32 = 16;
+    const BUSY_RETRY_BUDGET: Duration = Duration::from_secs(5);
+    let max_retries = MAX_RETRIES;
+    let busy_retry_started = std::time::Instant::now();
     let mut last_error = None;
     let mut conn_opt = None;
 
-    for attempt in 1..=max_retries {
+    for attempt in 1..=MAX_BUSY_RETRIES {
         // Bind the timeout result first: inlining it into `match` puts this
         // construct right at rustfmt's width boundary, where the formatter is
         // non-idempotent (it flip-flops the layout, failing `fmt --check`).
@@ -955,7 +991,7 @@ async fn execute_batch(
                 conn_opt = Some(conn);
                 break;
             }
-            Err(e) if is_nested_transaction_error(&e) => {
+            Err(e) if is_nested_transaction_error(&e) && attempt < max_retries => {
                 warn!("write_queue: BEGIN IMMEDIATE hit stuck transaction (attempt {}/{}), rolling back", attempt, max_retries);
                 match sqlx::query("ROLLBACK").execute(&mut *conn).await {
                     Ok(_) => {
@@ -971,15 +1007,29 @@ async fn execute_batch(
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
             }
-            Err(e) if attempt < max_retries && is_busy_error(&e) => {
+            Err(e)
+                if is_busy_error(&e)
+                    && busy_retry_started.elapsed() < BUSY_RETRY_BUDGET
+                    && attempt < MAX_BUSY_RETRIES =>
+            {
                 warn!(
-                    "write_queue: BEGIN IMMEDIATE busy (attempt {}/{}), retrying...",
-                    attempt, max_retries
+                    "write_queue: BEGIN IMMEDIATE busy (attempt {}/{}, elapsed {:?}), retrying...",
+                    attempt,
+                    MAX_BUSY_RETRIES,
+                    busy_retry_started.elapsed()
                 );
                 drop(conn);
                 last_error = Some(e);
-                tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                tokio::time::sleep(Duration::from_millis((50 * attempt as u64).min(500))).await;
                 continue;
+            }
+            Err(e) if is_nested_transaction_error(&e) => {
+                warn!(
+                    "write_queue: BEGIN IMMEDIATE could not clear a stuck transaction: {}",
+                    e
+                );
+                send_error_to_all(batch, e);
+                return BatchOutcome::FatalConnection;
             }
             Err(e) if should_recycle_sqlite_connection(&e) => {
                 let recovered = if is_cantopen_error(&e) {
@@ -1002,9 +1052,12 @@ async fn execute_batch(
             }
             Err(e) => {
                 warn!("write_queue: BEGIN IMMEDIATE failed: {}", e);
+                let contention = is_busy_error(&e);
                 let fatal = is_connection_error(&e);
                 send_error_to_all(batch, e);
-                return if fatal {
+                return if contention {
+                    BatchOutcome::Contention
+                } else if fatal {
                     BatchOutcome::FatalConnection
                 } else {
                     BatchOutcome::Healthy
@@ -1024,9 +1077,12 @@ async fn execute_batch(
             // as Healthy would leave the wedge in place (writes silently fail,
             // SCREENPIPE-CLI-RC) — escalate to FatalConnection so the drain
             // loop's pool reopen recovers it, same as for IOERR/CANTOPEN.
+            let contention = is_busy_error(&e);
             let fatal = should_recycle_sqlite_connection(&e) || is_nested_transaction_error(&e);
             send_error_to_all(batch, e);
-            return if fatal {
+            return if contention {
+                BatchOutcome::Contention
+            } else if fatal {
                 BatchOutcome::FatalConnection
             } else {
                 BatchOutcome::Healthy
@@ -2336,6 +2392,106 @@ mod tests {
 
         let semaphore = Arc::new(Semaphore::new(1));
         (pool, semaphore)
+    }
+
+    async fn setup_file_test_db(path: &std::path::Path) -> (Pool<Sqlite>, Arc<Semaphore>) {
+        use sqlx::sqlite::SqliteConnectOptions;
+
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .busy_timeout(Duration::from_millis(1));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(3)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE audio_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                transcription_status TEXT NOT NULL DEFAULT 'pending',
+                transcription_attempts INTEGER NOT NULL DEFAULT 0,
+                last_transcription_attempt_at TIMESTAMP,
+                transcription_failure_reason TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        (pool, Arc::new(Semaphore::new(1)))
+    }
+
+    #[tokio::test]
+    async fn write_queue_retries_a_real_sqlite_lock_until_the_capture_write_commits() {
+        use sqlx::sqlite::SqliteConnectOptions;
+        use sqlx::{Connection, SqliteConnection};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("queue.sqlite");
+        let (pool, semaphore) = setup_file_test_db(&db_path).await;
+        let queue = spawn_write_drain(
+            pool.clone(),
+            semaphore,
+            Arc::from(db_path.to_string_lossy().into_owned()),
+        );
+
+        let lock_options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .busy_timeout(Duration::from_millis(1));
+        let mut lock = SqliteConnection::connect_with(&lock_options).await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut lock)
+            .await
+            .unwrap();
+
+        let submit = tokio::spawn({
+            let queue = queue.clone();
+            async move {
+                queue
+                    .submit(WriteOp::InsertAudioChunk {
+                        file_path: "/tmp/locked-write.wav".to_string(),
+                        timestamp: None,
+                    })
+                    .await
+            }
+        });
+
+        // The old three-attempt implementation discarded this batch after
+        // roughly 150ms. Releasing the independent lock later proves the queue
+        // now waits through short-lived external SQLite contention.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        sqlx::query("COMMIT").execute(&mut lock).await.unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(3), submit)
+            .await
+            .expect("queued write should wait for the lock to clear")
+            .unwrap()
+            .expect("queued write should commit after the lock clears");
+        assert!(matches!(result, WriteResult::Id(id) if id > 0));
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audio_chunks")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 1);
+    }
+
+    #[test]
+    fn contention_keeps_health_degraded_until_a_write_succeeds() {
+        let health = WriteQueueHealth::default();
+
+        assert_eq!(health.record_contention(), 1);
+        health.set_degraded();
+        assert!(health.is_degraded());
+        assert_eq!(health.consecutive_contention_batches(), 1);
+
+        health.record_success();
+        assert!(!health.is_degraded());
+        assert_eq!(health.consecutive_contention_batches(), 0);
     }
 
     #[tokio::test]

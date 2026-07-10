@@ -160,6 +160,19 @@ impl Default for DbConfig {
 /// checkpointed the same WAL on different thresholds. Apply EXACTLY these on
 /// every pool; never set any of them to a different value on a side pool.
 ///
+/// `wal_autocheckpoint = 0` disables SQLite's INLINE auto-checkpoint entirely.
+/// With a non-zero threshold, whichever connection's COMMIT pushes the WAL past
+/// the threshold runs the checkpoint on *that* connection — under heavy load
+/// (large DB, many concurrent writers) a short read can leave the shared `-shm`
+/// WAL-index desynced, and the next inline checkpoint then copies a WAL frame to
+/// the *wrong* main-DB page (observed: a b-tree page written over page 1, the
+/// header). Setting it to `0` removes that under-load write path; ALL
+/// checkpointing is owned by the single serialized maintenance task
+/// (`start_wal_maintenance`), which also enforces a hard WAL-size ceiling so
+/// disabling auto-checkpoint cannot trade the corruption cliff for an
+/// unbounded-WAL cliff. Every pool still shares this one value (0), so the
+/// pool-parity invariant is preserved.
+///
 /// `mmap_size` (must stay `0`, see [`DbConfig`]) and `cache_size` are applied
 /// per-pool because they're tier-configurable; correctness only needs
 /// `mmap_size == 0` everywhere, which the pool-parity test asserts separately.
@@ -169,10 +182,11 @@ pub const WAL_SAFETY_PRAGMAS: [(&str, &str); 4] = [
     // the main DB) and cuts commit latency vs the FULL default.
     ("synchronous", "NORMAL"),
     ("temp_store", "MEMORY"),
-    // Checkpoint after ~4000 pages (~16MB) not SQLite's default 1000 (~4MB).
-    // CRITICAL: every pool over this file must use the SAME threshold or they
-    // race checkpoints on the shared -shm WAL-index (the corruption above).
-    ("wal_autocheckpoint", "4000"),
+    // 0 = no inline auto-checkpoint on committing connections. The single
+    // maintenance task is the sole checkpointer (see doc above). CRITICAL:
+    // every pool over this file must use the SAME value or they race
+    // checkpoints on the shared -shm WAL-index (the corruption above).
+    ("wal_autocheckpoint", "0"),
 ];
 
 /// Audio/transcription channel capacities tuned per device tier.

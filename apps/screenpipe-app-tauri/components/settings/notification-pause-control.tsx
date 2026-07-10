@@ -4,6 +4,7 @@
 "use client";
 
 import React from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { Moon } from "lucide-react";
@@ -48,13 +49,13 @@ export function NotificationPauseControl({
   onTurnOff,
   onQuietChange,
 }: NotificationPauseControlProps) {
-  // Re-render once a minute so an expiring snooze clears itself in the UI.
+  // Re-render once a minute so an expiring snooze clears itself in the UI;
+  // pause the ticker (null delay) once nothing is snoozed.
   const [, setTick] = React.useState(0);
-  React.useEffect(() => {
-    if (snoozeUntil <= Date.now()) return;
-    const id = window.setInterval(() => setTick((t) => t + 1), 30_000);
-    return () => window.clearInterval(id);
-  }, [snoozeUntil]);
+  useInterval(
+    () => setTick((t) => t + 1),
+    snoozeUntil > Date.now() ? 30_000 : null,
+  );
 
   const isSnoozed = snoozeUntil > Date.now();
   const quietNow = isQuietActive(quietHours);

@@ -65,6 +65,16 @@ jobs:
           shared-key: ci-test-ubuntu
           cache-bin: false
 
+      # After rust-cache on purpose — see the action's ordering note.
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.2
@@ -125,6 +135,16 @@ jobs:
         with:
           shared-key: ci-test-windows
           cache-bin: false
+
+      # After rust-cache on purpose — see the action's ordering note.
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - name: setup Bun
         uses: oven-sh/setup-bun@v2
@@ -345,6 +365,16 @@ jobs:
         with:
           shared-key: ci-test-macos
           cache-bin: false
+
+      # After rust-cache on purpose — see the action's ordering note.
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - name: Verify Rust toolchain
         shell: bash

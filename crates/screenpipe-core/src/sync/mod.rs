@@ -111,7 +111,7 @@ pub use crypto::{
 };
 pub use device::get_or_create_machine_id;
 pub use error::{SyncError, SyncResult};
-pub use keys::{ExistingUserKeyData, NewUserKeyData, SyncKeys};
+pub use keys::{derive_auto_sync_password, ExistingUserKeyData, NewUserKeyData, SyncKeys};
 pub use manager::{DownloadedBlob, SearchMatchInfo, SearchResult, SyncManager, UploadResult};
 pub use service::{
     PendingBlob, SyncCommand, SyncDataProvider, SyncEvent, SyncReport, SyncService,

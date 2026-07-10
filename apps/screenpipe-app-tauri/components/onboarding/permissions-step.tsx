@@ -99,14 +99,6 @@ export default function PermissionsStep({
 
   const permissions: PermissionDef[] = [
     {
-      id: "screen",
-      icon: <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture your screen",
-      subtitle: "Lets Screenpipe index what's on your screen — windows, docs, chats, code",
-      check: () => commands.checkScreenRecordingPermission(),
-      request: () => requestPermissionWithFlow("screenRecording"),
-    },
-    {
       id: "mic",
       icon: <Mic className="w-3.5 h-3.5" strokeWidth={1.5} />,
       title: "Capture what you say",
@@ -122,6 +114,16 @@ export default function PermissionsStep({
       check: () => commands.checkAccessibilityPermissionCmd(),
       request: () => requestPermissionWithFlow("accessibility"),
       macOnly: true,
+    },
+    {
+      id: "screen",
+      icon: <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />,
+      title: "Capture your screen",
+      subtitle: "Lets Screenpipe index what's on your screen — windows, docs, chats, code",
+      // requested last: granting this requires an app restart to take effect,
+      // so asking earlier just sends the user back into settings again mid-flow
+      check: () => commands.checkScreenRecordingPermission(),
+      request: () => requestPermissionWithFlow("screenRecording"),
     },
     {
       id: "browsers",

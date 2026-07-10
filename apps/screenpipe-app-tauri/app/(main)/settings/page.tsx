@@ -22,9 +22,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
+import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { useQueryState } from "nuqs";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AccountSection, searchIndex as accountSearchIndex } from "@/components/settings/account-section";
 import ShortcutSection, { searchIndex as shortcutsSearchIndex } from "@/components/settings/shortcut-section";
 import { AIPresets, searchIndex as aiSearchIndex } from "@/components/settings/ai-presets";
@@ -205,6 +205,8 @@ function ReferralSection() {
 
 function SettingsContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromSection = searchParams.get("from");
   const { isSectionHidden, isEnterprise } = useEnterprisePolicy();
   const { isTranslucent } = useSidebarContext();
 
@@ -358,8 +360,10 @@ function SettingsContent() {
     }
   };
 
+  // The outer flex row (sidebar shell + content) lives in the shared
+  // (main)/layout.tsx so the sidebar width survives navigation to /home.
   return (
-    <div className={cn("flex h-screen overflow-hidden", isTranslucent ? "bg-transparent" : "bg-background")}>
+    <>
       {/* Drag region */}
       <div className="absolute top-0 left-0 right-0 h-8 z-10" data-tauri-drag-region />
 
@@ -369,7 +373,19 @@ function SettingsContent() {
         <div className={cn("px-4 py-3 border-b", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
           <button
             data-testid="settings-back-to-app"
-            onClick={() => router.push("/home")}
+            onClick={() => {
+              let section = fromSection;
+              let chatId: string | null = null;
+              // Parse "home:<chatId>" format to restore the active chat
+              if (fromSection?.startsWith("home:")) {
+                section = "home";
+                chatId = fromSection.slice(5);
+              }
+              if (chatId) {
+                localStorage.setItem("pending-chat-conversation", chatId);
+              }
+              router.push(section ? `/home?section=${section}` : "/home");
+            }}
             className={cn(
               "flex items-center space-x-1.5 text-sm transition-colors w-full",
               isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground",
@@ -480,20 +496,18 @@ function SettingsContent() {
           {renderSection()}
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
 export default function SettingsPage() {
   return (
     <Suspense fallback={
-      <div className="h-screen bg-background flex items-center justify-center">
+      <div className="flex-1 min-w-0 h-full bg-background flex items-center justify-center">
         <div className="text-muted-foreground text-sm">Loading...</div>
       </div>
     }>
-      <SidebarProvider>
-        <SettingsContent />
-      </SidebarProvider>
+      <SettingsContent />
     </Suspense>
   );
 }

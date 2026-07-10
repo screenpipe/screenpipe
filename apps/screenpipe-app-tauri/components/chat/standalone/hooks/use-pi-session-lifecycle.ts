@@ -84,7 +84,19 @@ export function usePiSessionLifecycle({
     const presets = aiPresets ?? [];
     const fallback = presets.find((preset) => preset.defaultPreset) ?? presets[0];
     setActivePreset((prev) => {
-      if (!prev) return fallback;
+      if (!prev) {
+        // On fresh mount after a navigation (e.g. settings → home), restore
+        // the user's last-selected preset from localStorage instead of
+        // falling back to the default. localStorage is written by
+        // handleSetActivePreset on explicit user selection.
+        let savedId: string | null = null;
+        try { savedId = localStorage.getItem("chat-active-preset-id"); } catch {}
+        if (savedId) {
+          const saved = presets.find((preset) => preset.id === savedId);
+          if (saved) return saved;
+        }
+        return fallback;
+      }
       const stillThere = presets.find((preset) => preset.id === prev.id);
       if (stillThere) {
         return stillThere.provider === prev.provider &&

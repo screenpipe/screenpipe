@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 screenpipe captures accessibility trees, with OCR as fallback and conversations, and index them for AI consumption locally
 

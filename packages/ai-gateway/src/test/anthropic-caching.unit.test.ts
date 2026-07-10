@@ -6,14 +6,16 @@
  * (Pi chat + pipes go through AnthropicProvider).
  *
  * Pins the invariants that make caching actually save money:
- * 1. System prompt always carries cache_control (no size gate — below-minimum
+ * 1. Tool schemas carry cache_control, so large stable tool lists cache even
+ *    when there is no system prompt.
+ * 2. System prompt always carries cache_control (no size gate — below-minimum
  *    markers are free no-ops, missing markers lose hits).
- * 2. The LAST cacheable block of the LAST message carries cache_control, so
+ * 3. The LAST cacheable block of the LAST message carries cache_control, so
  *    agentic loops re-read the whole conversation at ~0.1x instead of 1x.
- * 3. ≤ 4 breakpoints per request (hard API limit).
- * 4. Conversion is deterministic AND turn N's blocks are a strict prefix of
+ * 4. ≤ 4 breakpoints per request (hard API limit).
+ * 5. Conversion is deterministic AND turn N's blocks are a strict prefix of
  *    turn N+1's blocks — byte-stable prefixes are what cache hits match on.
- * 5. Cache usage flows back out (totals + cached/written subsets) so cost
+ * 6. Cache usage flows back out (totals + cached/written subsets) so cost
  *    tracking can verify the savings.
  *
  * Run with: bun test src/test/anthropic-caching.unit.test.ts
@@ -120,6 +122,28 @@ describe('system prompt cache breakpoints', () => {
 	});
 });
 
+describe('tool schema cache breakpoints', () => {
+	it('marks the last tool definition even when there is no system prompt', async () => {
+		const { provider, calls } = makeProvider();
+		await provider.createCompletion(body(
+			[{ role: 'user', content: 'hi' }],
+			{
+				tools: [
+					{ type: 'function', function: { name: 'search', description: 'Search screen data', parameters: {} } },
+					{ type: 'function', function: { name: 'read_file', description: 'Read a file', parameters: {} } },
+				],
+			},
+		));
+
+		expect(calls[0].tools).toHaveLength(2);
+		expect(calls[0].tools[0].cache_control).toBeUndefined();
+		expect(calls[0].tools[1].cache_control).toEqual({ type: 'ephemeral' });
+		const last = calls[0].messages[calls[0].messages.length - 1];
+		expect(last.content[last.content.length - 1].cache_control).toEqual({ type: 'ephemeral' });
+		expect(countBreakpoints(calls[0])).toBe(2);
+	});
+});
+
 describe('message-history cache breakpoint', () => {
 	it('marks the last text block of the last message', async () => {
 		const { provider, calls } = makeProvider();
@@ -170,8 +194,9 @@ describe('message-history cache breakpoint', () => {
 			{ tools: [{ type: 'function', function: { name: 't', parameters: {} } }] },
 		));
 		expect(countBreakpoints(calls[0])).toBeLessThanOrEqual(4);
-		// exactly: system first + system last + last message block = 3
-		expect(countBreakpoints(calls[0])).toBe(3);
+		// exactly: tool + system first + system last + last message block = 4
+		expect(calls[0].tools[0].cache_control).toEqual({ type: 'ephemeral' });
+		expect(countBreakpoints(calls[0])).toBe(4);
 	});
 
 	it('applies the same breakpoints on the streaming path', async () => {

@@ -8,6 +8,23 @@ use std::collections::HashMap;
 
 const MAX_SPEAKER_EXAMPLES: usize = 10;
 
+/// Upper bound on distinct speaker clusters kept in memory when no meeting is
+/// active (meetings set their own tighter cap via `set_max_speakers`).
+///
+/// The clusters were previously unbounded (`usize::MAX`) and only ever dropped
+/// by `clear_speakers`, which is called *between meetings*. In a long,
+/// continuous, no-meeting session — screenpipe's normal always-on mode — system
+/// audio (podcasts, videos, music) and varied voices spawn a fresh cluster
+/// almost every speech segment, so `speakers` / `speaker_examples` grew without
+/// limit for the life of the process. That is a slow memory leak *and* a
+/// per-segment CPU leak: `search_speaker` scans every cluster (and up to
+/// `MAX_SPEAKER_EXAMPLES` embeddings each) on every segment, so cost climbs with
+/// cluster count. Bounding it makes `search_speaker` force-merge into the
+/// closest existing cluster once full (the same path meetings already use),
+/// which caps both memory and per-segment work. 1024 is far more distinct
+/// speakers than any real session needs, so normal diarization is unaffected.
+pub const DEFAULT_MAX_SPEAKERS: usize = 1024;
+
 #[derive(Debug, Clone)]
 pub struct EmbeddingManager {
     max_speakers: usize,
@@ -82,9 +99,12 @@ impl EmbeddingManager {
         self.max_speakers = max;
     }
 
-    /// Reset max_speakers to unlimited (usize::MAX).
+    /// Reset max_speakers to the no-meeting default cap.
+    /// Called when a meeting ends. Previously reset to `usize::MAX`
+    /// (unbounded); now bounded by [`DEFAULT_MAX_SPEAKERS`] so a long
+    /// no-meeting session can't grow speaker clusters without limit.
     pub fn reset_max_speakers(&mut self) {
-        self.max_speakers = usize::MAX;
+        self.max_speakers = DEFAULT_MAX_SPEAKERS;
     }
 
     /// Clear all speakers and reset the ID counter.
@@ -250,6 +270,51 @@ mod tests {
         let id = mgr.search_speaker(vec![0.0, 0.0, 0.0, 1.0], 0.0);
         assert!(id.is_some());
         assert_eq!(mgr.speaker_count(), 4);
+    }
+
+    #[test]
+    fn no_meeting_default_is_bounded_not_unbounded() {
+        // Regression: the no-meeting default used to be `usize::MAX`, so speaker
+        // clusters grew without limit for the life of a long, continuous,
+        // no-meeting session (screenpipe's normal always-on mode) — a slow
+        // memory leak and a per-segment CPU leak (search_speaker scans every
+        // cluster). The default must now be finite.
+        assert_ne!(DEFAULT_MAX_SPEAKERS, usize::MAX);
+        assert!(
+            DEFAULT_MAX_SPEAKERS >= 256,
+            "cap must be generous enough not to harm real diarization"
+        );
+
+        // Feed far more distinct (orthogonal, so never matching) embeddings than
+        // the cap. Without a bound this would allocate one cluster each; with the
+        // bound, search_speaker force-merges into the closest existing cluster
+        // once full, so the count stays capped.
+        let cap = 8usize;
+        let n = cap * 12;
+        let mut mgr = EmbeddingManager::new(cap);
+        for i in 0..n {
+            let mut e = vec![0.0f32; n]; // one-hot => all mutually orthogonal
+            e[i] = 1.0;
+            mgr.search_speaker(e, 0.999);
+        }
+        assert!(
+            mgr.speaker_count() <= cap,
+            "clusters must stay bounded by the cap; got {} for cap {}",
+            mgr.speaker_count(),
+            cap
+        );
+
+        // A manager whose meeting cap is lifted (meeting ended) also falls back
+        // to the finite default, not unbounded.
+        let mut mgr2 = EmbeddingManager::new(2);
+        mgr2.set_max_speakers(2);
+        mgr2.reset_max_speakers();
+        // 3 orthogonal embeddings now succeed (default cap >> 3), proving reset
+        // re-enabled creation, while remaining finite (asserted above).
+        mgr2.search_speaker(vec![1.0, 0.0, 0.0], 0.999);
+        mgr2.search_speaker(vec![0.0, 1.0, 0.0], 0.999);
+        mgr2.search_speaker(vec![0.0, 0.0, 1.0], 0.999);
+        assert_eq!(mgr2.speaker_count(), 3);
     }
 
     #[test]

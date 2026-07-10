@@ -295,6 +295,73 @@ async fn flush_level0_bulk(
     Ok(())
 }
 
+/// One accessibility-tree element row, buffered for bulk insertion. `id` is
+/// reserved client-side (see `DatabaseManager::insert_accessibility_elements`)
+/// so `parent_id` references are known before any row is written.
+struct AxRow<'a> {
+    id: i64,
+    role: &'a str,
+    text: Option<&'a str>,
+    parent_id: Option<i64>,
+    depth: i32,
+    left: Option<f64>,
+    top: Option<f64>,
+    width: Option<f64>,
+    height: Option<f64>,
+    sort_order: i32,
+    properties: Option<String>,
+    on_screen: Option<i64>,
+}
+
+/// Bulk-insert a batch of accessibility elements with pre-assigned ids.
+/// Because ids are reserved up front, a whole frame's tree can go in as one
+/// multi-row INSERT instead of N `RETURNING id` round-trips — the win is
+/// specific to accessibility because every node (not just leaves) can be a
+/// parent, so the old code paid a round-trip per node. Row order must keep
+/// each parent before its children within the statement: SQLite checks
+/// immediate foreign keys (`elements.parent_id -> elements.id`, enabled by
+/// sqlx's default `PRAGMA foreign_keys = ON`) as each row lands, so a child
+/// row would fail FK validation if its parent hasn't been inserted yet in
+/// this same statement. Depth-first tree order already guarantees this.
+async fn flush_ax_bulk(
+    tx: &mut sqlx::pool::PoolConnection<Sqlite>,
+    frame_id: i64,
+    chunk: &[AxRow<'_>],
+) -> Result<(), sqlx::Error> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    let mut sql = String::with_capacity(260 + chunk.len() * 60);
+    sql.push_str(
+        "INSERT INTO elements (id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, properties, on_screen) VALUES ",
+    );
+    for i in 0..chunk.len() {
+        if i > 0 {
+            sql.push(',');
+        }
+        sql.push_str("(?,?,'accessibility',?,?,?,?,?,?,?,?,NULL,?,?,?)");
+    }
+    let mut q = sqlx::query(&sql);
+    for row in chunk {
+        q = q
+            .bind(row.id)
+            .bind(frame_id)
+            .bind(row.role)
+            .bind(row.text)
+            .bind(row.parent_id)
+            .bind(row.depth)
+            .bind(row.left)
+            .bind(row.top)
+            .bind(row.width)
+            .bind(row.height)
+            .bind(row.sort_order)
+            .bind(row.properties.as_deref())
+            .bind(row.on_screen);
+    }
+    q.execute(&mut **tx).await?;
+    Ok(())
+}
+
 mod accessibility;
 mod audio;
 mod display_layout;

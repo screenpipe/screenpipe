@@ -464,6 +464,12 @@ async fn main() -> anyhow::Result<()> {
         warn!("failed to apply keep-awake setting: {}", e);
     }
 
+    // Yield CPU to foreground apps (Windows: BELOW_NORMAL priority class).
+    // CLI-record only — the desktop app gets targeted lowering of background
+    // work instead; see the process_priority module doc. Placed before any
+    // child spawns so ffmpeg/pipe children inherit the class.
+    screenpipe_engine::process_priority::set_background_priority();
+
     // Non-blocking update check — runs in background, prints banner if outdated
     tokio::spawn(async {
         screenpipe_engine::cli_reminder::check_for_updates().await;

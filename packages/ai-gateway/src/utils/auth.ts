@@ -12,14 +12,15 @@ import { activeSubscriptionFilter } from './subscription';
  * @returns Promise resolving to boolean indicating if token is valid
  */
 export async function verifyClerkToken(env: Env, token: string): Promise<{ valid: boolean; userId?: string }> {
-  console.log('verifying clerk token', token);
   try {
     const payload = await verifyToken(token, {
       secretKey: env.CLERK_SECRET_KEY,
     });
     return { valid: payload.sub !== null, userId: payload.sub ?? undefined };
-  } catch (error) {
-    console.error('clerk verification failed:', error);
+  } catch {
+    // Never log the JWT or upstream verification error verbatim: worker logs
+    // are broadly accessible operational data and may retain request context.
+    console.error('clerk verification failed');
     return { valid: false };
   }
 }
@@ -208,10 +209,10 @@ async function validateSubscriptionWithId(env: Env, token: string): Promise<{ is
         const subs = await subsRes.json() as Array<{ id: string }>;
         hasSub = subs.length > 0;
       } else {
-        console.error('Supabase subscription check error:', await subsRes.text());
+        console.error('Supabase subscription check failed', subsRes.status);
       }
-    } catch (error) {
-      console.error('Error in UUID auth path:', error);
+    } catch {
+      console.error('UUID subscription check failed');
     }
     // Always return resolvedUserId (clerk_id when available, UUID otherwise)
     // so the non-subscribed UUID branch upstream also keys on the same id.
@@ -220,7 +221,6 @@ async function validateSubscriptionWithId(env: Env, token: string): Promise<{ is
 
   // Clerk user IDs - resolve to UUID first, then check subscription
   if (CLERK_USER_ID_REGEX.test(token)) {
-    console.log('Clerk user ID detected, resolving to UUID:', token);
     try {
       // Resolve clerk_id to Supabase UUID (has_active_cloud_subscription expects uuid)
       const userResponse = await fetch(
@@ -255,8 +255,8 @@ async function validateSubscriptionWithId(env: Env, token: string): Promise<{ is
           }
         }
       }
-    } catch (error) {
-      console.error('Error checking Clerk user subscription:', error);
+    } catch {
+      console.error('Clerk user subscription check failed');
     }
     // Not subscribed - don't auto-grant, return false so it falls through
     return { isValid: false };
@@ -292,7 +292,6 @@ async function validateScreenpipeToken(token: string): Promise<{ isValid: boolea
     if (response.ok) {
       const data = await response.json() as { success?: boolean; user?: ScreenpipeUserData };
       const userData = data.user;
-      console.log('Valid screenpipe user token, user:', userData?.email);
       return {
         isValid: true,
         userId: userData?.clerk_id || userData?.id || userData?.email,
@@ -302,8 +301,8 @@ async function validateScreenpipeToken(token: string): Promise<{ isValid: boolea
       console.log('Invalid screenpipe user token');
       return { isValid: false };
     }
-  } catch (error) {
-    console.error('Error validating screenpipe token:', error);
+  } catch {
+    console.error('screenpipe token validation failed');
     return { isValid: false };
   }
 }

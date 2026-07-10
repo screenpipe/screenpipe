@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 // native HTTP (no webview CORS) — same client the enterprise policy poll uses
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { useSettings } from "./use-settings";
@@ -134,11 +135,9 @@ export function useCloudRunner(active: boolean) {
 
   // poll while visible — provisioning/heartbeat states move
   useEffect(() => {
-    if (!active) return;
-    refresh();
-    const interval = setInterval(refresh, 15_000);
-    return () => clearInterval(interval);
+    if (active) refresh();
   }, [active, refresh]);
+  useInterval(refresh, active ? 15_000 : null);
 
   const mutate = useCallback(
     async (method: "POST" | "PATCH" | "DELETE", body?: object) => {

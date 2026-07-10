@@ -43,6 +43,9 @@ describe('OpenAI API model catalog', () => {
 	it('advertises current OpenAI chat models when OPENAI_API_KEY is configured', async () => {
 		const ids = await listedModelIds();
 
+		expect(ids).toContain('gpt-5.6-sol');
+		expect(ids).toContain('gpt-5.6-terra');
+		expect(ids).toContain('gpt-5.6-luna');
 		expect(ids).toContain('gpt-5.5');
 		expect(ids).toContain('gpt-5.5-pro');
 		expect(ids).toContain('gpt-5.4');
@@ -55,6 +58,7 @@ describe('OpenAI API model catalog', () => {
 	it('hides OpenAI models until OPENAI_API_KEY is configured', async () => {
 		const ids = await listedModelIds({ OPENAI_API_KEY: '' });
 
+		expect(ids).not.toContain('gpt-5.6-terra');
 		expect(ids).not.toContain('gpt-5.5');
 		expect(ids).not.toContain('gpt-5.5-pro');
 		expect(ids).not.toContain('gpt-5.4');
@@ -137,7 +141,9 @@ describe('OpenAI API accounting and routing', () => {
 	it('routes GPT models through the direct OpenAI provider', () => {
 		const provider = createProvider('gpt-5.5', env());
 		expect(provider).toBeInstanceOf(OpenAIProvider);
+		expect(createProvider('gpt-5.6-terra', env())).toBeInstanceOf(OpenAIProvider);
 		expect(inferProvider('gpt-5.4-mini')).toBe('openai');
+		expect(inferProvider('gpt-5.6-luna')).toBe('openai');
 		expect(inferProvider('o4-mini')).toBe('openai');
 	});
 
@@ -152,6 +158,9 @@ describe('OpenAI API accounting and routing', () => {
 	});
 
 	it('uses exact OpenAI prices instead of the unknown-model fallback', () => {
+		expect(getModelCost('gpt-5.6-sol', null, null)).toBeCloseTo(0.025, 6);
+		expect(getModelCost('gpt-5.6-terra', null, null)).toBeCloseTo(0.0125, 6);
+		expect(getModelCost('gpt-5.6-luna', null, null)).toBeCloseTo(0.005, 6);
 		expect(getModelCost('gpt-5.5', null, null)).toBeCloseTo(0.025, 6);
 		expect(getModelCost('gpt-5.3-codex', null, null)).toBeCloseTo(0.0105, 6);
 		expect(getModelCost('gpt-5.4-nano', null, null)).toBeCloseTo(0.001025, 6);
@@ -173,6 +182,9 @@ describe('OpenAI API accounting and routing', () => {
 	});
 
 	it('assigns quota weights for expensive and cheap OpenAI models', () => {
+		expect(getModelWeight('gpt-5.6-sol')).toBe(6);
+		expect(getModelWeight('gpt-5.6-terra')).toBe(3);
+		expect(getModelWeight('gpt-5.6-luna')).toBe(1);
 		expect(getModelWeight('gpt-5.5-pro')).toBe(36);
 		expect(getModelWeight('gpt-5.5')).toBe(6);
 		expect(getModelWeight('gpt-5.4-pro')).toBe(36);

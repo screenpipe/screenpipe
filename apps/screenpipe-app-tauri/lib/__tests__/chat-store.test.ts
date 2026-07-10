@@ -16,7 +16,9 @@ import {
   getOrCreateEmptyChatId,
   dedupeSessionRecords,
   sessionRecordFromMeta,
+  applyChatSessionActivity,
   type SessionRecord,
+  type ChatSessionActivityPayload,
 } from "../stores/chat-store";
 
 function reset() {
@@ -255,6 +257,68 @@ describe("chat-store: getOrCreateEmptyChatId (no spam on +new)", () => {
     const { id, isNew } = getOrCreateEmptyChatId();
     expect(id).toBe("newEmpty");
     expect(isNew).toBe(false);
+  });
+
+  it("does NOT reuse on-disk-hydrated conversations that carry no in-memory messages (#4719 regression)", () => {
+    // Disk-synced sidebar rows have no `messages` array but a real
+    // messageCount. A naive messages.length check treated them as empty,
+    // making "+ new chat" hop through the sidebar instead of opening fresh.
+    useChatStore.setState({
+      sessions: {
+        diskChat: baseRecord({
+          id: "diskChat",
+          kind: "chat",
+          messageCount: 6,
+          messages: undefined,
+        }),
+      },
+      currentId: null,
+      panelSessionId: null,
+    });
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(isNew).toBe(true);
+    expect(id).not.toBe("diskChat");
+  });
+
+  it("does NOT reuse pipe-run / pipe-watch sessions (#4719 regression)", () => {
+    useChatStore.setState({
+      sessions: {
+        pipeRun: baseRecord({
+          id: "pipeRun",
+          kind: "pipe-run",
+          messageCount: 0,
+          messages: [],
+        }),
+      },
+      currentId: null,
+      panelSessionId: "pipeRun",
+    });
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(isNew).toBe(true);
+    expect(id).not.toBe("pipeRun");
+  });
+
+  it("repeated '+ new chat' (via the entry-point flow) never floods empty rows (#4719)", () => {
+    // Mirrors app/home/page.tsx startNewChat: get-or-create, upsert a draft
+    // only when new, then set current. Clicking "+ new chat" N times with no
+    // message sent must leave exactly ONE empty session, not N.
+    const clickNewChat = () => {
+      const store = useChatStore.getState();
+      const { id, isNew } = getOrCreateEmptyChatId();
+      if (isNew) {
+        store.actions.upsert(baseRecord({ id, messages: [], draft: true }));
+      }
+      store.actions.setCurrent(id);
+      return id;
+    };
+
+    const first = clickNewChat();
+    const second = clickNewChat();
+    const third = clickNewChat();
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(Object.keys(useChatStore.getState().sessions)).toEqual([first]);
   });
 });
 
@@ -669,5 +733,145 @@ describe("chat-store: cross-window duplicate row collapsing", () => {
       withMessages("b", "totally different", "y", { createdAt: 1_100 }),
     );
     expect(selectOrderedSessions(useChatStore.getState())).toHaveLength(2);
+  });
+});
+
+/**
+ * applyChatSessionActivity — characterization tests for the `chat-session-activity`
+ * merge logic extracted from app/home/page.tsx. These lock in the exact
+ * upsert-vs-patch, staleness, title/preview/status merge, lastError, and
+ * unread-hint behavior so the useEffect→useTauriEvent refactor (#4791) is
+ * provably behavior-preserving. `now` is injected for determinism.
+ */
+describe("chat-store: applyChatSessionActivity", () => {
+  beforeEach(reset);
+
+  const NOW = 9_999;
+
+  it("creates a new session with defaults when none exists", () => {
+    applyChatSessionActivity(useChatStore.getState(), { id: "A", updatedAt: 2_000 });
+    const s = useChatStore.getState().sessions["A"];
+    expect(s).toBeDefined();
+    expect(s.title).toBe("untitled");
+    expect(s.preview).toBe("");
+    expect(s.status).toBe("idle");
+    expect(s.createdAt).toBe(2_000);
+    expect(s.updatedAt).toBe(2_000);
+    expect(s.messageCount).toBe(0);
+    expect(s.pinned).toBe(false);
+  });
+
+  it("carries title/preview/status through on create and trims the title", () => {
+    applyChatSessionActivity(useChatStore.getState(), {
+      id: "A",
+      title: "  hello  ",
+      preview: "hi there",
+      status: "streaming",
+      updatedAt: 2_000,
+    });
+    const s = useChatStore.getState().sessions["A"];
+    expect(s.title).toBe("hello");
+    expect(s.preview).toBe("hi there");
+    expect(s.status).toBe("streaming");
+  });
+
+  it("ignores undefined payloads and those missing id or updatedAt", () => {
+    applyChatSessionActivity(useChatStore.getState(), undefined);
+    applyChatSessionActivity(useChatStore.getState(), { id: "", updatedAt: 1 });
+    applyChatSessionActivity(useChatStore.getState(), { id: "A", updatedAt: 0 });
+    expect(Object.keys(useChatStore.getState().sessions)).toHaveLength(0);
+  });
+
+  it("drops stale events (existing.updatedAt > incoming.updatedAt)", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A", title: "keep", updatedAt: 5_000 }));
+    applyChatSessionActivity(useChatStore.getState(), { id: "A", title: "stale", updatedAt: 4_000 });
+    const s = useChatStore.getState().sessions["A"];
+    expect(s.title).toBe("keep");
+    expect(s.updatedAt).toBe(5_000);
+  });
+
+  it("patches existing and falls back to existing preview/status when omitted", () => {
+    useChatStore.getState().actions.upsert(
+      baseRecord({ id: "A", title: "old", preview: "oldprev", status: "idle", updatedAt: 1_000 }),
+    );
+    applyChatSessionActivity(useChatStore.getState(), { id: "A", title: "new", updatedAt: 2_000 });
+    const s = useChatStore.getState().sessions["A"];
+    expect(s.title).toBe("new");
+    expect(s.preview).toBe("oldprev");
+    expect(s.status).toBe("idle");
+    expect(s.updatedAt).toBe(2_000);
+  });
+
+  it("keeps the existing title when the incoming title is blank", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A", title: "real", updatedAt: 1_000 }));
+    applyChatSessionActivity(useChatStore.getState(), { id: "A", title: "   ", updatedAt: 2_000 });
+    expect(useChatStore.getState().sessions["A"].title).toBe("real");
+  });
+
+  describe("lastError handling", () => {
+    it("sets a non-empty lastError", () => {
+      useChatStore.getState().actions.upsert(baseRecord({ id: "A", updatedAt: 1_000 }));
+      applyChatSessionActivity(useChatStore.getState(), { id: "A", lastError: "boom", updatedAt: 2_000 });
+      expect(useChatStore.getState().sessions["A"].lastError).toBe("boom");
+    });
+
+    it("clears lastError when passed an empty string", () => {
+      useChatStore.getState().actions.upsert(baseRecord({ id: "A", lastError: "old", updatedAt: 1_000 }));
+      applyChatSessionActivity(useChatStore.getState(), { id: "A", lastError: "", updatedAt: 2_000 });
+      expect(useChatStore.getState().sessions["A"].lastError).toBeUndefined();
+    });
+
+    it("preserves existing lastError when omitted and status stays error", () => {
+      useChatStore.getState().actions.upsert(
+        baseRecord({ id: "A", status: "error", lastError: "prev", updatedAt: 1_000 }),
+      );
+      applyChatSessionActivity(useChatStore.getState(), { id: "A", preview: "changed", updatedAt: 2_000 });
+      expect(useChatStore.getState().sessions["A"].lastError).toBe("prev");
+    });
+
+    it("drops lastError when omitted and status is not error", () => {
+      useChatStore.getState().actions.upsert(
+        baseRecord({ id: "A", status: "error", lastError: "prev", updatedAt: 1_000 }),
+      );
+      applyChatSessionActivity(useChatStore.getState(), { id: "A", status: "idle", updatedAt: 2_000 });
+      expect(useChatStore.getState().sessions["A"].lastError).toBeUndefined();
+    });
+  });
+
+  describe("unreadHint -> lastContentAt", () => {
+    it("sets lastContentAt (injected now) when hinted and NOT foreground", () => {
+      useChatStore.getState().actions.upsert(baseRecord({ id: "A", updatedAt: 1_000 }));
+      applyChatSessionActivity(
+        useChatStore.getState(),
+        { id: "A", preview: "changed", unreadHint: true, updatedAt: 2_000 },
+        NOW,
+      );
+      expect(useChatStore.getState().sessions["A"].lastContentAt).toBe(NOW);
+    });
+
+    it("does NOT set lastContentAt when the session is foreground", () => {
+      useChatStore.getState().actions.upsert(baseRecord({ id: "A", updatedAt: 1_000 }));
+      useChatStore.setState({ currentId: "A" });
+      applyChatSessionActivity(
+        useChatStore.getState(),
+        { id: "A", preview: "changed", unreadHint: true, updatedAt: 2_000 },
+        NOW,
+      );
+      expect(useChatStore.getState().sessions["A"].lastContentAt).toBeUndefined();
+    });
+
+    it("skips the unread hint when the merge is a no-op (equality early-return)", () => {
+      // Characterizes existing behavior: the no-op equality guard returns from
+      // the whole function, so an unread hint is skipped when nothing changed.
+      useChatStore.getState().actions.upsert(
+        baseRecord({ id: "A", title: "same", preview: "same", status: "idle", updatedAt: 2_000 }),
+      );
+      applyChatSessionActivity(
+        useChatStore.getState(),
+        { id: "A", title: "same", preview: "same", status: "idle", unreadHint: true, updatedAt: 2_000 },
+        NOW,
+      );
+      expect(useChatStore.getState().sessions["A"].lastContentAt).toBeUndefined();
+    });
   });
 });

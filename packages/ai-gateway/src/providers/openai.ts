@@ -17,6 +17,15 @@ type OpenAIChatStream = AsyncIterable<ChatCompletionChunk> & {
 };
 
 /**
+ * GPT-5.6 reports prompt-cache writes separately. Keep the gateway's
+ * OpenAI-compatible cache-creation field so the shared cost logger can apply
+ * the 1.25x write rate, while accepting either documented response shape.
+ */
+function getCacheWriteTokens(usage: any): number {
+	return usage?.cache_write_tokens ?? usage?.prompt_tokens_details?.cache_write_tokens ?? 0;
+}
+
+/**
  * OpenAI rejects tool_call ids longer than 40 chars. Other models mint longer
  * ids that arrive in conversation history; remap any over-length id to a short
  * stable id, applied IDENTICALLY to the assistant's tool_calls[].id and the
@@ -172,6 +181,17 @@ export class OpenAIProvider implements AIProvider {
 		(params as ChatCompletionCreateParams & { max_tokens?: number }).max_tokens = maxTokens;
 	}
 
+	private applyToolCompatibilityOptions(params: ChatCompletionCreateParams, body: RequestBody): void {
+		// GPT-5.6 accepts function tools through Chat Completions only when
+		// reasoning_effort is "none". Pi speaks the Chat Completions protocol,
+		// so preserve tool support there rather than silently cascading a Luna
+		// request to another provider. Agentic callers that need reasoning plus
+		// tools can use the Responses API directly.
+		if (body.model.toLowerCase().startsWith('gpt-5.6') && Array.isArray(body.tools) && body.tools.length > 0) {
+			(params as ChatCompletionCreateParams & { reasoning_effort?: 'none' }).reasoning_effort = 'none';
+		}
+	}
+
 	async createCompletion(body: RequestBody): Promise<Response> {
 		const messages = this.formatMessages(body.messages);
 		const responseFormat = this.formatResponseFormat(body.response_format);
@@ -187,6 +207,7 @@ export class OpenAIProvider implements AIProvider {
 
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
+		this.applyToolCompatibilityOptions(params, body);
 
 		const response = await this.createWithUnsupportedParamRetry(params, (p) =>
 			this.client.chat.completions.create(p),
@@ -209,10 +230,16 @@ export class OpenAIProvider implements AIProvider {
 			stream_options: { include_usage: true },
 			response_format: this.formatResponseFormat(body.response_format),
 			tools: body.tools as ChatCompletionCreateParams['tools'],
+			// Keep the streaming path semantically identical to non-streaming
+			// requests. Pi streams every pipe run; dropping tool_choice here meant
+			// a caller's explicit tool policy (notably "required") never reached
+			// GPT-5.6 Luna even though the model supports function calling.
+			tool_choice: body.tool_choice as ChatCompletionCreateParams['tool_choice'],
 		};
 
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
+		this.applyToolCompatibilityOptions(params, body);
 
 		const stream = (await this.createWithUnsupportedParamRetry(params, (p) =>
 			this.client.chat.completions.create(p as ChatCompletionCreateParams & { stream: true }),
@@ -302,6 +329,7 @@ export class OpenAIProvider implements AIProvider {
 										prompt_tokens_details: {
 											cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0,
 										},
+										cache_creation_input_tokens: getCacheWriteTokens(usage),
 									},
 								})}\n\n`
 							)
@@ -453,8 +481,8 @@ export class OpenAIProvider implements AIProvider {
 				},
 			],
 			// Pass usage through (was dropped — non-streaming OpenAI requests
-			// were cost-logged with estimated token counts). cached_tokens =
-			// OpenAI automatic prompt caching, billed at a discount.
+			// were cost-logged with estimated token counts). Cache writes are
+			// normalized to the gateway's cache-creation field for cost tracking.
 			...(response.usage
 				? {
 						usage: {
@@ -466,6 +494,7 @@ export class OpenAIProvider implements AIProvider {
 							prompt_tokens_details: {
 								cached_tokens: response.usage.prompt_tokens_details?.cached_tokens ?? 0,
 							},
+							cache_creation_input_tokens: getCacheWriteTokens(response.usage),
 						},
 				  }
 				: {}),

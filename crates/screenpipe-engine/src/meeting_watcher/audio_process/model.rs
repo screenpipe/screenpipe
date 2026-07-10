@@ -153,6 +153,7 @@ impl ResolvedMeetingCandidate {
                 platform,
                 session_key,
                 first_seen_at,
+                process,
                 ..
             } => Some(ResolvedSession {
                 platform: platform.clone(),
@@ -163,6 +164,8 @@ impl ResolvedMeetingCandidate {
                 // A native app holding the mic is by definition a live
                 // observation of the current snapshot.
                 live_evidence: true,
+                pid: process.pid,
+                bundle_id: process.bundle_id.clone(),
             }),
             Self::Browser {
                 platform,
@@ -170,6 +173,7 @@ impl ResolvedMeetingCandidate {
                 session_key,
                 first_seen_at,
                 live_evidence,
+                process,
                 ..
             } => Some(ResolvedSession {
                 platform: platform.clone(),
@@ -178,6 +182,8 @@ impl ResolvedMeetingCandidate {
                 first_seen_at: *first_seen_at,
                 is_browser: true,
                 live_evidence: *live_evidence,
+                pid: process.pid,
+                bundle_id: process.bundle_id.clone(),
             }),
             _ => None,
         }
@@ -213,6 +219,26 @@ pub(crate) struct ResolvedSession {
     /// See [`ResolvedMeetingCandidate::Browser::live_evidence`]. Always true
     /// for native candidates.
     pub(crate) live_evidence: bool,
+    /// Meeting process identity, threaded from the resolved candidate's
+    /// `AudioInputProcess` through to the published `ActiveMeeting`.
+    pub(crate) pid: Option<i32>,
+    pub(crate) bundle_id: Option<String>,
+}
+
+/// Result of scanning a messaging app's AX tree for call UI evidence.
+///
+/// When a native platform has `requires_call_signal: true`, the audio-process
+/// detector runs this scan before promoting the candidate to `Native`. If
+/// `is_in_call` is false the candidate is downgraded to `NonMeeting`,
+/// blocking phantom meetings from voice notes (#4776).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CallSignalEvidence {
+    /// Lowercased platform name (e.g. "whatsapp", "signal", "telegram").
+    pub platform: String,
+    /// Whether the AX scan found call signals confirming a real call.
+    pub is_in_call: bool,
+    /// Human-readable descriptions of which signals matched (for debug logging).
+    pub matched_signals: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

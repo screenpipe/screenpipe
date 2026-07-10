@@ -124,6 +124,10 @@ const MODEL_WEIGHTS: Record<string, number> = {
   // Auto — smart routing, free
   'auto': 0,
   // OpenAI API
+  'gpt-5.6': 6,
+  'gpt-5.6-sol': 6,
+  'gpt-5.6-terra': 3,
+  'gpt-5.6-luna': 1,
   'gpt-5.5-pro': 36,
   'gpt-5.5': 6,
   'gpt-5.4-pro': 36,

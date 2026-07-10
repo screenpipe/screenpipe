@@ -22,6 +22,7 @@ import {
 import {
   formatClock,
   formatDuration,
+  parseAttendees,
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
 import { ListeningSticks } from "./listening-sticks";
@@ -440,10 +441,7 @@ function titleFromApp(app: string): string {
 }
 
 function firstAttendee(attendees: string): string {
-  const parts = attendees
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const parts = parseAttendees(attendees);
   if (parts.length === 0) return "";
   if (parts.length === 1) return parts[0];
   return `${parts[0]} +${parts.length - 1}`;

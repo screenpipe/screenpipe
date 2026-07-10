@@ -20,7 +20,7 @@
 //!   3. Talk — the `level [████…]` meter should move with YOUR voice.
 //!   4. While it runs, change the mic the app uses (system input device, or in
 //!      Zoom/Teams audio settings). You should see:
-//!        "input device changed: [old] -> [new], switching"
+//!      "input device changed: [old] -> [new], switching"
 //!      and a "now recording: <new device>" line, then the meter keeps moving.
 //!   5. Ctrl-C to stop.
 

@@ -324,6 +324,27 @@
     background-color: rgba(59, 130, 246, 0.35) !important;
   }
 
+  /* Constrain selection highlight to text width — same approach as chat markdown.
+     flex + items-start makes block children shrink-wrap their content so
+     ::selection doesn't paint across the full container width. */
+  .ProseMirror {
+    display: flex;
+    flex-direction: column;
+    align-items: start;
+  }
+
+  /* Keep code blocks, details, hr, and tables full-width inside flex prose */
+  .prose > .not-prose,
+  .prose > hr,
+  .prose > table,
+  .ProseMirror > .not-prose,
+  .ProseMirror > hr,
+  .ProseMirror > table,
+  .ProseMirror > pre,
+  .ProseMirror > [data-type="taskList"] {
+    align-self: stretch;
+  }
+
   .prose a,
   .prose a * {
     cursor: pointer !important;

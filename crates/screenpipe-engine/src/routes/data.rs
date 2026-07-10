@@ -11,7 +11,8 @@ use chrono::{DateTime, Utc};
 use oasgen::{oasgen, OaSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
+use sysinfo::{DiskExt, System, SystemExt};
 use tracing::{info, warn};
 
 use crate::server::AppState;
@@ -479,24 +480,85 @@ pub struct CompactResponse {
     pub bytes_before: u64,
     pub bytes_after: u64,
     pub bytes_reclaimed: u64,
+    pub required_free_space: u64,
+    pub available_free_space: Option<u64>,
+}
+
+const COMPACT_FREE_SPACE_MULTIPLIER: u64 = 2;
+const COMPACT_FREE_SPACE_HEADROOM: u64 = 512 * 1024 * 1024;
+
+fn compact_required_free_space(database_size: u64) -> u64 {
+    database_size
+        .saturating_mul(COMPACT_FREE_SPACE_MULTIPLIER)
+        .saturating_add(COMPACT_FREE_SPACE_HEADROOM)
+}
+
+fn available_space_for_path(path: &Path) -> Option<u64> {
+    let mut sys = System::new();
+    sys.refresh_disks_list();
+    sys.disks()
+        .iter()
+        .filter(|disk| path.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().as_os_str().len())
+        .map(|disk| disk.available_space())
+}
+
+fn readable_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{:.2} {}", value, UNITS[unit])
+    }
 }
 
 /// POST /data/compact — rebuild the database with a full `VACUUM` to return
 /// freed pages to the OS. Use after deleting/stripping data (e.g. retention
 /// "lean"/"all") to physically shrink db.sqlite. Explicit user action: takes a
-/// brief exclusive lock (recording writes pause until it finishes) and needs
-/// free disk roughly equal to the current database size.
+/// brief exclusive lock (recording writes pause until it finishes) and may need
+/// free disk roughly twice the current database size while SQLite rebuilds it.
 #[oasgen]
 pub(crate) async fn compact_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<CompactResponse>, (StatusCode, JsonResponse<Value>)> {
-    let db_path = state.screenpipe_dir.join("db.sqlite");
     let size_of = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-    let bytes_before = size_of(&db_path);
+    let database_files = ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm"];
+    let bytes_before: u64 = database_files
+        .iter()
+        .map(|file_name| size_of(&state.screenpipe_dir.join(file_name)))
+        .sum();
+    let required_free_space = compact_required_free_space(bytes_before);
+    let available_free_space = available_space_for_path(&state.screenpipe_dir);
+
+    if bytes_before > 0 {
+        if let Some(available) = available_free_space {
+            if available < required_free_space {
+                return Err((
+                    StatusCode::INSUFFICIENT_STORAGE,
+                    JsonResponse(json!({
+                        "error": format!(
+                            "not enough free disk space to compact safely: need about {}, available {}",
+                            readable_bytes(required_free_space),
+                            readable_bytes(available),
+                        ),
+                        "required_free_space": required_free_space,
+                        "available_free_space": available,
+                        "database_size": bytes_before,
+                    })),
+                ));
+            }
+        }
+    }
 
     info!(
-        "compacting database (VACUUM); size before = {} bytes",
-        bytes_before
+        "compacting database (VACUUM); database files before = {} bytes, required_free_space = {} bytes, available_free_space = {:?}",
+        bytes_before, required_free_space, available_free_space
     );
 
     state.db.compact().await.map_err(|e| {
@@ -506,7 +568,10 @@ pub(crate) async fn compact_handler(
         )
     })?;
 
-    let bytes_after = size_of(&db_path);
+    let bytes_after: u64 = database_files
+        .iter()
+        .map(|file_name| size_of(&state.screenpipe_dir.join(file_name)))
+        .sum();
     let bytes_reclaimed = bytes_before.saturating_sub(bytes_after);
 
     info!(
@@ -519,5 +584,27 @@ pub(crate) async fn compact_handler(
         bytes_before,
         bytes_after,
         bytes_reclaimed,
+        required_free_space,
+        available_free_space,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_required_free_space_includes_double_database_size_and_headroom() {
+        let database_size = 20 * 1024 * 1024 * 1024;
+
+        assert_eq!(
+            compact_required_free_space(database_size),
+            (40 * 1024 * 1024 * 1024) + COMPACT_FREE_SPACE_HEADROOM
+        );
+    }
+
+    #[test]
+    fn compact_required_free_space_saturates_on_large_database_size() {
+        assert_eq!(compact_required_free_space(u64::MAX), u64::MAX);
+    }
 }
