@@ -410,17 +410,14 @@ function HomeContent() {
   }
   const [recordingDevices, setRecordingDevices] = useState<RecordingDevice[]>([]);
   const recordingDevicesSnapshotRef = useRef("");
-  // Tracks whether the whole capture session was paused via "pause all
-  // recording" (stop_capture). The sidecar per-device endpoints don't reflect
-  // this global stop, so the frontend must suppress `active` itself.
-  const capturePausedRef = useRef(false);
 
   const refreshRecordingDevices = useCallback(async () => {
     try {
-      const [health, audioStatus, visionStatus]: [
+      const [health, audioStatus, visionStatus, capturePausedResult]: [
         { monitors?: string[]; device_status_details?: string } | null,
         AudioDeviceStatus[] | null,
         VisionDeviceStatus[] | null,
+        Awaited<ReturnType<typeof commands.isCapturePaused>>,
       ] = await Promise.all([
         localFetch("/health")
           .then((r) => r.ok ? r.json() : null)
@@ -431,7 +428,13 @@ function HomeContent() {
         localFetch("/vision/device/status")
           .then((r) => r.ok ? r.json() : null)
           .catch(() => null),
+        commands.isCapturePaused(),
       ]);
+
+      // Read the backend's recording status — same source of truth as
+      // the tray menu. When capture is globally paused/stopped the sidecar
+      // per-device endpoints still report devices as active, so override.
+      const capturePaused = capturePausedResult === true;
 
       const devices: RecordingDevice[] = [];
       // Prefer /vision/device/status: it carries the numeric monitor id (so each
@@ -501,11 +504,7 @@ function HomeContent() {
         }
       }
 
-      // When the whole capture session was paused via "pause all recording",
-      // the sidecar per-device endpoints still report devices as active
-      // (user_disabled wasn't set per-device). Override all to inactive so
-      // the indicator dot and per-device buttons reflect reality.
-      const effective = capturePausedRef.current
+      const effective = capturePaused
         ? devices.map((d) => ({ ...d, active: false }))
         : devices;
 
@@ -531,17 +530,19 @@ function HomeContent() {
     void refreshRecordingDevices();
   });
 
+  // Covers pause/resume from tray, keyboard shortcut, or deeplink — the same
+  // events that trigger the "recording paused"/"recording started" toasts.
+  // Refresh reads is_capture_paused from the backend so it always has the
+  // real state — no fragile frontend ref needed.
+  useTauriEvent("shortcut-stop-recording", () => {
+    void refreshRecordingDevices();
+  });
+
   useTauriEvent("shortcut-start-recording", () => {
-    capturePausedRef.current = false;
     void refreshRecordingDevices();
   });
 
   const pauseRecording = useCallback(async () => {
-    capturePausedRef.current = true;
-    // Optimistically flip every device to inactive immediately so the
-    // indicator dot and per-device "pause"→"resume" labels update without
-    // waiting for the next refresh cycle.
-    setRecordingDevices((prev) => prev.map((d) => ({ ...d, active: false })));
     await emit("shortcut-stop-recording", {});
     window.setTimeout(() => {
       void refreshRecordingDevices();
@@ -549,8 +550,6 @@ function HomeContent() {
   }, [refreshRecordingDevices]);
 
   const resumeRecording = useCallback(async () => {
-    capturePausedRef.current = false;
-    setRecordingDevices((prev) => prev.map((d) => ({ ...d, active: true })));
     await emit("shortcut-start-recording", {});
     window.setTimeout(() => {
       void refreshRecordingDevices();

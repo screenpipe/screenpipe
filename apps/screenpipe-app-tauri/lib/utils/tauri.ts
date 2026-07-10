@@ -856,6 +856,13 @@ async installRegistrySkill(repo: string, gitRef: string, path: string, name: str
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Whether capture is currently paused. The frontend polls this alongside
+ * per-device status so the UI stays in sync with the tray indicator.
+ */
+async isCapturePaused() : Promise<boolean> {
+    return await TAURI_INVOKE("is_capture_paused");
+},
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },

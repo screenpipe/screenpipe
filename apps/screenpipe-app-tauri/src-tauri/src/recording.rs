@@ -480,6 +480,19 @@ pub async fn stop_capture(
     Ok(())
 }
 
+/// Whether capture is currently paused. The frontend polls this alongside
+/// per-device status so the UI stays in sync with the tray indicator.
+#[tauri::command]
+#[specta::specta]
+pub fn is_capture_paused() -> bool {
+    matches!(
+        crate::health::get_recording_status(),
+        crate::health::RecordingStatus::Paused
+            | crate::health::RecordingStatus::ScheduledPause
+            | crate::health::RecordingStatus::Stopped
+    )
+}
+
 async fn remember_active_meeting_for_capture_restart(state: &RecordingState) {
     let server_guard = state.server.lock().await;
     let Some(server) = server_guard.as_ref() else {
