@@ -151,7 +151,7 @@ export function SummaryCards({
       })()}
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
-      <div className="w-full max-w-lg mb-4 flex flex-wrap items-center gap-1 px-1">
+      <div className="w-full max-w-xl mb-4 flex flex-wrap items-center gap-1 px-1">
         <span className="text-[0.65em] text-muted-foreground/40 uppercase tracking-wider mr-1">more</span>
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
         {featured.filter((p) => p.name === "time-breakdown" || p.name === "missed-todos").map((pipe) => (
@@ -159,7 +159,7 @@ export function SummaryCards({
             key={pipe.name}
             data-testid={`summary-card-${pipe.name}`}
             onClick={() => handleCardClick(pipe)}
-            className="px-2 py-0.5 text-xs bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+            className="px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
             {pipe.title}
           </button>
@@ -179,7 +179,7 @@ export function SummaryCards({
               const prompt = `Analyze my screen and audio recordings from today.\n\nUser instructions: ${qt.prompt}\n\nOnly report activities you can verify from the recordings. If uncertain, say so. Format with clear headings and bullet points.`;
               onSendMessage(prompt, `\u2728 ${qt.label} \u2014 Today`);
             }}
-            className="px-2 py-0.5 text-xs bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+            className="px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
             {qt.label}
           </button>
@@ -189,7 +189,7 @@ export function SummaryCards({
             posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
             setShowBuilder(true);
           }}
-          className="px-2 py-0.5 text-xs border border-dashed border-border/40 text-muted-foreground/50 hover:text-foreground hover:border-foreground transition-all duration-150 cursor-pointer"
+          className="px-2 py-0.5 text-[11px] border border-dashed border-border/40 text-muted-foreground/50 hover:text-foreground hover:border-foreground transition-all duration-150 cursor-pointer"
         >
           + custom
         </button>
