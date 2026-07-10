@@ -130,7 +130,9 @@ int lt_analyze_image(const char* path, double x, double y, double w, double h,
     return -1;
 }
 
-int lt_update_position(double x, double y, double w, double h) { return -1; }
+int lt_prefetch(const char* paths_json) { return -1; }
+
+int lt_update_position(const char* frame_id, double x, double y, double w, double h) { return -1; }
 
 int lt_highlight_ranges(const char* json) { return -1; }
 
@@ -139,6 +141,10 @@ int lt_clear_highlights(void) { return -1; }
 int lt_hide(void) { return -1; }
 
 int lt_destroy(void) { return -1; }
+
+int lt_set_guard_rect(const char* key, double x, double y, double w, double h) { return -1; }
+
+int lt_remove_guard(const char* key) { return -1; }
 
 void lt_free_string(char* ptr) { if (ptr) free(ptr); }
 "#,
