@@ -98,4 +98,44 @@ describe("CaptureChoice", () => {
     });
     expect(mocks.handleNextSlide).toHaveBeenCalledTimes(1);
   });
+
+  it("does not overwrite a manual choice when hardware detection resolves later", async () => {
+    let resolveCapability!: (value: {
+      hasGpu: boolean;
+      cpuCores: number;
+      totalMemoryGb: number;
+      recommendedEngine: string;
+      reason: string;
+    }) => void;
+    mocks.getHardwareCapability.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCapability = resolve;
+      }),
+    );
+
+    render(<CaptureChoice handleNextSlide={mocks.handleNextSlide} />);
+    fireEvent.click(screen.getByRole("button", { name: /lighter mode/i }));
+
+    await act(async () => {
+      resolveCapability({
+        hasGpu: true,
+        cpuCores: 12,
+        totalMemoryGb: 32,
+        recommendedEngine: "parakeet",
+        reason: "test",
+      });
+    });
+
+    expect(
+      screen.getByRole("button", { name: /use lighter mode/i }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /use lighter mode/i }));
+    await waitFor(() => {
+      expect(mocks.updateSettings).toHaveBeenCalledWith({
+        disableScreenshots: true,
+        disableTimeline: true,
+      });
+    });
+  });
 });
