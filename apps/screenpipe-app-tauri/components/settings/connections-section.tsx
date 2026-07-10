@@ -182,6 +182,8 @@ import {
   getCursorMcpConfigPath,
   getGrokConfigPath,
   getInstalledMcpVersion,
+  getInstalledClaudeScreenpipeEntry,
+  isStaleClaudeScreenpipeEntry,
   isCodexMcpInstalled,
   isCursorMcpInstalled,
   isGrokMcpInstalled,
@@ -1150,7 +1152,25 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
   const [claudeAppInstalled, setClaudeAppInstalled] = useState<boolean | null>(null);
 
   useEffect(() => {
-    getInstalledMcpVersion().then(v => { if (v) { setState("connected"); onConnected?.(); } }).catch(() => {});
+    getInstalledClaudeScreenpipeEntry().then(async (entry) => {
+      if (!entry) return;
+      setState("connected");
+      onConnected?.();
+      // Auto-repair legacy/keyless configs (older builds, hand-authored npx
+      // snippets) so they hit the MCP's fast env-key path instead of the slow
+      // discovery ladder that can stall Claude Desktop's attach. Idempotent:
+      // a config that already carries the key is left untouched.
+      if (isStaleClaudeScreenpipeEntry(entry)) {
+        try {
+          const next = await buildMcpConfig();
+          if (next.env?.SCREENPIPE_LOCAL_API_KEY) {
+            await writeClaudeScreenpipeConfig();
+          }
+        } catch (e) {
+          console.warn("claude mcp auto-repair skipped:", e);
+        }
+      }
+    }).catch(() => {});
     const os = platform();
     if (os === "windows") {
       // Check for MSIX package folder first, then fall back to traditional exe search
@@ -1170,17 +1190,24 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
     }
   }, []);
 
+  // Write the screenpipe entry into Claude's config with the reliable, current
+  // shape (bundled-bun path + injected key). Used by both the explicit connect
+  // action and the on-mount auto-repair of stale/keyless configs.
+  const writeClaudeScreenpipeConfig = async () => {
+    const configPath = await getClaudeConfigPath();
+    if (!configPath) throw new Error("unsupported platform");
+    let config: Record<string, unknown> = {};
+    try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
+    if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+    (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
+    await mkdir(await dirname(configPath), { recursive: true });
+    await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+  };
+
   const handleConnect = async () => {
     try {
       setState("connecting");
-      const configPath = await getClaudeConfigPath();
-      if (!configPath) throw new Error("unsupported platform");
-      let config: Record<string, unknown> = {};
-      try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
-      if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-      (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
-      await mkdir(await dirname(configPath), { recursive: true });
-      await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+      await writeClaudeScreenpipeConfig();
       setState("connected");
       onConnected?.();
     } catch (error) {

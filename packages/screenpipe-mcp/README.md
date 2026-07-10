@@ -10,9 +10,24 @@ MCP server for screenpipe - search your screen recordings, audio transcriptions,
 
 ## Installation
 
-### Option 1: NPX (Recommended)
+### Option 1: The screenpipe desktop app (Recommended)
 
-The easiest way to use screenpipe-mcp is with npx. Edit your Claude Desktop config:
+The most reliable setup is to install the [screenpipe desktop app](https://screenpi.pe)
+and connect Claude Desktop from **Settings → Connections** (or during onboarding).
+This writes a config that:
+
+- uses the **bundled `bun`** shipped with the app (an absolute path — no Node/`npx`
+  or `PATH` dependency, and ~3× faster cold start), and
+- injects your **`SCREENPIPE_LOCAL_API_KEY`** into the server's `env`, so the MCP
+  authenticates instantly instead of running slow key discovery at startup.
+
+Both matter: a config without the key forces the server to discover it via
+subprocess fallbacks, which on a cold package cache can stall Claude Desktop's MCP
+startup and produce `Could not attach to MCP server screenpipe`.
+
+### Option 2: Manual NPX (no desktop app)
+
+If you're not using the desktop app, edit your Claude Desktop config:
 
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%AppData%\Claude\claude_desktop_config.json`
@@ -22,11 +37,19 @@ The easiest way to use screenpipe-mcp is with npx. Edit your Claude Desktop conf
   "mcpServers": {
     "screenpipe": {
       "command": "npx",
-      "args": ["-y", "screenpipe-mcp"]
+      "args": ["-y", "screenpipe-mcp@latest"],
+      "env": {
+        "SCREENPIPE_LOCAL_API_KEY": "sp-…"
+      }
     }
   }
 }
 ```
+
+Requires Node/`npx` on `PATH`. Pin `@latest` so the first install doesn't cache a
+stale version forever. Get your key with `screenpipe auth token`. If you omit the
+key, the server will try to discover it (bundled bun → npx → local DB) — this works
+but is slower and can time out on first run.
 
 ### Option 2: HTTP Server (Remote / Network Access)
 
