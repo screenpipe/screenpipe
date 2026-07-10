@@ -189,22 +189,27 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
             const providerConfig = buildProviderConfig(preset);
             if (!providerConfig) continue;
 
-            // Pre-check ChatGPT token existence before attempting start —
+            // Pre-check ChatGPT token validity before attempting start —
             // avoids a noisy error from the Tauri command layer when the
-            // token is missing, and lets us skip straight to fallback.
-            // Uses the fast status check (3s timeout, no network) instead
-            // of the full token validation which can block for ~60s.
+            // token is expired/missing, and lets us skip straight to
+            // fallback. Wrapped in a 5s timeout so a slow refresh can't
+            // block the entire fallback loop.
             if (providerConfig.provider === "openai-chatgpt") {
               try {
-                const status = await commands.chatgptOauthStatus();
-                if (status.status !== "ok" || !status.data.logged_in) {
-                  console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT not logged in`);
+                const checkResult = await Promise.race([
+                  commands.chatgptOauthCheckToken(),
+                  new Promise<{ status: "error" as const, error: string }>((resolve) =>
+                    setTimeout(() => resolve({ status: "error", error: "timeout" }), 5_000)
+                  ),
+                ]);
+                if (checkResult.status !== "ok" || !checkResult.data) {
+                  console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT token not valid`);
                   lastError = "ChatGPT OAuth token unavailable";
                   continue;
                 }
               } catch {
-                console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT status check failed`);
-                lastError = "ChatGPT OAuth status check failed";
+                console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT token check failed`);
+                lastError = "ChatGPT OAuth token check failed";
                 continue;
               }
             }

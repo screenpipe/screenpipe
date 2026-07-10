@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const ISSUER: &str = "https://auth.openai.com";
@@ -332,15 +332,15 @@ pub fn start_background_refresh() {
                                 );
                             }
                         }
-                    } else {
-                        debug!("chatgpt background refresh: token still fresh");
                     }
                 }
-                Ok(None) => {
-                    debug!("chatgpt background refresh: no tokens stored, skipping");
-                }
+                Ok(None) => {} // no tokens stored, nothing to refresh
                 Err(e) => {
-                    warn!("chatgpt background refresh: failed to read tokens: {}", e);
+                    consecutive_failures += 1;
+                    warn!(
+                        "chatgpt background refresh: store read failed ({}/{}): {}",
+                        consecutive_failures, MAX_BG_FAILURES, e
+                    );
                 }
             }
 
