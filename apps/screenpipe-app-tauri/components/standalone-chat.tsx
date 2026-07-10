@@ -142,7 +142,6 @@ export function StandaloneChat({
   const {
     allConnectionItems,
     connectionAwareSuggestions,
-    connectionSetupSuggestions,
     connections,
     refreshConnectionState,
     refreshVisibleSuggestions,
@@ -1376,11 +1375,6 @@ export function StandaloneChat({
         }}
         summaryCardsProps={{
           onSendMessage: sendMessage,
-          onOpenConnection: openConnectionSetup,
-          connectionSetupSuggestions,
-          autoSuggestions: connectionAwareSuggestions,
-          suggestionsRefreshing,
-          onRefreshSuggestions: refreshVisibleSuggestions,
           customTemplates,
           onSaveCustomTemplate: saveCustomTemplate,
           onDeleteCustomTemplate: deleteCustomTemplate,

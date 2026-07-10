@@ -160,6 +160,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn stt_priority_dip_lowers_and_restores() {
+        use screenpipe_core::thread_priority::BackgroundWorkDip;
         use windows::Win32::System::Threading::{
             GetCurrentThread, GetThreadPriority, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
             THREAD_PRIORITY_LOWEST, THREAD_PRIORITY_NORMAL,
@@ -170,8 +171,7 @@ mod tests {
             assert_eq!(baseline, THREAD_PRIORITY_NORMAL.0);
 
             {
-                let dip = SttPriorityDip::new();
-                assert!(dip.is_some(), "dip should engage from Normal");
+                let _dip = BackgroundWorkDip::new();
                 assert_eq!(
                     GetThreadPriority(GetCurrentThread()),
                     THREAD_PRIORITY_BELOW_NORMAL.0
@@ -181,7 +181,7 @@ mod tests {
 
             // Already lower than the target → guard must not raise it.
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST).unwrap();
-            assert!(SttPriorityDip::new().is_none());
+            let _dip = BackgroundWorkDip::new();
             assert_eq!(
                 GetThreadPriority(GetCurrentThread()),
                 THREAD_PRIORITY_LOWEST.0

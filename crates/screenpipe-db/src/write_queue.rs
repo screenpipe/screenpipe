@@ -217,6 +217,10 @@ struct WriteQueueHealthInner {
     total_contention_batches: std::sync::atomic::AtomicU64,
     write_pool_reopens: std::sync::atomic::AtomicU64,
     persistent_failure_signals: std::sync::atomic::AtomicU64,
+    /// Advances only after the escalation state observes the full healthy
+    /// streak required to end a fatal run. A recovery hook snapshots this
+    /// value before its debounce and cancels a stale restart when it changes.
+    fatal_run_recovery_epoch: std::sync::atomic::AtomicU64,
     degraded: AtomicBool,
     last_success_unix_ms: std::sync::atomic::AtomicI64,
 }
@@ -241,6 +245,20 @@ impl WriteQueueHealth {
     /// How many times the persistent-failure hook fired (engine-restart requests).
     pub fn persistent_failure_signals(&self) -> u64 {
         self.inner.persistent_failure_signals.load(Ordering::SeqCst)
+    }
+    /// Generation of completed fatal-run recoveries for this write queue.
+    ///
+    /// Unlike `is_degraded` and `consecutive_fatal_batches`, this does not
+    /// change after one lucky successful batch. It advances only once the
+    /// existing three-healthy-batch rule has cleared the fatal run.
+    pub fn fatal_run_recovery_epoch(&self) -> u64 {
+        self.inner.fatal_run_recovery_epoch.load(Ordering::SeqCst)
+    }
+    /// True when both handles observe the same write-queue generation.
+    /// A new `DatabaseManager` gets a fresh health instance, so this is a
+    /// lightweight generation check that does not keep SQLite pools alive.
+    pub fn is_same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
     /// Unix-ms timestamp of the last healthy batch (0 if never).
     pub fn last_success_unix_ms(&self) -> i64 {
@@ -282,6 +300,11 @@ impl WriteQueueHealth {
     fn note_persistent_signal(&self) {
         self.inner
             .persistent_failure_signals
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    fn note_fatal_run_recovered(&self) {
+        self.inner
+            .fatal_run_recovery_epoch
             .fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -801,6 +824,7 @@ async fn drain_loop(
                 }
                 health.record_success();
                 if escalation.on_healthy() {
+                    health.note_fatal_run_recovered();
                     info!("write_queue: fatal run cleared");
                 }
             }
@@ -2212,6 +2236,36 @@ mod tests {
             e.on_fatal(t1 + PERSISTENT_FAILURE_AFTER_WALL),
             "re-armed hook fires for the new run"
         );
+    }
+
+    #[test]
+    fn recovery_epoch_requires_the_full_healthy_streak() {
+        let health = WriteQueueHealth::default();
+        let cloned = health.clone();
+        let fresh = WriteQueueHealth::default();
+        assert!(health.is_same_instance(&cloned));
+        assert!(!health.is_same_instance(&fresh));
+
+        let mut escalation = esc();
+        let now = std::time::Instant::now();
+        escalation.on_fatal(now);
+        health.record_fatal();
+        let epoch = health.fatal_run_recovery_epoch();
+
+        for healthy in 1..FATAL_RUN_CLEAR_AFTER {
+            health.record_success();
+            assert!(!escalation.on_healthy());
+            assert_eq!(
+                health.fatal_run_recovery_epoch(),
+                epoch,
+                "healthy batch {healthy} must not cancel a pending recovery"
+            );
+        }
+
+        health.record_success();
+        assert!(escalation.on_healthy());
+        health.note_fatal_run_recovered();
+        assert_eq!(health.fatal_run_recovery_epoch(), epoch + 1);
     }
 
     #[test]

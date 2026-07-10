@@ -16,7 +16,10 @@ export async function verifyClerkToken(env: Env, token: string): Promise<{ valid
     const payload = await verifyToken(token, {
       secretKey: env.CLERK_SECRET_KEY,
     });
-    return { valid: payload.sub !== null, userId: payload.sub ?? undefined };
+    const userId = typeof payload.sub === 'string' && payload.sub.length > 0
+      ? payload.sub
+      : undefined;
+    return { valid: userId !== undefined, userId };
   } catch {
     // Never log the JWT or upstream verification error verbatim: worker logs
     // are broadly accessible operational data and may retain request context.
@@ -70,58 +73,23 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
     };
   }
 
-  // Check if user has active subscription
-  const { isValid: hasSubscription, userId } = await validateSubscriptionWithId(env, token);
-
-  if (hasSubscription) {
-    // Use userId as deviceId for authenticated users so usage tracking is
-    // consistent regardless of which client sends the request (Pi agent
-    // doesn't send X-Device-Id, billing page does — using userId unifies them).
-    return {
-      isValid: true,
-      tier: 'subscribed',
-      deviceId: userId || headerDeviceId,
-      userId,
-    };
-  }
-
-  // UUID user without subscription = logged_in tier
-  // (they provided a valid Supabase user ID, just not subscribed)
-  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (UUID_REGEX.test(token)) {
-    console.log('UUID token detected without subscription, granting logged_in tier');
-    const resolvedUserId = userId || token;
-    return {
-      isValid: true,
-      tier: 'logged_in',
-      deviceId: resolvedUserId,
-      userId: resolvedUserId,
-    };
-  }
-
-  // Clerk user ID without subscription = logged_in tier
-  // (won't pass JWT verification below, so catch it here)
-  const CLERK_ID_PATTERN = /^user_[a-zA-Z0-9]+$/;
-  if (CLERK_ID_PATTERN.test(token)) {
-    return {
-      isValid: true,
-      tier: 'logged_in',
-      deviceId: token,
-      userId: token,
-    };
-  }
-
-  // Check if it's a valid Clerk JWT token
+  // Authenticate the caller before trusting any user identifier. A Supabase
+  // UUID or Clerk `user_*` ID names an account, but it is not proof that the
+  // caller owns that account. Treating those public identifiers as bearer
+  // credentials lets an attacker mint fresh logged-in identities, bypass the
+  // anonymous IP backstop, and impersonate a subscribed account.
   const clerkResult = await verifyClerkToken(env, token);
-  if (clerkResult.valid) {
-    const resolvedUserId = clerkResult.userId || token;
-    // Check subscription using the resolved Clerk user ID
-    const { isValid: hasSubscription } = await validateSubscriptionWithId(env, resolvedUserId);
+  if (clerkResult.valid && clerkResult.userId) {
+    const resolvedUserId = clerkResult.userId;
+    // Subscription lookup is safe only after the Clerk token has established
+    // ownership of this user ID.
+    const { isValid: hasSubscription, userId } = await validateSubscriptionWithId(env, resolvedUserId);
+    const canonicalUserId = userId || resolvedUserId;
     return {
       isValid: true,
       tier: hasSubscription ? 'subscribed' : 'logged_in',
-      deviceId: resolvedUserId,
-      userId: resolvedUserId,
+      deviceId: canonicalUserId,
+      userId: canonicalUserId,
     };
   }
 
@@ -292,9 +260,13 @@ async function validateScreenpipeToken(token: string): Promise<{ isValid: boolea
     if (response.ok) {
       const data = await response.json() as { success?: boolean; user?: ScreenpipeUserData };
       const userData = data.user;
+      const userId = userData?.clerk_id || userData?.id || userData?.email;
+      if (data.success !== true || !userData || !userId) {
+        return { isValid: false };
+      }
       return {
         isValid: true,
-        userId: userData?.clerk_id || userData?.id || userData?.email,
+        userId,
         hasSubscription: userData?.cloud_subscribed === true,
       };
     } else {

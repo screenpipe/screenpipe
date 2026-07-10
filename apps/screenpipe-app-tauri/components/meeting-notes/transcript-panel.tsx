@@ -198,7 +198,7 @@ function groupBySpeaker(chunks: MeetingAudioChunk[]): SpeakerBlock[] {
     const ts = timestampMs(c.timestamp);
     if (ts <= 0) continue;
     const speakerName = c.speakerName || (c.isInput ? "me" : "speaker");
-    const speakerId = c.isInput ? null : c.speakerId;
+    const speakerId = c.speakerId;
     const last = out[out.length - 1];
     const sameSpeaker =
       last &&

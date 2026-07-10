@@ -53,7 +53,6 @@ static PLACEHOLDER: Lazy<Image<'static>> = Lazy::new(|| {
     Image::new_owned(rgba, PREVIEW_WIDTH, PREVIEW_HEIGHT)
 });
 static LAST_MENU_REFRESH: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
-static LAST_FRAME_SEQ: Lazy<Mutex<HashMap<u32, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static BOOTSTRAP_TX: OnceLock<mpsc::Sender<u32>> = OnceLock::new();
 
 /// Call once at tray setup — polls SCK frame sequence for cached tray previews.
@@ -70,13 +69,6 @@ pub fn sync_refresh_monitors(monitor_ids: &[u32]) {
     for &monitor_id in monitor_ids {
         let update = refresh_monitor_from_sck(monitor_id);
         if update != PreviewUpdate::NoFrame {
-            if let Some(seq) = screenpipe_screen::stream_invalidation::monitor_frame_seq(monitor_id)
-            {
-                LAST_FRAME_SEQ
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(monitor_id, seq);
-            }
             continue;
         }
         queue_sck_bootstrap(monitor_id);
@@ -156,31 +148,36 @@ async fn drain_bootstrap_requests(rx: &mpsc::Receiver<u32>, app: &AppHandle) {
 
 async fn poll_sck_frames(app: &AppHandle) {
     for monitor_id in active_monitor_ids() {
-        let seq =
-            screenpipe_screen::stream_invalidation::monitor_frame_seq(monitor_id).unwrap_or(0);
-        if seq == 0 {
+        // The native menu only receives a new image when it is rebuilt. Updating
+        // CACHE for every 2fps SCK frame while the menu is closed therefore did
+        // no visible work, but `peek_monitor_frame` deep-cloned the full display
+        // and thumbnailing allocated more image buffers each time. On long runs
+        // that produced multi-GB MALLOC_SMALL sawtooth growth.
+        //
+        // Background polling is only needed to populate the first preview after
+        // bootstrap. Later menu rebuilds call `sync_refresh_monitors` and refresh
+        // the cache once from the latest frame, so the visible behavior stays the
+        // same without continuous full-frame churn.
+        if has_cached_preview(monitor_id) {
+            continue;
+        }
+
+        if screenpipe_screen::stream_invalidation::monitor_frame_seq(monitor_id).unwrap_or(0) == 0 {
             queue_sck_bootstrap(monitor_id);
             continue;
         }
 
-        let prev = LAST_FRAME_SEQ
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&monitor_id)
-            .copied()
-            .unwrap_or(0);
-
-        if seq != prev {
-            let update = refresh_monitor_from_sck(monitor_id);
-            LAST_FRAME_SEQ
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(monitor_id, seq);
-            if should_refresh_menu(update) {
-                queue_menu_refresh(app);
-            }
+        if should_refresh_menu(refresh_monitor_from_sck(monitor_id)) {
+            queue_menu_refresh(app);
         }
     }
+}
+
+fn has_cached_preview(monitor_id: u32) -> bool {
+    CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains_key(&monitor_id)
 }
 
 fn refresh_monitor_from_sck(monitor_id: u32) -> PreviewUpdate {
@@ -322,5 +319,32 @@ mod tests {
             apply_rgba_preview(monitor_id, &second),
             PreviewUpdate::Updated
         );
+
+        CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&monitor_id);
+    }
+
+    #[test]
+    fn background_poll_stops_after_first_preview_is_cached() {
+        let monitor_id = u32::MAX - 18;
+        CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&monitor_id);
+        assert!(!has_cached_preview(monitor_id));
+
+        let frame = RgbaImage::from_pixel(2, 2, Rgba([1, 2, 3, 255]));
+        assert_eq!(
+            apply_rgba_preview(monitor_id, &frame),
+            PreviewUpdate::FirstFrame
+        );
+        assert!(has_cached_preview(monitor_id));
+
+        CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&monitor_id);
     }
 }

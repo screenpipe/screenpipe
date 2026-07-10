@@ -262,7 +262,7 @@ const getAudioEngineResolution = (
 ): AudioEngineResolution => {
   const requested = settings.audioTranscriptionEngine;
   const fallback = FALLBACK_TRANSCRIPTION_ENGINE;
-  const hasCloudAuth = Boolean(settings.user?.token || settings.user?.id);
+  const hasCloudAuth = Boolean(settings.user?.token);
   const hasDeepgramKey = Boolean(
     settings.deepgramApiKey && settings.deepgramApiKey !== "default"
   );
@@ -3290,8 +3290,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
             {(settings.meetingLiveTranscriptionEnabled ?? true) &&
               (settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "screenpipe-cloud" &&
-              !settings.user?.token &&
-              !settings.user?.id && (
+              !settings.user?.token && (
               <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
                 Log in to screenpipe cloud to use the cloud live provider.
               </p>

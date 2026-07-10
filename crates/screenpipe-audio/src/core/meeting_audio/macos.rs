@@ -34,12 +34,19 @@ pub fn process_audio_activity(pid: i32) -> Option<ProcessAudioActivity> {
 /// Resolve every input device `pid` is actively recording from.
 ///
 /// We query `kAudioProcessPropertyDevices` in the **input scope**, which
-/// returns exactly the device(s) the process holds open for input — not its
-/// output devices, and not a capability guess. A process can record from more
-/// than one input at once (an aggregate rig, or two mics); all are returned so
-/// the caller can capture each. Gated on `is_running_input` so a muted /
-/// not-yet-opened mic resolves to an empty list and the caller keeps the system
-/// default until the app actually opens an input.
+/// returns the device(s) the process holds open for input. A process can
+/// record from more than one input at once (an aggregate rig, or two mics);
+/// all are returned so the caller can capture each. Gated on
+/// `is_running_input` so a muted / not-yet-opened mic resolves to an empty
+/// list and the caller keeps the system default until the app actually opens
+/// an input.
+///
+/// The input scope is NOT sufficient on its own: for a process doing echo
+/// cancellation (VPIO — meeting apps, but also always-on daemons like
+/// `corespeechd`/`avconferenced`), CoreAudio lists the *output* device used
+/// as the AEC reference in the input scope too. Adopting that produced the
+/// "meeting mic 'MacBook Pro Speakers (input)' not found" retry loop, so
+/// every candidate is additionally required to actually have input streams.
 pub fn resolve_meeting_inputs(pid: i32) -> Vec<AudioDevice> {
     let Ok(process) = ca::Process::with_pid(pid) else {
         return Vec::new();
@@ -56,11 +63,43 @@ pub fn resolve_meeting_inputs(pid: i32) -> Vec<AudioDevice> {
         )
         .unwrap_or_default();
 
+    let resolved = input_capable_meeting_devices(&input_devices, pid);
+    if !resolved.is_empty() {
+        debug!(
+            "meeting_audio: pid {pid} recording from {:?}",
+            resolved.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+    }
+    resolved
+}
+
+/// True if the device exposes at least one input stream. An output-only
+/// device (speakers, headphones, the output sibling of a Bluetooth combo)
+/// reports zero input buffers. A failed query counts as "no input": worst
+/// case the caller keeps the currently running mic instead of adopting a
+/// device we could never open.
+fn device_has_input_streams(device: &ca::Device) -> bool {
+    device
+        .input_stream_cfg()
+        .map(|cfg| cfg.number_buffers() > 0)
+        .unwrap_or(false)
+}
+
+/// Convert the raw process-device list into adoptable input devices:
+/// named, deduped (order-preserving), and verified input-capable.
+fn input_capable_meeting_devices(devices: &[ca::Device], pid: i32) -> Vec<AudioDevice> {
     let mut resolved: Vec<AudioDevice> = Vec::new();
-    for device in &input_devices {
+    for device in devices {
         let Ok(name) = device.name() else { continue };
         let name = name.to_string();
         if name.is_empty() {
+            continue;
+        }
+        if !device_has_input_streams(device) {
+            debug!(
+                "meeting_audio: pid {pid} lists '{name}' in input scope but it has no input \
+                 streams (AEC reference / output device) — skipping"
+            );
             continue;
         }
         let dev = AudioDevice::new(name, DeviceType::Input);
@@ -68,13 +107,6 @@ pub fn resolve_meeting_inputs(pid: i32) -> Vec<AudioDevice> {
         if !resolved.contains(&dev) {
             resolved.push(dev);
         }
-    }
-
-    if !resolved.is_empty() {
-        debug!(
-            "meeting_audio: pid {pid} recording from {:?}",
-            resolved.iter().map(|d| &d.name).collect::<Vec<_>>()
-        );
     }
     resolved
 }
@@ -89,6 +121,7 @@ mod tests {
     #[test]
     fn resolves_active_input_for_own_pid_when_capturing() {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        let _guard = crate::test_support::coreaudio_self_introspection_lock();
         let host = cpal::default_host();
         let Some(device) = host.default_input_device() else {
             eprintln!("skipping: no default input device on this machine");
@@ -112,10 +145,19 @@ mod tests {
             eprintln!("skipping: could not start input stream");
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-
+        // Bounded retry: under a parallel test run CoreAudio can take more
+        // than a fixed sleep to reflect our stream in the process state. The
+        // regression this test guards (over-filtering real mics out of the
+        // resolution) fails on every retry, so the retry only absorbs timing.
         let pid = std::process::id() as i32;
-        let resolved = resolve_meeting_inputs(pid);
+        let mut resolved = Vec::new();
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            resolved = resolve_meeting_inputs(pid);
+            if !resolved.is_empty() {
+                break;
+            }
+        }
         assert!(
             !resolved.is_empty(),
             "expected to resolve the active input device(s) for our capturing process"
@@ -129,6 +171,7 @@ mod tests {
     #[test]
     fn reports_input_active_while_capturing() {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        let _guard = crate::test_support::coreaudio_self_introspection_lock();
         let host = cpal::default_host();
         let Some(device) = host.default_input_device() else {
             eprintln!("skipping: no default input device");
@@ -159,6 +202,46 @@ mod tests {
         assert!(
             activity.input_active,
             "own process should report input active while capturing"
+        );
+    }
+
+    /// Regression for the 2026-07-09 speaker adoption: a process doing echo
+    /// cancellation lists its OUTPUT device (the AEC reference) in the
+    /// input-scope `PROCESS_DEVICES` too. The conversion must drop devices
+    /// with no input streams so the mic-follow machine never adopts
+    /// "MacBook Pro Speakers (input)". Runs against the real default output +
+    /// input devices; skips (with a note) on rigs where either is missing or
+    /// where the default output is itself input-capable (combo aggregates).
+    #[test]
+    fn output_only_devices_are_filtered_from_meeting_inputs() {
+        let Ok(output) = ca::System::default_output_device() else {
+            eprintln!("skipping: no default output device");
+            return;
+        };
+        let Ok(input) = ca::System::default_input_device() else {
+            eprintln!("skipping: no default input device");
+            return;
+        };
+        if device_has_input_streams(&output) {
+            eprintln!("skipping: default output device is input-capable on this rig");
+            return;
+        }
+        assert!(
+            device_has_input_streams(&input),
+            "default input device must report input streams"
+        );
+
+        let output_name = output.name().unwrap().to_string();
+        let input_name = input.name().unwrap().to_string();
+        let resolved = input_capable_meeting_devices(&[output, input], 0);
+
+        assert!(
+            resolved.iter().all(|d| d.name != output_name),
+            "output-only device '{output_name}' must not resolve as a meeting input"
+        );
+        assert!(
+            resolved.iter().any(|d| d.name == input_name),
+            "real input device '{input_name}' must survive the filter"
         );
     }
 

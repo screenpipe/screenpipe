@@ -909,12 +909,17 @@ const FRAME_JPEG_QUALITY_FALLBACK: u8 = 50;
 /// configured ingest URL, so staging / on-prem `SCREENPIPE_ENTERPRISE_INGEST_URL`
 /// overrides keep working without a second env var.
 pub fn control_plane_base(ingest_url: &str) -> Option<String> {
-    let idx = ingest_url.find("/api/")?;
-    let base = ingest_url[..idx].trim_end_matches('/');
-    if base.is_empty() {
+    let url = reqwest::Url::parse(ingest_url).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !url.path().starts_with("/api/")
+    {
         return None;
     }
-    Some(base.to_string())
+    let origin = url.origin().ascii_serialization();
+    (origin != "null").then_some(origin)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1194,17 +1199,6 @@ fn save_last_auto_submit(cfg: &EnterpriseSyncConfig, when: std::time::SystemTime
     }
 }
 
-/// Origin (`scheme://host[:port]`) of the ingest URL — the logs endpoints live
-/// on the same host. Falls back to prod if the URL is malformed.
-fn logs_base_url(ingest_url: &str) -> String {
-    if let Some(scheme_end) = ingest_url.find("://") {
-        let rest = &ingest_url[scheme_end + 3..];
-        let host_len = rest.find('/').unwrap_or(rest.len());
-        return ingest_url[..scheme_end + 3 + host_len].to_string();
-    }
-    "https://screenpi.pe".to_string()
-}
-
 /// Stable, regex-safe identifier (`^[A-Za-z0-9._:-]+$`, ≤128) for the logs API.
 fn stall_log_identifier(device_id: &str) -> String {
     let safe: String = device_id
@@ -1212,57 +1206,6 @@ fn stall_log_identifier(device_id: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
         .collect();
     format!("enterprise-auto-{safe}").chars().take(128).collect()
-}
-
-/// UTF-8-boundary-safe tail of `s`, at most `max_bytes`.
-fn tail_str(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut start = s.len() - max_bytes;
-    while start < s.len() && !s.is_char_boundary(start) {
-        start += 1;
-    }
-    &s[start..]
-}
-
-/// Read recent `*.log` content from `dirs`, newest file first, bounded total.
-async fn collect_log_text(dirs: &[PathBuf]) -> String {
-    const MAX_TOTAL: usize = 256 * 1024;
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-    for dir in dirs {
-        if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
-            while let Ok(Some(entry)) = rd.next_entry().await {
-                let path = entry.path();
-                if path.extension().map(|e| e == "log").unwrap_or(false) {
-                    let modified = entry
-                        .metadata()
-                        .await
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    files.push((modified, path));
-                }
-            }
-        }
-    }
-    files.sort_by_key(|(m, _)| std::cmp::Reverse(*m));
-
-    let mut out = String::new();
-    for (_, path) in files {
-        if out.len() >= MAX_TOTAL {
-            break;
-        }
-        if let Ok(content) = tokio::fs::read_to_string(&path).await {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            let budget = MAX_TOTAL - out.len();
-            out.push_str(&format!("\n=== {} ===\n{}", name, tail_str(&content, budget)));
-        }
-    }
-    if out.is_empty() {
-        out.push_str("[no log files found]");
-    }
-    out
 }
 
 /// Best-effort: ship the device's app logs to support via the same public
@@ -1274,7 +1217,10 @@ async fn submit_device_logs(
     http: &reqwest::Client,
     feedback: &str,
 ) -> Option<String> {
-    let base = logs_base_url(&cfg.ingest_url);
+    // Diagnostics must follow the explicitly configured control plane. A
+    // malformed/on-prem ingest URL fails closed instead of leaking logs to the
+    // vendor production endpoint.
+    let base = control_plane_base(&cfg.ingest_url)?;
     let identifier = stall_log_identifier(&cfg.device_id);
 
     // 1. signed upload URL
@@ -1308,7 +1254,16 @@ async fn submit_device_logs(
     };
 
     // 2. upload the log bytes
-    let body = collect_log_text(&cfg.log_dirs).await;
+    // Managed collection used to bypass the manual feedback redaction path.
+    // Both managed and opted-in builds now share one fail-closed filesystem,
+    // size, timeout, and redaction boundary.
+    let body = match crate::diagnostic_logs::collect_redacted_from_dirs(&cfg.log_dirs).await {
+        Ok(body) => body,
+        Err(e) => {
+            warn!("enterprise sync: device-log redaction failed: {e}");
+            return None;
+        }
+    };
     if let Err(e) = http
         .put(&signed_url)
         .header("Content-Type", "text/plain")
@@ -1322,15 +1277,16 @@ async fn submit_device_logs(
     }
 
     // 3. confirm (this is what files it for support)
+    let metadata = crate::diagnostic_logs::device_metadata();
     if let Err(e) = http
         .post(format!("{base}/api/logs/confirm"))
         .json(&serde_json::json!({
             "path": path,
             "identifier": identifier,
             "type": "machine",
-            "os": std::env::consts::OS,
-            "os_version": "",
-            "app_version": option_env!("CARGO_PKG_VERSION").unwrap_or("unknown"),
+            "os": metadata.os,
+            "os_version": metadata.os_version,
+            "app_version": metadata.app_version,
             "feedback_text": feedback,
         }))
         .send()
@@ -1347,8 +1303,7 @@ async fn submit_device_logs(
 /// data). Thin wrapper over [`submit_device_logs`] with the stall reason.
 async fn submit_stall_logs(cfg: &EnterpriseSyncConfig, http: &reqwest::Client) {
     let feedback = format!(
-        "auto: enterprise device recording but not landing data in org storage (license {}, device {}, mode {})",
-        cfg.license_key,
+        "auto: enterprise device recording but not landing data in org storage (device {}, mode {})",
         cfg.device_id,
         cfg.upload_mode.label()
     );
@@ -1366,6 +1321,34 @@ pub struct LogRequestsResponse {
     /// ISO-8601 timestamp of the admin request (echoed back on ack).
     #[serde(default)]
     pub requested_at: Option<String>,
+}
+
+async fn acknowledge_log_request(
+    cfg: &EnterpriseSyncConfig,
+    http: &reqwest::Client,
+    url: &str,
+    requested_at: &str,
+    path: &str,
+) -> bool {
+    let ack = match http
+        .post(url)
+        .header("X-License-Key", &cfg.license_key)
+        .header("X-Device-Id", &cfg.device_id)
+        .json(&serde_json::json!({ "requested_at": requested_at, "path": path }))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            warn!("log-requests: ack failed: {e}");
+            return false;
+        }
+    };
+    if !ack.status().is_success() {
+        warn!("log-requests: ack {} -> {}", url, ack.status());
+        return false;
+    }
+    true
 }
 
 /// Poll the control plane for an admin "collect logs" request and fulfill it by
@@ -1421,22 +1404,18 @@ async fn fulfill_log_requests(
 
     info!("enterprise sync: admin requested device logs — collecting + uploading");
     let feedback = format!(
-        "admin-requested enterprise diagnostic logs (license {}, device {}, mode {})",
-        cfg.license_key,
+        "admin-requested enterprise diagnostic logs (device {}, mode {})",
         cfg.device_id,
         cfg.upload_mode.label()
     );
-    let path = submit_device_logs(cfg, http, &feedback).await;
+    let path = submit_device_logs(cfg, http, &feedback).await?;
 
     // Ack: echo requested_at back so the server's (requested_at > fulfilled_at)
-    // gate flips to done and the dashboard shows it collected.
-    let _ = http
-        .post(&url)
-        .header("X-License-Key", &cfg.license_key)
-        .header("X-Device-Id", &cfg.device_id)
-        .json(&serde_json::json!({ "requested_at": requested_at, "path": path }))
-        .send()
-        .await;
+    // gate flips to done and the dashboard shows it collected. A failed ack is
+    // best-effort, matching the pre-existing protocol: mark the request handled
+    // for this process so a permanent control-plane failure cannot block newer
+    // requests or trigger a duplicate upload loop.
+    acknowledge_log_request(cfg, http, &url, &requested_at, &path).await;
     Some(requested_at)
 }
 
@@ -1458,6 +1437,17 @@ async fn run_log_request_loop(
     }
 }
 
+fn enterprise_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        // License-authenticated control-plane requests use X-License-Key.
+        // Reqwest only strips a small standard set of sensitive headers on
+        // cross-origin redirects, so following redirects could leak that key.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("reqwest client builds")
+}
+
 pub async fn run(
     cfg: EnterpriseSyncConfig,
     local: Arc<dyn LocalApiClient>,
@@ -1468,10 +1458,7 @@ pub async fn run(
         cfg.device_id, cfg.ingest_url
     );
 
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .expect("reqwest client builds");
+    let http = enterprise_http_client();
 
     let mut cursor = Cursor::load(&cfg.cursor_path);
     let mut backoff = BACKOFF_INITIAL;
@@ -1704,24 +1691,65 @@ mod tests {
     }
 
     #[test]
-    fn logs_base_url_takes_origin() {
-        assert_eq!(
-            logs_base_url("https://screenpi.pe/api/enterprise/ingest"),
-            "https://screenpi.pe"
-        );
-        assert_eq!(
-            logs_base_url("http://localhost:3000/api/enterprise/ingest"),
-            "http://localhost:3000"
-        );
-        assert_eq!(logs_base_url("not a url"), "https://screenpi.pe");
-    }
-
-    #[test]
     fn stall_log_identifier_is_regex_safe() {
         let id = stall_log_identifier("AB-12 34/xy");
         assert!(id.starts_with("enterprise-auto-"));
         assert!(id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-')));
         assert!(id.len() <= 128);
+    }
+
+    #[tokio::test]
+    async fn enterprise_log_confirmation_uses_shared_device_metadata() {
+        let server = wiremock::MockServer::start().await;
+        let dir = TempDir::new().unwrap();
+        tokio::fs::write(
+            dir.path().join("screenpipe.2026-07-10.log"),
+            "safe diagnostic line\n",
+        )
+        .await
+        .unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        cfg.device_id = "dev-test".to_string();
+        let path = "logs/machine/enterprise-auto-dev-test/2026-07-10.log";
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/logs"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "data": {
+                        "signedUrl": format!("{}/upload", server.uri()),
+                        "path": path,
+                    }
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path("/upload"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/logs/confirm"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let uploaded = submit_device_logs(&cfg, &enterprise_http_client(), "requested").await;
+
+        assert_eq!(uploaded.as_deref(), Some(path));
+        let requests = server.received_requests().await.unwrap();
+        let confirm = requests
+            .iter()
+            .find(|request| request.url.path() == "/api/logs/confirm")
+            .expect("confirmation request");
+        let body: serde_json::Value = serde_json::from_slice(&confirm.body).unwrap();
+        let metadata = crate::diagnostic_logs::device_metadata();
+        assert_eq!(body["os"], metadata.os);
+        assert_eq!(body["os_version"], metadata.os_version);
+        assert_eq!(body["app_version"], metadata.app_version);
     }
 
     #[test]
@@ -1744,14 +1772,92 @@ mod tests {
         assert!(empty.requested_at.is_none());
     }
 
-    #[test]
-    fn tail_str_is_char_boundary_safe() {
-        assert_eq!(tail_str("hello", 100), "hello");
-        assert_eq!(tail_str("hello", 2), "lo");
-        // multi-byte: never split a char
-        let s = "aé"; // 'é' is 2 bytes
-        let t = tail_str(s, 1); // would land mid-'é' → step forward to boundary
-        assert!(s.ends_with(t) || t.is_empty());
+    #[tokio::test]
+    async fn log_request_ack_requires_successful_response() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .and(wiremock::matchers::header("X-License-Key", "sek_test"))
+            .and(wiremock::matchers::header("X-Device-Id", "dev-test"))
+            .respond_with(wiremock::ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        cfg.device_id = "dev-test".to_string();
+        let url = format!("{}/api/enterprise/log-requests", server.uri());
+
+        let ok = acknowledge_log_request(
+            &cfg,
+            &reqwest::Client::new(),
+            &url,
+            "2026-07-10T00:00:00Z",
+            "logs/machine/dev-test/request.log",
+        )
+        .await;
+
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn log_request_ack_succeeds_on_2xx() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        let url = format!("{}/api/enterprise/log-requests", server.uri());
+
+        let ok = acknowledge_log_request(
+            &cfg,
+            &reqwest::Client::new(),
+            &url,
+            "2026-07-10T00:00:00Z",
+            "logs/machine/dev-test/request.log",
+        )
+        .await;
+
+        assert!(ok);
+    }
+
+    #[tokio::test]
+    async fn enterprise_client_never_forwards_license_headers_across_redirects() {
+        let source = wiremock::MockServer::start().await;
+        let target = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/stolen", target.uri())),
+            )
+            .expect(1)
+            .mount(&source)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/stolen"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&target)
+            .await;
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", source.uri()));
+        let url = format!("{}/api/enterprise/log-requests", source.uri());
+
+        let ok = acknowledge_log_request(
+            &cfg,
+            &enterprise_http_client(),
+            &url,
+            "2026-07-10T00:00:00Z",
+            "logs/machine/dev-test/request.log",
+        )
+        .await;
+
+        assert!(!ok);
     }
 
     fn frame(id: i64, ts: &str, app: &str, text: &str) -> FrameRow {
@@ -3060,6 +3166,12 @@ mod tests {
         assert_eq!(control_plane_base("https://example.com/ingest"), None);
         assert_eq!(control_plane_base("/api/enterprise/ingest"), None);
         assert_eq!(control_plane_base(""), None);
+        assert_eq!(control_plane_base("not a url"), None);
+        assert_eq!(control_plane_base("ftp://example.com/api/enterprise/ingest"), None);
+        assert_eq!(
+            control_plane_base("https://user:pass@example.com/api/enterprise/ingest"),
+            None
+        );
     }
 
     #[test]

@@ -106,7 +106,12 @@ export function ChatMainPane({
         onScroll={onMessagesScroll}
         onContextMenu={onChatContextMenu}
       >
-        <div className={cn(CHAT_RAIL_CLASS, "px-5 sm:px-6 py-4 space-y-4")}>
+        <div className={cn(
+          CHAT_RAIL_CLASS,
+          "px-5 sm:px-6 py-4 space-y-4",
+          messages.length === 0 && !isLoading && !isStreaming && !isPreparingPrefill && !activePipeExecution
+            && "min-h-full flex flex-col items-center justify-center"
+        )}>
           {activePipeExecution && (
             <PipeContextBanner
               pipeName={activePipeExecution.name}

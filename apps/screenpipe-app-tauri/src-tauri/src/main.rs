@@ -44,6 +44,7 @@ mod capture_session;
 mod chatgpt_oauth;
 #[allow(deprecated)]
 mod commands;
+mod diagnostic_logs;
 mod disk_usage;
 mod e2e_seed;
 mod embedded_server;
@@ -81,6 +82,7 @@ mod power_awake;
 mod process_exit;
 mod recording;
 mod remote_sync_commands;
+mod remote_support_logs;
 mod secrets;
 mod server;
 mod server_core;
@@ -802,6 +804,7 @@ async fn main() {
     .await;
 
     let recording_state = RecordingState {
+        server_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         server: Arc::new(tokio::sync::Mutex::new(None)),
         capture: Arc::new(tokio::sync::Mutex::new(None)),
         is_starting: Arc::new(AtomicBool::new(false)),
@@ -1557,9 +1560,31 @@ async fn main() {
                     break 'start_server;
                 }
                 let recording_state = app_handle.state::<RecordingState>();
+                // Native auto-start has the same intent semantics as the
+                // spawn_screenpipe command. DB-wedge recovery consults this
+                // shared flag so it can rebuild the server without silently
+                // leaving a normally auto-started recording paused.
+                recording_state.set_capture_intent(true);
+                // Reserve the lifecycle slot before publishing is_starting or
+                // spawning the OS thread. Otherwise a frontend spawn can win
+                // the scheduling gap, hold this lock while waiting on
+                // is_starting, and deadlock the native thread that must clear
+                // that flag.
+                let lifecycle_guard = match recording_state
+                    .server_lifecycle
+                    .clone()
+                    .try_lock_owned()
+                {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        warn!("Server lifecycle already active; skipping duplicate native auto-start");
+                        break 'start_server;
+                    }
+                };
                 recording_state.is_starting.store(true, std::sync::atomic::Ordering::SeqCst);
                 let server_arc = recording_state.server.clone();
                 let capture_arc = recording_state.capture.clone();
+                let wants_recording = recording_state.wants_recording.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
                 let cloud_token_arc = recording_state.cloud_token.clone();
                 // DB-wedge auto-recovery hook wiring — captured into the server
@@ -1715,10 +1740,12 @@ async fn main() {
                             // Wire the persistent-failure hook so a wedged DB
                             // auto-restarts recording (rebuilding every pool +
                             // the shared WAL-index).
+                            let db_health = server.db.write_queue_health();
                             server.db.set_persistent_failure_hook(
                                 crate::recording::make_db_wedge_recovery_hook(
                                     app_for_db_wedge.clone(),
                                     db_wedge_breaker.clone(),
+                                    db_health,
                                 ),
                             );
 
@@ -1729,29 +1756,42 @@ async fn main() {
                                 crate::e2e_seed::seed_search_fixture(&server.db).await;
                             }
 
-                            // Phase 2: Start capture session
-                            let capture = match capture_session::CaptureSession::start(&server, &config, true).await {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    error!("Failed to start capture: {}", e);
-                                    // Store server anyway so pipes/search work
-                                    let mut guard = server_arc.lock().await;
-                                    *guard = Some(server);
-                                    drop(guard);
-                                    is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                                    return;
+                            // Phase 2: use the latest capture intent, not the
+                            // value from app launch. Hold the slot across
+                            // check/start/assign so a racing stop_capture wins.
+                            let mut capture_guard = capture_arc.lock().await;
+                            let capture = if wants_recording
+                                .load(std::sync::atomic::Ordering::SeqCst)
+                            {
+                                match capture_session::CaptureSession::start(
+                                    &server, &config, true,
+                                )
+                                .await
+                                {
+                                    Ok(c) => Some(c),
+                                    Err(e) => {
+                                        error!("Failed to start capture: {}", e);
+                                        None
+                                    }
                                 }
+                            } else {
+                                None
                             };
 
-                            info!("Server + capture started successfully on dedicated runtime");
                             {
                                 let mut guard = server_arc.lock().await;
                                 *guard = Some(server);
                             }
-                            {
-                                let mut guard = capture_arc.lock().await;
-                                *guard = Some(capture);
+                            if let Some(capture) = capture {
+                                *capture_guard = Some(capture);
+                                info!("Server + capture started successfully on dedicated runtime");
+                            } else {
+                                info!("Server started without capture");
                             }
+                            drop(capture_guard);
+                            is_starting_clone
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                            drop(lifecycle_guard);
 
                             // Keep runtime alive as long as server exists
                             loop {
@@ -1973,6 +2013,11 @@ async fn main() {
             // Runs forever in background; only takes effect on enterprise-
             // telemetry builds with SCREENPIPE_ENTERPRISE_LICENSE_KEY env set.
             let _enterprise_shutdown_tx = enterprise_sync::spawn(&app_handle);
+
+            // Standard builds: account-bound, explicit opt-in support logs.
+            // Enterprise builds compile this as a no-op because their managed
+            // license-authenticated collector above is mandatory.
+            remote_support_logs::spawn(&app_handle);
 
             // Disable removed Storage cloud backends if old settings enabled them.
             let app_handle_clone = app_handle.clone();

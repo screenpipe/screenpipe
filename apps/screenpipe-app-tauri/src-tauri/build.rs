@@ -669,8 +669,10 @@ fn stage_libonnxruntime_dylib() {
             }
         }
         sign_macos_sidecar_if_needed(&dylib);
-    } else {
-        let _ = std::fs::remove_file(&dylib);
+    } else if !dylib.exists() {
+        // aarch64 doesn't load this dylib at runtime, but the bundler's
+        // macOS.files mapping references it unconditionally, so it must exist.
+        let _ = std::fs::write(&dylib, b"");
     }
 }
 

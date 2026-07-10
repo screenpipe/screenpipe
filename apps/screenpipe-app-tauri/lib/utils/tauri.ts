@@ -856,6 +856,13 @@ async installRegistrySkill(repo: string, gitRef: string, path: string, name: str
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Whether capture is currently paused. The frontend polls this alongside
+ * per-device status so the UI stays in sync with the tray indicator.
+ */
+async isCapturePaused() : Promise<boolean> {
+    return await TAURI_INVOKE("is_capture_paused");
+},
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
@@ -1928,6 +1935,22 @@ async setBrowserCookieAccessGranted(granted: boolean) : Promise<Result<null, str
 async setBrowserCookieAccessState(granted: boolean, disabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_browser_cookie_access_state", { granted, disabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Apply the "Chat Always on Top" setting to the already-open chat window.
+ *
+ * The chat window's on-top level is otherwise only set at create/show time
+ * (`window::show`), so toggling the setting while the window is open had no
+ * effect until it was reopened. This lets the Display-settings toggle take
+ * effect immediately. No-op if the chat window isn't currently open.
+ */
+async setChatAlwaysOnTop(onTop: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_chat_always_on_top", { onTop }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -3196,6 +3219,17 @@ autoUpdatePipes?: boolean;
  * Better quality but sends activity context to the cloud (zero data retention).
  */
 enhancedAI?: boolean;
+/**
+ * Explicit consumer opt-in for on-demand remote diagnostic log requests.
+ * Enterprise builds enforce remote log collection separately; this stored
+ * value remains false unless a consumer chooses to enable it.
+ */
+remoteLogCollectionEnabled?: boolean;
+/**
+ * Account that granted remote log collection consent on this device.
+ * Consumer collection is allowed only while this matches the current user.
+ */
+remoteLogCollectionUserId?: string | null;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).

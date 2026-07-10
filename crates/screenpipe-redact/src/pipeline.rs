@@ -23,9 +23,10 @@
 //! Substring search is fine here because we already know the AI
 //! produced a replacement — we just need offsets for the audit trail.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
     adapters::regex::{self as regex_adapter, RegexRedactor},
@@ -56,6 +57,87 @@ impl Default for PipelineConfig {
             ai_skip_if_regex_spans: 5,
             policy: TextRedactionPolicy::default(),
         }
+    }
+}
+
+/// Keep a failed cloud backend off the per-text hot path long enough for
+/// transient DNS / transport failures to settle. A fixed, bounded cooldown
+/// also caps persistent-outage probes (and their warnings) at one per minute.
+const AI_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy)]
+struct AiAttempt {
+    generation: u64,
+    probe: bool,
+}
+
+#[derive(Default)]
+struct AiCircuitState {
+    generation: u64,
+    retry_at: Option<Instant>,
+    probe_in_flight: bool,
+}
+
+/// Thread-safe failure circuit for the remote AI fallback. The mutex is held
+/// only while updating this tiny state machine, never across an AI request.
+struct AiFailureCircuit {
+    state: Mutex<AiCircuitState>,
+}
+
+impl AiFailureCircuit {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(AiCircuitState::default()),
+        }
+    }
+
+    /// Return a permit for a normal request, or for the sole recovery probe
+    /// once the cooldown has elapsed. `None` means use regex-only for now.
+    async fn begin_attempt(&self) -> Option<AiAttempt> {
+        let mut state = self.state.lock().await;
+        let probe = match state.retry_at {
+            None => false,
+            Some(retry_at) if Instant::now() < retry_at => return None,
+            Some(_) if state.probe_in_flight => return None,
+            Some(_) => {
+                state.probe_in_flight = true;
+                true
+            }
+        };
+        Some(AiAttempt {
+            generation: state.generation,
+            probe,
+        })
+    }
+
+    /// Open (or re-open after a failed probe) the circuit. Generation checks
+    /// prevent older concurrent requests from extending a newer cooldown or
+    /// producing duplicate warnings.
+    async fn record_failure(&self, attempt: AiAttempt) -> bool {
+        let mut state = self.state.lock().await;
+        if attempt.generation != state.generation {
+            return false;
+        }
+        state.generation = state.generation.wrapping_add(1);
+        state.retry_at = Some(Instant::now() + AI_FAILURE_COOLDOWN);
+        state.probe_in_flight = false;
+        true
+    }
+
+    /// A successful recovery probe closes the circuit. Normal successes while
+    /// the circuit is already closed require no state change.
+    async fn record_success(&self, attempt: AiAttempt) -> bool {
+        if !attempt.probe {
+            return false;
+        }
+        let mut state = self.state.lock().await;
+        if attempt.generation != state.generation {
+            return false;
+        }
+        state.generation = state.generation.wrapping_add(1);
+        state.retry_at = None;
+        state.probe_in_flight = false;
+        true
     }
 }
 
@@ -127,6 +209,9 @@ pub struct Pipeline {
     ai: Option<Arc<dyn Redactor>>,
     cfg: PipelineConfig,
     cache: RedactionCache,
+    /// Only remote Tinfoil traffic needs outage backoff. Local adapters keep
+    /// their existing behavior and never pay this state check.
+    ai_failure_circuit: Option<AiFailureCircuit>,
     /// When set, redacted spans render as stable per-install pseudonym
     /// tokens instead of static `[LABEL]` placeholders (issue #4206,
     /// opt-in). `None` keeps the historic behavior.
@@ -155,17 +240,20 @@ impl Pipeline {
                 ..Default::default()
             },
             cache: RedactionCache::with_defaults(),
+            ai_failure_circuit: None,
             pseudonyms: None,
         }
     }
 
     /// Pipeline with regex + a configured AI fallback.
     pub fn regex_then_ai(ai: Arc<dyn Redactor>, cfg: PipelineConfig) -> Self {
+        let ai_failure_circuit = (ai.name() == "tinfoil").then(AiFailureCircuit::new);
         Self {
             regex: RegexRedactor::new(),
             ai: Some(ai),
             cfg,
             cache: RedactionCache::with_defaults(),
+            ai_failure_circuit,
             pseudonyms: None,
         }
     }
@@ -233,10 +321,36 @@ impl Redactor for Pipeline {
                 && current.input.chars().count() >= self.cfg.ai_min_chars
                 && current.spans.len() < self.cfg.ai_skip_if_regex_spans;
 
+            // Regex-only fallbacks caused by a transient AI outage must not be
+            // cached for the normal one-hour TTL. That lets the same input get
+            // the stronger AI pass after the circuit recovers; successful AI
+            // results and intentional regex-only results remain cached.
+            let mut cache_output = true;
+
             if want_ai {
                 let ai = self.ai.as_ref().expect("checked above");
+                let attempt = match &self.ai_failure_circuit {
+                    Some(circuit) => circuit.begin_attempt().await.map(Some),
+                    None => Some(None),
+                };
+
+                let Some(circuit_attempt) = attempt else {
+                    out.push(current);
+                    continue;
+                };
+
                 match ai.redact(&current.redacted).await {
                     Ok(ai_out) => {
+                        if let (Some(circuit), Some(attempt)) =
+                            (&self.ai_failure_circuit, circuit_attempt)
+                        {
+                            if circuit.record_success(attempt).await {
+                                tracing::info!(
+                                    backend = ai.name(),
+                                    "AI redactor recovered; closing failure circuit"
+                                );
+                            }
+                        }
                         let redacted = if ai_out.spans.is_empty() {
                             // Span-less adapter (the Tinfoil enclave
                             // returns redacted text only, no spans). It
@@ -265,9 +379,21 @@ impl Redactor for Pipeline {
                         };
                     }
                     Err(RedactError::Unavailable(_)) => {
-                        // AI not available — keep regex output.
+                        // AI not available — keep regex output and avoid
+                        // retrying it for every text in this outage window.
+                        cache_output = self.ai_failure_circuit.is_none();
+                        if let (Some(circuit), Some(attempt)) =
+                            (&self.ai_failure_circuit, circuit_attempt)
+                        {
+                            circuit.record_failure(attempt).await;
+                        }
                     }
                     Err(e) => {
+                        cache_output = self.ai_failure_circuit.is_none();
+                        let circuit_opened = match (&self.ai_failure_circuit, circuit_attempt) {
+                            (Some(circuit), Some(attempt)) => circuit.record_failure(attempt).await,
+                            _ => true,
+                        };
                         // Transient failure — log via tracing, keep
                         // regex output. We do NOT fail the whole
                         // batch because that would block the
@@ -275,23 +401,31 @@ impl Redactor for Pipeline {
                         // chain so we surface the underlying cause
                         // (TLS handshake / DNS / refused / etc.)
                         // rather than just the catchall wrapper.
-                        let mut detail = format!("{}", e);
-                        let mut src: Option<&dyn std::error::Error> = std::error::Error::source(&e);
-                        while let Some(s) = src {
-                            detail.push_str(" → ");
-                            detail.push_str(&s.to_string());
-                            src = s.source();
+                        // A cloud outage logs once when the circuit opens;
+                        // stale concurrent requests are intentionally quiet.
+                        if circuit_opened {
+                            let mut detail = format!("{}", e);
+                            let mut src: Option<&dyn std::error::Error> =
+                                std::error::Error::source(&e);
+                            while let Some(s) = src {
+                                detail.push_str(" → ");
+                                detail.push_str(&s.to_string());
+                                src = s.source();
+                            }
+                            tracing::warn!(
+                                error = %e,
+                                detail = %detail,
+                                cooldown_seconds = AI_FAILURE_COOLDOWN.as_secs(),
+                                "AI redactor failed; falling back to regex-only output"
+                            );
                         }
-                        tracing::warn!(
-                            error = %e,
-                            detail = %detail,
-                            "AI redactor failed; falling back to regex-only output"
-                        );
                     }
                 }
             }
 
-            self.cache.insert(key, current.clone()).await;
+            if cache_output {
+                self.cache.insert(key, current.clone()).await;
+            }
             out.push(current);
         }
 
@@ -338,6 +472,57 @@ mod tests {
             Self {
                 calls: AtomicUsize::new(0),
             }
+        }
+    }
+
+    /// Cloud-shaped test redactor that fails a configured number of calls,
+    /// then returns a visible successful result.
+    struct FlakyAi {
+        calls: AtomicUsize,
+        failures_remaining: AtomicUsize,
+    }
+
+    impl FlakyAi {
+        fn new(failures: usize) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                failures_remaining: AtomicUsize::new(failures),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Redactor for FlakyAi {
+        fn name(&self) -> &str {
+            "tinfoil"
+        }
+
+        fn version(&self) -> u32 {
+            43
+        }
+
+        async fn redact_batch(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<RedactionOutput>, RedactError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let should_fail = self
+                .failures_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok();
+            if should_fail {
+                return Err(RedactError::Runtime("temporary DNS failure".into()));
+            }
+            Ok(texts
+                .iter()
+                .map(|text| RedactionOutput {
+                    input: text.clone(),
+                    redacted: text.to_uppercase(),
+                    spans: vec![],
+                })
+                .collect())
         }
     }
 
@@ -422,6 +607,87 @@ mod tests {
         let _ = p.redact(text).await.unwrap();
         // Only the first call should have hit the AI.
         assert_eq!(ai.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cloud_failure_skips_rest_of_batch_during_cooldown() {
+        let ai = Arc::new(FlakyAi::new(usize::MAX));
+        let p = Pipeline::regex_then_ai(ai.clone(), PipelineConfig::default());
+        let texts = vec![
+            "first unique text long enough for cloud redaction".to_string(),
+            "second unique text long enough for cloud redaction".to_string(),
+            "third unique text long enough for cloud redaction".to_string(),
+        ];
+
+        let outputs = p.redact_batch(&texts).await.unwrap();
+
+        assert_eq!(ai.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(outputs.len(), texts.len());
+        assert!(outputs
+            .iter()
+            .zip(&texts)
+            .all(|(output, input)| output.redacted == *input));
+    }
+
+    #[tokio::test]
+    async fn cloud_circuit_is_shared_across_concurrent_callers() {
+        let ai = Arc::new(FlakyAi::new(usize::MAX));
+        let p = Arc::new(Pipeline::regex_then_ai(
+            ai.clone(),
+            PipelineConfig::default(),
+        ));
+
+        p.redact("initial unique text long enough to open the cloud circuit")
+            .await
+            .unwrap();
+        assert_eq!(ai.calls.load(Ordering::SeqCst), 1);
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for i in 0..32 {
+            let p = Arc::clone(&p);
+            tasks.spawn(async move {
+                p.redact(&format!(
+                    "concurrent unique text number {i} long enough for redaction"
+                ))
+                .await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+
+        assert_eq!(
+            ai.calls.load(Ordering::SeqCst),
+            1,
+            "open circuit must suppress every concurrent cloud request"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cloud_circuit_recovers_and_only_caches_success() {
+        let ai = Arc::new(FlakyAi::new(1));
+        let p = Pipeline::regex_then_ai(ai.clone(), PipelineConfig::default());
+        let text = "same text remains eligible after a temporary cloud outage";
+
+        let degraded = p.redact(text).await.unwrap();
+        assert_eq!(degraded.redacted, text);
+        assert_eq!(ai.calls.load(Ordering::SeqCst), 1);
+
+        // A degraded regex-only result is deliberately not cached, but the
+        // open circuit still keeps this repeat off the network.
+        let during_cooldown = p.redact(text).await.unwrap();
+        assert_eq!(during_cooldown.redacted, text);
+        assert_eq!(ai.calls.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(AI_FAILURE_COOLDOWN).await;
+        let recovered = p.redact(text).await.unwrap();
+        assert_eq!(recovered.redacted, text.to_uppercase());
+        assert_eq!(ai.calls.load(Ordering::SeqCst), 2);
+
+        // Successful output retains the existing long-lived cache behavior.
+        let cached = p.redact(text).await.unwrap();
+        assert_eq!(cached, recovered);
+        assert_eq!(ai.calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

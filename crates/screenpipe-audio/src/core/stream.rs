@@ -1087,6 +1087,7 @@ mod meeting_tap_stream_tests {
     /// `from_device` wires through to `spawn_process_tap_capture_for_pids`.
     #[tokio::test]
     async fn meeting_tap_stream_builds_for_own_pid() {
+        let _guard = crate::test_support::coreaudio_self_introspection_lock_async().await;
         if !crate::core::process_tap::is_process_tap_available() {
             eprintln!("skipping: process tap unavailable");
             return;

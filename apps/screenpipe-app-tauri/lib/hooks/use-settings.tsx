@@ -539,10 +539,10 @@ const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
 // "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
 // OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
 // every paying user — not just Cloud Sync subscribers — gets Screenpipe Cloud
-// transcription on by default. Still requires a token/id so the cloud engine can
-// authenticate against api.screenpipe.com.
+// transcription on by default. A database ID identifies an account but is not
+// a credential, so cloud defaults require the verified session token.
 const isLoggedInProUser = (user: User | null | undefined) =>
-	hasAppEntitlement(user as any) && Boolean(user?.token || user?.id);
+	hasAppEntitlement(user as any) && Boolean(user?.token);
 
 const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	if (!isLoggedInProUser(settings.user)) return settings;
@@ -611,6 +611,8 @@ let DEFAULT_SETTINGS: Settings = {
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			analyticsEnabled: true,
+			remoteLogCollectionEnabled: false,
+			remoteLogCollectionUserId: null,
 			audioChunkDuration: 30,
 			useChineseMirror: false,
 			languages: [],

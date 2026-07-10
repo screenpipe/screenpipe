@@ -950,18 +950,16 @@ impl DatabaseManager {
         let (current_speaker_id, target_speaker_id, transcriptions_updated, mut embeddings_moved) = {
             let mut tx = self.begin_immediate_with_retry().await?;
 
-            // 1. Get the current speaker_id for this audio chunk
-            let current_speaker_id: Option<i64> = sqlx::query_scalar(
+            // 1. Get the current speaker_id for this audio chunk. NULL is a
+            //    legitimate state (mic rows and freshly-mirrored live rows have
+            //    no speaker until backfill) — only a missing row is an error.
+            let current_speaker_id: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
                 "SELECT speaker_id FROM audio_transcriptions WHERE audio_chunk_id = ? LIMIT 1",
             )
             .bind(audio_chunk_id)
             .fetch_optional(&mut **tx.conn())
-            .await?;
-
-            let current_speaker_id = match current_speaker_id {
-                Some(id) => id,
-                None => return Err(sqlx::Error::RowNotFound),
-            };
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
 
             // 2. Find or create the target speaker (pick the one with most embeddings
             //    to act as canonical when duplicates exist)
@@ -991,14 +989,20 @@ impl DatabaseManager {
                 }
             };
 
-            // Record old assignments for undo
-            let affected_rows: Vec<(i64, i64)> = sqlx::query_as(
+            // Record old assignments for undo. Rows without a speaker can't be
+            // represented in the (id, old_speaker_id) undo payload — skip them;
+            // undo just leaves those on the new speaker.
+            let affected_rows: Vec<(i64, Option<i64>)> = sqlx::query_as(
                 "SELECT id, speaker_id FROM audio_transcriptions WHERE audio_chunk_id = ?",
             )
             .bind(audio_chunk_id)
             .fetch_all(&mut **tx.conn())
             .await?;
-            old_assignments.extend(affected_rows);
+            old_assignments.extend(
+                affected_rows
+                    .into_iter()
+                    .filter_map(|(id, speaker)| speaker.map(|s| (id, s))),
+            );
 
             // 3. Update the transcription's speaker_id
             let transcriptions_updated = sqlx::query(
@@ -1010,22 +1014,42 @@ impl DatabaseManager {
             .await?
             .rows_affected();
 
-            // 4. Move one embedding from old speaker to new speaker
-            let embedding_id: Option<i64> = sqlx::query_scalar(
-                "SELECT id FROM speaker_embeddings WHERE speaker_id = ? LIMIT 1",
+            // Live meeting segments mirrored onto this chunk read their label
+            // from meeting_transcript_segments, not audio_transcriptions — sync
+            // them (matched by exact text + near-identical timestamp) or the
+            // Meeting view keeps showing the old speaker after a rename.
+            sqlx::query(
+                "UPDATE meeting_transcript_segments SET speaker_id = ?1 \
+                 WHERE id IN ( \
+                     SELECT mts.id FROM meeting_transcript_segments mts \
+                     JOIN audio_transcriptions at ON at.audio_chunk_id = ?2 \
+                       AND at.transcription = mts.transcript \
+                       AND ABS(julianday(at.timestamp) - julianday(mts.captured_at)) \
+                           <= 2.0 / 86400.0)",
             )
-            .bind(current_speaker_id)
-            .fetch_optional(&mut **tx.conn())
+            .bind(target_speaker.id)
+            .bind(audio_chunk_id)
+            .execute(&mut **tx.conn())
             .await?;
 
+            // 4. Move one embedding from old speaker to new speaker
             let mut embeddings_moved = 0u64;
-            if let Some(emb_id) = embedding_id {
-                sqlx::query("UPDATE speaker_embeddings SET speaker_id = ? WHERE id = ?")
-                    .bind(target_speaker.id)
-                    .bind(emb_id)
-                    .execute(&mut **tx.conn())
-                    .await?;
-                embeddings_moved = 1;
+            if let Some(current) = current_speaker_id {
+                let embedding_id: Option<i64> = sqlx::query_scalar(
+                    "SELECT id FROM speaker_embeddings WHERE speaker_id = ? LIMIT 1",
+                )
+                .bind(current)
+                .fetch_optional(&mut **tx.conn())
+                .await?;
+
+                if let Some(emb_id) = embedding_id {
+                    sqlx::query("UPDATE speaker_embeddings SET speaker_id = ? WHERE id = ?")
+                        .bind(target_speaker.id)
+                        .bind(emb_id)
+                        .execute(&mut **tx.conn())
+                        .await?;
+                    embeddings_moved = 1;
+                }
             }
 
             tx.commit().await?;
@@ -1128,17 +1152,17 @@ impl DatabaseManager {
         }
 
         // Phase 4: Clean up – if original speaker has no embeddings left, delete it
-        if current_speaker_id != target_speaker_id {
+        if let Some(current) = current_speaker_id.filter(|&id| id != target_speaker_id) {
             let remaining: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM speaker_embeddings WHERE speaker_id = ?")
-                    .bind(current_speaker_id)
+                    .bind(current)
                     .fetch_one(&self.pool)
                     .await?;
 
             if remaining == 0 {
                 let mut tx = self.begin_immediate_with_retry().await?;
                 sqlx::query("DELETE FROM speakers WHERE id = ?")
-                    .bind(current_speaker_id)
+                    .bind(current)
                     .execute(&mut **tx.conn())
                     .await?;
                 tx.commit().await?;

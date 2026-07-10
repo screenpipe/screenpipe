@@ -21,6 +21,34 @@
 #[path = "../../../../ee/desktop-rust/enterprise_policy.rs"]
 mod enterprise_policy;
 
+// The production binary wires the shared bounded collector from
+// `src/diagnostic_logs.rs`. This isolated EE test target deliberately avoids
+// the Tauri binary tree, so provide the narrow boundary the sync module needs.
+// Collector/redaction behavior is covered by the desktop module's own tests;
+// these tests exercise enterprise request, upload, and acknowledgement logic.
+mod diagnostic_logs {
+    #[derive(Clone, Debug)]
+    pub(crate) struct DiagnosticDeviceMetadata {
+        pub os: &'static str,
+        pub os_version: String,
+        pub app_version: &'static str,
+    }
+
+    pub(crate) fn device_metadata() -> DiagnosticDeviceMetadata {
+        DiagnosticDeviceMetadata {
+            os: std::env::consts::OS,
+            os_version: "enterprise-test-os".to_string(),
+            app_version: env!("CARGO_PKG_VERSION"),
+        }
+    }
+
+    pub(crate) async fn collect_redacted_from_dirs(
+        _dirs: &[std::path::PathBuf],
+    ) -> Result<String, String> {
+        Ok("[redacted enterprise test diagnostics]".to_string())
+    }
+}
+
 #[path = "../../../../ee/desktop-rust/enterprise_sync.rs"]
 mod ee_sync;
 
