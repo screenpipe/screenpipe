@@ -267,9 +267,14 @@ export function DisplaySection() {
               </div>
               <Switch
                 checked={settings?.chatAlwaysOnTop ?? true}
-                onCheckedChange={(checked) =>
-                  handleSettingsChange({ chatAlwaysOnTop: checked })
-                }
+                onCheckedChange={async (checked) => {
+                  handleSettingsChange({ chatAlwaysOnTop: checked });
+                  // Apply live so an already-open chat window updates
+                  // immediately instead of only on next open.
+                  try {
+                    await commands.setChatAlwaysOnTop(checked);
+                  } catch (_) {}
+                }}
                 className="ml-4"
               />
             </div>

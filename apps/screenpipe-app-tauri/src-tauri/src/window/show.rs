@@ -32,6 +32,35 @@ use tauri_nspanel::ManagerExt;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::WebviewWindowExt;
 
+/// Apply the chat window's always-on-top panel behaviour. Single source of
+/// truth shared by the show path and the live settings toggle
+/// (`commands::set_chat_always_on_top`). When on-top, the panel sits at level
+/// 1001 with the NonActivatingPanel style bit (128) so clicking it doesn't
+/// steal focus from the frontmost app; when off, it drops to normal window
+/// level and the bit is cleared so other windows can cover it.
+///
+/// Must run on the main thread (wrap callers in `run_on_main_thread_safe`).
+#[cfg(target_os = "macos")]
+pub fn apply_chat_panel_on_top(panel: &tauri_nspanel::raw_nspanel::RawNSPanel, on_top: bool) {
+    use objc::{msg_send, sel, sel_impl};
+    if on_top {
+        panel.set_level(1001);
+        // NonActivatingPanel (128) so clicking doesn't activate app
+        unsafe {
+            let current: i32 = msg_send![panel, styleMask];
+            panel.set_style_mask(current | 128);
+        }
+    } else {
+        // Normal window level — allow it to go behind other windows
+        panel.set_level(0);
+        // Remove NonActivatingPanel bit (128) so it behaves normally
+        unsafe {
+            let current: i32 = msg_send![panel, styleMask];
+            panel.set_style_mask(current & !128);
+        }
+    }
+}
+
 #[derive(PartialEq)]
 pub enum RewindWindowId {
     Main,
@@ -617,22 +646,7 @@ impl ShowRewindWindow {
 
                         if let Ok(panel) = app_clone.get_webview_panel(RewindWindowId::Chat.label())
                         {
-                            if chat_on_top {
-                                panel.set_level(1001);
-                                // NonActivatingPanel (128) so clicking doesn't activate app
-                                unsafe {
-                                    let current: i32 = msg_send![&*panel, styleMask];
-                                    panel.set_style_mask(current | 128);
-                                }
-                            } else {
-                                // Normal window level — allow it to go behind other windows
-                                panel.set_level(0);
-                                // Remove NonActivatingPanel bit (128) so it behaves normally
-                                unsafe {
-                                    let current: i32 = msg_send![&*panel, styleMask];
-                                    panel.set_style_mask(current & !128);
-                                }
-                            }
+                            apply_chat_panel_on_top(&*panel, chat_on_top);
                             let _: () =
                                 unsafe { msg_send![&*panel, setMovableByWindowBackground: true] };
                             let sharing: u64 = if capturable { 1 } else { 0 };

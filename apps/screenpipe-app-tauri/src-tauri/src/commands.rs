@@ -2219,6 +2219,47 @@ pub async fn set_window_always_on_top_native(
     Ok(())
 }
 
+/// Apply the "Chat Always on Top" setting to the already-open chat window.
+///
+/// The chat window's on-top level is otherwise only set at create/show time
+/// (`window::show`), so toggling the setting while the window is open had no
+/// effect until it was reopened. This lets the Display-settings toggle take
+/// effect immediately. No-op if the chat window isn't currently open.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_chat_always_on_top(
+    app_handle: tauri::AppHandle,
+    on_top: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::window::{apply_chat_panel_on_top, run_on_main_thread_safe};
+        use tauri_nspanel::ManagerExt;
+
+        let app = app_handle.clone();
+        run_on_main_thread_safe(&app_handle, move || {
+            let label = RewindWindowId::Chat.label();
+            if let Ok(panel) = app.get_webview_panel(label) {
+                apply_chat_panel_on_top(&*panel, on_top);
+                // Keep it visible; re-order so the level change is reflected now.
+                panel.order_front_regardless();
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri::Manager;
+        if let Some(window) = app_handle.get_webview_window(RewindWindowId::Chat.label()) {
+            window
+                .set_always_on_top(on_top)
+                .map_err(|e| format!("failed to set always-on-top: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Re-assert the WKWebView as first responder for the current key panel.
 /// Called from JS on pointer enter / window focus to ensure trackpad pinch
 /// gestures (magnifyWithEvent:) reach the WKWebView for zoom handling.

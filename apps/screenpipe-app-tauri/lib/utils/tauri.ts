@@ -1934,6 +1934,22 @@ async setBrowserCookieAccessState(granted: boolean, disabled: boolean) : Promise
 }
 },
 /**
+ * Apply the "Chat Always on Top" setting to the already-open chat window.
+ *
+ * The chat window's on-top level is otherwise only set at create/show time
+ * (`window::show`), so toggling the setting while the window is open had no
+ * effect until it was reopened. This lets the Display-settings toggle take
+ * effect immediately. No-op if the chat window isn't currently open.
+ */
+async setChatAlwaysOnTop(onTop: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_chat_always_on_top", { onTop }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Toggle the "Cloud audio + video + image analysis" capability
  * in the screenpipe-api skill that Pi installs on every run.
  *
