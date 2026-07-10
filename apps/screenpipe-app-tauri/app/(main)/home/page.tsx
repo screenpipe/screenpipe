@@ -410,6 +410,10 @@ function HomeContent() {
   }
   const [recordingDevices, setRecordingDevices] = useState<RecordingDevice[]>([]);
   const recordingDevicesSnapshotRef = useRef("");
+  // Tracks whether the whole capture session was paused via "pause all
+  // recording" (stop_capture). The sidecar per-device endpoints don't reflect
+  // this global stop, so the frontend must suppress `active` itself.
+  const capturePausedRef = useRef(false);
 
   const refreshRecordingDevices = useCallback(async () => {
     try {
@@ -497,10 +501,18 @@ function HomeContent() {
         }
       }
 
-      const snapshot = JSON.stringify(devices);
+      // When the whole capture session was paused via "pause all recording",
+      // the sidecar per-device endpoints still report devices as active
+      // (user_disabled wasn't set per-device). Override all to inactive so
+      // the indicator dot and per-device buttons reflect reality.
+      const effective = capturePausedRef.current
+        ? devices.map((d) => ({ ...d, active: false }))
+        : devices;
+
+      const snapshot = JSON.stringify(effective);
       if (snapshot !== recordingDevicesSnapshotRef.current) {
         recordingDevicesSnapshotRef.current = snapshot;
-        setRecordingDevices(devices);
+        setRecordingDevices(effective);
       }
     } catch {
       // Device status is advisory UI state; keep the last known snapshot.
@@ -519,8 +531,27 @@ function HomeContent() {
     void refreshRecordingDevices();
   });
 
+  useTauriEvent("shortcut-start-recording", () => {
+    capturePausedRef.current = false;
+    void refreshRecordingDevices();
+  });
+
   const pauseRecording = useCallback(async () => {
+    capturePausedRef.current = true;
+    // Optimistically flip every device to inactive immediately so the
+    // indicator dot and per-device "pause"→"resume" labels update without
+    // waiting for the next refresh cycle.
+    setRecordingDevices((prev) => prev.map((d) => ({ ...d, active: false })));
     await emit("shortcut-stop-recording", {});
+    window.setTimeout(() => {
+      void refreshRecordingDevices();
+    }, 500);
+  }, [refreshRecordingDevices]);
+
+  const resumeRecording = useCallback(async () => {
+    capturePausedRef.current = false;
+    setRecordingDevices((prev) => prev.map((d) => ({ ...d, active: true })));
+    await emit("shortcut-start-recording", {});
     window.setTimeout(() => {
       void refreshRecordingDevices();
     }, 500);
@@ -959,6 +990,7 @@ function HomeContent() {
               meetingLoading={meetingLoading}
               onToggleMeeting={() => void toggleMeeting()}
               onPauseRecording={pauseRecording}
+              onResumeRecording={resumeRecording}
               isTranslucent={isTranslucent}
               floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
             />
