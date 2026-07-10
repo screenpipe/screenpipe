@@ -158,13 +158,7 @@ export function SummaryCards({
           <button
             key={pipe.name}
             data-testid={`summary-card-${pipe.name}`}
-            onClick={() => {
-              posthog.capture("home_card_clicked", {
-                kind: "template_chip",
-                template_name: pipe.name,
-              });
-              handleCardClick(pipe);
-            }}
+            onClick={() => handleCardClick(pipe)}
             className="px-2 py-0.5 text-xs bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
             {pipe.title}
