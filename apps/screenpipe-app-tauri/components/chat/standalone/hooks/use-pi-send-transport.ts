@@ -5,7 +5,7 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
-import { commands } from "@/lib/utils/tauri";
+import { commands, type Result } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorMessage, preflightChatProvider } from "@/lib/chat/provider-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
@@ -198,7 +198,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
               try {
                 const checkResult = await Promise.race([
                   commands.chatgptOauthCheckToken(),
-                  new Promise<{ status: "error" as const, error: string }>((resolve) =>
+                  new Promise<Result<boolean, string>>((resolve) =>
                     setTimeout(() => resolve({ status: "error", error: "timeout" }), 5_000)
                   ),
                 ]);
