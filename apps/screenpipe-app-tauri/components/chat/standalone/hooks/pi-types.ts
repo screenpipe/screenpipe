@@ -161,6 +161,7 @@ export type PiSendTransportOptions = {
   activePipeExecution: { name: string } | null;
   activePreset: AIPreset | undefined;
   activePresetRef?: React.MutableRefObject<AIPreset | undefined>;
+  setActivePreset?: React.Dispatch<React.SetStateAction<AIPreset | undefined>>;
   attachedDocsRef: React.MutableRefObject<ExtractedDoc[]>;
   autoSendBypassRef: PiTransportRefs["autoSendBypassRef"];
   buildProviderConfig: PiProviderConfigBuilder;

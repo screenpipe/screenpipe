@@ -29,6 +29,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     activePipeExecution,
     activePreset,
     activePresetRef,
+    setActivePreset,
     attachedDocsRef,
     autoSendBypassRef,
     buildProviderConfig,
@@ -166,29 +167,97 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         console.log("[Pi] Not running, auto-starting before sending message");
         piStartInFlightRef.current = true;
         setPiStarting(true);
-        const providerConfig = buildProviderConfig();
+
+        // Build a list of presets to try: active first, then other available
+        // presets as fallbacks. This ensures that if the active preset fails
+        // (e.g. ChatGPT OAuth expired), we try alternatives before giving up.
+        const activeP = getActivePreset();
+        const allPresets = settings.aiPresets ?? [];
+        const fallbackPresets = allPresets.filter(
+          (p) => p.id !== activeP?.id && p.model && p.model.trim() !== "",
+        );
+        const presetsToTry = activeP ? [activeP, ...fallbackPresets] : [...fallbackPresets];
+
+        let started = false;
+        let lastError = "";
+
         try {
           const home = await homeDir();
           const dir = await join(home, ".screenpipe", "pi-chat");
-          const result = await commands.piStart(piSessionIdRef.current, dir, settings.user?.token ?? null, providerConfig);
-          if (result.status === "ok" && result.data.running) {
-            setPiInfo(result.data);
-            piSessionSyncedRef.current = false;
-            piCrashCountRef.current = 0; // reset crash loop counter on manual start
-            // Keep running-config ref in sync so preset watcher doesn't re-trigger
-            if (providerConfig) {
-              setRunningConfigFromProviderConfig(providerConfig);
+
+          for (const preset of presetsToTry) {
+            const providerConfig = buildProviderConfig(preset);
+            if (!providerConfig) continue;
+
+            // Pre-check ChatGPT token existence before attempting start —
+            // avoids a noisy error from the Tauri command layer when the
+            // token is missing, and lets us skip straight to fallback.
+            // Uses the fast status check (3s timeout, no network) instead
+            // of the full token validation which can block for ~60s.
+            if (providerConfig.provider === "openai-chatgpt") {
+              try {
+                const status = await commands.chatgptOauthStatus();
+                if (status.status !== "ok" || !status.data.logged_in) {
+                  console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT not logged in`);
+                  lastError = "ChatGPT OAuth token unavailable";
+                  continue;
+                }
+              } catch {
+                console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT status check failed`);
+                lastError = "ChatGPT OAuth status check failed";
+                continue;
+              }
             }
-            syncThinkingLevelAfterStart(piSessionIdRef.current);
-          } else {
-            const providerLabel = providerConfig?.provider || "AI";
-            toast({ title: `failed to start AI assistant (${providerLabel})`, description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
+
+            try {
+              const result = await commands.piStart(
+                piSessionIdRef.current,
+                dir,
+                settings.user?.token ?? null,
+                providerConfig,
+              );
+              if (result.status === "ok" && result.data.running) {
+                setPiInfo(result.data);
+                piSessionSyncedRef.current = false;
+                piCrashCountRef.current = 0;
+                setRunningConfigFromProviderConfig(providerConfig);
+                syncThinkingLevelAfterStart(piSessionIdRef.current);
+
+                // Switch UI to the fallback preset so the user sees
+                // which preset is actually running.
+                if (preset.id !== activeP?.id) {
+                  console.log(`[Pi] Fell back to preset "${preset.id}" after active preset failed`);
+                  if (setActivePreset) {
+                    setActivePreset(preset);
+                  }
+                  toast({
+                    title: `switched to "${preset.id}" preset`,
+                    description: `"${activeP?.id ?? "active"}" preset failed to start — using fallback`,
+                  });
+                }
+                started = true;
+                break;
+              } else {
+                lastError = result.status === "error" ? result.error ?? "Unknown error" : "Unknown error";
+                console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) failed: ${lastError}`);
+              }
+            } catch (e) {
+              lastError = String(e);
+              console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) threw: ${lastError}`);
+            }
+          }
+
+          if (!started) {
+            const providerLabel = activeP?.provider || "AI";
+            toast({
+              title: `failed to start AI assistant (${providerLabel})`,
+              description: presetsToTry.length > 1
+                ? `all ${presetsToTry.length} presets failed — ${lastError}`
+                : lastError,
+              variant: "destructive",
+            });
             return;
           }
-        } catch (e) {
-          const providerLabel = providerConfig?.provider || "AI";
-          toast({ title: `failed to start AI assistant (${providerLabel})`, description: String(e), variant: "destructive" });
-          return;
         } finally {
           setPiStarting(false);
           piStartInFlightRef.current = false;

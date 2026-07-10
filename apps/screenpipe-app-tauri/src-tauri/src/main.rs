@@ -1868,6 +1868,12 @@ async fn main() {
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
 
+            // Background ChatGPT OAuth token refresh — keeps access tokens
+            // fresh so the lazy path in get_valid_token() rarely needs to
+            // refresh at request time. Separate from OAuthRefreshScheduler
+            // which only handles screenpipe-connect integrations.
+            crate::chatgpt_oauth::start_background_refresh();
+
             #[cfg(target_os = "macos")]
             crate::window::reset_to_regular_and_refresh_tray(&app_handle);
 

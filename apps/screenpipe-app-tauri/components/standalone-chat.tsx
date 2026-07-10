@@ -902,6 +902,7 @@ export function StandaloneChat({
     activePipeExecution,
     activePreset,
     activePresetRef,
+    setActivePreset: handleSetActivePreset,
     attachedDocsRef,
     autoSendBypassRef,
     setConversationId,
