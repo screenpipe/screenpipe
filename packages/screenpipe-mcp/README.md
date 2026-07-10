@@ -51,7 +51,7 @@ stale version forever. Get your key with `screenpipe auth token`. If you omit th
 key, the server will try to discover it (bundled bun → npx → local DB) — this works
 but is slower and can time out on first run.
 
-### Option 2: HTTP Server (Remote / Network Access)
+### Option 3: HTTP Server (Remote / Network Access)
 
 The MCP server can run over HTTP using the [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), allowing remote MCP clients to connect over the network instead of stdio. This is ideal when your AI assistant (e.g., OpenClaw) runs on a different machine than screenpipe.
 
@@ -106,7 +106,7 @@ If your machines are on different networks, expose port 3031 via Tailscale, SSH 
 
 > **Note:** The HTTP server currently exposes `search_content` only. The stdio server has the full tool set (export-video, list-meetings, activity-summary, search-elements, frame-context). We're working on bringing HTTP to full parity.
 
-### Option 3: From Source
+### Option 4: From Source
 
 Clone and build from source:
 

@@ -114,6 +114,10 @@ async function buildMcpConfig(): Promise<{ command: string; args: string[]; env?
       return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"], env };
     }
   } catch { /* fall through to npx */ }
+  // Unintended fallback: the app should always ship a bundled `bun`. Reaching
+  // here means it couldn't be resolved, and the npx config needs Node (which
+  // many users lack). Don't fail silently.
+  console.warn("[mcp] bundled bun not found — falling back to npx (requires Node). MCP setup may not work without Node installed.");
   return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
 }
 

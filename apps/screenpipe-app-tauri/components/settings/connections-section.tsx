@@ -418,6 +418,11 @@ async function buildMcpConfig(opts?: { forceNpx?: boolean }): Promise<McpCommand
       return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"], env };
     }
   } catch { /* fall through to npx */ }
+  // Unintended fallback: the desktop app should always ship a bundled `bun`, so
+  // reaching here means bun couldn't be resolved. The npx config needs Node,
+  // which many users don't have — don't fail silently. Callers writing an app
+  // config surface this to the user; see handleConnect.
+  console.warn("[mcp] bundled bun not found — falling back to npx (requires Node). MCP setup may not work without Node installed.");
   return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
 }
 
@@ -1193,23 +1198,34 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
   // Write the screenpipe entry into Claude's config with the reliable, current
   // shape (bundled-bun path + injected key). Used by both the explicit connect
   // action and the on-mount auto-repair of stale/keyless configs.
-  const writeClaudeScreenpipeConfig = async () => {
+  const writeClaudeScreenpipeConfig = async (): Promise<McpCommand> => {
     const configPath = await getClaudeConfigPath();
     if (!configPath) throw new Error("unsupported platform");
     let config: Record<string, unknown> = {};
     try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
     if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-    (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
+    const mcp = await buildMcpConfig();
+    (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
     await mkdir(await dirname(configPath), { recursive: true });
     await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+    return mcp;
   };
 
   const handleConnect = async () => {
     try {
       setState("connecting");
-      await writeClaudeScreenpipeConfig();
+      const mcp = await writeClaudeScreenpipeConfig();
       setState("connected");
       onConnected?.();
+      // The desktop app ships a bundled `bun`, so an npx fallback here means bun
+      // couldn't be resolved — that config needs Node, which many users lack.
+      // Warn instead of leaving the user with a silently-broken setup.
+      if (mcp.command === "npx") {
+        await message(
+          "connected, but screenpipe couldn't find its bundled runtime, so it wrote a config that needs Node.js installed.\n\nif Claude can't start screenpipe, install Node (https://nodejs.org) or reinstall the screenpipe app, then reconnect.",
+          { title: "claude mcp setup", kind: "warning" }
+        );
+      }
     } catch (error) {
       console.error("failed to install claude mcp:", error instanceof Error ? error.message : String(error));
       await message(

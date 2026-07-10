@@ -118,30 +118,53 @@ async function discoverApiKey(): Promise<string> {
   //    which Claude Desktop's MCP launcher strips. The CLI's `auth
   //    token` goes through `find_api_auth_key` and decrypts via
   //    keychain when needed.
-  const bunCandidates: string[] =
-    process.platform === "darwin"
-      ? [
-          // Standard system-wide install
-          "/Applications/screenpipe.app/Contents/MacOS/bun",
-          // Per-user install
-          path.join(home, "Applications", "screenpipe.app", "Contents", "MacOS", "bun"),
-        ]
-      : process.platform === "win32"
-      ? [
-          // NSIS per-user (default on Windows)
-          path.join(home, "AppData", "Local", "screenpipe", "bun.exe"),
-          // Per-user under "screenpipe-app" (older builds)
-          path.join(home, "AppData", "Local", "screenpipe-app", "bun.exe"),
-          // System-wide install
-          "C:\\Program Files\\screenpipe\\bun.exe",
-        ]
-      : [
-          // Linux .deb
-          "/opt/screenpipe/bun",
-          "/usr/lib/screenpipe/bun",
-          "/usr/bin/bun",
-        ];
-  for (const bunPath of bunCandidates) {
+  //
+  //    The desktop app's own Rust resolver (`find_bun_executable`) uses
+  //    `current_exe().parent()/bun`, which we can't call from this standalone
+  //    Node process — so we approximate it with the sources below, ordered
+  //    most- to least-reliable:
+  const bunExe = process.platform === "win32" ? "bun.exe" : "bun";
+  const bunCandidates: string[] = [];
+
+  // 2a. Explicit override — the app (or a user) can point us straight at the
+  //     bundled bun, bypassing every guess below. Cheapest + most reliable.
+  if (process.env.SCREENPIPE_BUN_PATH) bunCandidates.push(process.env.SCREENPIPE_BUN_PATH);
+
+  // 2b. The bun that is running THIS process, if any. When Claude launches us
+  //     via the config we write (`<abs>/bun x screenpipe-mcp@latest`), the
+  //     bundled bun is our own runner — so its path is knowable without
+  //     guessing, and it works for beta/enterprise/dev builds alike.
+  const execBase = path.basename(process.execPath).toLowerCase();
+  if (execBase === "bun" || execBase === "bun.exe") bunCandidates.push(process.execPath);
+  bunCandidates.push(path.join(path.dirname(process.execPath), bunExe));
+
+  // 2c. Known per-OS install locations, covering prod + beta + enterprise app
+  //     names. macOS bundles bun at `<App>.app/Contents/MacOS/bun`; the app
+  //     name follows `productName` (see tauri.*.conf.json).
+  if (process.platform === "darwin") {
+    for (const appName of ["screenpipe", "screenpipe beta", "screenpipe enterprise"]) {
+      bunCandidates.push(`/Applications/${appName}.app/Contents/MacOS/bun`);
+      bunCandidates.push(path.join(home, "Applications", `${appName}.app`, "Contents", "MacOS", "bun"));
+    }
+  } else if (process.platform === "win32") {
+    for (const dir of ["screenpipe", "screenpipe beta", "screenpipe enterprise", "screenpipe-app"]) {
+      bunCandidates.push(path.join(home, "AppData", "Local", dir, "bun.exe"));
+    }
+    bunCandidates.push("C:\\Program Files\\screenpipe\\bun.exe");
+  } else {
+    // Linux: the .deb/.rpm install dir and common AppImage/manual locations.
+    bunCandidates.push(
+      "/opt/screenpipe/bun",
+      "/usr/lib/screenpipe/bun",
+      "/usr/lib/screenpipe-app/bun",
+      "/usr/local/lib/screenpipe/bun",
+      "/usr/bin/bun",
+      path.join(home, ".local", "share", "screenpipe", "bun"),
+    );
+  }
+
+  // De-dupe while preserving order (execPath sibling may repeat an install path).
+  for (const bunPath of Array.from(new Set(bunCandidates))) {
     if (!fs.existsSync(bunPath)) continue;
     if (budgetLeft() <= 0) break;
     try {
