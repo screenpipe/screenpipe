@@ -409,6 +409,7 @@ function HomeContent() {
     user_disabled: boolean;
   }
   const [recordingDevices, setRecordingDevices] = useState<RecordingDevice[]>([]);
+  const [isCapturePaused, setIsCapturePaused] = useState(false);
   const recordingDevicesSnapshotRef = useRef("");
 
   const refreshRecordingDevices = useCallback(async () => {
@@ -435,6 +436,7 @@ function HomeContent() {
       // the tray menu. When capture is globally paused/stopped the sidecar
       // per-device endpoints still report devices as active, so override.
       const capturePaused = capturePausedResult === true;
+      setIsCapturePaused(capturePaused);
 
       const devices: RecordingDevice[] = [];
       // Prefer /vision/device/status: it carries the numeric monitor id (so each
@@ -990,6 +992,7 @@ function HomeContent() {
               onToggleMeeting={() => void toggleMeeting()}
               onPauseRecording={pauseRecording}
               onResumeRecording={resumeRecording}
+              isGloballyPaused={isCapturePaused}
               isTranslucent={isTranslucent}
               floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
             />
