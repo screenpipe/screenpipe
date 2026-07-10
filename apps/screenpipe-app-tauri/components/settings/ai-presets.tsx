@@ -687,9 +687,12 @@ const AISection = ({
         chat: { status: "running", message: "Sending test message..." },
       }));
     } else {
-      // Local custom providers often do not implement browser CORS preflight on /models.
+      // Local providers (Ollama, custom localhost) must go through tauriFetch —
+      // a browser fetch from the tauri://localhost webview to a local http server
+      // is blocked by WKWebView (mixed-content / cross-origin CORS).
       const modelsFetchFn =
-        settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url)
+        settingsPreset?.provider === "native-ollama" ||
+        (settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url))
           ? tauriFetch
           : fetch;
       try {
@@ -825,8 +828,9 @@ const AISection = ({
       chatHeaders["OpenAI-Beta"] = "responses=experimental";
     }
 
-    // Use tauriFetch for chatgpt.com and Anthropic to bypass CORS
-    const fetchFn = (isChatGpt || isAnthropic) ? tauriFetch : fetch;
+    // Use tauriFetch for chatgpt.com, Anthropic, and local Ollama to bypass
+    // CORS / WKWebView mixed-content blocking (localhost:11434 over http).
+    const fetchFn = (isChatGpt || isAnthropic || settingsPreset?.provider === "native-ollama") ? tauriFetch : fetch;
 
     const chatStart = performance.now();
     try {
@@ -925,7 +929,10 @@ const AISection = ({
       switch (settingsPreset?.provider) {
 
         case "native-ollama":
-          const ollamaResponse = await fetch("http://localhost:11434/api/tags");
+          // Use tauriFetch (Rust-side HTTP) — a browser fetch from the
+          // tauri://localhost webview to http://localhost:11434 is blocked by
+          // WKWebView (mixed-content / cross-origin), leaving the model list empty.
+          const ollamaResponse = await tauriFetch("http://localhost:11434/api/tags");
           if (!ollamaResponse.ok)
             throw new Error("Failed to fetch Ollama models");
           const ollamaData = (await ollamaResponse.json()) as {
