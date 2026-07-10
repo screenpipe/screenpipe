@@ -198,7 +198,7 @@ export function SummaryCards({
         {userName ? `How can I help, ${userName}?` : "How can I help today?"}
       </h3>
       <p className="text-xs text-muted-foreground mb-2">
-        Automate your work from screen activity
+        From everything you've seen, said, or heard
       </p>
 
       {/* Hero card — Automate My Work */}
