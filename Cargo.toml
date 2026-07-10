@@ -5,6 +5,7 @@ members = [
 exclude = [
     "apps/screenpipe-app-tauri/src-tauri",
     "crates/screenpipe-integrations",
+    "crates/screenpipe-rfdetr-mlx",
     "ee/sdk",
     ".github/ci/ort-smoke",
 ]

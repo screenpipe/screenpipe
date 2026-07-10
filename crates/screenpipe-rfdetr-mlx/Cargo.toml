@@ -1,10 +1,10 @@
 [package]
 name = "screenpipe-rfdetr-mlx"
 description = "RF-DETR-Nano image-PII detector in MLX via mlx-rs (Apple-Silicon-only)"
-version.workspace = true
-edition.workspace = true
-license-file.workspace = true
-authors.workspace = true
+version = "0.4.25"
+edition = "2021"
+license-file = "../../LICENSE.md"
+authors = ["louis030195 <hi@louis030195.com>"]
 publish = false
 
 [lib]
@@ -12,11 +12,11 @@ name = "screenpipe_rfdetr_mlx"
 path = "src/lib.rs"
 
 [dependencies]
-image = { workspace = true, features = ["png", "jpeg"] }
-thiserror = { workspace = true }
+image = { version = "0.25", features = ["png", "jpeg"] }
+thiserror = "1"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-mlx-rs = { workspace = true, features = ["safetensors"] }
+mlx-rs = { version = "0.25", features = ["safetensors"] }
 mlx-sys = "0.2"
 # Pin to the version mlx-rs uses internally so the TensorView types match.
 safetensors = "0.6"
