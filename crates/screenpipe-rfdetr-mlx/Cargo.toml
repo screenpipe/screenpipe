@@ -12,9 +12,11 @@ name = "screenpipe_rfdetr_mlx"
 path = "src/lib.rs"
 
 [dependencies]
+image = { workspace = true, features = ["png", "jpeg"] }
+thiserror = { workspace = true }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 mlx-rs = { workspace = true, features = ["safetensors"] }
 mlx-sys = "0.2"
 # Pin to the version mlx-rs uses internally so the TensorView types match.
 safetensors = "0.6"
-image = { workspace = true, features = ["png", "jpeg"] }
-thiserror = { workspace = true }
