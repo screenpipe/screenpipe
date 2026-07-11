@@ -4395,9 +4395,14 @@ mod tests {
         let state = "test-cb-success-state";
         let rx = register_pending(state);
 
-        let (status, _) =
-            oauth_callback(callback_query(Some("auth-code-1"), Some(state), None, None, None))
-                .await;
+        let (status, _) = oauth_callback(callback_query(
+            Some("auth-code-1"),
+            Some(state),
+            None,
+            None,
+            None,
+        ))
+        .await;
 
         assert_eq!(status, StatusCode::OK);
         assert!(!pending_contains(state));
@@ -4468,14 +4473,8 @@ mod tests {
         let state = "test-cb-error-nostate-state";
         let mut rx = register_pending(state);
 
-        let (status, _) = oauth_callback(callback_query(
-            None,
-            None,
-            Some("server_error"),
-            None,
-            None,
-        ))
-        .await;
+        let (status, _) =
+            oauth_callback(callback_query(None, None, Some("server_error"), None, None)).await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         // Unrelated pending flow must survive an error callback without state.
