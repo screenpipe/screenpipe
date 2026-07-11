@@ -1293,9 +1293,9 @@ const AISection = ({
           value={settingsPreset?.url || ""}
           onChange={(value, isValid) => updateSettingsPreset({ url: value })}
           validation={validateUrl}
-          placeholder="Enter custom AI URL"
+          placeholder="e.g. https://integrate.api.nvidia.com/v1 or http://localhost:11434/v1"
           required={true}
-          helperText="Enter the base URL for your custom AI provider"
+          helperText="Base URL of an OpenAI-compatible endpoint (must end in /v1). Examples: NVIDIA NIM https://integrate.api.nvidia.com/v1, Ollama http://localhost:11434/v1, Groq https://api.groq.com/openai/v1"
         />
       )}
 
