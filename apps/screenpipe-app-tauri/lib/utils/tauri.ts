@@ -2447,7 +2447,13 @@ export type CalendarStatus = { available: boolean; authorized: boolean; authoriz
  * [`list_chat_entries_by_mtime`].
  */
 export type ChatDirEntry = { name: string; mtime_ms: number }
-export type ChatGptOAuthStatus = { logged_in: boolean }
+export type ChatGptOAuthStatus = { logged_in: boolean;
+/**
+ * `None` when the store was read successfully; contains an error
+ * description when the status could not be determined (DB locked,
+ * keychain failure, timeout, etc.).
+ */
+error: string | null }
 export type Credits = { amount: number }
 /**
  * A skill folder discovered somewhere on the user's device.

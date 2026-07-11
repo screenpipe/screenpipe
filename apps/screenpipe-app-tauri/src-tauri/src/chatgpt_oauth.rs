@@ -45,6 +45,10 @@ struct OAuthTokens {
 #[derive(Serialize, Deserialize, specta::Type)]
 pub struct ChatGptOAuthStatus {
     pub logged_in: bool,
+    /// `None` when the store was read successfully; contains an error
+    /// description when the status could not be determined (DB locked,
+    /// keychain failure, timeout, etc.).
+    pub error: Option<String>,
 }
 
 /// Open a connection to the secrets store (same DB as the screenpipe server).
@@ -526,15 +530,21 @@ pub async fn chatgpt_oauth_status() -> Result<ChatGptOAuthStatus, String> {
     // Refresh happens lazily in chatgpt_oauth_get_token when actually needed.
     // 3-second timeout guards against a locked/slow SQLite DB.
     match tokio::time::timeout(std::time::Duration::from_secs(3), read_tokens_from_store()).await {
-        Ok(Ok(Some(_))) => Ok(ChatGptOAuthStatus { logged_in: true }),
-        Ok(Ok(None)) => Ok(ChatGptOAuthStatus { logged_in: false }),
+        Ok(Ok(Some(_))) => Ok(ChatGptOAuthStatus { logged_in: true, error: None }),
+        Ok(Ok(None)) => Ok(ChatGptOAuthStatus { logged_in: false, error: None }),
         Ok(Err(e)) => {
             warn!("chatgpt_oauth_status: store read failed: {}", e);
-            Ok(ChatGptOAuthStatus { logged_in: false })
+            Ok(ChatGptOAuthStatus {
+                logged_in: false,
+                error: Some(format!("secret store error: {}", e)),
+            })
         }
         Err(_) => {
             warn!("chatgpt_oauth_status: timed out reading secret store");
-            Ok(ChatGptOAuthStatus { logged_in: false })
+            Ok(ChatGptOAuthStatus {
+                logged_in: false,
+                error: Some("timed out reading secret store".to_string()),
+            })
         }
     }
 }

@@ -29,7 +29,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     activePipeExecution,
     activePreset,
     activePresetRef,
-    setActivePreset,
     attachedDocsRef,
     autoSendBypassRef,
     buildProviderConfig,
@@ -228,16 +227,13 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 setRunningConfigFromProviderConfig(providerConfig);
                 syncThinkingLevelAfterStart(piSessionIdRef.current);
 
-                // Switch UI to the fallback preset so the user sees
-                // which preset is actually running.
+                // Notify the user about the session-only fallback, but
+                // do NOT persist it — the user's chosen preset stays.
                 if (preset.id !== activeP?.id) {
-                  console.log(`[Pi] Fell back to preset "${preset.id}" after active preset failed`);
-                  if (setActivePreset) {
-                    setActivePreset(preset);
-                  }
+                  console.log(`[Pi] Fell back to preset "${preset.id}" for this session (not persisted)`);
                   toast({
-                    title: `switched to "${preset.id}" preset`,
-                    description: `"${activeP?.id ?? "active"}" preset failed to start — using fallback`,
+                    title: `using "${preset.id}" preset for this session`,
+                    description: `"${activeP?.id ?? "active"}" preset failed to start — using fallback for this session only`,
                   });
                 }
                 started = true;
