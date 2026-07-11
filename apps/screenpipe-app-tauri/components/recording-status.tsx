@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
+import type { RecordingStatus as GlobalRecordingStatus } from "@/lib/utils/tauri";
 
 export interface RecordingDevice {
   name: string;
@@ -33,6 +34,7 @@ export interface RecordingDevice {
 
 interface RecordingStatusProps {
   devices: RecordingDevice[];
+  captureStatus: GlobalRecordingStatus;
   onDevicesChange: React.Dispatch<React.SetStateAction<RecordingDevice[]>>;
   meetingActive: boolean;
   meetingApp?: string | null;
@@ -57,6 +59,7 @@ const KIND_ICONS: Record<
 
 export function getRecordingStatusCopy(
   devices: RecordingDevice[],
+  captureStatus: GlobalRecordingStatus,
   meetingActive: boolean,
   meetingApp?: string | null
 ) {
@@ -70,21 +73,39 @@ export function getRecordingStatusCopy(
     activeAudio > 0 ? "audio" : null,
   ].filter(Boolean);
 
-  const summary =
-    devices.length === 0
-      ? "recording stopped"
-      : activeDevices.length === 0
-        ? "recording paused"
-        : `recording ${captureParts.length > 0 ? captureParts.join(" + ") : "capture"}`;
+  let summary: string;
+  switch (captureStatus) {
+    case "starting":
+      summary = "recording starting";
+      break;
+    case "scheduled_pause":
+      summary = "outside work hours";
+      break;
+    case "paused":
+    case "stopped":
+      summary = "recording stopped";
+      break;
+    case "error":
+      summary = "recording error";
+      break;
+    case "recording":
+      summary =
+        devices.length > 0 && activeDevices.length === 0
+          ? "all devices paused"
+          : `recording ${captureParts.length > 0 ? captureParts.join(" + ") : "capture"}`;
+      break;
+  }
 
   const detail =
-    pausedCount > 0 && activeDevices.length > 0
+    captureStatus === "recording" &&
+    pausedCount > 0 &&
+    activeDevices.length > 0
       ? `${summary}; ${pausedCount} device${pausedCount > 1 ? "s" : ""} paused`
       : summary;
 
   return {
     pausedCount,
-    allActive: devices.length > 0 && pausedCount === 0,
+    allActive: captureStatus === "recording" && pausedCount === 0,
     summary,
     label: meetingActive
       ? `${detail} - meeting notes${meetingApp ? ` - ${meetingApp}` : ""}`
@@ -101,6 +122,7 @@ export function getRecordingStatusCopy(
  */
 export function RecordingStatus({
   devices,
+  captureStatus,
   onDevicesChange,
   meetingActive,
   meetingApp,
@@ -116,10 +138,11 @@ export function RecordingStatus({
 
   const { pausedCount, allActive, summary, label } = getRecordingStatusCopy(
     devices,
+    captureStatus,
     meetingActive,
     meetingApp
   );
-  const canPauseRecording = devices.some((d) => d.active);
+  const canPauseRecording = captureStatus === "recording";
   const showLabel = !compact && !floatingOverMedia;
 
   // Monitors pause via /vision/device/* (screen capture only — audio keeps
@@ -221,7 +244,7 @@ export function RecordingStatus({
                     : allActive
                       ? "bg-foreground"
                       : "border border-foreground bg-transparent",
-                  devices.length === 0 && "opacity-40",
+                  captureStatus !== "recording" && "opacity-40",
                   meetingActive && "animate-pulse"
                 )}
               />

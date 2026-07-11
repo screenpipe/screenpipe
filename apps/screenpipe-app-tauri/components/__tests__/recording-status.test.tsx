@@ -23,7 +23,7 @@ const devices: RecordingDevice[] = [
 
 describe("getRecordingStatusCopy", () => {
   it("describes active screen and audio capture", () => {
-    expect(getRecordingStatusCopy(devices, false)).toMatchObject({
+    expect(getRecordingStatusCopy(devices, "recording", false)).toMatchObject({
       summary: "recording screen + audio",
       label: "recording screen + audio",
       allActive: true,
@@ -34,16 +34,45 @@ describe("getRecordingStatusCopy", () => {
   it("keeps paused devices in the accessible label", () => {
     const mixedDevices = [devices[0], { ...devices[1], active: false }];
 
-    expect(getRecordingStatusCopy(mixedDevices, true, "zoom").label).toBe(
+    expect(getRecordingStatusCopy(mixedDevices, "recording", true, "zoom").label).toBe(
       "recording screen; 1 device paused - meeting notes - zoom"
     );
   });
 
-  it("reports stopped and fully paused states clearly", () => {
-    expect(getRecordingStatusCopy([], false).summary).toBe("recording stopped");
+  it("lets a global stop override stale active device state", () => {
+    expect(getRecordingStatusCopy(devices, "paused", false)).toMatchObject({
+      summary: "recording stopped",
+      allActive: false,
+    });
+    expect(getRecordingStatusCopy(devices, "stopped", false).summary).toBe(
+      "recording stopped"
+    );
+  });
+
+  it("distinguishes individually paused devices from a global stop", () => {
+    const pausedDevices = devices.map((device) => ({
+      ...device,
+      active: false,
+    }));
+
     expect(
-      getRecordingStatusCopy(devices.map((device) => ({ ...device, active: false })), false)
-        .summary
-    ).toBe("recording paused");
+      getRecordingStatusCopy(pausedDevices, "recording", false)
+    ).toMatchObject({
+      summary: "all devices paused",
+      allActive: false,
+      pausedCount: 2,
+    });
+  });
+
+  it("keeps non-recording global states explicit", () => {
+    expect(getRecordingStatusCopy(devices, "starting", false).summary).toBe(
+      "recording starting"
+    );
+    expect(
+      getRecordingStatusCopy(devices, "scheduled_pause", false).summary
+    ).toBe("outside work hours");
+    expect(getRecordingStatusCopy(devices, "error", false).summary).toBe(
+      "recording error"
+    );
   });
 });

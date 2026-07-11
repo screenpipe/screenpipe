@@ -720,6 +720,12 @@ async getPendingUpdate() : Promise<Result<PendingUpdateSnapshot | null, null>> {
 }
 },
 /**
+ * Read the process-wide capture state used by the tray and recording UI.
+ */
+async getRecordingStatus() : Promise<RecordingStatus> {
+    return await TAURI_INVOKE("get_recording_status");
+},
+/**
  * Tauri command: absolute path of the screenpipe base dir (where store.bin
  * lives). Honors SCREENPIPE_DATA_DIR; the webview must use this instead of
  * hardcoding ~/.screenpipe, or it reads/writes a different settings file
@@ -2640,6 +2646,7 @@ featured?: boolean;
  * True when a skill of the same normalized name is already in the store.
  */
 imported?: boolean }
+export type RecordingStatus = "starting" | "recording" | "paused" | "scheduled_pause" | "stopped" | "error"
 /**
  * Result of a remote command run over SSH.
  */

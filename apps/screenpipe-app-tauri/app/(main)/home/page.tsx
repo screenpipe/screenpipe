@@ -53,7 +53,10 @@ import { useQueryState } from "nuqs";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
-import { commands } from "@/lib/utils/tauri";
+import {
+  commands,
+  type RecordingStatus as GlobalRecordingStatus,
+} from "@/lib/utils/tauri";
 import { shouldAcceptTitleSource } from "@/lib/utils/chat-title";
 import {
   formatShortcutDisplay,
@@ -409,15 +412,19 @@ function HomeContent() {
     user_disabled: boolean;
   }
   const [recordingDevices, setRecordingDevices] = useState<RecordingDevice[]>([]);
+  const [globalRecordingStatus, setGlobalRecordingStatus] =
+    useState<GlobalRecordingStatus>("starting");
   const recordingDevicesSnapshotRef = useRef("");
 
   const refreshRecordingDevices = useCallback(async () => {
     try {
-      const [health, audioStatus, visionStatus]: [
+      const [captureStatus, health, audioStatus, visionStatus]: [
+        GlobalRecordingStatus | null,
         { monitors?: string[]; device_status_details?: string } | null,
         AudioDeviceStatus[] | null,
         VisionDeviceStatus[] | null,
       ] = await Promise.all([
+        commands.getRecordingStatus().catch(() => null),
         localFetch("/health")
           .then((r) => r.ok ? r.json() : null)
           .catch(() => null),
@@ -428,6 +435,10 @@ function HomeContent() {
           .then((r) => r.ok ? r.json() : null)
           .catch(() => null),
       ]);
+
+      if (captureStatus) {
+        setGlobalRecordingStatus(captureStatus);
+      }
 
       const devices: RecordingDevice[] = [];
       // Prefer /vision/device/status: it carries the numeric monitor id (so each
@@ -520,6 +531,7 @@ function HomeContent() {
   });
 
   const pauseRecording = useCallback(async () => {
+    setGlobalRecordingStatus("paused");
     await emit("shortcut-stop-recording", {});
     window.setTimeout(() => {
       void refreshRecordingDevices();
@@ -953,6 +965,7 @@ function HomeContent() {
 
             <RecordingStatus
               devices={recordingDevices}
+              captureStatus={globalRecordingStatus}
               onDevicesChange={setRecordingDevices}
               meetingActive={meetingState.active ?? false}
               meetingApp={meetingState.meetingApp}
