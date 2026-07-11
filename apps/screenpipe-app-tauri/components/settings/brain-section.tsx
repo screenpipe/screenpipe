@@ -44,7 +44,14 @@ import {
   FolderOpen,
   Eye,
   MessageSquare,
+  MoreVertical,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { CompactMarkdown } from "@/components/settings/compact-markdown";
 import { SafArtifactBody } from "@/components/settings/saf-sop-view";
@@ -1625,7 +1632,7 @@ export function BrainSection() {
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
-                  className={`group relative min-h-[315px] cursor-pointer overflow-hidden rounded-none border border-border bg-background transition-colors hover:bg-muted/20 ${
+                  className={`group relative cursor-pointer overflow-hidden border border-border bg-background transition-colors duration-150 hover:bg-muted/20 ${
                     isChecked ? "bg-muted/30 ring-1 ring-border" : ""
                   }`}
                   onClick={() => {
@@ -1647,175 +1654,146 @@ export function BrainSection() {
                     openArtifactOrigin(target, artPath);
                   }}
                 >
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute right-0 top-0 z-10 h-8 w-8 overflow-hidden"
-                  >
-                    <div className="absolute inset-0 bg-muted/40 [clip-path:polygon(100%_0,100%_100%,0_0)]" />
-                    <div className="absolute right-[15px] top-[-7px] h-[46px] w-px origin-top rotate-[-45deg] bg-border" />
+                  {/* floating action buttons — top right with blurred backdrop */}
+                  <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-sm bg-background/60 backdrop-blur-md opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void commands.openViewerWindow(artPath);
+                      }}
+                      title="open viewer"
+                    >
+                      <Eye className="h-4 w-4 text-foreground" />
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <MoreVertical className="h-4 w-4 text-foreground" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        {target.mode !== "artifact-only" && (
+                          <DropdownMenuItem
+                            onClick={() => openArtifactOrigin(target, artPath)}
+                          >
+                            <MessageSquare className="mr-2 h-3.5 w-3.5" />
+                            {target.mode === "pipe-run" ? "open pipe run" : "open chat"}
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem
+                          onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
+                        >
+                          <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                          reveal in finder
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => commands.copyTextToClipboard(artPath)}
+                        >
+                          <Copy className="mr-2 h-3.5 w-3.5" />
+                          copy path
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => toggleSelected(artKey)}
+                        >
+                          <Check className="mr-2 h-3.5 w-3.5" />
+                          {isChecked ? "deselect" : "select"}
+                        </DropdownMenuItem>
+                        {artItem.registered && (
+                          <DropdownMenuItem
+                            data-testid={`brain-delete-artifact-${artTestId}`}
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => void handleDeleteArtifact(artItem)}
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            delete
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
-                  <div className="flex h-full flex-col">
-                    {isHtml ? (
-                      <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10">
-                        {htmlContent ? (
-                          <iframe
-                            srcDoc={htmlContent}
-                            sandbox=""
-                            className="pointer-events-none h-[340px] w-[200%] origin-top-left scale-50 border-0"
-                            tabIndex={-1}
-                            aria-hidden
-                          />
-                        ) : (
-                          <p className="px-4 py-3 text-[13px] text-muted-foreground">loading…</p>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10 pl-2 pt-2 text-foreground">
-                        {display.summary ? (
-                          <div
-                            data-testid={`brain-artifact-preview-${artTestId}`}
-                            className="h-full overflow-hidden"
-                          >
-                            <CompactMarkdown truncateLen={Infinity}>
-                              {display.summary}
-                            </CompactMarkdown>
-                          </div>
-                        ) : (
-                          <p className="text-[13px] text-muted-foreground">
-                            {display.subtitle}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 space-y-1">
-                          <h4 className="line-clamp-2 text-[16px] font-semibold leading-snug">
-                            {display.title}
-                          </h4>
-                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
-                            <span className="truncate">{display.subtitle}</span>
-                            {artDate && (
-                              <>
-                                <span className="text-muted-foreground/40">·</span>
-                                <span>{timeAgo(artDate)}</span>
-                              </>
-                            )}
-                            {artSize != null && (
-                              <>
-                                <span className="text-muted-foreground/40">·</span>
-                                <span>{formatBytes(artSize)}</span>
-                              </>
-                            )}
-                          </div>
+
+                  {/* preview area */}
+                  {isHtml ? (
+                    <div className="h-[160px] overflow-hidden border-b border-border bg-muted/5">
+                      {htmlContent ? (
+                        <iframe
+                          srcDoc={htmlContent}
+                          sandbox=""
+                          className="pointer-events-none h-[320px] w-[200%] origin-top-left scale-50 border-0"
+                          tabIndex={-1}
+                          aria-hidden
+                        />
+                      ) : (
+                        <p className="px-4 py-3 text-[13px] text-muted-foreground">loading…</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="h-[160px] overflow-hidden border-b border-border bg-muted/5 px-3 pt-3 text-foreground">
+                      {display.summary ? (
+                        <div
+                          data-testid={`brain-artifact-preview-${artTestId}`}
+                          className="h-full overflow-hidden"
+                        >
+                          <CompactMarkdown truncateLen={Infinity}>
+                            {display.summary}
+                          </CompactMarkdown>
                         </div>
-                        <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 font-normal">
-                          {artifactKindLabel(artItem.kind)}
-                        </Badge>
-                      </div>
-                      <div className="mt-auto flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <Checkbox
-                            data-testid={`brain-checkbox-artifact-${artTestId}`}
-                            checked={isChecked}
-                            onClick={(e) => e.stopPropagation()}
-                            onCheckedChange={() => toggleSelected(artKey)}
-                            className={`h-3.5 w-3.5 shrink-0 transition-opacity ${
-                              !selectionMode && !isChecked
-                                ? "hidden opacity-0 group-hover:block group-hover:opacity-100"
-                                : "opacity-100"
-                            }`}
-                          />
-                          <Badge variant="secondary" className="max-w-[120px] truncate text-[10px] px-1.5 py-0 font-normal">
-                            {target.mode === "artifact-only" ? "artifact" : target.mode}
-                          </Badge>
-                        </div>
-                        <div className="flex items-center gap-0.5">
-                          {target.mode !== "artifact-only" && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openArtifactOrigin(target, artPath);
-                              }}
-                              title={target.mode === "pipe-run" ? "open pipe run with preview" : "open chat with preview"}
-                            >
-                              <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
-                            </Button>
-                          )}
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void commands.openViewerWindow(artPath);
-                            }}
-                            title="open viewer"
-                          >
-                            <Eye className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void invoke("reveal_in_default_browser", { path: artPath });
-                            }}
-                            title="reveal in finder"
-                          >
-                            <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              commands.copyTextToClipboard(artPath);
-                            }}
-                            title="copy path"
-                          >
-                            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
-                          {artItem.registered && (
-                            <ConfirmDeleteDialog
-                              trigger={
-                                <Button
-                                  data-testid={`brain-delete-artifact-${artTestId}`}
-                                  size="icon"
-                                  variant="ghost"
-                                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                                  title="delete"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                                </Button>
-                              }
-                              title="delete artifact"
-                              description="this artifact will be permanently deleted. this cannot be undone."
-                              onConfirm={() => void handleDeleteArtifact(artItem)}
-                            />
-                          )}
-                        </div>
-                      </div>
+                      ) : (
+                        <p className="text-[13px] text-muted-foreground">
+                          {display.subtitle}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* card body */}
+                  <div className="flex flex-col gap-2 p-3">
+                    <h4 className="line-clamp-2 text-[14px] font-semibold leading-snug">
+                      {display.title}
+                    </h4>
+
+                    {/* metadata line */}
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span className="truncate">{display.subtitle}</span>
+                      {artDate && (
+                        <>
+                          <span className="text-muted-foreground/40">·</span>
+                          <span>{timeAgo(artDate)}</span>
+                        </>
+                      )}
+                      {artSize != null && (
+                        <>
+                          <span className="text-muted-foreground/40">·</span>
+                          <span>{formatBytes(artSize)}</span>
+                        </>
+                      )}
+                    </div>
+
+                    {/* bottom row: origin badge */}
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
+                        {target.mode === "artifact-only" ? "artifact" : target.mode}
+                      </Badge>
                       {artItem.saf_kind && (
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span
-                            data-testid={`brain-artifact-saf-kind-${artTestId}`}
-                            className="inline-flex items-center px-1.5 py-0 text-[10px] rounded-full border border-border font-mono text-foreground/80"
-                          >
-                            {artItem.saf_kind}
-                            {artItem.saf_version != null && (
-                              <span className="ml-1 text-muted-foreground/70">
-                                v{artItem.saf_version}
-                              </span>
-                            )}
-                          </span>
-                        </div>
+                        <span
+                          data-testid={`brain-artifact-saf-kind-${artTestId}`}
+                          className="inline-flex items-center px-1.5 py-0 text-[10px] border border-border font-mono text-foreground/80"
+                        >
+                          {artItem.saf_kind}
+                          {artItem.saf_version != null && (
+                            <span className="ml-1 text-muted-foreground/70">
+                              v{artItem.saf_version}
+                            </span>
+                          )}
+                        </span>
                       )}
                     </div>
                   </div>
