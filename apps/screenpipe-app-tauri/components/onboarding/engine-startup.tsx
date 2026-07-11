@@ -928,13 +928,19 @@ if the input is sparse, just describe what little you have warmly. don't apologi
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.1 }}
+          role="status"
+          aria-label="screenpipe is watching your screen"
         >
           <motion.div
             className="w-1.5 h-1.5 rounded-full bg-foreground"
             animate={{ opacity: [1, 0.3, 1] }}
             transition={{ duration: 1.5, repeat: Infinity }}
+            aria-hidden="true"
           />
-          <span className="font-mono text-[10px] tracking-wider lowercase text-muted-foreground/70">
+          <span
+            className="font-mono text-[10px] tracking-wider lowercase text-muted-foreground/70"
+            aria-hidden="true"
+          >
             watching · {feedSeconds}s
           </span>
         </motion.div>
