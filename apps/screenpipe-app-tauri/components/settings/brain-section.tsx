@@ -1616,6 +1616,11 @@ export function BrainSection() {
               const display = getArtifactCardDisplay(artItem);
               const isChecked = selectedIds.has(artKey);
               const target = artifactOpenTarget(artItem, artKey);
+              const isHtml = isHtmlFileName(artItem.path);
+              if (isHtml && !artifactContents.has(artKey)) {
+                void loadArtifactContent(artKey, artPath);
+              }
+              const htmlContent = isHtml ? artifactContents.get(artKey) : undefined;
               return (
                 <div
                   key={artKey}
@@ -1650,22 +1655,38 @@ export function BrainSection() {
                     <div className="absolute right-[15px] top-[-7px] h-[46px] w-px origin-top rotate-[-45deg] bg-border" />
                   </div>
                   <div className="flex h-full flex-col">
-                    <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10 pl-2 pt-2 text-foreground">
-                      {display.summary ? (
-                        <div
-                          data-testid={`brain-artifact-preview-${artTestId}`}
-                          className="h-full overflow-hidden"
-                        >
-                          <CompactMarkdown truncateLen={Infinity}>
-                            {display.summary}
-                          </CompactMarkdown>
-                        </div>
-                      ) : (
-                        <p className="text-[13px] text-muted-foreground">
-                          {display.subtitle}
-                        </p>
-                      )}
-                    </div>
+                    {isHtml ? (
+                      <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10">
+                        {htmlContent ? (
+                          <iframe
+                            srcDoc={htmlContent}
+                            sandbox=""
+                            className="pointer-events-none h-[340px] w-[200%] origin-top-left scale-50 border-0"
+                            tabIndex={-1}
+                            aria-hidden
+                          />
+                        ) : (
+                          <p className="px-4 py-3 text-[13px] text-muted-foreground">loading…</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10 pl-2 pt-2 text-foreground">
+                        {display.summary ? (
+                          <div
+                            data-testid={`brain-artifact-preview-${artTestId}`}
+                            className="h-full overflow-hidden"
+                          >
+                            <CompactMarkdown truncateLen={Infinity}>
+                              {display.summary}
+                            </CompactMarkdown>
+                          </div>
+                        ) : (
+                          <p className="text-[13px] text-muted-foreground">
+                            {display.subtitle}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 space-y-1">

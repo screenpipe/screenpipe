@@ -38,9 +38,15 @@ function previewWithoutHeading(preview: string | null | undefined, heading: stri
     .trim();
 }
 
-/** Strip HTML tags and collapse whitespace to produce a plain-text preview. */
+/** Strip HTML tags, style/script blocks, and comments to produce a plain-text preview. */
 function stripHtmlTags(text: string): string {
-  return text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return text
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, "")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** Detect content that looks like HTML markup. */
