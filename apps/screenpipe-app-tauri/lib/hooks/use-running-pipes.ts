@@ -166,6 +166,7 @@ async function fetchRunningPipes(): Promise<RunningPipe[]> {
 }
 
 let mounted = false;
+let consumerCount = 0;
 let unregister: Unregister | null = null;
 let pollHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -219,7 +220,22 @@ async function mountRunningPipesTracker(): Promise<void> {
  */
 export function useRunningPipes(): RunningPipe[] {
   useEffect(() => {
+    consumerCount++;
     void mountRunningPipesTracker();
+    return () => {
+      // Tear the shared tracker down when the last consumer unmounts so the
+      // 30s poll and the bus subscription don't dangle for the app's lifetime.
+      if (--consumerCount > 0) return;
+      mounted = false;
+      if (pollHandle) {
+        clearInterval(pollHandle);
+        pollHandle = null;
+      }
+      if (unregister) {
+        unregister();
+        unregister = null;
+      }
+    };
   }, []);
   const pipes = useRunningPipesStore((s) => s.pipes);
   return useMemo(

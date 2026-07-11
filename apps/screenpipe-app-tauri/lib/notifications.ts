@@ -10,6 +10,18 @@ const FIRST_RUN_SENT_KEY = "firstRunNotificationSent";
 const FIRST_RUN_TIME_KEY = "firstRunNotificationTime";
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
+// Module-scoped handle so the pending first-run timer can be cancelled
+// (e.g. on window teardown) instead of dangling with its captured closure.
+let firstRunTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Cancel any pending first-run notification timer. */
+export function cancelFirstRunNotification(): void {
+  if (firstRunTimer) {
+    clearTimeout(firstRunTimer);
+    firstRunTimer = null;
+  }
+}
+
 /**
  * Called from onboarding when user completes it.
  * Stores a timestamp so the main window can schedule the notification later.
@@ -57,7 +69,9 @@ export async function checkFirstRunNotification(): Promise<void> {
       console.log(
         `first run notification in ${Math.round(remaining / 60000)}m`
       );
-      setTimeout(async () => {
+      if (firstRunTimer) clearTimeout(firstRunTimer);
+      firstRunTimer = setTimeout(async () => {
+        firstRunTimer = null;
         const sent = await localforage.getItem<boolean>(FIRST_RUN_SENT_KEY);
         if (!sent) {
           await showFirstRunNotification();
