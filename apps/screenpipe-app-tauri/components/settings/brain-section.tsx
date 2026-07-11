@@ -1650,24 +1650,21 @@ export function BrainSection() {
                     <div className="absolute right-[15px] top-[-7px] h-[46px] w-px origin-top rotate-[-45deg] bg-border" />
                   </div>
                   <div className="flex h-full flex-col">
-                    <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10 px-6 py-6 text-foreground">
-                      <div className="max-w-[92%] space-y-2.5">
-                        <h3 className="line-clamp-2 text-[16px] font-semibold leading-tight">
-                          {display.title}
-                        </h3>
-                        {display.summary ? (
-                          <p
-                            data-testid={`brain-artifact-preview-${artTestId}`}
-                            className="line-clamp-4 font-serif text-[13px] leading-relaxed text-muted-foreground"
-                          >
+                    <div className="h-[170px] overflow-hidden border-b border-border bg-muted/10 pl-2 pt-2 text-foreground">
+                      {display.summary ? (
+                        <div
+                          data-testid={`brain-artifact-preview-${artTestId}`}
+                          className="h-full overflow-hidden"
+                        >
+                          <CompactMarkdown truncateLen={Infinity}>
                             {display.summary}
-                          </p>
-                        ) : (
-                          <p className="text-[13px] text-muted-foreground">
-                            {display.subtitle}
-                          </p>
-                        )}
-                      </div>
+                          </CompactMarkdown>
+                        </div>
+                      ) : (
+                        <p className="text-[13px] text-muted-foreground">
+                          {display.subtitle}
+                        </p>
+                      )}
                     </div>
                     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
                       <div className="flex items-start justify-between gap-3">
