@@ -35,9 +35,11 @@
 //!   2. The browser opens the provider's authorization URL with
 //!      `redirect_uri=http://localhost:3030/connections/oauth/callback&state=<uuid>`.
 //!   3. The provider redirects back; the screenpipe server handles
-//!      `GET /connections/oauth/callback?code=X&state=<uuid>`, looks up the
-//!      sender by `state`, and delivers the code.
-//!   4. `oauth_connect` receives the code and calls `exchange_code`.
+//!      `GET /connections/oauth/callback?code=X&state=<uuid>` (or
+//!      `?error=...&state=<uuid>` when the user denies), looks up the sender
+//!      by `state`, and delivers a typed `OAuthCallbackResult`.
+//!   4. `oauth_connect` receives the result and calls `exchange_code`, or
+//!      fails immediately with the provider error.
 //!
 //! ## Adding a new OAuth integration
 //!   1. Fill in a `static OAUTH: OAuthConfig` in the integration file.
@@ -67,11 +69,29 @@ pub const OAUTH_REDIRECT_URI: &str = "http://localhost:3030/connections/oauth/ca
 // /connections/oauth/callback HTTP handler (screenpipe-engine)
 // ---------------------------------------------------------------------------
 
+/// Outcome of a provider redirect to the OAuth callback, delivered through
+/// the pending oneshot channel. Errors carry only the provider's error code
+/// and optional description (RFC 6749 §4.1.2.1) — never codes, tokens, or
+/// state values.
+#[derive(Debug)]
+pub enum OAuthCallbackResult {
+    Success {
+        code: String,
+        /// Extra callback param some providers return alongside the code
+        /// (e.g. QuickBooks `realmId`).
+        realm_id: Option<String>,
+    },
+    ProviderError {
+        error: String,
+        error_description: Option<String>,
+    },
+}
+
 /// A pending OAuth flow: the sender that delivers the callback payload,
 /// tagged with its `integration_id` so `oauth_cancel` can find and drop it.
 pub struct PendingOAuth {
     pub integration_id: String,
-    pub sender: oneshot::Sender<String>,
+    pub sender: oneshot::Sender<OAuthCallbackResult>,
 }
 
 pub static PENDING_OAUTH: Lazy<Mutex<HashMap<String, PendingOAuth>>> =
