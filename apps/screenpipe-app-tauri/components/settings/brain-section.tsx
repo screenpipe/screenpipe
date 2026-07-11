@@ -1737,11 +1737,11 @@ export function BrainSection() {
                       )}
                     </div>
                   ) : (
-                    <div className="h-[160px] overflow-hidden border-b border-border bg-muted/5 px-3 pt-3 text-foreground">
+                    <div className="h-[160px] overflow-hidden border-b border-border bg-muted/5 px-3 pt-3 text-foreground select-none">
                       {display.summary ? (
                         <div
                           data-testid={`brain-artifact-preview-${artTestId}`}
-                          className="h-full overflow-hidden"
+                          className="h-full overflow-hidden pointer-events-none"
                         >
                           <CompactMarkdown truncateLen={Infinity}>
                             {display.summary}
@@ -1778,24 +1778,37 @@ export function BrainSection() {
                       )}
                     </div>
 
-                    {/* bottom row: origin badge */}
-                    <div className="flex items-center gap-1.5">
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
-                        {target.mode === "artifact-only" ? "artifact" : target.mode}
-                      </Badge>
-                      {artItem.saf_kind && (
-                        <span
-                          data-testid={`brain-artifact-saf-kind-${artTestId}`}
-                          className="inline-flex items-center px-1.5 py-0 text-[10px] border border-border font-mono text-foreground/80"
-                        >
-                          {artItem.saf_kind}
-                          {artItem.saf_version != null && (
-                            <span className="ml-1 text-muted-foreground/70">
-                              v{artItem.saf_version}
-                            </span>
-                          )}
-                        </span>
-                      )}
+                    {/* bottom row: origin badge + checkbox */}
+                    <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
+                          {target.mode === "artifact-only" ? "artifact" : target.mode}
+                        </Badge>
+                        {artItem.saf_kind && (
+                          <span
+                            data-testid={`brain-artifact-saf-kind-${artTestId}`}
+                            className="inline-flex items-center px-1.5 py-0 text-[10px] border border-border font-mono text-foreground/80"
+                          >
+                            {artItem.saf_kind}
+                            {artItem.saf_version != null && (
+                              <span className="ml-1 text-muted-foreground/70">
+                                v{artItem.saf_version}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      <Checkbox
+                        data-testid={`brain-checkbox-artifact-${artTestId}`}
+                        checked={isChecked}
+                        onClick={(e) => e.stopPropagation()}
+                        onCheckedChange={() => toggleSelected(artKey)}
+                        className={`h-3.5 w-3.5 shrink-0 transition-opacity duration-150 ${
+                          selectionMode || isChecked
+                            ? "opacity-100"
+                            : "pointer-events-none opacity-0"
+                        }`}
+                      />
                     </div>
                   </div>
                 </div>
