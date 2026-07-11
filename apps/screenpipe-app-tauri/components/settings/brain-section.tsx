@@ -1725,8 +1725,9 @@ export function BrainSection() {
                     <div className="h-[160px] overflow-hidden border-b border-border bg-muted/5">
                       {htmlContent ? (
                         <iframe
-                          srcDoc={htmlContent}
+                          srcDoc={`<style>html,body{overflow:hidden!important}</style>${htmlContent}`}
                           sandbox=""
+                          scrolling="no"
                           className="pointer-events-none h-[320px] w-[200%] origin-top-left scale-50 border-0"
                           tabIndex={-1}
                           aria-hidden
