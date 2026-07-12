@@ -2660,13 +2660,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           )}
       </div>
 
-      {/* Battery Saver / Power Mode */}
-      <Card className="border-border bg-card">
-        <CardContent className="px-3 py-3">
-          <BatterySaverSection />
-        </CardContent>
-      </Card>
-
       {/* Audio */}
       <LockedSetting settingKey="audio_recording">
       <div className="space-y-2 pt-2">
@@ -4003,6 +3996,22 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
       </div>
+
+      {/* Power and battery are important but infrequent decisions. Keep them
+          in Recording for discoverability/search, but defer the full control
+          surface until the user explicitly opens it. */}
+      <details className="border border-border bg-card rounded">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+          <Zap className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <div>
+            <h2 className="text-sm font-medium text-foreground">Power &amp; battery</h2>
+            <p className="text-xs text-muted-foreground">Battery-aware capture and keep-awake behavior</p>
+          </div>
+        </summary>
+        <div className="border-t border-border px-3 py-3">
+          <BatterySaverSection />
+        </div>
+      </details>
 
       {/* Voice Training Dialog */}
       <Dialog open={voiceTraining.dialogOpen} onOpenChange={(open) => {

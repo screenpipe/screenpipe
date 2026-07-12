@@ -79,6 +79,7 @@ import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { toast } from "@/components/ui/use-toast";
+import posthog from "posthog-js";
 
 type SettingsSection =
   | "account"
@@ -232,22 +233,40 @@ function SettingsContent() {
 
   const navGroups = [
     {
-      label: "App",
+      label: "Capture & AI",
       items: [
-        { id: "display" as const, label: "Display", icon: <Layout className="h-4 w-4" /> },
-        { id: "general" as const, label: "General", icon: <SettingsIcon className="h-4 w-4" /> },
-        { id: "ai" as const, label: "AI models", icon: <Brain className="h-4 w-4" /> },
         { id: "recording" as const, label: "Recording", icon: <Video className="h-4 w-4" /> },
-        { id: "shortcuts" as const, label: "Shortcuts", icon: <Keyboard className="h-4 w-4" /> },
-        { id: "notifications" as const, label: "Notifications", icon: <Bell className="h-4 w-4" /> },
+        { id: "ai" as const, label: "AI", icon: <Brain className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
     {
-      label: "Data & Privacy",
+      label: "Privacy & security",
       items: [
-        { id: "usage" as const, label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
         { id: "privacy" as const, label: "Privacy", icon: <Shield className="h-4 w-4" /> },
+      ].filter((s) => !isSectionHidden(s.id)),
+    },
+    {
+      label: "Data",
+      items: [
         { id: "storage" as const, label: "Storage", icon: <HardDrive className="h-4 w-4" /> },
+        { id: "usage" as const, label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
+      ].filter((s) => !isSectionHidden(s.id)),
+    },
+    {
+      label: "App",
+      items: [
+        // Keep the legacy `general` section id so existing deep links and
+        // automated tests continue to work. The user-facing label is the
+        // familiar Apple-style category name.
+        { id: "general" as const, label: "General", icon: <SettingsIcon className="h-4 w-4" /> },
+        { id: "display" as const, label: "Appearance", icon: <Layout className="h-4 w-4" /> },
+        { id: "notifications" as const, label: "Notifications", icon: <Bell className="h-4 w-4" /> },
+        { id: "shortcuts" as const, label: "Shortcuts", icon: <Keyboard className="h-4 w-4" /> },
+      ].filter((s) => !isSectionHidden(s.id)),
+    },
+    {
+      label: "Audio",
+      items: [
         { id: "speakers" as const, label: "Speakers", icon: <Mic className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
@@ -284,10 +303,27 @@ function SettingsContent() {
   );
   const results = searchSettingsNav(searchQuery, flatItems, ALL_SETTINGS_FIELDS);
 
+  useEffect(() => {
+    posthog.capture("settings_viewed", { initial_section: section });
+  // The initial page view should be sent once per settings mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    posthog.capture("settings_section_viewed", { section });
+    if (section === "general") {
+      posthog.capture("settings_general_opened");
+    }
+  }, [section]);
+
   // Reset highlight to top whenever the query changes.
   useEffect(() => { setActiveIndex(0); }, [searchQuery]);
 
   const pickResult = (result: { item: { id: string }; matchedFieldLabel?: string }) => {
+    posthog.capture("settings_search_result_selected", {
+      section: result.item.id,
+      matched_field: Boolean(result.matchedFieldLabel),
+    });
     setSection(result.item.id as SettingsSection);
     setSearchQuery("");
     searchInputRef.current?.blur();

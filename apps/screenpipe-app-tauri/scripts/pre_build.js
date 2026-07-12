@@ -23,15 +23,11 @@ const winArch = platform === 'windows' ? (process.arch === 'arm64' ? 'arm64' : '
 const cwd = process.cwd()
 console.log('cwd', cwd)
 
-// Remove any stale static export before the frontend rebuilds. `next build`
-// (output: 'export') only writes ../out on success; if it fails (e.g. a type
-// error), a previously-built out/ stays on disk and tauri embeds that OLD
-// bundle — so the app "builds" but silently ships a stale UI. Clearing it here
-// (prebuild runs before `next build`) means a failed build leaves no out/ and
-// tauri fails loudly on the missing frontendDist instead. See #4645 post-mortem.
-const staleExportDir = path.join(cwd, '..', 'out')
-await fs.rm(staleExportDir, { recursive: true, force: true })
-console.log('cleared stale frontend export:', staleExportDir)
+// The stale static export is cleared by scripts/build-frontend.js, but ONLY on
+// the rebuild path — so an unchanged frontend can reuse out/ and skip
+// `next build` entirely. build-frontend.js preserves the #4645 guarantee (a
+// failed `next build` leaves no stale out/, tauri fails loudly on the missing
+// frontendDist rather than silently shipping an old UI).
 
 
 const config = {
