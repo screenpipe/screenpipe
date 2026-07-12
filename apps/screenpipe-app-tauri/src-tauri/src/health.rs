@@ -1328,6 +1328,17 @@ async fn show_capture_stall_notification(app: &tauri::AppHandle, system: &str) -
             return Ok(());
         }
     }
+    
+    // Automatically reveal the shortcut reminder overlay for the incident
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let store = crate::store::SettingsStore::get(&app_clone)
+            .unwrap_or_default()
+            .unwrap_or_default();
+        let shortcut = store.show_screenpipe_shortcut.clone();
+        let _ = crate::commands::show_shortcut_reminder(app_clone, shortcut).await;
+    });
+
     let payload = serde_json::json!({
         "id": format!("capture_stall_{}", system),
         "type": "capture_stall",

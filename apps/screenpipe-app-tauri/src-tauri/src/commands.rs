@@ -2379,10 +2379,12 @@ pub async fn show_shortcut_reminder(
                     let mut metrics_ws_url = format!("ws://127.0.0.1:{}/ws/metrics", core.port);
                     let mut events_ws_url =
                         format!("ws://127.0.0.1:{}/ws/meeting-status", core.port);
+                    let mut health_ws_url = format!("ws://127.0.0.1:{}/ws/health", core.port);
                     if let Some(ref key) = core.local_api_key {
                         let enc = urlencoding::encode(key);
                         metrics_ws_url = format!("{}?token={}", metrics_ws_url, enc);
                         events_ws_url = format!("{}?token={}", events_ws_url, enc);
+                        health_ws_url = format!("{}?token={}", health_ws_url, enc);
                     }
                     map.insert(
                         "metrics_ws_url".to_string(),
@@ -2391,6 +2393,10 @@ pub async fn show_shortcut_reminder(
                     map.insert(
                         "events_ws_url".to_string(),
                         serde_json::json!(events_ws_url),
+                    );
+                    map.insert(
+                        "health_ws_url".to_string(),
+                        serde_json::json!(health_ws_url),
                     );
                 }
             }

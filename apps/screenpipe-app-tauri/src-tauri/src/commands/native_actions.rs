@@ -427,7 +427,7 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                                         "stoppableMeetingId": serde_json::Value::Null,
                                         "meetingApp": serde_json::Value::Null,
                                         "detectionSource": serde_json::Value::Null,
-                                    }),
+                                     }),
                                 );
                             }
                         }
@@ -458,6 +458,16 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                             warn!("failed to check meeting status");
                         }
                     }
+                }
+                "restart_recording" => {
+                    let app_clone = app_clone.clone();
+                    tauri::async_runtime::spawn(async move {
+                        info!("native shortcut action: restarting recording...");
+                        let _ = crate::recording::stop_screenpipe(&app_clone).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        let _ = crate::recording::spawn_screenpipe(&app_clone, None).await;
+                        info!("native shortcut action: restart recording complete");
+                    });
                 }
                 _ => {}
             }

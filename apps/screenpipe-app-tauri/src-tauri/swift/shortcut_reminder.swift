@@ -30,6 +30,9 @@ final class OverlayMetrics: ObservableObject {
     @Published var screenActive: Bool = false
     @Published var captureFps: Double = 0
     @Published var meetingActive: Bool = false
+    @Published var isServerDown: Bool = false
+    @Published var isUnhealthy: Bool = false
+    @Published var fixingState: String = "normal" // "normal" | "failure" | "fixing" | "recovered"
 }
 
 // MARK: - Font helper (same as notification panel)
@@ -239,7 +242,13 @@ struct ShortcutReminderView: View {
 
     var body: some View {
         ZStack {
-            if isExpanded {
+            if metrics.fixingState == "failure" {
+                failureView
+            } else if metrics.fixingState == "fixing" {
+                fixingView
+            } else if metrics.fixingState == "recovered" {
+                recoveredView
+            } else if isExpanded {
                 // Once expanded, collapse only when the mouse leaves the
                 // entire expanded bar (so hovering individual buttons inside
                 // doesn't bounce us back).
@@ -256,7 +265,102 @@ struct ShortcutReminderView: View {
         .fixedSize()
         .accessibilityHidden(true)
         .animation(.easeInOut(duration: kAnimDur), value: isExpanded)
+        .animation(.easeInOut(duration: kAnimDur), value: metrics.fixingState)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    // MARK: - Failure State View
+    private var failureView: some View {
+        HStack(spacing: 0) {
+            Circle()
+                .fill(Color.red)
+                .frame(width: s(6), height: s(6))
+                .padding(.leading, s(8))
+                .padding(.trailing, s(4))
+            
+            Text("recording stopped")
+                .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.trailing, s(8))
+            
+            if isExpanded {
+                Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5).frame(height: s(12))
+                
+                Button(action: {
+                    onAction("restart_recording")
+                }) {
+                    HStack(spacing: s(2)) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 6 * scale, weight: .bold))
+                            .foregroundColor(.white.opacity(0.95))
+                        Text("restart")
+                            .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .bold))
+                            .foregroundColor(.white.opacity(0.95))
+                    }
+                    .padding(.horizontal, s(8))
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                
+                Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5).frame(height: s(12))
+                
+                Button(action: {
+                    onAction("close")
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 6 * scale, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
+                        .padding(.horizontal, s(8))
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(height: kBaseCollapsedH * scale)
+        .background(Capsule().fill(Color.black.opacity(0.85)))
+        .overlay(Capsule().stroke(Color.red.opacity(0.4), lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isExpanded = hovering
+        }
+    }
+
+    // MARK: - Fixing State View
+    private var fixingView: some View {
+        HStack(spacing: s(4)) {
+            ProgressView()
+                .scaleEffect(0.45)
+                .frame(width: s(12), height: s(12))
+                .padding(.leading, s(8))
+            
+            Text("fixing recording...")
+                .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.trailing, s(8))
+        }
+        .frame(height: kBaseCollapsedH * scale)
+        .background(Capsule().fill(Color.black.opacity(0.85)))
+        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+    }
+
+    // MARK: - Recovered State View
+    private var recoveredView: some View {
+        HStack(spacing: s(4)) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 8 * scale))
+                .foregroundColor(.green)
+                .padding(.leading, s(8))
+            
+            Text("recording again")
+                .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.trailing, s(8))
+        }
+        .frame(height: kBaseCollapsedH * scale)
+        .background(Capsule().fill(Color.black.opacity(0.85)))
+        .overlay(Capsule().stroke(Color.green.opacity(0.4), lineWidth: 0.5))
     }
 
     // MARK: - Collapsed pill
@@ -494,11 +598,14 @@ class ShortcutReminderController: NSObject {
     private var wsRetryTimer: Timer?
     private var meetingWsTask: URLSessionWebSocketTask?
     private var meetingWsRetryTimer: Timer?
+    private var healthWsTask: URLSessionWebSocketTask?
+    private var healthWsRetryTimer: Timer?
     private var prevFramesCaptured: Int?
     private var prevOcrCompleted: Int?
     /// Set from Rust `show_shortcut_reminder` when API auth is enabled (includes ?token=).
     private var metricsWsUrl = "ws://127.0.0.1:3030/ws/metrics"
     private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-status"
+    private var healthWsUrl = "ws://127.0.0.1:3030/ws/health"
     private var isVisible = false
 
     func show(shortcuts: String?) {
@@ -524,6 +631,7 @@ class ShortcutReminderController: NSObject {
             )
             connectWebSocket()
             connectMeetingEventsWebSocket()
+            connectHealthWebSocket()
         }
     }
 
@@ -533,6 +641,7 @@ class ShortcutReminderController: NSObject {
             AnimationTick.shared.setVisible(false, hasActiveSignal: false)
             disconnectWebSocket()
             disconnectMeetingEventsWebSocket()
+            disconnectHealthWebSocket()
             panel?.orderOut(nil)
         }
     }
@@ -677,6 +786,99 @@ class ShortcutReminderController: NSObject {
         }
     }
 
+    // MARK: - Health status connection
+
+    private func connectHealthWebSocket() {
+        disconnectHealthWebSocket()
+        guard isVisible else { return }
+        guard let url = URL(string: healthWsUrl) else { return }
+        let session = URLSession(configuration: .default)
+        let task = session.webSocketTask(with: url)
+        self.healthWsTask = task
+        task.resume()
+        receiveHealthMessage()
+    }
+
+    private func disconnectHealthWebSocket() {
+        healthWsRetryTimer?.invalidate()
+        healthWsRetryTimer = nil
+        healthWsTask?.cancel(with: .goingAway, reason: nil)
+        healthWsTask = nil
+    }
+
+    private func receiveHealthMessage() {
+        healthWsTask?.receive { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let message):
+                if case .string(let text) = message {
+                    self.processHealthMessage(text)
+                }
+                self.receiveHealthMessage()
+            case .failure:
+                DispatchQueue.main.async {
+                    self.setServerDown(true)
+                    guard self.isVisible else { return }
+                    self.healthWsRetryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                        self?.connectHealthWebSocket()
+                    }
+                }
+            }
+        }
+    }
+
+    private func processHealthMessage(_ text: String) {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        let status = json["status"] as? String ?? ""
+        let isUnhealthy = status == "unhealthy" || status == "error"
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.setServerDown(false)
+            self.setUnhealthy(isUnhealthy)
+        }
+    }
+
+    func setServerDown(_ down: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.metrics.isServerDown != down {
+                self.metrics.isServerDown = down
+                self.updateFixingState()
+            }
+        }
+    }
+
+    func setUnhealthy(_ unhealthy: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.metrics.isUnhealthy != unhealthy {
+                self.metrics.isUnhealthy = unhealthy
+                self.updateFixingState()
+            }
+        }
+    }
+
+    func updateFixingState() {
+        let isBroken = metrics.isServerDown || metrics.isUnhealthy
+        if isBroken {
+            if metrics.fixingState == "normal" {
+                metrics.fixingState = "failure"
+            }
+        } else {
+            if metrics.fixingState == "failure" || metrics.fixingState == "fixing" {
+                metrics.fixingState = "recovered"
+                Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        if self?.metrics.fixingState == "recovered" {
+                            self?.metrics.fixingState = "normal"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func parseShortcuts(_ json: String) {
         // Expects shortcut labels, size, and optional authenticated API URLs from Rust.
         guard let data = json.data(using: .utf8),
@@ -687,6 +889,7 @@ class ShortcutReminderController: NSObject {
         if let s = dict["shortcutOverlaySize"] { setOverlayScale(s) }
         if let s = dict["metrics_ws_url"] { metricsWsUrl = s }
         if let s = dict["events_ws_url"] { eventsWsUrl = s }
+        if let s = dict["health_ws_url"] { healthWsUrl = s }
     }
 
     /// Convert "Super+Ctrl+S" → "⌘⌃S" for compact overlay display.

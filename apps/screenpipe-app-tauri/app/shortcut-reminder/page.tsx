@@ -12,12 +12,13 @@ import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
-import { X, Phone } from "lucide-react";
+import { X, Phone, RotateCw, Loader2, CheckCircle2 } from "lucide-react";
 import { useOverlayData } from "./use-overlay-data";
 import { AudioEqualizer } from "./audio-equalizer";
 import { ScreenMatrix } from "./screen-matrix";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import { appendAuthToken, ensureApiReady, getApiBaseUrl } from "@/lib/api";
+import { useHealthCheck } from "@/lib/hooks/use-health-check";
 
 type ReminderSettings = {
   disabledShortcuts?: string[];
@@ -114,6 +115,9 @@ function useMeetingState() {
 
 export default function ShortcutReminderPage() {
   const { isMac, isLoading } = usePlatform();
+  const { health, isServerDown } = useHealthCheck();
+  const [recordingState, setRecordingState] = useState<"normal" | "failure" | "fixing" | "recovered">("normal");
+  const [isHovered, setIsHovered] = useState(false);
   const [overlayShortcut, setOverlayShortcut] = useState<string | null>(null);
   const [chatShortcut, setChatShortcut] = useState<string | null>(null);
   const [searchShortcut, setSearchShortcut] = useState<string | null>(null);
@@ -122,6 +126,46 @@ export default function ShortcutReminderPage() {
   const [overlayScale, setOverlayScale] = useState(1);
   const isMacRef = useRef(isMac);
   isMacRef.current = isMac;
+
+  useEffect(() => {
+    const isBroken = isServerDown || health?.status === "unhealthy" || health?.status === "error";
+    if (isBroken) {
+      if (recordingState === "normal") {
+        setRecordingState("failure");
+      }
+    } else {
+      if (recordingState === "failure" || recordingState === "fixing") {
+        setRecordingState("recovered");
+        const timer = setTimeout(() => {
+          setRecordingState("normal");
+        }, 3000);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isServerDown, health?.status, recordingState]);
+
+  const handleRestart = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setRecordingState("fixing");
+    try {
+      try { await commands.stopScreenpipe(); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await commands.spawnScreenpipe(null);
+    } catch (err) {
+      console.error("Restart failed:", err);
+    }
+  }, []);
+
+  const handleCloseFailure = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      await commands.hideShortcutReminder();
+    } catch (err) {
+      console.error("Failed to hide shortcut reminder:", err);
+    }
+  }, []);
 
   const applyReminderSettings = useCallback((settings?: ReminderSettings | null) => {
     if (!settings) return;
@@ -260,6 +304,138 @@ export default function ShortcutReminderPage() {
   const gap = 2 * overlayScale;
   const smIconPx = 10 * overlayScale;
   const dotPx = Math.max(5 * overlayScale, 5);
+
+
+  if (recordingState === "failure") {
+    return (
+      <div
+        className="w-full h-full flex items-center justify-center"
+        style={{ background: "transparent" }}
+      >
+        <div
+          onMouseDown={handleMouseDown}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          className="select-none w-full h-full border border-red-500/40"
+          style={{
+            background: "rgba(0, 0, 0, 0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: `${padY}px ${padX * 2}px`,
+            cursor: "grab",
+          }}
+        >
+          <div className="flex items-center" style={{ gap: `${gap * 2}px` }}>
+            <div
+              className="rounded-full bg-red-500 animate-pulse shrink-0"
+              style={{ width: `${dotPx}px`, height: `${dotPx}px` }}
+            />
+            <span
+              className="font-mono text-white/90 whitespace-nowrap"
+              style={{ fontSize: `${fontPx}px` }}
+            >
+              recording stopped
+            </span>
+          </div>
+
+          {isHovered && (
+            <div className="flex items-center shrink-0" style={{ gap: `${gap * 2}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+              <div className="bg-white/20" style={{ width: "1px", height: `${12 * overlayScale}px` }} />
+              <button
+                onClick={handleRestart}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="flex items-center hover:bg-white/10 transition-colors cursor-pointer text-white/90"
+                style={{ gap: `${gap}px`, padding: `${padY}px ${padX}px` }}
+              >
+                <RotateCw style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} className="shrink-0" />
+                <span className="font-mono font-bold uppercase" style={{ fontSize: `${fontPx}px` }}>
+                  restart
+                </span>
+              </button>
+              <div className="bg-white/20" style={{ width: "1px", height: `${12 * overlayScale}px` }} />
+              <button
+                onClick={handleCloseFailure}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer text-white/60 hover:text-white"
+                style={{ padding: `${padY}px` }}
+              >
+                <X style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (recordingState === "fixing") {
+    return (
+      <div
+        className="w-full h-full flex items-center justify-center"
+        style={{ background: "transparent" }}
+      >
+        <div
+          onMouseDown={handleMouseDown}
+          className="select-none w-full h-full border border-white/25"
+          style={{
+            background: "rgba(0, 0, 0, 0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            padding: `${padY}px ${padX * 2}px`,
+            cursor: "grab",
+            gap: `${gap * 2}px`,
+          }}
+        >
+          <Loader2
+            className="animate-spin text-white/70 shrink-0"
+            style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }}
+          />
+          <span
+            className="font-mono text-white/90 whitespace-nowrap"
+            style={{ fontSize: `${fontPx}px` }}
+          >
+            fixing recording...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (recordingState === "recovered") {
+    return (
+      <div
+        className="w-full h-full flex items-center justify-center"
+        style={{ background: "transparent" }}
+      >
+        <div
+          onMouseDown={handleMouseDown}
+          className="select-none w-full h-full border border-green-500/40"
+          style={{
+            background: "rgba(0, 0, 0, 0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            padding: `${padY}px ${padX * 2}px`,
+            cursor: "grab",
+            gap: `${gap * 2}px`,
+          }}
+        >
+          <CheckCircle2
+            className="text-green-500 shrink-0"
+            style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }}
+          />
+          <span
+            className="font-mono text-white/90 whitespace-nowrap"
+            style={{ fontSize: `${fontPx}px` }}
+          >
+            recording again
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
