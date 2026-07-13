@@ -987,11 +987,34 @@ export function NoteView({
   );
 
   const handleResumeInputCapture = async () => {
-    if (pausedInputDevices.length === 0) return;
+    const activeInputDevices = captureDevices.filter(
+      (device) => device.kind === "input" && device.active,
+    );
+    const devicesToResume =
+      pausedInputDevices.length > 0 ? pausedInputDevices : activeInputDevices;
+    if (devicesToResume.length === 0) return;
     setResumingCapture(true);
     try {
+      // If devices appear active but audio is stalled, stop first so the
+      // restart actually re-creates the audio stream.
+      if (pausedInputDevices.length === 0 && activeInputDevices.length > 0) {
+        await Promise.all(
+          activeInputDevices.map((device) =>
+            localFetch("/audio/device/stop", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                device_name: device.fullName ?? `${device.name} (input)`,
+              }),
+            }).catch(() => {
+              // ignore stop errors
+            }),
+          ),
+        );
+        await new Promise((r) => setTimeout(r, 500));
+      }
       await Promise.all(
-        pausedInputDevices.map((device) =>
+        devicesToResume.map((device) =>
           localFetch("/audio/device/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1225,7 +1248,11 @@ export function NoteView({
           {isLive && captureState && isLiveCaptureDegraded(captureState) && (
             <LiveCaptureIssueBanner
               state={captureState}
-              canResumeInput={pausedInputDevices.length > 0}
+              canResumeInput={
+                pausedInputDevices.length > 0 ||
+                captureState.kind === "audio-stalled" ||
+                captureState.kind === "audio-not-started"
+              }
               resuming={resumingCapture}
               onResumeInput={() => void handleResumeInputCapture()}
             />
