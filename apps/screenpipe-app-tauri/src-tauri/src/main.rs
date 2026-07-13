@@ -881,9 +881,22 @@ async fn main() {
                     .item(&PredefinedMenuItem::select_all(app, None)?)
                     .build()?;
 
+                // Standard Window menu so macOS key equivalents (Cmd-W close,
+                // Cmd-M minimize) work — without a menu item carrying the
+                // accelerator, AppKit silently swallows the keystroke. Close
+                // goes through the CloseRequested handler above, so Cmd-W
+                // hides to tray exactly like the red traffic-light button.
+                let window_submenu = SubmenuBuilder::new(app, "Window")
+                    .item(&PredefinedMenuItem::minimize(app, None)?)
+                    .item(&PredefinedMenuItem::maximize(app, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::close_window(app, None)?)
+                    .build()?;
+
                 let menu = MenuBuilder::new(app)
                     .item(&app_submenu)
                     .item(&edit_submenu)
+                    .item(&window_submenu)
                     .build()?;
 
                 app.set_menu(menu)?;
