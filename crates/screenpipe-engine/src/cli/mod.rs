@@ -2675,9 +2675,15 @@ mod tests {
             "--use-all-monitors=false",
             "--use-system-default-audio=false",
         ]);
-        assert!(!args.use_pii_removal, "--use-pii-removal=false must disable");
+        assert!(
+            !args.use_pii_removal,
+            "--use-pii-removal=false must disable"
+        );
         assert!(!args.api_auth, "--api-auth=false must disable");
-        assert!(!args.use_all_monitors, "--use-all-monitors=false must disable");
+        assert!(
+            !args.use_all_monitors,
+            "--use-all-monitors=false must disable"
+        );
         assert!(
             !args.use_system_default_audio,
             "--use-system-default-audio=false must disable"
@@ -2687,7 +2693,10 @@ mod tests {
     #[test]
     fn test_default_true_bools_accept_space_separated_value() {
         let args = record_args(["screenpipe", "record", "--use-pii-removal", "false"]);
-        assert!(!args.use_pii_removal, "--use-pii-removal false must disable");
+        assert!(
+            !args.use_pii_removal,
+            "--use-pii-removal false must disable"
+        );
     }
 
     #[test]
