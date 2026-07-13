@@ -716,13 +716,7 @@ mod tests {
     /// FaceTime meeting capture (its pid is what the per-process tap follows).
     #[test]
     fn avconferenced_is_not_excluded() {
-        let p = process(
-            Some(809),
-            Some("com.apple.avconferenced"),
-            None,
-            None,
-            None,
-        );
+        let p = process(Some(809), Some("com.apple.avconferenced"), None, None, None);
         assert!(
             !is_system_voice_daemon(&p),
             "avconferenced must stay adoptable: it is FaceTime's audio process"
@@ -737,13 +731,7 @@ mod tests {
     /// meeting detector maps to the "FaceTime" platform.
     #[test]
     fn facetime_processes_pass_the_snapshot_gate() {
-        let daemon = process(
-            Some(809),
-            Some("com.apple.avconferenced"),
-            None,
-            None,
-            None,
-        );
+        let daemon = process(Some(809), Some("com.apple.avconferenced"), None, None, None);
         let app = process(
             Some(1234),
             Some("com.apple.FaceTime"),
@@ -772,10 +760,19 @@ mod tests {
     fn meeting_apps_are_not_system_voice_daemons() {
         for bundle_id in ["us.zoom.xos", "com.google.Chrome", "com.microsoft.teams2"] {
             let p = process(Some(42), Some(bundle_id), None, None, None);
-            assert!(!is_system_voice_daemon(&p), "{bundle_id} must not be excluded");
+            assert!(
+                !is_system_voice_daemon(&p),
+                "{bundle_id} must not be excluded"
+            );
         }
         // No metadata at all → keep it (unknown ≠ daemon).
-        assert!(!is_system_voice_daemon(&process(Some(1), None, None, None, None)));
+        assert!(!is_system_voice_daemon(&process(
+            Some(1),
+            None,
+            None,
+            None,
+            None
+        )));
     }
 
     #[test]

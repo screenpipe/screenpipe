@@ -130,6 +130,7 @@ pub type FrameImageCache = LruCache<i64, (String, std::time::Instant)>;
 
 /// Cache key for search results (hash of query parameters)
 pub type SearchCache = MokaCache<u64, Arc<SearchCacheEntry>>;
+const SEARCH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 pub struct AppState {
     pub db: Arc<DatabaseManager>,
@@ -645,11 +646,12 @@ impl SCServer {
                 NonZeroUsize::new(1000).unwrap(),
             )))),
             ws_connection_count: Arc::new(AtomicUsize::new(0)),
-            // Search cache: short-lived and intentionally small. Search payloads
-            // can contain large OCR/audio text blobs; the route also skips
-            // caching oversized responses before they reach this cache.
+            // Search cache: short-lived and byte-bounded. Search payloads can
+            // contain large OCR/audio text blobs, so an entry-count capacity
+            // still allowed hundreds of MB of typed + serialized responses.
             search_cache: MokaCache::builder()
-                .max_capacity(128)
+                .weigher(|_key: &u64, value: &Arc<SearchCacheEntry>| value.weight())
+                .max_capacity(SEARCH_CACHE_MAX_BYTES)
                 .time_to_live(Duration::from_secs(30))
                 .build(),
             use_pii_removal: self.use_pii_removal,

@@ -246,7 +246,7 @@ export function DisplaySection() {
                       }`}
                     >
                       <div className="font-medium text-xs text-foreground">{option.label}</div>
-                      <div className="text-[11px] text-muted-foreground">{option.desc}</div>
+                      <div className="text-xs text-muted-foreground">{option.desc}</div>
                     </button>
                   );
                 })}

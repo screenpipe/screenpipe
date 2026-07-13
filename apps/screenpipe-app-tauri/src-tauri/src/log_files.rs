@@ -40,7 +40,7 @@ pub async fn get_log_files(app: AppHandle) -> Result<Vec<LogFile>, String> {
 /// Files are deduped by canonical path so overlapping directories (e.g. the
 /// default `dataDir`, where both inputs resolve to the same path) don't list
 /// every log twice.
-async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
+pub(crate) async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut entries: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
 

@@ -26,7 +26,7 @@ import { enforceDailyCostCap } from './services/cost-cap';
 export { RateLimiter };
 
 // Handler function for the worker
-async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
 	const path = url.pathname;
 
@@ -545,6 +545,20 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 				// body parse failure — proceed with defaults
 			}
 
+			// Keep the Anthropic-compatible route on the same model policy as
+			// /v1/chat/completions and /v1/messages. This endpoint previously only
+			// checked for a non-anonymous tier, so any authentication weakness could
+			// be composed with this server-key proxy to reach Business-only models.
+			if (!isModelAllowed(ocModel, authResult.tier, env)) {
+				const allowedModels = getTierConfig(env)[authResult.tier].allowedModels;
+				return addCorsHeaders(createErrorResponse(403, JSON.stringify({
+					error: 'model_not_allowed',
+					message: `Model "${ocModel}" is not available for your tier (${authResult.tier}). Available models: ${allowedModels.join(', ')}`,
+					tier: authResult.tier,
+					allowed_models: allowedModels,
+				})));
+			}
+
 			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
 			const ocCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, ocModel);
 			if (ocCapError) return ocCapError;
@@ -625,6 +639,15 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
 		// Anthropic models endpoint for OpenCode
 		if (path === '/anthropic/v1/models' && request.method === 'GET') {
+			// Model discovery still consumes the server-side Anthropic credential and
+			// exposes the account's available model catalog. Keep it behind the same
+			// verified-identity boundary as the OpenCode messages endpoint.
+			if (authResult.tier === 'anonymous') {
+				return addCorsHeaders(createErrorResponse(401, JSON.stringify({
+					error: 'authentication_required',
+					message: 'OpenCode requires authentication. Please log in to screenpipe.',
+				})));
+			}
 			console.log('OpenCode Anthropic models request');
 			return await handleVertexModels(env);
 		}

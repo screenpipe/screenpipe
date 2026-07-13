@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
 use screenpipe_audio::audio_manager::builder::TranscriptionMode;
@@ -30,6 +30,9 @@ use crate::ui_recorder::{
 /// times per second. The response only changes meaningfully every ~1s.
 static HEALTH_CACHE: std::sync::LazyLock<RwLock<(u64, Option<HealthCheckResponse>)>> =
     std::sync::LazyLock::new(|| RwLock::new((0, None)));
+/// Single-flight gate for full health recomputation. Cache misses crossing the
+/// same one-second boundary must not all run the DB-backed backlog query.
+static HEALTH_REFRESH: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
 type AudioReconciliationBacklogCache = (i64, Option<(u64, Option<DateTime<Utc>>)>);
 static AUDIO_RECONCILIATION_BACKLOG_CACHE: std::sync::LazyLock<
     RwLock<AudioReconciliationBacklogCache>,
@@ -452,50 +455,104 @@ pub struct AudioPipelineHealthInfo {
 /// killed by a watchdog).
 const HEALTH_RESPONSE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
-#[oasgen]
-pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<HealthCheckResponse> {
-    let now_ts = std::time::SystemTime::now()
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+        .unwrap_or_default()
+        .as_secs()
+}
 
-    // Return cached response if still fresh. This prevents thundering-herd
-    // scenarios where dozens of WebSocket clients + HTTP polls recompute the
-    // full health response simultaneously.
+async fn cached_health_or_refresh<F, Fut>(
+    cache: &RwLock<(u64, Option<HealthCheckResponse>)>,
+    refresh: &Mutex<()>,
+    ttl_secs: u64,
+    compute: F,
+) -> HealthCheckResponse
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<HealthCheckResponse>>,
+{
+    let now = unix_now_secs();
     {
-        let cache = HEALTH_CACHE.read().await;
-        if now_ts.saturating_sub(cache.0) < HEALTH_CACHE_TTL_SECS {
-            if let Some(ref cached) = cache.1 {
-                return JsonResponse(cached.clone());
+        let cached = cache.read().await;
+        if now.saturating_sub(cached.0) < ttl_secs {
+            if let Some(response) = cached.1.as_ref() {
+                return response.clone();
             }
         }
     }
 
-    let response = match tokio::time::timeout(HEALTH_RESPONSE_BUDGET, health_check_inner(&state))
-        .await
-    {
-        Ok(r) => r,
+    // Prefer stale-while-refresh over queuing every tray/WebSocket/HTTP poll
+    // behind a potentially two-second health computation. Cold start has no
+    // stale value, so those callers wait for the single refresh to finish.
+    let _refresh_guard = match refresh.try_lock() {
+        Ok(guard) => guard,
         Err(_) => {
-            // Inner computation exceeded the budget. Serve the last cached
-            // snapshot (even if past TTL) so callers see continuity. If no
-            // snapshot exists yet, return a minimal "degraded" response —
-            // never block forever.
-            warn!(
-                "health_check: inner computation exceeded {:?} budget — serving last cached snapshot",
-                HEALTH_RESPONSE_BUDGET
-            );
-            let cached = HEALTH_CACHE.read().await.1.clone();
-            // Don't refresh the cache timestamp here — the next caller
-            // should re-attempt rather than amortize the stale entry.
-            return JsonResponse(cached.unwrap_or_else(degraded_response));
+            {
+                let cached = cache.read().await;
+                if let Some(response) = cached.1.as_ref() {
+                    return response.clone();
+                }
+            }
+            refresh.lock().await
         }
     };
 
-    // Cache the result
+    // Another cold-start caller may have populated the cache while this one
+    // waited for the refresh gate.
+    let now = unix_now_secs();
     {
-        let mut cache = HEALTH_CACHE.write().await;
-        *cache = (now_ts, Some(response.clone()));
+        let cached = cache.read().await;
+        if now.saturating_sub(cached.0) < ttl_secs {
+            if let Some(response) = cached.1.as_ref() {
+                return response.clone();
+            }
+        }
     }
+
+    let response = match compute().await {
+        Some(response) => response,
+        None => cache
+            .read()
+            .await
+            .1
+            .clone()
+            .unwrap_or_else(degraded_response),
+    };
+
+    // Publish timeout results too. Without this, a cold-cache burst queues on
+    // the refresh mutex and every waiter performs its own full two-second
+    // computation after the first timeout. The normal one-second TTL makes
+    // this a short backoff, while all callers in the same burst share one
+    // bounded attempt (or the same stale snapshot).
+    let mut cached = cache.write().await;
+    *cached = (unix_now_secs(), Some(response.clone()));
+    response
+}
+
+#[oasgen]
+pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<HealthCheckResponse> {
+    let response = cached_health_or_refresh(
+        &HEALTH_CACHE,
+        &HEALTH_REFRESH,
+        HEALTH_CACHE_TTL_SECS,
+        || async {
+            match tokio::time::timeout(HEALTH_RESPONSE_BUDGET, health_check_inner(&state)).await {
+                Ok(response) => Some(response),
+                Err(_) => {
+                    // The shared refresh helper publishes this failed attempt
+                    // for one short TTL so cold-cache peers do not serialize
+                    // another full computation each.
+                    warn!(
+                        "health_check: inner computation exceeded {:?} budget — serving last cached snapshot",
+                        HEALTH_RESPONSE_BUDGET
+                    );
+                    None
+                }
+            }
+        },
+    )
+    .await;
 
     JsonResponse(response)
 }
@@ -1622,6 +1679,100 @@ mod tests {
             let cache = HEALTH_CACHE.read().await;
             assert!(now.saturating_sub(cache.0) >= HEALTH_CACHE_TTL_SECS);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_stale_health_requests_share_one_refresh() {
+        const CALLERS: usize = 24;
+        let cache = Arc::new(RwLock::new((0, None)));
+        let refresh = Arc::new(Mutex::new(()));
+        let barrier = Arc::new(tokio::sync::Barrier::new(CALLERS));
+        let computes = Arc::new(AtomicU64::new(0));
+        let mut tasks = Vec::with_capacity(CALLERS);
+
+        for _ in 0..CALLERS {
+            let cache = cache.clone();
+            let refresh = refresh.clone();
+            let barrier = barrier.clone();
+            let computes = computes.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                cached_health_or_refresh(&cache, &refresh, 60, || async move {
+                    computes.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    Some(dummy_response("healthy"))
+                })
+                .await
+            }));
+        }
+
+        for task in tasks {
+            assert_eq!(task.await.unwrap().status, "healthy");
+        }
+        assert_eq!(
+            computes.load(Ordering::SeqCst),
+            1,
+            "a stale-cache burst must perform exactly one full health refresh"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_cold_timeout_is_published_to_all_waiters() {
+        const CALLERS: usize = 24;
+        let cache = Arc::new(RwLock::new((0, None)));
+        let refresh = Arc::new(Mutex::new(()));
+        let barrier = Arc::new(tokio::sync::Barrier::new(CALLERS));
+        let computes = Arc::new(AtomicU64::new(0));
+        let mut tasks = Vec::with_capacity(CALLERS);
+
+        for _ in 0..CALLERS {
+            let cache = cache.clone();
+            let refresh = refresh.clone();
+            let barrier = barrier.clone();
+            let computes = computes.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                cached_health_or_refresh(&cache, &refresh, 60, || async move {
+                    computes.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    None
+                })
+                .await
+            }));
+        }
+
+        for task in tasks {
+            let response = task.await.unwrap();
+            assert_eq!(response.status, "degraded");
+            assert_eq!(response.status_code, 503);
+        }
+        assert_eq!(
+            computes.load(Ordering::SeqCst),
+            1,
+            "a cold timeout burst must share one bounded refresh attempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_refresh_serves_an_existing_stale_snapshot() {
+        let cache = RwLock::new((0, Some(dummy_response("stale"))));
+        let refresh = Mutex::new(());
+        let in_flight = refresh.lock().await;
+        let computes = AtomicU64::new(0);
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            cached_health_or_refresh(&cache, &refresh, 60, || async {
+                computes.fetch_add(1, Ordering::SeqCst);
+                Some(dummy_response("unexpected"))
+            }),
+        )
+        .await
+        .expect("stale-while-refresh must not queue behind the active refresh");
+
+        assert_eq!(response.status, "stale");
+        assert_eq!(computes.load(Ordering::SeqCst), 0);
+        drop(in_flight);
     }
 
     #[test]

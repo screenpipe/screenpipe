@@ -518,6 +518,7 @@ fn has_usable_output_configs(device: &cpal::Device) -> bool {
 /// reports it as an input device (the tap side has input streams), so without
 /// this filter it appears in the settings device picker whenever a tap is
 /// live; selecting it would feed our own capture back into recording.
+#[cfg(target_os = "macos")]
 fn is_own_tap_aggregate(name: &str) -> bool {
     name == super::process_tap::TAP_AGGREGATE_DEVICE_NAME
 }
@@ -544,6 +545,7 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
                 continue;
             }
             if let Ok(name) = device.name() {
+                #[cfg(target_os = "macos")]
                 if is_own_tap_aggregate(&name) {
                     tracing::debug!("skipping our own private tap aggregate: {}", name);
                     continue;
@@ -1245,7 +1247,7 @@ mod meeting_tap_device_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tap_aggregate_filter_tests {
     use super::is_own_tap_aggregate;
 

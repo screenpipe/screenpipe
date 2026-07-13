@@ -862,6 +862,13 @@ async installRegistrySkill(repo: string, gitRef: string, path: string, name: str
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Whether capture is currently paused. The frontend polls this alongside
+ * per-device status so the UI stays in sync with the tray indicator.
+ */
+async isCapturePaused() : Promise<boolean> {
+    return await TAURI_INVOKE("is_capture_paused");
+},
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
@@ -3219,6 +3226,17 @@ autoUpdatePipes?: boolean;
  * Better quality but sends activity context to the cloud (zero data retention).
  */
 enhancedAI?: boolean;
+/**
+ * Explicit consumer opt-in for on-demand remote diagnostic log requests.
+ * Enterprise builds enforce remote log collection separately; this stored
+ * value remains false unless a consumer chooses to enable it.
+ */
+remoteLogCollectionEnabled?: boolean;
+/**
+ * Account that granted remote log collection consent on this device.
+ * Consumer collection is allowed only while this matches the current user.
+ */
+remoteLogCollectionUserId?: string | null;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).

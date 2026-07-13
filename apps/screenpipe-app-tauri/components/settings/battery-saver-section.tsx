@@ -17,7 +17,7 @@ import { PowerModePreview } from "./setting-previews";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Power mode", keywords: ["battery", "performance", "saver"] },
+  { label: "Power & battery", keywords: ["power", "battery", "performance", "saver"] },
   { label: "Keep computer awake", keywords: ["sleep", "awake", "power"] },
 ];
 
@@ -180,7 +180,7 @@ export function BatterySaverSection() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-foreground">power mode</h3>
+          <h3 className="text-sm font-medium text-foreground">power &amp; battery</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
             controls capture frequency, quality, and transcription to save battery
           </p>
