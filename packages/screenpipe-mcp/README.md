@@ -183,7 +183,7 @@ Create, update, or delete a persistent memory (facts, preferences, decisions the
 Send a notification to the screenpipe desktop UI.
 
 ### control-recording
-Start or stop audio/screen recording. Use to pause/resume capture.
+Start or stop audio recording. This does not pause or resume screen capture.
 
 ### health-check
 Check if screenpipe is running and healthy. Returns recording status, frame/audio stats, and timestamps.
@@ -198,7 +198,7 @@ List available monitors/screens for capture.
 Manage pipes — scheduled AI automations that run a markdown prompt on a schedule (e.g. "every day at 9am"). `list-pipes` shows enabled state + schedule; `create-pipe` creates one; `run-pipe` triggers a one-off test run; `pipe-logs` fetches recent execution output.
 
 ### team-search / team-devices / team-records
-Team-tier tools (require an org license). `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), `team-records` dumps chronological org data for a time window.
+Team-tier tools, registered only when an enterprise admin token is configured. `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), and `team-records` dumps chronological org data for a time window.
 
 ## Example Queries in Claude
 
