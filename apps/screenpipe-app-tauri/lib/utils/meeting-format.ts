@@ -14,6 +14,29 @@ export interface MeetingRecord {
   created_at: string;
 }
 
+/**
+ * Attendees are stored on-the-wire as a single comma-separated string
+ * (`MeetingRecord.attendees`). These helpers convert between that string and a
+ * list of trimmed, de-duplicated names for the pill-based editor UI.
+ */
+export function parseAttendees(value: string | null | undefined): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of (value ?? "").split(",")) {
+    const name = raw.trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(name);
+  }
+  return result;
+}
+
+export function serializeAttendees(list: string[]): string {
+  return parseAttendees(list.join(",")).join(", ");
+}
+
 export function formatDuration(start: string, end: string | null): string {
   if (!end) {
     const startMs = new Date(start).getTime();

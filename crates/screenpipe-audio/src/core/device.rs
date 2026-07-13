@@ -23,6 +23,11 @@ use tokio::sync::Mutex as AsyncMutex;
 #[cfg(target_os = "macos")]
 pub const MACOS_OUTPUT_AUDIO_DEVICE_NAME: &str = "System Audio";
 
+/// Virtual output device representing the per-process meeting tap. Session-
+/// scoped: started by the piggyback sweep during meetings, never advertised in
+/// device lists, never persisted to enabled_devices.
+pub const MEETING_TAP_DEVICE_NAME: &str = "Meeting Tap";
+
 #[derive(OaSchema, Clone, Debug)]
 pub struct DeviceControl {
     pub is_running: bool,
@@ -182,6 +187,121 @@ fn detect_device_type_from_system(bare_name: &str) -> Option<DeviceType> {
         }
     }
     None
+}
+
+/// Whether the Bluetooth input device named `bare_name` is a combo headset —
+/// i.e. paired with a sibling AudioObject that has an output side on the
+/// SAME physical hardware — as opposed to a dedicated Bluetooth microphone
+/// with no output capability at all. The SCO/A2DP quality tradeoff (issue
+/// #3750, see `device_detection::bluetooth_mic_allowed`) only matters for
+/// combo devices: opening the mic degrades that hardware's own output, so
+/// gating only makes sense when the user could actually be listening through
+/// that same accessory. A dedicated mic-only device (no output side to
+/// degrade) should always be recorded, same as a wired mic.
+///
+/// CoreAudio does NOT expose a Bluetooth combo accessory as one AudioObject
+/// with both directions — it splits it into two SIBLING AudioObjectIDs, one
+/// per direction, sharing a UID with a `:input` / `:output` suffix on a
+/// common (MAC-address-derived) prefix. Measured live for a real AirPods Max:
+/// `70-F9-4A-9C-2C-F0:input` (1 input stream, 0 output streams) and
+/// `70-F9-4A-9C-2C-F0:output` (0 input streams, 1 output stream) — both
+/// reporting the SAME `name()`. Checking `output_stream_cfg()` on the object
+/// resolved by name alone is therefore wrong: `ca::System::devices()` can
+/// return either sibling first, and the input-side sibling *always* reports
+/// zero output streams by construction — that isn't evidence the hardware
+/// lacks a speaker, it's just not this AudioObjectID's problem. The fix is to
+/// resolve by name once to get this object's UID, then look up the sibling
+/// by UID prefix (never by name — the pair share the same name, so name
+/// matching can't distinguish them) and check *its* output capability.
+///
+/// Resolves the device by name once (unavoidable — screenpipe's device model
+/// is name-keyed throughout); the combo/dedicated determination itself reads
+/// the sibling object's own properties, not a name-based guess.
+///
+/// Conservative on any ambiguity (lookup failure, device vanished mid-query,
+/// or a UID that doesn't follow the `:input`/`:output` sibling-split pattern
+/// at all — some transports may expose a single bidirectional object):
+/// defaults to `true` (combo), i.e. falls back to gating exactly like before
+/// this distinction existed. Non-macOS platforms have no equivalent probe
+/// yet, so they also default to `true` — this only *narrows* the existing
+/// gate, it never widens it. Only a *confirmed* sibling with zero output
+/// streams returns `false`.
+#[cfg(target_os = "macos")]
+pub fn bluetooth_input_is_combo_headset(bare_name: &str) -> bool {
+    use cidre::core_audio as ca;
+
+    let Ok(devices) = ca::System::devices() else {
+        return true;
+    };
+    let Some(device) = devices
+        .iter()
+        .find(|d| d.name().ok().map(|n| n.to_string()).as_deref() == Some(bare_name))
+    else {
+        return true;
+    };
+    let Some(uid) = device.uid().ok().map(|u| u.to_string()) else {
+        return device
+            .output_stream_cfg()
+            .map(|cfg| cfg.number_buffers() > 0)
+            .unwrap_or(true);
+    };
+    let Some(prefix) = uid.strip_suffix(":input") else {
+        // Not a split sibling pair (or this IS the output-side object) —
+        // this object's own output capability is the right thing to check.
+        return device
+            .output_stream_cfg()
+            .map(|cfg| cfg.number_buffers() > 0)
+            .unwrap_or(true);
+    };
+    let sibling_uid = format!("{prefix}:output");
+    match devices
+        .iter()
+        .find(|d| d.uid().ok().map(|u| u.to_string()).as_deref() == Some(sibling_uid.as_str()))
+    {
+        Some(sibling) => sibling
+            .output_stream_cfg()
+            .map(|cfg| cfg.number_buffers() > 0)
+            .unwrap_or(true),
+        // No sibling output object exists at all — a genuinely dedicated mic.
+        None => false,
+    }
+}
+
+/// Bluetooth headsets on Windows are, like macOS (see the real
+/// implementation above — measured live: CoreAudio splits a combo device
+/// into sibling AudioObjectIDs sharing a MAC-address UID prefix with a
+/// `:input`/`:output` suffix), commonly split into separate WASAPI endpoints
+/// per profile — e.g. a "Headphones" render endpoint for A2DP stereo
+/// output-only, and a "Headset" endpoint for the Hands-Free Profile mono
+/// capture+render. The Windows analog of macOS's shared UID prefix is
+/// `PKEY_Device_ContainerId`: endpoints belonging to the same physical
+/// hardware share the same container ID even though they're separate
+/// `IMMDevice`s with unrelated endpoint IDs. See
+/// `windows_com_audio::bare_name_is_combo_headset` for the implementation:
+/// resolve `bare_name` to its capture endpoint, read its container ID, then
+/// check whether any active render endpoint shares that ID with usable
+/// output channels.
+///
+/// Conservative on any probe failure (endpoint not found, no container ID,
+/// COM error) — defaults to `true` (combo), same fail-safe as macOS.
+#[cfg(target_os = "windows")]
+pub fn bluetooth_input_is_combo_headset(bare_name: &str) -> bool {
+    match unsafe { windows_com_audio::bare_name_is_combo_headset(bare_name) } {
+        Ok(is_combo) => is_combo,
+        Err(e) => {
+            tracing::debug!(
+                "bluetooth combo-headset probe failed for '{}': {} — defaulting to combo",
+                bare_name,
+                e
+            );
+            true
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn bluetooth_input_is_combo_headset(_bare_name: &str) -> bool {
+    true
 }
 
 /// Attempts an operation with exponential backoff retry
@@ -354,6 +474,20 @@ pub async fn get_cpal_device_and_config(
             .ok_or_else(|| anyhow!("No supported output configurations found"))?;
 
         (*best_config).with_sample_rate(best_config.max_sample_rate())
+    } else if let Ok(default_config) = cpal_audio_device.default_input_config() {
+        // Input devices are shared hardware — another app (a meeting app,
+        // for instance) can be using the SAME physical mic at the same time.
+        // On macOS, opening a stream at a rate other than the device's
+        // CURRENT nominal sample rate makes cpal write
+        // `kAudioDevicePropertyNominalSampleRate`, which is a device-wide
+        // property, not scoped to our stream — every other client sharing
+        // the device gets yanked through that reconfiguration too (observed
+        // live: a meeting app's own mic stream stalling right as screenpipe
+        // opens the shared mic). Requesting the device's own default config
+        // means the rate already matches, so cpal skips that write entirely.
+        // Output devices don't share this failure mode the same way, so they
+        // keep picking the highest-quality config below.
+        default_config
     } else {
         let configs: Vec<_> = cpal_audio_device.supported_input_configs()?.collect();
         let best_config = configs
@@ -493,6 +627,17 @@ fn has_usable_output_configs(device: &cpal::Device) -> bool {
     }
 }
 
+/// True for screenpipe's own private tap aggregate (macOS Process Tap).
+/// The aggregate is created `is_private`, which hides it from other processes
+/// — but not from us, and this enumeration runs in the creating process. cpal
+/// reports it as an input device (the tap side has input streams), so without
+/// this filter it appears in the settings device picker whenever a tap is
+/// live; selecting it would feed our own capture back into recording.
+#[cfg(target_os = "macos")]
+fn is_own_tap_aggregate(name: &str) -> bool {
+    name == super::process_tap::TAP_AGGREGATE_DEVICE_NAME
+}
+
 async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
     #[cfg(all(target_os = "linux", feature = "pulseaudio"))]
     {
@@ -515,6 +660,11 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
                 continue;
             }
             if let Ok(name) = device.name() {
+                #[cfg(target_os = "macos")]
+                if is_own_tap_aggregate(&name) {
+                    tracing::debug!("skipping our own private tap aggregate: {}", name);
+                    continue;
+                }
                 devices.push(AudioDevice::new(name, DeviceType::Input));
             }
         }
@@ -1092,6 +1242,139 @@ mod windows_com_audio {
         Ok(false)
     }
 
+    /// `PKEY_Device_ContainerId` as a string, or `Err` if the endpoint has
+    /// none (VT_EMPTY) or an unexpected property type. Endpoints belonging to
+    /// the same physical hardware — e.g. the HFP capture side and the A2DP
+    /// render side of one Bluetooth headset — share this value even though
+    /// they are unrelated `IMMDevice`s with unrelated endpoint IDs. This is
+    /// the Windows analog of the CoreAudio MAC-prefixed UID pairing used in
+    /// the macOS implementation above.
+    ///
+    /// `PKEY_Device_ContainerId` is a `VT_CLSID` property — windows-core's
+    /// safe `PROPVARIANT` wrapper has no typed accessor for that variant, so
+    /// the GUID pointer is read from the raw union directly (safe to do once
+    /// the `vt` tag has been checked).
+    unsafe fn endpoint_container_id(
+        device: &windows::Win32::Media::Audio::IMMDevice,
+    ) -> Result<String> {
+        use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_ContainerId;
+        use windows::Win32::System::Com::STGM;
+
+        const VT_CLSID: u16 = 72;
+
+        let store = device.OpenPropertyStore(STGM(0))?;
+        let prop = store.GetValue(&PKEY_Device_ContainerId)?;
+        let raw = prop.as_raw();
+        if raw.Anonymous.Anonymous.vt != VT_CLSID {
+            return Err(anyhow!("PKEY_Device_ContainerId is not a CLSID"));
+        }
+        let guid_ptr = raw.Anonymous.Anonymous.Anonymous.puuid;
+        if guid_ptr.is_null() {
+            return Err(anyhow!("PKEY_Device_ContainerId CLSID pointer is null"));
+        }
+        // `puuid` points at the internal `windows_core::imp::GUID` binding,
+        // not the public `windows_core::GUID` that implements `Display` —
+        // same `repr(C)` layout, so read the fields across rather than
+        // transmuting the pointer.
+        let raw_guid = *guid_ptr;
+        let guid = windows::core::GUID::from_values(
+            raw_guid.data1,
+            raw_guid.data2,
+            raw_guid.data3,
+            raw_guid.data4,
+        );
+        Ok(format!("{guid:?}"))
+    }
+
+    /// Number of channels the render endpoint's current mix format reports,
+    /// or 0 on any failure (activation error, malformed format). Used to
+    /// distinguish a real output-capable sibling from a phantom/unrouted
+    /// render endpoint that happens to share a container ID.
+    unsafe fn endpoint_output_channels(device: &windows::Win32::Media::Audio::IMMDevice) -> u16 {
+        use windows::Win32::Media::Audio::IAudioClient;
+        use windows::Win32::System::Com::CLSCTX_ALL;
+
+        let Ok(client) = device.Activate::<IAudioClient>(CLSCTX_ALL, None) else {
+            return 0;
+        };
+        let Ok(format) = client.GetMixFormat() else {
+            return 0;
+        };
+        let channels = (*format).nChannels;
+        CoTaskMemFree(Some(format as _));
+        channels
+    }
+
+    /// Pure decision logic, split out from the COM calls above so it is
+    /// unit-testable without real hardware (mirrors [`com_init_added_reference`]).
+    /// A combo headset is one whose capture endpoint has a sibling render
+    /// endpoint — same container ID — that reports usable output channels.
+    /// No matching container ID at all (dedicated mic-only hardware, or a
+    /// container ID shared with nothing else) means "not combo".
+    fn container_id_indicates_combo_headset(
+        capture_container_id: &str,
+        render_endpoints: &[(String, u16)],
+    ) -> bool {
+        render_endpoints
+            .iter()
+            .any(|(container_id, channels)| container_id == capture_container_id && *channels > 0)
+    }
+
+    /// Whether the Bluetooth capture endpoint named `bare_name` is a combo
+    /// headset — see the doc comment on `super::bluetooth_input_is_combo_headset`
+    /// for the design rationale. Resolves the endpoint by friendly name (the
+    /// same enumerator/property-store idioms as [`list_render_endpoint_activity`]),
+    /// reads its container ID, then checks whether any active render endpoint
+    /// shares that ID with usable output channels.
+    ///
+    /// `Err` means the probe itself failed (endpoint not found, no container
+    /// ID, COM error) — the caller treats that as "assume combo" (conservative).
+    pub unsafe fn bare_name_is_combo_headset(bare_name: &str) -> Result<bool> {
+        use windows::Win32::Media::Audio::{
+            eCapture, eRender, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+
+        let _com = ComApartment::enter();
+
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+
+        let captures = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)?;
+        let capture_count = captures.GetCount()?;
+        let mut capture_device = None;
+        for i in 0..capture_count {
+            let Ok(device) = captures.Item(i) else {
+                continue;
+            };
+            if endpoint_friendly_name(&device).ok().as_deref() == Some(bare_name) {
+                capture_device = Some(device);
+                break;
+            }
+        }
+        let capture_device =
+            capture_device.ok_or_else(|| anyhow!("capture endpoint '{}' not found", bare_name))?;
+        let capture_container_id = endpoint_container_id(&capture_device)?;
+
+        let renders = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+        let render_count = renders.GetCount()?;
+        let mut render_endpoints = Vec::with_capacity(render_count as usize);
+        for i in 0..render_count {
+            let Ok(device) = renders.Item(i) else {
+                continue;
+            };
+            let Ok(container_id) = endpoint_container_id(&device) else {
+                continue;
+            };
+            render_endpoints.push((container_id, endpoint_output_channels(&device)));
+        }
+
+        Ok(container_id_indicates_combo_headset(
+            &capture_container_id,
+            &render_endpoints,
+        ))
+    }
+
     /// Enumerate all ACTIVE render endpoints with their live session and
     /// meter state. Per-endpoint failures are skipped (an unplugged-but-
     /// listed device must not hide the others).
@@ -1136,7 +1419,7 @@ mod windows_com_audio {
 
     #[cfg(test)]
     mod tests {
-        use super::com_init_added_reference;
+        use super::{com_init_added_reference, container_id_indicates_combo_headset};
         use windows::Win32::Foundation::{RPC_E_CHANGED_MODE, S_FALSE, S_OK};
 
         #[test]
@@ -1157,6 +1440,104 @@ mod windows_com_audio {
                 !com_init_added_reference(RPC_E_CHANGED_MODE),
                 "RPC_E_CHANGED_MODE means we did NOT add a reference"
             );
+        }
+
+        /// No render endpoint shares the capture endpoint's container ID at
+        /// all — a genuinely dedicated Bluetooth mic with no output side,
+        /// same as the macOS "no sibling object" case.
+        #[test]
+        fn no_matching_container_id_is_dedicated_mic() {
+            let renders = [("other-container".to_string(), 2u16)];
+            assert!(!container_id_indicates_combo_headset(
+                "airpods-container",
+                &renders
+            ));
+        }
+
+        /// A render endpoint sharing the container ID and reporting real
+        /// output channels is the combo-headset case (e.g. the A2DP stereo
+        /// render side of a Bluetooth headset whose HFP mono side is the
+        /// capture endpoint being probed).
+        #[test]
+        fn matching_container_id_with_channels_is_combo_headset() {
+            let renders = [("airpods-container".to_string(), 2u16)];
+            assert!(container_id_indicates_combo_headset(
+                "airpods-container",
+                &renders
+            ));
+        }
+
+        /// A render endpoint shares the container ID but reports 0 channels
+        /// (mirrors macOS: a sibling object exists but has no usable output
+        /// streams) — not evidence of a combo headset.
+        #[test]
+        fn matching_container_id_with_zero_channels_is_not_combo_headset() {
+            let renders = [("airpods-container".to_string(), 0u16)];
+            assert!(!container_id_indicates_combo_headset(
+                "airpods-container",
+                &renders
+            ));
+        }
+
+        /// Multiple render endpoints on the system — only the one sharing
+        /// the container ID matters, regardless of position in the list.
+        #[test]
+        fn picks_matching_sibling_among_unrelated_render_endpoints() {
+            let renders = [
+                ("speakers-container".to_string(), 2u16),
+                ("airpods-container".to_string(), 2u16),
+                ("monitor-container".to_string(), 0u16),
+            ];
+            assert!(container_id_indicates_combo_headset(
+                "airpods-container",
+                &renders
+            ));
+        }
+
+        /// No render endpoints active on the system at all.
+        #[test]
+        fn empty_render_list_is_dedicated_mic() {
+            assert!(!container_id_indicates_combo_headset(
+                "airpods-container",
+                &[]
+            ));
+        }
+
+        /// Not run in CI (no guaranteed audio hardware on CI runners): exercises
+        /// the REAL COM/WASAPI path — enumerate capture endpoints, read
+        /// `PKEY_Device_ContainerId`, enumerate render endpoints, compare — end
+        /// to end against whatever capture devices actually exist on the machine
+        /// running this test. Doesn't assert combo vs. dedicated either way
+        /// (that depends on what hardware happens to be plugged in); it proves
+        /// the pipeline runs to completion without panicking for every real
+        /// device name cpal reports, which the pure `container_id_indicates_combo_headset`
+        /// tests above can't cover on their own.
+        ///
+        /// Run manually with:
+        ///   cargo test -p screenpipe-audio --lib \
+        ///     core::device::windows_com_audio::tests::live_probe_enumerates_without_crashing \
+        ///     -- --ignored --nocapture
+        #[test]
+        #[ignore = "requires real Windows audio hardware; run manually"]
+        fn live_probe_enumerates_without_crashing() {
+            use cpal::traits::{DeviceTrait, HostTrait};
+
+            let host = cpal::default_host();
+            let names: Vec<String> = host
+                .input_devices()
+                .expect("cpal input_devices should enumerate on a real Windows machine")
+                .filter_map(|d| d.name().ok())
+                .collect();
+
+            assert!(
+                !names.is_empty(),
+                "expected at least one capture device on the machine running this test"
+            );
+
+            for name in &names {
+                let is_combo = super::super::bluetooth_input_is_combo_headset(name);
+                println!("device '{name}': is_combo_headset={is_combo}");
+            }
         }
     }
 }
@@ -1192,6 +1573,51 @@ mod resolve_audio_tests {
             &["MacBook Pro Microphone (input)".to_string()],
             false
         ));
+    }
+}
+
+#[cfg(test)]
+mod meeting_tap_device_tests {
+    use super::{parse_audio_device, AudioDevice, DeviceType, MEETING_TAP_DEVICE_NAME};
+
+    /// The Meeting Tap virtual output device name must round-trip through
+    /// `parse_audio_device` in its display form `"Meeting Tap (output)"`, so a
+    /// session device started by the piggyback sweep can be parsed back from its
+    /// string form everywhere the pipeline stringifies devices.
+    #[test]
+    fn meeting_tap_display_name_round_trips() {
+        assert_eq!(
+            parse_audio_device("Meeting Tap (output)").unwrap(),
+            AudioDevice::new(MEETING_TAP_DEVICE_NAME.to_string(), DeviceType::Output)
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tap_aggregate_filter_tests {
+    use super::is_own_tap_aggregate;
+
+    /// Regression: our private tap aggregate is visible to our own process
+    /// (private only hides it from OTHERS), so enumeration must drop it or it
+    /// appears as a selectable input in the settings device picker.
+    #[test]
+    fn own_tap_aggregate_is_filtered() {
+        assert!(is_own_tap_aggregate("ScreenpipeProcessTap"));
+        assert!(is_own_tap_aggregate(
+            crate::core::process_tap::TAP_AGGREGATE_DEVICE_NAME
+        ));
+    }
+
+    #[test]
+    fn real_devices_are_not_filtered() {
+        for name in [
+            "MacBook Pro Microphone",
+            "Ezra’s AirPods Max",
+            "Samsung Microphone",
+            "System Audio",
+        ] {
+            assert!(!is_own_tap_aggregate(name), "{name} must not be filtered");
+        }
     }
 }
 

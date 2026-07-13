@@ -97,17 +97,22 @@ after starting the CLI, you have three ways to access your screen history:
 
 ## verify it's running
 
-once screenpipe starts, it serves an API on `localhost:3030`:
+once screenpipe starts, it serves an API on `localhost:3030`. **API authentication is enabled by default** for security:
 
 ```bash
+# get your API key
+SCREENPIPE_API_KEY=$(npx -y screenpipe@latest auth token)
+
 # check health
-curl http://localhost:3030/health
+curl http://localhost:3030/health \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY"
 
 # search your screen history
-curl "http://localhost:3030/search"
+curl "http://localhost:3030/search?q=example" \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY"
 ```
 
-<Note>if you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to these requests. by default the local API needs no auth.</Note>
+<Note>If you get an `unauthorized` error, you forgot the API key header. See "API authentication" section below for more options.</Note>
 
 ## check and update your version
 
@@ -126,28 +131,33 @@ npx -y screenpipe@latest record
 
 the latest version is always available at npm. if you're on an older version, you'll see a warning when you run `npx -y screenpipe@latest record`.
 
-### API authentication (if enabled)
+### API authentication
 
-by default the local API on `localhost:3030` needs no auth. if you've turned on API auth in settings, get your key by running:
+API authentication is **enabled by default** when screenpipe starts. get your API key:
 
 ```bash
 npx -y screenpipe@latest auth token
 ```
 
-then use it in curl:
-
+**Option 1: pass the key in the header (recommended)**
 ```bash
 curl "http://localhost:3030/search?q=example" \
   -H "Authorization: Bearer <your-api-key>"
 ```
 
-or set it as an environment variable:
-
+**Option 2: set the environment variable**
 ```bash
 export SCREENPIPE_API_KEY=$(npx -y screenpipe@latest auth token)
 curl "http://localhost:3030/search?q=example" \
   -H "Authorization: Bearer $SCREENPIPE_API_KEY"
 ```
+
+**Option 3: pass as a query parameter (less secure)**
+```bash
+curl "http://localhost:3030/search?q=example&token=<your-api-key>"
+```
+
+if you get `{"error":"unauthorized: API access requires authentication..."}", double-check that you're passing the correct auth header or token.
 
 ## connect to AI
 

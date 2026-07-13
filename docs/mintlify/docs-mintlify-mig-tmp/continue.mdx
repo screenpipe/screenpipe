@@ -87,4 +87,56 @@ via MCP, Continue gets access to:
 - Continue extension in VS Code or JetBrains
 - Node.js >= 18.0.0
 
-need help? [join our discord](https://discord.gg/screenpipe).
+## troubleshooting
+
+**MCP server not appearing in Continue?**
+
+1. check screenpipe is running:
+   ```bash
+   curl http://localhost:3030/health
+   ```
+   you should see `{"status":"healthy"}`
+
+2. verify the config file location:
+   - VS Code: `~/.continue/config.json` (check it exists and is valid JSON)
+   - JetBrains: open Continue settings and confirm the MCP config is saved
+
+3. restart the IDE completely (not just the Continue extension)
+
+4. if the server still doesn't appear, remove and re-add it in Continue settings
+
+**screenpipe queries returning empty?**
+
+- verify screenpipe has data:
+  ```bash
+  curl "http://localhost:3030/search?limit=1"
+  ```
+  if empty, screenpipe hasn't recorded anything yet — let it run for a minute and try again
+
+- check screen recording permissions are granted (System Settings on macOS)
+
+- confirm you're querying a time range with recorded data
+
+**"Error calling tool" in Continue?**
+
+- check the screenpipe process is still running (it may have crashed):
+  ```bash
+  curl http://localhost:3030/health
+  ```
+
+- check screenpipe logs:
+  - macOS/Linux: `~/.screenpipe/screenpipe.log`
+  - Windows: check event viewer or `%APPDATA%\screenpipe\logs`
+
+- restart screenpipe if needed:
+  ```bash
+  npx -y screenpipe@latest record
+  ```
+
+**VS Code extension not showing MCP tools?**
+
+- reload the Continue extension: use VS Code's Command Palette (Cmd+Shift+P) → "Reload Window"
+- verify `config.json` is valid JSON (check for trailing commas)
+- ensure Node.js >= 18.0.0: `node --version`
+
+still stuck? [join our discord](https://discord.gg/screenpipe).

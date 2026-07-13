@@ -13,7 +13,7 @@ import posthog from "posthog-js";
 import { cacheAnalyticsId } from "@/lib/analytics-id";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
-import { installAuthInterceptor } from "../auth-guard";
+import { installAuthInterceptor, stripSessionToken } from "../auth-guard";
 import { hasAppEntitlement, normalizeAppUser } from "@/lib/app-entitlement";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
@@ -297,6 +297,18 @@ export type Settings = SettingsStore & {
 	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
 	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
 	experimentalCoreaudioSystemAudio?: boolean;
+	/** Beta ("Smart recording" in the app): during meetings, capture only the meeting app's audio
+	 *  and the microphone it actually uses (per-process piggyback). Off by default. Engages in ANY
+	 *  audio capture mode — takes precedence over the configured devices for the meeting's
+	 *  duration. Requires the meeting detector. Falls back to standard capture automatically if
+	 *  unavailable. */
+	experimentalMeetingPiggyback?: boolean;
+	/** Opening a Bluetooth mic always degrades the paired device's output audio (A2DP -> SCO,
+	 *  a macOS/OS limitation — issue #3750). Off by default: Bluetooth mics are only recorded
+	 *  during a detected meeting. Turn on to always record Bluetooth mics regardless of
+	 *  meeting state. No effect on wired/built-in mics, Bluetooth output devices, or a dedicated
+	 *  Bluetooth mic with no output side of its own — nothing to protect there. */
+	alwaysRecordBluetoothMic?: boolean;
 	/** Experimental: request Windows WASAPI microphone AEC when supported. */
 	windowsInputAecEnabled?: boolean;
 	/** Experimental: request Apple VoiceProcessingIO AEC on the default macOS microphone. */
@@ -533,10 +545,10 @@ const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
 // "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
 // OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
 // every paying user — not just Cloud Sync subscribers — gets Screenpipe Cloud
-// transcription on by default. Still requires a token/id so the cloud engine can
-// authenticate against api.screenpipe.com.
+// transcription on by default. A database ID identifies an account but is not
+// a credential, so cloud defaults require the verified session token.
 const isLoggedInProUser = (user: User | null | undefined) =>
-	hasAppEntitlement(user as any) && Boolean(user?.token || user?.id);
+	hasAppEntitlement(user as any) && Boolean(user?.token);
 
 const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	if (!isLoggedInProUser(settings.user)) return settings;
@@ -605,6 +617,8 @@ let DEFAULT_SETTINGS: Settings = {
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			analyticsEnabled: true,
+			remoteLogCollectionEnabled: false,
+			remoteLogCollectionUserId: null,
 			audioChunkDuration: 30,
 			useChineseMirror: false,
 			languages: [],
@@ -673,6 +687,8 @@ let DEFAULT_SETTINGS: Settings = {
 			disableClickCapture: false,
 			keepComputerAwake: false,
 			experimentalCoreaudioSystemAudio: false,
+			experimentalMeetingPiggyback: false,
+			alwaysRecordBluetoothMic: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,
 			screenpipeAecEnabled: false,
@@ -1038,6 +1054,14 @@ function createSettingsStore() {
 			}
 		}
 
+		// Migration: backfill disabledShortcuts for installs that predate the
+		// field. Several call sites assume it's always an array (`.includes(...)`)
+		// and crash with "Cannot read properties of undefined" when it's missing.
+		if (!Array.isArray(settings.disabledShortcuts)) {
+			settings.disabledShortcuts = [];
+			needsUpdate = true;
+		}
+
 		// Save migrations if needed
 		if (needsUpdate) {
 			await setSettingsStripped(store, settings);
@@ -1188,7 +1212,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		installAuthInterceptor(
 			() => settingsRef.current.user?.token ?? undefined,
 			async () => {
-				await updateSettings({ user: null as any });
+				// Strip only the token — keep the profile + entitlement evidence so
+				// the entitlement gate's transient-loss cushion can hold instead of
+				// resetting onboarding (SCR-132). Because the user stays non-null,
+				// the explicit-logout invalidation in updateSettings ("user" in
+				// updates && !updates.user) intentionally does NOT fire: an
+				// in-flight loadUser that still succeeds may legitimately restore
+				// the session after a transient 401.
+				await updateSettings({
+					user: stripSessionToken(settingsRef.current.user) as any,
+				});
 				// Mirror the sign-out into the sidecar so the pi-agent and
 				// cloud_proxy.rs stop sending the now-revoked token on the
 				// next pipe run.

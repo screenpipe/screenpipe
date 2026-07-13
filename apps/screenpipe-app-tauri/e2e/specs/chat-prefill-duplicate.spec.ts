@@ -34,13 +34,16 @@
  */
 
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 import { showWindow, waitForWindowHandle } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
+import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 
-const CHATS_DIR = join(homedir(), ".screenpipe", "chats");
+// The app runs under SCREENPIPE_DATA_DIR = E2E_DATA_DIR (~/.screenpipe/.e2e),
+// so chats are persisted to <E2E_DATA_DIR>/chats — NOT ~/.screenpipe/chats.
+// Reading the wrong dir was why this spec saw "no conversation persisted".
+const CHATS_DIR = join(E2E_DATA_DIR, "chats");
 // Unique, unlikely to collide with any real or seeded conversation content.
 const MARKER = "E2E-PREFILL-DUP-MARKER-7Q4X9Z";
 
@@ -112,14 +115,14 @@ async function emitUntargetedAutoSendPrefill(prompt: string): Promise<void> {
   );
 }
 
-// QUARANTINED (#4610): the autoSend→pi→auto-save persist precondition (a
-// conversation must reach disk before we can count it) is racy in CI — it
-// times out with "no conversation persisted" (0 conversations, NOT the
-// duplicate=2 it guards against) ~100% on Linux AND ~33% on macOS. So it's
-// CI-hostile on every platform, not just Linux. Re-enable once the test seeds
-// the persisted conversation deterministically instead of depending on a live
-// model/streaming round-trip.
-describe.skip("Chat prefill cross-window duplication", function () {
+// Un-quarantined (#4719). The prior #4610 "needs a live model / racy" reason is
+// stale: the send path persists the user turn immediately on send
+// (use-pi-send-transport.ts — saveConversation right after the user message is
+// appended), so a conversation reaches disk deterministically without waiting on
+// a model reply. The remaining failures were test-only: CHATS_DIR pointed at the
+// non-e2e dir (fixed above) and the fs:scope didn't allow the hidden .e2e path
+// (added to capabilities/main.json).
+describe("Chat prefill cross-window duplication", function () {
   this.timeout(180_000);
 
   before(async function () {

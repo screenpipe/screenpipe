@@ -60,12 +60,16 @@ pub fn telemetry_disabled_by_env() -> bool {
         .iter()
         .any(|var| {
             std::env::var(var)
-                .map(|v| {
-                    let v = v.trim().to_ascii_lowercase();
-                    !matches!(v.as_str(), "" | "0" | "false" | "no" | "off")
-                })
+                .map(|v| env_value_truthy(&v))
                 .unwrap_or(false)
         })
+}
+
+/// Lenient truthiness for the engine's kill-switch env vars (also used by
+/// `process_priority`): empty / "0" / "false" / "no" / "off" mean unset.
+pub(crate) fn env_value_truthy(value: &str) -> bool {
+    let v = value.trim().to_ascii_lowercase();
+    !matches!(v.as_str(), "" | "0" | "false" | "no" | "off")
 }
 
 /// Initialize analytics with telemetry enabled/disabled

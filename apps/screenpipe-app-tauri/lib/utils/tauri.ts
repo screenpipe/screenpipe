@@ -193,10 +193,10 @@ async checkBrowsersAutomationPermission() : Promise<boolean> {
     return await TAURI_INVOKE("check_browsers_automation_permission");
 },
 /**
- * Returns true on macOS 14.4+ where the CoreAudio Process Tap API is
- * available. Used to gate the "experimental System Audio via CoreAudio"
- * toggle — we don't show it on platforms where flipping it would be a
- * no-op. False on Windows, Linux, and older macOS.
+ * Returns true on platforms where Screenpipe's process-audio tap backend is
+ * available. On macOS that means CoreAudio Process Tap (14.4+); on Windows it
+ * means WASAPI process loopback (build 20348+). Linux and older OS versions
+ * return false.
  */
 async checkCoreaudioProcessTapAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("check_coreaudio_process_tap_available");
@@ -855,6 +855,13 @@ async installRegistrySkill(repo: string, gitRef: string, path: string, name: str
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Whether capture is currently paused. The frontend polls this alongside
+ * per-device status so the UI stays in sync with the tray indicator.
+ */
+async isCapturePaused() : Promise<boolean> {
+    return await TAURI_INVOKE("is_capture_paused");
 },
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
@@ -1934,6 +1941,22 @@ async setBrowserCookieAccessState(granted: boolean, disabled: boolean) : Promise
 }
 },
 /**
+ * Apply the "Chat Always on Top" setting to the already-open chat window.
+ *
+ * The chat window's on-top level is otherwise only set at create/show time
+ * (`window::show`), so toggling the setting while the window is open had no
+ * effect until it was reopened. This lets the Display-settings toggle take
+ * effect immediately. No-op if the chat window isn't currently open.
+ */
+async setChatAlwaysOnTop(onTop: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_chat_always_on_top", { onTop }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Toggle the "Cloud audio + video + image analysis" capability
  * in the screenpipe-api skill that Pi installs on every run.
  *
@@ -2368,7 +2391,20 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
 export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
-export type AudioDeviceInfo = { name: string; isDefault: boolean }
+export type AudioDeviceInfo = { name: string; isDefault: boolean;
+/**
+ * True for a Bluetooth *input* device that is also a combo headset (the
+ * same hardware exposes an output side) — i.e. exactly the devices the
+ * `alwaysRecordBluetoothMic` gate actually holds back outside a
+ * detected meeting. A dedicated Bluetooth mic with no output side is
+ * never gated, so this is `false` for one even though it's Bluetooth.
+ * Mirrors `AudioManager::start_device`'s real gate condition
+ * (screenpipe-audio's `device_detection::bluetooth_mic_allowed` +
+ * `device::bluetooth_input_is_combo_headset`) so the settings UI's
+ * "meetings only" hint matches actual recording behavior instead of
+ * guessing from the device name.
+ */
+isComboBluetoothMic: boolean }
 export type BootPhaseSnapshot = {
 /**
  * One of: idle | starting | migrating_database | building_audio |
@@ -2424,7 +2460,13 @@ export type CalendarStatus = { available: boolean; authorized: boolean; authoriz
  * [`list_chat_entries_by_mtime`].
  */
 export type ChatDirEntry = { name: string; mtime_ms: number }
-export type ChatGptOAuthStatus = { logged_in: boolean }
+export type ChatGptOAuthStatus = { logged_in: boolean;
+/**
+ * `None` when the store was read successfully; contains an error
+ * description when the status could not be determined (DB locked,
+ * keychain failure, timeout, etc.).
+ */
+error: string | null }
 export type Credits = { amount: number }
 /**
  * A skill folder discovered somewhere on the user's device.
@@ -2718,6 +2760,36 @@ useSystemDefaultAudio: boolean;
  * falls back to the SCK path automatically. Ignored on non-macOS platforms.
  */
 experimentalCoreaudioSystemAudio?: boolean;
+/**
+ * Beta ("Smart recording" in the app): during detected meetings, capture
+ * the meeting app's own audio via a per-process tap plus the microphone
+ * that app actually has open (instead of the global mix + assumed-default
+ * mic). Default `false`. Takes precedence over everything: it engages in
+ * ANY `audio_capture_mode` (continuous or meetings-only) and displaces
+ * the configured devices for the meeting's duration. Requires macOS 14.4+
+ * or Windows, plus the meeting detector (with `disable_meeting_detector`
+ * no meeting is ever observed, so this flag is inert); when the platform
+ * can't do it or the tap fails at runtime, capture automatically falls
+ * back to the stable path (default mic + global system audio) — never
+ * less capture than with the flag off.
+ */
+experimentalMeetingPiggyback?: boolean;
+/**
+ * Opening a Bluetooth microphone always forces the paired device's audio
+ * link out of A2DP into SCO, degrading the user's headphone/speaker
+ * output quality (48kHz stereo -> 24kHz stereo or mono HFP, depending on
+ * hardware) — a macOS/OS-level tradeoff with no external workaround
+ * (issue #3750). Default `false`: Bluetooth input devices are only
+ * actually opened while a meeting is detected; outside a meeting they
+ * stay enabled-but-gated (selected in settings, not streaming) so the
+ * Bluetooth link stays in A2DP. Set `true` to always record Bluetooth
+ * mics regardless of meeting state (prior behavior). Has no effect on
+ * wired/built-in/unrecognized mics, on Bluetooth output devices, or on a
+ * dedicated Bluetooth microphone with no output side of its own (macOS:
+ * confirmed via `bluetooth_input_is_combo_headset` — nothing to protect
+ * there, since there's no headphone output on that hardware to degrade).
+ */
+alwaysRecordBluetoothMic?: boolean;
 /**
  * Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
  * Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
@@ -3182,6 +3254,17 @@ autoUpdatePipes?: boolean;
  * Better quality but sends activity context to the cloud (zero data retention).
  */
 enhancedAI?: boolean;
+/**
+ * Explicit consumer opt-in for on-demand remote diagnostic log requests.
+ * Enterprise builds enforce remote log collection separately; this stored
+ * value remains false unless a consumer chooses to enable it.
+ */
+remoteLogCollectionEnabled?: boolean;
+/**
+ * Account that granted remote log collection consent on this device.
+ * Consumer collection is allowed only while this matches the current user.
+ */
+remoteLogCollectionUserId?: string | null;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).

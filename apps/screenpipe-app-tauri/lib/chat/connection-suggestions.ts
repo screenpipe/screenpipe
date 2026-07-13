@@ -355,6 +355,6 @@ export function buildConnectionSetupSuggestions(
       a.fallbackRank - b.fallbackRank ||
       a.suggestion.title.localeCompare(b.suggestion.title)
     )
-    .slice(0, 2)
+    .slice(0, 3)
     .map((entry) => entry.suggestion);
 }

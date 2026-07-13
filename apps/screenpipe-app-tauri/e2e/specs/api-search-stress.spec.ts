@@ -25,9 +25,13 @@ describe("Local API search and stability", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
-    await waitForLocalApi();
-
+    // Use the explicitly configured port while the Tauri command may still be
+    // on its cold-start fallback. This keeps isolated E2E runs from ever
+    // probing a developer's live default-port server.
+    const expectedPort = Number(process.env.SCREENPIPE_PORT ?? "3030");
+    await waitForLocalApi(expectedPort);
     const cfg = await getLocalApiConfig();
+    expect(cfg.port).toBe(expectedPort);
     port = cfg.port;
     key = cfg.key;
   });
@@ -457,6 +461,27 @@ describe("Local API search and stability", function () {
       Array.from({ length: 30 }, () => fetchJson(apiUrl("/health"))),
     );
     expect(results.filter((r) => !r.ok)).toHaveLength(0);
+  });
+
+  it("handles health bursts across repeated cache refresh boundaries", async () => {
+    for (let round = 0; round < 3; round += 1) {
+      // Cross the one-second cache TTL so every burst begins on the refresh
+      // boundary that previously allowed duplicate full health computations.
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      const startedAt = Date.now();
+      const results = await Promise.all(
+        Array.from({ length: 30 }, () => fetchJson(apiUrl("/health"))),
+      );
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(results.filter((r) => !r.ok)).toHaveLength(0);
+      for (const result of results) {
+        expect(result.body).not.toBeNull();
+        expect(typeof result.body).toBe("object");
+        const body = result.body as { status_code?: number; status?: string };
+        expect(body.status_code).toBe(200);
+        expect(body.status).not.toBe("degraded");
+      }
+    }
   });
 
   it("handles mixed readonly API load while the UI stays responsive", async function () {

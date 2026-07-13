@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Battery, BatteryCharging, BatteryLow, Zap, Leaf, Gauge, MicOff, PauseCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -16,7 +17,7 @@ import { PowerModePreview } from "./setting-previews";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Power mode", keywords: ["battery", "performance", "saver"] },
+  { label: "Power & battery", keywords: ["power", "battery", "performance", "saver"] },
   { label: "Keep computer awake", keywords: ["sleep", "awake", "power"] },
 ];
 
@@ -98,9 +99,8 @@ export function BatterySaverSection() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
   }, [fetchStatus]);
+  useInterval(fetchStatus, 5000);
 
   const setMode = async (mode: PowerMode) => {
     if (updating) return;
@@ -180,7 +180,7 @@ export function BatterySaverSection() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-foreground">power mode</h3>
+          <h3 className="text-sm font-medium text-foreground">power &amp; battery</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
             controls capture frequency, quality, and transcription to save battery
           </p>

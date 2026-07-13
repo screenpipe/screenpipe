@@ -476,7 +476,7 @@ def scenario_health_poll(client: ApiClient, state: SharedState, duration_sec: fl
     fanout(state, "health_poll", duration_sec, concurrency, work)
 
 
-def scenario_search_fanout(client: ApiClient, state: SharedState, duration_sec: float, concurrency: int) -> None:
+def build_search_fanout_params(include_frame_images: bool) -> dict[str, Any]:
     queries = [
         "screenpipe",
         "meeting",
@@ -491,20 +491,38 @@ def scenario_search_fanout(client: ApiClient, state: SharedState, duration_sec: 
     ]
     content_types = ["all", "ocr", "audio", "input", "accessibility", "memory"]
 
+    include_frames = include_frame_images and random.choice([False, True])
+    limits = [5, 10, 20] if include_frames else [10, 25, 50, 100, 250]
+    return {
+        "q": random.choice(queries),
+        "content_type": random.choice(content_types),
+        "limit": random.choice(limits),
+        "offset": random.choice([0, 10, 50, 100, 250]),
+        "max_content_length": random.choice([None, 256, 1024, 4096]),
+        "include_frames": "true" if include_frames else "false",
+        "focused": random.choice([None, "true", "false"]),
+    }
+
+
+def scenario_search_fanout(
+    client: ApiClient,
+    state: SharedState,
+    duration_sec: float,
+    concurrency: int,
+    include_frame_images: bool,
+) -> None:
+
     def work() -> bool:
-        params = {
-            "q": random.choice(queries),
-            "content_type": random.choice(content_types),
-            "limit": random.choice([10, 25, 50, 100, 250]),
-            "offset": random.choice([0, 10, 50, 100, 250]),
-            "max_content_length": random.choice([None, 256, 1024, 4096]),
-            "include_frames": random.choice(["false", "true"]),
-            "focused": random.choice([None, "true", "false"]),
-        }
+        params = build_search_fanout_params(include_frame_images)
         ok, _, _, _ = client.request("GET", "/search", params=params)
         return ok
 
-    fanout(state, "search_fanout", duration_sec, concurrency, work)
+    # Inline frame payloads spawn ffmpeg and retain large base64 response
+    # buffers. Keep that pressure opt-in, low-cardinality, and serial so the
+    # default monitor cannot become the source of the memory pressure it is
+    # trying to measure.
+    effective_concurrency = 1 if include_frame_images else concurrency
+    fanout(state, "search_fanout", duration_sec, effective_concurrency, work)
 
 
 def scenario_timeline_stream(client: ApiClient, state: SharedState, duration_sec: float, concurrency: int) -> None:
@@ -811,7 +829,16 @@ def run_harness(args: argparse.Namespace) -> int:
     client = ApiClient(args.base_url, args.request_timeout_sec, args.api_key or os.environ.get("SCREENPIPE_API_KEY"))
     scenarios: list[tuple[str, Callable[[], None]]] = [
         ("health_poll", lambda: scenario_health_poll(client, state, args.scenario_duration_sec, args.concurrency)),
-        ("search_fanout", lambda: scenario_search_fanout(client, state, args.scenario_duration_sec, args.concurrency)),
+        (
+            "search_fanout",
+            lambda: scenario_search_fanout(
+                client,
+                state,
+                args.scenario_duration_sec,
+                args.concurrency,
+                args.include_frame_images,
+            ),
+        ),
         ("timeline_stream", lambda: scenario_timeline_stream(client, state, args.scenario_duration_sec, args.concurrency)),
         ("frame_walk", lambda: scenario_frame_walk(client, state, args.scenario_duration_sec, args.concurrency, args.include_frame_images)),
         ("meeting_walk", lambda: scenario_meeting_walk(client, state, args.scenario_duration_sec, args.concurrency)),

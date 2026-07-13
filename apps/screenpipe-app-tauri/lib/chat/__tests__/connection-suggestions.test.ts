@@ -101,6 +101,12 @@ describe("connection suggestions", () => {
         description: "Search your docs",
         icon: "notion",
       },
+      {
+        id: "google-docs",
+        title: "Connect Google Docs",
+        description: "Search your docs",
+        icon: "google-docs",
+      },
     ]);
   });
 });

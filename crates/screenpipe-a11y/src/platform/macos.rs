@@ -2571,6 +2571,16 @@ mod tests {
     }
 
     #[test]
+    fn test_ax_status_errors_return_without_aborting() {
+        for status in [-25204, -25205] {
+            let error = cidre::os::Status(status)
+                .result()
+                .expect_err("AX failure status should return an error");
+            assert_eq!(error.status(), cidre::os::Status(status));
+        }
+    }
+
+    #[test]
     fn test_get_clipboard_returns_option() {
         // Should not panic regardless of clipboard state
         let result = get_clipboard();

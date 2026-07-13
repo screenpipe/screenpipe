@@ -13,10 +13,11 @@
 //! See https://github.com/screenpipe/screenpipe/issues/4840.
 //!
 //! Design:
-//! - `FrameArrived` only does a GPU-side `CopyResource` into a persistent "latest"
-//!   texture (cheap: a queued GPU command, no CPU readback). The expensive staging
-//!   texture + `Map` + swizzle work is deferred to `get_latest_image()`, which runs
-//!   only when a caller actually wants a frame.
+//! - `get_latest_image()` publishes a monotonically increasing request generation.
+//!   `FrameArrived` keeps draining compositor frames, but only does a GPU-side
+//!   `CopyResource` when a request is pending. One copy can satisfy every caller that
+//!   was waiting at that instant. The expensive staging texture + `Map` + swizzle
+//!   work is likewise performed only for callers that actually want a frame.
 //! - The D3D11 device is shared across sessions but recreatable: it is validated with
 //!   `GetDeviceRemovedReason` on every session init and dropped from the cache when a
 //!   GPU reset / driver update removes it, so the reinit loop in monitor/windows.rs
@@ -32,7 +33,7 @@
 
 use anyhow::{anyhow, Result};
 use image::{DynamicImage, RgbaImage};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use windows::{
@@ -67,13 +68,76 @@ use windows::{
     },
 };
 
-/// Caps the `FrameArrived` callback rate at ~60Hz. Purely a bonus on top of lazy
-/// readback: it reduces GPU `CopyResource` submissions on high-refresh-rate displays.
+/// Caps the `FrameArrived` callback rate at ~60Hz. Purely a bonus on top of
+/// demand-driven copying: it reduces callback overhead on high-refresh-rate displays.
 /// Best-effort — `SetMinUpdateInterval` needs Win11 24H2+ and is a no-op if unsupported,
-/// since the callback is already cheap (one GPU copy) without it.
+/// since callbacks without a pending request only drain and inspect the frame.
 const MIN_UPDATE_INTERVAL_100NS: i64 = 166_667;
 
 const FRAME_POOL_BUFFERS: i32 = 2;
+
+/// Compact counters used by the Windows capture probe and future resource telemetry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureStats {
+    pub frame_arrivals: u64,
+    pub copy_submissions: u64,
+    pub image_requests: u64,
+}
+
+#[derive(Default)]
+struct CaptureCounters {
+    frame_arrivals: AtomicU64,
+    copy_submissions: AtomicU64,
+    image_requests: AtomicU64,
+}
+
+impl CaptureCounters {
+    fn snapshot(&self) -> CaptureStats {
+        CaptureStats {
+            frame_arrivals: self.frame_arrivals.load(Ordering::Relaxed),
+            copy_submissions: self.copy_submissions.load(Ordering::Relaxed),
+            image_requests: self.image_requests.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Generations make outstanding demand explicit and allow one frame to satisfy all
+/// callers that were waiting when it arrived. Access is protected by `LatestFrame`'s
+/// mutex, so no atomics are needed here.
+#[derive(Debug, Default)]
+struct CopyDemand {
+    requested: u64,
+    completed: u64,
+}
+
+impl CopyDemand {
+    fn request(&mut self) -> u64 {
+        if self.requested == u64::MAX {
+            // While the final generation is pending, additional callers can safely
+            // join it. Once complete, no waiter remains and both counters can reset.
+            if self.completed != u64::MAX {
+                return u64::MAX;
+            }
+            self.requested = 0;
+            self.completed = 0;
+        }
+        self.requested += 1;
+        self.requested
+    }
+
+    fn pending_generation(&self) -> Option<u64> {
+        (self.requested != self.completed).then_some(self.requested)
+    }
+
+    fn complete(&mut self, generation: u64) {
+        debug_assert_eq!(generation, self.requested);
+        self.completed = generation;
+    }
+
+    fn is_complete(&self, generation: u64) -> bool {
+        self.completed >= generation
+    }
+}
 
 /// Shared D3D11 device state for all persistent captures. One device serves every
 /// monitor's session; it lives in `SHARED_D3D` so it can be dropped and recreated
@@ -288,6 +352,7 @@ struct LatestFrame {
     /// differs are stale pre-`Recreate` deliveries and are dropped; frames whose
     /// `ContentSize` differs signal a display mode change and trigger a `Recreate`.
     pool_size: (i32, i32),
+    demand: CopyDemand,
 }
 
 /// Persistent WGC capture session that keeps a single GraphicsCaptureSession alive,
@@ -300,6 +365,7 @@ pub struct PersistentCapture {
     frame_arrived_token: EventRegistrationToken,
     closed_token: EventRegistrationToken,
     latest: Arc<(Mutex<LatestFrame>, Condvar)>,
+    stats: Arc<CaptureCounters>,
     /// Set when the capture item reports `Closed` (monitor disconnect, session
     /// invalidated) or `stop()` runs. Checked *before* the cached frame in
     /// `get_latest_image` — a closed session errors out (triggering reinit in
@@ -346,14 +412,17 @@ impl PersistentCapture {
                 width: 0,
                 height: 0,
                 pool_size: (item_size.Width, item_size.Height),
+                demand: CopyDemand::default(),
             }),
             Condvar::new(),
         ));
         let closed = Arc::new(AtomicBool::new(false));
+        let stats = Arc::new(CaptureCounters::default());
 
         let handler_latest = latest.clone();
         let handler_closed = closed.clone();
         let handler_d3d = d3d.clone();
+        let handler_stats = stats.clone();
         let frame_arrived_token = frame_pool
             .FrameArrived(
                 &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
@@ -364,6 +433,7 @@ impl PersistentCapture {
                                 &handler_d3d,
                                 &handler_latest,
                                 &handler_closed,
+                                &handler_stats,
                             ) {
                                 tracing::debug!("wgc FrameArrived: {}", e);
                             }
@@ -457,6 +527,7 @@ impl PersistentCapture {
             frame_arrived_token,
             closed_token,
             latest,
+            stats,
             closed,
             stopped: AtomicBool::new(false),
             staging: Mutex::new(None),
@@ -469,12 +540,14 @@ impl PersistentCapture {
         d3d: &Arc<D3dContext>,
         latest: &Arc<(Mutex<LatestFrame>, Condvar)>,
         closed: &Arc<AtomicBool>,
+        stats: &Arc<CaptureCounters>,
     ) -> Result<()> {
+        stats.frame_arrivals.fetch_add(1, Ordering::Relaxed);
         let frame = frame_pool
             .TryGetNextFrame()
             .map_err(|e| anyhow!("TryGetNextFrame failed: {}", e))?;
 
-        let stored = Self::store_frame(&frame, frame_pool, d3d, latest, closed);
+        let stored = Self::store_frame(&frame, frame_pool, d3d, latest, closed, stats);
 
         if let Err(e) = frame.Close() {
             tracing::debug!("Direct3D11CaptureFrame::Close failed: {:?}", e);
@@ -495,41 +568,17 @@ impl PersistentCapture {
         d3d: &Arc<D3dContext>,
         latest: &Arc<(Mutex<LatestFrame>, Condvar)>,
         closed: &Arc<AtomicBool>,
+        stats: &Arc<CaptureCounters>,
     ) -> Result<bool> {
         let content = frame
             .ContentSize()
             .map_err(|e| anyhow!("ContentSize failed: {}", e))?;
-        let surface = frame
-            .Surface()
-            .map_err(|e| anyhow!("Direct3D11CaptureFrame::Surface failed: {}", e))?;
-        let access = surface
-            .cast::<IDirect3DDxgiInterfaceAccess>()
-            .map_err(|e| {
-                anyhow!(
-                    "failed to cast surface to IDirect3DDxgiInterfaceAccess: {}",
-                    e
-                )
-            })?;
-        let source_texture: ID3D11Texture2D = unsafe {
-            access
-                .GetInterface()
-                .map_err(|e| anyhow!("IDirect3DDxgiInterfaceAccess::GetInterface failed: {}", e))?
-        };
-
-        let mut desc = D3D11_TEXTURE2D_DESC::default();
-        unsafe { source_texture.GetDesc(&mut desc) };
-        let frame_size = (desc.Width as i32, desc.Height as i32);
         let content_size = (content.Width, content.Height);
 
         let mut slot = latest
             .0
             .lock()
             .map_err(|_| anyhow!("latest frame mutex poisoned"))?;
-
-        if frame_size != slot.pool_size {
-            // Frame from a buffer generation before the last Recreate — drop it.
-            return Ok(false);
-        }
 
         if content_size != slot.pool_size {
             // Display mode changed (resolution/scaling): recreate the pool at the new
@@ -562,7 +611,39 @@ impl PersistentCapture {
                 return Err(e);
             }
             slot.pool_size = content_size;
+            slot.texture = None;
+            slot.width = 0;
+            slot.height = 0;
             // Skip this old-size frame; the next delivery uses the recreated buffers.
+            return Ok(false);
+        }
+
+        let Some(request_generation) = slot.demand.pending_generation() else {
+            return Ok(false);
+        };
+
+        let surface = frame
+            .Surface()
+            .map_err(|e| anyhow!("Direct3D11CaptureFrame::Surface failed: {}", e))?;
+        let access = surface
+            .cast::<IDirect3DDxgiInterfaceAccess>()
+            .map_err(|e| {
+                anyhow!(
+                    "failed to cast surface to IDirect3DDxgiInterfaceAccess: {}",
+                    e
+                )
+            })?;
+        let source_texture: ID3D11Texture2D = unsafe {
+            access
+                .GetInterface()
+                .map_err(|e| anyhow!("IDirect3DDxgiInterfaceAccess::GetInterface failed: {}", e))?
+        };
+
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { source_texture.GetDesc(&mut desc) };
+        let frame_size = (desc.Width as i32, desc.Height as i32);
+        if frame_size != slot.pool_size {
+            // Frame from a buffer generation before the last Recreate — drop it.
             return Ok(false);
         }
 
@@ -585,13 +666,15 @@ impl PersistentCapture {
             let _context_guard = d3d.lock_context();
             unsafe { d3d.context.CopyResource(&dst_resource, &src_resource) };
         }
+        slot.demand.complete(request_generation);
+        stats.copy_submissions.fetch_add(1, Ordering::Relaxed);
         Ok(true)
     }
 
-    /// Get the latest captured frame. On the first call after init, polls until a frame
-    /// arrives or timeout expires. Errors as soon as the session is closed (monitor
-    /// disconnect, sleep/wake invalidation, stop()) so monitor/windows.rs reinits
-    /// rather than receiving stale frames.
+    /// Request and read a frame newer than this call. Waits until the callback fulfills
+    /// this request generation or the timeout expires. Errors as soon as the session is
+    /// closed (monitor disconnect, sleep/wake invalidation, stop()) so
+    /// monitor/windows.rs reinits rather than receiving stale frames.
     ///
     /// This is where the CPU cost lives now: staging texture + `Map` readback +
     /// BGRA->RGBA swizzle happen here, lazily, only when a frame is actually needed —
@@ -603,6 +686,14 @@ impl PersistentCapture {
             .lock()
             .map_err(|e| anyhow!("frame mutex poisoned: {}", e))?;
 
+        if self.closed.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "WGC session closed (capture item closed or stopped)"
+            ));
+        }
+        let request_generation = slot.demand.request();
+        self.stats.image_requests.fetch_add(1, Ordering::Relaxed);
+
         loop {
             // Closed takes precedence over any cached frame: a dead session must
             // error (=> reinit upstream), never serve its last frame forever.
@@ -611,7 +702,7 @@ impl PersistentCapture {
                     "WGC session closed (capture item closed or stopped)"
                 ));
             }
-            if slot.texture.is_some() {
+            if slot.demand.is_complete(request_generation) && slot.texture.is_some() {
                 break;
             }
             let now = Instant::now();
@@ -633,6 +724,10 @@ impl PersistentCapture {
         drop(slot);
 
         self.readback(&texture, width, height)
+    }
+
+    pub fn stats(&self) -> CaptureStats {
+        self.stats.snapshot()
     }
 
     fn readback(&self, texture: &ID3D11Texture2D, width: u32, height: u32) -> Result<DynamicImage> {
@@ -762,6 +857,90 @@ mod tests {
     use super::*;
     use xcap::Monitor as XcapMonitor;
 
+    fn deliver_frame(demand: &mut CopyDemand) -> bool {
+        let Some(generation) = demand.pending_generation() else {
+            return false;
+        };
+        demand.complete(generation);
+        true
+    }
+
+    #[test]
+    fn frame_arrivals_without_demand_do_not_copy() {
+        let mut demand = CopyDemand::default();
+        assert_eq!((0..1_000).filter(|_| deliver_frame(&mut demand)).count(), 0);
+    }
+
+    #[test]
+    fn one_request_produces_exactly_one_copy() {
+        let mut demand = CopyDemand::default();
+        let generation = demand.request();
+
+        assert!(deliver_frame(&mut demand));
+        assert!(demand.is_complete(generation));
+        assert!(!deliver_frame(&mut demand));
+    }
+
+    #[test]
+    fn later_request_produces_one_additional_copy() {
+        let mut demand = CopyDemand::default();
+        let first = demand.request();
+        assert!(deliver_frame(&mut demand));
+        assert!(demand.is_complete(first));
+
+        let second = demand.request();
+        assert!(!demand.is_complete(second));
+        assert!(deliver_frame(&mut demand));
+        assert!(demand.is_complete(second));
+        assert!(!deliver_frame(&mut demand));
+    }
+
+    #[test]
+    fn one_copy_satisfies_concurrent_requests() {
+        let mut demand = CopyDemand::default();
+        let first = demand.request();
+        let second = demand.request();
+
+        assert!(deliver_frame(&mut demand));
+        assert!(demand.is_complete(first));
+        assert!(demand.is_complete(second));
+        assert!(!deliver_frame(&mut demand));
+    }
+
+    #[test]
+    fn abandoned_request_leaves_at_most_one_copy() {
+        let mut demand = CopyDemand::default();
+        let _abandoned_generation = demand.request();
+
+        assert!(deliver_frame(&mut demand));
+        assert!(!deliver_frame(&mut demand));
+    }
+
+    #[test]
+    fn completed_generations_wrap_only_without_waiters() {
+        let mut demand = CopyDemand {
+            requested: u64::MAX,
+            completed: u64::MAX,
+        };
+
+        let generation = demand.request();
+        assert_eq!(generation, 1);
+        assert!(deliver_frame(&mut demand));
+        assert!(demand.is_complete(generation));
+    }
+
+    #[test]
+    fn callers_join_the_final_generation_until_it_completes() {
+        let mut demand = CopyDemand {
+            requested: u64::MAX,
+            completed: u64::MAX - 1,
+        };
+
+        assert_eq!(demand.request(), u64::MAX);
+        assert!(deliver_frame(&mut demand));
+        assert!(demand.is_complete(u64::MAX));
+    }
+
     /// Resolve the first monitor through xcap, exactly like production code in
     /// monitor/windows.rs does. This also exercises the id contract that
     /// find_hmonitor re-derives (xcap Monitor::id() == HMONITOR value as u32) —
@@ -799,8 +978,7 @@ mod tests {
             "captured height != monitor height"
         );
 
-        // A second call should hit the already-populated "latest" slot immediately
-        // (no waiting for a fresh compositor frame) and still decode cleanly.
+        // A second call must wait for and decode a fresh compositor frame.
         let image2 = capture
             .get_latest_image(Duration::from_millis(500))
             .expect("failed to get second frame");

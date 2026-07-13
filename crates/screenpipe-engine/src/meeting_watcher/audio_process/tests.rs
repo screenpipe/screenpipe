@@ -133,6 +133,72 @@ fn windows_exe_names_map_to_native_platform() {
     }
 }
 
+fn facetime_app_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: None,
+        audio_object_id: Some(400),
+        pid: Some(1234),
+        bundle_id: Some("com.apple.FaceTime".to_string()),
+        process_name: Some("FaceTime".to_string()),
+        owner_app_name: Some("FaceTime".to_string()),
+        owner_bundle_id: Some("com.apple.FaceTime".to_string()),
+        first_seen_at_ms: None,
+    }
+}
+
+/// FaceTime auto-detection: the FaceTime APP holding the mic resolves to the
+/// FaceTime native platform. (FaceTime's audio IO daemon `avconferenced` is a
+/// separate process — see `facetime_daemon_is_not_an_identity_signal`.)
+#[test]
+fn facetime_app_maps_to_native_platform() {
+    let profiles = load_detection_profiles();
+    let process = facetime_app_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(
+        candidate,
+        ResolvedMeetingCandidate::Native { platform, .. } if platform == "FaceTime"
+    ));
+}
+
+/// Documents (pre-existing, unchanged) behavior: `avconferenced` — FaceTime's
+/// audio IO daemon — is NOT a platform identity for auto-detection; the
+/// FaceTime app itself is (above). The daemon still matters downstream: it
+/// stays in mic-holder snapshots (see
+/// `meeting_processes::tests::facetime_processes_pass_the_snapshot_gate`) so
+/// manual-meeting adoption taps it and mic-follow resolves its real mic.
+#[test]
+fn facetime_daemon_is_not_an_identity_signal() {
+    let profiles = load_detection_profiles();
+    let process = AudioInputProcess {
+        audio_session_id: None,
+        audio_object_id: Some(104),
+        pid: Some(809),
+        bundle_id: Some("com.apple.avconferenced".to_string()),
+        process_name: None,
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    };
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(candidate, ResolvedMeetingCandidate::NonMeeting));
+}
+
 #[test]
 fn browser_helper_alone_is_unresolved_browser() {
     let profiles = load_detection_profiles();
@@ -374,6 +440,114 @@ fn active_tab_meeting_link_in_query_does_not_resolve() {
         &profiles
     )
     .is_none());
+}
+
+#[test]
+fn meet_code_title_shape_is_strict() {
+    // The bare meeting code is standalone meeting evidence for Little Arc, so
+    // only the exact ^[a-z]{3}-[a-z]{4}-[a-z]{3}$ shape may pass.
+    assert_eq!(
+        arc_window_title_meet_code("abc-defg-hij"),
+        Some("abc-defg-hij")
+    );
+    assert_eq!(
+        arc_window_title_meet_code("phv-jdrc-vxw"),
+        Some("phv-jdrc-vxw")
+    );
+
+    // Anything looser is rejected.
+    for title in [
+        "",
+        "abc-defg-hi",         // last group too short
+        "abc-defg-hijk",       // last group too long
+        "ab-cdefg-hij",        // first group too short
+        "ABC-DEFG-HIJ",        // uppercase
+        "abc-defg-hi1",        // digit
+        "abc_defg_hij",        // wrong separator
+        "abc-defg-hij ",       // trailing whitespace (caller trims)
+        "Meet - abc-defg-hij", // code embedded in a longer title
+        "meet.google.com",     // domain, not a code
+        "one-two-three-four",  // hyphenated slug
+        "new-doc-nov",         // 3-3-3 dashed doc name
+        "\u{0430}bc-defg-hij", // non-ASCII lookalike (Cyrillic а)
+    ] {
+        assert_eq!(arc_window_title_meet_code(title), None, "{:?}", title);
+    }
+}
+
+#[test]
+fn little_arc_meet_code_title_resolves_google_meet_candidate() {
+    // Little Arc windows expose no AXDocument and are absent from Arc's
+    // AppleScript `windows` collection; their AX title is the bare meeting
+    // code. That title must resolve to a live Google Meet candidate with the
+    // same shape as the URL probe's.
+    let profiles = load_detection_profiles();
+    let titles = vec!["Untitled".to_string(), "phv-jdrc-vxw".to_string()];
+    let candidate = little_arc_meet_candidate("Arc", &titles, &profiles)
+        .expect("meeting-code title should resolve");
+    assert_eq!(candidate.browser_app, "Arc");
+    assert_eq!(
+        platform_name_for_profile(&profiles[candidate.profile_index], true),
+        "Google Meet"
+    );
+    assert_eq!(
+        candidate.meeting_url.as_deref(),
+        Some("https://meet.google.com/phv-jdrc-vxw")
+    );
+}
+
+#[test]
+fn little_arc_candidate_is_gated_to_arc() {
+    // The bare-code heuristic is justified only by Little Arc's rendering
+    // (title == code, no other footprint); other browsers must never resolve
+    // from a title-shaped code.
+    let profiles = load_detection_profiles();
+    let titles = vec!["phv-jdrc-vxw".to_string()];
+    assert!(little_arc_meet_candidate("Google Chrome", &titles, &profiles).is_none());
+    assert!(little_arc_meet_candidate("Safari", &titles, &profiles).is_none());
+    // Arc but no code-shaped title -> nothing.
+    assert!(little_arc_meet_candidate(
+        "Arc",
+        &["Meet - planning".to_string(), "Arc".to_string()],
+        &profiles
+    )
+    .is_none());
+    assert!(little_arc_meet_candidate("Arc", &[], &profiles).is_none());
+}
+
+#[test]
+fn little_arc_candidate_starts_meeting_as_live_evidence() {
+    // End-to-end through resolve_process_candidate: the Little Arc candidate
+    // must behave exactly like a URL-probe candidate — live evidence, Google
+    // Meet platform, canonical meeting URL.
+    let profiles = load_detection_profiles();
+    let process = arc_process();
+    let titles = vec!["phv-jdrc-vxw".to_string()];
+    let ax = vec![little_arc_meet_candidate("Arc", &titles, &profiles).unwrap()];
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &ax,
+        &[],
+    );
+    match candidate {
+        ResolvedMeetingCandidate::Browser {
+            platform,
+            meeting_url,
+            browser_app,
+            live_evidence,
+            ..
+        } => {
+            assert_eq!(platform, "Google Meet");
+            assert_eq!(meeting_url, "https://meet.google.com/phv-jdrc-vxw");
+            assert_eq!(browser_app, "Arc");
+            assert!(live_evidence);
+        }
+        other => panic!("expected Browser candidate, got {:?}", other),
+    }
 }
 
 #[test]
@@ -1067,4 +1241,844 @@ fn ax_resolution_only_runs_before_a_meeting_is_active() {
         since: now,
         is_browser: true,
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Call signal gate tests (#4776) — WhatsApp/Signal/Telegram voice note phantom
+// meeting prevention.
+// ---------------------------------------------------------------------------
+
+fn whatsapp_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:500:input:built-in-mic".to_string()),
+        audio_object_id: Some(500),
+        pid: Some(99),
+        bundle_id: Some("net.whatsapp.WhatsApp".to_string()),
+        // macOS prepends U+200E LEFT-TO-RIGHT MARK to WhatsApp's localized name.
+        process_name: Some("\u{200e}WhatsApp".to_string()),
+        owner_app_name: Some("\u{200e}WhatsApp".to_string()),
+        owner_bundle_id: Some("net.whatsapp.WhatsApp".to_string()),
+        first_seen_at_ms: None,
+    }
+}
+
+/// Signal call: uses the .helper.Renderer subprocess (real WebRTC call).
+fn signal_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:115:input:BuiltInMicrophoneDevice".to_string()),
+        audio_object_id: Some(115),
+        pid: Some(63225),
+        bundle_id: Some("org.whispersystems.signal-desktop.helper.Renderer".to_string()),
+        process_name: None,
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+/// Signal voice note: uses the .helper subprocess (no .Renderer suffix).
+fn signal_voice_note_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:116:input:BuiltInMicrophoneDevice".to_string()),
+        audio_object_id: Some(116),
+        pid: Some(63247),
+        bundle_id: Some("org.whispersystems.signal-desktop.helper".to_string()),
+        process_name: None,
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+fn telegram_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:700:input:built-in-mic".to_string()),
+        audio_object_id: Some(700),
+        pid: Some(102),
+        bundle_id: Some("ru.keepcoder.Telegram".to_string()),
+        process_name: Some("Telegram".to_string()),
+        owner_app_name: Some("Telegram".to_string()),
+        owner_bundle_id: Some("ru.keepcoder.Telegram".to_string()),
+        first_seen_at_ms: None,
+    }
+}
+
+#[test]
+fn unicode_ltr_mark_stripped_from_whatsapp_identity() {
+    // macOS returns "\u{200e}WhatsApp" — verify process_identity_fields strips it.
+    let process = whatsapp_process();
+    let fields = process_identity_fields(&process);
+    assert!(
+        fields.iter().any(|f| f == "whatsapp"),
+        "Unicode LTR mark should be stripped: {fields:?}"
+    );
+    assert!(
+        !fields.iter().any(|f| f.contains('\u{200e}')),
+        "No identity field should contain U+200E: {fields:?}"
+    );
+}
+
+#[test]
+fn whatsapp_resolves_to_native_with_profile_index() {
+    // WhatsApp must fall through `known_native_bundle_platform` and match via
+    // the profile loop, which returns a profile index. Without the index,
+    // `requires_call_signal` can never be consulted.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "WhatsApp should resolve as native");
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "WhatsApp");
+    assert!(
+        profile_index.is_some(),
+        "WhatsApp must have a profile index for call signal gating"
+    );
+    let profile = &profiles[profile_index.unwrap()];
+    assert!(
+        profile.requires_call_signal,
+        "WhatsApp profile must have requires_call_signal = true"
+    );
+}
+
+#[test]
+fn signal_resolves_to_native_without_gate() {
+    let profiles = load_detection_profiles();
+    let process = signal_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "Signal should resolve as native");
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "Signal");
+    // Signal resolves via known_native_bundle_platform (no profile index)
+    // because its Electron AX tree is opaque — requires_call_signal is
+    // false and the gate is not needed.
+    assert!(
+        profile_index.is_none(),
+        "Signal should resolve via known_native_bundle_platform, not profile loop"
+    );
+}
+
+#[test]
+fn signal_voice_note_blocked_by_renderer_gate() {
+    // Signal voice notes use the .helper subprocess (no .Renderer suffix).
+    // The bundle-based gate should block them as NonMeeting.
+    let profiles = load_detection_profiles();
+    let process = signal_voice_note_process();
+    let session_key = ProcessKey::from_process(&process).unwrap();
+    let result = resolve_process_candidate(
+        session_key,
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(result, ResolvedMeetingCandidate::NonMeeting),
+        "Signal voice note (.helper) should be blocked: got {:?}",
+        result
+    );
+}
+
+#[test]
+fn signal_call_passes_renderer_gate() {
+    // Signal calls use the .helper.Renderer subprocess.
+    // The bundle-based gate should allow them as Native.
+    let profiles = load_detection_profiles();
+    let process = signal_process();
+    let session_key = ProcessKey::from_process(&process).unwrap();
+    let result = resolve_process_candidate(
+        session_key,
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(result, ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "Signal"),
+        "Signal call (.helper.Renderer) should resolve as Native Signal: got {:?}",
+        result
+    );
+}
+
+#[test]
+fn telegram_resolves_to_native_with_profile_index() {
+    let profiles = load_detection_profiles();
+    let process = telegram_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "Telegram should resolve as native");
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "Telegram");
+    assert!(
+        profile_index.is_some(),
+        "Telegram must have a profile index for call signal gating"
+    );
+    let profile = &profiles[profile_index.unwrap()];
+    assert!(
+        profile.requires_call_signal,
+        "Telegram profile must have requires_call_signal = true"
+    );
+}
+
+#[test]
+fn zoom_unaffected_by_call_signal_gate() {
+    // Call-first apps must NOT have requires_call_signal. This is a regression
+    // guard: if Zoom is accidentally flagged, every Zoom call would need AX
+    // evidence before starting.
+    let profiles = load_detection_profiles();
+    let process = zoom_process();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some());
+    let (platform, _) = result.unwrap();
+    assert_eq!(platform, "Zoom");
+    // Zoom resolves via known_native_bundle_platform (no profile index), which
+    // is fine — it should never be gated.
+}
+
+#[test]
+fn teams_unaffected_by_call_signal_gate() {
+    let profiles = load_detection_profiles();
+    let teams = AudioInputProcess {
+        audio_session_id: Some("coreaudio-process:800:input:built-in-mic".to_string()),
+        audio_object_id: Some(800),
+        pid: Some(103),
+        bundle_id: Some("com.microsoft.teams2".to_string()),
+        process_name: Some("Microsoft Teams".to_string()),
+        owner_app_name: Some("Microsoft Teams".to_string()),
+        owner_bundle_id: Some("com.microsoft.teams2".to_string()),
+        first_seen_at_ms: None,
+    };
+    let result = resolve_native_platform(&teams, &profiles);
+    assert!(result.is_some());
+    let (platform, _) = result.unwrap();
+    assert_eq!(platform, "Microsoft Teams");
+}
+
+#[test]
+fn whatsapp_without_call_signal_blocked_by_gate() {
+    // Voice note scenario: WhatsApp holds the mic but no Calling_Window is
+    // present. The candidate resolves to Native{WhatsApp} but the call signal
+    // gate should block it.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    // Without the gate (which runs in build_candidates), resolution succeeds.
+    assert!(
+        matches!(
+            candidate,
+            ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "WhatsApp"
+        ),
+        "WhatsApp should resolve to Native before the gate: {candidate:?}"
+    );
+
+    // Simulate what build_candidates does: check call_evidence with no call signals.
+    let call_evidence = vec![CallSignalEvidence {
+        platform: "whatsapp".to_string(),
+        is_in_call: false,
+        matched_signals: vec![],
+    }];
+    let mut candidates = vec![candidate];
+    candidates.retain(|c| {
+        if let ResolvedMeetingCandidate::Native { platform, .. } = c {
+            let platform_lower = platform.to_lowercase();
+            if let Some(evidence) = call_evidence.iter().find(|e| e.platform == platform_lower) {
+                return evidence.is_in_call;
+            }
+        }
+        true
+    });
+    assert!(
+        candidates.is_empty(),
+        "WhatsApp without call signals should be blocked"
+    );
+}
+
+#[test]
+fn whatsapp_with_call_signal_passes_gate() {
+    // Real call scenario: WhatsApp holds the mic AND Calling_Window is present.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(
+        candidate,
+        ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "WhatsApp"
+    ));
+
+    let call_evidence = vec![CallSignalEvidence {
+        platform: "whatsapp".to_string(),
+        is_in_call: true,
+        matched_signals: vec!["AutomationIdContains(Calling_Window)".to_string()],
+    }];
+    let mut candidates = vec![candidate];
+    candidates.retain(|c| {
+        if let ResolvedMeetingCandidate::Native { platform, .. } = c {
+            let platform_lower = platform.to_lowercase();
+            if let Some(evidence) = call_evidence.iter().find(|e| e.platform == platform_lower) {
+                return evidence.is_in_call;
+            }
+        }
+        true
+    });
+    assert_eq!(
+        candidates.len(),
+        1,
+        "WhatsApp with call signal should pass the gate"
+    );
+}
+
+#[test]
+fn zoom_not_filtered_by_call_signal_gate() {
+    // Zoom should never appear in call_evidence (requires_call_signal = false),
+    // so it must pass through the retain filter untouched.
+    let profiles = load_detection_profiles();
+    let process = zoom_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(
+        candidate,
+        ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "Zoom"
+    ));
+
+    // No call_evidence for Zoom (scan_messaging_call_signals skips it).
+    let call_evidence: Vec<CallSignalEvidence> = vec![];
+    let mut candidates = vec![candidate];
+    candidates.retain(|c| {
+        if let ResolvedMeetingCandidate::Native { platform, .. } = c {
+            let platform_lower = platform.to_lowercase();
+            if let Some(evidence) = call_evidence.iter().find(|e| e.platform == platform_lower) {
+                return evidence.is_in_call;
+            }
+        }
+        true
+    });
+    assert_eq!(
+        candidates.len(),
+        1,
+        "Zoom must not be affected by call signal gate"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #4998 review: Windows identity shape for WhatsApp/Telegram, and the Signal
+// bundle-id gate must not fail closed on Windows (where bundle_id/
+// owner_bundle_id are structurally absent, not merely non-"renderer").
+// ---------------------------------------------------------------------------
+
+/// Windows-shaped WhatsApp process: no bundle_id/owner_bundle_id (those are
+/// macOS-only fields), identity carried entirely by the `.exe` process name.
+fn whatsapp_process_windows() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("wasapi:whatsapp.exe:99".to_string()),
+        audio_object_id: None,
+        pid: Some(99),
+        bundle_id: None,
+        process_name: Some("whatsapp.exe".to_string()),
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+/// Windows-shaped Telegram process: same shape as above.
+fn telegram_process_windows() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("wasapi:telegram.exe:102".to_string()),
+        audio_object_id: None,
+        pid: Some(102),
+        bundle_id: None,
+        process_name: Some("telegram.exe".to_string()),
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+/// Windows-shaped Signal process: same shape as above (a real call — Windows
+/// has no `.helper`/`.helper.Renderer` bundle-id distinction to gate on).
+fn signal_process_windows() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: Some("wasapi:signal.exe:200".to_string()),
+        audio_object_id: None,
+        pid: Some(200),
+        bundle_id: None,
+        process_name: Some("signal.exe".to_string()),
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+#[test]
+fn whatsapp_resolves_to_native_on_windows_identity_shape() {
+    // Windows never populates bundle_id/owner_bundle_id, so identity is
+    // carried only by `process_name` = "whatsapp.exe". Before the #4998
+    // review fix, the profile-matching fallback loop only checked
+    // `macos_app_names` ("whatsapp"), which never matches "whatsapp.exe",
+    // so WhatsApp (and real WhatsApp calls, not just voice notes) could never
+    // resolve as a Native candidate on Windows at all.
+    let profiles = load_detection_profiles();
+    let process = whatsapp_process_windows();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(
+        result.is_some(),
+        "WhatsApp should resolve as native from Windows process_name alone"
+    );
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "WhatsApp");
+    assert!(
+        profile_index.is_some(),
+        "WhatsApp must still get a profile index on Windows for call signal gating"
+    );
+}
+
+#[test]
+fn telegram_resolves_to_native_on_windows_identity_shape() {
+    let profiles = load_detection_profiles();
+    let process = telegram_process_windows();
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(
+        result.is_some(),
+        "Telegram should resolve as native from Windows process_name alone"
+    );
+    let (platform, profile_index) = result.unwrap();
+    assert_eq!(platform, "Telegram");
+    assert!(
+        profile_index.is_some(),
+        "Telegram must still get a profile index on Windows for call signal gating"
+    );
+}
+
+#[test]
+fn signal_windows_call_not_blocked_by_macos_only_renderer_gate() {
+    // On Windows, bundle_id/owner_bundle_id are always None (structurally
+    // absent, not merely "not containing renderer"). Before the #4998 review
+    // fix, `unwrap_or("")` fed into `.contains("renderer")` always evaluated
+    // to false, so this gate silently blocked EVERY Signal session on
+    // Windows, including real calls. It must fail open there instead.
+    let profiles = load_detection_profiles();
+    let process = signal_process_windows();
+    let session_key = ProcessKey::from_process(&process).unwrap();
+    let result = resolve_process_candidate(
+        session_key,
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(result, ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "Signal"),
+        "Signal on Windows should resolve as Native (fail open, no bundle-id \
+         discriminator available on this platform): got {:?}",
+        result
+    );
+}
+
+#[test]
+fn native_meeting_survives_mic_switch_rekey() {
+    // Switching the mic inside the meeting app rotates its session key: macOS
+    // synthesizes the id from the device set the process records from, and
+    // Windows WASAPI sessions are per-endpoint, so a new device means a new
+    // GUID. The active meeting must NOT slide into Ending (and 20s later
+    // EndMeeting) just because the key rotated — the same native platform
+    // holding ANY mic is proof the call is ongoing.
+    let now = Instant::now();
+    let mut airpods = zoom_process();
+    airpods.audio_session_id = Some("coreaudio-process:200:input:airpods-uid".to_string());
+    let old_key = ProcessKey::from_process(&airpods).unwrap();
+
+    let mut samsung = zoom_process();
+    samsung.audio_session_id = Some("coreaudio-process:200:input:samsung-uid".to_string());
+    let new_key = ProcessKey::from_process(&samsung).unwrap();
+    assert_ne!(old_key, new_key, "fixture must model a re-keyed session");
+
+    let candidates = [ResolvedMeetingCandidate::Native {
+        platform: "Zoom".to_string(),
+        session_key: new_key.clone(),
+        first_seen_at: now,
+        process: samsung,
+    }];
+
+    let (next, action) = advance_audio_process_state(
+        AudioProcessMeetingState::Active {
+            meeting_id: 67,
+            platform: "Zoom".to_string(),
+            session_key: old_key,
+            meeting_url: None,
+            first_seen_at: now - Duration::from_secs(120),
+            last_seen_at: now - Duration::from_secs(1),
+            is_browser: false,
+        },
+        &[],
+        &candidates,
+        now,
+        Duration::from_secs(1),
+        Duration::from_secs(20),
+    );
+    assert!(action.is_none(), "expected no action, got {action:?}");
+    match next {
+        AudioProcessMeetingState::Active {
+            meeting_id: 67,
+            session_key,
+            ..
+        } => assert_eq!(
+            session_key, new_key,
+            "active state must adopt the re-keyed session so end-of-meeting \
+             suppression targets the live process"
+        ),
+        other => panic!("meeting must stay active across a mic-switch re-key, got {other:?}"),
+    }
+}
+
+#[test]
+fn ending_native_meeting_revives_on_rekeyed_session() {
+    // Same re-key mid-grace: a meeting already in Ending (e.g. the switch
+    // briefly showed no session at all) must revive when the platform's
+    // session reappears under a new key, not wait out the grace and end.
+    let now = Instant::now();
+    let mut airpods = zoom_process();
+    airpods.audio_session_id = Some("coreaudio-process:200:input:airpods-uid".to_string());
+    let old_key = ProcessKey::from_process(&airpods).unwrap();
+
+    let mut samsung = zoom_process();
+    samsung.audio_session_id = Some("coreaudio-process:200:input:samsung-uid".to_string());
+    let new_key = ProcessKey::from_process(&samsung).unwrap();
+
+    let candidates = [ResolvedMeetingCandidate::Native {
+        platform: "Zoom".to_string(),
+        session_key: new_key.clone(),
+        first_seen_at: now,
+        process: samsung,
+    }];
+
+    let (next, action) = advance_audio_process_state(
+        AudioProcessMeetingState::Ending {
+            meeting_id: 67,
+            platform: "Zoom".to_string(),
+            session_key: old_key,
+            meeting_url: None,
+            first_seen_at: now - Duration::from_secs(120),
+            since: now - Duration::from_secs(10),
+            is_browser: false,
+        },
+        &[],
+        &candidates,
+        now,
+        Duration::from_secs(1),
+        Duration::from_secs(20),
+    );
+    assert!(action.is_none(), "expected no action, got {action:?}");
+    match next {
+        AudioProcessMeetingState::Active {
+            meeting_id: 67,
+            session_key,
+            ..
+        } => assert_eq!(
+            session_key, new_key,
+            "revived state must adopt the re-keyed session so end-of-meeting \
+             suppression targets the live process"
+        ),
+        other => panic!("ending meeting must revive on a re-keyed session, got {other:?}"),
+    }
+}
+
+#[test]
+fn end_after_mic_switch_rekey_suppresses_adopted_session_key() {
+    // The suppression consequence of key adoption: after a mic switch re-keys
+    // the native session, the Active state must carry the NEW candidate key,
+    // so when the meeting ends the EndMeeting action suppresses the LIVE
+    // session. Suppressing the stale pre-switch key would be a no-op (Windows
+    // WASAPI keys are per-endpoint GUIDs, so the dead key never matches) and
+    // the process still holding the mic would instantly restart the meeting
+    // the user just stopped.
+    let now = Instant::now();
+    let mut airpods = zoom_process();
+    airpods.audio_session_id = Some("coreaudio-process:200:input:airpods-uid".to_string());
+    let old_key = ProcessKey::from_process(&airpods).unwrap();
+
+    let mut samsung = zoom_process();
+    samsung.audio_session_id = Some("coreaudio-process:200:input:samsung-uid".to_string());
+    let new_key = ProcessKey::from_process(&samsung).unwrap();
+    assert_ne!(old_key, new_key, "fixture must model a re-keyed session");
+
+    let candidates = [ResolvedMeetingCandidate::Native {
+        platform: "Zoom".to_string(),
+        session_key: new_key.clone(),
+        first_seen_at: now,
+        process: samsung.clone(),
+    }];
+
+    // Mic switch mid-meeting: the platform-only keep-alive fires and the
+    // state adopts the new key.
+    let (active, action) = advance_audio_process_state(
+        AudioProcessMeetingState::Active {
+            meeting_id: 67,
+            platform: "Zoom".to_string(),
+            session_key: old_key.clone(),
+            meeting_url: None,
+            first_seen_at: now - Duration::from_secs(120),
+            last_seen_at: now - Duration::from_secs(1),
+            is_browser: false,
+        },
+        &[],
+        &candidates,
+        now,
+        Duration::from_secs(1),
+        Duration::from_secs(20),
+    );
+    assert!(action.is_none(), "expected no action, got {action:?}");
+
+    // The call winds down: no candidates → Ending.
+    let (ending, action) = advance_audio_process_state(
+        active,
+        &[],
+        &[],
+        now + Duration::from_secs(1),
+        Duration::from_secs(1),
+        Duration::from_secs(20),
+    );
+    assert!(
+        matches!(ending, AudioProcessMeetingState::Ending { .. }),
+        "expected Ending, got {ending:?}"
+    );
+    assert!(action.is_none(), "expected no action, got {action:?}");
+
+    // Past the ending grace → EndMeeting, whose suppression must carry the
+    // ADOPTED key, not the stale pre-switch one.
+    let (_idle, action) = advance_audio_process_state(
+        ending,
+        &[],
+        &[],
+        now + Duration::from_secs(22),
+        Duration::from_secs(1),
+        Duration::from_secs(20),
+    );
+    let Some(AudioProcessStateAction::EndMeeting {
+        meeting_id: 67,
+        suppressed_session: Some(suppressed),
+    }) = action
+    else {
+        panic!("expected EndMeeting with a suppressed session, got {action:?}");
+    };
+    assert_eq!(
+        suppressed.session_key, new_key,
+        "suppression must target the adopted (live) key, not the stale pre-switch key"
+    );
+
+    // And the suppression must actually bite: the process still holding the
+    // mic under the new key is filtered out, so the just-ended meeting cannot
+    // instantly restart.
+    let mut live_candidates = vec![ResolvedMeetingCandidate::Native {
+        platform: "Zoom".to_string(),
+        session_key: new_key,
+        first_seen_at: now + Duration::from_secs(22),
+        process: samsung,
+    }];
+    filter_suppressed_candidates(&mut live_candidates, &[suppressed]);
+    assert!(
+        live_candidates.is_empty(),
+        "the live re-keyed session must stay suppressed after the meeting ends"
+    );
+}
+
+// --- Post-restart reattach: the meeting must re-acquire its process identity ---
+//
+// Regression (2026-07-07, live Google Meet in Arc): a mid-meeting capture
+// restart reattaches the meeting with a synthetic `reattached:` key and a
+// published `ActiveMeeting { pid: None }`. Nothing ever healed that identity:
+// `matching_session_key` kept the synthetic key forever, `needs_ax_resolution`
+// stopped the active-tab/AX probes the moment the state was Active, and the
+// detection loop only publishes a pid on `StartMeeting`. With `pid: None` the
+// piggyback sweep computes an empty pid set and disengages entirely — no
+// Meeting Tap, no `resolve_meeting_inputs`, so in-meeting mic switches are
+// never followed for the rest of the call.
+
+#[test]
+fn ax_resolution_keeps_running_for_reattached_meeting() {
+    // A reattached meeting has a synthetic identity: the platform is known
+    // (from the DB row) but the PROCESS isn't. Resolution must keep running
+    // until a live candidate re-attributes it — otherwise a browser meeting
+    // (evidence-starved on a static call screen) can never heal its pid.
+    let now = Instant::now();
+    assert!(
+        needs_ax_resolution(&AudioProcessMeetingState::Active {
+            meeting_id: 73,
+            platform: "Google Meet".to_string(),
+            session_key: ProcessKey::reattached("Google Meet"),
+            meeting_url: None,
+            first_seen_at: now,
+            last_seen_at: now,
+            is_browser: false,
+        }),
+        "an Active meeting with a synthetic reattached key must keep resolving"
+    );
+    assert!(
+        needs_ax_resolution(&AudioProcessMeetingState::Ending {
+            meeting_id: 73,
+            platform: "Google Meet".to_string(),
+            session_key: ProcessKey::reattached("Google Meet"),
+            meeting_url: None,
+            first_seen_at: now,
+            since: now,
+            is_browser: false,
+        }),
+        "an Ending meeting with a synthetic reattached key must keep resolving"
+    );
+}
+
+#[test]
+fn reattached_meeting_adopts_resolved_platform_session_key() {
+    // Once a live candidate RESOLVES to the reattached meeting's platform, the
+    // state must adopt that candidate's real key (mirroring the native
+    // mic-switch re-key adoption): end-of-meeting suppression then targets the
+    // live session, and the meeting stops being keyed to a synthetic string
+    // that matches any mic holder.
+    let process = chrome_process();
+    let live_key = ProcessKey::from_process(&process).unwrap();
+    let start = Instant::now();
+    let reattached = AudioProcessMeetingState::Active {
+        meeting_id: 73,
+        platform: "Google Meet".to_string(),
+        session_key: ProcessKey::reattached("Google Meet"),
+        meeting_url: None,
+        first_seen_at: start,
+        last_seen_at: start,
+        is_browser: false,
+    };
+    let resolved = ResolvedMeetingCandidate::Browser {
+        platform: "Google Meet".to_string(),
+        meeting_url: "https://meet.google.com/abc-defg-hij".to_string(),
+        browser_app: "Google Chrome".to_string(),
+        session_key: live_key.clone(),
+        first_seen_at: start,
+        process,
+        live_evidence: true,
+    };
+    let (state, action) = advance_audio_process_state(
+        reattached,
+        &[],
+        std::slice::from_ref(&resolved),
+        start + Duration::from_secs(2),
+        Duration::from_secs(1),
+        Duration::from_secs(20),
+    );
+    assert!(action.is_none(), "expected no action, got {action:?}");
+    match state {
+        AudioProcessMeetingState::Active {
+            meeting_id: 73,
+            session_key,
+            ..
+        } => assert_eq!(
+            session_key, live_key,
+            "reattached state must adopt the resolved same-platform candidate's key"
+        ),
+        other => panic!("meeting must stay active, got {other:?}"),
+    }
+}
+
+#[test]
+fn reattached_meeting_keeps_synthetic_key_when_resolution_is_other_platform() {
+    // A resolved candidate for a DIFFERENT platform (say a Zoom call in
+    // another window) must not be adopted as the reattached meeting's
+    // identity — the synthetic keep-alive stays in force instead.
+    let start = Instant::now();
+    let reattached_key = ProcessKey::reattached("Google Meet");
+    let reattached = AudioProcessMeetingState::Active {
+        meeting_id: 73,
+        platform: "Google Meet".to_string(),
+        session_key: reattached_key.clone(),
+        meeting_url: None,
+        first_seen_at: start,
+        last_seen_at: start,
+        is_browser: false,
+    };
+    let zoom = ResolvedMeetingCandidate::Native {
+        platform: "Zoom".to_string(),
+        session_key: ProcessKey::from_process(&zoom_process()).unwrap(),
+        first_seen_at: start,
+        process: zoom_process(),
+    };
+    let (state, _) = advance_audio_process_state(
+        reattached,
+        &[],
+        std::slice::from_ref(&zoom),
+        start + Duration::from_secs(2),
+        Duration::from_secs(1),
+        Duration::from_secs(20),
+    );
+    match state {
+        AudioProcessMeetingState::Active { session_key, .. } => assert_eq!(
+            session_key, reattached_key,
+            "an other-platform candidate must not hijack the meeting's identity"
+        ),
+        other => panic!("meeting must stay active on the keep-alive, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolved_platform_identity_heals_pid_from_matching_candidate() {
+    // The pure helper the detection loop uses to republish a healed
+    // `ActiveMeeting`: a live candidate resolved to the meeting's platform
+    // yields its pid + bundle id; unresolved or other-platform candidates
+    // yield nothing.
+    let start = Instant::now();
+    let process = chrome_process();
+    let candidates = vec![
+        ResolvedMeetingCandidate::UnresolvedBrowser {
+            browser_app: "Arc".to_string(),
+            session_key: ProcessKey::from_process(&arc_process()).unwrap(),
+            first_seen_at: start,
+            process: arc_process(),
+        },
+        ResolvedMeetingCandidate::Browser {
+            platform: "Google Meet".to_string(),
+            meeting_url: "https://meet.google.com/abc-defg-hij".to_string(),
+            browser_app: "Google Chrome".to_string(),
+            session_key: ProcessKey::from_process(&process).unwrap(),
+            first_seen_at: start,
+            process: process.clone(),
+            live_evidence: true,
+        },
+    ];
+    assert_eq!(
+        resolved_platform_identity(&candidates, "Google Meet"),
+        Some((42, Some("com.google.Chrome.helper".to_string()))),
+        "the matching resolved candidate's pid/bundle must be surfaced"
+    );
+    assert_eq!(
+        resolved_platform_identity(&candidates, "Zoom"),
+        None,
+        "an other-platform meeting must not adopt this candidate's pid"
+    );
+    assert_eq!(
+        resolved_platform_identity(&candidates[..1], "Google Meet"),
+        None,
+        "an unresolved browser alone must not be adopted (could be any WebRTC page)"
+    );
 }

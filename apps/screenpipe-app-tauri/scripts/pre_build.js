@@ -23,15 +23,11 @@ const winArch = platform === 'windows' ? (process.arch === 'arm64' ? 'arm64' : '
 const cwd = process.cwd()
 console.log('cwd', cwd)
 
-// Remove any stale static export before the frontend rebuilds. `next build`
-// (output: 'export') only writes ../out on success; if it fails (e.g. a type
-// error), a previously-built out/ stays on disk and tauri embeds that OLD
-// bundle — so the app "builds" but silently ships a stale UI. Clearing it here
-// (prebuild runs before `next build`) means a failed build leaves no out/ and
-// tauri fails loudly on the missing frontendDist instead. See #4645 post-mortem.
-const staleExportDir = path.join(cwd, '..', 'out')
-await fs.rm(staleExportDir, { recursive: true, force: true })
-console.log('cleared stale frontend export:', staleExportDir)
+// The stale static export is cleared by scripts/build-frontend.js, but ONLY on
+// the rebuild path — so an unchanged frontend can reuse out/ and skip
+// `next build` entirely. build-frontend.js preserves the #4645 guarantee (a
+// failed `next build` leaves no stale out/, tauri fails loudly on the missing
+// frontendDist rather than silently shipping an old UI).
 
 
 const config = {
@@ -78,6 +74,7 @@ const config = {
 		ffprobeUrlArm: 'https://www.osxexperts.net/ffprobe71arm.zip',
 		ffmpegUrlx86_64: 'https://www.osxexperts.net/ffmpeg80intel.zip',
 		ffprobeUrlx86_64: 'https://www.osxexperts.net/ffprobe71intel.zip',
+		mlxMetallibUrl: 'https://github.com/screenpipe/screenpipe/releases/download/mlx-metallib-v0.2.0/mlx.metallib',
 	},
 }
 
@@ -285,6 +282,48 @@ async function copyFile(src, dest) {
 	await fs.chmod(dest, 0o755); // ensure the binary is executable
 }
 
+async function ensureMacosMlxMetallibSidecar() {
+	const releaseTarget = process.env.SCREENPIPE_RELEASE_TARGET;
+	if (releaseTarget !== 'aarch64-apple-darwin') return;
+
+	const minSize = 1_000_000; // real metallib is ~84MB
+	const baseMetallib = path.join(cwd, 'mlx.metallib');
+	const sidecarMetallib = path.join(cwd, 'mlx.metallib-aarch64-apple-darwin');
+
+	const fileSize = async (filePath) => {
+		try {
+			return (await fs.stat(filePath)).size;
+		} catch {
+			return 0;
+		}
+	};
+
+	if ((await fileSize(sidecarMetallib)) >= minSize) {
+		if ((await fileSize(baseMetallib)) < minSize) {
+			await fs.copyFile(sidecarMetallib, baseMetallib);
+		}
+		console.log('mlx.metallib sidecar already exists for tauri externalBin.');
+		return;
+	}
+
+	if ((await fileSize(baseMetallib)) >= minSize) {
+		await fs.copyFile(baseMetallib, sidecarMetallib);
+		await fs.chmod(sidecarMetallib, 0o755);
+		console.log('copied mlx.metallib to aarch64 tauri externalBin sidecar.');
+		return;
+	}
+
+	console.log('downloading mlx.metallib for macOS aarch64 tauri externalBin...');
+	await downloadFile(config.macos.mlxMetallibUrl, sidecarMetallib, { retries: 10, timeoutMs: 900000 });
+	await fs.chmod(sidecarMetallib, 0o755);
+	await fs.copyFile(sidecarMetallib, baseMetallib);
+	const size = await fileSize(sidecarMetallib);
+	if (size < minSize) {
+		throw new Error(`downloaded mlx.metallib sidecar is too small: ${size} bytes`);
+	}
+	console.log(`mlx.metallib sidecar installed to ${sidecarMetallib}`);
+}
+
 async function linkSystemBinary(binaryName, destination) {
 	try {
 		const source = await findOnPath(binaryName);
@@ -433,6 +472,14 @@ async function verifyMacosSidecarsSelfContained() {
 	if (sidecars.length === 0) return;
 	console.log('verifying macOS sidecars are self-contained...');
 	for (const bin of sidecars) {
+		if (/^mlx\.metallib-(aarch64|x86_64)-apple-darwin$/.test(bin)) {
+			const size = (await fs.stat(bin)).size;
+			if (size < 1_000_000) {
+				throw new Error(`sidecar ${bin} is too small to be the real MLX metallib: ${size} bytes`);
+			}
+			console.log(`  ok: ${bin} (${Math.round(size / 1_000_000)} MB metallib)`);
+			continue;
+		}
 		const expectedArch = bin.endsWith('-aarch64-apple-darwin') ? 'arm64' : 'x86_64';
 		const fileOut = (await runWithTimeout(['file', bin], { label: `file ${bin}` })).trim();
 		// `file` on a fat binary lists every slice; on a thin binary, just one.
@@ -749,8 +796,14 @@ if (platform == 'windows') {
 		if (winArch === 'arm64') {
 			// Resolve download URL dynamically from GitHub API (daily autobuilds change filenames)
 			const apiUrl = `https://api.github.com/repos/${config.windows.ffmpegArm64GithubRepo}/releases/latest`
-			const releaseResp = await fetch(apiUrl)
+			const githubToken = process.env.GITHUB_TOKEN
+			const releaseResp = await fetch(apiUrl, {
+				headers: githubToken ? { Authorization: `Bearer ${githubToken}` } : {},
+			})
 			const releaseData = await releaseResp.json()
+			if (!releaseResp.ok) {
+				throw new Error(`GitHub API request failed (${releaseResp.status}) for ${apiUrl}: ${releaseData.message ?? 'unknown error'}`)
+			}
 			const asset = releaseData.assets?.find((a) => config.windows.ffmpegArm64AssetPattern.test(a.name))
 			if (!asset) throw new Error(`No matching ffmpeg ARM64 asset found in ${apiUrl}`)
 			const arm64Url = asset.browser_download_url
@@ -847,6 +900,8 @@ if (platform == 'macos') {
 		await $`rm ffprobe-x86_64.zip`;
 		await $`rm -rf ffprobe-x86_64`;
 	}
+
+	await ensureMacosMlxMetallibSidecar();
 
   console.log('FFMPEG and FFPROBE checks completed');
 	console.log('Moved and renamed ffmpeg binary for externalBin');

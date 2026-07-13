@@ -1,6 +1,6 @@
 {
   "name": "screenpipe-mcp",
-  "version": "0.18.14",
+  "version": "0.18.15",
   "mcpName": "io.github.screenpipe/screenpipe-mcp",
   "description": "MCP server for screenpipe - search your screen recordings and audio transcriptions",
   "main": "dist/index.js",
@@ -31,7 +31,8 @@
   "author": "Screenpipe",
   "license": "SEE LICENSE IN LICENSE.md",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1"
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@sentry/node": "^10.64.0"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",

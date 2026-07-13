@@ -11,10 +11,6 @@ export interface ArtifactCardDisplay {
   properties: Array<{ label: string; value: string }>;
 }
 
-function compactText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
@@ -34,13 +30,31 @@ function previewWithoutHeading(preview: string | null | undefined, heading: stri
   const index = lines.findIndex((line) => line.trim().length > 0);
   if (index === -1) return "";
   const first = lines[index].trim().replace(/^#{1,6}\s+/, "").trim();
-  if (first !== heading.trim()) return compactText(preview);
-  return compactText(
-    lines
-      .slice(0, index)
-      .concat(lines.slice(index + 1))
-      .join("\n"),
-  );
+  if (first !== heading.trim()) return preview.trim();
+  return lines
+    .slice(0, index)
+    .concat(lines.slice(index + 1))
+    .join("\n")
+    .trim();
+}
+
+/** Strip HTML tags, style/script blocks, and comments to produce a plain-text preview. */
+function stripHtmlTags(text: string): string {
+  return text
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, "")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Detect content that looks like HTML markup. */
+function looksLikeHtml(text: string | null | undefined): boolean {
+  if (!text) return false;
+  // Strip leading HTML/XML comments before checking for tags.
+  const stripped = text.replace(/^\s*(<!--[\s\S]*?-->\s*)*/g, "");
+  return /^\s*<(!doctype|html|head|body|div|p|h[1-6])\b/i.test(stripped);
 }
 
 export function getArtifactCardDisplay(artifact: UnifiedArtifact): ArtifactCardDisplay {
@@ -60,10 +74,15 @@ export function getArtifactCardDisplay(artifact: UnifiedArtifact): ArtifactCardD
     { label: "kind", value: kind },
   ];
 
+  const htmlContent =
+    artifact.kind === "html" ||
+    (artifact.kind !== "markdown" && looksLikeHtml(artifact.preview));
+  const raw = previewWithoutHeading(artifact.preview, title);
+
   return {
     title,
     subtitle: `${source} · ${kind}`,
-    summary: previewWithoutHeading(artifact.preview, title),
+    summary: htmlContent ? stripHtmlTags(raw) : raw,
     properties,
   };
 }

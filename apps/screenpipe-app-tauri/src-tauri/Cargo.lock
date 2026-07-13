@@ -425,7 +425,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=86aa0212d0b537496370ebbd65892ca70c6d2e24#86aa0212d0b537496370ebbd65892ca70c6d2e24"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
 dependencies = [
  "cc",
 ]
@@ -913,7 +913,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=86aa0212d0b537496370ebbd65892ca70c6d2e24#86aa0212d0b537496370ebbd65892ca70c6d2e24"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -2493,7 +2493,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/screenpipe/cpal.git?rev=c7a610aee5c6037c9c69dc5bf7f2a850da8d8b12#c7a610aee5c6037c9c69dc5bf7f2a850da8d8b12"
+source = "git+https://github.com/screenpipe/cpal.git?rev=e7edfa174466e87a467d1a58e3a4aec233ff8a21#e7edfa174466e87a467d1a58e3a4aec233ff8a21"
 dependencies = [
  "alsa",
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
@@ -6750,6 +6750,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "libxdo"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00333b8756a3d28e78def82067a377de7fa61b24909000aeaa2b446a948d14db"
+dependencies = [
+ "libxdo-sys",
+]
+
+[[package]]
+name = "libxdo-sys"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db23b9e7e2b7831bbd8aac0bbeeeb7b68cbebc162b227e7052e8e55829a09212"
+dependencies = [
+ "libc",
+ "x11",
+]
+
+[[package]]
 name = "linux-keyutils"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7376,13 +7395,14 @@ dependencies = [
 
 [[package]]
 name = "muda"
-version = "0.19.2"
-source = "git+https://github.com/divanshu-go/muda?rev=9dc5de53e84040a63c9a5423b669ec892de8a671#9dc5de53e84040a63c9a5423b669ec892de8a671"
+version = "0.19.3"
+source = "git+https://github.com/divanshu-go/muda?rev=327f3f8198b0ecdc3d58d7be85dfb83b2fa0d05d#327f3f8198b0ecdc3d58d7be85dfb83b2fa0d05d"
 dependencies = [
  "crossbeam-channel",
  "dpi",
  "gtk",
  "keyboard-types",
+ "libxdo",
  "objc2 0.6.4",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -7391,7 +7411,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.18",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9705,7 +9725,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=86aa0212d0b537496370ebbd65892ca70c6d2e24#86aa0212d0b537496370ebbd65892ca70c6d2e24"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
 dependencies = [
  "cc",
  "cmake",
@@ -10874,7 +10894,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=81855c0db45bde9390fc7765629ecc115b48711d#81855c0db45bde9390fc7765629ecc115b48711d"
+source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
 dependencies = [
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "image 0.25.10",
@@ -10927,7 +10947,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.95"
+version = "2.5.110"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -10963,6 +10983,7 @@ dependencies = [
  "ini",
  "lazy_static",
  "log",
+ "muda",
  "nokhwa-bindings-macos",
  "notify",
  "objc",

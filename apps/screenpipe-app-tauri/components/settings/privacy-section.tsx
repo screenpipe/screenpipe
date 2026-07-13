@@ -10,6 +10,10 @@ import type { SettingsField } from "./settings-search";
 export const searchIndex: SettingsField[] = [
   { label: "Blocklist", keywords: ["ignore", "exclude", "block"] },
   { label: "PII masking", keywords: ["mask", "redact", "columns", "url", "fields"] },
+  {
+    label: "Remote support logs",
+    keywords: ["support", "diagnostic", "troubleshooting", "remote", "logs"],
+  },
   { label: "Telemetry" },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
@@ -45,6 +49,7 @@ import { InputMonitoringPanel } from "./input-monitoring-card";
 import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
+import { RemoteSupportLogsCard } from "./remote-support-logs-card";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
@@ -1834,6 +1839,8 @@ export function PrivacySection() {
           </CardContent>
         </Card>
       </div>
+
+      <RemoteSupportLogsCard />
 
       {/* Telemetry */}
       <div className="space-y-2">

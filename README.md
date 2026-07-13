@@ -13,8 +13,8 @@
 
 
 
-<p align="center">AI that knows what you've seen, said, or heard.</p>
-<p align="center">Records everything you do, say, hear 24/7, local, private, secure</p>
+<p align="center">screenpipe remembers how you actually work</p>
+<p align="center">It captures what you see, say, and do, locally, then turns real work into searchable memory, SOPs, and automations for AI agents.</p>
 
 
 
@@ -113,12 +113,6 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 - filters (window, app, chrome extensions, passwords, proprietary AI PII model)
 - optional encryption at rest
 - works offline
-
-## sdk
-
-[tauri, electron, swift sdk available today](https://github.com/screenpipe/screenpipe/tree/main/ee/sdk)
-
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/a5b49966-b607-47cb-b0fa-e5f9aec14351" />
 
 ---
 

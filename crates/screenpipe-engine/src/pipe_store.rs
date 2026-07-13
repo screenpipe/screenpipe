@@ -106,20 +106,42 @@ impl PipeStore for SqlitePipeStore {
         Ok(())
     }
 
-    async fn get_executions(&self, pipe_name: &str, limit: i32) -> Result<Vec<PipeExecution>> {
-        let rows = sqlx::query_as::<_, PipeExecutionRow>(
-            r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
-                      started_at, finished_at, stdout, stderr, exit_code,
-                      error_type, error_message, duration_ms, session_path
-               FROM pipe_executions
-               WHERE pipe_name = ?
-               ORDER BY id DESC
-               LIMIT ?"#,
-        )
-        .bind(pipe_name)
-        .bind(limit)
-        .fetch_all(&self.db.pool)
-        .await?;
+    async fn get_executions(
+        &self,
+        pipe_name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>> {
+        let rows = if let Some(before_id) = before_id {
+            sqlx::query_as::<_, PipeExecutionRow>(
+                r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
+                          started_at, finished_at, stdout, stderr, exit_code,
+                          error_type, error_message, duration_ms, session_path
+                   FROM pipe_executions
+                   WHERE pipe_name = ? AND id < ?
+                   ORDER BY id DESC
+                   LIMIT ?"#,
+            )
+            .bind(pipe_name)
+            .bind(before_id)
+            .bind(limit)
+            .fetch_all(&self.db.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PipeExecutionRow>(
+                r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
+                          started_at, finished_at, stdout, stderr, exit_code,
+                          error_type, error_message, duration_ms, session_path
+                   FROM pipe_executions
+                   WHERE pipe_name = ?
+                   ORDER BY id DESC
+                   LIMIT ?"#,
+            )
+            .bind(pipe_name)
+            .bind(limit)
+            .fetch_all(&self.db.pool)
+            .await?
+        };
 
         Ok(rows.into_iter().map(|r| r.into()).collect())
     }
@@ -468,7 +490,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execs = store.get_executions("test-pipe", 10).await.unwrap();
+        let execs = store.get_executions("test-pipe", 10, None).await.unwrap();
         assert_eq!(execs.len(), 1);
         assert_eq!(execs[0].id, id);
         assert_eq!(execs[0].pipe_name, "test-pipe");
@@ -488,7 +510,7 @@ mod tests {
 
         store.set_execution_running(id, Some(12345)).await.unwrap();
 
-        let execs = store.get_executions("p", 10).await.unwrap();
+        let execs = store.get_executions("p", 10, None).await.unwrap();
         assert_eq!(execs[0].status, "running");
         assert_eq!(execs[0].pid, Some(12345));
     }
@@ -515,7 +537,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execs = store.get_executions("p", 10).await.unwrap();
+        let execs = store.get_executions("p", 10, None).await.unwrap();
         assert_eq!(execs[0].status, "completed");
         assert_eq!(execs[0].stdout, "hello stdout");
         assert_eq!(execs[0].exit_code, Some(0));
@@ -545,7 +567,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execs = store.get_executions("p", 10).await.unwrap();
+        let execs = store.get_executions("p", 10, None).await.unwrap();
         assert_eq!(execs[0].status, "failed");
         assert_eq!(execs[0].error_type.as_deref(), Some("rate_limited"));
         assert_eq!(
@@ -576,7 +598,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execs = store.get_executions("p", 10).await.unwrap();
+        let execs = store.get_executions("p", 10, None).await.unwrap();
         assert_eq!(execs[0].status, "timed_out");
         assert_eq!(execs[0].error_type.as_deref(), Some("timeout"));
     }
@@ -591,10 +613,32 @@ mod tests {
                 .unwrap();
         }
 
-        let execs = store.get_executions("p", 3).await.unwrap();
+        let execs = store.get_executions("p", 3, None).await.unwrap();
         assert_eq!(execs.len(), 3);
         // Should be newest first (descending by id)
         assert!(execs[0].id > execs[1].id);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_get_executions_before_id() {
+        let (store, _tmp) = setup_test_store().await;
+        for _ in 0..5 {
+            store
+                .create_execution("p", "manual", "m", None)
+                .await
+                .unwrap();
+        }
+
+        let first_page = store.get_executions("p", 2, None).await.unwrap();
+        assert_eq!(first_page.len(), 2);
+
+        let second_page = store
+            .get_executions("p", 2, Some(first_page[1].id))
+            .await
+            .unwrap();
+        assert_eq!(second_page.len(), 2);
+        assert!(second_page.iter().all(|exec| exec.id < first_page[1].id));
+        assert!(second_page[0].id > second_page[1].id);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -613,8 +657,8 @@ mod tests {
             .await
             .unwrap();
 
-        let execs_a = store.get_executions("pipe-a", 10).await.unwrap();
-        let execs_b = store.get_executions("pipe-b", 10).await.unwrap();
+        let execs_a = store.get_executions("pipe-a", 10, None).await.unwrap();
+        let execs_b = store.get_executions("pipe-b", 10, None).await.unwrap();
         assert_eq!(execs_a.len(), 2);
         assert_eq!(execs_b.len(), 1);
     }
@@ -653,15 +697,15 @@ mod tests {
         let _count = store.mark_orphaned_running().await.unwrap();
 
         // Verify states
-        let execs = store.get_executions("p1", 10).await.unwrap();
+        let execs = store.get_executions("p1", 10, None).await.unwrap();
         assert_eq!(execs[0].status, "failed");
         assert_eq!(execs[0].error_type.as_deref(), Some("interrupted"));
 
-        let execs = store.get_executions("p2", 10).await.unwrap();
+        let execs = store.get_executions("p2", 10, None).await.unwrap();
         assert_eq!(execs[0].status, "failed");
 
         // p3 should be unaffected
-        let execs = store.get_executions("p3", 10).await.unwrap();
+        let execs = store.get_executions("p3", 10, None).await.unwrap();
         assert_eq!(execs[0].status, "completed");
     }
 
@@ -755,10 +799,10 @@ mod tests {
         // by checking the remaining execution counts below.
         let _deleted = store.cleanup_old_executions(2).await.unwrap();
 
-        let execs_a = store.get_executions("pipe-a", 10).await.unwrap();
+        let execs_a = store.get_executions("pipe-a", 10, None).await.unwrap();
         assert_eq!(execs_a.len(), 2);
 
-        let execs_b = store.get_executions("pipe-b", 10).await.unwrap();
+        let execs_b = store.get_executions("pipe-b", 10, None).await.unwrap();
         assert_eq!(execs_b.len(), 2);
     }
 
@@ -773,7 +817,7 @@ mod tests {
         let deleted = store.cleanup_old_executions(50).await.unwrap();
         assert_eq!(deleted, 0);
 
-        let execs = store.get_executions("pipe-a", 10).await.unwrap();
+        let execs = store.get_executions("pipe-a", 10, None).await.unwrap();
         assert_eq!(execs.len(), 1);
     }
 
@@ -792,13 +836,19 @@ mod tests {
             .await
             .unwrap();
 
-        let execs = store.get_executions("lifecycle-pipe", 10).await.unwrap();
+        let execs = store
+            .get_executions("lifecycle-pipe", 10, None)
+            .await
+            .unwrap();
         assert_eq!(execs[0].status, "queued");
 
         // 2. Running with PID
         store.set_execution_running(id, Some(42)).await.unwrap();
 
-        let execs = store.get_executions("lifecycle-pipe", 10).await.unwrap();
+        let execs = store
+            .get_executions("lifecycle-pipe", 10, None)
+            .await
+            .unwrap();
         assert_eq!(execs[0].status, "running");
         assert_eq!(execs[0].pid, Some(42));
 
@@ -817,7 +867,10 @@ mod tests {
             .await
             .unwrap();
 
-        let execs = store.get_executions("lifecycle-pipe", 10).await.unwrap();
+        let execs = store
+            .get_executions("lifecycle-pipe", 10, None)
+            .await
+            .unwrap();
         assert_eq!(execs[0].status, "completed");
         assert_eq!(execs[0].stdout, "result output");
         assert!(execs[0].duration_ms.unwrap() >= 0);

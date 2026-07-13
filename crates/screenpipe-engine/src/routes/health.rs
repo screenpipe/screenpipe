@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
 use screenpipe_audio::audio_manager::builder::TranscriptionMode;
@@ -30,6 +30,9 @@ use crate::ui_recorder::{
 /// times per second. The response only changes meaningfully every ~1s.
 static HEALTH_CACHE: std::sync::LazyLock<RwLock<(u64, Option<HealthCheckResponse>)>> =
     std::sync::LazyLock::new(|| RwLock::new((0, None)));
+/// Single-flight gate for full health recomputation. Cache misses crossing the
+/// same one-second boundary must not all run the DB-backed backlog query.
+static HEALTH_REFRESH: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
 type AudioReconciliationBacklogCache = (i64, Option<(u64, Option<DateTime<Utc>>)>);
 static AUDIO_RECONCILIATION_BACKLOG_CACHE: std::sync::LazyLock<
     RwLock<AudioReconciliationBacklogCache>,
@@ -41,16 +44,38 @@ const AUDIO_RECONCILIATION_LOOKBACK_HOURS: i64 = 24 * 7;
 const AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS: i64 = 10 * 60;
 const AUDIO_RECONCILIATION_BACKLOG_CACHE_TTL_SECS: i64 = 30;
 
+/// How long the transcription pipeline may go without landing a single
+/// successful write before a deep+old backlog counts as a real stall.
+///
+/// Batch mode intentionally parks audio during a live session, then drains it
+/// with a reconciliation sweep that runs every 120s (see the sweep loop in
+/// `audio_manager::manager`). During that normal post-meeting catch-up the
+/// sweep writes a row per chunk, so `last_db_write_ts` advances at least once
+/// per sweep. This threshold must therefore sit comfortably above one sweep
+/// interval so a healthy-but-catching-up queue never trips the alarm; only a
+/// genuinely wedged sweep (or an engine that is up but writing nothing) goes
+/// this long with zero progress.
+const AUDIO_TRANSCRIPTION_NO_PROGRESS_SECS: u64 = 5 * 60;
+
 /// Decide whether the audio transcription backlog should be flagged as a real
-/// stall. Real stall = the reconciliation worker has fallen behind. A "stall"
-/// is intentionally NOT flagged when batch mode is parking the queue while a
-/// live audio session owns the engine — that's expected, not broken.
+/// stall. Real stall = the reconciliation worker has fallen behind AND is not
+/// making progress. Two things are intentionally NOT flagged:
+///
+/// 1. Batch mode parking the queue while a live audio session owns the engine
+///    (`intentionally_deferring`) — expected, not broken.
+/// 2. Normal post-meeting catch-up, where a deep backlog exists but the sweep
+///    is actively draining it (`last_db_write_ts` is fresh). The meeting flag
+///    flips off the instant a call ends, well before the several-minute drain
+///    completes, so a purely state-based check (old backlog + no live meeting)
+///    false-fires a 503 after every meeting. Gating on *progress* is what
+///    distinguishes "catching up" from "stuck".
 ///
 /// Returning `false` here is what makes the difference between the user
-/// seeing a calm "ok" response and a misleading 503/degraded mid-meeting.
+/// seeing a calm "ok" response and a misleading 503/degraded after a meeting.
 fn audio_backlog_is_stalled(
     pending_count: u64,
     oldest_pending_age_secs: u64,
+    transcription_progress_age_secs: u64,
     intentionally_deferring: bool,
 ) -> bool {
     if intentionally_deferring {
@@ -61,9 +86,14 @@ fn audio_backlog_is_stalled(
     // only when there's a real backlog AND the oldest chunk has been waiting
     // noticeably longer than the freshness delay (>2x = should have been
     // picked up by the last sweep).
-    pending_count > 20
+    let backlog_deep_and_old = pending_count > 20
         && oldest_pending_age_secs
-            > (AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS as u64).saturating_mul(2)
+            > (AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS as u64).saturating_mul(2);
+    // ...AND the pipeline is not draining it. During normal catch-up the sweep
+    // lands a write every <=120s, keeping this age small; a wedged sweep or a
+    // silently-not-writing engine lets it grow past the no-progress window.
+    let no_recent_progress = transcription_progress_age_secs > AUDIO_TRANSCRIPTION_NO_PROGRESS_SECS;
+    backlog_deep_and_old && no_recent_progress
 }
 
 /// Describe the most likely cause of a DB-write stall from pool stats.
@@ -262,12 +292,15 @@ pub struct HealthCheckResponse {
     pub recording_coverage: Option<CoverageSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_stats: Option<PoolHealthInfo>,
-    /// True once the write queue has flagged the disk-I/O wedge as degraded.
+    /// True once the write queue has flagged a failed write path as degraded.
     #[serde(default)]
     pub write_queue_degraded: bool,
     /// Consecutive fatal write batches right now (0 when the write path is healthy).
     #[serde(default)]
     pub write_queue_consecutive_fatal: u64,
+    /// Consecutive batches that exceeded the SQLite lock retry budget.
+    #[serde(default)]
+    pub write_queue_consecutive_contention: u64,
     /// How many times the write pool was reopened in-process to clear poisoned connections.
     #[serde(default)]
     pub write_pool_reopens: u64,
@@ -422,50 +455,104 @@ pub struct AudioPipelineHealthInfo {
 /// killed by a watchdog).
 const HEALTH_RESPONSE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
-#[oasgen]
-pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<HealthCheckResponse> {
-    let now_ts = std::time::SystemTime::now()
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+        .unwrap_or_default()
+        .as_secs()
+}
 
-    // Return cached response if still fresh. This prevents thundering-herd
-    // scenarios where dozens of WebSocket clients + HTTP polls recompute the
-    // full health response simultaneously.
+async fn cached_health_or_refresh<F, Fut>(
+    cache: &RwLock<(u64, Option<HealthCheckResponse>)>,
+    refresh: &Mutex<()>,
+    ttl_secs: u64,
+    compute: F,
+) -> HealthCheckResponse
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<HealthCheckResponse>>,
+{
+    let now = unix_now_secs();
     {
-        let cache = HEALTH_CACHE.read().await;
-        if now_ts.saturating_sub(cache.0) < HEALTH_CACHE_TTL_SECS {
-            if let Some(ref cached) = cache.1 {
-                return JsonResponse(cached.clone());
+        let cached = cache.read().await;
+        if now.saturating_sub(cached.0) < ttl_secs {
+            if let Some(response) = cached.1.as_ref() {
+                return response.clone();
             }
         }
     }
 
-    let response = match tokio::time::timeout(HEALTH_RESPONSE_BUDGET, health_check_inner(&state))
-        .await
-    {
-        Ok(r) => r,
+    // Prefer stale-while-refresh over queuing every tray/WebSocket/HTTP poll
+    // behind a potentially two-second health computation. Cold start has no
+    // stale value, so those callers wait for the single refresh to finish.
+    let _refresh_guard = match refresh.try_lock() {
+        Ok(guard) => guard,
         Err(_) => {
-            // Inner computation exceeded the budget. Serve the last cached
-            // snapshot (even if past TTL) so callers see continuity. If no
-            // snapshot exists yet, return a minimal "degraded" response —
-            // never block forever.
-            warn!(
-                "health_check: inner computation exceeded {:?} budget — serving last cached snapshot",
-                HEALTH_RESPONSE_BUDGET
-            );
-            let cached = HEALTH_CACHE.read().await.1.clone();
-            // Don't refresh the cache timestamp here — the next caller
-            // should re-attempt rather than amortize the stale entry.
-            return JsonResponse(cached.unwrap_or_else(degraded_response));
+            {
+                let cached = cache.read().await;
+                if let Some(response) = cached.1.as_ref() {
+                    return response.clone();
+                }
+            }
+            refresh.lock().await
         }
     };
 
-    // Cache the result
+    // Another cold-start caller may have populated the cache while this one
+    // waited for the refresh gate.
+    let now = unix_now_secs();
     {
-        let mut cache = HEALTH_CACHE.write().await;
-        *cache = (now_ts, Some(response.clone()));
+        let cached = cache.read().await;
+        if now.saturating_sub(cached.0) < ttl_secs {
+            if let Some(response) = cached.1.as_ref() {
+                return response.clone();
+            }
+        }
     }
+
+    let response = match compute().await {
+        Some(response) => response,
+        None => cache
+            .read()
+            .await
+            .1
+            .clone()
+            .unwrap_or_else(degraded_response),
+    };
+
+    // Publish timeout results too. Without this, a cold-cache burst queues on
+    // the refresh mutex and every waiter performs its own full two-second
+    // computation after the first timeout. The normal one-second TTL makes
+    // this a short backoff, while all callers in the same burst share one
+    // bounded attempt (or the same stale snapshot).
+    let mut cached = cache.write().await;
+    *cached = (unix_now_secs(), Some(response.clone()));
+    response
+}
+
+#[oasgen]
+pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<HealthCheckResponse> {
+    let response = cached_health_or_refresh(
+        &HEALTH_CACHE,
+        &HEALTH_REFRESH,
+        HEALTH_CACHE_TTL_SECS,
+        || async {
+            match tokio::time::timeout(HEALTH_RESPONSE_BUDGET, health_check_inner(&state)).await {
+                Ok(response) => Some(response),
+                Err(_) => {
+                    // The shared refresh helper publishes this failed attempt
+                    // for one short TTL so cold-cache peers do not serialize
+                    // another full computation each.
+                    warn!(
+                        "health_check: inner computation exceeded {:?} budget — serving last cached snapshot",
+                        HEALTH_RESPONSE_BUDGET
+                    );
+                    None
+                }
+            }
+        },
+    )
+    .await;
 
     JsonResponse(response)
 }
@@ -502,6 +589,7 @@ fn degraded_response() -> HealthCheckResponse {
         pool_stats: None,
         write_queue_degraded: false,
         write_queue_consecutive_fatal: 0,
+        write_queue_consecutive_contention: 0,
         write_pool_reopens: 0,
         persistent_failure_signals: 0,
         vision_db_write_stalled: false,
@@ -800,19 +888,30 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         // behavior, not a real stall.
         //
         // A real stall now means: the reconciliation worker has pending
-        // chunks older than the freshness window — i.e. they should have
-        // been processed by now and haven't. The `intentionally_deferring`
-        // gate (handled by audio_backlog_is_stalled) prevents the same
-        // false-positive class during a live audio session.
+        // chunks older than the freshness window AND isn't draining them. The
+        // `intentionally_deferring` gate (handled by audio_backlog_is_stalled)
+        // suppresses the false positive during a live audio session, and the
+        // progress-age gate suppresses it during normal post-meeting catch-up
+        // (a deep backlog that the sweep is actively working through).
         let backlog = audio_reconciliation_backlog.unwrap_or((0, None));
         let pending_count = backlog.0;
         let oldest_pending_age_secs = backlog
             .1
             .map(|ts| (now.timestamp() - ts.timestamp()).max(0) as u64)
             .unwrap_or(0);
+        // Seconds since the last successful transcription write (live or
+        // reconciliation — both call `record_db_insert`). `last_db_write_ts==0`
+        // means nothing has ever landed, which with a deep old backlog is a
+        // genuine stall, so treat "never" as maximally stale.
+        let transcription_progress_age_secs = if audio_snap.last_db_write_ts == 0 {
+            u64::MAX
+        } else {
+            now_ts.saturating_sub(audio_snap.last_db_write_ts)
+        };
         let stalled = audio_backlog_is_stalled(
             pending_count,
             oldest_pending_age_secs,
+            transcription_progress_age_secs,
             intentionally_deferring,
         );
         if stalled {
@@ -821,12 +920,14 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             let prev = LAST_AUDIO_STALL_LOG.load(Ordering::Relaxed);
             if now_ts.saturating_sub(prev) >= 60 {
                 LAST_AUDIO_STALL_LOG.store(now_ts, Ordering::Relaxed);
-                let (rs, ri, ws, wi) = state.db.pool_stats();
+                // Report the transcription-progress age (the signal this stall
+                // is actually based on), NOT the SQLite pool stats — the pool is
+                // unrelated to the reconciliation sweep and only misleads triage.
                 warn!(
-                    "health_check: audio transcription backlog stalled — {} chunk(s) pending, oldest {}s old | pool: read={}/{} idle, write={}/{} idle",
+                    "health_check: audio transcription backlog stalled — {} chunk(s) pending, oldest {}s old, no successful transcription in {}s (reconciliation sweep not draining the queue)",
                     pending_count,
                     oldest_pending_age_secs,
-                    ri, rs, wi, ws,
+                    transcription_progress_age_secs,
                 );
             }
         }
@@ -988,24 +1089,26 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     // Audio degradation: chunks_channel_full > 0 means the Whisper consumer
     // couldn't keep up and audio was dropped even after a 30s backpressure wait.
-    // A reconciliation backlog means audio exists but transcript has not landed
-    // yet, which should be visible instead of reported as healthy — *unless*
-    // the backlog is the expected result of batch mode deferring during a
-    // live session, in which case it's not a problem to surface.
+    //
+    // A pending reconciliation backlog on its own does NOT mean degraded: batch
+    // mode builds a backlog during every meeting and drains it over the next few
+    // minutes, and the meeting flag clears the instant a call ends (before the
+    // drain finishes). Flagging any non-empty backlog therefore 503'd after
+    // every meeting. `audio_db_write_stalled` already captures the genuine case
+    // — deep + old + not draining — so a healthy catch-up stays 200 and only a
+    // truly stuck queue is surfaced as degraded.
     let audio_degraded = if !state.audio_disabled
         && !transcription_engine_disabled
         && audio_snap.uptime_secs > 120.0
     {
         let channel_full = audio_snap.chunks_channel_full > 0;
-        let transcription_backlog =
-            pending_transcription_segments.is_some() && !intentionally_deferring;
         if channel_full {
             warn!(
                 "health_check: {} audio chunk(s) dropped (transcription engine too slow)",
                 audio_snap.chunks_channel_full
             );
         }
-        channel_full || audio_db_write_stalled || transcription_backlog
+        channel_full || audio_db_write_stalled
     } else {
         false
     };
@@ -1290,6 +1393,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         },
         write_queue_degraded: wqh.is_degraded(),
         write_queue_consecutive_fatal: wqh.consecutive_fatal_batches(),
+        write_queue_consecutive_contention: wqh.consecutive_contention_batches(),
         write_pool_reopens: wqh.write_pool_reopens(),
         persistent_failure_signals: wqh.persistent_failure_signals(),
         vision_db_write_stalled,
@@ -1489,6 +1593,7 @@ mod tests {
             pool_stats: None,
             write_queue_degraded: false,
             write_queue_consecutive_fatal: 0,
+            write_queue_consecutive_contention: 0,
             write_pool_reopens: 0,
             persistent_failure_signals: 0,
             vision_db_write_stalled: false,
@@ -1576,6 +1681,100 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_stale_health_requests_share_one_refresh() {
+        const CALLERS: usize = 24;
+        let cache = Arc::new(RwLock::new((0, None)));
+        let refresh = Arc::new(Mutex::new(()));
+        let barrier = Arc::new(tokio::sync::Barrier::new(CALLERS));
+        let computes = Arc::new(AtomicU64::new(0));
+        let mut tasks = Vec::with_capacity(CALLERS);
+
+        for _ in 0..CALLERS {
+            let cache = cache.clone();
+            let refresh = refresh.clone();
+            let barrier = barrier.clone();
+            let computes = computes.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                cached_health_or_refresh(&cache, &refresh, 60, || async move {
+                    computes.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    Some(dummy_response("healthy"))
+                })
+                .await
+            }));
+        }
+
+        for task in tasks {
+            assert_eq!(task.await.unwrap().status, "healthy");
+        }
+        assert_eq!(
+            computes.load(Ordering::SeqCst),
+            1,
+            "a stale-cache burst must perform exactly one full health refresh"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_cold_timeout_is_published_to_all_waiters() {
+        const CALLERS: usize = 24;
+        let cache = Arc::new(RwLock::new((0, None)));
+        let refresh = Arc::new(Mutex::new(()));
+        let barrier = Arc::new(tokio::sync::Barrier::new(CALLERS));
+        let computes = Arc::new(AtomicU64::new(0));
+        let mut tasks = Vec::with_capacity(CALLERS);
+
+        for _ in 0..CALLERS {
+            let cache = cache.clone();
+            let refresh = refresh.clone();
+            let barrier = barrier.clone();
+            let computes = computes.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                cached_health_or_refresh(&cache, &refresh, 60, || async move {
+                    computes.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    None
+                })
+                .await
+            }));
+        }
+
+        for task in tasks {
+            let response = task.await.unwrap();
+            assert_eq!(response.status, "degraded");
+            assert_eq!(response.status_code, 503);
+        }
+        assert_eq!(
+            computes.load(Ordering::SeqCst),
+            1,
+            "a cold timeout burst must share one bounded refresh attempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_refresh_serves_an_existing_stale_snapshot() {
+        let cache = RwLock::new((0, Some(dummy_response("stale"))));
+        let refresh = Mutex::new(());
+        let in_flight = refresh.lock().await;
+        let computes = AtomicU64::new(0);
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            cached_health_or_refresh(&cache, &refresh, 60, || async {
+                computes.fetch_add(1, Ordering::SeqCst);
+                Some(dummy_response("unexpected"))
+            }),
+        )
+        .await
+        .expect("stale-while-refresh must not queue behind the active refresh");
+
+        assert_eq!(response.status, "stale");
+        assert_eq!(computes.load(Ordering::SeqCst), 0);
+        drop(in_flight);
+    }
+
     #[test]
     fn health_response_is_cloneable() {
         let resp = dummy_response("healthy");
@@ -1588,21 +1787,45 @@ mod tests {
     fn audio_backlog_stall_gate() {
         let freshness = AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS as u64;
         let way_past = freshness * 3;
+        let no_progress = AUDIO_TRANSCRIPTION_NO_PROGRESS_SECS + 60; // past the window
+        let progressing = 30; // a write landed 30s ago — sweep is draining
 
-        // Real stall: big backlog, old, no live session — must flag.
-        assert!(audio_backlog_is_stalled(200, way_past, false));
+        // Real stall: big backlog, old, no live session, and NOT draining
+        // (no successful transcription for longer than the no-progress window).
+        assert!(audio_backlog_is_stalled(200, way_past, no_progress, false));
 
-        // Same numbers but live session in flight — must NOT flag.
+        // Same deep+old backlog but the sweep IS draining it (fresh write) —
+        // this is normal post-meeting catch-up, must NOT flag. This is the
+        // regression this fix targets: the meeting flag clears the instant a
+        // call ends, so the old state-based check 503'd during every drain.
+        assert!(!audio_backlog_is_stalled(200, way_past, progressing, false));
+
+        // Deep+old+not-draining but a live session is in flight — must NOT flag.
         // (Mid-meeting false-positive: batch mode parks the queue while live
-        //  transcription owns the engine, and the old check misread that as
-        //  a broken pipeline.)
-        assert!(!audio_backlog_is_stalled(200, way_past, true));
+        //  transcription owns the engine.)
+        assert!(!audio_backlog_is_stalled(200, way_past, no_progress, true));
 
-        // Small backlog within the freshness window — never a stall.
-        assert!(!audio_backlog_is_stalled(5, freshness / 2, false));
+        // Small backlog within the freshness window — never a stall, even if no
+        // recent write (10 min of in-flight audio is expected).
+        assert!(!audio_backlog_is_stalled(
+            5,
+            freshness / 2,
+            no_progress,
+            false
+        ));
 
         // Big count but young enough — not a stall yet.
-        assert!(!audio_backlog_is_stalled(200, freshness, false));
+        assert!(!audio_backlog_is_stalled(
+            200,
+            freshness,
+            no_progress,
+            false
+        ));
+
+        // Never-written engine (last_db_write_ts == 0 → u64::MAX age) with a
+        // deep old backlog IS a genuine stall (e.g. engine came up but writes
+        // nothing).
+        assert!(audio_backlog_is_stalled(200, way_past, u64::MAX, false));
     }
 
     /// Healthy, actively-capturing mic with no recent timeout, varying only the

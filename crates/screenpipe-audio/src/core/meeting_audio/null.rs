@@ -11,10 +11,7 @@
 //! This module covers the non-macOS case; the < 14.4 macOS case degrades the
 //! same way (empty results → caller uses the system default).
 //
-// TODO(meeting-piggyback): the wiring follow-up must gate the experimental flag
-// on availability — don't enable per-process capture when it's unsupported;
-// fall back to the stable path and tell the user. See the matching TODO on
-// `process_tap::is_process_tap_available`.
+// Availability gating + stable-path fallback live in audio_manager/meeting_piggyback.rs (decide_piggyback).
 
 use super::ProcessAudioActivity;
 use crate::core::device::AudioDevice;

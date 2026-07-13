@@ -95,14 +95,30 @@ function CursorIcon({ className = "w-5 h-5" }: { className?: string }) {
  * `components/settings/connections-section.tsx` — both code paths must
  * write identical configs.
  */
-async function buildMcpConfig(): Promise<{ command: string; args: string[] }> {
+async function buildMcpConfig(): Promise<{ command: string; args: string[]; env?: Record<string, string> }> {
+  // Inject the local API key so the spawned MCP hits its fast env-var path
+  // instead of falling into the slow subprocess key-discovery ladder (bundled
+  // bun / npx / sqlite), which on a cold cache can stall Claude Desktop's MCP
+  // startup and produce "Could not attach to MCP server screenpipe". This MUST
+  // match the settings helper — see connections-section.tsx::buildMcpConfig.
+  const apiKey = await (commands.getLocalApiConfig() as Promise<{ key: string | null }>)
+    .then(r => r.key ?? undefined)
+    .catch(() => undefined);
+  const env: Record<string, string> | undefined = apiKey
+    ? { SCREENPIPE_LOCAL_API_KEY: apiKey }
+    : undefined;
+
   try {
     const res = await commands.bunCheck();
     if (res.status === "ok" && res.data.available && res.data.path) {
-      return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"] };
+      return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"], env };
     }
   } catch { /* fall through to npx */ }
-  return { command: "npx", args: ["-y", "screenpipe-mcp@latest"] };
+  // Unintended fallback: the app should always ship a bundled `bun`. Reaching
+  // here means it couldn't be resolved, and the npx config needs Node (which
+  // many users lack). Don't fail silently.
+  console.warn("[mcp] bundled bun not found — falling back to npx (requires Node). MCP setup may not work without Node installed.");
+  return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
 }
 
 async function readMcpConfig(configPath: string): Promise<Record<string, unknown>> {

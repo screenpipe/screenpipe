@@ -5,7 +5,7 @@
 "use client";
 
 import React from "react";
-import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Phone, Pause } from "lucide-react";
+import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Phone, Pause, Play } from "lucide-react";
 import posthog from "posthog-js";
 import {
   Popover,
@@ -39,6 +39,11 @@ interface RecordingStatusProps {
   meetingLoading: boolean;
   onToggleMeeting: () => void;
   onPauseRecording?: () => void | Promise<void>;
+  onResumeRecording?: () => void | Promise<void>;
+  /** true when the capture session itself is stopped (global pause via
+   * stop_capture). false when the session is alive but individual devices
+   * may have user_disabled set. */
+  isGloballyPaused?: boolean;
   isTranslucent?: boolean;
   /** buttons float over full-bleed video (timeline, sidebar collapsed) */
   floatingOverMedia?: boolean;
@@ -68,6 +73,8 @@ export function RecordingStatus({
   meetingLoading,
   onToggleMeeting,
   onPauseRecording,
+  onResumeRecording,
+  isGloballyPaused,
   isTranslucent,
   floatingOverMedia,
 }: RecordingStatusProps) {
@@ -129,11 +136,28 @@ export function RecordingStatus({
     }
   };
 
-  const pauseRecording = async () => {
-    if (!onPauseRecording || pauseLoading) return;
+  const allPaused = devices.length > 0 && !canPauseRecording;
+
+  const toggleAllRecording = async () => {
+    if (pauseLoading) return;
     setPauseLoading(true);
     try {
-      await onPauseRecording();
+      if (allPaused) {
+        if (!isGloballyPaused) {
+          // Capture session is still alive — devices were paused individually.
+          // Resume each one via per-device endpoints since start_capture()
+          // would return early (session already exists).
+          await Promise.all(
+            devices.filter((d) => !d.active).map((d) => toggleDevice(d))
+          );
+        } else if (onResumeRecording) {
+          // Capture session was torn down (global pause) — need the full
+          // start_capture() path to recreate it.
+          await onResumeRecording();
+        }
+      } else if (canPauseRecording && onPauseRecording) {
+        await onPauseRecording();
+      }
       setOpen(false);
     } finally {
       setPauseLoading(false);
@@ -204,22 +228,24 @@ export function RecordingStatus({
         <div className="px-3 py-2 border-b border-border">
           <span className="text-xs font-medium text-foreground">{label}</span>
         </div>
-        {onPauseRecording && (
+        {(onPauseRecording || onResumeRecording) && (
           <div className="px-3 py-2 border-b border-border">
             <button
               type="button"
-              onClick={() => void pauseRecording()}
-              disabled={!canPauseRecording || pauseLoading}
+              onClick={() => void toggleAllRecording()}
+              disabled={pauseLoading || (allPaused ? (isGloballyPaused && !onResumeRecording) : !onPauseRecording)}
               data-testid="recording-status-pause-all"
-              title="pause all screen and audio recording — resume anytime"
+              title={allPaused ? "resume all recording" : "pause all screen and audio recording — resume anytime"}
               className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-[11px] font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <Pause aria-hidden="true" className="h-3 w-3 fill-current" />
+              {allPaused
+                ? <Play aria-hidden="true" className="h-3 w-3 fill-current" />
+                : <Pause aria-hidden="true" className="h-3 w-3 fill-current" />}
               {pauseLoading
-                ? "pausing…"
-                : canPauseRecording
-                  ? "pause all recording"
-                  : "all recording paused"}
+                ? allPaused ? "resuming…" : "pausing…"
+                : allPaused
+                  ? "resume all recording"
+                  : "pause all recording"}
             </button>
           </div>
         )}

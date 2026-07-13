@@ -143,14 +143,24 @@ jobs:
               if not event:
                   return "stack=unavailable"
               for entry in event.get("entries", []):
-                  if entry.get("type") != "exception":
+                  if not isinstance(entry, dict) or entry.get("type") != "exception":
                       continue
-                  values = entry.get("data", {}).get("values", [])
+                  data = entry.get("data") or {}
+                  if not isinstance(data, dict):
+                      continue
+                  values = data.get("values") or []
                   for value in reversed(values):
-                      frames = value.get("stacktrace", {}).get("frames", [])
+                      if not isinstance(value, dict):
+                          continue
+                      stacktrace = value.get("stacktrace") or {}
+                      if not isinstance(stacktrace, dict):
+                          continue
+                      frames = stacktrace.get("frames") or []
                       if not frames:
                           continue
                       frame = frames[-1]
+                      if not isinstance(frame, dict):
+                          continue
                       function = frame.get("function") or "<unknown>"
                       filename = frame.get("filename") or frame.get("absPath") or "<unknown>"
                       lineno = frame.get("lineno")

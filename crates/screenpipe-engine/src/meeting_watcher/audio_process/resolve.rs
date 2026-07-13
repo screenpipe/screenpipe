@@ -44,11 +44,40 @@ pub(crate) async fn resolve_tracked_candidates(
 /// meeting platform. Once a meeting is `Active` — or already winding down in
 /// `Ending` — the platform is settled, so re-walking the tree every
 /// `ACTIVE_POLL_INTERVAL` for the rest of the call is pure overhead.
+///
+/// EXCEPTION: a meeting reattached after a capture restart carries a synthetic
+/// `reattached:` key and a published `ActiveMeeting { pid: None }` — the
+/// platform is settled but the PROCESS identity isn't, and the piggyback
+/// sweep (per-process tap + mic-follow) stays disengaged until it heals. A
+/// browser meeting on a static call screen produces no fresh frame evidence,
+/// so the active-tab probe / AX sweep is the only thing that can re-attribute
+/// it. Keep resolving until the state adopts a real key (see the reattached
+/// branch of `matching_session_key`); the extra per-poll cost is exactly the
+/// pre-meeting cost and stops as soon as the identity heals.
 pub(crate) fn needs_ax_resolution(state: &AudioProcessMeetingState) -> bool {
-    !matches!(
-        state,
-        AudioProcessMeetingState::Active { .. } | AudioProcessMeetingState::Ending { .. }
-    )
+    match state {
+        AudioProcessMeetingState::Active { session_key, .. }
+        | AudioProcessMeetingState::Ending { session_key, .. } => session_key.is_reattached(),
+        _ => true,
+    }
+}
+
+/// Live process identity for the given platform, from this tick's resolved
+/// candidates. The detection loop uses this to heal a pid-less published
+/// `ActiveMeeting` (post-restart reattach) so the piggyback sweep re-engages:
+/// only a candidate RESOLVED to the meeting's own platform counts — an
+/// unresolved browser merely holding the mic could be any WebRTC page, and
+/// tapping the wrong process would replace the stable capture with the wrong
+/// app's audio.
+pub(crate) fn resolved_platform_identity(
+    candidates: &[ResolvedMeetingCandidate],
+    platform: &str,
+) -> Option<(i32, Option<String>)> {
+    candidates
+        .iter()
+        .filter_map(ResolvedMeetingCandidate::resolved_session)
+        .find(|session| session.platform == platform && session.pid.is_some())
+        .and_then(|session| session.pid.map(|pid| (pid, session.bundle_id)))
 }
 
 pub(crate) async fn should_use_ax_fallback(
@@ -120,6 +149,79 @@ pub(crate) fn resolve_active_tab_url_candidate(
             None
         }
     })
+}
+
+/// Return the Google Meet meeting code if a window title IS one: exactly
+/// `xxx-yyyy-zzz`, lowercase ASCII letters (the regex `^[a-z]{3}-[a-z]{4}-[a-z]{3}$`).
+///
+/// Nothing looser: this shape is used as standalone meeting evidence for
+/// Little Arc (see `little_arc_meet_candidate`), so a hyphenated slug, a
+/// dashed document name, uppercase, digits, or the code embedded in a longer
+/// title must all be rejected.
+pub(crate) fn arc_window_title_meet_code(title: &str) -> Option<&str> {
+    let bytes = title.as_bytes();
+    if bytes.len() != 12 {
+        return None;
+    }
+    let shape_ok = bytes.iter().enumerate().all(|(i, &b)| match i {
+        3 | 8 => b == b'-',
+        _ => b.is_ascii_lowercase(),
+    });
+    shape_ok.then_some(title)
+}
+
+/// Little Arc fallback: accept a mic-holding Arc process as Google Meet
+/// evidence when one of its AX window titles is a bare Meet meeting code.
+///
+/// Little Arc mini windows are invisible to every other evidence path: they
+/// are not in Arc's AppleScript `windows` collection and expose no AXDocument
+/// — the title (the bare meeting code) is their entire AX footprint. Gated to
+/// Arc AND the strict code shape (`arc_window_title_meet_code`), and routed
+/// through `resolve_active_tab_url_candidate` with the canonical
+/// `https://meet.google.com/<code>` URL so the candidate shape (profile
+/// matching, ignore filtering, live evidence) is identical to the URL probe's.
+///
+/// `excluded_titles` are the AppleScript-visible FULL-window titles: those
+/// windows' active-tab URLs were just resolved by the AppleScript probe (and
+/// did NOT match a meeting, or we wouldn't be in this fallback), so a full
+/// window whose tab title merely LOOKS like a meeting code (a lowercase 3-4-3
+/// kebab slug) must not fabricate a Meet meeting here. Little Arc windows are
+/// absent from Arc's AppleScript `windows` collection, so their titles
+/// survive the subtraction. Titles are trim-compared.
+pub(crate) fn little_arc_meet_candidate_excluding(
+    browser_app: &str,
+    window_titles: &[String],
+    excluded_titles: &[String],
+    profiles: &[MeetingDetectionProfile],
+) -> Option<AxResolvedCandidate> {
+    if !browser_app.eq_ignore_ascii_case("arc") {
+        return None;
+    }
+    window_titles.iter().find_map(|title| {
+        let title = title.trim();
+        if excluded_titles
+            .iter()
+            .any(|excluded| excluded.trim() == title)
+        {
+            return None;
+        }
+        let code = arc_window_title_meet_code(title)?;
+        let url = format!("https://meet.google.com/{}", code);
+        resolve_active_tab_url_candidate(browser_app, &url, profiles)
+    })
+}
+
+/// `little_arc_meet_candidate_excluding` with no exclusions. Kept under the
+/// original name so existing callers/tests of the plain fallback stay valid;
+/// the live probe (`active_tab_url_candidates`) passes the AppleScript window
+/// titles through the `_excluding` variant.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn little_arc_meet_candidate(
+    browser_app: &str,
+    window_titles: &[String],
+    profiles: &[MeetingDetectionProfile],
+) -> Option<AxResolvedCandidate> {
+    little_arc_meet_candidate_excluding(browser_app, window_titles, &[], profiles)
 }
 
 pub(crate) async fn db_find_browser_evidence(
@@ -247,6 +349,35 @@ pub(crate) fn resolve_process_candidate(
     }
 
     if let Some((platform, profile_index)) = resolve_native_platform(process, profiles) {
+        // Signal voice note gate (#4776): Signal is an Electron app whose AX
+        // tree is opaque, so we can't scan for call UI. Instead we use the
+        // process bundle ID: voice notes use the `.helper` subprocess while
+        // real calls use `.helper.Renderer`. If the bundle doesn't contain
+        // "renderer", it's a voice note — block it.
+        //
+        // `bundle_id`/`owner_bundle_id` are macOS-only fields (always `None` on
+        // Windows — see `screenpipe_audio::meeting_processes::platform`), so
+        // the heuristic only fires when one of them is actually present.
+        // Applying it unconditionally used to fail closed on Windows: with
+        // both fields `None`, `unwrap_or("")` always produced a string that
+        // never contains "renderer", so it silently blocked EVERY Windows
+        // Signal session, including real calls (#4998 review). When the
+        // discriminating field is structurally absent, fail open instead —
+        // matching pre-gate behavior on platforms this heuristic can't reach.
+        let signal_bundle = process
+            .bundle_id
+            .as_deref()
+            .or(process.owner_bundle_id.as_deref());
+        if platform == "Signal"
+            && signal_bundle.is_some_and(|b| !b.to_lowercase().contains("renderer"))
+        {
+            debug!(
+                "audio-process meeting detector: Signal blocked — voice note helper \
+                 (bundle={:?}, no .Renderer suffix)",
+                signal_bundle
+            );
+            return ResolvedMeetingCandidate::NonMeeting;
+        }
         let profile = profile_index.and_then(|idx| profiles.get(idx));
         if candidate_is_ignored(&platform, profile, process, ignored_terms, None, None, None) {
             return ResolvedMeetingCandidate::Ignored;
@@ -318,11 +449,22 @@ pub(crate) fn resolve_native_platform(
     }
 
     for (idx, profile) in profiles.iter().enumerate() {
-        let matches = profile.app_identifiers.macos_app_names.iter().any(|name| {
-            fields
-                .iter()
-                .any(|field| field.eq_ignore_ascii_case(name) || field == &name.to_lowercase())
-        });
+        // Match against both macOS app names and Windows process names: identity
+        // fields are macOS bundle ids/app names on macOS and Windows exe names
+        // (e.g. "whatsapp.exe") on Windows, so a profile with only
+        // `macos_app_names` populated (WhatsApp, Telegram, ...) would otherwise
+        // never resolve on Windows once it's not also in
+        // `known_native_bundle_platform` (#4998 review).
+        let matches = profile
+            .app_identifiers
+            .macos_app_names
+            .iter()
+            .chain(profile.app_identifiers.windows_process_names.iter())
+            .any(|name| {
+                fields
+                    .iter()
+                    .any(|field| field.eq_ignore_ascii_case(name) || field == &name.to_lowercase())
+            });
         if matches {
             return Some((platform_name_for_profile(profile, false), Some(idx)));
         }
@@ -339,7 +481,18 @@ pub(crate) fn process_identity_fields(process: &AudioInputProcess) -> Vec<String
     ]
     .into_iter()
     .flatten()
-    .map(|s| s.trim().to_lowercase())
+    .map(|s| {
+        // macOS NSRunningApp.localized_name() can prepend invisible Unicode
+        // formatting characters (e.g. U+200E LEFT-TO-RIGHT MARK on WhatsApp:
+        // "\u{200e}WhatsApp"). Strip them so profile name matching works.
+        s.chars()
+            .filter(|c| {
+                !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{200b}' | '\u{feff}')
+            })
+            .collect::<String>()
+            .trim()
+            .to_lowercase()
+    })
     .filter(|s| !s.is_empty())
     .collect()
 }
@@ -379,15 +532,15 @@ pub(crate) fn known_native_bundle_platform(field_lower: &str) -> Option<&'static
     if field_lower.contains("discord") {
         return Some("Discord");
     }
+    // Signal is kept here (not gated) because its Electron AX tree is opaque
+    // — we can't distinguish calls from voice notes, so requires_call_signal
+    // is false and it doesn't need a profile index for the gate (#4776).
     if field_lower.contains("signal") {
         return Some("Signal");
     }
-    if field_lower.contains("whatsapp") {
-        return Some("WhatsApp");
-    }
-    if field_lower.contains("telegram") {
-        return Some("Telegram");
-    }
+    // WhatsApp and Telegram are intentionally NOT matched here. They must
+    // fall through to the profile-matching loop below so they get a profile
+    // index, which is needed to check `requires_call_signal` (#4776).
     if field_lower.contains("skype") {
         return Some("Skype");
     }
@@ -580,8 +733,13 @@ pub(crate) fn acquire_input_processes(
             );
             *unsupported_logged = true;
         }
+        // This is a flag resync, not a fresh transition — preserve whatever
+        // identity is already published rather than clobbering it with
+        // `None` on every idle tick while the platform sensor is unsupported.
+        let current_active_meeting = detector.as_ref().and_then(|d| d.active_meeting());
         sync_meeting_flag(
             matches!(state, AudioProcessMeetingState::Active { .. }),
+            current_active_meeting,
             in_meeting_flag,
             detector,
         );
@@ -597,6 +755,80 @@ pub(crate) fn acquire_input_processes(
             .filter(|process| process.pid != Some(std::process::id() as i32))
             .collect(),
     )
+}
+
+/// Scan messaging apps (those with `requires_call_signal: true`) for call UI
+/// evidence in the AX tree. Returns a `CallSignalEvidence` per scanned app.
+///
+/// Only called during pre-active states (`needs_ax_resolution`) and only for
+/// `Native` candidates whose profile requires call signal verification.
+/// Platform-agnostic: delegates to `MeetingUiScanner::scan_process` which
+/// uses AX on macOS, UIA on Windows, and is a no-op on other platforms.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+async fn scan_messaging_call_signals(
+    candidates: &[ResolvedMeetingCandidate],
+    profiles: &[MeetingDetectionProfile],
+) -> Vec<CallSignalEvidence> {
+    let to_scan: Vec<(String, i32, usize)> = candidates
+        .iter()
+        .filter_map(|c| {
+            if let ResolvedMeetingCandidate::Native {
+                platform, process, ..
+            } = c
+            {
+                let profile_idx = profiles
+                    .iter()
+                    .position(|p| platform_name_for_profile(p, false) == *platform)?;
+                let profile = &profiles[profile_idx];
+                if profile.requires_call_signal {
+                    Some((platform.clone(), process.pid?, profile_idx))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if to_scan.is_empty() {
+        return Vec::new();
+    }
+
+    let profiles = profiles.to_vec();
+    let scan = tokio::task::spawn_blocking(move || {
+        let scanner = crate::meeting_watcher::shared::scanner::MeetingUiScanner::new();
+        to_scan
+            .into_iter()
+            .map(|(platform, pid, profile_idx)| {
+                let profile = &profiles[profile_idx];
+                let result = scanner.scan_process(pid, profile);
+                debug!(
+                    "audio-process meeting detector: call signal scan for {} (pid {}): \
+                     is_in_call={}, signals={:?}",
+                    platform, pid, result.is_in_call, result.matched_signals
+                );
+                CallSignalEvidence {
+                    platform: platform.to_lowercase(),
+                    is_in_call: result.is_in_call,
+                    matched_signals: result.matched_signals,
+                }
+            })
+            .collect()
+    });
+    match tokio::time::timeout(Duration::from_secs(5), scan).await {
+        Ok(Ok(results)) => results,
+        _ => Vec::new(),
+    }
+}
+
+/// Stub: no call signal scanning on unsupported platforms.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+async fn scan_messaging_call_signals(
+    _candidates: &[ResolvedMeetingCandidate],
+    _profiles: &[MeetingDetectionProfile],
+) -> Vec<CallSignalEvidence> {
+    Vec::new()
 }
 
 /// Run the full candidate pipeline for one snapshot: sticky tracking, optional
@@ -630,6 +862,54 @@ pub(crate) async fn build_candidates(
         resolve_tracked_candidates(db, profiles, ignored_terms, &tracked, ax_candidates).await;
 
     candidates.retain(|candidate| !matches!(candidate, ResolvedMeetingCandidate::Ignored));
+
+    // Call signal gate for messaging-first platforms (#4776): apps like
+    // WhatsApp/Signal/Telegram grab the mic for voice notes identically to
+    // calls. Before promoting them to Native, scan their AX tree for real
+    // call UI (e.g. Calling_Window). Only run during pre-active states —
+    // once a meeting is Active the platform is settled.
+    if needs_ax_resolution(state) {
+        let call_evidence = scan_messaging_call_signals(&candidates, profiles).await;
+        candidates.retain(|candidate| {
+            if let ResolvedMeetingCandidate::Native { platform, .. } = candidate {
+                let platform_lower = platform.to_lowercase();
+                // Check if this platform requires call signal verification.
+                let requires_gate = profiles.iter().any(|p| {
+                    p.requires_call_signal
+                        && platform_name_for_profile(p, false).to_lowercase() == platform_lower
+                });
+                if requires_gate {
+                    // Fail-closed: block unless we have explicit evidence of a
+                    // real call. If the AX scan timed out or the process had no
+                    // PID, no evidence is produced and we err on the side of NOT
+                    // starting a phantom meeting.
+                    match call_evidence.iter().find(|e| e.platform == platform_lower) {
+                        Some(evidence) if evidence.is_in_call => {
+                            // Real call confirmed — allow.
+                        }
+                        Some(_) => {
+                            debug!(
+                                "audio-process meeting detector: {} blocked by call signal gate \
+                                 (voice note / idle, no call UI found)",
+                                platform
+                            );
+                            return false;
+                        }
+                        None => {
+                            debug!(
+                                "audio-process meeting detector: {} blocked by call signal gate \
+                                 (no evidence produced — scan may have timed out)",
+                                platform
+                            );
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        });
+    }
+
     filter_suppressed_candidates(&mut candidates, suppressed_sessions);
     let live_candidates: Vec<_> = candidates
         .iter()
@@ -639,4 +919,85 @@ pub(crate) async fn build_candidates(
         .cloned()
         .collect();
     (candidates, live_candidates)
+}
+
+#[cfg(test)]
+mod little_arc_exclusion_tests {
+    use super::*;
+    use crate::meeting_watcher::shared::profiles::load_detection_profiles;
+
+    fn titles(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn full_window_slug_title_is_excluded() {
+        // A FULL Arc window whose active-tab title happens to be a lowercase
+        // 3-4-3 kebab slug: the AppleScript probe already resolved that
+        // window's URL as non-meeting, so its title must not fabricate a
+        // Meet meeting via the Little Arc fallback.
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["abc-defg-hij"]);
+        let applescript_titles = titles(&["abc-defg-hij"]);
+        assert!(little_arc_meet_candidate_excluding(
+            "Arc",
+            &ax_titles,
+            &applescript_titles,
+            &profiles
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn little_arc_window_survives_exclusion() {
+        // Little Arc windows are absent from Arc's AppleScript `windows`
+        // collection: the AX title set contains the meeting-code window plus
+        // full windows, the exclusion list only the full windows' titles.
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["My Docs - Notion", "abc-defg-hij"]);
+        let applescript_titles = titles(&["My Docs - Notion"]);
+        let candidate =
+            little_arc_meet_candidate_excluding("Arc", &ax_titles, &applescript_titles, &profiles)
+                .expect("Little Arc code title should resolve");
+        assert_eq!(
+            candidate.meeting_url.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+    }
+
+    #[test]
+    fn exclusion_is_trim_compared() {
+        // AX and AppleScript may disagree on surrounding whitespace for the
+        // same window title; the subtraction must still hit.
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["  abc-defg-hij  "]);
+        let applescript_titles = titles(&["abc-defg-hij "]);
+        assert!(little_arc_meet_candidate_excluding(
+            "Arc",
+            &ax_titles,
+            &applescript_titles,
+            &profiles
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn empty_exclusion_matches_plain_fallback() {
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["abc-defg-hij"]);
+        let with_empty = little_arc_meet_candidate_excluding("Arc", &ax_titles, &[], &profiles);
+        let plain = little_arc_meet_candidate("Arc", &ax_titles, &profiles);
+        assert_eq!(with_empty.is_some(), plain.is_some());
+        assert!(with_empty.is_some());
+    }
+
+    #[test]
+    fn non_arc_browsers_never_resolve() {
+        let profiles = load_detection_profiles();
+        let ax_titles = titles(&["abc-defg-hij"]);
+        assert!(
+            little_arc_meet_candidate_excluding("Google Chrome", &ax_titles, &[], &profiles)
+                .is_none()
+        );
+    }
 }

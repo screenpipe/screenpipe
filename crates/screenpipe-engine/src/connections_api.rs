@@ -10,7 +10,7 @@ use axum::response::Html;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use screenpipe_connect::connections::{bee, ConnectionManager};
-use screenpipe_connect::oauth::{self as oauth_store, PENDING_OAUTH};
+use screenpipe_connect::oauth::{self as oauth_store, OAuthCallbackResult, PENDING_OAUTH};
 use screenpipe_connect::whatsapp::WhatsAppGateway;
 use screenpipe_secrets::SecretStore;
 use serde::{Deserialize, Serialize};
@@ -1441,17 +1441,49 @@ pub struct OAuthCallbackQuery {
     pub code: Option<String>,
     pub state: Option<String>,
     pub error: Option<String>,
+    // Optional human-readable error detail (RFC 6749 §4.1.2.1).
+    pub error_description: Option<String>,
     // QuickBooks Online returns realmId (company ID) as a callback param alongside the code.
     #[serde(rename = "realmId")]
     pub realm_id: Option<String>,
 }
 
-/// GET /connections/oauth/callback — receives the provider redirect after user approves.
+/// GET /connections/oauth/callback — receives the provider redirect.
 ///
 /// The `state` parameter is used to look up the waiting `oauth_connect` Tauri command
-/// via the `PENDING_OAUTH` channel map, then delivers the `code` through the channel.
+/// via the `PENDING_OAUTH` channel map, then delivers the outcome — success with the
+/// authorization `code`, or the provider's error — as a typed `OAuthCallbackResult`.
+/// Logs never include codes, tokens, state values, or the callback query string.
 async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode, Html<String>) {
     if let Some(err) = params.error {
+        // Provider rejection (e.g. access_denied on cancel). Resolve the waiting
+        // flow immediately instead of leaving it to hit the 120s timeout.
+        let pending = params.state.as_ref().and_then(|state| {
+            let mut map = PENDING_OAUTH.lock().unwrap();
+            map.remove(state)
+        });
+        match pending {
+            Some(pending) => {
+                tracing::warn!(
+                    "oauth callback: provider returned error '{}' for {} — resolving pending flow",
+                    err,
+                    pending.integration_id
+                );
+                let _ = pending.sender.send(OAuthCallbackResult::ProviderError {
+                    error: err.clone(),
+                    error_description: params.error_description,
+                });
+            }
+            None => tracing::warn!(
+                "oauth callback: provider returned error '{}' with {} state — no pending flow to resolve",
+                err,
+                if params.state.is_some() {
+                    "an unknown or stale"
+                } else {
+                    "a missing"
+                }
+            ),
+        }
         return oauth_callback_page(
             StatusCode::BAD_REQUEST,
             "Connection failed",
@@ -1463,6 +1495,7 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
     let (code, state) = match (params.code, params.state) {
         (Some(c), Some(s)) => (c, s),
         _ => {
+            tracing::warn!("oauth callback: missing code or state parameter");
             return oauth_callback_page(
                 StatusCode::BAD_REQUEST,
                 "Invalid callback",
@@ -1479,13 +1512,14 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
 
     match sender {
         Some(pending) => {
-            // For providers that return extra callback params (e.g. QuickBooks realmId),
-            // encode them alongside the code as JSON so the Tauri command can extract both.
-            let payload = match params.realm_id {
-                Some(ref rid) => serde_json::json!({"code": code, "realmId": rid}).to_string(),
-                None => code,
-            };
-            let _ = pending.sender.send(payload);
+            tracing::info!(
+                "oauth callback: authorization received for {}",
+                pending.integration_id
+            );
+            let _ = pending.sender.send(OAuthCallbackResult::Success {
+                code,
+                realm_id: params.realm_id,
+            });
             oauth_callback_page(
                 StatusCode::OK,
                 "Connected",
@@ -1493,12 +1527,15 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
                 "You can close this tab and return to screenpipe.",
             )
         }
-        None => oauth_callback_page(
-            StatusCode::BAD_REQUEST,
-            "Session expired",
-            "screenpipe could not find the waiting app session.",
-            "The authorization session was not found or already completed. Please try again.",
-        ),
+        None => {
+            tracing::warn!("oauth callback: unknown or stale state — no pending flow");
+            oauth_callback_page(
+                StatusCode::BAD_REQUEST,
+                "Session expired",
+                "screenpipe could not find the waiting app session.",
+                "The authorization session was not found or already completed. Please try again.",
+            )
+        }
     }
 }
 
@@ -4309,5 +4346,177 @@ mod tests {
             last_owner.lock().await.clone(),
             Some("pipe:reddit-poster".to_string())
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // OAuth callback — success and provider-error delivery (#5092)
+    // -----------------------------------------------------------------------
+
+    use screenpipe_connect::oauth::PendingOAuth;
+    use tokio::sync::oneshot;
+
+    /// Register a pending flow under `state` and return the receiving end.
+    /// `PENDING_OAUTH` is a process-global map, so every test uses a unique
+    /// state key to stay independent under parallel test execution.
+    fn register_pending(state: &str) -> oneshot::Receiver<OAuthCallbackResult> {
+        let (tx, rx) = oneshot::channel();
+        PENDING_OAUTH.lock().unwrap().insert(
+            state.to_string(),
+            PendingOAuth {
+                integration_id: "test-integration".to_string(),
+                sender: tx,
+            },
+        );
+        rx
+    }
+
+    fn pending_contains(state: &str) -> bool {
+        PENDING_OAUTH.lock().unwrap().contains_key(state)
+    }
+
+    fn callback_query(
+        code: Option<&str>,
+        state: Option<&str>,
+        error: Option<&str>,
+        error_description: Option<&str>,
+        realm_id: Option<&str>,
+    ) -> Query<OAuthCallbackQuery> {
+        Query(OAuthCallbackQuery {
+            code: code.map(String::from),
+            state: state.map(String::from),
+            error: error.map(String::from),
+            error_description: error_description.map(String::from),
+            realm_id: realm_id.map(String::from),
+        })
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_success_delivers_code_and_removes_entry() {
+        let state = "test-cb-success-state";
+        let rx = register_pending(state);
+
+        let (status, _) = oauth_callback(callback_query(
+            Some("auth-code-1"),
+            Some(state),
+            None,
+            None,
+            None,
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(!pending_contains(state));
+        match rx.await.unwrap() {
+            OAuthCallbackResult::Success { code, realm_id } => {
+                assert_eq!(code, "auth-code-1");
+                assert_eq!(realm_id, None);
+            }
+            other => panic!("expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_success_carries_realm_id() {
+        let state = "test-cb-realmid-state";
+        let rx = register_pending(state);
+
+        let (status, _) = oauth_callback(callback_query(
+            Some("qb-code"),
+            Some(state),
+            None,
+            None,
+            Some("realm-42"),
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        match rx.await.unwrap() {
+            OAuthCallbackResult::Success { code, realm_id } => {
+                assert_eq!(code, "qb-code");
+                assert_eq!(realm_id.as_deref(), Some("realm-42"));
+            }
+            other => panic!("expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_provider_error_wakes_pending_flow() {
+        let state = "test-cb-error-state";
+        let rx = register_pending(state);
+
+        let (status, body) = oauth_callback(callback_query(
+            None,
+            Some(state),
+            Some("access_denied"),
+            Some("User denied access"),
+            None,
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.0.contains("access_denied"));
+        assert!(!pending_contains(state));
+        match rx.await.unwrap() {
+            OAuthCallbackResult::ProviderError {
+                error,
+                error_description,
+            } => {
+                assert_eq!(error, "access_denied");
+                assert_eq!(error_description.as_deref(), Some("User denied access"));
+            }
+            other => panic!("expected ProviderError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_error_with_missing_state_leaves_pending_untouched() {
+        let state = "test-cb-error-nostate-state";
+        let mut rx = register_pending(state);
+
+        let (status, _) =
+            oauth_callback(callback_query(None, None, Some("server_error"), None, None)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // Unrelated pending flow must survive an error callback without state.
+        assert!(pending_contains(state));
+        assert!(rx.try_recv().is_err());
+        PENDING_OAUTH.lock().unwrap().remove(state);
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_error_with_unknown_state_returns_error_page() {
+        let (status, _) = oauth_callback(callback_query(
+            None,
+            Some("test-cb-unknown-state"),
+            Some("temporarily_unavailable"),
+            None,
+            None,
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_missing_code_and_state_is_invalid() {
+        let (status, body) = oauth_callback(callback_query(None, None, None, None, None)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.0.contains("Missing code or state"));
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_success_with_stale_state_reports_session_expired() {
+        let (status, body) = oauth_callback(callback_query(
+            Some("auth-code-2"),
+            Some("test-cb-stale-state"),
+            None,
+            None,
+            None,
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.0.contains("Session expired"));
     }
 }

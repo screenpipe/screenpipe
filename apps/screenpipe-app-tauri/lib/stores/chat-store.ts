@@ -301,6 +301,80 @@ export function isSessionForeground(
   return state.currentId === id || state.panelSessionId === id;
 }
 
+/** Payload of the backend `chat-session-activity` event — a lightweight
+ *  overlay-side activity mirror (status + preview + title), never full
+ *  message bodies. */
+export interface ChatSessionActivityPayload {
+  id: string;
+  status?: SessionStatus;
+  preview?: string;
+  title?: string;
+  updatedAt: number;
+  lastError?: string;
+  unreadHint?: boolean;
+}
+
+/** Merge a `chat-session-activity` event into the sidebar store.
+ *
+ * Extracted verbatim from the home page's listener so the upsert-vs-patch,
+ * staleness (`existing.updatedAt > updatedAt`), title/preview/status merge,
+ * and unread-hint branches are unit-testable in isolation. `now` is injected
+ * so the `lastContentAt` write is deterministic under test.
+ */
+export function applyChatSessionActivity(
+  store: Pick<ChatStore, "sessions" | "currentId" | "panelSessionId" | "actions">,
+  payload: ChatSessionActivityPayload | undefined,
+  now: number = Date.now(),
+): void {
+  const { id, status, preview, title, updatedAt, lastError, unreadHint } =
+    payload ?? ({} as Partial<ChatSessionActivityPayload>);
+  if (!id || !updatedAt) return;
+  const existing = store.sessions[id];
+  if (!existing) {
+    store.actions.upsert({
+      id,
+      title: title?.trim() || "untitled",
+      preview: preview ?? "",
+      status: status ?? "idle",
+      lastError,
+      messageCount: 0,
+      createdAt: updatedAt,
+      updatedAt,
+      pinned: false,
+      hidden: false,
+      unread: false,
+    });
+  } else {
+    if (existing.updatedAt > updatedAt) return;
+    const nextTitle = title?.trim() || existing.title;
+    const nextPreview = preview ?? existing.preview;
+    const nextStatus = status ?? existing.status;
+    const nextLastError =
+      lastError !== undefined
+        ? lastError || undefined
+        : nextStatus === "error"
+          ? existing.lastError
+          : undefined;
+    if (
+      existing.title === nextTitle &&
+      existing.preview === nextPreview &&
+      existing.status === nextStatus &&
+      existing.lastError === nextLastError &&
+      existing.updatedAt === updatedAt
+    ) return;
+    store.actions.patch(id, {
+      title: nextTitle,
+      preview: nextPreview,
+      status: nextStatus,
+      lastError: nextLastError,
+      updatedAt,
+    });
+  }
+  if (unreadHint && !isSessionForeground(store, id)) {
+    store.actions.patch(id, { lastContentAt: now });
+  }
+}
+
 /** Compute unread from timestamps — immune to non-content writes.
  *  A session is unread when its most recent real message append happened
  *  AFTER the last time the user viewed it. Falls back to
@@ -712,20 +786,31 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
 }
 
 /**
- * "+ new chat" semantics. If the user already has an empty chat
- * (no user message sent yet), return its id instead of spawning a
+ * "+ new chat" semantics. If the user already has a blank chat
+ * (no message sent yet), return its id instead of spawning a
  * new one — repeatedly clicking the button otherwise floods the
  * sidebar with empty rows. Picks the panel's current session first
  * (most likely the one the user is staring at), then falls back to
- * any other empty session newest-first.
+ * any other blank chat newest-first.
+ *
+ * A session is only reusable when it is a genuine blank CHAT draft:
+ *   - `kind` is "chat" (or unset) — never a `pipe-run` / `pipe-watch`.
+ *   - `messageCount === 0` — this is what excludes on-disk-hydrated
+ *     sidebar rows. Those carry no in-memory `messages` array (see the
+ *     SessionRecord doc), so a naive `messages.length === 0` check would
+ *     treat every real conversation on disk as "empty" and make "+ new
+ *     chat" hop through the sidebar instead of opening a fresh one (#4719).
+ *   - no loaded `user` message — belt-and-suspenders for a foreground
+ *     draft that already has an unsent user turn before its count updates.
  *
  * Returns `{ id, isNew }` so callers can decide whether to upsert.
  */
 export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
   const state = useChatStore.getState();
-  const isEmpty = (s: SessionRecord) => {
+  const isReusableBlankChat = (s: SessionRecord) => {
+    if (s.kind && s.kind !== "chat") return false;
+    if (s.messageCount > 0) return false;
     const msgs = (s.messages as Array<{ role?: string }> | undefined) ?? [];
-    if (msgs.length === 0) return true;
     return !msgs.some((m) => m?.role === "user");
   };
 
@@ -733,12 +818,12 @@ export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
   const panelId = state.panelSessionId;
   if (panelId) {
     const panel = state.sessions[panelId];
-    if (panel && isEmpty(panel)) return { id: panelId, isNew: false };
+    if (panel && isReusableBlankChat(panel)) return { id: panelId, isNew: false };
   }
 
-  // Otherwise any other empty session, newest first by createdAt.
+  // Otherwise any other blank chat, newest first by createdAt.
   const empties = Object.values(state.sessions)
-    .filter(isEmpty)
+    .filter(isReusableBlankChat)
     .sort((a, b) => b.createdAt - a.createdAt);
   if (empties.length > 0) return { id: empties[0].id, isNew: false };
 

@@ -156,6 +156,10 @@
           "requireLiteralLeadingDot": false
         },
         {
+          "path": "$HOME/.screenpipe/.e2e/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
           "path": "$RESOURCE/.screenpipe/**",
           "requireLiteralLeadingDot": false
         },
@@ -412,6 +416,30 @@
       "allow": [
         {
           "url": "http://**/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://localhost:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:*/*",
           "methods": [
             "GET",
             "POST",

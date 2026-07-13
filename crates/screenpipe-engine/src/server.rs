@@ -130,6 +130,7 @@ pub type FrameImageCache = LruCache<i64, (String, std::time::Instant)>;
 
 /// Cache key for search results (hash of query parameters)
 pub type SearchCache = MokaCache<u64, Arc<SearchCacheEntry>>;
+const SEARCH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 pub struct AppState {
     pub db: Arc<DatabaseManager>,
@@ -527,6 +528,13 @@ impl SCServer {
                                 "ocr_queue_depth": snap.ocr_queue_depth,
                                 "video_queue_depth": snap.video_queue_depth,
                                 "pipeline_stall_count": snap.pipeline_stall_count,
+                                // OCR gate (#5054/#5060): the skip/ocr split is the
+                                // production fast-path ratio that validates the
+                                // gate's savings; detect latency prices the gate.
+                                "ocr_gate_skips": snap.ocr_gate_skips,
+                                "ocr_gate_crop_ocr": snap.ocr_gate_crop_ocr,
+                                "ocr_gate_detects": snap.ocr_gate_detects,
+                                "avg_ocr_gate_detect_latency_ms": snap.avg_ocr_gate_detect_latency_ms,
                                 // Recording-coverage reliability metric.
                                 "recording_coverage_ratio": cov.coverage_ratio,
                                 "recording_secs": cov.recording_secs,
@@ -590,6 +598,12 @@ impl SCServer {
                     }
                 }
             });
+
+            // Permanent subscriber that forwards allowlisted piggyback telemetry
+            // (meeting summaries + mic capture health) from the in-process events
+            // bus to PostHog. Runs in both CLI and app-embedded modes since it's
+            // spawned here rather than gated behind an app websocket connection.
+            crate::piggyback_telemetry::spawn_piggyback_telemetry_forwarder();
         }
 
         // Use pre-set hot frame cache or create a new one, then warm from DB.
@@ -639,11 +653,12 @@ impl SCServer {
                 NonZeroUsize::new(1000).unwrap(),
             )))),
             ws_connection_count: Arc::new(AtomicUsize::new(0)),
-            // Search cache: short-lived and intentionally small. Search payloads
-            // can contain large OCR/audio text blobs; the route also skips
-            // caching oversized responses before they reach this cache.
+            // Search cache: short-lived and byte-bounded. Search payloads can
+            // contain large OCR/audio text blobs, so an entry-count capacity
+            // still allowed hundreds of MB of typed + serialized responses.
             search_cache: MokaCache::builder()
-                .max_capacity(128)
+                .weigher(|_key: &u64, value: &Arc<SearchCacheEntry>| value.weight())
+                .max_capacity(SEARCH_CACHE_MAX_BYTES)
                 .time_to_live(Duration::from_secs(30))
                 .build(),
             use_pii_removal: self.use_pii_removal,

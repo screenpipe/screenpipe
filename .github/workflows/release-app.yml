@@ -292,18 +292,6 @@ jobs:
           echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           rustc --version # verify rust is available
 
-      # sccache disabled temporarily due to GitHub Actions cache outage
-      # - name: Setup sccache
-      #   uses: mozilla-actions/sccache-action@v0.0.7
-      #   with:
-      #     version: "v0.8.2"
-
-      # - name: Configure sccache
-      #   shell: bash
-      #   run: |
-      #     echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-      #     echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -320,6 +308,18 @@ jobs:
           shared-key: "rust-cache-${{ matrix.target }}"
           # Save cache even on failed builds
           save-if: true
+
+      # Re-enabled on the shared R2 backend (the old GHA backend was
+      # disabled during a GitHub Actions cache outage and never came back).
+      # After rust-cache on purpose — see the action's ordering note.
+      - name: Setup sccache (shared R2 compile cache)
+        uses: ./.github/actions/setup-sccache
+        with:
+          r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+          read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+          write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+          write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - name: Cache Build Artifacts
         uses: actions/cache@v4
@@ -689,6 +689,37 @@ jobs:
           ARGS="${{ matrix.tauri-args }}"
           echo "args=$ARGS" >> $GITHUB_OUTPUT
           echo "Final tauri args: $ARGS"
+
+      - name: Configure macOS sidecar bundle entries
+        if: matrix.os_type == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          node <<'NODE'
+          const fs = require("fs");
+          const path = "apps/screenpipe-app-tauri/src-tauri/tauri.macos.conf.json";
+          const target = process.env.TARGET;
+          const config = JSON.parse(fs.readFileSync(path, "utf8"));
+          config.bundle ??= {};
+          config.bundle.macOS ??= {};
+          config.bundle.externalBin = [...new Set(config.bundle.externalBin ?? [])]
+            .filter((entry) => entry !== "mlx.metallib");
+          if (target === "aarch64-apple-darwin") {
+            config.bundle.macOS.files = {};
+            config.bundle.externalBin.push("mlx.metallib");
+          } else if (target === "x86_64-apple-darwin") {
+            config.bundle.macOS.files = {
+              "MacOS/libonnxruntime.dylib": "libonnxruntime.dylib",
+            };
+          } else {
+            throw new Error(`unknown macOS release target: ${target}`);
+          }
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          console.log(`macOS bundle sidecars configured for ${target}`);
+          NODE
+        env:
+          TARGET: ${{ matrix.target }}
 
       - name: Re-unlock build keychain before signing (macOS)
         if: matrix.os_type == 'macos'
@@ -1069,11 +1100,8 @@ jobs:
         # build-keychain dance (the `errSecInternalComponent` class — see
         # the keychain setup above) only surfaces as a notarization failure
         # much later in the workflow.
-        #
-        # The aarch64 re-sign path at "Inject mlx.metallib..." below already
-        # runs --verify after its own re-sign; this step also covers x86_64
-        # (which has no re-sign path) and protects against a regression in
-        # the initial Tauri-side sign too.
+        # Covers the single Tauri codesign pass for architecture-specific
+        # sidecars staged into Contents/MacOS/ via externalBin/macOS.files.
         if: matrix.os_type == 'macos'
         shell: bash
         run: |
@@ -1093,245 +1121,6 @@ jobs:
           done
           echo "all .app bundles pass codesign --verify --deep --strict"
 
-      - name: Inject mlx.metallib into Contents/MacOS/ + re-sign (macOS)
-        # MLX's runtime library search looks for mlx.metallib next to the
-        # binary (Contents/MacOS/), not in the app's Resources dir. Tauri's
-        # `bundle.resources` always lands in Contents/Resources/, so we have
-        # to physically copy the file into Contents/MacOS/ ourselves.
-        #
-        # This must happen BEFORE notarization. Adding files inside an already
-        # signed bundle invalidates the cdhash — that was the v2.4.133–149
-        # "screenpipe is damaged" bug, which surfaced as repeated Gatekeeper
-        # popups + the embedded server (port 3030) being killed mid-launch.
-        # The runtime symlink approach we used to do is gone (see main.rs).
-        # Now: copy + re-sign + rebuild DMG so the very first signature
-        # already covers Contents/MacOS/mlx.metallib.
-        #
-        # Only runs for the macOS aarch64 build, which is the only target
-        # that enables parakeet-mlx. Other macOS targets (x86_64) ship the
-        # metallib via bundle.resources too (because build.rs downloads it
-        # whenever the build host is aarch64), but parakeet-mlx isn't
-        # compiled in for x86_64 so MLX never tries to load it — and the
-        # disk-mount + DMG-rebuild step blew through CI runner disk space
-        # on x86_64 in v2.4.154 ("fcopyfile failed: No space left on
-        # device") for no benefit. Narrow to where it actually matters.
-        if: matrix.target == 'aarch64-apple-darwin'
-        shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-          TARGET="${{ matrix.target }}"
-          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          APP_DIR="${BUNDLE_DIR}/macos"
-
-          # Find the .app bundle Tauri produced
-          shopt -s nullglob
-          apps=( "${APP_DIR}"/*.app )
-          if [ ${#apps[@]} -eq 0 ]; then
-            echo "no .app to patch — skipping mlx.metallib inject"
-            exit 0
-          fi
-          APP="${apps[0]}"
-          RES_LIB="${APP}/Contents/Resources/mlx.metallib"
-
-          if [ ! -f "$RES_LIB" ]; then
-            echo "no Contents/Resources/mlx.metallib — non-mlx build, skipping"
-            exit 0
-          fi
-
-          # Empty/placeholder metallib (created by build.rs on non-aarch64 macOS,
-          # or when the GitHub release download failed) — don't bother injecting,
-          # MLX would fail anyway. Real metallib is ~84 MB.
-          SIZE=$(stat -f%z "$RES_LIB")
-          if [ "$SIZE" -lt 1000000 ]; then
-            echo "Resources/mlx.metallib is only ${SIZE} bytes (placeholder) — skipping inject"
-            exit 0
-          fi
-
-          echo "=== Injecting mlx.metallib into Contents/MacOS/ (${SIZE} bytes) ==="
-          cp "$RES_LIB" "${APP}/Contents/MacOS/mlx.metallib"
-
-          # Re-unlock the keychain before re-signing — same retry pattern the
-          # build step uses, since codesign needs the cert.
-          BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
-          if [ -f "$BUILD_KC" ]; then
-            security unlock-keychain -p "build_password" "$BUILD_KC"
-            security set-keychain-settings -t 3600 "$BUILD_KC"
-          fi
-
-          # Re-sign the bundle. --deep so all inner binaries stay covered;
-          # --force so the existing signature is replaced. Same identity +
-          # entitlements + hardened-runtime flags Tauri used.
-          codesign --force --deep \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            --options runtime \
-            --entitlements apps/screenpipe-app-tauri/src-tauri/entitlements.plist \
-            --timestamp \
-            "$APP"
-
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          echo "✅ ${APP##*/} re-signed with mlx.metallib in Contents/MacOS/"
-
-          # Rebuild the DMG so it ships the modified .app.
-          #
-          # The mount-and-swap approach (UDRW convert → attach → cp .app →
-          # detach → UDZO convert) blew through CI runner disk space — the
-          # ~600 MB .app gets duplicated into the mounted DMG, on top of
-          # the existing UDRW + UDZO copies (~3× peak disk usage). v2.4.154
-          # hit "fcopyfile failed: No space left on device".
-          #
-          # Cheaper: delete the original DMG to free space, then create a
-          # fresh DMG from a staging dir that contains BOTH the patched
-          # .app AND an `Applications` symlink → /Applications. The
-          # symlink is what gives users the drag-to-install affordance
-          # — without it, opening the DMG just shows the app icon with
-          # nowhere to drag it (regression: v2.4.156 shipped a bare
-          # `-srcfolder "$APP"` and dropped the Applications symlink;
-          # users opened the DMG and couldn't install).
-          DMG_DIR="${BUNDLE_DIR}/dmg"
-          dmgs=( "${DMG_DIR}"/*.dmg )
-          if [ ${#dmgs[@]} -eq 0 ]; then
-            echo "no DMG produced — skipping DMG patch"
-            exit 0
-          fi
-          DMG="${dmgs[0]}"
-          echo "=== Replacing DMG: ${DMG##*/} ==="
-          df -h "$DMG_DIR" | tail -1
-          rm -f "$DMG"
-
-          # Stage the .app alongside an Applications symlink. The
-          # symlink itself adds zero bytes to the DMG — when hdiutil
-          # walks the staging dir, the Applications target is OUTSIDE
-          # the staging root so it's preserved as a symlink (not
-          # followed, which would copy /Applications recursively).
-          # We `cp -R` rather than `mv` because the next workflow step
-          # ("Staple .app and rebuild updater tarball") needs the
-          # original .app at bundle/macos/ to staple + repackage for
-          # the Tauri auto-updater.
-          DMG_STAGE="${RUNNER_TEMP:-/tmp}/screenpipe-dmg-stage-$$"
-          mkdir -p "$DMG_STAGE"
-          cp -R "$APP" "$DMG_STAGE/"
-          ln -s /Applications "$DMG_STAGE/Applications"
-
-          hdiutil create \
-            -volname "Screenpipe" \
-            -srcfolder "$DMG_STAGE" \
-            -ov \
-            -format UDZO \
-            -imagekey zlib-level=9 \
-            "$DMG"
-
-          rm -rf "$DMG_STAGE"
-
-          # Sign the new DMG so notarization sees a clean cdhash.
-          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG"
-          codesign --verify --verbose=2 "$DMG"
-          echo "✅ ${DMG##*/} re-created + signed from patched .app (with Applications symlink)"
-
-      - name: Inject libonnxruntime.dylib into Contents/MacOS/ + re-sign (Intel macOS)
-        # ort rc.12 ships no x86_64-apple-darwin prebuilt (pyke + upstream ONNX
-        # Runtime are arm64-only since ~1.20), so the Intel build links ONNX
-        # Runtime via `load-dynamic` and loads libonnxruntime.dylib at runtime.
-        # ort's loader resolves the bare "libonnxruntime.dylib" relative to the
-        # executable dir (Contents/MacOS/), so the dylib must sit next to the
-        # binary — same constraint, and same inject + re-sign + rebuild-DMG
-        # flow, as the mlx.metallib step above. Must run BEFORE notarization.
-        #
-        # Source: the Homebrew onnxruntime bottle (x86_64, 1.26.0), pinned by
-        # immutable ghcr blob digest (QQ== is Homebrew's anonymous ghcr token).
-        # ort only warns (never errors) when the dylib is newer than its target
-        # 1.24, so the 1.26 build is accepted.
-        if: matrix.target == 'x86_64-apple-darwin'
-        shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-          TARGET="${{ matrix.target }}"
-          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          APP_DIR="${BUNDLE_DIR}/macos"
-
-          shopt -s nullglob
-          apps=( "${APP_DIR}"/*.app )
-          if [ ${#apps[@]} -eq 0 ]; then
-            echo "no .app to patch — skipping libonnxruntime inject"
-            exit 0
-          fi
-          APP="${apps[0]}"
-
-          # Fetch the x86_64 ONNX Runtime dylib from the Homebrew bottle
-          # (content-addressed = immutable; won't move if the formula bumps).
-          ORT_BLOB="https://ghcr.io/v2/homebrew/core/onnxruntime/blobs/sha256:afe69511a14f1b9351074b0bf9e5de65858d25a6795ab7f228ba78b149079c3d"
-          TMP="${RUNNER_TEMP:-/tmp}/ort-x64-$$"
-          mkdir -p "$TMP"
-          echo "=== Downloading x86_64 libonnxruntime.dylib (Homebrew bottle) ==="
-          curl -fsSL -H "Authorization: Bearer QQ==" "$ORT_BLOB" -o "$TMP/bottle.tar.gz"
-          tar -xzf "$TMP/bottle.tar.gz" -C "$TMP"
-          SRC_DYLIB="$(find "$TMP" -name 'libonnxruntime*.dylib' | head -1)"
-          if [ -z "$SRC_DYLIB" ]; then
-            echo "ERROR: no libonnxruntime dylib found in bottle" >&2
-            exit 1
-          fi
-          if ! lipo -info "$SRC_DYLIB" | grep -q 'x86_64'; then
-            echo "ERROR: dylib is not x86_64: $(lipo -info "$SRC_DYLIB")" >&2
-            exit 1
-          fi
-          DEST="${APP}/Contents/MacOS/libonnxruntime.dylib"
-          echo "=== Injecting $(basename "$SRC_DYLIB") -> Contents/MacOS/libonnxruntime.dylib ==="
-          cp "$SRC_DYLIB" "$DEST"
-          chmod 0644 "$DEST"
-
-          # Re-unlock the keychain before re-signing — same retry pattern the
-          # build + metallib steps use, since codesign needs the cert.
-          BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
-          if [ -f "$BUILD_KC" ]; then
-            security unlock-keychain -p "build_password" "$BUILD_KC"
-            security set-keychain-settings -t 3600 "$BUILD_KC"
-          fi
-
-          # Sign the injected dylib (hardened runtime + timestamp, required for
-          # notarization), then re-sign the whole bundle so the cdhash covers it.
-          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$DEST"
-          codesign --force --deep \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            --options runtime \
-            --entitlements apps/screenpipe-app-tauri/src-tauri/entitlements.plist \
-            --timestamp \
-            "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          echo "✅ ${APP##*/} re-signed with libonnxruntime.dylib in Contents/MacOS/"
-
-          # Rebuild the DMG so it ships the patched .app (same cheaper
-          # delete + recreate-from-staging flow as the metallib step, with the
-          # Applications symlink so drag-to-install still works).
-          DMG_DIR="${BUNDLE_DIR}/dmg"
-          dmgs=( "${DMG_DIR}"/*.dmg )
-          if [ ${#dmgs[@]} -eq 0 ]; then
-            echo "no DMG produced — skipping DMG patch"
-            rm -rf "$TMP"
-            exit 0
-          fi
-          DMG="${dmgs[0]}"
-          echo "=== Replacing DMG: ${DMG##*/} ==="
-          df -h "$DMG_DIR" | tail -1
-          rm -f "$DMG"
-          DMG_STAGE="${RUNNER_TEMP:-/tmp}/screenpipe-dmg-stage-$$"
-          mkdir -p "$DMG_STAGE"
-          cp -R "$APP" "$DMG_STAGE/"
-          ln -s /Applications "$DMG_STAGE/Applications"
-          hdiutil create \
-            -volname "Screenpipe" \
-            -srcfolder "$DMG_STAGE" \
-            -ov \
-            -format UDZO \
-            -imagekey zlib-level=9 \
-            "$DMG"
-          rm -rf "$DMG_STAGE" "$TMP"
-          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG"
-          codesign --verify --verbose=2 "$DMG"
-          echo "✅ ${DMG##*/} re-created + signed from patched .app (with libonnxruntime.dylib)"
-
       - name: Clean up signing cert from login keychain (macOS)
         if: matrix.os_type == 'macos' && always()
         shell: bash
@@ -1348,18 +1137,80 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          notary_auth=(
+            --apple-id "$APPLE_ID"
+            --password "$APPLE_PASSWORD"
+            --team-id "$APPLE_TEAM_ID"
+          )
+
+          submit_for_notarization() {
+            local artifact="$1"
+            local artifact_name
+            artifact_name="$(basename "$artifact")"
+            local attempt submit_output submission_id wait_seconds
+
+            for attempt in 1 2 3; do
+              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/3)" >&2
+              if submit_output="$(xcrun notarytool submit "$artifact" "${notary_auth[@]}" 2>&1)"; then
+                printf '%s\n' "$submit_output" >&2
+                submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+                if [ -z "$submission_id" ]; then
+                  echo "notarytool submit succeeded but did not print a submission id" >&2
+                  return 1
+                fi
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              printf '%s\n' "$submit_output" >&2
+              submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+              if [ -n "$submission_id" ]; then
+                echo "notarytool submit exited non-zero after upload; waiting on existing submission ${submission_id}" >&2
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              if [ "$attempt" -eq 3 ]; then
+                echo "notarytool submit failed after ${attempt} attempts" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool submit failed before a submission id; retrying in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
+
+          wait_for_notarization() {
+            local submission_id="$1"
+            local attempt wait_seconds
+
+            for attempt in 1 2 3 4; do
+              echo "Waiting for notarization ${submission_id} (attempt ${attempt}/4)"
+              if xcrun notarytool wait "$submission_id" "${notary_auth[@]}" --timeout 15m; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq 4 ]; then
+                echo "notarytool wait failed after ${attempt} attempts for ${submission_id}" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool wait failed; retrying same submission in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
 
           echo "=== Notarizing and stapling DMGs ==="
           for dmg in "${BUNDLE_DIR}"/dmg/*.dmg; do
             if [ -f "$dmg" ]; then
               echo "Notarizing: $(basename "$dmg")"
-              xcrun notarytool submit "$dmg" \
-                --apple-id "$APPLE_ID" \
-                --password "$APPLE_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" \
-                --wait --timeout 15m
+              submission_id="$(submit_for_notarization "$dmg")"
+              wait_for_notarization "$submission_id"
 
               echo "Stapling: $(basename "$dmg")"
               xcrun stapler staple "$dmg"
@@ -1376,11 +1227,78 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           MACOS_DIR="${BUNDLE_DIR}/macos"
+          notary_auth=(
+            --apple-id "$APPLE_ID"
+            --password "$APPLE_PASSWORD"
+            --team-id "$APPLE_TEAM_ID"
+          )
+
+          submit_for_notarization() {
+            local artifact="$1"
+            local artifact_name
+            artifact_name="$(basename "$artifact")"
+            local attempt submit_output submission_id wait_seconds
+
+            for attempt in 1 2 3; do
+              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/3)" >&2
+              if submit_output="$(xcrun notarytool submit "$artifact" "${notary_auth[@]}" 2>&1)"; then
+                printf '%s\n' "$submit_output" >&2
+                submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+                if [ -z "$submission_id" ]; then
+                  echo "notarytool submit succeeded but did not print a submission id" >&2
+                  return 1
+                fi
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              printf '%s\n' "$submit_output" >&2
+              submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+              if [ -n "$submission_id" ]; then
+                echo "notarytool submit exited non-zero after upload; waiting on existing submission ${submission_id}" >&2
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              if [ "$attempt" -eq 3 ]; then
+                echo "notarytool submit failed after ${attempt} attempts" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool submit failed before a submission id; retrying in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
+
+          wait_for_notarization() {
+            local submission_id="$1"
+            local attempt wait_seconds
+
+            for attempt in 1 2 3 4; do
+              echo "Waiting for notarization ${submission_id} (attempt ${attempt}/4)"
+              if xcrun notarytool wait "$submission_id" "${notary_auth[@]}" --timeout 15m; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq 4 ]; then
+                echo "notarytool wait failed after ${attempt} attempts for ${submission_id}" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool wait failed; retrying same submission in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
 
           # Gatekeeper context:
           # The DMG is notarized + stapled above, so fresh installs are fine.
@@ -1409,11 +1327,8 @@ jobs:
             # notarytool only accepts flat archives; zip the .app for submission.
             APP_ZIP="${MACOS_DIR}/${APP_NAME}.notarize.zip"
             /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" "$APP_ZIP"
-            xcrun notarytool submit "$APP_ZIP" \
-              --apple-id "${{ secrets.APPLE_ID }}" \
-              --password "${{ secrets.APPLE_PASSWORD }}" \
-              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-              --wait --timeout 15m
+            submission_id="$(submit_for_notarization "$APP_ZIP")"
+            wait_for_notarization "$submission_id"
             rm -f "$APP_ZIP"
 
             xcrun stapler staple "$app"

@@ -705,6 +705,7 @@ pub(crate) fn discord_profile() -> Option<MeetingDetectionProfile> {
         ],
         min_signals_required: 1,
         ignore_window_titles: &[],
+        requires_call_signal: false,
     })
 }
 

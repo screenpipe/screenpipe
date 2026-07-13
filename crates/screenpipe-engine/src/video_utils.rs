@@ -98,7 +98,18 @@ struct Stream {
     r_frame_rate: String,
 }
 
+async fn ensure_regular_media_file(file_path: &str) -> Result<std::fs::Metadata> {
+    let metadata = tokio::fs::metadata(file_path)
+        .await
+        .map_err(|_| anyhow::anyhow!("VIDEO_NOT_FOUND: {}", file_path))?;
+    if !metadata.is_file() {
+        return Err(anyhow::anyhow!("VIDEO_NOT_FILE: {}", file_path));
+    }
+    Ok(metadata)
+}
+
 pub async fn extract_frame(file_path: &str, offset_index: i64) -> Result<String> {
+    ensure_regular_media_file(file_path).await?;
     let ffmpeg_path = find_ffmpeg_path().expect("failed to find ffmpeg path");
 
     let offset_seconds = offset_index as f64 / 1000.0;
@@ -194,11 +205,7 @@ pub struct ValidateMediaParams {
 }
 
 pub async fn validate_media(file_path: &str) -> Result<()> {
-    use tokio::fs::try_exists;
-
-    if !try_exists(file_path).await? {
-        return Err(anyhow::anyhow!("media file does not exist: {}", file_path));
-    }
+    ensure_regular_media_file(file_path).await?;
 
     let ffmpeg_path = find_ffmpeg_path().expect("failed to find ffmpeg path");
     let mut cmd = ffmpeg_cmd_async(ffmpeg_path);
@@ -743,27 +750,20 @@ pub async fn extract_frame_from_video(
     offset_index: i64,
     jpeg_quality: &str,
 ) -> Result<String> {
+    let metadata = ensure_regular_media_file(file_path).await?;
+    if metadata.len() == 0 {
+        return Err(anyhow::anyhow!("VIDEO_CORRUPTED: empty file {}", file_path));
+    }
+    // Files under 1KB are likely corrupted (no valid video that small).
+    if metadata.len() < 1024 {
+        return Err(anyhow::anyhow!(
+            "VIDEO_CORRUPTED: file too small ({} bytes) {}",
+            metadata.len(),
+            file_path
+        ));
+    }
+
     let ffmpeg_path = find_ffmpeg_path().expect("failed to find ffmpeg path");
-
-    // Check if file exists first
-    if !std::path::Path::new(file_path).exists() {
-        return Err(anyhow::anyhow!("VIDEO_NOT_FOUND: {}", file_path));
-    }
-
-    // Check file size - empty files are definitely corrupted
-    if let Ok(metadata) = tokio::fs::metadata(file_path).await {
-        if metadata.len() == 0 {
-            return Err(anyhow::anyhow!("VIDEO_CORRUPTED: empty file {}", file_path));
-        }
-        // Files under 1KB are likely corrupted (no valid video that small)
-        if metadata.len() < 1024 {
-            return Err(anyhow::anyhow!(
-                "VIDEO_CORRUPTED: file too small ({} bytes) {}",
-                metadata.len(),
-                file_path
-            ));
-        }
-    }
 
     // Get video FPS and duration - if this fails, the video is likely corrupted
     let (source_fps, video_duration) =
@@ -916,11 +916,36 @@ async fn cleanup_old_frames(frames_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn frame_extractors_reject_directories_before_spawning_ffmpeg() {
+        let directory = tempfile::tempdir().unwrap();
+        let directory_path = directory.path().to_str().unwrap();
+        let error = extract_frame(directory_path, 0).await.unwrap_err();
+        assert!(error.to_string().starts_with("VIDEO_NOT_FILE:"));
+
+        let error = extract_frame_from_video(directory_path, 0, "95")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().starts_with("VIDEO_NOT_FILE:"));
+
+        let error = extract_high_quality_frame(directory_path, 0, directory.path())
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().starts_with("VIDEO_NOT_FILE:"));
+    }
+}
+
 pub async fn extract_high_quality_frame(
     file_path: &str,
     offset_index: i64,
     output_dir: &Path,
 ) -> Result<String> {
+    ensure_regular_media_file(file_path).await?;
     let ffmpeg_path = find_ffmpeg_path().expect("failed to find ffmpeg path");
 
     let source_fps = match get_video_fps(&ffmpeg_path, file_path).await {

@@ -261,7 +261,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=86aa0212d0b537496370ebbd65892ca70c6d2e24#86aa0212d0b537496370ebbd65892ca70c6d2e24"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
 dependencies = [
  "cc",
 ]
@@ -619,7 +619,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=86aa0212d0b537496370ebbd65892ca70c6d2e24#86aa0212d0b537496370ebbd65892ca70c6d2e24"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -1401,18 +1401,6 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeb5b1ace98faf1a55e3631d63427f267897cfab7b65b1d5928cb0b8e6a4a194"
-dependencies = [
- "cidre-macros 0.4.0",
- "half",
- "parking_lot",
- "tokio",
-]
-
-[[package]]
-name = "cidre"
 version = "0.15.1"
 source = "git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a#8481f3f0dc7dd39bb5be80d9424bfac0cad3801a"
 dependencies = [
@@ -1436,16 +1424,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "cidre-macros"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5da2cdee573cf967cf4fec1f95f12a16dce31efb6d104238a8cb114cbdae1780"
+name = "cidre"
+version = "0.16.1"
+source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
+dependencies = [
+ "cc",
+ "cidre-macros 0.6.0",
+ "half",
+ "parking_lot",
+ "tokio",
+]
 
 [[package]]
 name = "cidre-macros"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6facfeffa8b9792dc014bb4e65e364d13518b74e06783d56249810a3e48cfad7"
+
+[[package]]
+name = "cidre-macros"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f32b3f1473b6147c2cf3a3f76ad680f49c95fb36a0292425af5e019132f3236"
 
 [[package]]
 name = "cipher"
@@ -1792,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/screenpipe/cpal.git?rev=c7a610aee5c6037c9c69dc5bf7f2a850da8d8b12#c7a610aee5c6037c9c69dc5bf7f2a850da8d8b12"
+source = "git+https://github.com/screenpipe/cpal.git?rev=e7edfa174466e87a467d1a58e3a4aec233ff8a21#e7edfa174466e87a467d1a58e3a4aec233ff8a21"
 dependencies = [
  "alsa",
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
@@ -7159,7 +7159,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=86aa0212d0b537496370ebbd65892ca70c6d2e24#86aa0212d0b537496370ebbd65892ca70c6d2e24"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
 dependencies = [
  "cc",
  "cmake",
@@ -8095,7 +8095,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=81855c0db45bde9390fc7765629ecc115b48711d#81855c0db45bde9390fc7765629ecc115b48711d"
+source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
 dependencies = [
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "image",
@@ -8125,7 +8125,9 @@ dependencies = [
  "arboard",
  "arc-swap",
  "chrono",
- "cidre 0.13.1",
+ "cidre 0.16.1",
+ "core-foundation 0.10.1",
+ "core-graphics",
  "crossbeam-channel",
  "dirs 6.0.0",
  "evdev",
@@ -8239,6 +8241,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "image",
+ "libc",
  "once_cell",
  "regex",
  "screenpipe-a11y",

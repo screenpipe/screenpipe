@@ -193,6 +193,16 @@
       "notes": "Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path."
     },
     {
+      "spec": "chat-automation-card-duplicate.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat", "chat-sidebar-dedupe"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path."
+    },
+    {
       "spec": "chat-newchat-duplicate.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],
@@ -201,6 +211,16 @@
       "confidence": "partial",
       "ux": "synthetic",
       "notes": "Synthetic chat event regression for duplicate sidebar rows."
+    },
+    {
+      "spec": "chat-newchat-fresh.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat", "chat-drafts"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "The real new-chat shortcut opens a fresh chat from non-empty conversations and reuses one blank chat when pressed repeatedly."
     },
     {
       "spec": "chat-sidebar-stub-dedup.spec.ts",

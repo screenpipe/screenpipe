@@ -26,6 +26,32 @@ pub mod meeting_processes;
 pub mod meeting_streaming;
 mod segmentation;
 
+/// Serializes tests that create CoreAudio taps on our own pid or introspect
+/// our own pid's CoreAudio process state (`PROCESS_DEVICES`). With several
+/// same-process taps live at once, CoreAudio stops attributing input devices
+/// to our pid (`PROCESS_DEVICES` returns empty while `is_running_input` stays
+/// true), so those tests cross-talk when the harness runs them in parallel.
+/// Production is unaffected: the engine resolves the MEETING APP's pid, and
+/// meeting apps don't hold our taps.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use tokio::sync::{Mutex, MutexGuard};
+
+    // tokio Mutex: safe to hold across `.await` (async tap tests) and never
+    // poisoned, so one panicked test can't cascade into the rest.
+    static COREAUDIO_SELF_INTROSPECTION: Mutex<()> = Mutex::const_new(());
+
+    /// For synchronous `#[test]`s (no runtime on this thread).
+    pub(crate) fn coreaudio_self_introspection_lock() -> MutexGuard<'static, ()> {
+        COREAUDIO_SELF_INTROSPECTION.blocking_lock()
+    }
+
+    /// For `#[tokio::test]`s.
+    pub(crate) async fn coreaudio_self_introspection_lock_async() -> MutexGuard<'static, ()> {
+        COREAUDIO_SELF_INTROSPECTION.lock().await
+    }
+}
+
 /// Flag to request invalidation of audio streams after sleep/wake or display
 /// reconfiguration. Set by `sleep_monitor` (CFNotification callback thread),
 /// consumed by the device monitor loop so that audio devices are force-cycled

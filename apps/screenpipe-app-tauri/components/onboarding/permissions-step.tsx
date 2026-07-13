@@ -99,29 +99,12 @@ export default function PermissionsStep({
 
   const permissions: PermissionDef[] = [
     {
-      id: "screen",
-      icon: <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture your screen",
-      subtitle: "Lets Screenpipe index what's on your screen — windows, docs, chats, code",
-      check: () => commands.checkScreenRecordingPermission(),
-      request: () => requestPermissionWithFlow("screenRecording"),
-    },
-    {
       id: "mic",
       icon: <Mic className="w-3.5 h-3.5" strokeWidth={1.5} />,
       title: "Capture what you say",
       subtitle: "Lets Screenpipe transcribe your voice in meetings and calls",
       check: () => commands.checkMicrophonePermission(),
       request: () => commands.requestPermission("microphone"),
-    },
-    {
-      id: "accessibility",
-      icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Read on-screen text",
-      subtitle: "Lets Screenpipe understand app content without OCR",
-      check: () => commands.checkAccessibilityPermissionCmd(),
-      request: () => requestPermissionWithFlow("accessibility"),
-      macOnly: true,
     },
     {
       id: "browsers",
@@ -137,6 +120,25 @@ export default function PermissionsStep({
       },
       macOnly: true,
       optional: true,
+    },
+    {
+      id: "accessibility",
+      icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
+      title: "Read on-screen text",
+      subtitle: "Lets Screenpipe understand app content without OCR",
+      check: () => commands.checkAccessibilityPermissionCmd(),
+      request: () => requestPermissionWithFlow("accessibility"),
+      macOnly: true,
+    },
+    {
+      id: "screen",
+      icon: <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />,
+      title: "Capture your screen",
+      subtitle: "Lets Screenpipe index what's on your screen — windows, docs, chats, code",
+      // requested last: granting this requires an app restart to take effect,
+      // so asking earlier just sends the user back into settings again mid-flow
+      check: () => commands.checkScreenRecordingPermission(),
+      request: () => requestPermissionWithFlow("screenRecording"),
     },
   ];
 

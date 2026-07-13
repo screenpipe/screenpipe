@@ -24,6 +24,9 @@ import type {
 type SaveConversationOptions = {
   refreshHistory?: boolean;
   syncActiveConversation?: boolean;
+  /** Force the target conversation id (send path passes the dispatched
+   *  session id so the save can't split into a duplicate row — #4719). */
+  idOverride?: string;
 };
 
 type SaveConversation = (
@@ -50,6 +53,7 @@ type ChatStateActions = {
   setInput: React.Dispatch<React.SetStateAction<string>>;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setIsStreaming: React.Dispatch<React.SetStateAction<boolean>>;
+  setConversationId: React.Dispatch<React.SetStateAction<string | null>>;
 };
 
 type ComposerAttachmentActions = {
@@ -208,6 +212,7 @@ export type PiSendTransportOptions = {
   setIsLoading: ChatStateActions["setIsLoading"];
   setIsStreaming: ChatStateActions["setIsStreaming"];
   setMessages: ChatStateActions["setMessages"];
+  setConversationId: ChatStateActions["setConversationId"];
   setPastedImages: ComposerAttachmentActions["setPastedImages"];
   setPiInfo: PiStateActions["setPiInfo"];
   setPiStarting: NonNullable<PiStateActions["setPiStarting"]>;

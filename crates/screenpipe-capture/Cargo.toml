@@ -21,5 +21,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# Process-CPU (getrusage) measurement in the ocr_gate_ab example.
+libc = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

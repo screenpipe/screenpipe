@@ -92,6 +92,13 @@ interface UseChatConversationsOpts {
 interface SaveConversationOptions {
   refreshHistory?: boolean;
   syncActiveConversation?: boolean;
+  /** Force the conversation id to write under, bypassing the
+   *  `conversationId`-first resolution below. The send path passes the id the
+   *  turn is actually dispatched under (`piSessionIdRef.current`) so the disk
+   *  file + its `chat-conversation-saved` emit match the live store session —
+   *  otherwise a lagging `conversationId` writes a second id and the sidebar
+   *  upserts a duplicate row (#4719, summary/todo card twin). */
+  idOverride?: string;
 }
 
 function newestUserMessageTimestamp(messages: Message[]): number | undefined {
@@ -489,15 +496,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // setConversationId(newSid)); without the fallback the save would mint
     // a fresh uuid and duplicate the conversation.
     //
-    // Never mint a fresh id here (issue #4719). If `conversationId` and the
-    // ref are both transiently empty (the null-id window inside
-    // startNewConversation), fall back to the store's `currentId` — the last
-    // stable id the panel published — and if even that is missing, SKIP the
-    // save rather than invent one. A `crypto.randomUUID()` fallback would
-    // persist a phantom twin file for what is really one conversation, which
-    // is exactly the cross-window duplicate this issue tracks.
+    // `idOverride` wins when the caller knows the exact target session (the
+    // send path — the id the message is dispatched/streamed under). Otherwise
+    // prefer `conversationId` per the mid-switch reasoning above, then the ref,
+    // then the store's `currentId` (the last stable id the panel published).
+    // Never mint a fresh id here (issue #4719): if none of those exist, SKIP
+    // the save rather than invent one — a `crypto.randomUUID()` fallback would
+    // persist a phantom twin file for what is really one conversation.
     const { useChatStore } = await import("@/lib/stores/chat-store");
     const convId =
+      options.idOverride ||
       conversationId ||
       piSessionIdRef.current ||
       useChatStore.getState().currentId;
@@ -1486,7 +1494,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // hitting "+ new chat" in the middle of a stream would silently
     // discard everything the user couldn't yet see, even though the
     // Pi process keeps running. Mirrors the snapshot in loadConversation.
-    const { useChatStore } = await import("@/lib/stores/chat-store");
+    const { useChatStore, getOrCreateEmptyChatId } = await import("@/lib/stores/chat-store");
     const store = useChatStore.getState();
     const outgoingSid = piSessionIdRef.current;
     if (outgoingSid && store.sessions[outgoingSid]) {
@@ -1532,7 +1540,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Pair with setCurrent so the router immediately knows the new id is
     // foreground (and won't accumulate writes for it). See the matching
     // pairing in loadConversation for the same reasoning.
-    const newSid = explicitId ?? crypto.randomUUID();
+    // Reuse an existing empty chat when the caller didn't pin an id (#4719),
+    // so a header "+ new chat" (or an agent-evicted / post-delete restart)
+    // doesn't mint a throwaway uuid when a blank chat is already available.
+    const newSid = explicitId ?? getOrCreateEmptyChatId().id;
     piSessionIdRef.current = newSid;
     piSessionSyncedRef.current = true;
     store.actions.setCurrent(newSid);

@@ -51,6 +51,7 @@ describe('OpenAIProvider usage reporting', () => {
 					completion_tokens: 50,
 					total_tokens: 5_050,
 					prompt_tokens_details: { cached_tokens: 4_000 },
+					cache_write_tokens: 200,
 				},
 			};
 		}
@@ -73,7 +74,64 @@ describe('OpenAIProvider usage reporting', () => {
 		expect(usageEvent.usage.prompt_tokens).toBe(5_000);
 		expect(usageEvent.usage.completion_tokens).toBe(50);
 		expect(usageEvent.usage.prompt_tokens_details.cached_tokens).toBe(4_000);
+		expect(usageEvent.usage.cache_creation_input_tokens).toBe(200);
 		expect(text.trim().endsWith('data: [DONE]')).toBe(true);
+	});
+
+	it('forwards Pi-shaped tools and required tool_choice on streams', async () => {
+		async function* stream() {
+			yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'add_one', arguments: '{"a":1}' } }] }, finish_reason: 'tool_calls' }] };
+		}
+		const { provider, calls } = makeOpenAIProvider(async () => {
+			const s: any = stream();
+			s.controller = { abort: () => {} };
+			return s;
+		});
+		const tools: any = [{
+			type: 'function',
+			function: {
+				name: 'add_one',
+				description: 'Adds one to a number.',
+				strict: false,
+				parameters: {
+					type: 'object',
+					properties: { a: { type: 'integer' } },
+					required: ['a'],
+					additionalProperties: false,
+				},
+			},
+		}];
+
+		await new Response(await provider.createStreamingCompletion({
+			...body,
+			model: 'gpt-5.6-luna',
+			stream: true,
+			tools,
+			tool_choice: 'required',
+		})).text();
+
+		expect(calls[0].tools).toEqual(tools);
+		expect(calls[0].tool_choice).toBe('required');
+		expect(calls[0].reasoning_effort).toBe('none');
+	});
+
+	it('does not disable reasoning for GPT-5.6 requests without tools', async () => {
+		async function* stream() {
+			yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+		}
+		const { provider, calls } = makeOpenAIProvider(async () => {
+			const s: any = stream();
+			s.controller = { abort: () => {} };
+			return s;
+		});
+
+		await new Response(await provider.createStreamingCompletion({
+			...body,
+			model: 'gpt-5.6-luna',
+			stream: true,
+		})).text();
+
+		expect(calls[0].reasoning_effort).toBeUndefined();
 	});
 
 	it('drops stream_options and retries when an OpenAI-compatible server rejects it', async () => {
@@ -110,6 +168,7 @@ describe('OpenAIProvider usage reporting', () => {
 				completion_tokens: 30,
 				total_tokens: 1_230,
 				prompt_tokens_details: { cached_tokens: 1_024 },
+				cache_write_tokens: 176,
 			},
 		}));
 		const response = await provider.createCompletion(body);
@@ -118,6 +177,7 @@ describe('OpenAIProvider usage reporting', () => {
 		expect(json.usage.completion_tokens).toBe(30);
 		expect(json.usage.total_tokens).toBe(1_230);
 		expect(json.usage.prompt_tokens_details.cached_tokens).toBe(1_024);
+		expect(json.usage.cache_creation_input_tokens).toBe(176);
 	});
 
 	it('omits usage when upstream provides none (no fake zeros)', async () => {

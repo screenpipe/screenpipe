@@ -69,7 +69,13 @@ fn encode_single_audio(
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        // Chunk encoding is background batch work on samples already captured
+        // in memory — no realtime deadline. BELOW_NORMAL keeps the recurring
+        // per-chunk ffmpeg from competing with the user's foreground apps
+        // (#4849). The compaction ffmpeg goes further (IDLE); encode feeds the
+        // persist path, so BELOW_NORMAL is the safer floor here.
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
+        command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
     }
 
     debug!("FFmpeg command: {:?}", command);

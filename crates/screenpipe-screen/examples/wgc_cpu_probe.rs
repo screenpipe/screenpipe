@@ -95,6 +95,7 @@ mod windows_main {
         capture
             .get_latest_image(Duration::from_secs(2))
             .expect("failed to get warm-up frame");
+        let stats_start = capture.stats();
 
         let sample_interval = Duration::from_millis(interval_ms);
         let run_for = Duration::from_secs(duration_secs);
@@ -118,6 +119,7 @@ mod windows_main {
         let cpu_elapsed = cpu_time_now() - cpu_start;
         let wall_elapsed = wall_start.elapsed();
         let cores = cpu_elapsed.as_secs_f64() / wall_elapsed.as_secs_f64();
+        let stats_end = capture.stats();
 
         capture.stop();
 
@@ -128,5 +130,11 @@ mod windows_main {
             cpu_elapsed.as_secs_f64()
         );
         println!("process CPU load: {:.1}% of one core", cores * 100.0);
+        println!(
+            "WGC callbacks: {}, GPU copies: {}, image requests: {}",
+            stats_end.frame_arrivals - stats_start.frame_arrivals,
+            stats_end.copy_submissions - stats_start.copy_submissions,
+            stats_end.image_requests - stats_start.image_requests
+        );
     }
 }

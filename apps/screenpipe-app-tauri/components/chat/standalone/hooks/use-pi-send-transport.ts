@@ -5,7 +5,7 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
-import { commands } from "@/lib/utils/tauri";
+import { commands, type Result } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorMessage, preflightChatProvider } from "@/lib/chat/provider-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
@@ -61,6 +61,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendDispatchInFlightRef,
     sendMessageRef,
     setAttachedDocs,
+    setConversationId,
     setInput,
     setIsLoading,
     setIsStreaming,
@@ -165,29 +166,99 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         console.log("[Pi] Not running, auto-starting before sending message");
         piStartInFlightRef.current = true;
         setPiStarting(true);
-        const providerConfig = buildProviderConfig();
+
+        // Build a list of presets to try: active first, then other available
+        // presets as fallbacks. This ensures that if the active preset fails
+        // (e.g. ChatGPT OAuth expired), we try alternatives before giving up.
+        const activeP = getActivePreset();
+        const allPresets = settings.aiPresets ?? [];
+        const fallbackPresets = allPresets.filter(
+          (p) => p.id !== activeP?.id && p.model && p.model.trim() !== "",
+        );
+        const presetsToTry = activeP ? [activeP, ...fallbackPresets] : [...fallbackPresets];
+
+        let started = false;
+        let lastError = "";
+
         try {
           const home = await homeDir();
           const dir = await join(home, ".screenpipe", "pi-chat");
-          const result = await commands.piStart(piSessionIdRef.current, dir, settings.user?.token ?? null, providerConfig);
-          if (result.status === "ok" && result.data.running) {
-            setPiInfo(result.data);
-            piSessionSyncedRef.current = false;
-            piCrashCountRef.current = 0; // reset crash loop counter on manual start
-            // Keep running-config ref in sync so preset watcher doesn't re-trigger
-            if (providerConfig) {
-              setRunningConfigFromProviderConfig(providerConfig);
+
+          for (const preset of presetsToTry) {
+            const providerConfig = buildProviderConfig(preset);
+            if (!providerConfig) continue;
+
+            // Pre-check ChatGPT token validity before attempting start —
+            // avoids a noisy error from the Tauri command layer when the
+            // token is expired/missing, and lets us skip straight to
+            // fallback. Wrapped in a 5s timeout so a slow refresh can't
+            // block the entire fallback loop.
+            if (providerConfig.provider === "openai-chatgpt") {
+              try {
+                const checkResult = await Promise.race([
+                  commands.chatgptOauthCheckToken(),
+                  new Promise<Result<boolean, string>>((resolve) =>
+                    setTimeout(() => resolve({ status: "error", error: "timeout" }), 5_000)
+                  ),
+                ]);
+                if (checkResult.status !== "ok" || !checkResult.data) {
+                  console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT token not valid`);
+                  lastError = "ChatGPT OAuth token unavailable";
+                  continue;
+                }
+              } catch {
+                console.log(`[Pi] Skipping preset "${preset.id}" — ChatGPT token check failed`);
+                lastError = "ChatGPT OAuth token check failed";
+                continue;
+              }
             }
-            syncThinkingLevelAfterStart(piSessionIdRef.current);
-          } else {
-            const providerLabel = providerConfig?.provider || "AI";
-            toast({ title: `failed to start AI assistant (${providerLabel})`, description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
+
+            try {
+              const result = await commands.piStart(
+                piSessionIdRef.current,
+                dir,
+                settings.user?.token ?? null,
+                providerConfig,
+              );
+              if (result.status === "ok" && result.data.running) {
+                setPiInfo(result.data);
+                piSessionSyncedRef.current = false;
+                piCrashCountRef.current = 0;
+                setRunningConfigFromProviderConfig(providerConfig);
+                syncThinkingLevelAfterStart(piSessionIdRef.current);
+
+                // Notify the user about the session-only fallback, but
+                // do NOT persist it — the user's chosen preset stays.
+                if (preset.id !== activeP?.id) {
+                  console.log(`[Pi] Fell back to preset "${preset.id}" for this session (not persisted)`);
+                  toast({
+                    title: `using "${preset.id}" preset for this session`,
+                    description: `"${activeP?.id ?? "active"}" preset failed to start — using fallback for this session only`,
+                  });
+                }
+                started = true;
+                break;
+              } else {
+                lastError = result.status === "error" ? result.error ?? "Unknown error" : "Unknown error";
+                console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) failed: ${lastError}`);
+              }
+            } catch (e) {
+              lastError = String(e);
+              console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) threw: ${lastError}`);
+            }
+          }
+
+          if (!started) {
+            const providerLabel = activeP?.provider || "AI";
+            toast({
+              title: `failed to start AI assistant (${providerLabel})`,
+              description: presetsToTry.length > 1
+                ? `all ${presetsToTry.length} presets failed — ${lastError}`
+                : lastError,
+              variant: "destructive",
+            });
             return;
           }
-        } catch (e) {
-          const providerLabel = providerConfig?.provider || "AI";
-          toast({ title: `failed to start AI assistant (${providerLabel})`, description: String(e), variant: "destructive" });
-          return;
         } finally {
           setPiStarting(false);
           piStartInFlightRef.current = false;
@@ -225,6 +296,17 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     piRateLimitRetries.current = 0;
     lastUserMessageRef.current = userMessage;
 
+    // The id this turn is dispatched and streamed under — the single source of
+    // truth for the whole turn's persistence (#4719).
+    const turnSessionId = piSessionIdRef.current;
+    // Pull `conversationId` (React state, used by the edge/streaming auto-saves
+    // in useChatConversations) into lockstep with the dispatched session id. If
+    // it lags, those later saves write under a SECOND id and the sidebar
+    // upserts a duplicate row (the summary/todo card twin). Setting it here
+    // makes every save for this turn — immediate, streaming, and edge — land on
+    // one id.
+    setConversationId(turnSessionId);
+
     let nextRowsAfterUserAppend: Message[] | null = null;
     setMessages((prev) => {
       const next = [...prev, newUserMessage];
@@ -232,7 +314,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       return next;
     });
     if (nextRowsAfterUserAppend) {
-      void saveConversation(nextRowsAfterUserAppend, { refreshHistory: false });
+      // conversationId state hasn't committed yet this tick, so force the
+      // immediate save under the same id explicitly.
+      void saveConversation(nextRowsAfterUserAppend, {
+        refreshHistory: false,
+        idOverride: turnSessionId,
+      });
     }
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";

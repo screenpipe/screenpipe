@@ -44,7 +44,11 @@ jobs:
           timeout 15 bunx screenpipe@0.3.139 record 2>&1 || echo "--- exited (expected on CI due to screen recording permission) ---"
 
   test-macos-x64:
-    runs-on: macos-13  # Intel
+    # macos-13 was retired by GitHub in Dec 2025 (actions/runner-images#13046) —
+    # a job pinned to it just queues 24h for a runner that never comes, then
+    # gets cancelled. macos-15-intel is the current (and final) hosted x86_64
+    # macOS image.
+    runs-on: macos-15-intel  # Intel
     steps:
       - name: Verify blank slate
         run: |

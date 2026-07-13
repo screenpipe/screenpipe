@@ -313,6 +313,21 @@ pub enum TruncationReason {
     MaxNodes,
 }
 
+/// Screen bounds of the focused window, normalized to the monitor's extent
+/// (fractions of monitor size, top-left origin) so they map directly onto a
+/// full-monitor capture image at any capture resolution (the capture may be
+/// width-capped below the monitor's native pixels). Unlike [`NodeBounds`]
+/// these are deliberately NOT clamped to 0-1 — a window dragged past the
+/// monitor's edge legitimately has negative or >1 extents; consumers clamp
+/// in pixel space after scaling to the actual frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 /// A snapshot of all visible text from the focused window's accessibility tree.
 #[derive(Debug, Clone)]
 pub struct TreeSnapshot {
@@ -342,6 +357,12 @@ pub struct TreeSnapshot {
     pub truncation_reason: TruncationReason,
     /// Deepest depth reached during the walk.
     pub max_depth_reached: usize,
+    /// Screen bounds of the walked (focused) window, normalized to the
+    /// monitor's extent — see [`WindowBounds`]. `None` when the platform
+    /// couldn't resolve the window frame or the monitor dimensions weren't
+    /// configured. Downstream, the meeting OCR gate uses this to scope
+    /// text-region detection and OCR to the meeting window (#5054).
+    pub window_bounds: Option<WindowBounds>,
 }
 
 impl TreeSnapshot {
@@ -662,6 +683,7 @@ mod tests {
             truncated: false,
             truncation_reason: TruncationReason::None,
             max_depth_reached: 1,
+            window_bounds: None,
         }
     }
 

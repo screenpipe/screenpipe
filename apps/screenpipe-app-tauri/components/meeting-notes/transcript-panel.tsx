@@ -198,7 +198,7 @@ function groupBySpeaker(chunks: MeetingAudioChunk[]): SpeakerBlock[] {
     const ts = timestampMs(c.timestamp);
     if (ts <= 0) continue;
     const speakerName = c.speakerName || (c.isInput ? "me" : "speaker");
-    const speakerId = c.isInput ? null : c.speakerId;
+    const speakerId = c.speakerId;
     const last = out[out.length - 1];
     const sameSpeaker =
       last &&
@@ -998,7 +998,11 @@ function SpeakerParagraph({
       style={{ contain: "layout paint" }}
     >
       <div className="flex items-baseline gap-2 mb-1">
-        {block.firstAudioFilePath ? (
+        {/* Gate on chunk id, not file path: reassignment only needs a real
+            audio_chunk_id. firstAudioFilePath can legitimately be empty
+            (e.g. a background chunk with a corrupted file_path) without
+            that blocking renaming — it's only used for playback preview. */}
+        {block.firstAudioChunkId > 0 ? (
           <SpeakerAssignPopover
             audioChunkId={block.firstAudioChunkId}
             speakerId={block.speakerId ?? undefined}

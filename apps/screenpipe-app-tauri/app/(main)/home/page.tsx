@@ -21,17 +21,18 @@ import {
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import {
-  isSessionForeground,
+  getOrCreateEmptyChatId,
+  applyChatSessionActivity,
   sessionRecordFromMeta,
   useChatStore,
-  type SessionStatus,
+  type ChatSessionActivityPayload,
 } from "@/lib/stores/chat-store";
 import {
   conversationMetaFromJson,
   loadConversationFile,
 } from "@/lib/chat-storage";
 import { cn } from "@/lib/utils";
-import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
+import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { UpdateBanner } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
@@ -61,6 +62,7 @@ import {
 } from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
@@ -132,23 +134,30 @@ function HomeContent() {
   }, [setActiveSection]);
 
   const startNewChat = useCallback(() => {
-    const id = crypto.randomUUID();
     const store = useChatStore.getState();
+    // Reuse an existing empty chat instead of minting a fresh uuid every
+    // time (#4719). Repeatedly hitting "+ new chat" otherwise floods the
+    // sidebar with stray untitled rows and mints ids that the panel and the
+    // other window then have to reconcile.
+    const { id, isNew } = getOrCreateEmptyChatId();
+    // Clean up any *other* stray empty drafts, keeping the one we reuse.
     Object.values(store.sessions).forEach((s) => {
-      if (s.draft) store.actions.drop(s.id);
+      if (s.draft && s.id !== id) store.actions.drop(s.id);
     });
-    store.actions.upsert({
-      id,
-      title: "untitled",
-      preview: "",
-      status: "idle",
-      messageCount: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      pinned: false,
-      unread: false,
-      draft: true,
-    });
+    if (isNew) {
+      store.actions.upsert({
+        id,
+        title: "untitled",
+        preview: "",
+        status: "idle",
+        messageCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        pinned: false,
+        unread: false,
+        draft: true,
+      });
+    }
     store.actions.setCurrent(id);
     void emit("chat-load-conversation", { conversationId: id });
   }, [setActiveSection]);
@@ -201,75 +210,9 @@ function HomeContent() {
   // Overlay-side foreground sessions don't pass through this window's
   // background router path. Mirror lightweight activity (status + preview)
   // so the home sidebar stays live without mirroring full message bodies.
-  useEffect(() => {
-    let cancelled = false;
-    let unlistenFn: (() => void) | undefined;
-    (async () => {
-      const unlisten = await listen<{
-        id: string;
-        status?: SessionStatus;
-        preview?: string;
-        title?: string;
-        updatedAt: number;
-        lastError?: string;
-        unreadHint?: boolean;
-      }>("chat-session-activity", (event) => {
-        if (cancelled) return;
-        const { id, status, preview, title, updatedAt, lastError, unreadHint } = event.payload ?? {};
-        if (!id || !updatedAt) return;
-        const store = useChatStore.getState();
-        const existing = store.sessions[id];
-        if (!existing) {
-          store.actions.upsert({
-            id,
-            title: title?.trim() || "untitled",
-            preview: preview ?? "",
-            status: status ?? "idle",
-            lastError,
-            messageCount: 0,
-            createdAt: updatedAt,
-            updatedAt,
-            pinned: false,
-            hidden: false,
-            unread: false,
-          });
-        } else {
-          if (existing.updatedAt > updatedAt) return;
-          const nextTitle = title?.trim() || existing.title;
-          const nextPreview = preview ?? existing.preview;
-          const nextStatus = status ?? existing.status;
-          const nextLastError =
-            lastError !== undefined
-              ? lastError || undefined
-              : nextStatus === "error"
-                ? existing.lastError
-                : undefined;
-          if (
-            existing.title === nextTitle &&
-            existing.preview === nextPreview &&
-            existing.status === nextStatus &&
-            existing.lastError === nextLastError &&
-            existing.updatedAt === updatedAt
-          ) return;
-          store.actions.patch(id, {
-            title: nextTitle,
-            preview: nextPreview,
-            status: nextStatus,
-            lastError: nextLastError,
-            updatedAt,
-          });
-        }
-        if (unreadHint && !isSessionForeground(store, id)) {
-          store.actions.patch(id, { lastContentAt: Date.now() });
-        }
-      });
-      unlistenFn = unlisten;
-    })();
-    return () => {
-      cancelled = true;
-      unlistenFn?.();
-    };
-  }, []);
+  useTauriEvent<ChatSessionActivityPayload>("chat-session-activity", (event) => {
+    applyChatSessionActivity(useChatStore.getState(), event.payload);
+  });
 
   // Saved-title correction path. Activity updates are best-effort during
   // streaming; this event is emitted after canonical on-disk save, so use it
@@ -350,23 +293,10 @@ function HomeContent() {
   // but the user is still looking at a different view. They'd have to
   // also click "New chat" or similar to see the result. Hooking the
   // listener at the page level fixes the cross-view UX.
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      const u = await listen<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
-        if (cancelled) return;
-        if (!shouldActivateHomeSectionForChatLoadConversation(event.payload)) return;
-        setActiveSection("home");
-      });
-      unlistenFn = u;
-    })();
-    return () => {
-      cancelled = true;
-      unlistenFn?.();
-    };
-  }, [setActiveSection]);
+  useTauriEvent<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
+    if (!shouldActivateHomeSectionForChatLoadConversation(event.payload)) return;
+    setActiveSection("home");
+  });
 
   // Clear the sidebar's "current" highlight when leaving the chat
   // view. The chat panel stays mounted (display:none) and keeps streaming.
@@ -479,14 +409,16 @@ function HomeContent() {
     user_disabled: boolean;
   }
   const [recordingDevices, setRecordingDevices] = useState<RecordingDevice[]>([]);
+  const [isCapturePaused, setIsCapturePaused] = useState(false);
   const recordingDevicesSnapshotRef = useRef("");
 
   const refreshRecordingDevices = useCallback(async () => {
     try {
-      const [health, audioStatus, visionStatus]: [
+      const [health, audioStatus, visionStatus, capturePausedResult]: [
         { monitors?: string[]; device_status_details?: string } | null,
         AudioDeviceStatus[] | null,
         VisionDeviceStatus[] | null,
+        Awaited<ReturnType<typeof commands.isCapturePaused>>,
       ] = await Promise.all([
         localFetch("/health")
           .then((r) => r.ok ? r.json() : null)
@@ -497,7 +429,14 @@ function HomeContent() {
         localFetch("/vision/device/status")
           .then((r) => r.ok ? r.json() : null)
           .catch(() => null),
+        commands.isCapturePaused(),
       ]);
+
+      // Read the backend's recording status — same source of truth as
+      // the tray menu. When capture is globally paused/stopped the sidecar
+      // per-device endpoints still report devices as active, so override.
+      const capturePaused = capturePausedResult === true;
+      setIsCapturePaused(capturePaused);
 
       const devices: RecordingDevice[] = [];
       // Prefer /vision/device/status: it carries the numeric monitor id (so each
@@ -567,10 +506,14 @@ function HomeContent() {
         }
       }
 
-      const snapshot = JSON.stringify(devices);
+      const effective = capturePaused
+        ? devices.map((d) => ({ ...d, active: false }))
+        : devices;
+
+      const snapshot = JSON.stringify(effective);
       if (snapshot !== recordingDevicesSnapshotRef.current) {
         recordingDevicesSnapshotRef.current = snapshot;
-        setRecordingDevices(devices);
+        setRecordingDevices(effective);
       }
     } catch {
       // Device status is advisory UI state; keep the last known snapshot.
@@ -585,16 +528,31 @@ function HomeContent() {
     return () => { clearInterval(interval); };
   }, [refreshRecordingDevices]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen("audio-device-status-changed", () => {
-      void refreshRecordingDevices();
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, [refreshRecordingDevices]);
+  useTauriEvent("audio-device-status-changed", () => {
+    void refreshRecordingDevices();
+  });
+
+  // Covers pause/resume from tray, keyboard shortcut, or deeplink — the same
+  // events that trigger the "recording paused"/"recording started" toasts.
+  // Refresh reads is_capture_paused from the backend so it always has the
+  // real state — no fragile frontend ref needed.
+  useTauriEvent("shortcut-stop-recording", () => {
+    void refreshRecordingDevices();
+  });
+
+  useTauriEvent("shortcut-start-recording", () => {
+    void refreshRecordingDevices();
+  });
 
   const pauseRecording = useCallback(async () => {
     await emit("shortcut-stop-recording", {});
+    window.setTimeout(() => {
+      void refreshRecordingDevices();
+    }, 500);
+  }, [refreshRecordingDevices]);
+
+  const resumeRecording = useCallback(async () => {
+    await emit("shortcut-start-recording", {});
     window.setTimeout(() => {
       void refreshRecordingDevices();
     }, 500);
@@ -762,47 +720,39 @@ function HomeContent() {
   // Native overlay already toggles the meeting in Rust. Refresh local state
   // here instead of toggling again, otherwise one click can create or stop
   // two meetings depending on which UI surfaces are mounted.
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen<MeetingStatusResponse>("native-shortcut-toggle-meeting", (event) => {
-      const payload = event.payload;
-      if (typeof payload?.active === "boolean") {
-        if (payload.active) {
-          manualMeetingStartedAt.current = Date.now();
-        } else {
-          manualMeetingStartedAt.current = 0;
-        }
-        setMeetingState({
-          active: payload.active,
-          manualActive: payload.manualActive ?? false,
-          activeMeetingId: payload.activeMeetingId ?? null,
-          stoppableMeetingId: payload.stoppableMeetingId ?? payload.activeMeetingId ?? null,
-          meetingApp: payload.meetingApp ?? null,
-          detectionSource: payload.detectionSource ?? null,
-        });
-        return;
+  useTauriEvent<MeetingStatusResponse>("native-shortcut-toggle-meeting", (event) => {
+    const payload = event.payload;
+    if (typeof payload?.active === "boolean") {
+      if (payload.active) {
+        manualMeetingStartedAt.current = Date.now();
+      } else {
+        manualMeetingStartedAt.current = 0;
       }
-      void (async () => {
-        try {
-          const res = await localFetch("/meetings/status");
-          const status = res.ok ? await res.json() as MeetingStatusResponse : null;
-          setMeetingState(computeMeetingActive(status, manualMeetingStartedAt.current));
-        } catch {
-          // ignore sync failures; websocket remains source of truth
-        }
-      })();
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, []);
+      setMeetingState({
+        active: payload.active,
+        manualActive: payload.manualActive ?? false,
+        activeMeetingId: payload.activeMeetingId ?? null,
+        stoppableMeetingId: payload.stoppableMeetingId ?? payload.activeMeetingId ?? null,
+        meetingApp: payload.meetingApp ?? null,
+        detectionSource: payload.detectionSource ?? null,
+      });
+      return;
+    }
+    void (async () => {
+      try {
+        const res = await localFetch("/meetings/status");
+        const status = res.ok ? await res.json() as MeetingStatusResponse : null;
+        setMeetingState(computeMeetingActive(status, manualMeetingStartedAt.current));
+      } catch {
+        // ignore sync failures; websocket remains source of truth
+      }
+    })();
+  });
 
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    listen<{ pipeName: string; executionId: number }>("watch_pipe", () => {
-      setActiveSection("home");
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, [setActiveSection]);
+  useTauriEvent<{ pipeName: string; executionId: number }>("watch_pipe", () => {
+    setActiveSection("home");
+  });
 
   const openSettings = useCallback((section: string = "general") => {
     const chatId = activeSection === "home" ? useChatStore.getState().currentId : null;
@@ -929,22 +879,19 @@ function HomeContent() {
     .filter((s) => !(s.id === "timeline" && (settings.disableTimeline ?? false)));
 
   // Listen for navigation events from other windows (e.g. tray, Rust-side links)
-  useEffect(() => {
-    const unlisten = listen<{ url: string }>("navigate", (event) => {
-      const url = new URL(event.payload.url, window.location.origin);
-      const section = url.searchParams.get("section");
-      if (!section) return;
-      if (SETTINGS_SECTIONS.has(section)) {
-        const mapped = section === "disk-usage" || section === "cloud-archive" || section === "cloud-sync"
-          ? "storage" : section;
-        router.push(`/settings?section=${mapped}`);
-      } else {
-        const mapped = section === "feedback" ? "help" : section;
-        if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [setActiveSection, router]);
+  useTauriEvent<{ url: string }>("navigate", (event) => {
+    const url = new URL(event.payload.url, window.location.origin);
+    const section = url.searchParams.get("section");
+    if (!section) return;
+    if (SETTINGS_SECTIONS.has(section)) {
+      const mapped = section === "disk-usage" || section === "cloud-archive" || section === "cloud-sync"
+        ? "storage" : section;
+      router.push(`/settings?section=${mapped}`);
+    } else {
+      const mapped = section === "feedback" ? "help" : section;
+      if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
+    }
+  });
 
   const isFullHeight =
     activeSection === "home" ||
@@ -953,14 +900,17 @@ function HomeContent() {
     activeSection === "history" ||
     activeSection === "brain";
 
+  // The outer flex row (sidebar shell + content column) lives in the shared
+  // (main)/layout.tsx so the sidebar width survives navigation to /settings.
+  // This page contributes overlays, the floating top-left strip, the sidebar
+  // content (portaled into the shell by AppSidebar) and the content column.
   return (
-    <div className={cn("bg-transparent", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
+    <>
       {/* Enterprise license key prompt */}
       {needsLicenseKey && <EnterpriseLicensePrompt onSubmit={submitLicenseKey} />}
       {/* Drag region — always absolute so it works with full-bleed translucent layout */}
       <div className="absolute top-0 left-0 right-0 h-8 z-10" data-tauri-drag-region />
 
-      <div className="h-screen flex min-h-0">
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
           {/* Top-left chrome strip — pinned next to the macOS traffic
@@ -1041,6 +991,8 @@ function HomeContent() {
               meetingLoading={meetingLoading}
               onToggleMeeting={() => void toggleMeeting()}
               onPauseRecording={pauseRecording}
+              onResumeRecording={resumeRecording}
+              isGloballyPaused={isCapturePaused}
               isTranslucent={isTranslucent}
               floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
             />
@@ -1237,7 +1189,7 @@ function HomeContent() {
               nowrap, so that's the FULL untruncated text width), and in a
               narrow window with the sidebar open the whole pane gets
               clipped at the right window edge instead of truncating. */}
-          <div className={cn("flex-1 min-w-0 flex flex-col h-full bg-background min-h-0 relative", isTranslucent ? "rounded-none" : "rounded-tr-lg")}>
+          <div className={cn("flex-1 min-w-0 flex flex-col h-full bg-background min-h-0 relative", isTranslucent ? "rounded-none" : "rounded-tr-lg")} data-testid="home-page">
             {/* ALWAYS-MOUNTED chat layer.
                 Hidden via CSS (display:none) when the user is on a non-chat
                 section, so the StandaloneChat component never unmounts. This
@@ -1277,20 +1229,16 @@ function HomeContent() {
             )}
 
           </div>
-      </div>
-
-    </div>
+    </>
   );
 }
 
 export default function HomePage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center">
+    <Suspense fallback={<div className="flex-1 min-w-0 h-full bg-background flex items-center justify-center">
       <div className="text-muted-foreground">Loading...</div>
     </div>}>
-      <SidebarProvider>
-        <HomeContent />
-      </SidebarProvider>
+      <HomeContent />
     </Suspense>
   );
 }

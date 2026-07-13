@@ -832,8 +832,10 @@ export async function fetchMeetingAudio(
         out.push({
           audioChunkId: id,
           audioFilePath: c.file_path,
-          speakerId: isInput ? null : c.speaker?.id ?? null,
-          speakerName: isInput ? "me" : c.speaker?.name ?? "",
+          speakerId: c.speaker?.id ?? null,
+          // Mic rows show "me" only until someone is actually assigned —
+          // hardcoding "me" made input lines look impossible to reassign.
+          speakerName: c.speaker?.name?.trim() || (isInput ? "me" : ""),
           deviceType,
           isInput,
           transcription: c.transcription,
@@ -906,10 +908,12 @@ async function fetchRoutedMeetingTranscript(
               ? segment.audioChunkId
               : -segment.id,
           audioFilePath: segment.audioFilePath ?? "",
-          speakerId: isInput ? null : segment.speakerId ?? null,
-          speakerName: isInput
-            ? "me"
-            : segment.speakerName?.trim() || "speaker",
+          speakerId: segment.speakerId ?? null,
+          // The endpoint only returns a name for mic rows once a real speaker
+          // is assigned, so an assigned name survives here instead of being
+          // masked by a hardcoded "me".
+          speakerName:
+            segment.speakerName?.trim() || (isInput ? "me" : "speaker"),
           deviceType,
           isInput,
           transcription: segment.transcript,

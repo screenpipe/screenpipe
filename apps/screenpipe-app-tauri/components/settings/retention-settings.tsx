@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { RetentionModePreview } from "./setting-previews";
 import {
@@ -142,9 +143,8 @@ export function RetentionSettings({
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 10000);
-    return () => clearInterval(interval);
   }, [fetchStatus]);
+  useInterval(fetchStatus, 10000);
 
   // Pull a fresh disk-preview whenever a confirmation opens or retentionDays
   // changes while pending. Cheap query, no debounce needed at human pace.

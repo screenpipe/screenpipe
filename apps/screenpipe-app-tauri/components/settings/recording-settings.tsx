@@ -7,6 +7,8 @@
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { useEventListener } from "@/lib/hooks/use-event-listener";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { useSettingsIndexDriftCheck, type SettingsField } from "./settings-search";
 import { CaptureFrequencyPreview, AudioCaptureModePreview } from "./setting-previews";
 
@@ -26,6 +28,8 @@ export const searchIndex: SettingsField[] = [
   // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
   { label: "Echo cancellation mode", keywords: ["echo", "aec", "voiceprocessingio", "wasapi"], conditional: true },
   { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
+  { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
+  { label: "Bluetooth microphones", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
   { label: "Screenshot images", keywords: ["screenshot", "pixels", "ocr", "jpeg"] },
   { label: "Use all monitors", keywords: ["monitor", "display"], conditional: true },
@@ -92,6 +96,7 @@ import {
   Play,
   Rewind,
   FastForward,
+  Bluetooth,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -259,7 +264,7 @@ const getAudioEngineResolution = (
 ): AudioEngineResolution => {
   const requested = settings.audioTranscriptionEngine;
   const fallback = FALLBACK_TRANSCRIPTION_ENGINE;
-  const hasCloudAuth = Boolean(settings.user?.token || settings.user?.id);
+  const hasCloudAuth = Boolean(settings.user?.token);
   const hasDeepgramKey = Boolean(
     settings.deepgramApiKey && settings.deepgramApiKey !== "default"
   );
@@ -1566,9 +1571,8 @@ function HighFpsCard({
 
   React.useEffect(() => {
     fetchState();
-    const id = setInterval(fetchState, 2000);
-    return () => clearInterval(id);
   }, [fetchState]);
+  useInterval(fetchState, 2000);
 
   const pushSettings = React.useCallback(
     async (patch: Partial<{ defaultMode: HdDefaultMode; intervalMs: number }>): Promise<PushOutcome> => {
@@ -1785,15 +1789,17 @@ export function RecordingSettings() {
     AudioDeviceInfo[]
   >([]);
 
-  // Gate for the experimental CoreAudio Process Tap toggle — we only show
-  // the switch on macOS 14.4+ where the API exists. Probed once via a
-  // Tauri command that proxies to
-  // `screenpipe_audio::core::process_tap::is_process_tap_available()`.
-  const [coreaudioTapAvailable, setCoreaudioTapAvailable] = useState<boolean | null>(null);
+  const [isMacOS, setIsMacOS] = useState(false);
+  const [isWindows, setIsWindows] = useState(false);
+
+  // Gate for process-tap-backed experimental audio controls. CoreAudio global
+  // system audio is macOS-only; meeting piggyback can use the same availability
+  // probe on macOS and Windows.
+  const [processTapAvailable, setProcessTapAvailable] = useState<boolean | null>(null);
   useEffect(() => {
     commands.checkCoreaudioProcessTapAvailable()
-      .then(setCoreaudioTapAvailable)
-      .catch(() => setCoreaudioTapAvailable(false));
+      .then(setProcessTapAvailable)
+      .catch(() => setProcessTapAvailable(false));
   }, []);
 
   type ExcludedApp = {
@@ -1831,9 +1837,9 @@ export function RecordingSettings() {
   }, [toast]);
 
   useEffect(() => {
-    if (!coreaudioTapAvailable) return;
+    if (!isMacOS || !processTapAvailable) return;
     reloadAudioExclusions();
-  }, [coreaudioTapAvailable, reloadAudioExclusions]);
+  }, [isMacOS, processTapAvailable, reloadAudioExclusions]);
 
   const addAudioExclusion = useCallback(
     (app: ExcludedApp) => {
@@ -1877,9 +1883,10 @@ export function RecordingSettings() {
     }
   }, [addAudioExclusion, toast]);
 
-  useEffect(() => {
-    if (!selectedBundleId) return;
-    const handler = (e: KeyboardEvent) => {
+  useEventListener(
+    "keydown",
+    (e) => {
+      if (!selectedBundleId) return;
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         removeAudioExclusion(selectedBundleId);
@@ -1887,17 +1894,14 @@ export function RecordingSettings() {
       } else if (e.key === "Escape") {
         setSelectedBundleId(null);
       }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [selectedBundleId, removeAudioExclusion]);
+    },
+    selectedBundleId ? document : null,
+  );
 
   const [isUpdating, setIsUpdating] = useState(false);
   const { health } = useHealthCheck();
   const isDisabled = health?.status_code === 500;
   const audioPipeline = health?.audio_pipeline ?? null;
-  const [isMacOS, setIsMacOS] = useState(false);
-  const [isWindows, setIsWindows] = useState(false);
   const [platformReady, setPlatformReady] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
@@ -2658,13 +2662,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           )}
       </div>
 
-      {/* Battery Saver / Power Mode */}
-      <Card className="border-border bg-card">
-        <CardContent className="px-3 py-3">
-          <BatterySaverSection />
-        </CardContent>
-      </Card>
-
       {/* Audio */}
       <LockedSetting settingKey="audio_recording">
       <div className="space-y-2 pt-2">
@@ -3288,8 +3285,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
             {(settings.meetingLiveTranscriptionEnabled ?? true) &&
               (settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "screenpipe-cloud" &&
-              !settings.user?.token &&
-              !settings.user?.id && (
+              !settings.user?.token && (
               <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
                 Log in to screenpipe cloud to use the cloud live provider.
               </p>
@@ -3417,6 +3413,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             const displayName = getAudioDeviceDisplayName(device.name);
             // Use per-device level if available, fall back to global speechRatio
             const deviceLevel = overlayData.deviceLevels[device.name] ?? overlayData.speechRatio;
+            // Backend-computed: exactly mirrors AudioManager::start_device's
+            // real gate (Bluetooth input + combo headset), so this hint
+            // never mismatches actual recording behavior.
+            const isBluetoothMicGated = device.isComboBluetoothMic && !settings.alwaysRecordBluetoothMic;
             return (
               <div
                 key={device.name}
@@ -3434,6 +3434,15 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <p className="text-xs font-medium truncate">{displayName}</p>
                     {device.isDefault && (
                       <Badge variant="secondary" className="text-[9px] h-3.5 px-1 shrink-0">Default</Badge>
+                    )}
+                    {isBluetoothMicGated && (
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] h-3.5 px-1 shrink-0"
+                        title="only recorded during a detected meeting — turn on &quot;always record bluetooth mic&quot; to change this"
+                      >
+                        meetings only
+                      </Badge>
                     )}
                   </div>
                   {isSelected && (
@@ -3524,7 +3533,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         )}
 
         {/* CoreAudio System Audio (macOS 14.4+ only) */}
-        {!settings.disableAudio && coreaudioTapAvailable && (
+        {!settings.disableAudio && isMacOS && processTapAvailable && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -3549,9 +3558,77 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
+        {/* Smart recording (beta; internally "meeting piggyback"): during
+            meetings, capture only the meeting app's audio and the mic it
+            actually uses. Takes precedence over every other audio setting —
+            engages in ANY capture mode (continuous or meetings-only), not just
+            meetings-only. Uses CoreAudio Process Tap on macOS and WASAPI
+            process loopback on Windows. */}
+        {!settings.disableAudio && (isMacOS || isWindows) && processTapAvailable && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Smart recording
+                    <Badge variant="secondary" aria-label="beta" className="px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide">
+                      beta
+                    </Badge>
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    during meetings, records your meeting&apos;s audio and whichever microphone you pick in the meeting app — taking precedence over your other audio settings. falls back to your configured capture automatically if unavailable.
+                  </p>
+                  {settings.disableMeetingDetector && (
+                    <p className="text-xs text-amber-600 dark:text-amber-500">
+                      requires automatic meeting detection — turn it back on above to use this.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <Switch
+                id="experimentalMeetingPiggyback"
+                checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
+                disabled={Boolean(settings.disableMeetingDetector)}
+                onCheckedChange={(checked) => handleSettingsChange({ experimentalMeetingPiggyback: checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Bluetooth mic recording: opening a Bluetooth mic always degrades
+            the paired device's output audio quality (A2DP -> SCO, a macOS/OS
+            limitation — issue #3750). Off by default, Bluetooth mics are only
+            recorded during a detected meeting; this override records them
+            always, like any other mic. */}
+        {!settings.disableAudio && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Bluetooth className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Bluetooth microphones</h3>
+                  <p className="text-xs text-muted-foreground">
+                    connecting to a bluetooth mic degrades your headphones&apos; audio quality, an OS limitation we can&apos;t avoid. by default we only record bluetooth mics while you&apos;re in a detected meeting.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="alwaysRecordBluetoothMic"
+                checked={Boolean(settings.alwaysRecordBluetoothMic ?? false)}
+                onCheckedChange={(checked) => handleSettingsChange({ alwaysRecordBluetoothMic: checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
         {/* Per-app exclusion list for the CoreAudio Process Tap. Only
             meaningful when the tap is the active backend. */}
-        {!settings.disableAudio && coreaudioTapAvailable && settings.experimentalCoreaudioSystemAudio && (
+        {!settings.disableAudio && isMacOS && processTapAvailable && settings.experimentalCoreaudioSystemAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5 space-y-2">
             <div className="flex items-center space-x-2.5">
@@ -3962,6 +4039,22 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
       </div>
+
+      {/* Power and battery are important but infrequent decisions. Keep them
+          in Recording for discoverability/search, but defer the full control
+          surface until the user explicitly opens it. */}
+      <details className="border border-border bg-card rounded">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+          <Zap className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <div>
+            <h2 className="text-sm font-medium text-foreground">Power &amp; battery</h2>
+            <p className="text-xs text-muted-foreground">Battery-aware capture and keep-awake behavior</p>
+          </div>
+        </summary>
+        <div className="border-t border-border px-3 py-3">
+          <BatterySaverSection />
+        </div>
+      </details>
 
       {/* Voice Training Dialog */}
       <Dialog open={voiceTraining.dialogOpen} onOpenChange={(open) => {

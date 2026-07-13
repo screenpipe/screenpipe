@@ -28,19 +28,24 @@ fn temp_db_path(tag: &str) -> String {
 
 /// Wait (bounded) for SQLite to unlink the WAL sidecars after the last
 /// connection closes. `close()` resolves when the pools are closed; the OS
-/// unlink is immediate after that, but give slower CI a moment.
+/// unlink is usually immediate after that, but Linux CI can lag under load.
 async fn assert_wal_sidecars_gone(db_path: &str) {
-    for _ in 0..50 {
-        let wal = std::path::Path::new(&format!("{db_path}-wal")).exists();
-        let shm = std::path::Path::new(&format!("{db_path}-shm")).exists();
+    let wal_path = format!("{db_path}-wal");
+    let shm_path = format!("{db_path}-shm");
+    for _ in 0..200 {
+        let wal = std::path::Path::new(&wal_path).exists();
+        let shm = std::path::Path::new(&shm_path).exists();
         if !wal && !shm {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+    let wal = std::path::Path::new(&wal_path).exists();
+    let shm = std::path::Path::new(&shm_path).exists();
     panic!(
         "-wal/-shm still present after close() — a SQLite connection survived teardown \
-         (the exact leak that made the 2026-07-02 wedge unrecoverable in-process)"
+         (the exact leak that made the 2026-07-02 wedge unrecoverable in-process); \
+         wal={wal}, shm={shm}"
     );
 }
 

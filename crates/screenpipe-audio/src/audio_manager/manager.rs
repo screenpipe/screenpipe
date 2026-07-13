@@ -16,7 +16,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{broadcast, Mutex, RwLock},
+    sync::{broadcast, oneshot, Mutex, RwLock},
     task::JoinHandle,
 };
 use tracing::{debug, error, info, warn};
@@ -122,6 +122,16 @@ struct MeetingEventData {
 type RecordingHandlesMap = DashMap<AudioDevice, Arc<Mutex<JoinHandle<Result<()>>>>>;
 const MEETING_AUDIO_FRAME_BUFFER: usize = 512;
 
+/// Wall-clock milliseconds since the Unix epoch (0 if the clock predates it).
+/// Local to the audio manager so the receiver-loop stamping and the piggyback
+/// sweep share one monotonic-enough source without a cross-module dependency.
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct AudioManager {
     options: Arc<RwLock<AudioManagerOptions>>,
@@ -148,6 +158,10 @@ pub struct AudioManager {
     on_transcription_insert: Option<crate::transcription::AudioInsertCallback>,
     /// Unified transcription engine. Set after model loading in start_audio_receiver_handler.
     engine: Arc<RwLock<Option<TranscriptionEngine>>>,
+    /// Owns model construction independently from whichever caller requested it.
+    /// This prevents caller cancellation from releasing the single-flight gate
+    /// while a blocking model load is still running.
+    engine_builds: EngineBuildCoordinator,
     /// Handle to the reconciliation background task so we can abort it on shutdown.
     reconciliation_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     /// Output devices temporarily stopped due to DRM content detection.
@@ -157,6 +171,19 @@ pub struct AudioManager {
     /// The device monitor must never auto-start devices in this set.
     /// Cleared on global start/stop but preserved across reconnects.
     user_disabled_devices: Arc<RwLock<HashSet<String>>>,
+    /// Meeting-lifetime session streams (e.g. the Meeting Tap, a piggyback
+    /// mic). Registered by `start_session_device`, removed by
+    /// `stop_session_device`. NEVER persisted to `enabled_devices` (those are
+    /// user intent). Read inside the blocking audio-receiver loop to bypass the
+    /// meetings-only drop gate, so this is a `std::sync::RwLock` (not tokio):
+    /// the guard is taken, the set membership checked, and the guard dropped —
+    /// never held across an `.await`.
+    session_devices: Arc<std::sync::RwLock<HashSet<String>>>,
+    /// Devices the piggyback sweep has suspended for the duration of a meeting
+    /// (a session stream stands in for them). Nothing else may start a device
+    /// in this set; the sweep resumes it on meeting end / fallback. Same
+    /// `std::sync::RwLock` discipline as `session_devices`.
+    suspended_devices: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 /// Result of checking / restarting the two central handler tasks.
@@ -166,6 +193,112 @@ pub struct CentralHandlerRestartResult {
     pub transcription_restarted: bool,
     pub recording_error: Option<String>,
     pub transcription_error: Option<String>,
+}
+
+struct EngineAcquisition<E> {
+    engine: E,
+    /// True for exactly one caller that observes a newly-published engine.
+    created: bool,
+}
+
+#[derive(Clone)]
+struct EngineBuildCoordinator {
+    operation: Arc<Mutex<()>>,
+    published_unobserved: Arc<AtomicBool>,
+}
+
+impl EngineBuildCoordinator {
+    fn new() -> Self {
+        Self {
+            operation: Arc::new(Mutex::new(())),
+            published_unobserved: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn has_unobserved_publish(&self) -> bool {
+        self.published_unobserved.load(Ordering::Acquire)
+    }
+}
+
+/// Serialize model construction in a detached task that owns the build gate.
+///
+/// The detached task, rather than the requesting monitor/handler task, owns
+/// both construction and publication. Aborting the requester therefore cannot
+/// release the gate while a `spawn_blocking` model load continues in the
+/// background. The next caller waits for that task, then reuses its published
+/// engine. A one-shot publication flag preserves the capability-change signal
+/// when the initiating caller was cancelled before it could observe the result.
+async fn get_or_create_engine<E, Matches, Factory, FactoryFuture>(
+    slot: Arc<RwLock<Option<E>>>,
+    builds: EngineBuildCoordinator,
+    matches: Matches,
+    factory: Factory,
+) -> Result<EngineAcquisition<E>>
+where
+    E: Clone + Send + Sync + 'static,
+    Matches: Fn(&E) -> bool,
+    Factory: FnOnce() -> FactoryFuture + Send + 'static,
+    FactoryFuture: std::future::Future<Output = Result<E>> + Send + 'static,
+{
+    let build_guard = builds.operation.clone().lock_owned().await;
+
+    let existing = slot
+        .read()
+        .await
+        .as_ref()
+        .filter(|engine| matches(engine))
+        .cloned();
+    if let Some(engine) = existing {
+        return Ok(EngineAcquisition {
+            engine,
+            created: builds.published_unobserved.swap(false, Ordering::AcqRel),
+        });
+    }
+
+    // This build replaces whatever is in the slot. A prior unobserved
+    // publication cannot describe the engine this caller is requesting.
+    builds.published_unobserved.store(false, Ordering::Release);
+
+    let (result_tx, result_rx) = oneshot::channel();
+    let published_unobserved = builds.published_unobserved.clone();
+    tokio::spawn(async move {
+        let outcome = match AssertUnwindSafe(factory()).catch_unwind().await {
+            Ok(Ok(engine)) => {
+                *slot.write().await = Some(engine.clone());
+                published_unobserved.store(true, Ordering::Release);
+                Ok(engine)
+            }
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(anyhow!("engine factory panicked")),
+        };
+
+        let _ = result_tx.send(outcome);
+        drop(build_guard);
+    });
+
+    let engine = result_rx
+        .await
+        .map_err(|_| anyhow!("engine build task ended before publishing a result"))??;
+    Ok(EngineAcquisition {
+        engine,
+        created: builds.published_unobserved.swap(false, Ordering::AcqRel),
+    })
+}
+
+fn runtime_transcription_config_matches(
+    requested: &AudioTranscriptionEngine,
+    runtime: &AudioTranscriptionEngine,
+) -> bool {
+    requested == runtime
+        // `Parakeet` deliberately auto-upgrades to the MLX runtime on builds
+        // that include it. That is the same requested engine, not a mismatch.
+        || matches!(
+            (requested, runtime),
+            (
+                AudioTranscriptionEngine::Parakeet,
+                AudioTranscriptionEngine::ParakeetMlx
+            )
+        )
 }
 
 impl AudioManager {
@@ -240,9 +373,12 @@ impl AudioManager {
             transcription_paused: Arc::new(AtomicBool::new(false)),
             on_transcription_insert: None,
             engine: Arc::new(RwLock::new(None)),
+            engine_builds: EngineBuildCoordinator::new(),
             reconciliation_handle: Arc::new(RwLock::new(None)),
             drm_stopped_devices: Arc::new(RwLock::new(Vec::new())),
             user_disabled_devices: Arc::new(RwLock::new(HashSet::new())),
+            session_devices: Arc::new(std::sync::RwLock::new(HashSet::new())),
+            suspended_devices: Arc::new(std::sync::RwLock::new(HashSet::new())),
         };
 
         Ok(manager)
@@ -295,8 +431,18 @@ impl AudioManager {
         let mut options = options;
         super::builder::ensure_system_default_device_types(&mut options, &user_disabled).await;
 
+        // Wait for any detached model construction to finish before replacing
+        // its configuration. Holding the same gate while updating options and
+        // clearing the slot prevents an old build from publishing afterward.
+        let _engine_build_guard = self.engine_builds.operation.lock().await;
         *self.options.write().await = options;
+        // Handler restarts can reuse a matching engine, but a full options
+        // update must invalidate it: language, vocabulary, and provider
+        // credentials are runtime engine state even when the enum is unchanged.
         *self.engine.write().await = None;
+        self.engine_builds
+            .published_unobserved
+            .store(false, Ordering::Release);
         Ok(())
     }
 
@@ -584,12 +730,15 @@ impl AudioManager {
         // Remove from disabled FIRST so start_device gate allows it
         self.user_disabled_devices.write().await.remove(device_name);
 
+        // If the audio manager was fully stopped (e.g. global capture pause),
+        // restart the pipeline so this device can actually produce data.
+        // start() is idempotent — no-op if already Running.
         if self.status().await != AudioManagerStatus::Running {
             info!(
-                "user re-enabled audio device while audio manager is stopped: {}",
+                "audio manager stopped, restarting pipeline to resume device: {}",
                 device_name
             );
-            return Ok(());
+            self.start().await?;
         }
 
         let device = match parse_audio_device(device_name) {
@@ -653,6 +802,34 @@ impl AudioManager {
             return Ok(());
         }
 
+        // Suspended by the piggyback sweep for the duration of a meeting (a
+        // session stream replaces this device). The sweep resumes it on
+        // meeting end / fallback; nothing else may start it meanwhile. This is
+        // the single choke point so every monitor path that could restart a
+        // suspended device is blocked at once.
+        if self
+            .suspended_devices
+            .read()
+            .unwrap()
+            .contains(&device.to_string())
+        {
+            debug!("skipping start of piggyback-suspended device: {}", device);
+            return Ok(());
+        }
+
+        // Bluetooth mics always force the paired device's audio link out of
+        // A2DP into SCO, degrading the user's headphone/speaker output — a
+        // macOS/OS-level tradeoff with no external workaround (issue #3750).
+        // Gated to detected meetings by default; `always_record_bluetooth_mic`
+        // opts back into always-on capture.
+        if self.bluetooth_input_gate_blocks(device).await {
+            debug!(
+                "skipping start of bluetooth mic {}: not in a meeting (always_record_bluetooth_mic is off)",
+                device
+            );
+            return Ok(());
+        }
+
         if let Err(e) = self.device_manager.start_device(device).await {
             let err_str = e.to_string();
 
@@ -681,6 +858,103 @@ impl AudioManager {
         }
 
         Ok(())
+    }
+
+    /// Start a meeting-session stream. Mirrors `start_device` but: never
+    /// touches `enabled_devices` (session streams are meeting-lifetime, not
+    /// user intent), registers in `session_devices` (drop-gate bypass +
+    /// sweep bookkeeping), and can carry tap pids for the Meeting Tap device.
+    pub async fn start_session_device(
+        &self,
+        device: &AudioDevice,
+        tap_pids: Option<Vec<i32>>,
+    ) -> Result<()> {
+        if self.options.read().await.is_disabled {
+            return Ok(());
+        }
+        // Insert BEFORE starting: the audio-receiver drop-gate bypass must see
+        // this device from the very first chunk. Rolled back on failure below.
+        self.session_devices
+            .write()
+            .unwrap()
+            .insert(device.to_string());
+        let start_result = match tap_pids {
+            Some(pids) => {
+                self.device_manager
+                    .start_device_with_tap_pids(device, pids)
+                    .await
+            }
+            None => self.device_manager.start_device(device).await,
+        };
+        if let Err(e) = start_result {
+            let err_str = e.to_string();
+            if !err_str.contains("already running") {
+                self.session_devices
+                    .write()
+                    .unwrap()
+                    .remove(&device.to_string());
+                return Err(e);
+            }
+        }
+        if !self.recording_handles.contains_key(device) {
+            if let Some(is_running) = self.device_manager.is_running_mut(device) {
+                is_running.store(true, Ordering::Relaxed);
+            }
+            match self.record_device(device).await {
+                Ok(handle) => {
+                    self.recording_handles
+                        .insert(device.clone(), Arc::new(Mutex::new(handle)));
+                }
+                Err(e) => {
+                    self.session_devices
+                        .write()
+                        .unwrap()
+                        .remove(&device.to_string());
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Tear down a meeting-session stream. Never touches `enabled_devices`.
+    pub async fn stop_session_device(&self, device: &AudioDevice) -> Result<()> {
+        self.session_devices
+            .write()
+            .unwrap()
+            .remove(&device.to_string());
+        self.stop_device_recording(device).await
+    }
+
+    /// Snapshot of the currently-registered meeting-session device names.
+    pub fn session_devices(&self) -> HashSet<String> {
+        self.session_devices.read().unwrap().clone()
+    }
+
+    /// Suspend a device for the duration of a meeting: nothing may start it
+    /// until `unsuspend_device`. Used by the piggyback sweep when a session
+    /// stream stands in for a normally-captured device.
+    ///
+    /// NOTE: the resume counterpart is `unsuspend_device`, NOT `resume_device`.
+    /// `resume_device` already exists as the user-facing un-pause flow (it
+    /// operates on `user_disabled_devices` and calls `start_device`), a
+    /// different concept from meeting suspension; reusing that name would be a
+    /// duplicate-method compile error.
+    pub fn suspend_device(&self, name: &str) {
+        self.suspended_devices
+            .write()
+            .unwrap()
+            .insert(name.to_string());
+    }
+
+    /// Lift a suspension set by `suspend_device`.
+    pub fn unsuspend_device(&self, name: &str) {
+        self.suspended_devices.write().unwrap().remove(name);
+    }
+
+    /// Snapshot of the currently-suspended device names.
+    pub fn suspended_devices(&self) -> HashSet<String> {
+        self.suspended_devices.read().unwrap().clone()
     }
 
     pub async fn use_all_devices(&self) -> bool {
@@ -768,6 +1042,34 @@ impl AudioManager {
         Ok(recording_handle)
     }
 
+    async fn get_or_create_transcription_engine(
+        &self,
+        audio_transcription_engine: Arc<AudioTranscriptionEngine>,
+        deepgram_config: Option<crate::transcription::deepgram::DeepgramTranscriptionConfig>,
+        openai_compatible_config: Option<crate::OpenAICompatibleConfig>,
+        languages: Vec<screenpipe_core::Language>,
+        vocabulary: Vec<crate::transcription::VocabularyEntry>,
+    ) -> Result<EngineAcquisition<TranscriptionEngine>> {
+        let requested_for_match = audio_transcription_engine.clone();
+        get_or_create_engine(
+            self.engine.clone(),
+            self.engine_builds.clone(),
+            move |engine| {
+                runtime_transcription_config_matches(requested_for_match.as_ref(), &engine.config())
+            },
+            move || {
+                TranscriptionEngine::new(
+                    audio_transcription_engine,
+                    deepgram_config,
+                    openai_compatible_config,
+                    languages,
+                    vocabulary,
+                )
+            },
+        )
+        .await
+    }
+
     async fn start_audio_receiver_handler(&self) -> Result<JoinHandle<()>> {
         let transcription_sender = self.transcription_sender.clone();
         let segmentation_manager = self.segmentation_manager.clone();
@@ -793,27 +1095,39 @@ impl AudioManager {
         let audio_capture_mode = options.audio_capture_mode.clone();
         let batch_max_duration_secs = options.batch_max_duration_secs;
         let filter_music = options.filter_music;
+        // apply_options takes the build gate before options.write(). Never carry
+        // this read guard into get_or_create_transcription_engine(), which takes
+        // the same gate, or the two paths can deadlock through lock inversion.
+        drop(options);
         let vad_engine = self.vad_engine.clone();
         let whisper_receiver = self.recording_receiver.clone();
         let metrics = self.metrics.clone();
         let meeting_detector = self.meeting_detector().await;
         let meeting_audio_tap = self.meeting_audio_tap.clone();
         let db = self.db.clone();
-        let shared_engine = self.engine.clone();
         let on_insert_session = self.on_transcription_insert.clone();
+        // Session streams (Meeting Tap, piggyback mic) bypass the meetings-only
+        // drop gate below — they exist only during a meeting by construction.
+        let session_devices = self.session_devices.clone();
 
-        // Build unified transcription engine — only loads the needed model
-        let engine = TranscriptionEngine::new(
-            audio_transcription_engine.clone(),
-            deepgram_config.clone(),
-            openai_compatible_config.clone(),
-            languages.clone(),
-            vocabulary.clone(),
-        )
-        .await?;
-
-        // Store for reconciliation / retranscribe access
-        *shared_engine.write().await = Some(engine.clone());
+        // Reuse the ready shared engine across handler restarts. Construction is
+        // serialized with capability refreshes so Parakeet/MLX can never be
+        // loaded twice by the two paths.
+        let acquisition = self
+            .get_or_create_transcription_engine(
+                audio_transcription_engine.clone(),
+                deepgram_config.clone(),
+                openai_compatible_config.clone(),
+                languages.clone(),
+                vocabulary.clone(),
+            )
+            .await?;
+        let engine = acquisition.engine;
+        if acquisition.created {
+            info!("transcription engine constructed for audio receiver handler");
+        } else {
+            debug!("reusing shared transcription engine for audio receiver handler");
+        }
 
         // Create a single session and reuse it across all segments.
         // WhisperState is reused (whisper_full_with_state clears KV caches internally).
@@ -845,6 +1159,12 @@ impl AudioManager {
                 metrics.record_chunk_received();
                 debug!("received audio from device: {:?}", audio.device.name);
 
+                // RMS feeds the meeting detector's activity gate below.
+                let rms = {
+                    let sum_sq: f32 = audio.data.iter().map(|&x| x * x).sum();
+                    (sum_sq / audio.data.len() as f32).sqrt()
+                };
+
                 // Audio-based call detection: update meeting detector with speech activity.
                 // Output devices (SCK on macOS) produce much quieter audio than mic input,
                 // so we use a lower threshold. Empirical data from real SCK captures:
@@ -855,10 +1175,6 @@ impl AudioManager {
                     // monitor's speaker watchdog uses this to tell a dead
                     // loopback stream apart from a quiet one.
                     meeting.on_audio_chunk(&audio.device.device_type);
-                    let rms = {
-                        let sum_sq: f32 = audio.data.iter().map(|&x| x * x).sum();
-                        (sum_sq / audio.data.len() as f32).sqrt()
-                    };
                     let has_activity = match audio.device.device_type {
                         crate::core::device::DeviceType::Output => rms > 0.001,
                         crate::core::device::DeviceType::Input => rms > 0.05,
@@ -873,11 +1189,18 @@ impl AudioManager {
                 // cannot tell whether we're in a meeting, so we keep capturing rather
                 // than silently dropping everything.
                 if audio_capture_mode == AudioCaptureMode::MeetingsOnly {
+                    // Session streams exist only during a meeting by
+                    // construction — never drop them, even if the detector
+                    // flaps mid-meeting.
+                    let is_session_stream = session_devices
+                        .read()
+                        .unwrap()
+                        .contains(&audio.device.to_string());
                     let in_session = meeting_detector
                         .as_ref()
                         .map(|m| m.is_in_audio_session())
                         .unwrap_or(true);
-                    if !in_session {
+                    if !is_session_stream && !in_session {
                         debug!(
                             "meetings-only capture: no active meeting, dropping audio chunk from {:?}",
                             audio.device.name
@@ -1191,6 +1514,15 @@ impl AudioManager {
             .collect::<Vec<AudioDevice>>()
     }
 
+    /// True when `device` has a live, non-disconnected stream. Thin wrapper over
+    /// the device monitor's [`super::is_device_actively_streaming`] so callers
+    /// that only hold an `AudioManager` (the piggyback sweep) can distinguish a
+    /// registered-but-dead stream from one actually delivering audio — without
+    /// reaching into the private `device_manager` or duplicating the check.
+    pub(crate) fn is_device_actively_streaming(&self, device: &AudioDevice) -> bool {
+        super::is_device_actively_streaming(&self.device_manager, device)
+    }
+
     /// Non-blocking read of the *configured* transcription mode. Returns `None`
     /// if the options lock is momentarily contended, so callers such as
     /// `/health` never block on it.
@@ -1294,6 +1626,67 @@ impl AudioManager {
         self.meeting_detector.read().await.clone()
     }
 
+    /// Whether the meeting piggyback ("smart recording") flag is on. Consumed
+    /// by the device monitor's piggyback sweep (`meeting_piggyback.rs`) — the
+    /// `options` field is private to this module, so the sweep can't read it
+    /// directly. Deliberately independent of `audio_capture_mode`: the flag
+    /// takes precedence over everything, so a detected meeting engages the
+    /// piggyback in continuous ("always") capture just as in meetings-only.
+    pub(crate) async fn piggyback_enabled(&self) -> bool {
+        self.options.read().await.experimental_meeting_piggyback
+    }
+
+    /// Whether Bluetooth mics are exempt from the meeting gate (see
+    /// `start_device`'s Bluetooth check and the device monitor's
+    /// `run_bluetooth_mic_gate_sweep`). Consumed outside this module, so
+    /// `pub(crate)` rather than private, matching `piggyback_enabled`.
+    pub(crate) async fn always_record_bluetooth_mic(&self) -> bool {
+        self.options.read().await.always_record_bluetooth_mic
+    }
+
+    /// Whether `device` is currently withheld by the Bluetooth meeting gate.
+    /// `start_device` uses this internally, but it's also `pub(crate)` for
+    /// callers in `device_monitor.rs` that swap the active input device
+    /// based on system-default changes or "no input running" recovery —
+    /// they MUST check this BEFORE stopping a working device or resetting a
+    /// retry backoff on the strength of `start_device` returning `Ok(())`.
+    /// That `Ok(())` only means "no error", not "now actually capturing" —
+    /// this gate is a deliberate, often long-lived no-op, not a failure, so
+    /// treating it as success causes real capture loss (stopping a working
+    /// mic in favor of one that silently never started) or a tight retry
+    /// loop (backoff keeps getting reset by a "success" that never streams
+    /// a single frame, hammering the Bluetooth device's CoreAudio object
+    /// every couple of seconds — this is what caused the AirPods to flicker
+    /// between showing up as an input and an output, since sitting on the
+    /// mic-open path this often perturbs the A2DP/SCO profile negotiation).
+    pub(crate) async fn bluetooth_input_gate_blocks(
+        &self,
+        device: &crate::core::device::AudioDevice,
+    ) -> bool {
+        if device.device_type != crate::core::device::DeviceType::Input {
+            return false;
+        }
+        let kind = crate::core::device_detection::InputDeviceKind::detect(&device.name);
+        if kind != crate::core::device_detection::InputDeviceKind::Bluetooth {
+            return false;
+        }
+        // Only probe hardware for confirmed-Bluetooth devices — a dedicated
+        // mic-only Bluetooth device (no output side on the same hardware)
+        // has nothing to protect, so it's exempt from the gate entirely.
+        let is_combo_headset = crate::core::device::bluetooth_input_is_combo_headset(&device.name);
+        let always_override = self.always_record_bluetooth_mic().await;
+        let in_meeting = match self.meeting_detector().await {
+            Some(d) => d.is_in_meeting(),
+            None => false,
+        };
+        !crate::core::device_detection::bluetooth_mic_allowed(
+            &kind,
+            is_combo_headset,
+            always_override,
+            in_meeting,
+        )
+    }
+
     /// Returns the shared WhisperContext for backward compatibility, if loaded.
     pub async fn whisper_context(&self) -> Option<Arc<WhisperContext>> {
         self.engine
@@ -1351,6 +1744,18 @@ impl AudioManager {
         drop(options);
 
         let mut changed = false;
+        let engine_is_disabled = self
+            .engine
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|engine| engine.config() == AudioTranscriptionEngine::Disabled);
+        // If the caller that initiated a successful detached build was
+        // cancelled, the ready engine is already in the slot. Still enter the
+        // lifecycle once so this refresh observes the pending publication and
+        // requests the handler restart that activates its new session.
+        let engine_needs_refresh =
+            engine_is_disabled || self.engine_builds.has_unobserved_publish();
 
         // Re-initialize whisper transcription when the model becomes available.
         let should_try_transcription_refresh =
@@ -1364,13 +1769,9 @@ impl AudioManager {
                     | AudioTranscriptionEngine::WhisperLargeV3Quantized
             ) && get_cached_whisper_model_path(audio_transcription_engine.as_ref()).is_some();
 
-        if should_try_transcription_refresh {
-            let mut engine = self.engine.write().await;
-            if engine
-                .as_ref()
-                .is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled)
-            {
-                match TranscriptionEngine::new(
+        if should_try_transcription_refresh && engine_needs_refresh {
+            match self
+                .get_or_create_transcription_engine(
                     audio_transcription_engine.clone(),
                     deepgram_config.clone(),
                     openai_compatible_config.clone(),
@@ -1378,19 +1779,19 @@ impl AudioManager {
                     vocabulary.clone(),
                 )
                 .await
-                {
-                    Ok(updated_engine) => {
-                        if updated_engine.config() != AudioTranscriptionEngine::Disabled {
-                            *engine = Some(updated_engine);
-                            changed = true;
-                        }
+            {
+                Ok(acquisition) => {
+                    if acquisition.created
+                        && acquisition.engine.config() != AudioTranscriptionEngine::Disabled
+                    {
+                        changed = true;
                     }
-                    Err(e) => {
-                        debug!(
-                            "whisper refresh still unavailable while creating transcription engine: {}",
-                            e
-                        );
-                    }
+                }
+                Err(e) => {
+                    debug!(
+                        "whisper refresh still unavailable while creating transcription engine: {}",
+                        e
+                    );
                 }
             }
         }
@@ -1404,13 +1805,9 @@ impl AudioManager {
                     | AudioTranscriptionEngine::ParakeetMlx
             );
 
-            if should_try_audiopipe_refresh {
-                let mut engine = self.engine.write().await;
-                if engine
-                    .as_ref()
-                    .is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled)
-                {
-                    match TranscriptionEngine::new(
+            if should_try_audiopipe_refresh && engine_needs_refresh {
+                match self
+                    .get_or_create_transcription_engine(
                         audio_transcription_engine.clone(),
                         deepgram_config.clone(),
                         openai_compatible_config.clone(),
@@ -1418,16 +1815,16 @@ impl AudioManager {
                         vocabulary.clone(),
                     )
                     .await
-                    {
-                        Ok(updated_engine) => {
-                            if updated_engine.config() != AudioTranscriptionEngine::Disabled {
-                                *engine = Some(updated_engine);
-                                changed = true;
-                            }
+                {
+                    Ok(acquisition) => {
+                        if acquisition.created
+                            && acquisition.engine.config() != AudioTranscriptionEngine::Disabled
+                        {
+                            changed = true;
                         }
-                        Err(e) => {
-                            debug!("audiopipe transcription refresh still unavailable: {}", e);
-                        }
+                    }
+                    Err(e) => {
+                        debug!("audiopipe transcription refresh still unavailable: {}", e);
                     }
                 }
             }
@@ -1504,10 +1901,20 @@ impl AudioManager {
     /// Returns device names that need to be cleaned up and restarted
     pub async fn check_stale_recording_handles(&self) -> Vec<String> {
         let mut stale_devices = Vec::new();
+        let session_devices = self.session_devices.read().unwrap().clone();
 
         for pair in self.recording_handles.iter() {
             let device = pair.key();
             let handle = pair.value();
+
+            // Session devices are virtual / meeting-lifetime and absent from
+            // both enabled_devices and the available-device list. If the monitor
+            // culled a stale session handle it would then try to restart it via
+            // start_device (losing the tap pids AND leaking the name into
+            // enabled_devices). Only stop_session_device may cull them.
+            if session_devices.contains(&device.to_string()) {
+                continue;
+            }
 
             // Check if the JoinHandle has finished (task completed/crashed)
             if handle.lock().await.is_finished() {
@@ -1603,6 +2010,16 @@ impl AudioManager {
     /// Clean up a stale device that had its recording handle crash/timeout
     /// This prepares the device for restart by the device monitor
     pub async fn cleanup_stale_device(&self, device_name: &str) -> anyhow::Result<()> {
+        // Defensive: never clean up a session device here. `check_stale_recording_handles`
+        // already omits them from the stale list (the only caller), but guard the
+        // public entry point too — only `stop_session_device` may tear these down.
+        if self.session_devices.read().unwrap().contains(device_name) {
+            debug!(
+                "cleanup_stale_device({device_name}): session device, leaving intact (only stop_session_device may cull it)"
+            );
+            return Ok(());
+        }
+
         let device = match parse_audio_device(device_name) {
             Ok(device) => device,
             Err(_) => return Err(anyhow!("Device {} not found", device_name)),
@@ -1739,6 +2156,369 @@ impl Drop for AudioManager {
 mod tests {
     use super::*;
     use crate::core::device::{AudioDevice, DeviceType};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tokio::sync::{Barrier, Notify, Semaphore};
+
+    #[derive(Clone)]
+    struct FakeEngine {
+        config: &'static str,
+        identity: Arc<()>,
+    }
+
+    fn fake_engine(config: &'static str) -> FakeEngine {
+        FakeEngine {
+            config,
+            identity: Arc::new(()),
+        }
+    }
+
+    #[tokio::test]
+    async fn model_lifecycle_disabled_to_ready_loads_once_and_restart_reuses_it() {
+        let slot = Arc::new(RwLock::new(Some(fake_engine("disabled"))));
+        let builds = EngineBuildCoordinator::new();
+        let build_calls = Arc::new(AtomicUsize::new(0));
+
+        let refresh_calls = build_calls.clone();
+        let refreshed = get_or_create_engine(
+            slot.clone(),
+            builds.clone(),
+            |engine| engine.config == "parakeet",
+            move || async move {
+                refresh_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(fake_engine("parakeet"))
+            },
+        )
+        .await
+        .unwrap();
+        assert!(refreshed.created);
+        assert_eq!(build_calls.load(Ordering::SeqCst), 1);
+
+        let ready_identity = refreshed.engine.identity.clone();
+        let restart_calls = build_calls.clone();
+        let restarted = get_or_create_engine(
+            slot.clone(),
+            builds.clone(),
+            |engine| engine.config == "parakeet",
+            move || async move {
+                restart_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(fake_engine("parakeet"))
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!restarted.created);
+        assert!(Arc::ptr_eq(&ready_identity, &restarted.engine.identity));
+        assert_eq!(build_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn model_lifecycle_configuration_mismatch_forces_exactly_one_replacement() {
+        let original = fake_engine("parakeet");
+        let original_identity = original.identity.clone();
+        let slot = Arc::new(RwLock::new(Some(original)));
+        let builds = EngineBuildCoordinator::new();
+        let build_calls = Arc::new(AtomicUsize::new(0));
+
+        let replacement_calls = build_calls.clone();
+        let replacement = get_or_create_engine(
+            slot.clone(),
+            builds.clone(),
+            |engine| engine.config == "qwen3-asr",
+            move || async move {
+                replacement_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(fake_engine("qwen3-asr"))
+            },
+        )
+        .await
+        .unwrap();
+        assert!(replacement.created);
+        assert!(!Arc::ptr_eq(
+            &original_identity,
+            &replacement.engine.identity
+        ));
+
+        let replacement_identity = replacement.engine.identity.clone();
+        let duplicate_calls = build_calls.clone();
+        let reused = get_or_create_engine(
+            slot.clone(),
+            builds.clone(),
+            |engine| engine.config == "qwen3-asr",
+            move || async move {
+                duplicate_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(fake_engine("qwen3-asr"))
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!reused.created);
+        assert!(Arc::ptr_eq(&replacement_identity, &reused.engine.identity));
+        assert_eq!(build_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn model_lifecycle_concurrent_refreshes_cannot_double_load() {
+        const CALLERS: usize = 8;
+        let slot = Arc::new(RwLock::new(Some(fake_engine("disabled"))));
+        let builds = EngineBuildCoordinator::new();
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let start_barrier = Arc::new(Barrier::new(CALLERS));
+        let mut tasks = Vec::new();
+
+        for _ in 0..CALLERS {
+            let slot = slot.clone();
+            let builds = builds.clone();
+            let build_calls = build_calls.clone();
+            let start_barrier = start_barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                start_barrier.wait().await;
+                let calls_for_factory = build_calls.clone();
+                get_or_create_engine(
+                    slot,
+                    builds,
+                    |engine| engine.config == "parakeet",
+                    move || async move {
+                        calls_for_factory.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        Ok(fake_engine("parakeet"))
+                    },
+                )
+                .await
+                .unwrap()
+            }));
+        }
+
+        let mut constructed = 0;
+        let mut identity: Option<Arc<()>> = None;
+        for task in tasks {
+            let acquisition = task.await.unwrap();
+            constructed += usize::from(acquisition.created);
+            if let Some(first_identity) = &identity {
+                assert!(Arc::ptr_eq(first_identity, &acquisition.engine.identity));
+            } else {
+                identity = Some(acquisition.engine.identity);
+            }
+        }
+
+        assert_eq!(constructed, 1);
+        assert_eq!(build_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn model_lifecycle_abort_mid_load_keeps_single_flight_alive() {
+        let slot = Arc::new(RwLock::new(Some(fake_engine("disabled"))));
+        let builds = EngineBuildCoordinator::new();
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let build_started = Arc::new(Notify::new());
+        let release_build = Arc::new(Semaphore::new(0));
+
+        let first_slot = slot.clone();
+        let first_builds = builds.clone();
+        let first_calls = build_calls.clone();
+        let first_started = build_started.clone();
+        let first_release = release_build.clone();
+        let first_caller = tokio::spawn(async move {
+            get_or_create_engine(
+                first_slot,
+                first_builds,
+                |engine| engine.config == "parakeet",
+                move || async move {
+                    first_calls.fetch_add(1, Ordering::SeqCst);
+                    first_started.notify_one();
+                    let _permit = first_release.acquire().await.unwrap();
+                    Ok(fake_engine("parakeet"))
+                },
+            )
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), build_started.notified())
+            .await
+            .expect("detached factory did not start");
+        first_caller.abort();
+        match first_caller.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("aborted lifecycle caller unexpectedly completed"),
+        }
+
+        let second_slot = slot.clone();
+        let second_builds = builds.clone();
+        let second_calls = build_calls.clone();
+        let second_caller = tokio::spawn(async move {
+            get_or_create_engine(
+                second_slot,
+                second_builds,
+                |engine| engine.config == "parakeet",
+                move || async move {
+                    second_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(fake_engine("parakeet"))
+                },
+            )
+            .await
+            .unwrap()
+        });
+
+        tokio::task::yield_now().await;
+        assert_eq!(
+            build_calls.load(Ordering::SeqCst),
+            1,
+            "the replacement caller must wait for the detached in-flight build"
+        );
+
+        release_build.add_permits(1);
+        let acquisition = tokio::time::timeout(Duration::from_secs(2), second_caller)
+            .await
+            .expect("replacement caller did not observe the completed build")
+            .unwrap();
+
+        assert!(
+            acquisition.created,
+            "the surviving caller must observe the pending publication"
+        );
+        assert_eq!(build_calls.load(Ordering::SeqCst), 1);
+        let published_identity = slot.read().await.as_ref().unwrap().identity.clone();
+        assert!(Arc::ptr_eq(
+            &published_identity,
+            &acquisition.engine.identity
+        ));
+    }
+
+    #[tokio::test]
+    async fn model_lifecycle_factory_error_preserves_the_existing_engine() {
+        let existing = fake_engine("parakeet");
+        let existing_identity = existing.identity.clone();
+        let slot = Arc::new(RwLock::new(Some(existing)));
+        let builds = EngineBuildCoordinator::new();
+
+        let result = get_or_create_engine(
+            slot.clone(),
+            builds,
+            |engine| engine.config == "qwen3-asr",
+            || async { Err(::anyhow::anyhow!("load failed")) },
+        )
+        .await;
+
+        match result {
+            Err(error) => assert_eq!(error.to_string(), "load failed"),
+            Ok(_) => panic!("failed replacement unexpectedly succeeded"),
+        }
+        let preserved = slot.read().await;
+        let preserved = preserved.as_ref().unwrap();
+        assert_eq!(preserved.config, "parakeet");
+        assert!(Arc::ptr_eq(&existing_identity, &preserved.identity));
+    }
+
+    #[test]
+    fn model_lifecycle_requested_parakeet_accepts_mlx_runtime_but_not_disabled() {
+        assert!(runtime_transcription_config_matches(
+            &AudioTranscriptionEngine::Parakeet,
+            &AudioTranscriptionEngine::ParakeetMlx,
+        ));
+        assert!(!runtime_transcription_config_matches(
+            &AudioTranscriptionEngine::Parakeet,
+            &AudioTranscriptionEngine::Disabled,
+        ));
+        assert!(runtime_transcription_config_matches(
+            &AudioTranscriptionEngine::Disabled,
+            &AudioTranscriptionEngine::Disabled,
+        ));
+    }
+
+    /// Real-model smoke for the release-only Apple Silicon MLX path. This is
+    /// ignored because it requires the multi-gigabyte model to already be in
+    /// the Hugging Face cache and the Xcode Metal toolchain to be installed.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    #[tokio::test]
+    #[ignore = "requires cached Parakeet MLX weights and the Xcode Metal toolchain"]
+    async fn cached_parakeet_refresh_reuses_single_mlx_model() {
+        const MODEL_REPO: &str = "mlx-community/parakeet-tdt-0.6b-v3";
+        const MAX_REUSE_DELTA_BYTES: usize = 64 * 1024 * 1024;
+
+        let cache = hf_hub::Cache::from_env().repo(hf_hub::Repo::model(MODEL_REPO.to_string()));
+        let model_cached = cache.get("model.safetensors").is_some()
+            && cache.get("config.json").is_some()
+            && (cache.get("vocab.txt").is_some() || cache.get("tokenizer.model").is_some());
+        if !model_cached {
+            eprintln!(
+                "skipping cached Parakeet MLX smoke: {MODEL_REPO} is not complete in the HF cache"
+            );
+            return;
+        }
+
+        let slot = Arc::new(RwLock::new(Some(TranscriptionEngine::Disabled)));
+        let builds = EngineBuildCoordinator::new();
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let requested = Arc::new(AudioTranscriptionEngine::Parakeet);
+
+        let first_calls = build_calls.clone();
+        let first_requested = requested.clone();
+        let first = get_or_create_engine(
+            slot.clone(),
+            builds.clone(),
+            |engine| runtime_transcription_config_matches(requested.as_ref(), &engine.config()),
+            move || async move {
+                first_calls.fetch_add(1, Ordering::SeqCst);
+                TranscriptionEngine::new(
+                    first_requested,
+                    None,
+                    None,
+                    vec![screenpipe_core::Language::English],
+                    Vec::new(),
+                )
+                .await
+            },
+        )
+        .await
+        .unwrap();
+        assert!(first.created);
+        let first_model = match &first.engine {
+            TranscriptionEngine::ParakeetMlx { model, .. } => model.clone(),
+            other => panic!("expected Parakeet MLX runtime, got {}", other.config()),
+        };
+        let active_after_first = crate::transcription::engine::mlx_active_memory_bytes_for_test();
+
+        let second_calls = build_calls.clone();
+        let second_requested = requested.clone();
+        let second = get_or_create_engine(
+            slot.clone(),
+            builds.clone(),
+            |engine| runtime_transcription_config_matches(requested.as_ref(), &engine.config()),
+            move || async move {
+                second_calls.fetch_add(1, Ordering::SeqCst);
+                TranscriptionEngine::new(
+                    second_requested,
+                    None,
+                    None,
+                    vec![screenpipe_core::Language::English],
+                    Vec::new(),
+                )
+                .await
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!second.created);
+        assert_eq!(build_calls.load(Ordering::SeqCst), 1);
+        let second_model = match &second.engine {
+            TranscriptionEngine::ParakeetMlx { model, .. } => model.clone(),
+            other => panic!("expected Parakeet MLX runtime, got {}", other.config()),
+        };
+        assert!(Arc::ptr_eq(&first_model, &second_model));
+
+        let _session = second.engine.create_session().unwrap();
+        let active_after_second = crate::transcription::engine::mlx_active_memory_bytes_for_test();
+        let reuse_delta = active_after_second.saturating_sub(active_after_first);
+        assert!(
+            reuse_delta <= MAX_REUSE_DELTA_BYTES,
+            "second acquire grew MLX active memory by {:.1} MiB (limit: 64 MiB)",
+            reuse_delta as f64 / 1024.0 / 1024.0
+        );
+    }
 
     #[test]
     fn test_central_handler_restart_result_defaults() {

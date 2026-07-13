@@ -50,6 +50,8 @@ impl WindowOcrCache {
 
     /// Calculate hash for an image, downscaling first to avoid hashing full-res pixels.
     pub fn calculate_image_hash(image: &DynamicImage) -> u64 {
+        // Definitively-background compute: yield to foreground apps (#4849).
+        let _dip = screenpipe_core::thread_priority::BackgroundWorkDip::new();
         let w = (image.width() / 6).max(1);
         let h = (image.height() / 6).max(1);
         let small = image.resize_exact(w, h, FilterType::Nearest);

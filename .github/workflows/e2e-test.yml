@@ -106,19 +106,6 @@ jobs:
         target: x86_64-pc-windows-msvc
         cache-bin: false
 
-    # sccache, same as the Linux/macOS e2e jobs. This Build step is the
-    # slowest in all of CI (~45 min cold) and was the only e2e build
-    # without compiler-level caching. CARGO_INCREMENTAL=0 (set in the job
-    # env above) is required for sccache to cache rustc invocations.
-    - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
-
-    - name: Configure sccache
-      shell: pwsh
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $env:GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
-
     - name: Rust cache
       # cache restore/save is an optimization only; a transient GHA cache
       # service error must never fail the job (skipped build+tests, red CI)
@@ -129,6 +116,21 @@ jobs:
         shared-key: screenpipe-tauri-e2e-windows
         cache-bin: false
         save-if: true
+
+    # sccache, same as the Linux/macOS e2e jobs. This Build step is the
+    # slowest in all of CI (~45 min cold). Backend is the shared R2 bucket
+    # (was SCCACHE_GHA_ENABLED, which competed for the 10 GB repo cache
+    # quota). CARGO_INCREMENTAL=0 (set in the job env above) is required
+    # for sccache to cache rustc invocations. Placed after rust-cache on
+    # purpose — see the action's ordering note.
+    - name: Setup sccache (shared R2 compile cache)
+      uses: ./.github/actions/setup-sccache
+      with:
+        r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+        read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+        write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
     - name: Configure Bun cache on same drive as workspace (Windows perf fix)
       shell: pwsh
@@ -484,14 +486,6 @@ jobs:
         target: x86_64-unknown-linux-gnu
         cache-bin: false
 
-    - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
-
-    - name: Configure sccache
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-
     - name: Rust cache
       # cache restore/save is an optimization only; a transient GHA cache
       # service error must never fail the job (skipped build+tests, red CI)
@@ -501,6 +495,17 @@ jobs:
         workspaces: apps/screenpipe-app-tauri/src-tauri
         shared-key: screenpipe-tauri-e2e
         cache-bin: false
+
+    # Backend is the shared R2 bucket (was SCCACHE_GHA_ENABLED). After
+    # rust-cache on purpose — see the action's ordering note.
+    - name: Setup sccache (shared R2 compile cache)
+      uses: ./.github/actions/setup-sccache
+      with:
+        r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+        read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+        write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
     - name: Install frontend dependencies
       working-directory: ./apps/screenpipe-app-tauri
@@ -616,6 +621,16 @@ jobs:
         shared-key: linux-wayland-e2e
         cache-bin: false
 
+    # After rust-cache on purpose — see the action's ordering note.
+    - name: Setup sccache (shared R2 compile cache)
+      uses: ./.github/actions/setup-sccache
+      with:
+        r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+        read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+        write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
+
     - name: Install Wayland test dependencies
       shell: bash
       run: |
@@ -655,7 +670,7 @@ jobs:
 
         cat > "$RUNNER_TEMP/sway/config" <<EOF
         output * resolution 1280x720
-        exec foot --title "$SCREENPIPE_WAYLAND_TEST_TITLE" sh -lc 'sleep 300'
+        exec foot --title "$SCREENPIPE_WAYLAND_TEST_TITLE" sh -lc 'sleep 1800'
         EOF
 
         sway --config "$RUNNER_TEMP/sway/config" --validate
@@ -749,15 +764,6 @@ jobs:
         target: aarch64-apple-darwin
         cache-bin: false
 
-    - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
-
-    - name: Configure sccache
-      shell: bash
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-
     - name: Rust cache
       # cache restore/save is an optimization only; a transient GHA cache
       # service error must never fail the job (skipped build+tests, red CI)
@@ -767,6 +773,17 @@ jobs:
         workspaces: apps/screenpipe-app-tauri/src-tauri
         shared-key: screenpipe-tauri-e2e
         cache-bin: false
+
+    # Backend is the shared R2 bucket (was SCCACHE_GHA_ENABLED). After
+    # rust-cache on purpose — see the action's ordering note.
+    - name: Setup sccache (shared R2 compile cache)
+      uses: ./.github/actions/setup-sccache
+      with:
+        r2-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        read-access-key-id: ${{ secrets.SCCACHE_R2_READ_ACCESS_KEY_ID }}
+        read-secret-access-key: ${{ secrets.SCCACHE_R2_READ_SECRET_ACCESS_KEY }}
+        write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
+        write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
     - name: Cache macOS build artifacts
       uses: actions/cache@v4

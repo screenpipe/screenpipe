@@ -22,8 +22,25 @@ import { invoke } from '../helpers/tauri.js';
 import { getLocalApiConfig, waitForLocalApi } from '../helpers/api-utils.js';
 
 const FORCE_KEY = 'screenpipe_e2e_force_billing_gate';
+const E2E_ACCOUNT_USER_KEY = 'screenpipe_e2e_account_user';
+const E2E_ACCOUNT_USER_EVENT = 'screenpipe-e2e-seed-account-user';
 const FAKE_DENIED_TOKEN = 'e2e-fake-token-cloud-sub-app-denied';
 const FAKE_DENIED_EMAIL = 'e2e-cloud-sub-app-denied@screenpipe.test';
+
+async function clearAccountState(): Promise<void> {
+  await browser.execute(
+    (key: string, eventName: string) => {
+      window.localStorage.setItem(key, 'null');
+      window.dispatchEvent(new Event(eventName));
+    },
+    E2E_ACCOUNT_USER_KEY,
+    E2E_ACCOUNT_USER_EVENT,
+  );
+
+  const result = await invoke('set_cloud_token', { token: null });
+  expect(result.ok).toBe(true);
+  await browser.pause(t(500));
+}
 
 /** Forcing the gate on drives the entitlement gate to stop the engine
  *  (components/app-entitlement-gate.tsx calls stopScreenpipe for an unentitled
@@ -148,6 +165,10 @@ describe('App entitlement gate', () => {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    // The preceding Basic billing spec intentionally seeds an entitled user.
+    // Start from an explicit signed-out state instead of depending on spec order
+    // or an eventual real-network 401 to clear that synthetic account.
+    await clearAccountState();
   });
 
   after(async () => {
@@ -168,35 +189,60 @@ describe('App entitlement gate', () => {
   });
 
   it('blocks an unentitled session and restores access when cleared', async () => {
-    // 1. Force the gate on. With no entitled user, the paywall must show and the
-    //    app navigation must be hidden.
-    await setForceGate(true);
+    try {
+      // 1. Force the gate on. With no entitled user, the paywall must show and the
+      //    app navigation must be hidden.
+      await setForceGate(true);
 
-    const choosePlan = await $('button*=choose plan');
-    await choosePlan.waitForExist({ timeout: t(15000) });
-    expect(await choosePlan.isExisting()).toBe(true);
-    expect(await (await $('[data-testid="nav-home"]')).isExisting()).toBe(false);
+      const choosePlan = await $('button*=choose plan');
+      await choosePlan.waitForExist({ timeout: t(15000) });
+      expect(await choosePlan.isExisting()).toBe(true);
+      expect(await (await $('[data-testid="nav-home"]')).isExisting()).toBe(false);
 
-    // 2. Clear the flag (back to the bypassed e2e build) and the app returns.
-    await setForceGate(false);
+      // 2. Clear the flag (back to the bypassed e2e build) and the app returns.
+      await setForceGate(false);
 
-    const navHome = await $('[data-testid="nav-home"]');
-    await navHome.waitForExist({ timeout: t(15000) });
-    expect(await navHome.isExisting()).toBe(true);
-    expect(await (await $('button*=choose plan')).isExisting()).toBe(false);
+      const navHome = await $('[data-testid="nav-home"]');
+      await navHome.waitForExist({ timeout: t(15000) });
+      expect(await navHome.isExisting()).toBe(true);
+      expect(await (await $('button*=choose plan')).isExisting()).toBe(false);
+    } finally {
+      await setForceGate(false).catch(() => {});
+    }
   });
 
   it('blocks a cloud_subscribed account when the server denies app entitlement', async () => {
-    await setForceGate(true);
-    await patchFetchForCloudSubscribedAppDeniedUser();
-    await emitDeepLink(`screenpipe://login?api_key=${FAKE_DENIED_TOKEN}`);
+    try {
+      await setForceGate(true);
+      await patchFetchForCloudSubscribedAppDeniedUser();
+      await emitDeepLink(`screenpipe://login?api_key=${FAKE_DENIED_TOKEN}`);
 
-    const title = await $('h1=subscription required');
-    await title.waitForExist({ timeout: t(15000) });
-    expect(await title.isExisting()).toBe(true);
-    expect(await (await $('[data-testid="nav-home"]')).isExisting()).toBe(false);
+      await browser.waitUntil(
+        async () => {
+          const state = (await browser.execute((email: string) => {
+            const body = document.body.innerText.toLowerCase();
+            return {
+              hasSubscriptionRequired: body.includes("subscription required"),
+              hasDeniedEmail: body.includes(email.toLowerCase()),
+              hasNavHome: Boolean(document.querySelector('[data-testid="nav-home"]')),
+            };
+          }, FAKE_DENIED_EMAIL)) as {
+            hasSubscriptionRequired: boolean;
+            hasDeniedEmail: boolean;
+            hasNavHome: boolean;
+          };
 
-    await restoreFetch();
-    await setForceGate(false);
+          return state.hasSubscriptionRequired && state.hasDeniedEmail && !state.hasNavHome;
+        },
+        {
+          timeout: t(15000),
+          interval: 250,
+          timeoutMsg: "Cloud-subscribed but app-denied account did not stay behind the entitlement gate",
+        },
+      );
+    } finally {
+      await restoreFetch().catch(() => {});
+      await setForceGate(false).catch(() => {});
+    }
   });
 });

@@ -51,6 +51,22 @@ flowchart LR
 | app settings | app store plus local config files |
 | e2e test data | isolated `.e2e/` directory in the app repo |
 
+### changing your storage location
+
+you can move screenpipe data to a different drive or external storage:
+
+1. **quit screenpipe completely** — ensure the app is not running
+2. **copy `~/.screenpipe/` to your new location** — e.g., `/Volumes/MyDrive/.screenpipe/`
+3. **set the environment variable** `SCREENPIPE_DATA_DIR=/Volumes/MyDrive/.screenpipe` before starting screenpipe
+4. **restart screenpipe** — the app will now use the new location
+
+**note:** if pipes still read or write to the default location after changing settings, ensure:
+- screenpipe itself (the main app) was fully restarted after the change
+- any CLI or scheduled processes use the same `SCREENPIPE_DATA_DIR` value
+- if using the desktop app, the settings change is saved and the app was restarted
+
+**for cloud backup or team sync:** use **settings → storage → archive** or **cloud archive** instead of manually moving the directory. this ensures pipes and search continue to work correctly.
+
 ## privacy controls
 
 | control | where |

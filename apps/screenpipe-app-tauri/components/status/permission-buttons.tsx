@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useInterval } from "@/lib/hooks/use-interval";
 import { Button } from "@/components/ui/button";
 import { Check, Lock, Settings, X } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
@@ -40,21 +41,14 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
   }, [isMacOS]);
 
   // Poll microphone permission only (screen requires app restart)
-  useEffect(() => {
-    if (!isMacOS || type !== "audio") return;
-
-    const checkMicPermission = async () => {
-      try {
-        const micStatus = await commands.checkMicrophonePermission();
-        setPermissions(prev => prev ? { ...prev, microphone: micStatus } : null);
-      } catch (error) {
-        console.error("Failed to check mic permission:", error);
-      }
-    };
-
-    const intervalId = setInterval(checkMicPermission, 1000);
-    return () => clearInterval(intervalId);
-  }, [isMacOS, type]);
+  useInterval(async () => {
+    try {
+      const micStatus = await commands.checkMicrophonePermission();
+      setPermissions(prev => prev ? { ...prev, microphone: micStatus } : null);
+    } catch (error) {
+      console.error("Failed to check mic permission:", error);
+    }
+  }, isMacOS && type === "audio" ? 1000 : null);
 
   const handlePermissionButton = async () => {
     try {

@@ -49,6 +49,13 @@ mod mlx_memory {
         unsafe { mlx_clear_cache() };
     }
 
+    #[cfg(test)]
+    pub fn active_memory_bytes() -> usize {
+        let mut active = 0usize;
+        unsafe { mlx_get_active_memory(&mut active) };
+        active
+    }
+
     /// Log current MLX memory stats.
     pub fn log_memory_stats(label: &str) {
         let (mut active, mut cache, mut peak) = (0usize, 0usize, 0usize);
@@ -65,6 +72,11 @@ mod mlx_memory {
             peak as f64 / 1048576.0,
         );
     }
+}
+
+#[cfg(all(test, feature = "parakeet-mlx"))]
+pub(crate) fn mlx_active_memory_bytes_for_test() -> usize {
+    mlx_memory::active_memory_bytes()
 }
 
 /// Unified transcription engine that owns the runtime state for whatever backend is configured.

@@ -71,7 +71,9 @@ impl SegmentationManager {
             None
         };
 
-        let embedding_manager = Arc::new(StdMutex::new(EmbeddingManager::new(usize::MAX)));
+        let embedding_manager = Arc::new(StdMutex::new(EmbeddingManager::new(
+            crate::speaker::embedding_manager::DEFAULT_MAX_SPEAKERS,
+        )));
         Ok(SegmentationManager {
             embedding_manager,
             embedding_extractor: AsyncMutex::new(embedding_extractor),

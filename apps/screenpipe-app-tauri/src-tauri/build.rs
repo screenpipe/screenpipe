@@ -341,6 +341,11 @@ fn main() {
         // Build SwiftUI shortcut reminder
         build_shortcut_reminder();
 
+        // Stage macOS runtime sidecars into src-tauri/. Release builds bundle
+        // mlx.metallib as a Tauri externalBin on arm64 so Tauri signs it, and
+        // copy libonnxruntime.dylib via macOS.files on x86_64 for ort load-dynamic.
+        stage_macos_sidecar_libs();
+
         // Stage permission-flow's resource bundle for Tauri to pick up.
         copy_permission_flow_bundle();
     }
@@ -356,54 +361,6 @@ fn main() {
         if !stub.exists() {
             std::fs::create_dir_all(&stub).ok();
             std::fs::write(stub.join(".placeholder"), b"").ok();
-        }
-    }
-
-    // Copy mlx.metallib to a known location so Tauri can bundle it as a resource.
-    // MLX compiles Metal shaders into this file during mlx-sys build. Without it,
-    // parakeet-mlx crashes with "Failed to load the default metallib".
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        // Download mlx.metallib (pre-compiled MLX Metal shaders) for parakeet-mlx.
-        // MLX needs this file next to the binary at runtime. Tauri bundles it into
-        // Contents/Resources/ and main.rs symlinks it to Contents/MacOS/.
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let metallib = std::path::Path::new(&manifest_dir).join("mlx.metallib");
-        let min_size = 1_000_000; // real metallib is ~84MB
-
-        let needs_download = !metallib.exists()
-            || std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0) < min_size;
-
-        if needs_download {
-            println!("cargo:warning=mlx-metallib: downloading from GitHub releases...");
-            let url = "https://github.com/screenpipe/screenpipe/releases/download/mlx-metallib-v0.2.0/mlx.metallib";
-            let status = std::process::Command::new("curl")
-                .args(["-L", "-f", "-o", metallib.to_str().unwrap(), url])
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
-                    println!("cargo:warning=mlx-metallib: downloaded ({} MB)", size / 1_000_000);
-                }
-                _ => println!("cargo:warning=mlx-metallib: download failed — parakeet-mlx will crash at runtime"),
-            }
-        } else {
-            let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
-            println!(
-                "cargo:warning=mlx-metallib: already present ({} MB)",
-                size / 1_000_000
-            );
-        }
-    }
-
-    // Ensure mlx.metallib exists so Tauri doesn't fail on the resource declaration.
-    // On non-aarch64-macOS builds, create an empty placeholder (it won't be used).
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-    {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let metallib = std::path::Path::new(&manifest_dir).join("mlx.metallib");
-        if !metallib.exists() {
-            let _ = std::fs::write(&metallib, b"");
         }
     }
 
@@ -595,6 +552,249 @@ int shortcut_is_available(void) { return 0; }
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=shortcut_reminder");
+}
+
+/// Stage mlx.metallib and libonnxruntime.dylib into `src-tauri/` for macOS
+/// release bundling.
+/// MLX needs metallib next to the binary at runtime (parakeet-mlx crashes without it).
+/// x86_64 Intel builds need libonnxruntime.dylib colocated for ort `load-dynamic`.
+/// Same build-time staging pattern as `copy_permission_flow_bundle` (#3990).
+#[cfg(target_os = "macos")]
+fn stage_macos_sidecar_libs() {
+    stage_mlx_metallib();
+    stage_libonnxruntime_dylib();
+}
+
+/// Copy mlx.metallib to a known location so release packaging can bundle it as
+/// a Tauri externalBin on aarch64 macOS builds. MLX compiles Metal shaders into
+/// this file during mlx-sys build. Without it, parakeet-mlx crashes with
+/// "Failed to load the default metallib".
+#[cfg(target_os = "macos")]
+fn stage_mlx_metallib() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let metallib = std::path::Path::new(&manifest_dir).join("mlx.metallib");
+    let target_arch =
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "aarch64".to_string());
+
+    if target_arch != "aarch64" {
+        let _ = std::fs::remove_file(&metallib);
+        return;
+    }
+
+    let min_size = 1_000_000; // real metallib is ~84MB
+
+    let needs_download = !metallib.exists()
+        || std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0) < min_size;
+
+    if needs_download {
+        // Download mlx.metallib (pre-compiled MLX Metal shaders) for parakeet-mlx.
+        // MLX needs this file next to the binary at runtime. The release
+        // workflow exposes the target-suffixed externalBin copy to Tauri.
+        println!("cargo:warning=mlx-metallib: downloading from GitHub releases...");
+        let url =
+            "https://github.com/screenpipe/screenpipe/releases/download/mlx-metallib-v0.2.0/mlx.metallib";
+        let status = std::process::Command::new("curl")
+            .args(["-L", "-f", "-o", metallib.to_str().unwrap(), url])
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
+                println!("cargo:warning=mlx-metallib: downloaded ({} MB)", size / 1_000_000);
+            }
+            _ => println!(
+                "cargo:warning=mlx-metallib: download failed — parakeet-mlx will crash at runtime"
+            ),
+        }
+    } else {
+        let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
+        println!(
+            "cargo:warning=mlx-metallib: already present ({} MB)",
+            size / 1_000_000
+        );
+    }
+
+    sign_macos_sidecar_if_needed(&metallib);
+}
+
+/// Stage libonnxruntime.dylib for x86_64 Intel builds. ort `load-dynamic` resolves
+/// relative paths from the executable, so the dylib must live in Contents/MacOS/.
+#[cfg(target_os = "macos")]
+fn stage_libonnxruntime_dylib() {
+    use std::path::PathBuf;
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let dylib = PathBuf::from(&manifest_dir).join("libonnxruntime.dylib");
+    let target_arch =
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "aarch64".to_string());
+    let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
+    let min_size = 100_000;
+
+    if target_arch == "x86_64" {
+        if !dylib.exists() || std::fs::metadata(&dylib).map(|m| m.len()).unwrap_or(0) < min_size {
+            if let Ok(ort_path) = std::env::var("ORT_DYLIB_PATH") {
+                let src = PathBuf::from(&ort_path);
+                if src.is_file() {
+                    if let Err(e) = std::fs::copy(&src, &dylib) {
+                        println!("cargo:warning=libonnxruntime: ORT_DYLIB_PATH copy failed: {e}");
+                    } else {
+                        println!(
+                            "cargo:warning=libonnxruntime: copied from ORT_DYLIB_PATH ({})",
+                            src.display()
+                        );
+                    }
+                }
+            }
+        }
+
+        let still_needs_fetch =
+            !dylib.exists() || std::fs::metadata(&dylib).map(|m| m.len()).unwrap_or(0) < min_size;
+
+        if still_needs_fetch {
+            println!(
+                "cargo:warning=libonnxruntime: downloading x86_64 dylib from Homebrew bottle..."
+            );
+            match download_homebrew_onnxruntime_dylib(&dylib) {
+                Ok(size) => println!(
+                    "cargo:warning=libonnxruntime: downloaded ({} MB)",
+                    size / 1_000_000
+                ),
+                Err(e) => {
+                    let msg = format!("libonnxruntime dylib fetch failed: {e}");
+                    if is_release {
+                        panic!("{msg}");
+                    }
+                    println!("cargo:warning={msg} (debug build, staging empty stub)");
+                    let _ = std::fs::write(&dylib, b"");
+                }
+            }
+        }
+        sign_macos_sidecar_if_needed(&dylib);
+    } else if !dylib.exists() {
+        // aarch64 doesn't load this dylib at runtime, but the bundler's
+        // macOS.files mapping references it unconditionally, so it must exist.
+        let _ = std::fs::write(&dylib, b"");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn sign_macos_sidecar_if_needed(path: &std::path::Path) {
+    let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
+    if !is_release {
+        return;
+    }
+
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size == 0 {
+        return;
+    }
+
+    let Ok(identity) = std::env::var("APPLE_SIGNING_IDENTITY") else {
+        println!(
+            "cargo:warning=macos-sidecar-sign: APPLE_SIGNING_IDENTITY missing; Tauri app signing may reject {}",
+            path.display()
+        );
+        return;
+    };
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let entitlements = std::path::Path::new(&manifest_dir).join("entitlements.plist");
+    let status = std::process::Command::new("codesign")
+        .arg("--force")
+        .arg("--sign")
+        .arg(identity)
+        .arg("--options")
+        .arg("runtime")
+        .arg("--timestamp")
+        .arg("--entitlements")
+        .arg(&entitlements)
+        .arg(path)
+        .status();
+
+    match status {
+        Ok(status) if status.success() => {
+            println!(
+                "cargo:warning=macos-sidecar-sign: signed {}",
+                path.file_name().and_then(|n| n.to_str()).unwrap_or("sidecar")
+            );
+        }
+        Ok(status) => panic!(
+            "codesign failed for staged macOS sidecar {} with status {}",
+            path.display(),
+            status
+        ),
+        Err(err) => panic!(
+            "failed to run codesign for staged macOS sidecar {}: {}",
+            path.display(),
+            err
+        ),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn download_homebrew_onnxruntime_dylib(dst: &std::path::Path) -> Result<u64, String> {
+    use std::path::PathBuf;
+
+    let tmp = std::env::temp_dir().join(format!("ort-app-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let tarball = tmp.join("bottle.tar.gz");
+
+    let curl_status = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "-H",
+            "Authorization: Bearer QQ==",
+            "-o",
+            tarball.to_str().ok_or("invalid temp path")?,
+            "https://ghcr.io/v2/homebrew/core/onnxruntime/blobs/sha256:afe69511a14f1b9351074b0bf9e5de65858d25a6795ab7f228ba78b149079c3d",
+        ])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !curl_status.success() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err("curl download failed".into());
+    }
+
+    let tar_status = std::process::Command::new("tar")
+        .args(["-xzf", tarball.to_str().ok_or("invalid temp path")?, "-C"])
+        .arg(&tmp)
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !tar_status.success() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err("tar extract failed".into());
+    }
+
+    let src = find_onnxruntime_dylib(&tmp).ok_or_else(|| {
+        let _ = std::fs::remove_dir_all(&tmp);
+        "no libonnxruntime dylib in bottle".to_string()
+    })?;
+
+    std::fs::copy(&src, dst).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::metadata(dst)
+        .map(|m| m.len())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn find_onnxruntime_dylib(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("libonnxruntime") && n.ends_with(".dylib"))
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 /// Stage `PermissionFlow_PermissionFlow.bundle` into `src-tauri/` so Tauri

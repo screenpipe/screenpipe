@@ -78,13 +78,23 @@ impl SafeMonitor {
             }
 
             match crate::wgc_capture::PersistentCapture::new(monitor_id) {
-                Ok(capture) => {
+                Ok(mut capture) => {
                     // First frame — allow longer timeout for WGC to deliver
                     match capture.get_latest_image(std::time::Duration::from_millis(500)) {
                         Ok(img) => {
                             let mut guard = persistent.lock().map_err(|e| {
                                 anyhow::anyhow!("persistent capture mutex poisoned: {}", e)
                             })?;
+                            // Re-check under the mutex: a concurrent capture on the same
+                            // Arcs may have tripped the disable flag since the check at
+                            // the top. Storing now would strand a live WGC session that
+                            // no future capture_image() call can reach (early return at
+                            // the disabled check happens before the mutex is touched).
+                            if persistent_disabled.load(Ordering::Relaxed) {
+                                drop(guard);
+                                capture.stop();
+                                return Ok(img);
+                            }
                             *guard = Some(capture);
                             persistent_failures.store(0, Ordering::Relaxed);
                             return Ok(img);
@@ -92,6 +102,7 @@ impl SafeMonitor {
                         Err(e) => {
                             Self::record_persistent_init_failure(
                                 monitor_id,
+                                &persistent,
                                 &persistent_disabled,
                                 &persistent_failures,
                                 &e.to_string(),
@@ -103,6 +114,7 @@ impl SafeMonitor {
                 Err(e) => {
                     Self::record_persistent_init_failure(
                         monitor_id,
+                        &persistent,
                         &persistent_disabled,
                         &persistent_failures,
                         &e.to_string(),
@@ -197,6 +209,7 @@ impl SafeMonitor {
 
     fn record_persistent_init_failure(
         monitor_id: u32,
+        persistent: &std::sync::Mutex<Option<crate::wgc_capture::PersistentCapture>>,
         persistent_disabled: &Arc<AtomicBool>,
         persistent_failures: &Arc<AtomicU32>,
         reason: &str,
@@ -210,6 +223,20 @@ impl SafeMonitor {
                     failures,
                     reason
                 );
+            }
+            // Drain under the mutex after setting the flag: a concurrent
+            // capture_image() that passed the early disabled check may have
+            // stored (or be about to store) a live session. Its store path
+            // re-checks the flag under this same mutex, so between the two
+            // no live WGC session can survive behind disabled == true.
+            if let Ok(mut guard) = persistent.lock() {
+                if let Some(mut capture) = guard.take() {
+                    capture.stop();
+                    tracing::warn!(
+                        "stopped concurrently stored persistent WGC session for monitor {} after disable",
+                        monitor_id
+                    );
+                }
             }
         } else {
             tracing::debug!(
@@ -301,19 +328,29 @@ mod tests {
 
     #[test]
     fn test_persistent_capture_disables_after_three_failures() {
+        let persistent: std::sync::Mutex<Option<crate::wgc_capture::PersistentCapture>> =
+            std::sync::Mutex::new(None);
         let disabled = Arc::new(AtomicBool::new(false));
         let failures = Arc::new(AtomicU32::new(0));
 
-        SafeMonitor::record_persistent_init_failure(1, &disabled, &failures, "err 1");
+        SafeMonitor::record_persistent_init_failure(1, &persistent, &disabled, &failures, "err 1");
         assert!(!disabled.load(Ordering::Relaxed));
         assert_eq!(failures.load(Ordering::Relaxed), 1);
 
-        SafeMonitor::record_persistent_init_failure(1, &disabled, &failures, "err 2");
+        SafeMonitor::record_persistent_init_failure(1, &persistent, &disabled, &failures, "err 2");
         assert!(!disabled.load(Ordering::Relaxed));
         assert_eq!(failures.load(Ordering::Relaxed), 2);
 
-        SafeMonitor::record_persistent_init_failure(1, &disabled, &failures, "err 3");
+        SafeMonitor::record_persistent_init_failure(1, &persistent, &disabled, &failures, "err 3");
         assert!(disabled.load(Ordering::Relaxed));
         assert_eq!(failures.load(Ordering::Relaxed), 3);
+        // Disable must also drain any stored session (race: a concurrent
+        // capture may store a live session right as the flag trips).
+        assert!(persistent.lock().unwrap().is_none());
+
+        // Further failures after disable must not panic or re-log; drain stays idempotent.
+        SafeMonitor::record_persistent_init_failure(1, &persistent, &disabled, &failures, "err 4");
+        assert!(disabled.load(Ordering::Relaxed));
+        assert!(persistent.lock().unwrap().is_none());
     }
 }

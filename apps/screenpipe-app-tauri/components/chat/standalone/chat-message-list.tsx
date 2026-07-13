@@ -28,6 +28,28 @@ import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 
+function messageDate(timestamp: number): Date | null {
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function formatMessageHoverTime(timestamp: number): string | null {
+  const date = messageDate(timestamp);
+  if (!date) return null;
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatMessageFullTime(timestamp: number): string | null {
+  const date = messageDate(timestamp);
+  if (!date) return null;
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export interface ChatMessageListProps {
   messages: Message[];
   isLoading: boolean;
@@ -215,6 +237,8 @@ export function ChatMessageList({
               nextSameSegmentAssistant && isSteeredAssistantMessage(nextSameSegmentAssistant)
             );
             const turnAggregatedCitations = citationPlan.aggregatedAfter.get(message.id);
+            const messageHoverTime = formatMessageHoverTime(message.timestamp);
+            const messageFullTime = formatMessageFullTime(message.timestamp);
 
             return [
               <motion.div
@@ -369,6 +393,15 @@ export function ChatMessageList({
                             message.role === "assistant" ? "self-start" : "self-end"
                           )}
                         >
+                          {messageHoverTime ? (
+                            <time
+                              dateTime={messageDate(message.timestamp)?.toISOString()}
+                              title={messageFullTime ?? undefined}
+                              className="mr-1 text-[11px] leading-none text-muted-foreground/70 select-none"
+                            >
+                              {messageHoverTime}
+                            </time>
+                          ) : null}
                           <button
                             onClick={() => onCopyMessage(message)}
                             className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
@@ -418,7 +451,7 @@ export function ChatMessageList({
                               </PopoverTrigger>
                               <PopoverContent className="w-48 p-1" align="end" side="top">
                                 <div className="text-xs text-muted-foreground px-2 py-1 mb-1">
-                                  {new Date(message.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                  {messageFullTime}
                                 </div>
                                 {!message.content.includes("used all your free queries") &&
                                   !message.content.startsWith("Error") &&

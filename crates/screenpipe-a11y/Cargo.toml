@@ -48,8 +48,12 @@ rusqlite = { version = "0.29", features = ["bundled"] }
 url = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }
+cidre = { git = "https://github.com/yury/cidre.git", rev = "8d0f7307d201d75328ed82ea0d4ca7bb0a649716", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
+# Window-server frontmost-app query (CGWindowList) — the run-loop-free
+# source of truth the focused-app resolver cross-checks AX focus against.
+core-foundation = { workspace = true }
+core-graphics = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Native Windows APIs - no rdev dependency
