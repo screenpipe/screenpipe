@@ -730,12 +730,15 @@ impl AudioManager {
         // Remove from disabled FIRST so start_device gate allows it
         self.user_disabled_devices.write().await.remove(device_name);
 
+        // If the audio manager was fully stopped (e.g. global capture pause),
+        // restart the pipeline so this device can actually produce data.
+        // start() is idempotent — no-op if already Running.
         if self.status().await != AudioManagerStatus::Running {
             info!(
-                "user re-enabled audio device while audio manager is stopped: {}",
+                "audio manager stopped, restarting pipeline to resume device: {}",
                 device_name
             );
-            return Ok(());
+            self.start().await?;
         }
 
         let device = match parse_audio_device(device_name) {
