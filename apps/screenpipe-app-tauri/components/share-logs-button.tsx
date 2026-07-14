@@ -4,7 +4,7 @@
 
 import { Button } from "./ui/button";
 import { useToast } from "./ui/use-toast";
-import { Upload, Loader, X, Camera, Video } from "lucide-react";
+import { Upload, Loader, X, Check, Video } from "lucide-react";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { commands } from "@/lib/utils/tauri";
 import { useState, useEffect } from "react";
@@ -24,7 +24,13 @@ import {
 import { localFetch } from "@/lib/api";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { loadAllConversations } from "@/lib/chat-storage";
-import { firstImageFile } from "@/lib/utils/clipboard-image";
+import {
+  ACCEPTED_ATTACHMENT_TYPES,
+  classifyAttachmentFile,
+  firstTransferFile,
+  formatBytes,
+  type VideoExt,
+} from "@/lib/utils/feedback-attachments";
 
 // Read an image File and return a compressed JPEG data URL (max 1920px wide).
 // Shared by the file-picker, clipboard paste, and drag-drop entry points.
@@ -59,6 +65,19 @@ interface VideoChunk {
   id: number;
 }
 
+// One image slot + one video slot, matching the server which provisions one
+// `_screenshot.png` and one `_video.{ext}` upload per report. Last write wins
+// within each slot.
+interface ImageAttachment {
+  dataUrl: string;
+  name: string;
+  sizeBytes: number;
+}
+
+type VideoAttachment =
+  | { source: "file"; file: File; ext: VideoExt }
+  | { source: "recording"; localPath: string };
+
 export const ShareLogsButton = ({
   onComplete,
   prefillText,
@@ -72,8 +91,13 @@ export const ShareLogsButton = ({
   const [machineId, setMachineId] = useState("");
   const [feedbackText, setFeedbackText] = useState(prefillText ?? "");
   const [isLoadingVideo, setIsLoadingVideo] = useState(false);
-  const [screenshot, setScreenshot] = useState<string | null>(null);
-  const [mergedVideoPath, setMergedVideoPath] = useState<string | null>(null);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [image, setImage] = useState<ImageAttachment | null>(null);
+  const [video, setVideo] = useState<VideoAttachment | null>(null);
+  // dragenter/dragleave fire for every child element crossed, so track depth
+  // instead of a boolean to avoid the drag-active style flickering off.
+  const [dragDepth, setDragDepth] = useState(0);
+  const isDragActive = dragDepth > 0;
   const [includeChatHistory, setIncludeChatHistory] = useState(true);
   const { health } = useHealthCheck();
 
@@ -155,7 +179,7 @@ export const ShareLogsButton = ({
 
       if (!mergeResponse.ok) throw new Error("failed to merge video chunks");
       const { video_path } = await mergeResponse.json();
-      setMergedVideoPath(video_path);
+      setVideo({ source: "recording", localPath: video_path });
     } catch (err) {
       console.error("failed to capture video:", err);
       toast({
@@ -168,11 +192,41 @@ export const ShareLogsButton = ({
     }
   };
 
-  // Compress + attach an image File from any source. Last write wins so a
-  // paste/drop replaces an existing attachment (the single-screenshot model).
-  const attachImageFile = async (file: File) => {
+  // Classify + attach a file from any entry point (picker, paste, drop).
+  // Images are compressed; videos are kept verbatim for upload. Unsupported
+  // and oversized files get an immediate toast instead of a silent no-op
+  // (the original bug: dropped videos vanished without a trace, #5156).
+  const attachFromFile = async (file: File) => {
+    const classified = classifyAttachmentFile(file);
+
+    if (classified.kind === "error") {
+      toast({
+        title:
+          classified.reason === "too-large"
+            ? "file too large"
+            : "unsupported file",
+        description:
+          classified.reason === "too-large"
+            ? "max 50mb — trim or compress the file and try again."
+            : "png, jpg, mp4, mov only.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (classified.kind === "video") {
+      setVideo({ source: "file", file, ext: classified.ext });
+      return;
+    }
+
+    setIsCompressing(true);
     try {
-      setScreenshot(await compressImageFile(file));
+      const dataUrl = await compressImageFile(file);
+      setImage({
+        dataUrl,
+        name: file.name || "screenshot",
+        sizeBytes: file.size,
+      });
     } catch (err) {
       console.error("failed to attach screenshot:", err);
       toast({
@@ -180,44 +234,58 @@ export const ShareLogsButton = ({
         description: "that image couldn't be read — try a different file.",
         variant: "destructive",
       });
+    } finally {
+      setIsCompressing(false);
     }
   };
 
-  const handleScreenshotUpload = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
+  const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) await attachImageFile(file);
+    // Reset so picking the same file twice re-fires onChange.
+    e.target.value = "";
+    if (file) await attachFromFile(file);
   };
 
-  // Paste-a-screenshot (Cmd/Ctrl+V) and drag-drop. Previously only the
-  // file-picker worked, so users who copied a screenshot to the clipboard hit
-  // a dead end. We intercept only when an image is actually present so normal
-  // text paste into the textarea is untouched.
+  // Paste-a-screenshot (Cmd/Ctrl+V) and drag-drop. We intercept only when a
+  // file is actually present so normal text paste into the textarea is
+  // untouched.
   const handlePaste = (e: React.ClipboardEvent) => {
-    const file = firstImageFile(e.clipboardData);
+    const file = firstTransferFile(e.clipboardData);
     if (file) {
       // stop propagation so the duplicate handler on the wrapper div (which
       // catches pastes when the textarea isn't focused) doesn't attach twice.
       e.preventDefault();
       e.stopPropagation();
-      void attachImageFile(file);
+      void attachFromFile(file);
     }
   };
 
   const handleDrop = (e: React.DragEvent) => {
-    const file = firstImageFile(e.dataTransfer);
-    if (file) {
-      e.preventDefault();
-      e.stopPropagation();
-      void attachImageFile(file);
-    }
+    // Any file drop is ours: preventDefault unconditionally so an unsupported
+    // file shows an error toast instead of the webview navigating to it.
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragDepth(0);
+    const file = firstTransferFile(e.dataTransfer);
+    if (file) void attachFromFile(file);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     // Signal we accept the drop so the browser fires `drop` instead of opening
-    // the image in the webview.
+    // the file in the webview.
     if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    setDragDepth((d) => d + 1);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    setDragDepth((d) => Math.max(0, d - 1));
   };
 
   const sendLogs = async () => {
@@ -267,6 +335,9 @@ export const ShareLogsButton = ({
         body: JSON.stringify({
           identifier,
           type,
+          // Ask for a video slot matching the attachment's real container so
+          // QuickTime bytes are never stored under a `.mp4` key.
+          video_ext: video?.source === "file" ? video.ext : "mp4",
         }),
       });
 
@@ -347,8 +418,8 @@ export const ShareLogsButton = ({
         headers: { "Content-Type": "text/plain" },
       });
 
-      if (screenshot && signedUrlScreenshot) {
-        const response = await fetch(screenshot);
+      if (image && signedUrlScreenshot) {
+        const response = await fetch(image.dataUrl);
         const blob = await response.blob();
 
         await fetch(signedUrlScreenshot, {
@@ -358,13 +429,42 @@ export const ShareLogsButton = ({
         });
       }
 
-      if (mergedVideoPath && signedUrlVideo) {
-        const videoResult = await commands.uploadFileToS3(
-          mergedVideoPath,
-          signedUrlVideo,
-        );
-        if (videoResult.status !== "ok")
-          throw new Error("Failed to upload video");
+      let videoUploaded = false;
+      if (video && signedUrlVideo) {
+        if (video.source === "recording") {
+          const videoResult = await commands.uploadFileToS3(
+            video.localPath,
+            signedUrlVideo,
+          );
+          if (videoResult.status !== "ok")
+            throw new Error("Failed to upload video");
+          videoUploaded = true;
+        } else if (
+          typeof videoPath === "string" &&
+          videoPath.endsWith(`.${video.ext}`)
+        ) {
+          const res = await fetch(signedUrlVideo, {
+            method: "PUT",
+            body: video.file,
+            headers: {
+              "Content-Type":
+                video.file.type ||
+                (video.ext === "mov" ? "video/quicktime" : "video/mp4"),
+            },
+          });
+          if (!res.ok) throw new Error("Failed to upload video");
+          videoUploaded = true;
+        } else {
+          // Server predates `video_ext` and provisioned a `.mp4` key for a
+          // `.mov` attachment — skip the video rather than store mislabeled
+          // bytes. The rest of the report still goes out.
+          toast({
+            title: "video not attached",
+            description:
+              "mov isn't accepted by the server yet — convert to mp4 and try again. the rest of your report was sent.",
+            variant: "destructive",
+          });
+        }
       }
 
       const os = osPlatform();
@@ -382,8 +482,8 @@ export const ShareLogsButton = ({
           os_version,
           app_version,
           feedback_text: feedbackText,
-          screenshot_url: screenshot ? screenshotPath : undefined,
-          video_url: mergedVideoPath ? videoPath : undefined,
+          screenshot_url: image ? screenshotPath : undefined,
+          video_url: videoUploaded ? videoPath : undefined,
           screenpipe_id: settings.analyticsId,
         }),
       });
@@ -395,16 +495,27 @@ export const ShareLogsButton = ({
       const followUpChannel = confirmPayload?.data?.follow_up;
       const reference = supportId ? ` #${supportId}` : "";
 
+      // Receipt states what was actually included so a user never believes a
+      // video went out when it didn't.
+      const attachedParts = [
+        image ? "screenshot" : null,
+        videoUploaded ? "video" : null,
+      ].filter(Boolean);
+      const attachedNote = attachedParts.length
+        ? ` included: ${attachedParts.join(" + ")}.`
+        : "";
+
       toast({
         title: "feedback sent",
         description:
-          followUpChannel === "email"
+          (followUpChannel === "email"
             ? `we emailed you a receipt${reference} and will reply there.`
-            : `we posted it to support${reference}; mention that ID in Discord if you need an update.`,
+            : `we posted it to support${reference}; mention that ID in Discord if you need an update.`) +
+          attachedNote,
       });
       setFeedbackText("");
-      setScreenshot(null);
-      setMergedVideoPath(null);
+      setImage(null);
+      setVideo(null);
       if (onComplete) onComplete();
     } catch (err) {
       console.error("log sharing failed:", err);
@@ -424,48 +535,115 @@ export const ShareLogsButton = ({
         onPaste={handlePaste}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
       >
         <Textarea
-          placeholder="describe your feedback or issue... (paste or drop a screenshot)"
+          placeholder="describe your feedback or issue..."
           value={feedbackText}
           onChange={(e) => setFeedbackText(e.target.value)}
           onPaste={handlePaste}
           className="min-h-[60px] resize-none text-xs bg-secondary/5 placeholder:text-muted-foreground/50 focus:border-secondary/30 focus:ring-0 transition-colors"
         />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="cursor-pointer flex-none">
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleScreenshotUpload}
-              disabled={!!screenshot}
-            />
-            <Button
-              variant={screenshot ? "secondary" : "outline"}
-              size="sm"
-              className={`gap-1.5 h-7 text-xs transition-all ${
-                screenshot ? "bg-foreground/10 text-foreground" : ""
-              }`}
-              disabled={!!screenshot}
-              asChild
-            >
-              <span>
-                <Camera className="h-3 w-3" />
-                <span>screenshot</span>
-              </span>
-            </Button>
-          </label>
+        <label
+          data-testid="attachment-drop-zone"
+          className={`cursor-pointer flex flex-col items-center justify-center gap-0.5 border border-dashed px-3 py-3 text-center transition-colors duration-150 ${
+            isDragActive
+              ? "border-foreground bg-secondary/20"
+              : "border-border bg-secondary/5 hover:border-foreground/40"
+          }`}
+        >
+          <input
+            type="file"
+            accept={ACCEPTED_ATTACHMENT_TYPES}
+            className="hidden"
+            onChange={handleFilePick}
+          />
+          <span className="text-xs">
+            {isCompressing
+              ? "attaching..."
+              : "drop screenshots or videos here, paste, or click to browse"}
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            png, jpg, mp4, mov · max 50mb
+          </span>
+        </label>
 
+        {image && (
+          <div
+            data-testid="image-attachment"
+            className="flex items-center gap-2 border border-border bg-secondary/5 px-2 py-1.5"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={image.dataUrl}
+              alt="screenshot preview"
+              className="h-9 w-16 flex-none object-cover border border-border"
+            />
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="text-xs truncate">{image.name}</span>
+              <span className="text-[10px] text-muted-foreground">
+                {formatBytes(image.sizeBytes)} · image
+              </span>
+            </div>
+            <Check className="h-3 w-3 flex-none text-muted-foreground" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5 flex-none"
+              onClick={() => setImage(null)}
+              aria-label="remove screenshot"
+            >
+              <X className="h-2.5 w-2.5" />
+            </Button>
+          </div>
+        )}
+
+        {video && (
+          <div
+            data-testid="video-attachment"
+            className="flex items-center gap-2 border border-border bg-secondary/5 px-2 py-1.5"
+          >
+            <Video className="h-4 w-4 flex-none text-muted-foreground" />
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="text-xs truncate">
+                {video.source === "file"
+                  ? video.file.name
+                  : "last 5 min recording"}
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                {video.source === "file"
+                  ? `${formatBytes(video.file.size)} · video`
+                  : "video"}
+              </span>
+            </div>
+            <Check className="h-3 w-3 flex-none text-muted-foreground" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5 flex-none"
+              onClick={() => setVideo(null)}
+              aria-label="remove video"
+            >
+              <X className="h-2.5 w-2.5" />
+            </Button>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
               <Button
-                variant={mergedVideoPath ? "secondary" : "outline"}
+                variant={
+                  video?.source === "recording" ? "secondary" : "outline"
+                }
                 size="sm"
                 onClick={captureLastFiveMinutes}
                 className={`gap-1.5 h-7 text-xs transition-all ${
-                  mergedVideoPath ? "bg-foreground/10 text-foreground" : ""
+                  video?.source === "recording"
+                    ? "bg-foreground/10 text-foreground"
+                    : ""
                 }`}
                 disabled={isLoadingVideo || health?.status === "error"}
               >
@@ -486,25 +664,6 @@ export const ShareLogsButton = ({
           </Tooltip>
         </div>
 
-        {screenshot && (
-          <div className="relative w-32 aspect-video rounded-lg overflow-hidden bg-secondary/10 border border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={screenshot}
-              alt="Screenshot preview"
-              className="object-cover w-full h-full"
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute top-1 right-1 h-5 w-5 rounded-full bg-background/80 hover:bg-background/95 border border-border"
-              onClick={() => setScreenshot(null)}
-            >
-              <X className="h-2.5 w-2.5" />
-            </Button>
-          </div>
-        )}
-
         <p className="text-[10px] text-muted-foreground leading-tight">
           logs, settings, and pi chat history are included to help us debug. api
           keys, secrets, and personal info are automatically removed.
@@ -514,7 +673,7 @@ export const ShareLogsButton = ({
           variant="default"
           size="sm"
           onClick={sendLogs}
-          disabled={isSending}
+          disabled={isSending || isCompressing || isLoadingVideo}
           className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
         >
           {isSending ? (

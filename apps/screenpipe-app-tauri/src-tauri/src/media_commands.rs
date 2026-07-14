@@ -92,6 +92,7 @@ fn get_mime_type(path: &str) -> String {
 
     match ext.as_str() {
         "mp4" => "video/mp4".to_string(),
+        "mov" => "video/quicktime".to_string(),
         "webm" => "video/webm".to_string(),
         "ogg" => "video/ogg".to_string(),
         "mp3" => "audio/mpeg".to_string(),
@@ -134,6 +135,9 @@ pub async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool
 
         match client
             .put(signed_url)
+            // Supabase records the object's content type from this header;
+            // without it videos land as application/octet-stream.
+            .header("Content-Type", get_mime_type(file_path))
             .body(file_contents.clone())
             .send()
             .await
@@ -181,6 +185,7 @@ mod tests {
     fn maps_media_mime_types_and_preserves_fallbacks() {
         for (path, expected) in [
             ("clip.mp4", "video/mp4"),
+            ("clip.mov", "video/quicktime"),
             ("clip.webm", "video/webm"),
             ("clip.ogg", "video/ogg"),
             ("clip.mp3", "audio/mpeg"),
