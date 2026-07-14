@@ -542,34 +542,61 @@ fn respawn_engine_if_crashed(
         return;
     }
 
-    // Port conflict — restarting into the same occupied port is futile. Surface
-    // a notification so the user knows why recording stopped, and skip respawn.
+    // Port conflict — restarting into the same occupied port is futile. But
+    // the boot-phase error is a snapshot from the last failed bind. Re-probe
+    // the port: if it's now free, clear the stale error and let respawn proceed.
     {
         let boot = get_boot_phase_snapshot();
         if boot.phase == "error" {
             if let Some(ref err) = boot.error {
                 if err.contains("in use") {
-                    warn!(
-                        "skipping auto-respawn: port conflict detected — {}",
-                        err
-                    );
-                    // Show notification once, then respect cooldown so dismissing
-                    // it doesn't cause it to reappear every health-check cycle.
-                    // Shorter cooldown than capture-stall (60s vs 5min) so the
-                    // user gets a RESTART button fairly soon after freeing the port.
-                    const PORT_CONFLICT_COOLDOWN: Duration = Duration::from_secs(60);
-                    let cooldown_ok = last_port_conflict_notified
-                        .map(|t| now.duration_since(t) >= PORT_CONFLICT_COOLDOWN)
-                        .unwrap_or(true);
-                    if cooldown_ok {
-                        *last_port_conflict_notified = Some(now);
+                    // Quick probe: can we bind the port right now?
+                    let api = local_api_context_from_app(app);
+                    let port_free = std::net::TcpListener::bind(("127.0.0.1", api.port)).is_ok();
+
+                    if port_free {
+                        info!("port {} is now free — restarting engine", api.port);
+                        set_boot_phase("idle", None);
+                        *last_port_conflict_notified = None;
+                        // Spawn directly instead of falling through to
+                        // EngineRespawnCheck — that check requires ever_connected,
+                        // which is false if the server never started successfully.
+                        *last_restart_triggered = Some(now);
                         let app_clone = app.clone();
-                        let err_body = err.clone();
                         tokio::spawn(async move {
-                            let _ = show_port_conflict_notification(&app_clone, &err_body).await;
+                            match crate::recording::spawn_screenpipe(
+                                app_clone.state::<crate::recording::RecordingState>(),
+                                app_clone.clone(),
+                                None,
+                            )
+                            .await
+                            {
+                                Ok(()) => info!("engine restarted after port conflict resolved"),
+                                Err(e) => warn!("engine restart after port conflict failed: {}", e),
+                            }
                         });
+                        return;
+                    } else {
+                        warn!(
+                            "skipping auto-respawn: port conflict detected — {}",
+                            err
+                        );
+                        // Show notification once, then respect cooldown so dismissing
+                        // it doesn't cause it to reappear every health-check cycle.
+                        const PORT_CONFLICT_COOLDOWN: Duration = Duration::from_secs(60);
+                        let cooldown_ok = last_port_conflict_notified
+                            .map(|t| now.duration_since(t) >= PORT_CONFLICT_COOLDOWN)
+                            .unwrap_or(true);
+                        if cooldown_ok {
+                            *last_port_conflict_notified = Some(now);
+                            let app_clone = app.clone();
+                            let err_body = err.clone();
+                            tokio::spawn(async move {
+                                let _ = show_port_conflict_notification(&app_clone, &err_body).await;
+                            });
+                        }
+                        return;
                     }
-                    return;
                 }
             }
         }
