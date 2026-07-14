@@ -28,8 +28,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
     GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY,
-    THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_IDLE, THREAD_PRIORITY_LOWEST,
-    THREAD_PRIORITY_NORMAL,
+    THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_HIGHEST, THREAD_PRIORITY_IDLE,
+    THREAD_PRIORITY_LOWEST, THREAD_PRIORITY_NORMAL,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -65,6 +65,29 @@ pub(crate) fn apply_extraction_thread_priority(priority: ExtractionThreadPriorit
                 "SetThreadPriority({:?}) failed: {:?} — falling back to default priority",
                 priority, e
             ),
+        }
+    }
+}
+
+/// Restore scheduling parity for the LL-hook thread when the process runs at
+/// a lowered priority class: HIGHEST within BELOW_NORMAL is base priority 8 —
+/// exactly what a Normal-class thread gets by default (#4849). Deliberately a
+/// no-op in a Normal-class process (the desktop app): this thread's message
+/// loop also does clipboard fetch + PII-regex work, so an unconditional
+/// HIGHEST would elevate real work above the user's apps, not just restore
+/// input-path parity.
+fn raise_hook_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
+    };
+    unsafe {
+        let class = GetPriorityClass(GetCurrentProcess());
+        if class != BELOW_NORMAL_PRIORITY_CLASS.0 && class != IDLE_PRIORITY_CLASS.0 {
+            return;
+        }
+        match SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) {
+            Ok(()) => debug!("hook thread priority raised to HIGHEST (lowered process class)"),
+            Err(e) => warn!("SetThreadPriority(HIGHEST) on hook thread failed: {:?}", e),
         }
     }
 }
@@ -528,6 +551,14 @@ fn run_native_hooks(
     last_input_at_ms: Arc<AtomicU64>,
 ) {
     debug!("Starting native Windows hooks");
+
+    // LL hooks are the system-wide *synchronous* input path: every keystroke
+    // and mouse event in every app waits on this thread's callback, and
+    // Windows silently unhooks callbacks that repeatedly exceed the hook
+    // timeout. When the process runs at BELOW_NORMAL priority class (#4849),
+    // restore this thread to Normal-parity so it stays schedulable; no-op at
+    // Normal class (see raise_hook_thread_priority).
+    raise_hook_thread_priority();
 
     // Initialize thread-local state for the hook callbacks.
     HOOK_STATE.with(|state| {
@@ -1436,6 +1467,11 @@ thread_local! {
 
 fn run_activity_only_hooks(activity_feed: ActivityFeed, stop: Arc<AtomicBool>) {
     debug!("Starting activity-only Windows hooks");
+
+    // Same reasoning as run_native_hooks: LL hooks sit in the system-wide
+    // synchronous input path and must not be starved by a BELOW_NORMAL
+    // process class (#4849).
+    raise_hook_thread_priority();
 
     ACTIVITY_FEED_ONLY.with(|f| *f.borrow_mut() = Some(activity_feed));
 

@@ -45,6 +45,10 @@ struct OAuthTokens {
 #[derive(Serialize, Deserialize, specta::Type)]
 pub struct ChatGptOAuthStatus {
     pub logged_in: bool,
+    /// `None` when the store was read successfully; contains an error
+    /// description when the status could not be determined (DB locked,
+    /// keychain failure, timeout, etc.).
+    pub error: Option<String>,
 }
 
 /// Open a connection to the secrets store (same DB as the screenpipe server).
@@ -70,10 +74,47 @@ async fn open_secret_store() -> Result<screenpipe_secrets::SecretStore, String> 
         .map_err(|e| format!("failed to init secret store: {:#}", e))
 }
 
-async fn read_tokens_from_store() -> Option<OAuthTokens> {
-    let store = open_secret_store().await.ok()?;
-    let bytes = store.get(SECRET_KEY).await.ok()??;
-    serde_json::from_slice(&bytes).ok()
+/// Read tokens from the secret store with retry logic.
+///
+/// Returns `Ok(None)` when the user genuinely hasn't logged in (no secret
+/// stored). Returns `Err` on transient failures (DB locked, keychain hiccup)
+/// so callers can surface the real problem instead of "not logged in".
+async fn read_tokens_from_store() -> Result<Option<OAuthTokens>, String> {
+    let mut last_err = String::new();
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64))).await;
+        }
+        match open_secret_store().await {
+            Ok(store) => match store.get(SECRET_KEY).await {
+                Ok(Some(bytes)) => match serde_json::from_slice::<OAuthTokens>(&bytes) {
+                    Ok(tokens) => return Ok(Some(tokens)),
+                    Err(e) => {
+                        warn!("read_tokens_from_store: JSON parse failed: {}", e);
+                        return Err(format!("failed to parse stored ChatGPT token: {}", e));
+                    }
+                },
+                Ok(None) => return Ok(None), // genuinely not logged in
+                Err(e) => {
+                    last_err = format!("failed to read secret: {}", e);
+                    warn!(
+                        "read_tokens_from_store attempt {}: {}",
+                        attempt + 1,
+                        last_err
+                    );
+                }
+            },
+            Err(e) => {
+                last_err = e;
+                warn!(
+                    "read_tokens_from_store attempt {}: {}",
+                    attempt + 1,
+                    last_err
+                );
+            }
+        }
+    }
+    Err(format!("secret store unavailable after 3 attempts: {}", last_err))
 }
 
 async fn write_tokens_to_store(tokens: &OAuthTokens) -> Result<(), String> {
@@ -199,17 +240,117 @@ async fn do_refresh_token(refresh_token: &str) -> Result<OAuthTokens, String> {
 }
 
 /// Get a valid access token, refreshing automatically if expired.
+///
+/// Retries the refresh once on transient failures (network blip, brief
+/// server error) before propagating the error.
 pub async fn get_valid_token() -> Result<String, String> {
-    let tokens = read_tokens_from_store()
-        .await
-        .ok_or("not logged in to ChatGPT")?;
+    let tokens = match read_tokens_from_store().await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Err("not logged in to ChatGPT".to_string()),
+        Err(e) => return Err(e),
+    };
 
     if is_token_expired(&tokens) {
-        let refreshed = do_refresh_token(&tokens.refresh_token).await?;
-        return Ok(refreshed.access_token);
+        match do_refresh_token(&tokens.refresh_token).await {
+            Ok(refreshed) => return Ok(refreshed.access_token),
+            Err(first_err) => {
+                warn!("ChatGPT token refresh failed, retrying in 1s: {}", first_err);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                match do_refresh_token(&tokens.refresh_token).await {
+                    Ok(refreshed) => return Ok(refreshed.access_token),
+                    Err(retry_err) => {
+                        return Err(format!(
+                            "token refresh failed after retry: {}",
+                            retry_err
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     Ok(tokens.access_token)
+}
+
+// ── Background proactive refresh ──────────────────────────────────────
+
+/// How often the background loop checks if the token needs refreshing.
+const REFRESH_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Refresh proactively when the token expires within this window.
+const REFRESH_SOON_WINDOW: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// After this many consecutive failures, pause for [`FAILURE_COOLDOWN`].
+const MAX_BG_FAILURES: u32 = 3;
+
+/// How long to wait after hitting the failure threshold.
+const FAILURE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Spawn a background task that keeps the ChatGPT access token fresh.
+///
+/// The existing `OAuthRefreshScheduler` only handles screenpipe-connect
+/// integrations (Google Calendar, Zoom, etc.) — ChatGPT uses its own
+/// direct OAuth flow, so it needs a dedicated refresh loop.
+pub fn start_background_refresh() {
+    tauri::async_runtime::spawn(async move {
+        // Startup delay — avoid fighting cold-start resources.
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        info!("chatgpt background refresh: started");
+
+        let mut consecutive_failures: u32 = 0;
+
+        loop {
+            // Check if we're in cooldown after repeated failures.
+            if consecutive_failures >= MAX_BG_FAILURES {
+                warn!(
+                    "chatgpt background refresh: {} consecutive failures, cooling down for {}s",
+                    consecutive_failures,
+                    FAILURE_COOLDOWN.as_secs()
+                );
+                tokio::time::sleep(FAILURE_COOLDOWN).await;
+                consecutive_failures = 0;
+                continue;
+            }
+
+            match read_tokens_from_store().await {
+                Ok(Some(tokens)) => {
+                    let needs_refresh = match tokens.expires_at {
+                        Some(exp) => {
+                            let soon = unix_now().saturating_add(REFRESH_SOON_WINDOW.as_secs());
+                            exp <= soon
+                        }
+                        None => false,
+                    };
+
+                    if needs_refresh {
+                        match do_refresh_token(&tokens.refresh_token).await {
+                            Ok(_) => {
+                                info!("chatgpt background refresh: token refreshed proactively");
+                                consecutive_failures = 0;
+                            }
+                            Err(e) => {
+                                consecutive_failures += 1;
+                                warn!(
+                                    "chatgpt background refresh: refresh failed ({}/{}): {}",
+                                    consecutive_failures, MAX_BG_FAILURES, e
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {} // no tokens stored, nothing to refresh
+                Err(e) => {
+                    consecutive_failures += 1;
+                    warn!(
+                        "chatgpt background refresh: store read failed ({}/{}): {}",
+                        consecutive_failures, MAX_BG_FAILURES, e
+                    );
+                }
+            }
+
+            tokio::time::sleep(REFRESH_CHECK_INTERVAL).await;
+        }
+    });
 }
 
 // ── Local callback server ──────────────────────────────────────────────
@@ -389,8 +530,22 @@ pub async fn chatgpt_oauth_status() -> Result<ChatGptOAuthStatus, String> {
     // Refresh happens lazily in chatgpt_oauth_get_token when actually needed.
     // 3-second timeout guards against a locked/slow SQLite DB.
     match tokio::time::timeout(std::time::Duration::from_secs(3), read_tokens_from_store()).await {
-        Ok(Some(_)) => Ok(ChatGptOAuthStatus { logged_in: true }),
-        Ok(None) | Err(_) => Ok(ChatGptOAuthStatus { logged_in: false }),
+        Ok(Ok(Some(_))) => Ok(ChatGptOAuthStatus { logged_in: true, error: None }),
+        Ok(Ok(None)) => Ok(ChatGptOAuthStatus { logged_in: false, error: None }),
+        Ok(Err(e)) => {
+            warn!("chatgpt_oauth_status: store read failed: {}", e);
+            Ok(ChatGptOAuthStatus {
+                logged_in: false,
+                error: Some(format!("secret store error: {}", e)),
+            })
+        }
+        Err(_) => {
+            warn!("chatgpt_oauth_status: timed out reading secret store");
+            Ok(ChatGptOAuthStatus {
+                logged_in: false,
+                error: Some("timed out reading secret store".to_string()),
+            })
+        }
     }
 }
 

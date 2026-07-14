@@ -392,6 +392,7 @@ impl Rect {
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone)]
 pub struct CGWindowInfo {
+    window_id: u32,
     pid: i32,
     layer: i32,
     bounds: Rect,
@@ -429,6 +430,27 @@ fn get_cg_window_list() -> (Vec<CGWindowInfo>, HashSet<u32>) {
                     continue;
                 }
                 let dict = dict_ref as core_foundation::dictionary::CFDictionaryRef;
+
+                // CGWindowNumber matches ScreenCaptureKit's SCWindow.windowID.
+                // Reading it here avoids the unsafe SCWindow title bridge on Intel Macs.
+                let window_id_key = CFString::new("kCGWindowNumber");
+                let mut window_id_val = std::ptr::null();
+                if core_foundation::dictionary::CFDictionaryGetValueIfPresent(
+                    dict,
+                    window_id_key.as_concrete_TypeRef() as *const _,
+                    &mut window_id_val,
+                ) == 0
+                    || window_id_val.is_null()
+                {
+                    continue;
+                }
+                let window_id_num = CFNumber::wrap_under_get_rule(
+                    window_id_val as core_foundation::number::CFNumberRef,
+                );
+                let Some(window_id) = window_id_num.to_i64().and_then(|id| u32::try_from(id).ok())
+                else {
+                    continue;
+                };
 
                 // Extract PID
                 let pid_key = CFString::new("kCGWindowOwnerPID");
@@ -531,6 +553,7 @@ fn get_cg_window_list() -> (Vec<CGWindowInfo>, HashSet<u32>) {
                 };
 
                 windows.push(CGWindowInfo {
+                    window_id,
                     pid: w_pid as i32,
                     layer,
                     bounds,
@@ -919,36 +942,8 @@ pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
         return Vec::new();
     }
 
-    let excluded = match cidre::objc::ar_pool(|| -> Result<Vec<u32>, String> {
-        let windows = SckWindow::all().map_err(|e| e.to_string())?;
-        let mut excluded = Vec::new();
-
-        for w in &windows {
-            let app_name = w.app_name().unwrap_or_default();
-            let title = w.title().unwrap_or_default();
-
-            if app_name.is_empty() {
-                continue;
-            }
-
-            if !window_filters.is_valid(&app_name, &title) {
-                if let Ok(id) = w.id() {
-                    excluded.push(id);
-                }
-            }
-        }
-
-        Ok(excluded)
-    }) {
-        Ok(ids) => ids,
-        Err(e) => {
-            debug!(
-                "get_excluded_sck_window_ids: failed to enumerate windows: {}",
-                e
-            );
-            return Vec::new();
-        }
-    };
+    let (cg_windows, _) = get_cg_window_list();
+    let excluded = excluded_sck_window_ids_from_cg_windows(&cg_windows, window_filters);
 
     if !excluded.is_empty() {
         debug!(
@@ -959,6 +954,23 @@ pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
     }
 
     excluded
+}
+
+/// Resolve filtered windows to SCK-compatible IDs without enumerating SCWindow strings.
+///
+/// On Intel macOS 15, `sck_rs::Window::all()` can pass a null window title to
+/// `CFStringGetLength`, which terminates the process before Rust can return an error.
+#[cfg(target_os = "macos")]
+fn excluded_sck_window_ids_from_cg_windows(
+    cg_windows: &[CGWindowInfo],
+    window_filters: &WindowFilters,
+) -> Vec<u32> {
+    cg_windows
+        .iter()
+        .filter(|window| window.window_id != 0 && !window.owner_name.is_empty())
+        .filter(|window| !window_filters.is_valid(&window.owner_name, &window.window_name))
+        .map(|window| window.window_id)
+        .collect()
 }
 
 /// Non-macOS stub — SCK exclusion is not available.
@@ -1722,6 +1734,7 @@ mod tests {
             title: &str,
         ) -> CGWindowInfo {
             CGWindowInfo {
+                window_id: pid as u32,
                 pid,
                 layer,
                 bounds: Rect {
@@ -1760,6 +1773,48 @@ mod tests {
                 find_topmost_pid_on_monitor(&windows, &monitor_1080p()),
                 Some(100)
             );
+        }
+
+        #[test]
+        fn test_excluded_sck_ids_respect_ignore_patterns() {
+            let windows = vec![
+                make_window(111, 0, 0, 0, 800, 600, "Password Manager", "Vault"),
+                make_window(222, 0, 0, 0, 800, 600, "Notes", "Daily note"),
+            ];
+            let filters = WindowFilters::new(&["password".to_string()], &[], &[]);
+
+            assert_eq!(
+                excluded_sck_window_ids_from_cg_windows(&windows, &filters),
+                vec![111]
+            );
+        }
+
+        #[test]
+        fn test_excluded_sck_ids_respect_include_patterns() {
+            let windows = vec![
+                make_window(111, 0, 0, 0, 800, 600, "Terminal", "Build"),
+                make_window(222, 0, 0, 0, 800, 600, "Notes", "Daily note"),
+            ];
+            let filters = WindowFilters::new(&[], &["terminal".to_string()], &[]);
+
+            assert_eq!(
+                excluded_sck_window_ids_from_cg_windows(&windows, &filters),
+                vec![222]
+            );
+        }
+
+        #[test]
+        fn test_excluded_sck_ids_skip_unusable_rows() {
+            let missing_owner = make_window(111, 0, 0, 0, 800, 600, "", "Vault");
+            let mut missing_id = make_window(222, 0, 0, 0, 800, 600, "Password Manager", "Vault");
+            missing_id.window_id = 0;
+            let filters = WindowFilters::new(&["vault".to_string()], &[], &[]);
+
+            assert!(excluded_sck_window_ids_from_cg_windows(
+                &[missing_owner, missing_id],
+                &filters
+            )
+            .is_empty());
         }
 
         #[test]

@@ -234,6 +234,26 @@ jobs:
             throw "CLI exited during startup with code $($process.ExitCode)"
           }
 
+          # The record path must drop itself to BelowNormal so it yields CPU
+          # to foreground apps (#4849). Catches the call being lost or moved.
+          # Retry: the drop happens after config load + logging init, which a
+          # cold runner can stretch past the 10s sleep above.
+          $prio = $null
+          foreach ($attempt in 1..15) {
+            if ($process.HasExited) {
+              Get-Content "screenpipe_output.log" -ErrorAction SilentlyContinue
+              Get-Content "screenpipe_error.log" -ErrorAction SilentlyContinue
+              throw "CLI exited (code $($process.ExitCode)) before priority check"
+            }
+            $prio = (Get-Process -Id $process.Id -ErrorAction SilentlyContinue).PriorityClass
+            if ($prio -eq 'BelowNormal') { break }
+            Start-Sleep -Seconds 2
+          }
+          if ($prio -ne 'BelowNormal') {
+            throw "expected engine PriorityClass BelowNormal, got $prio"
+          }
+          Write-Host "engine PriorityClass: $prio"
+
           # Generate some screen activity
           for ($i = 0; $i -lt 5; $i++) {
             Start-Process "notepad.exe"

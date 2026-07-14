@@ -111,6 +111,7 @@ mod tests {
             truncated: false,
             truncation_reason: TruncationReason::None,
             max_depth_reached: 0,
+            window_bounds: None,
         }
     }
 

@@ -93,6 +93,10 @@ pub struct RecordingConfig {
     /// Beta: meeting-driven per-process audio capture (piggyback; "Smart
     /// recording" in the app). Engages during meetings in any capture mode.
     pub experimental_meeting_piggyback: bool,
+    /// Gate Bluetooth mic capture to detected meetings by default (see
+    /// `RecordingSettings::always_record_bluetooth_mic` for the full
+    /// rationale — SCO/A2DP downgrade, issue #3750).
+    pub always_record_bluetooth_mic: bool,
     /// Experimental: request Windows WASAPI microphone AEC when supported.
     pub windows_input_aec_enabled: bool,
     /// Use Apple VoiceProcessingIO on the default macOS microphone when supported.
@@ -327,6 +331,7 @@ impl RecordingConfig {
             use_system_default_audio: settings.use_system_default_audio,
             experimental_coreaudio_system_audio: settings.experimental_coreaudio_system_audio,
             experimental_meeting_piggyback: settings.experimental_meeting_piggyback,
+            always_record_bluetooth_mic: settings.always_record_bluetooth_mic,
             windows_input_aec_enabled,
             macos_input_vpio_enabled,
             screenpipe_aec_enabled,
@@ -488,6 +493,7 @@ impl RecordingConfig {
             .use_system_default_audio(self.use_system_default_audio)
             .experimental_coreaudio_system_audio(self.experimental_coreaudio_system_audio)
             .experimental_meeting_piggyback(self.experimental_meeting_piggyback)
+            .always_record_bluetooth_mic(self.always_record_bluetooth_mic)
             .windows_input_aec_enabled(self.windows_input_aec_enabled)
             .macos_input_vpio_enabled(self.macos_input_vpio_enabled)
             .screenpipe_aec_enabled(self.screenpipe_aec_enabled)

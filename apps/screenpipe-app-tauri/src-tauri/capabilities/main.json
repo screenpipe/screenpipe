@@ -427,6 +427,30 @@
           ]
         },
         {
+          "url": "http://localhost:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
           "url": "https://**/*",
           "methods": [
             "GET",

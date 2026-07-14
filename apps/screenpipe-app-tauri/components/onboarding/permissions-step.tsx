@@ -107,6 +107,21 @@ export default function PermissionsStep({
       request: () => commands.requestPermission("microphone"),
     },
     {
+      id: "browsers",
+      icon: <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />,
+      title: "Capture browser URLs",
+      subtitle: "So Screenpipe knows what you were reading, not just what the pixels say",
+      check: async () => {
+        const granted = await commands.checkBrowsersAutomationPermission();
+        return granted ? "granted" : "denied";
+      },
+      request: async () => {
+        await commands.requestBrowsersAutomationPermission();
+      },
+      macOnly: true,
+      optional: true,
+    },
+    {
       id: "accessibility",
       icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
       title: "Read on-screen text",
@@ -124,21 +139,6 @@ export default function PermissionsStep({
       // so asking earlier just sends the user back into settings again mid-flow
       check: () => commands.checkScreenRecordingPermission(),
       request: () => requestPermissionWithFlow("screenRecording"),
-    },
-    {
-      id: "browsers",
-      icon: <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture browser URLs",
-      subtitle: "So Screenpipe knows what you were reading, not just what the pixels say",
-      check: async () => {
-        const granted = await commands.checkBrowsersAutomationPermission();
-        return granted ? "granted" : "denied";
-      },
-      request: async () => {
-        await commands.requestBrowsersAutomationPermission();
-      },
-      macOnly: true,
-      optional: true,
     },
   ];
 

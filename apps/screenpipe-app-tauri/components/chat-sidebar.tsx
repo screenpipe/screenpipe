@@ -30,7 +30,7 @@
  * survives app restart. Delete removes the file.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import {
@@ -103,6 +103,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
+import { localFetch } from "@/lib/api";
 import {
   applySidebarRecentsCap,
   buildSidebarRecentsSections,
@@ -401,13 +402,54 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   );
   // Flatten pipe grouped sections into a single items list for rendering
   const pipeItems = useMemo(
-    () => pipeGroupedSections.flatMap((section) => section.items),
+    () =>
+      pipeGroupedSections.flatMap((section) => section.items).map((item) => {
+        if (item.kind === "group" || !item.session.pipeContext?.pipeName) return item;
+        return {
+          kind: "group" as const,
+          key: `pipe:${item.session.pipeContext.pipeName}`,
+          title: item.session.pipeContext.pipeName,
+          sessions: [item.session],
+        };
+      }),
     [pipeGroupedSections],
   );
 
   const [pipesCollapsed, setPipesCollapsed] = useCollapsedPref(
     "screenpipe:pipes-collapsed",
     true
+  );
+  const [pipeExecutionCounts, setPipeExecutionCounts] = useState<Record<string, number>>({});
+  const [pipeExecutionCountsLoaded, setPipeExecutionCountsLoaded] = useState(false);
+  const fetchPipeExecutionCounts = useCallback(async () => {
+    try {
+      const response = await localFetch("/pipes?include_execution_counts=true");
+      if (!response.ok) return;
+      const payload = await response.json();
+      const counts: Record<string, number> = {};
+      for (const pipe of payload.data ?? []) {
+        const name = pipe?.config?.name;
+        if (typeof name === "string" && typeof pipe.execution_count === "number") {
+          counts[name] = pipe.execution_count;
+        }
+      }
+      setPipeExecutionCounts(counts);
+    } catch {
+      // Older engines do not expose exact counts. Keep the recent-chat
+      // fallback rather than making the sidebar unavailable.
+    } finally {
+      setPipeExecutionCountsLoaded(true);
+    }
+  }, []);
+
+  // Counts are intentionally lazy: a collapsed Pipes section performs no
+  // database count query. Refresh while visible so completed runs stay exact.
+  useEffect(() => {
+    if (!pipesCollapsed && pipes.length > 0) void fetchPipeExecutionCounts();
+  }, [pipesCollapsed, pipes.length, fetchPipeExecutionCounts]);
+  useInterval(
+    () => void fetchPipeExecutionCounts(),
+    pipesCollapsed || pipes.length === 0 ? null : 15_000,
   );
 
   // Auto-expand the pipes section when the current session is a pipe run
@@ -905,6 +947,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <PipeGroupRow
                       key={item.key}
                       item={item}
+                      executionCount={pipeExecutionCounts[item.title]}
+                      executionCountLoading={!pipeExecutionCountsLoaded}
                       expanded={expandedGroups.has(item.key)}
                       onToggleExpand={() => toggleGroupExpanded(item.key)}
                       currentId={currentId}
@@ -1531,6 +1575,8 @@ function RecentsBody({
  */
 function PipeGroupRow({
   item,
+  executionCount,
+  executionCountLoading = false,
   expanded,
   onToggleExpand,
   currentId,
@@ -1548,6 +1594,8 @@ function PipeGroupRow({
   setOpenConversationMenuId,
 }: {
   item: Extract<SidebarItem, { kind: "group" }>;
+  executionCount?: number;
+  executionCountLoading?: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
   currentId: string | null;
@@ -1578,7 +1626,7 @@ function PipeGroupRow({
         <span className="truncate flex-1 text-xs">{item.title}</span>
         <span className="inline-flex items-center gap-1.5 shrink-0">
           <span className="text-[10px] tabular-nums text-muted-foreground/60">
-            {item.sessions.length}
+            {executionCountLoading ? "…" : executionCount ?? item.sessions.length}
           </span>
           {expanded ? (
             <ChevronDown

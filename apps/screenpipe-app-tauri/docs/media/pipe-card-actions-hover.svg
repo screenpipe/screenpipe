@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="420" viewBox="0 0 1440 420">
+  <rect width="1440" height="420" fill="#f8f8f8"/>
+  <text x="56" y="65" fill="#121212" font-family="Arial, sans-serif" font-size="23" font-weight="700">PIPES</text>
+  <text x="56" y="94" fill="#737373" font-family="Arial, sans-serif" font-size="17">Secondary actions reveal only while a card is active.</text>
+  <rect x="40" y="126" width="1360" height="238" fill="#fff" stroke="#d4d4d4" stroke-width="2"/>
+  <path d="M78 179l12 12-12 12" fill="none" stroke="#1a1a1a" stroke-width="3"/>
+  <path d="M127 164l5 11 12 1-9 8 3 12-11-6-11 6 3-12-9-8 12-1z" fill="#121212"/>
+  <text x="166" y="181" fill="#111" font-family="Arial, sans-serif" font-size="25" font-weight="700">automation-digest</text>
+  <text x="166" y="213" fill="#686868" font-family="Arial, sans-serif" font-size="19">Summarize daily work and send a short, useful report.</text>
+  <text x="1078" y="181" fill="#777" font-family="monospace" font-size="18">◷ 1h</text>
+  <text x="1270" y="181" fill="#777" font-family="monospace" font-size="18">just now</text>
+  <line x1="56" y1="252" x2="1384" y2="252" stroke="#eeeeee"/>
+  <rect x="58" y="277" width="250" height="48" fill="#111"/>
+  <text x="79" y="308" fill="#fff" font-family="Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="1.25">✧  OPTIMIZE WITH AI</text>
+  <rect x="324" y="277" width="114" height="48" fill="#fff" stroke="#cfcfcf"/>
+  <text x="345" y="308" fill="#4a4a4a" font-family="Arial, sans-serif" font-size="17" font-weight="700" letter-spacing="1.4">⌘  REMIX</text>
+  <rect x="454" y="277" width="48" height="48" fill="#fff" stroke="#cfcfcf"/>
+  <path d="M472 290l17 11-17 11z" fill="#111"/>
+  <rect x="518" y="277" width="48" height="48" fill="#fff" stroke="#cfcfcf"/>
+  <circle cx="534" cy="301" r="3" fill="#111"/><circle cx="542" cy="301" r="3" fill="#111"/><circle cx="550" cy="301" r="3" fill="#111"/>
+  <rect x="1248" y="277" width="106" height="48" fill="#111"/>
+  <rect x="1316" y="288" width="26" height="26" fill="#fff"/>
+  <rect x="1166" y="137" width="176" height="33" fill="#111"/>
+  <text x="1181" y="159" fill="#fff" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="1.3">HOVER STATE</text>
+</svg>

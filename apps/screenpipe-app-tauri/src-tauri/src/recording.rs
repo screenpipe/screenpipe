@@ -122,156 +122,10 @@ pub fn local_api_context_from_app(app: &tauri::AppHandle) -> LocalApiContext {
 const RESTART_COOLDOWN_SECS: u64 = 30;
 const CAPTURE_RESTART_MEETING_REATTACH_WINDOW: Duration = Duration::from_secs(120);
 
-/// Shared state for the DB-wedge auto-recovery circuit breaker.
-#[derive(Default)]
-pub struct DbWedgeState {
-    /// Timestamps of recent auto-restarts, so a DB that stays broken after a
-    /// restart (genuine on-disk corruption, which a restart can't repair)
-    /// cannot restart-storm.
-    restarts: std::collections::VecDeque<std::time::Instant>,
-    /// Whether the user has already been told auto-recovery gave up this
-    /// episode. The persistent-failure hook can keep firing while the breaker
-    /// is tripped, so this dedupes the "needs recovery" notification.
-    gave_up_notified: bool,
-}
-
-pub type DbWedgeBreaker = Arc<std::sync::Mutex<DbWedgeState>>;
-
-pub fn new_db_wedge_breaker() -> DbWedgeBreaker {
-    Arc::new(std::sync::Mutex::new(DbWedgeState::default()))
-}
-
-/// What the circuit breaker decided to do about one persistent-failure signal.
-#[derive(Debug, PartialEq, Eq)]
-enum WedgeAction {
-    /// Attempt a stop→spawn restart (the timestamp was recorded).
-    Restart,
-    /// Too many restarts in the window — don't restart. `notify` is true only
-    /// the first time we give up this episode, so a hook that keeps firing
-    /// while the breaker is tripped doesn't spam the notification panel.
-    GiveUp { notify: bool },
-}
-
-impl DbWedgeState {
-    /// Age out restart timestamps older than `window`, then decide whether to
-    /// restart again. On `Restart` the new attempt is recorded and the give-up
-    /// notice is re-armed for this episode.
-    fn decide(
-        &mut self,
-        now: std::time::Instant,
-        window: Duration,
-        max_restarts: usize,
-    ) -> WedgeAction {
-        while self
-            .restarts
-            .front()
-            .is_some_and(|t| now.duration_since(*t) > window)
-        {
-            self.restarts.pop_front();
-        }
-        if self.restarts.len() >= max_restarts {
-            let notify = !self.gave_up_notified;
-            self.gave_up_notified = true;
-            return WedgeAction::GiveUp { notify };
-        }
-        self.restarts.push_back(now);
-        self.gave_up_notified = false;
-        WedgeAction::Restart
-    }
-}
-
-/// Max auto-restarts allowed inside `DB_WEDGE_BREAKER_WINDOW` before giving up.
-const DB_WEDGE_MAX_RESTARTS: usize = 3;
-const DB_WEDGE_BREAKER_WINDOW: Duration = Duration::from_secs(600);
-/// Coalesce a burst of persistent-failure signals before acting.
-const DB_WEDGE_DEBOUNCE: Duration = Duration::from_secs(15);
-
-/// Build the `PersistentFailureHook` the DB layer fires when writes wedge
-/// persistently. The hook itself is sync (`Fn()`), so it spawns the async
-/// restart. Captures an `AppHandle` (cheap clone, Send+Sync) and the shared
-/// breaker so restart-storm protection persists across restarts.
-pub fn make_db_wedge_recovery_hook(
-    app: tauri::AppHandle,
-    breaker: DbWedgeBreaker,
-) -> screenpipe_db::PersistentFailureHook {
-    std::sync::Arc::new(move || {
-        let app = app.clone();
-        let breaker = breaker.clone();
-        tokio::spawn(async move {
-            recover_from_db_wedge(app, breaker).await;
-        });
-    })
-}
-
-async fn recover_from_db_wedge(app: tauri::AppHandle, breaker: DbWedgeBreaker) {
-    // Debounce: let a burst of signals coalesce and any in-flight work settle.
-    tokio::time::sleep(DB_WEDGE_DEBOUNCE).await;
-
-    // Circuit breaker: a DB that stays broken after a restart is on-disk
-    // corruption a restart can't repair, so cap auto-restarts per window.
-    let action = {
-        let mut state = breaker.lock().unwrap();
-        state.decide(
-            std::time::Instant::now(),
-            DB_WEDGE_BREAKER_WINDOW,
-            DB_WEDGE_MAX_RESTARTS,
-        )
-    };
-    if let WedgeAction::GiveUp { notify } = action {
-        error!(
-            "db wedge auto-recovery: {} restarts within {:?} did not clear the write wedge — \
-             in-process restarts can't fix this (poisoned WAL-index pinned by a leaked \
-             connection, or on-disk damage). Surfacing manual recovery.",
-            DB_WEDGE_MAX_RESTARTS, DB_WEDGE_BREAKER_WINDOW
-        );
-        if notify {
-            // In-process restarts are proven futile for this episode. Do not
-            // surprise-relaunch the app on broad DB-shaped errors; surface a
-            // user-visible recovery state instead.
-            crate::db_relaunch::surface_manual_recovery(
-                "db wedge persisted across in-process engine restarts",
-            )
-            .await;
-        }
-        return;
-    }
-
-    warn!(
-        "db wedge auto-recovery: persistent write failure detected — restarting recording to \
-         rebuild all DB pools + the shared WAL-index"
-    );
-    if let Err(e) = stop_screenpipe(app.state::<RecordingState>(), app.clone()).await {
-        warn!(
-            "db wedge auto-recovery: stop_screenpipe failed (continuing to spawn): {}",
-            e
-        );
-    }
-
-    // stop_screenpipe rebuilds the engine's read/write pools on respawn, but the
-    // secret-store pool is a process-lifetime cache (min_connections=1, no idle
-    // reaping) that would otherwise keep a connection — and the poisoned `-shm`
-    // WAL-index — open across the restart. SQLite only rebuilds `-shm` once the
-    // LAST connection to the db closes, so without this the wedge survives an
-    // in-process restart and recording stays down until a full process exit.
-    // Pools recreate lazily on the next secret access after spawn reopens.
-    screenpipe_secrets::close_all_secret_pools().await;
-
-    if let Err(e) = spawn_screenpipe(app.state::<RecordingState>(), app.clone(), None).await {
-        // The restart failed to bring the engine back up (e.g. the port never
-        // rebound). Nothing else will retry until the DB layer fires the hook
-        // again — and if the server is fully down it never will — so recording
-        // would otherwise sit silently stopped. Publish on the event bus so the
-        // in-process `db_recovery_notifications` subscriber surfaces it.
-        error!("db wedge auto-recovery: spawn_screenpipe failed: {}", e);
-        let evt = screenpipe_events::DbRecoveryEvent::restart_failed();
-        let _ = screenpipe_events::send_event(evt.event_name(), evt);
-        // A DB-init failure right after a full pool close means the WAL-index
-        // is pinned by something outside our teardown — count it toward the
-        // manual recovery threshold rather than waiting for the health
-        // watchdog to grind through more doomed respawns.
-        crate::db_relaunch::note_respawn_failure(&app, &e).await;
-    }
-}
+mod db_wedge;
+pub use db_wedge::{
+    make_db_wedge_recovery_hook, new_db_wedge_breaker, DbWedgeBreaker, DbWedgeState,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct InterruptedMeeting {
@@ -285,10 +139,14 @@ pub(crate) struct InterruptedMeeting {
 
 /// Two-phase state: server (long-lived) + capture (togglable).
 ///
-/// **Lock ordering**: `capture` may be locked independently (it's self-contained).
-/// When both locks are needed (e.g. `start_capture`), always lock `capture` first,
-/// then `server`. Never hold `server` while waiting on `capture`.
+/// **Lock ordering**: acquire `server_lifecycle` first for a full stop/start,
+/// then `capture`, then `server`. `capture` may be locked independently (it's
+/// self-contained). Never hold `server` while waiting on `capture`.
 pub struct RecordingState {
+    /// Serializes full server stop/start cycles. DB-wedge recovery holds this
+    /// across its generation check, teardown, and respawn so a delayed hook
+    /// cannot tear down a server that a manual restart just replaced.
+    pub server_lifecycle: Arc<Mutex<()>>,
     /// Long-lived server core (DB, HTTP, pipes). None until first start.
     pub server: Arc<Mutex<Option<ServerCore>>>,
     /// Current capture session. None when recording is stopped/paused.
@@ -344,8 +202,12 @@ impl RecordingState {
 
     /// Whether capture is currently intended to be running.
     pub fn capture_intended(&self) -> bool {
-        self.wants_recording.load(Ordering::SeqCst)
+        capture_intended_now(&self.wants_recording)
     }
+}
+
+fn capture_intended_now(wants_recording: &AtomicBool) -> bool {
+    wants_recording.load(Ordering::SeqCst)
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +230,17 @@ pub struct MonitorDevice {
 pub struct AudioDeviceInfo {
     pub name: String,
     pub is_default: bool,
+    /// True for a Bluetooth *input* device that is also a combo headset (the
+    /// same hardware exposes an output side) — i.e. exactly the devices the
+    /// `alwaysRecordBluetoothMic` gate actually holds back outside a
+    /// detected meeting. A dedicated Bluetooth mic with no output side is
+    /// never gated, so this is `false` for one even though it's Bluetooth.
+    /// Mirrors `AudioManager::start_device`'s real gate condition
+    /// (screenpipe-audio's `device_detection::bluetooth_mic_allowed` +
+    /// `device::bluetooth_input_is_combo_headset`) so the settings UI's
+    /// "meetings only" hint matches actual recording behavior instead of
+    /// guessing from the device name.
+    pub is_combo_bluetooth_mic: bool,
 }
 
 pub async fn get_available_audio_devices() -> Result<Vec<AudioDeviceInfo>, String> {
@@ -390,7 +263,15 @@ pub async fn get_available_audio_devices() -> Result<Vec<AudioDeviceInfo>, Strin
             let name = d.to_string();
             let is_default =
                 Some(&name) == default_input.as_ref() || Some(&name) == default_output.as_ref();
-            AudioDeviceInfo { name, is_default }
+            let is_combo_bluetooth_mic = d.device_type == screenpipe_audio::core::device::DeviceType::Input
+                && screenpipe_audio::core::device_detection::InputDeviceKind::detect(&d.name)
+                    == screenpipe_audio::core::device_detection::InputDeviceKind::Bluetooth
+                && screenpipe_audio::core::device::bluetooth_input_is_combo_headset(&d.name);
+            AudioDeviceInfo {
+                name,
+                is_default,
+                is_combo_bluetooth_mic,
+            }
         })
         .collect();
 
@@ -478,6 +359,15 @@ pub async fn stop_capture(
         debug!("No capture session running");
     }
     Ok(())
+}
+
+/// Whether capture is currently paused. Reads `capture_intended` which is
+/// flipped immediately in stop_capture/start_capture — no health-monitor
+/// delay. The frontend polls this so the UI stays in sync with the tray.
+#[tauri::command]
+#[specta::specta]
+pub fn is_capture_paused(state: State<'_, RecordingState>) -> bool {
+    !state.capture_intended()
 }
 
 async fn remember_active_meeting_for_capture_restart(state: &RecordingState) {
@@ -723,11 +613,16 @@ pub async fn stop_screenpipe(
     state: State<'_, RecordingState>,
     _app: tauri::AppHandle,
 ) -> Result<(), String> {
-    info!("stop_screenpipe: stopping capture and server");
-
     // Deliberate stop → clear the intent so the health watchdog leaves the
     // server down instead of auto-respawning it.
     state.set_capture_intent(false);
+
+    let _lifecycle_guard = state.server_lifecycle.lock().await;
+    stop_screenpipe_inner(&state).await
+}
+
+async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), String> {
+    info!("stop_screenpipe: stopping capture and server");
 
     // Stop capture first
     {
@@ -810,12 +705,23 @@ pub async fn spawn_screenpipe(
     app: tauri::AppHandle,
     _override_args: Option<Vec<String>>,
 ) -> Result<(), String> {
-    info!("spawn_screenpipe: starting server + capture");
-
     // Mark recording as intended-ON up front (even if the start below fails or
     // is deferred by cooldown) so the health watchdog will keep trying to bring
     // a crashed/failed server back instead of treating it as a user stop.
     state.set_capture_intent(true);
+
+    let _lifecycle_guard = state.server_lifecycle.lock().await;
+    spawn_screenpipe_inner(&state, app).await
+}
+
+async fn spawn_screenpipe_inner(
+    state: &RecordingState,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    info!(
+        "spawn_screenpipe: starting server (capture intended: {})",
+        state.capture_intended()
+    );
 
     // --- Cooldown enforcement ---
     let now_epoch = std::time::SystemTime::now()
@@ -994,6 +900,11 @@ pub async fn spawn_screenpipe(
                 .and_then(|core| core.local_api_key.clone());
             if probe_server_health(&health_url, api_key.as_deref()).await {
                 info!("Server already running and healthy on port {}", port);
+                if !state.capture_intended() {
+                    info!("Capture is deliberately stopped; leaving healthy server running");
+                    state.is_starting.store(false, Ordering::SeqCst);
+                    return Ok(());
+                }
                 // Server is fine — just ensure capture is running
                 drop(server_guard);
                 let capture_guard = state.capture.lock().await;
@@ -1069,7 +980,7 @@ pub async fn spawn_screenpipe(
     let permissions_check = do_permissions_check(false);
     let disable_audio = store.recording.disable_audio;
 
-    if !permissions_check.screen_recording.permitted() {
+    if state.capture_intended() && !permissions_check.screen_recording.permitted() {
         warn!(
             "Screen recording permission not granted: {:?}. Cannot start server.",
             permissions_check.screen_recording
@@ -1086,7 +997,7 @@ pub async fn spawn_screenpipe(
         );
     }
 
-    if !disable_audio && !permissions_check.microphone.permitted() {
+    if state.capture_intended() && !disable_audio && !permissions_check.microphone.permitted() {
         warn!(
             "Microphone permission not granted: {:?}. Audio recording will not work.",
             permissions_check.microphone
@@ -1094,8 +1005,8 @@ pub async fn spawn_screenpipe(
     }
 
     info!(
-        "Permissions OK. Starting server + capture. Audio disabled: {}, mic: {:?}",
-        disable_audio, permissions_check.microphone
+        "Permissions OK. Starting server. Capture intended: {}, audio disabled: {}, mic: {:?}",
+        state.capture_intended(), disable_audio, permissions_check.microphone
     );
 
     let (data_dir, fell_back) = config::resolve_data_dir(&store.data_dir);
@@ -1134,6 +1045,7 @@ pub async fn spawn_screenpipe(
 
     let server_arc = state.server.clone();
     let capture_arc = state.capture.clone();
+    let wants_recording = state.wants_recording.clone();
     let cloud_token_arc = state.cloud_token.clone();
     // Wire the DB-wedge auto-recovery hook onto every (re)created DB. Captured into
     // the dedicated server thread so the freshly-built `ServerCore` gets the hook
@@ -1209,38 +1121,51 @@ pub async fn spawn_screenpipe(
 
                 // Wire the persistent-failure hook so a wedged DB auto-restarts
                 // recording (rebuilding every pool + the shared WAL-index).
+                let db_health = server.db.write_queue_health();
                 server
                     .db
                     .set_persistent_failure_hook(make_db_wedge_recovery_hook(
                         app_for_db_wedge.clone(),
                         db_wedge_breaker.clone(),
+                        db_health,
                     ));
 
-                // Phase 2: Start capture
-                let capture = match CaptureSession::start(&server, &recording_config, true).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to start capture session: {}", e);
-                        // Server started but capture failed — store server anyway
-                        // so pipes/search still work
-                        {
-                            let mut guard = server_arc.lock().await;
-                            *guard = Some(server);
+                // Phase 2: Start capture only if it is still intended. Hold
+                // the capture slot across the check + construction + assign:
+                // stop_capture clears the intent before waiting on this lock,
+                // so a stop racing a full server spawn either prevents capture
+                // from starting or waits and then tears down the new session.
+                let mut capture_guard = capture_arc.lock().await;
+                let capture = if capture_intended_now(&wants_recording) {
+                    match CaptureSession::start(&server, &recording_config, true).await {
+                        Ok(c) => Some(c),
+                        Err(e) => {
+                            error!("Failed to start capture session: {}", e);
+                            // Server started but capture failed — store server anyway
+                            // so pipes/search still work.
+                            {
+                                let mut guard = server_arc.lock().await;
+                                *guard = Some(server);
+                            }
+                            let _ = result_tx.send(Err(e));
+                            return;
                         }
-                        let _ = result_tx.send(Err(e));
-                        return;
                     }
+                } else {
+                    None
                 };
 
-                info!("Server + capture started successfully on dedicated runtime");
                 {
                     let mut guard = server_arc.lock().await;
                     *guard = Some(server);
                 }
-                {
-                    let mut guard = capture_arc.lock().await;
-                    *guard = Some(capture);
+                if let Some(capture) = capture {
+                    *capture_guard = Some(capture);
+                    info!("Server + capture started successfully on dedicated runtime");
+                } else {
+                    info!("Server started with capture deliberately stopped");
                 }
+                drop(capture_guard);
                 let _ = result_tx.send(Ok(()));
 
                 // Keep runtime alive as long as server exists
@@ -1436,71 +1361,20 @@ async fn kill_process_on_port(port: u16) {
 }
 
 #[cfg(test)]
-mod db_wedge_tests {
-    use super::{DbWedgeState, WedgeAction};
-    use std::time::{Duration, Instant};
+mod capture_intent_tests {
+    use super::capture_intended_now;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    const WINDOW: Duration = Duration::from_secs(600);
-    const MAX: usize = 3;
-
-    // First MAX signals restart; the next one gives up and notifies exactly
-    // once even though the breaker keeps being consulted.
     #[test]
-    fn gives_up_after_cap_and_notifies_once() {
-        let mut s = DbWedgeState::default();
-        let t = Instant::now();
-        for _ in 0..MAX {
-            assert_eq!(s.decide(t, WINDOW, MAX), WedgeAction::Restart);
-        }
-        assert_eq!(
-            s.decide(t, WINDOW, MAX),
-            WedgeAction::GiveUp { notify: true }
-        );
-        // Hook keeps firing while tripped — no more notifications.
-        assert_eq!(
-            s.decide(t, WINDOW, MAX),
-            WedgeAction::GiveUp { notify: false }
-        );
-        assert_eq!(
-            s.decide(t, WINDOW, MAX),
-            WedgeAction::GiveUp { notify: false }
-        );
-    }
+    fn stop_during_debounce_is_honored_when_recovery_respawns() {
+        let wants_recording = AtomicBool::new(true);
 
-    // Once the old restarts age out of the window, recovery re-arms: it restarts
-    // again and a fresh give-up re-notifies (it's a new corruption episode).
-    #[test]
-    fn restarts_age_out_and_re_arm_notification() {
-        let mut s = DbWedgeState::default();
-        let t0 = Instant::now();
-        for _ in 0..MAX {
-            assert_eq!(s.decide(t0, WINDOW, MAX), WedgeAction::Restart);
-        }
-        assert_eq!(
-            s.decide(t0, WINDOW, MAX),
-            WedgeAction::GiveUp { notify: true }
-        );
+        // The hook does not cache capture intent when it fires. A tray stop
+        // during the debounce clears the shared flag, and the server thread
+        // reads that latest value immediately before constructing capture.
+        wants_recording.store(false, Ordering::SeqCst);
 
-        let later = t0 + WINDOW + Duration::from_secs(1);
-        for _ in 0..MAX {
-            assert_eq!(s.decide(later, WINDOW, MAX), WedgeAction::Restart);
-        }
-        assert_eq!(
-            s.decide(later, WINDOW, MAX),
-            WedgeAction::GiveUp { notify: true }
-        );
-    }
-
-    // A successful restart cadence (signals spaced beyond the window) never
-    // trips the breaker — every attempt restarts and nothing is suppressed.
-    #[test]
-    fn spaced_out_failures_never_trip() {
-        let mut s = DbWedgeState::default();
-        let mut t = Instant::now();
-        for _ in 0..10 {
-            assert_eq!(s.decide(t, WINDOW, MAX), WedgeAction::Restart);
-            t += WINDOW + Duration::from_secs(1);
-        }
+        assert!(!capture_intended_now(&wants_recording));
     }
 }
 

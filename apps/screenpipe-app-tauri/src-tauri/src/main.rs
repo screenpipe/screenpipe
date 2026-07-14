@@ -44,6 +44,7 @@ mod capture_session;
 mod chatgpt_oauth;
 #[allow(deprecated)]
 mod commands;
+mod diagnostic_logs;
 mod disk_usage;
 mod e2e_seed;
 mod embedded_server;
@@ -81,6 +82,7 @@ mod power_awake;
 mod process_exit;
 mod recording;
 mod remote_sync_commands;
+mod remote_support_logs;
 mod secrets;
 mod server;
 mod server_core;
@@ -133,6 +135,7 @@ use tauri::AppHandle;
 mod dock_menu;
 mod health;
 mod log_files;
+mod media_commands;
 mod native_notification;
 mod native_shortcut_reminder;
 mod notifications;
@@ -144,8 +147,32 @@ mod vault;
 mod viewer;
 
 #[cfg(target_os = "macos")]
-static MIC_FOCUS_CAPTURE_RESTART: AtomicBool = AtomicBool::new(false);
-use base64::Engine;
+/// Tracks the observed permission transition so repeated focus events cannot
+/// restart capture while the audio status cache is still empty.
+struct MicFocusRecoveryTracker {
+    permission_was_granted: AtomicBool,
+}
+
+#[cfg(target_os = "macos")]
+impl MicFocusRecoveryTracker {
+    const fn new() -> Self {
+        Self {
+            permission_was_granted: AtomicBool::new(false),
+        }
+    }
+
+    fn should_restart_capture(&self, permission_granted: bool, audio_devices_empty: bool) -> bool {
+        let permission_was_granted = self
+            .permission_was_granted
+            .swap(permission_granted, Ordering::SeqCst);
+
+        permission_granted && !permission_was_granted && audio_devices_empty
+    }
+}
+
+#[cfg(target_os = "macos")]
+static MIC_FOCUS_RECOVERY: MicFocusRecoveryTracker = MicFocusRecoveryTracker::new();
+
 use health::start_health_check;
 use log_files::{get_log_files, get_screenpipe_data_dir};
 use shortcuts::{
@@ -189,171 +216,6 @@ fn should_skip_onboarding() -> bool {
         .ok()
         .map(|s| matches!(s.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
-}
-
-use tokio::time::{sleep, Duration};
-
-#[tauri::command]
-#[specta::specta]
-async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
-    const MAX_RETRIES: u32 = 3;
-    const INITIAL_DELAY_MS: u64 = 100;
-
-    debug!("Reading media file: {}", file_path);
-
-    // Media paths can arrive home-relative (e.g. `~/Downloads/clip.mp4`) when the
-    // agent prints a friendly path in chat. `Path::new` does not expand `~`, so
-    // resolve it the same way the in-app file viewer does before touching disk.
-    let path = viewer::expand_tilde(file_path);
-
-    // Retry loop to handle files that may be in the process of being written
-    let mut last_error = String::new();
-    for attempt in 0..=MAX_RETRIES {
-        if attempt > 0 {
-            let delay = INITIAL_DELAY_MS * (1 << (attempt - 1)); // exponential backoff
-            debug!(
-                "Retry attempt {} for {}, waiting {}ms",
-                attempt, file_path, delay
-            );
-            sleep(Duration::from_millis(delay)).await;
-        }
-
-        if !path.exists() {
-            last_error = format!("File does not exist: {}", path.display());
-            if attempt < MAX_RETRIES {
-                continue;
-            }
-            return Err(last_error);
-        }
-
-        // Read file contents
-        match tokio::fs::read(&path).await {
-            Ok(contents) => {
-                // Check for empty or suspiciously small files (might still be writing)
-                if contents.is_empty() {
-                    last_error = "File is empty (may still be writing)".to_string();
-                    debug!("{}: {}", last_error, file_path);
-                    if attempt < MAX_RETRIES {
-                        continue;
-                    }
-                    return Err(last_error);
-                }
-
-                debug!(
-                    "Successfully read file of size: {} bytes (attempt {})",
-                    contents.len(),
-                    attempt + 1
-                );
-
-                // Convert to base64
-                let data = base64::prelude::BASE64_STANDARD.encode(&contents);
-
-                // Determine MIME type
-                let mime_type = get_mime_type(file_path);
-
-                return Ok(serde_json::json!({
-                    "data": data,
-                    "mimeType": mime_type
-                }));
-            }
-            Err(e) => {
-                last_error = format!("Failed to read file: {}", e);
-                debug!("{} (attempt {})", last_error, attempt + 1);
-                if attempt < MAX_RETRIES {
-                    continue;
-                }
-                error!("{}", last_error);
-                return Err(last_error);
-            }
-        }
-    }
-
-    Err(last_error)
-}
-
-fn get_mime_type(path: &str) -> String {
-    let ext = path.split('.').last().unwrap_or("").to_lowercase();
-    let is_audio = path.to_lowercase().contains("input") || path.to_lowercase().contains("output");
-
-    match ext.as_str() {
-        "mp4" => "video/mp4".to_string(),
-        "webm" => "video/webm".to_string(),
-        "ogg" => "video/ogg".to_string(),
-        "mp3" => "audio/mpeg".to_string(),
-        "wav" => "audio/wav".to_string(),
-        _ => {
-            if is_audio {
-                "audio/mpeg".to_string()
-            } else {
-                "video/mp4".to_string()
-            }
-        }
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, String> {
-    debug!("Starting upload for file: {}", file_path);
-
-    // Read file contents - do this outside retry loop to avoid multiple reads
-    let file_contents = match tokio::fs::read(file_path).await {
-        Ok(contents) => {
-            debug!("Successfully read file of size: {} bytes", contents.len());
-            contents
-        }
-        Err(e) => {
-            error!("Failed to read file: {}", e);
-            return Err(e.to_string());
-        }
-    };
-
-    let client = reqwest::Client::new();
-    let max_retries = 3;
-    let mut attempt = 0;
-    let mut last_error = String::new();
-
-    while attempt < max_retries {
-        attempt += 1;
-        debug!("Upload attempt {} of {}", attempt, max_retries);
-
-        match client
-            .put(signed_url)
-            .body(file_contents.clone())
-            .send()
-            .await
-        {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    debug!("Successfully uploaded file on attempt {}", attempt);
-                    return Ok(true);
-                }
-                // Surface the response body — S3/Supabase wraps the reason for
-                // 400/403 (signed URL expired, content-type mismatch, etc.) in
-                // an XML payload that we'd otherwise discard.
-                let body = response.text().await.unwrap_or_default();
-                let snippet: String = body.chars().take(500).collect();
-                last_error = format!("Upload failed with status: {} body: {}", status, snippet);
-                error!("{} (attempt {}/{})", last_error, attempt, max_retries);
-            }
-            Err(e) => {
-                last_error = format!("Request failed: {}", e);
-                error!("{} (attempt {}/{})", last_error, attempt, max_retries);
-            }
-        }
-
-        if attempt < max_retries {
-            let delay = Duration::from_secs(2u64.pow(attempt as u32 - 1)); // Exponential backoff
-            debug!("Waiting {}s before retry...", delay.as_secs());
-            sleep(delay).await;
-        }
-    }
-
-    Err(format!(
-        "Upload failed after {} attempts. Last error: {}",
-        max_retries, last_error
-    ))
 }
 
 // check if the server is running
@@ -798,12 +660,13 @@ async fn main() {
     // inside `.setup()`: a `block_on` there nests runtimes under
     // #[tokio::main] and panics ("Cannot start a runtime from within a
     // runtime"), killing the app at launch.
-    let _ = crate::auth_token::migrate_plaintext_token(
+    let initial_cloud_token = crate::auth_token::migrate_plaintext_token(
         &screenpipe_core::paths::default_screenpipe_data_dir(),
     )
     .await;
 
     let recording_state = RecordingState {
+        server_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         server: Arc::new(tokio::sync::Mutex::new(None)),
         capture: Arc::new(tokio::sync::Mutex::new(None)),
         is_starting: Arc::new(AtomicBool::new(false)),
@@ -811,7 +674,7 @@ async fn main() {
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
         wants_recording: Arc::new(AtomicBool::new(false)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
-        cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(None))),
+        cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(initial_cloud_token))),
         db_wedge_breaker: recording::new_db_wedge_breaker(),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
@@ -827,20 +690,16 @@ async fn main() {
             tauri::WindowEvent::Focused(true) => {
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    if !permissions::check_microphone_permission().permitted() {
-                        return;
-                    }
-                    if !health::get_audio_device_status().is_empty() {
-                        return;
-                    }
-                    if MIC_FOCUS_CAPTURE_RESTART
-                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_err()
+                    let permission_granted =
+                        permissions::check_microphone_permission().permitted();
+                    let audio_devices_empty = health::get_audio_device_status().is_empty();
+                    if !MIC_FOCUS_RECOVERY
+                        .should_restart_capture(permission_granted, audio_devices_empty)
                     {
                         return;
                     }
                     info!(
-                        "Microphone permission newly granted (focus return) — restarting capture for audio reinit"
+                        "Microphone permission became available with no audio devices (focus return) — restarting capture once for audio reinit"
                     );
                     permissions::restart_capture_on_mic_grant(app).await;
                 });
@@ -1022,9 +881,22 @@ async fn main() {
                     .item(&PredefinedMenuItem::select_all(app, None)?)
                     .build()?;
 
+                // Standard Window menu so macOS key equivalents (Cmd-W close,
+                // Cmd-M minimize) work — without a menu item carrying the
+                // accelerator, AppKit silently swallows the keystroke. Close
+                // goes through the CloseRequested handler above, so Cmd-W
+                // hides to tray exactly like the red traffic-light button.
+                let window_submenu = SubmenuBuilder::new(app, "Window")
+                    .item(&PredefinedMenuItem::minimize(app, None)?)
+                    .item(&PredefinedMenuItem::maximize(app, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::close_window(app, None)?)
+                    .build()?;
+
                 let menu = MenuBuilder::new(app)
                     .item(&app_submenu)
                     .item(&edit_submenu)
+                    .item(&window_submenu)
                     .build()?;
 
                 app.set_menu(menu)?;
@@ -1128,9 +1000,10 @@ async fn main() {
                 env::set_var("TESSDATA_PREFIX", tessdata_path);
             }
 
-            // mlx.metallib and libonnxruntime.dylib are placed at Contents/MacOS/ at
-            // build time via bundle.macOS.files (see build.rs stage_macos_sidecar_libs),
-            // then signed as part of the normal codesign pass.
+            // mlx.metallib and libonnxruntime.dylib are staged at build time
+            // for macOS release bundling (see build.rs stage_macos_sidecar_libs).
+            // arm64 bundles mlx.metallib as a Tauri externalBin so Tauri signs it;
+            // x86_64 copies libonnxruntime.dylib via macOS.files.
             //
             // Previously this block created a symlink at Contents/MacOS/mlx.metallib
             // pointing at Contents/Resources/mlx.metallib on first launch. Apple
@@ -1564,9 +1437,31 @@ async fn main() {
                     break 'start_server;
                 }
                 let recording_state = app_handle.state::<RecordingState>();
+                // Native auto-start has the same intent semantics as the
+                // spawn_screenpipe command. DB-wedge recovery consults this
+                // shared flag so it can rebuild the server without silently
+                // leaving a normally auto-started recording paused.
+                recording_state.set_capture_intent(true);
+                // Reserve the lifecycle slot before publishing is_starting or
+                // spawning the OS thread. Otherwise a frontend spawn can win
+                // the scheduling gap, hold this lock while waiting on
+                // is_starting, and deadlock the native thread that must clear
+                // that flag.
+                let lifecycle_guard = match recording_state
+                    .server_lifecycle
+                    .clone()
+                    .try_lock_owned()
+                {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        warn!("Server lifecycle already active; skipping duplicate native auto-start");
+                        break 'start_server;
+                    }
+                };
                 recording_state.is_starting.store(true, std::sync::atomic::Ordering::SeqCst);
                 let server_arc = recording_state.server.clone();
                 let capture_arc = recording_state.capture.clone();
+                let wants_recording = recording_state.wants_recording.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
                 let cloud_token_arc = recording_state.cloud_token.clone();
                 // DB-wedge auto-recovery hook wiring — captured into the server
@@ -1722,10 +1617,12 @@ async fn main() {
                             // Wire the persistent-failure hook so a wedged DB
                             // auto-restarts recording (rebuilding every pool +
                             // the shared WAL-index).
+                            let db_health = server.db.write_queue_health();
                             server.db.set_persistent_failure_hook(
                                 crate::recording::make_db_wedge_recovery_hook(
                                     app_for_db_wedge.clone(),
                                     db_wedge_breaker.clone(),
+                                    db_health,
                                 ),
                             );
 
@@ -1736,29 +1633,42 @@ async fn main() {
                                 crate::e2e_seed::seed_search_fixture(&server.db).await;
                             }
 
-                            // Phase 2: Start capture session
-                            let capture = match capture_session::CaptureSession::start(&server, &config, true).await {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    error!("Failed to start capture: {}", e);
-                                    // Store server anyway so pipes/search work
-                                    let mut guard = server_arc.lock().await;
-                                    *guard = Some(server);
-                                    drop(guard);
-                                    is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                                    return;
+                            // Phase 2: use the latest capture intent, not the
+                            // value from app launch. Hold the slot across
+                            // check/start/assign so a racing stop_capture wins.
+                            let mut capture_guard = capture_arc.lock().await;
+                            let capture = if wants_recording
+                                .load(std::sync::atomic::Ordering::SeqCst)
+                            {
+                                match capture_session::CaptureSession::start(
+                                    &server, &config, true,
+                                )
+                                .await
+                                {
+                                    Ok(c) => Some(c),
+                                    Err(e) => {
+                                        error!("Failed to start capture: {}", e);
+                                        None
+                                    }
                                 }
+                            } else {
+                                None
                             };
 
-                            info!("Server + capture started successfully on dedicated runtime");
                             {
                                 let mut guard = server_arc.lock().await;
                                 *guard = Some(server);
                             }
-                            {
-                                let mut guard = capture_arc.lock().await;
-                                *guard = Some(capture);
+                            if let Some(capture) = capture {
+                                *capture_guard = Some(capture);
+                                info!("Server + capture started successfully on dedicated runtime");
+                            } else {
+                                info!("Server started without capture");
                             }
+                            drop(capture_guard);
+                            is_starting_clone
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                            drop(lifecycle_guard);
 
                             // Keep runtime alive as long as server exists
                             loop {
@@ -1875,6 +1785,12 @@ async fn main() {
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
 
+            // Background ChatGPT OAuth token refresh — keeps access tokens
+            // fresh so the lazy path in get_valid_token() rarely needs to
+            // refresh at request time. Separate from OAuthRefreshScheduler
+            // which only handles screenpipe-connect integrations.
+            crate::chatgpt_oauth::start_background_refresh();
+
             #[cfg(target_os = "macos")]
             crate::window::reset_to_regular_and_refresh_tray(&app_handle);
 
@@ -1974,6 +1890,11 @@ async fn main() {
             // Runs forever in background; only takes effect on enterprise-
             // telemetry builds with SCREENPIPE_ENTERPRISE_LICENSE_KEY env set.
             let _enterprise_shutdown_tx = enterprise_sync::spawn(&app_handle);
+
+            // Standard builds: account-bound, explicit opt-in support logs.
+            // Enterprise builds compile this as a no-op because their managed
+            // license-authenticated collector above is mandatory.
+            remote_support_logs::spawn(&app_handle);
 
             // Disable removed Storage cloud backends if old settings enabled them.
             let app_handle_clone = app_handle.clone();
@@ -2143,6 +2064,45 @@ async fn main() {
             error!("panic in run event handler: {:?}", e);
         }
     });
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mic_focus_recovery_tests {
+    use super::MicFocusRecoveryTracker;
+
+    #[test]
+    fn repeated_focus_with_empty_audio_status_restarts_only_once() {
+        let tracker = MicFocusRecoveryTracker::new();
+
+        assert!(tracker.should_restart_capture(true, true));
+        assert!(!tracker.should_restart_capture(true, true));
+        assert!(!tracker.should_restart_capture(true, true));
+    }
+
+    #[test]
+    fn temporary_empty_audio_status_does_not_look_like_a_new_permission_grant() {
+        let tracker = MicFocusRecoveryTracker::new();
+
+        assert!(!tracker.should_restart_capture(true, false));
+        assert!(!tracker.should_restart_capture(true, true));
+    }
+
+    #[test]
+    fn permission_revoke_rearms_focus_recovery() {
+        let tracker = MicFocusRecoveryTracker::new();
+
+        assert!(tracker.should_restart_capture(true, true));
+        assert!(!tracker.should_restart_capture(false, true));
+        assert!(tracker.should_restart_capture(true, true));
+    }
+
+    #[test]
+    fn missing_permission_never_restarts_capture() {
+        let tracker = MicFocusRecoveryTracker::new();
+
+        assert!(!tracker.should_restart_capture(false, true));
+        assert!(!tracker.should_restart_capture(false, false));
+    }
 }
 
 #[cfg(test)]

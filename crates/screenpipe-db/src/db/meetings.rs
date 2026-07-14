@@ -902,11 +902,99 @@ impl DatabaseManager {
         Ok(updated)
     }
 
+    /// Fill `audio_chunk_id`/`audio_file_path` on live segments from the
+    /// `audio_transcriptions` rows the post-meeting mirror wrote for them
+    /// (same text, same device direction, ±2s). Live segments carry no chunk
+    /// link of their own, and without one the UI can neither rename nor play
+    /// a line. Resolving at read time (instead of joining in SQL) keeps the
+    /// scan bounded to one pass and works for meetings mirrored before this
+    /// existed. Matching in memory mirrors
+    /// `mirror_live_meeting_to_audio_transcriptions`, which created the rows.
+    async fn resolve_live_segment_chunk_links(
+        &self,
+        segments: &mut [MeetingTranscriptSegment],
+    ) -> Result<(), SqlxError> {
+        let mut unresolved: Vec<(usize, i64)> = segments
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.source == "live" && s.audio_chunk_id.is_none())
+            .filter_map(|(i, s)| {
+                let ts = DateTime::parse_from_rfc3339(&s.captured_at).ok()?;
+                Some((i, ts.timestamp_millis()))
+            })
+            .collect();
+        if unresolved.is_empty() {
+            return Ok(());
+        }
+
+        const WINDOW_MS: i64 = 2_000;
+        let min_ts = unresolved.iter().map(|(_, ts)| *ts).min().unwrap_or(0);
+        let max_ts = unresolved.iter().map(|(_, ts)| *ts).max().unwrap_or(0);
+        let bound = |ms: i64| {
+            chrono::DateTime::<Utc>::from_timestamp_millis(ms)
+                .unwrap_or_default()
+                .to_rfc3339()
+        };
+
+        let candidate_rows = sqlx::query(
+            "SELECT at.transcription, at.timestamp, at.audio_chunk_id, \
+                    at.is_input_device, ac.file_path \
+             FROM audio_transcriptions at \
+             JOIN audio_chunks ac ON ac.id = at.audio_chunk_id \
+             WHERE at.transcription_engine = 'live' \
+               AND julianday(at.timestamp) >= julianday(?1) \
+               AND julianday(at.timestamp) <= julianday(?2)",
+        )
+        .bind(bound(min_ts - WINDOW_MS))
+        .bind(bound(max_ts + WINDOW_MS))
+        .fetch_all(&self.pool)
+        .await?;
+
+        // (is_input, text) → [(ts_ms, chunk_id, file_path)]
+        let mut candidates: std::collections::HashMap<(bool, String), Vec<(i64, i64, String)>> =
+            std::collections::HashMap::new();
+        for row in &candidate_rows {
+            let (Ok(text), Ok(ts), Ok(chunk_id)) = (
+                row.try_get::<String, _>("transcription"),
+                row.try_get::<DateTime<Utc>, _>("timestamp"),
+                row.try_get::<i64, _>("audio_chunk_id"),
+            ) else {
+                continue;
+            };
+            let is_input = row.try_get::<bool, _>("is_input_device").unwrap_or(true);
+            let file_path = row.try_get::<String, _>("file_path").unwrap_or_default();
+            candidates
+                .entry((is_input, text.trim().to_string()))
+                .or_default()
+                .push((ts.timestamp_millis(), chunk_id, file_path));
+        }
+
+        for (idx, seg_ms) in unresolved.drain(..) {
+            let seg = &mut segments[idx];
+            let key = (
+                seg.device_type == "input",
+                seg.transcript.trim().to_string(),
+            );
+            let Some(matches) = candidates.get(&key) else {
+                continue;
+            };
+            if let Some((_, chunk_id, file_path)) = matches
+                .iter()
+                .filter(|(ts, _, _)| (ts - seg_ms).abs() <= WINDOW_MS)
+                .min_by_key(|(ts, _, _)| (ts - seg_ms).abs())
+            {
+                seg.audio_chunk_id = Some(*chunk_id);
+                seg.audio_file_path = Some(file_path.clone());
+            }
+        }
+        Ok(())
+    }
+
     pub async fn list_meeting_transcript_segments(
         &self,
         meeting_id: i64,
     ) -> Result<Vec<MeetingTranscriptSegment>, SqlxError> {
-        let rows = sqlx::query_as::<_, MeetingTranscriptSegment>(
+        let mut rows = sqlx::query_as::<_, MeetingTranscriptSegment>(
             r#"
             WITH meeting_window AS (
                 SELECT
@@ -933,10 +1021,15 @@ impl DatabaseManager {
                     NULL AS audio_chunk_id,
                     NULL AS audio_file_path,
                     mts.speaker_id AS speaker_id,
-                    -- Prefer the resolved global speaker's name; fall back to the
-                    -- free-text Deepgram label until backfilled / if the speaker is
-                    -- unnamed (NULLIF treats '' as "no name yet").
-                    COALESCE(NULLIF(s.name, ''), mts.speaker_name) AS speaker_name,
+                    -- Prefer the resolved global speaker's name; output rows fall
+                    -- back to the free-text Deepgram label until backfilled / if
+                    -- the speaker is unnamed (NULLIF treats '' as "no name yet").
+                    -- Input (mic) rows get NULL instead of the raw label so the
+                    -- client can render "me" until the user assigns someone.
+                    CASE
+                        WHEN mts.device_type = 'input' THEN NULLIF(s.name, '')
+                        ELSE COALESCE(NULLIF(s.name, ''), mts.speaker_name)
+                    END AS speaker_name,
                     mts.transcript,
                     mts.captured_at,
                     mts.created_at
@@ -1012,6 +1105,8 @@ impl DatabaseManager {
         .bind(meeting_id)
         .fetch_all(&self.pool)
         .await?;
+
+        self.resolve_live_segment_chunk_links(&mut rows).await?;
         Ok(rows)
     }
 

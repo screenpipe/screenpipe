@@ -49,7 +49,7 @@ static RESOLVED_CLOUD_TOKEN: RwLock<Option<String>> = RwLock::new(None);
 /// Seed/replace the process cache. Empty/`None` clears it (sign-out).
 pub fn seed_cloud_token(token: Option<String>) {
     if let Ok(mut guard) = RESOLVED_CLOUD_TOKEN.write() {
-        *guard = token.filter(|t| !t.is_empty());
+        *guard = normalize_cloud_token(token);
     }
 }
 
@@ -112,14 +112,21 @@ async fn load_token_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String>
     String::from_utf8(bytes).ok().filter(|s| !s.is_empty())
 }
 
+async fn load_session_token_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
+    load_token_at(data_dir, key)
+        .await
+        .filter(|token| is_cloud_session_token(token))
+}
+
 // ── Public API (production: default data dir + resolved keychain key) ────────
 
 /// Persist the cloud token to the encrypted SecretStore and refresh the
 /// in-process cache. Empty/`None` clears it. Returns an error if persistence
 /// fails so callers can avoid removing the last plaintext copy.
 pub async fn store_cloud_token(token: Option<&str>) -> anyhow::Result<()> {
-    let token = token.filter(|t| !t.is_empty());
-    seed_cloud_token(token.map(str::to_string));
+    let normalized = normalize_cloud_token(token.map(str::to_string));
+    let token = normalized.as_deref();
+    seed_cloud_token(normalized.clone());
     let dir = screenpipe_core::paths::default_screenpipe_data_dir();
     match token {
         Some(t) => store_token_at(&dir, write_encryption_key()?, Some(t)).await,
@@ -163,7 +170,7 @@ async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
     // nothing to migrate, and the engine should own db.sqlite's creation). The
     // persist path below still creates it when there's actually a token to move.
     let from_secret = if data_dir.join("db.sqlite").exists() {
-        load_token_at(data_dir, key).await
+        load_session_token_at(data_dir, key).await
     } else {
         None
     };
@@ -207,7 +214,7 @@ fn token_from_store_bytes(data: &[u8]) -> Option<String> {
     let json: serde_json::Value = serde_json::from_slice(data).ok()?;
     json.pointer("/settings/user/token")
         .and_then(|t| t.as_str())
-        .filter(|s| !s.is_empty())
+        .filter(|s| is_cloud_session_token(s))
         .map(str::to_string)
 }
 
@@ -221,7 +228,7 @@ fn token_from_auth_json(data: &[u8]) -> Option<String> {
     let json: serde_json::Value = serde_json::from_slice(data).ok()?;
     json.get("token")
         .and_then(|t| t.as_str())
-        .filter(|s| looks_like_jwt(s))
+        .filter(|s| is_cloud_session_token(s))
         .map(str::to_string)
 }
 
@@ -229,6 +236,21 @@ fn token_from_auth_json(data: &[u8]) -> Option<String> {
 /// the `{"alg":…` header (`eyJ`).
 pub(crate) fn looks_like_jwt(s: &str) -> bool {
     s.starts_with("eyJ") && s.matches('.').count() == 2
+}
+
+/// Synthetic credentials are accepted only in the app's explicit E2E mode so
+/// existing desktop upgrade/logout specs can exercise persistence without a
+/// live identity provider. Production accepts JWT-shaped values only.
+pub(crate) fn is_cloud_session_token(value: &str) -> bool {
+    looks_like_jwt(value)
+        || (crate::config::is_e2e_mode() && value.starts_with("e2e-fake-token-"))
+}
+
+/// Public account identifiers are not bearer credentials. Normalize every
+/// desktop ingress through this helper before caching, persisting, or passing a
+/// token to the engine/Pi sidecar.
+pub(crate) fn normalize_cloud_token(token: Option<String>) -> Option<String> {
+    token.filter(|value| is_cloud_session_token(value))
 }
 
 /// Resolve the token from the plaintext files only (no SecretStore), in
@@ -257,7 +279,7 @@ fn token_from_store_user_id(data: &[u8]) -> Option<String> {
     let json: serde_json::Value = serde_json::from_slice(data).ok()?;
     json.pointer("/settings/userId")
         .and_then(|t| t.as_str())
-        .filter(|s| looks_like_jwt(s))
+        .filter(|s| is_cloud_session_token(s))
         .map(str::to_string)
 }
 
@@ -397,14 +419,52 @@ mod tests {
 
     // ── pure helpers ────────────────────────────────────────────────────────
 
-    #[test]
-    fn extracts_token_from_store_json() {
-        let data = br#"{"settings":{"user":{"token":"jwt-abc","email":"a@b.c"}}}"#;
-        assert_eq!(token_from_store_bytes(data), Some("jwt-abc".to_string()));
-    }
-
     /// JWT-shaped fixture (`eyJ` + two dots) so it passes `looks_like_jwt`.
     const JWT: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.sig";
+    const JWT_ALT: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ5In0.sig";
+
+    #[test]
+    fn normalizes_only_cloud_session_token_shapes() {
+        assert_eq!(
+            normalize_cloud_token(Some(JWT.to_string())),
+            Some(JWT.to_string())
+        );
+        for invalid in [
+            "",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "user_2ppjMkjVL86ft5q",
+            "sp-1a2b3c4d",
+        ] {
+            assert_eq!(normalize_cloud_token(Some(invalid.to_string())), None);
+        }
+        assert_eq!(normalize_cloud_token(None), None);
+    }
+
+    #[test]
+    fn extracts_jwt_shaped_credential_from_store_json() {
+        let data = format!(r#"{{"settings":{{"user":{{"token":"{JWT}","email":"a@b.c"}}}}}}"#);
+        assert_eq!(
+            token_from_store_bytes(data.as_bytes()),
+            Some(JWT.to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_public_account_identifiers_from_store_token_slot() {
+        for raw_identifier in [
+            "550e8400-e29b-41d4-a716-446655440000",
+            "user_2ppjMkjVL86ft5q",
+            "sp-1a2b3c4d",
+            "SCREENPIPE_API_KEY",
+        ] {
+            let data = format!(r#"{{"settings":{{"user":{{"token":"{raw_identifier}"}}}}}}"#);
+            assert_eq!(
+                token_from_store_bytes(data.as_bytes()),
+                None,
+                "public identifier must not be migrated as a bearer credential: {raw_identifier}"
+            );
+        }
+    }
 
     #[test]
     fn extracts_token_from_auth_json() {
@@ -609,10 +669,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stored_public_identifier_is_not_loaded_as_cloud_auth() {
+        let dir = unique_dir("reject_public_identifier");
+        store_token_at(&dir, None, Some("550e8400-e29b-41d4-a716-446655440000"))
+            .await
+            .unwrap();
+        assert_eq!(load_session_token_at(&dir, None).await, None);
+    }
+
+    #[tokio::test]
     async fn store_load_roundtrip_plaintext() {
         let dir = unique_dir("rt_plain");
-        store_token_at(&dir, None, Some("jwt-plain")).await.unwrap();
-        assert_eq!(read_back(&dir, None).await, Some("jwt-plain".to_string()));
+        store_token_at(&dir, None, Some(JWT)).await.unwrap();
+        assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
     }
 
     #[tokio::test]
@@ -647,14 +716,14 @@ mod tests {
         let dir = unique_dir("mig_store");
         std::fs::write(
             dir.join("store.bin"),
-            br#"{"settings":{"user":{"token":"jwt-store","email":"a@b.c"},"aiPresets":[{"id":"x"}]}}"#,
+            format!(r#"{{"settings":{{"user":{{"token":"{JWT}","email":"a@b.c"}},"aiPresets":[{{"id":"x"}}]}}}}"#),
         )
         .unwrap();
 
         let got = migrate_at(&dir, None).await;
-        assert_eq!(got, Some("jwt-store".to_string()));
+        assert_eq!(got, Some(JWT.to_string()));
         // Now in the SecretStore...
-        assert_eq!(read_back(&dir, None).await, Some("jwt-store".to_string()));
+        assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
         // ...and gone from store.bin.
         assert_eq!(
             token_from_store_bytes(&std::fs::read(dir.join("store.bin")).unwrap()),
@@ -676,35 +745,30 @@ mod tests {
         let dir = unique_dir("mig_priority");
         std::fs::write(
             dir.join("store.bin"),
-            br#"{"settings":{"user":{"token":"jwt-store"}}}"#,
+            format!(r#"{{"settings":{{"user":{{"token":"{JWT}"}}}}}}"#),
         )
         .unwrap();
-        std::fs::write(dir.join("auth.json"), format!(r#"{{"token":"{JWT}"}}"#)).unwrap();
-        assert_eq!(migrate_at(&dir, None).await, Some("jwt-store".to_string()));
-        assert_eq!(read_back(&dir, None).await, Some("jwt-store".to_string()));
+        std::fs::write(dir.join("auth.json"), format!(r#"{{"token":"{JWT_ALT}"}}"#)).unwrap();
+        assert_eq!(migrate_at(&dir, None).await, Some(JWT.to_string()));
+        assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
     }
 
     #[tokio::test]
     async fn migrate_already_in_secret_store_still_scrubs_plaintext() {
         let dir = unique_dir("mig_already");
         // Pre-seed the SecretStore with the canonical token...
-        store_token_at(&dir, None, Some("jwt-canonical"))
-            .await
-            .unwrap();
+        store_token_at(&dir, None, Some(JWT)).await.unwrap();
         // ...while a STALE plaintext copy lingers in store.bin.
         std::fs::write(
             dir.join("store.bin"),
-            br#"{"settings":{"user":{"token":"jwt-stale"}}}"#,
+            format!(r#"{{"settings":{{"user":{{"token":"{JWT_ALT}"}}}}}}"#),
         )
         .unwrap();
 
         let got = migrate_at(&dir, None).await;
         // SecretStore wins — the stale plaintext does NOT overwrite it.
-        assert_eq!(got, Some("jwt-canonical".to_string()));
-        assert_eq!(
-            read_back(&dir, None).await,
-            Some("jwt-canonical".to_string())
-        );
+        assert_eq!(got, Some(JWT.to_string()));
+        assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
         // But the stale plaintext is scrubbed regardless.
         assert_eq!(
             token_from_store_bytes(&std::fs::read(dir.join("store.bin")).unwrap()),
@@ -762,16 +826,16 @@ mod tests {
         // sqlite pool can't open it.
         let dir = unique_dir("mig_persistfail");
         std::fs::create_dir(dir.join("db.sqlite")).unwrap(); // poison the db path
-        let store_json = br#"{"settings":{"user":{"token":"jwt-keepme"}}}"#;
-        std::fs::write(dir.join("store.bin"), store_json).unwrap();
+        let store_json = format!(r#"{{"settings":{{"user":{{"token":"{JWT}"}}}}}}"#);
+        std::fs::write(dir.join("store.bin"), store_json.as_bytes()).unwrap();
 
         let got = migrate_at(&dir, None).await;
         // Token is still resolved (from store.bin) and cached for the session...
-        assert_eq!(got, Some("jwt-keepme".to_string()));
+        assert_eq!(got, Some(JWT.to_string()));
         // ...but the plaintext copy is preserved because persistence failed.
         assert_eq!(
             token_from_store_bytes(&std::fs::read(dir.join("store.bin")).unwrap()),
-            Some("jwt-keepme".to_string()),
+            Some(JWT.to_string()),
             "must NOT scrub plaintext when the secret store write failed"
         );
     }

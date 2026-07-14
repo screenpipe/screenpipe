@@ -183,6 +183,11 @@ fn plan_display_name(plan: Option<&str>) -> &'static str {
 /// without needing to pass the update_item through every call chain.
 static UPDATE_MENU_ITEM: Lazy<Mutex<Option<MenuItem<Wry>>>> = Lazy::new(|| Mutex::new(None));
 
+/// The active HD stop item is updated in place for countdown changes. Rebuilding
+/// the entire native menu every five seconds retained macOS preview image backing
+/// stores and caused multi-gigabyte heap growth during long meetings.
+static HD_STOP_MENU_ITEM: Lazy<Mutex<Option<MenuItem<Wry>>>> = Lazy::new(|| Mutex::new(None));
+
 // Track last known state to avoid unnecessary updates
 static LAST_MENU_STATE: Lazy<Mutex<MenuState>> = Lazy::new(|| Mutex::new(MenuState::default()));
 
@@ -452,10 +457,52 @@ fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -
             .collect(),
         cloud_subscribed: data.cloud_subscribed,
         subscription_plan: data.subscription_plan.clone(),
-        hd_active: hd.active,
-        hd_remaining_secs: hd.remaining_secs,
-        hd_session_kind: hd.session_kind,
-        hd_interval_ms: hd.interval_ms,
+        hd: hd_menu_state(&hd),
+    }
+}
+
+#[derive(Default, PartialEq, Clone, Debug)]
+struct HdMenuState {
+    active: bool,
+    session_kind: String,
+    interval_ms: u64,
+}
+
+fn hd_menu_state(hd: &HighFpsCacheEntry) -> HdMenuState {
+    HdMenuState {
+        active: hd.active,
+        session_kind: hd.session_kind.clone(),
+        interval_ms: hd.interval_ms,
+    }
+}
+
+fn hd_stop_menu_label(hd: &HighFpsCacheEntry) -> String {
+    let fps = (hd.interval_ms > 0).then(|| 1000 / hd.interval_ms);
+    let remaining = format_remaining_secs(hd.remaining_secs);
+    let why = match hd.session_kind.as_str() {
+        "meeting" => "until call ends",
+        "prewarm_pending" => "awaiting call",
+        _ => "left",
+    };
+    match fps {
+        Some(f) => format!("Stop HD recording (~{} fps, {} {})", f, remaining, why),
+        None => format!("Stop HD recording ({} {})", remaining, why),
+    }
+}
+
+fn update_hd_stop_menu_item() {
+    let hd = get_high_fps_status();
+    if !hd.active {
+        return;
+    }
+    let item = HD_STOP_MENU_ITEM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(item) = item {
+        if let Err(e) = item.set_text(hd_stop_menu_label(&hd)) {
+            debug!("failed to update HD tray countdown in place: {}", e);
+        }
     }
 }
 
@@ -556,17 +603,10 @@ struct MenuState {
     cloud_subscribed: bool,
     /// Plan id (Free/Basic/Business/…) so plan-label changes also rebuild the menu
     subscription_plan: Option<String>,
-    /// HD high-fps session state, for change detection. Without these, starting
-    /// or stopping an HD session changes nothing in MenuState, so
-    /// update_menu_if_needed computes should_update=false and never re-queues
-    /// the menu — the "Stop HD recording" item then never replaces the "Record
-    /// HD" submenu (and the countdown never ticks). Mirrors what
-    /// create_dynamic_menu renders into the HD label so any visible change
-    /// triggers a rebuild.
-    hd_active: bool,
-    hd_remaining_secs: u64,
-    hd_session_kind: String,
-    hd_interval_ms: u64,
+    /// Stable HD session fields determine whether the menu structure changed.
+    /// The per-tick countdown is updated on the existing item instead of being
+    /// part of this equality key, which avoids rebuilding the native menu.
+    hd: HdMenuState,
 }
 
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
@@ -1032,25 +1072,11 @@ fn create_dynamic_menu(
         // or timer expiry). Hits /capture/hd/{start,stop} so changes take
         // effect on the next capture tick.
         let hd = get_high_fps_status();
-        let fps = if hd.interval_ms > 0 {
-            Some(1000 / hd.interval_ms)
-        } else {
-            None
-        };
         if hd.active {
-            // Format remaining time succinctly: 1h 23m / 47m / 12s.
-            let remaining = format_remaining_secs(hd.remaining_secs);
-            let why = match hd.session_kind.as_str() {
-                "meeting" => "until call ends",
-                "prewarm_pending" => "awaiting call",
-                _ => "left",
-            };
-            let label = match fps {
-                Some(f) => format!("Stop HD recording (~{} fps, {} {})", f, remaining, why),
-                None => format!("Stop HD recording ({} {})", remaining, why),
-            };
-            menu_builder = menu_builder
-                .item(&MenuItemBuilder::with_id("stop_hd_recording", label).build(app)?);
+            let item = MenuItemBuilder::with_id("stop_hd_recording", hd_stop_menu_label(&hd))
+                .build(app)?;
+            *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = Some(item.clone());
+            menu_builder = menu_builder.item(&item);
             // "Just realized I want to keep recording" path. +30 min is
             // the most common "one more demo / one more topic" extension;
             // bigger bumps go via the API or restart timer from scratch.
@@ -1058,6 +1084,7 @@ fn create_dynamic_menu(
                 &MenuItemBuilder::with_id("extend_hd_30", "Extend HD by +30 min").build(app)?,
             );
         } else {
+            *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
             // Idle: offer timer-bound sessions only. The meeting-bound path
             // is reached via the meeting-start notification's "+ HD" action.
             let submenu = SubmenuBuilder::new(app, "Record HD")
@@ -1654,6 +1681,9 @@ async fn update_menu_if_needed(
         }
     });
 
+    // Keep the visible HD timer current without replacing the native menu.
+    update_hd_stop_menu_item();
+
     if should_update {
         #[cfg(target_os = "macos")]
         {
@@ -1731,4 +1761,47 @@ fn to_accelerator(shortcut: &str) -> String {
     shortcut
         .replace("Control", "Ctrl")
         .replace("CommandOrControl", "CmdOrCtrl")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hd_countdown_ticks_do_not_change_the_menu_rebuild_key() {
+        let mut hd = HighFpsCacheEntry {
+            active: true,
+            interval_ms: 33,
+            session_kind: "meeting".to_string(),
+            remaining_secs: 90 * 60,
+        };
+        let initial = hd_menu_state(&hd);
+
+        // Reproduce a 90-minute meeting at the production five-second poll rate.
+        for remaining in (0..=90 * 60).step_by(5) {
+            hd.remaining_secs = remaining;
+            assert_eq!(hd_menu_state(&hd), initial);
+        }
+    }
+
+    #[test]
+    fn hd_countdown_label_still_tracks_remaining_time() {
+        let mut hd = HighFpsCacheEntry {
+            active: true,
+            interval_ms: 33,
+            session_kind: "meeting".to_string(),
+            remaining_secs: 90 * 60,
+        };
+        let initial = hd_stop_menu_label(&hd);
+        hd.remaining_secs = 45 * 60;
+
+        assert_ne!(hd_stop_menu_label(&hd), initial);
+        assert_eq!(
+            hd_menu_state(&hd),
+            hd_menu_state(&HighFpsCacheEntry {
+                remaining_secs: 90 * 60,
+                ..hd.clone()
+            })
+        );
+    }
 }

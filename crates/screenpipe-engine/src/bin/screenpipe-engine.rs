@@ -464,6 +464,12 @@ async fn main() -> anyhow::Result<()> {
         warn!("failed to apply keep-awake setting: {}", e);
     }
 
+    // Yield CPU to foreground apps (Windows: BELOW_NORMAL priority class).
+    // CLI-record only — the desktop app gets targeted lowering of background
+    // work instead; see the process_priority module doc. Placed before any
+    // child spawns so ffmpeg/pipe children inherit the class.
+    screenpipe_engine::process_priority::set_background_priority();
+
     // Non-blocking update check — runs in background, prints banner if outdated
     tokio::spawn(async {
         screenpipe_engine::cli_reminder::check_for_updates().await;
@@ -1448,12 +1454,18 @@ async fn main() -> anyhow::Result<()> {
             server.pipe_permissions.clone(),
         ),
     ));
+    let (event_runs_active, event_runs_peak) = pipe_manager.event_run_concurrency();
     pipe_manager.set_on_run_complete(std::sync::Arc::new(
-        |pipe_name, _execution_id, success, duration_secs, error_type| {
+        move |pipe_name, _execution_id, success, duration_secs, error_type| {
             let mut props = serde_json::json!({
                 "pipe": pipe_name,
                 "success": success,
                 "duration_secs": duration_secs,
+                // Concurrency of event-triggered runs: live count as this run
+                // completes plus the process-lifetime peak. This makes the
+                // EVENT_TRIGGERED_CONCURRENCY_LIMIT behavior observable.
+                "event_runs_active": event_runs_active.load(std::sync::atomic::Ordering::Relaxed),
+                "event_runs_peak": event_runs_peak.load(std::sync::atomic::Ordering::Relaxed),
             });
             if let Some(et) = error_type {
                 props["error_type"] = serde_json::Value::String(et.to_string());

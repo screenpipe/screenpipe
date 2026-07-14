@@ -133,6 +133,72 @@ fn windows_exe_names_map_to_native_platform() {
     }
 }
 
+fn facetime_app_process() -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: None,
+        audio_object_id: Some(400),
+        pid: Some(1234),
+        bundle_id: Some("com.apple.FaceTime".to_string()),
+        process_name: Some("FaceTime".to_string()),
+        owner_app_name: Some("FaceTime".to_string()),
+        owner_bundle_id: Some("com.apple.FaceTime".to_string()),
+        first_seen_at_ms: None,
+    }
+}
+
+/// FaceTime auto-detection: the FaceTime APP holding the mic resolves to the
+/// FaceTime native platform. (FaceTime's audio IO daemon `avconferenced` is a
+/// separate process — see `facetime_daemon_is_not_an_identity_signal`.)
+#[test]
+fn facetime_app_maps_to_native_platform() {
+    let profiles = load_detection_profiles();
+    let process = facetime_app_process();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(
+        candidate,
+        ResolvedMeetingCandidate::Native { platform, .. } if platform == "FaceTime"
+    ));
+}
+
+/// Documents (pre-existing, unchanged) behavior: `avconferenced` — FaceTime's
+/// audio IO daemon — is NOT a platform identity for auto-detection; the
+/// FaceTime app itself is (above). The daemon still matters downstream: it
+/// stays in mic-holder snapshots (see
+/// `meeting_processes::tests::facetime_processes_pass_the_snapshot_gate`) so
+/// manual-meeting adoption taps it and mic-follow resolves its real mic.
+#[test]
+fn facetime_daemon_is_not_an_identity_signal() {
+    let profiles = load_detection_profiles();
+    let process = AudioInputProcess {
+        audio_session_id: None,
+        audio_object_id: Some(104),
+        pid: Some(809),
+        bundle_id: Some("com.apple.avconferenced".to_string()),
+        process_name: None,
+        owner_app_name: None,
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    };
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(matches!(candidate, ResolvedMeetingCandidate::NonMeeting));
+}
+
 #[test]
 fn browser_helper_alone_is_unresolved_browser() {
     let profiles = load_detection_profiles();

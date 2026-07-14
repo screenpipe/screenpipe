@@ -32,7 +32,7 @@ use crate::{
 /// Bumped whenever we add or change a pattern in [`PATTERNS`]. Cached
 /// rows redacted under an old version are eligible for re-redaction by
 /// the worker.
-pub const REGEX_REDACTOR_VERSION: u32 = 2;
+pub const REGEX_REDACTOR_VERSION: u32 = 4;
 
 struct Pattern {
     re: Regex,
@@ -80,11 +80,26 @@ static PATTERNS: Lazy<Vec<Pattern>> = Lazy::new(|| {
         // postgres://user:pass@host, mongodb+srv://user:pass@host, etc.
         (
             r"(?i)(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss|amqp|amqps)://[^:\s]+:[^@\s]+@\S+",
-            SpanLabel::Url,
+            SpanLabel::Secret,
         ),
         // Generic URL with `user:pass@host` — keep AFTER the more
         // specific connection-string pattern.
-        (r"[a-z][a-z0-9+.-]*://[^:\s]+:[^@\s]+@\S+", SpanLabel::Url),
+        (
+            r"(?i)[a-z][a-z0-9+.-]*://[^:\s]+:[^@\s]+@\S+",
+            SpanLabel::Secret,
+        ),
+        // Opaque authorization headers do not always use a recognizable token
+        // prefix. The header context is strong enough to redact the whole
+        // value conservatively (plain text and JSON-style log shapes).
+        (
+            r#"(?i)\b(?:authorization|proxy-authorization)[\"']?\s*[:=]\s*[\"']?(?:bearer|basic|token)\s+[^\s,\"';}]+"#,
+            SpanLabel::Secret,
+        ),
+        // Prefixless credentials logged as key=value / JSON fields.
+        (
+            r#"(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd|secret)[\"']?\s*[:=]\s*(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s,;&}\]]+)"#,
+            SpanLabel::Secret,
+        ),
         // ---- API key prefixes (provider-specific shapes) ----
         // OpenAI sk-… / sk-proj-…
         (
@@ -2031,7 +2046,44 @@ mod tests {
     fn connection_string_with_creds_caught() {
         let out = run("psql postgres://aiden:S3cret@db.acme.com:5432/prod");
         assert_eq!(out.spans.len(), 1);
-        assert_eq!(out.spans[0].label, SpanLabel::Url);
+        assert_eq!(out.spans[0].label, SpanLabel::Secret);
+    }
+
+    #[test]
+    fn generic_url_with_credentials_is_always_a_secret() {
+        for input in [
+            "proxy https://operator:hunter2@example.com/private",
+            "proxy HTTPS://operator:hunter2@example.com/private",
+        ] {
+            let out = run(input);
+            assert_eq!(out.spans.len(), 1);
+            assert_eq!(out.spans[0].label, SpanLabel::Secret);
+            assert!(!out.redacted.contains("operator:hunter2"));
+        }
+    }
+
+    #[test]
+    fn opaque_authorization_and_key_context_secrets_are_caught() {
+        for input in [
+            "Authorization: Bearer abcdef1234567890",
+            "Authorization=Basic dXNlcjpwYXNz",
+            r#"{"Authorization":"Bearer opaque-token-value"}"#,
+            "api_key=deadbeef",
+            "password=hunter2",
+            r#"{"client_secret": "plain-prefixless-value"}"#,
+        ] {
+            let out = run(input);
+            assert!(
+                out.spans.iter().any(|span| span.label == SpanLabel::Secret),
+                "missed contextual secret in {input}"
+            );
+        }
+
+        let prose = run("password rotation failed before a value was written");
+        assert!(prose
+            .spans
+            .iter()
+            .all(|span| span.label != SpanLabel::Secret));
     }
 
     #[test]

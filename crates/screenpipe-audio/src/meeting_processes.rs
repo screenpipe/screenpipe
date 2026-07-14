@@ -70,6 +70,50 @@ fn is_screenpipe_bundle_id(bundle_id: &str) -> bool {
         || bundle_id.starts_with("com.mediar.screenpipe.")
 }
 
+/// The snapshot inclusion decision: `Some(reason)` if this mic-holding
+/// process must be dropped from the snapshot, `None` if it counts as meeting
+/// evidence. This is the single gate the macOS collector runs, kept pure so
+/// the contract is directly testable — in particular the FaceTime contract:
+/// `avconferenced` (FaceTime's audio engine) and the FaceTime app itself MUST
+/// pass, or FaceTime meetings lose adoption/capture.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn excluded_input_process_reason(
+    process: &AudioInputProcess,
+    self_pid: i32,
+) -> Option<&'static str> {
+    if is_screenpipe_process(process, self_pid) {
+        return Some("Screenpipe process");
+    }
+    if is_system_voice_daemon(process) {
+        return Some("always-on voice daemon");
+    }
+    None
+}
+
+/// Always-on system voice daemons whose input claims are ambient noise, not
+/// meeting evidence. `corespeechd` (com.apple.CoreSpeech) holds the mic for
+/// the "Hey Siri" voice trigger more or less permanently, so counting it made
+/// manual meetings adopt it as a mic holder — flapping the tap pid set and,
+/// worse, resolving its AEC-reference *speaker* as the "meeting mic" (the
+/// 2026-07-09 "MacBook Pro Speakers (input) not found" retry loop).
+///
+/// Deliberately NOT listed: `com.apple.avconferenced` — that daemon IS
+/// FaceTime's audio engine; excluding it would break FaceTime meeting capture.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_system_voice_daemon(process: &AudioInputProcess) -> bool {
+    const DAEMON_BUNDLE_IDS: [&str; 1] = ["com.apple.corespeech"];
+    [
+        process.bundle_id.as_deref(),
+        process.owner_bundle_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|bundle| {
+        let bundle = bundle.trim().to_ascii_lowercase();
+        DAEMON_BUNDLE_IDS.contains(&bundle.as_str())
+    })
+}
+
 fn is_screenpipe_app_name(name: &str) -> bool {
     let name = name.trim().to_ascii_lowercase();
     name == "screenpipe"
@@ -80,7 +124,7 @@ fn is_screenpipe_app_name(name: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{is_screenpipe_process, AudioInputProcess, AudioProcessSnapshot};
+    use super::{excluded_input_process_reason, AudioInputProcess, AudioProcessSnapshot};
     use cidre::{core_audio as ca, ns};
     use tracing::debug;
 
@@ -138,9 +182,9 @@ mod platform {
                 first_seen_at_ms: None,
             };
 
-            if is_screenpipe_process(&snapshot, self_pid) {
+            if let Some(reason) = excluded_input_process_reason(&snapshot, self_pid) {
                 debug!(
-                    "audio-process snapshot: skipped Screenpipe process (pid={:?}, bundle={:?}, owner_bundle={:?}, name={:?})",
+                    "audio-process snapshot: skipped {reason} (pid={:?}, bundle={:?}, owner_bundle={:?}, name={:?})",
                     snapshot.pid,
                     snapshot.bundle_id,
                     snapshot.owner_bundle_id,
@@ -648,6 +692,87 @@ mod tests {
         assert!(!snapshot.supported);
         assert!(snapshot.processes.is_empty());
         assert!(snapshot.error.is_some());
+    }
+
+    /// Regression: corespeechd (Hey Siri voice trigger) holds input more or
+    /// less permanently. Counting it as a mic holder made manual meetings
+    /// adopt it and resolve its AEC-reference speaker as the "meeting mic"
+    /// (the 2026-07-09 `MacBook Pro Speakers (input) not found` retry loop).
+    #[test]
+    fn corespeechd_is_a_system_voice_daemon() {
+        for bundle_id in ["com.apple.CoreSpeech", "com.apple.corespeech"] {
+            let p = process(Some(727), Some(bundle_id), None, None, None);
+            assert!(
+                is_system_voice_daemon(&p),
+                "{bundle_id} must be excluded from mic-holder evidence"
+            );
+        }
+        // Also excluded when only the owner metadata carries the bundle id.
+        let p = process(Some(727), None, None, None, Some("com.apple.CoreSpeech"));
+        assert!(is_system_voice_daemon(&p));
+    }
+
+    /// avconferenced IS FaceTime's audio engine — excluding it would break
+    /// FaceTime meeting capture (its pid is what the per-process tap follows).
+    #[test]
+    fn avconferenced_is_not_excluded() {
+        let p = process(Some(809), Some("com.apple.avconferenced"), None, None, None);
+        assert!(
+            !is_system_voice_daemon(&p),
+            "avconferenced must stay adoptable: it is FaceTime's audio process"
+        );
+    }
+
+    /// The FaceTime contract, pinned on the exact gate the macOS collector
+    /// runs: during a FaceTime call the mic holders are `avconferenced`
+    /// (audio IO daemon) and/or the FaceTime app itself. BOTH must pass the
+    /// snapshot gate — the daemon's pid is what manual-meeting adoption taps
+    /// and what mic-follow resolves; the app's bundle id is what the auto
+    /// meeting detector maps to the "FaceTime" platform.
+    #[test]
+    fn facetime_processes_pass_the_snapshot_gate() {
+        let daemon = process(Some(809), Some("com.apple.avconferenced"), None, None, None);
+        let app = process(
+            Some(1234),
+            Some("com.apple.FaceTime"),
+            Some("FaceTime"),
+            Some("FaceTime"),
+            Some("com.apple.FaceTime"),
+        );
+        assert_eq!(
+            excluded_input_process_reason(&daemon, 999),
+            None,
+            "avconferenced must be included in mic-holder snapshots"
+        );
+        assert_eq!(
+            excluded_input_process_reason(&app, 999),
+            None,
+            "the FaceTime app must be included in mic-holder snapshots"
+        );
+        // And the gate still drops what it must:
+        let siri = process(Some(727), Some("com.apple.CoreSpeech"), None, None, None);
+        assert!(excluded_input_process_reason(&siri, 999).is_some());
+        let own = process(Some(999), None, None, None, None);
+        assert!(excluded_input_process_reason(&own, 999).is_some());
+    }
+
+    #[test]
+    fn meeting_apps_are_not_system_voice_daemons() {
+        for bundle_id in ["us.zoom.xos", "com.google.Chrome", "com.microsoft.teams2"] {
+            let p = process(Some(42), Some(bundle_id), None, None, None);
+            assert!(
+                !is_system_voice_daemon(&p),
+                "{bundle_id} must not be excluded"
+            );
+        }
+        // No metadata at all → keep it (unknown ≠ daemon).
+        assert!(!is_system_voice_daemon(&process(
+            Some(1),
+            None,
+            None,
+            None,
+            None
+        )));
     }
 
     #[test]

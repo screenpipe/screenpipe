@@ -178,6 +178,22 @@ pub struct RecordingSettings {
     )]
     pub experimental_meeting_piggyback: bool,
 
+    /// Opening a Bluetooth microphone always forces the paired device's audio
+    /// link out of A2DP into SCO, degrading the user's headphone/speaker
+    /// output quality (48kHz stereo -> 24kHz stereo or mono HFP, depending on
+    /// hardware) — a macOS/OS-level tradeoff with no external workaround
+    /// (issue #3750). Default `false`: Bluetooth input devices are only
+    /// actually opened while a meeting is detected; outside a meeting they
+    /// stay enabled-but-gated (selected in settings, not streaming) so the
+    /// Bluetooth link stays in A2DP. Set `true` to always record Bluetooth
+    /// mics regardless of meeting state (prior behavior). Has no effect on
+    /// wired/built-in/unrecognized mics, on Bluetooth output devices, or on a
+    /// dedicated Bluetooth microphone with no output side of its own (macOS:
+    /// confirmed via `bluetooth_input_is_combo_headset` — nothing to protect
+    /// there, since there's no headphone output on that hardware to degrade).
+    #[serde(rename = "alwaysRecordBluetoothMic", default)]
+    pub always_record_bluetooth_mic: bool,
+
     /// Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
     /// Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
     #[serde(rename = "windowsInputAecEnabled", default)]
@@ -699,6 +715,7 @@ impl Default for RecordingSettings {
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
             experimental_meeting_piggyback: false,
+            always_record_bluetooth_mic: false,
             windows_input_aec_enabled: false,
             macos_input_vpio_enabled: false,
             screenpipe_aec_enabled: false,

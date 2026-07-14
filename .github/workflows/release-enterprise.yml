@@ -617,6 +617,35 @@ jobs:
       - name: Use enterprise config
         run: cp apps/screenpipe-app-tauri/src-tauri/tauri.enterprise.conf.json apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
 
+      - name: Configure macOS sidecar bundle entries
+        shell: bash
+        env:
+          TARGET: aarch64-apple-darwin
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("fs");
+          const path = "apps/screenpipe-app-tauri/src-tauri/tauri.macos.conf.json";
+          const target = process.env.TARGET;
+          const config = JSON.parse(fs.readFileSync(path, "utf8"));
+          config.bundle ??= {};
+          config.bundle.macOS ??= {};
+          config.bundle.externalBin = [...new Set(config.bundle.externalBin ?? [])]
+            .filter((entry) => entry !== "mlx.metallib");
+          if (target === "aarch64-apple-darwin") {
+            config.bundle.macOS.files = {};
+            config.bundle.externalBin.push("mlx.metallib");
+          } else if (target === "x86_64-apple-darwin") {
+            config.bundle.macOS.files = {
+              "MacOS/libonnxruntime.dylib": "libonnxruntime.dylib",
+            };
+          } else {
+            throw new Error(`unknown macOS release target: ${target}`);
+          }
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          console.log(`macOS bundle sidecars configured for ${target}`);
+          NODE
+
       - name: Import signing cert into build keychain
         shell: bash
         env:

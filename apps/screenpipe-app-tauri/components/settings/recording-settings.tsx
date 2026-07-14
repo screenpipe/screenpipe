@@ -29,6 +29,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Echo cancellation mode", keywords: ["echo", "aec", "voiceprocessingio", "wasapi"], conditional: true },
   { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
   { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
+  { label: "Bluetooth microphones", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
   { label: "Screenshot images", keywords: ["screenshot", "pixels", "ocr", "jpeg"] },
   { label: "Use all monitors", keywords: ["monitor", "display"], conditional: true },
@@ -95,6 +96,7 @@ import {
   Play,
   Rewind,
   FastForward,
+  Bluetooth,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -262,7 +264,7 @@ const getAudioEngineResolution = (
 ): AudioEngineResolution => {
   const requested = settings.audioTranscriptionEngine;
   const fallback = FALLBACK_TRANSCRIPTION_ENGINE;
-  const hasCloudAuth = Boolean(settings.user?.token || settings.user?.id);
+  const hasCloudAuth = Boolean(settings.user?.token);
   const hasDeepgramKey = Boolean(
     settings.deepgramApiKey && settings.deepgramApiKey !== "default"
   );
@@ -2660,13 +2662,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           )}
       </div>
 
-      {/* Battery Saver / Power Mode */}
-      <Card className="border-border bg-card">
-        <CardContent className="px-3 py-3">
-          <BatterySaverSection />
-        </CardContent>
-      </Card>
-
       {/* Audio */}
       <LockedSetting settingKey="audio_recording">
       <div className="space-y-2 pt-2">
@@ -3290,8 +3285,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
             {(settings.meetingLiveTranscriptionEnabled ?? true) &&
               (settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "screenpipe-cloud" &&
-              !settings.user?.token &&
-              !settings.user?.id && (
+              !settings.user?.token && (
               <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
                 Log in to screenpipe cloud to use the cloud live provider.
               </p>
@@ -3419,6 +3413,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             const displayName = getAudioDeviceDisplayName(device.name);
             // Use per-device level if available, fall back to global speechRatio
             const deviceLevel = overlayData.deviceLevels[device.name] ?? overlayData.speechRatio;
+            // Backend-computed: exactly mirrors AudioManager::start_device's
+            // real gate (Bluetooth input + combo headset), so this hint
+            // never mismatches actual recording behavior.
+            const isBluetoothMicGated = device.isComboBluetoothMic && !settings.alwaysRecordBluetoothMic;
             return (
               <div
                 key={device.name}
@@ -3436,6 +3434,15 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <p className="text-xs font-medium truncate">{displayName}</p>
                     {device.isDefault && (
                       <Badge variant="secondary" className="text-[9px] h-3.5 px-1 shrink-0">Default</Badge>
+                    )}
+                    {isBluetoothMicGated && (
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] h-3.5 px-1 shrink-0"
+                        title="only recorded during a detected meeting — turn on &quot;always record bluetooth mic&quot; to change this"
+                      >
+                        meetings only
+                      </Badge>
                     )}
                   </div>
                   {isSelected && (
@@ -3585,6 +3592,34 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
                 disabled={Boolean(settings.disableMeetingDetector)}
                 onCheckedChange={(checked) => handleSettingsChange({ experimentalMeetingPiggyback: checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Bluetooth mic recording: opening a Bluetooth mic always degrades
+            the paired device's output audio quality (A2DP -> SCO, a macOS/OS
+            limitation — issue #3750). Off by default, Bluetooth mics are only
+            recorded during a detected meeting; this override records them
+            always, like any other mic. */}
+        {!settings.disableAudio && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Bluetooth className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Bluetooth microphones</h3>
+                  <p className="text-xs text-muted-foreground">
+                    connecting to a bluetooth mic degrades your headphones&apos; audio quality, an OS limitation we can&apos;t avoid. by default we only record bluetooth mics while you&apos;re in a detected meeting.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="alwaysRecordBluetoothMic"
+                checked={Boolean(settings.alwaysRecordBluetoothMic ?? false)}
+                onCheckedChange={(checked) => handleSettingsChange({ alwaysRecordBluetoothMic: checked }, true)}
               />
             </div>
           </CardContent>
@@ -4004,6 +4039,22 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
       </div>
+
+      {/* Power and battery are important but infrequent decisions. Keep them
+          in Recording for discoverability/search, but defer the full control
+          surface until the user explicitly opens it. */}
+      <details className="border border-border bg-card rounded">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+          <Zap className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <div>
+            <h2 className="text-sm font-medium text-foreground">Power &amp; battery</h2>
+            <p className="text-xs text-muted-foreground">Battery-aware capture and keep-awake behavior</p>
+          </div>
+        </summary>
+        <div className="border-t border-border px-3 py-3">
+          <BatterySaverSection />
+        </div>
+      </details>
 
       {/* Voice Training Dialog */}
       <Dialog open={voiceTraining.dialogOpen} onOpenChange={(open) => {

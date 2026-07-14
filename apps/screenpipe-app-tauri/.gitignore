@@ -22,6 +22,9 @@ e2e/dist/
 /.next/
 /out/
 
+# build-frontend.js atomic-swap staging dirs
+/.out.tmp-*
+
 # production
 /build
 

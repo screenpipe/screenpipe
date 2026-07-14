@@ -21,13 +21,20 @@ interface ModelPricing {
 
 // Anthropic prompt-caching multipliers (5-minute TTL writes — the only TTL we use)
 const CLAUDE_CACHE = { cacheRead: 0.1, cacheWrite: 1.25 };
-// OpenAI bills cached input at 90% off across the gpt-5 family (no write charge)
+// GPT-5 through GPT-5.5 bill cached input at 90% off, with no write charge.
 const GPT5_CACHE = { cacheRead: 0.1 };
+// GPT-5.6 also bills cache reads at 90% off, but cache writes cost 1.25x input.
+const GPT56_CACHE = { cacheRead: 0.1, cacheWrite: 1.25 };
 // Gemini 2.5 implicit caching bills cached tokens at 25% of input price
 const GEMINI25_CACHE = { cacheRead: 0.25 };
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
   // OpenAI API
+  // GPT-5.6: Sol is the flagship/default, Terra is balanced, Luna is high-volume.
+  'gpt-5.6': { input: 5.00, output: 30.00, ...GPT56_CACHE },
+  'gpt-5.6-sol': { input: 5.00, output: 30.00, ...GPT56_CACHE },
+  'gpt-5.6-terra': { input: 2.50, output: 15.00, ...GPT56_CACHE },
+  'gpt-5.6-luna': { input: 1.00, output: 6.00, ...GPT56_CACHE },
   'gpt-5.5-pro': { input: 30.00, output: 180.00, ...GPT5_CACHE },
   'gpt-5.5': { input: 5.00, output: 30.00, ...GPT5_CACHE },
   'gpt-5.4-pro': { input: 30.00, output: 180.00, ...GPT5_CACHE },
@@ -337,7 +344,7 @@ export function hasPricing(model: string | null | undefined): boolean {
 }
 
 // Output $/Mtok at/above which a model is "frontier" — too expensive for an
-// unattended high-volume pipe. Catches opus (25-75), fable-5 (50), gpt-5.5 (30),
+// unattended high-volume pipe. Catches opus (25-75), fable-5 (50), gpt-5.6 Sol (30), gpt-5.5 (30),
 // gpt-*-pro (180); leaves sonnet (15), gpt-5.4 (15), haiku/flash/glm through.
 const FRONTIER_OUTPUT_USD = 20;
 /** Frontier/premium models that shouldn't run on background/pipe traffic. */

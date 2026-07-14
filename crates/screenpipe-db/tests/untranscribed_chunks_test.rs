@@ -476,7 +476,11 @@ mod tests {
 
         assert_eq!(rows[1].source, "live");
         assert_eq!(rows[1].audio_chunk_id, None);
-        assert_eq!(rows[1].speaker_name.as_deref(), Some("Louis"));
+        // Input (mic) rows expose a name only once a real global speaker is
+        // assigned; the raw provider label is suppressed so the client renders
+        // "me" — otherwise mic lines masked user assignments (unrenameable
+        // "me" bug) or leaked diarization labels for the user's own voice.
+        assert_eq!(rows[1].speaker_name, None);
 
         // The opposite-direction overlap row is KEPT (different participant), so it
         // sits between the live segment and the later background row.

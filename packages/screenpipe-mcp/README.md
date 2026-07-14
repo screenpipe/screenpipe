@@ -10,9 +10,24 @@ MCP server for screenpipe - search your screen recordings, audio transcriptions,
 
 ## Installation
 
-### Option 1: NPX (Recommended)
+### Option 1: The screenpipe desktop app (Recommended)
 
-The easiest way to use screenpipe-mcp is with npx. Edit your Claude Desktop config:
+The most reliable setup is to install the [screenpipe desktop app](https://screenpi.pe)
+and connect Claude Desktop from **Settings → Connections** (or during onboarding).
+This writes a config that:
+
+- uses the **bundled `bun`** shipped with the app (an absolute path — no Node/`npx`
+  or `PATH` dependency, and ~3× faster cold start), and
+- injects your **`SCREENPIPE_LOCAL_API_KEY`** into the server's `env`, so the MCP
+  authenticates instantly instead of running slow key discovery at startup.
+
+Both matter: a config without the key forces the server to discover it via
+subprocess fallbacks, which on a cold package cache can stall Claude Desktop's MCP
+startup and produce `Could not attach to MCP server screenpipe`.
+
+### Option 2: Manual NPX (no desktop app)
+
+If you're not using the desktop app, edit your Claude Desktop config:
 
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%AppData%\Claude\claude_desktop_config.json`
@@ -22,13 +37,21 @@ The easiest way to use screenpipe-mcp is with npx. Edit your Claude Desktop conf
   "mcpServers": {
     "screenpipe": {
       "command": "npx",
-      "args": ["-y", "screenpipe-mcp"]
+      "args": ["-y", "screenpipe-mcp@latest"],
+      "env": {
+        "SCREENPIPE_LOCAL_API_KEY": "sp-…"
+      }
     }
   }
 }
 ```
 
-### Option 2: HTTP Server (Remote / Network Access)
+Requires Node/`npx` on `PATH`. Pin `@latest` so the first install doesn't cache a
+stale version forever. Get your key with `screenpipe auth token`. If you omit the
+key, the server will try to discover it (bundled bun → npx → local DB) — this works
+but is slower and can time out on first run.
+
+### Option 3: HTTP Server (Remote / Network Access)
 
 The MCP server can run over HTTP using the [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), allowing remote MCP clients to connect over the network instead of stdio. This is ideal when your AI assistant (e.g., OpenClaw) runs on a different machine than screenpipe.
 
@@ -83,7 +106,7 @@ If your machines are on different networks, expose port 3031 via Tailscale, SSH 
 
 > **Note:** The HTTP server currently exposes `search_content` only. The stdio server has the full tool set (export-video, list-meetings, activity-summary, search-elements, frame-context). We're working on bringing HTTP to full parity.
 
-### Option 3: From Source
+### Option 4: From Source
 
 Clone and build from source:
 
@@ -163,6 +186,42 @@ The whole element tree for one frame, as the same compact outline.
 
 ### frame-context
 Get accessibility text, parsed tree nodes, and extracted URLs for a specific frame.
+
+### keyword-search
+Fast FTS5 keyword search across OCR + audio combined. Returns matches with `frame_id`, app, timestamp, and text positions.
+
+### list-meetings / get-meeting / update-meeting / start-meeting / stop-meeting
+Manage the meeting store. `list-meetings` filters by substring; `get-meeting` returns title/attendees/times/full note (add `include_transcript: true` for the speaker-attributed transcript). `update-meeting` writes only the fields you pass. `start-meeting` and `stop-meeting` drive manual meeting recording sessions.
+
+### search-speakers / list-unnamed-speakers / update-speaker / merge-speakers
+Speaker identification workflow. Search by name prefix, list speakers that haven't been named yet, rename a speaker, or merge two speakers when the same person was detected as different ones.
+
+### add-tags
+Tag a screen frame (vision) or audio chunk (audio) so it can be retrieved later.
+
+### update-memory
+Create, update, or delete a persistent memory (facts, preferences, decisions the user wants to remember).
+
+### send-notification
+Send a notification to the screenpipe desktop UI.
+
+### control-recording
+Start or stop audio recording. This does not pause or resume screen capture.
+
+### health-check
+Check if screenpipe is running and healthy. Returns recording status, frame/audio stats, and timestamps.
+
+### list-audio-devices
+List available audio input/output devices for recording.
+
+### list-monitors
+List available monitors/screens for capture.
+
+### list-pipes / create-pipe / run-pipe / pipe-logs
+Manage pipes — scheduled AI automations that run a markdown prompt on a schedule (e.g. "every day at 9am"). `list-pipes` shows enabled state + schedule; `create-pipe` creates one; `run-pipe` triggers a one-off test run; `pipe-logs` fetches recent execution output.
+
+### team-search / team-devices / team-records
+Team-tier tools, registered only when an enterprise admin token is configured. `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), and `team-records` dumps chronological org data for a time window.
 
 ## Example Queries in Claude
 

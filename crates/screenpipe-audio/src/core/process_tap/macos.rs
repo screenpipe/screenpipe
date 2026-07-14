@@ -789,6 +789,7 @@ fn build_capture_from_desc(
         .uid()
         .map_err(|s| anyhow!("Failed to get tap UID: {:?}", s))?;
     let sub_tap = cf::DictionaryOf::with_keys_values(&[sub_keys::uid()], &[tap_uid.as_type_ref()]);
+    let tap_name = cf::String::from_str(super::TAP_AGGREGATE_DEVICE_NAME);
     let agg_desc = cf::DictionaryOf::with_keys_values(
         &[
             agg_keys::is_private(),
@@ -804,7 +805,7 @@ fn build_capture_from_desc(
             cf::Boolean::value_true().as_type_ref(),
             cf::Boolean::value_false(),
             cf::Boolean::value_true(),
-            cf::str!(c"ScreenpipeProcessTap"),
+            &tap_name,
             &output_uid,
             &cf::Uuid::new().to_cf_string(),
             &cf::ArrayOf::from_slice(&[sub_device.as_ref()]),
@@ -1307,8 +1308,46 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    /// Regression: the tap aggregate is created `is_private`, which hides it
+    /// from other processes but NOT from us — and `/audio/list` enumerates in
+    /// this process. With a live tap, the device list must not contain the
+    /// aggregate, or it shows up as a selectable "input" in settings (and
+    /// recording it would loop our own capture back in). Skips cleanly where
+    /// taps are unavailable (old macOS, missing permission).
+    #[tokio::test]
+    async fn live_tap_aggregate_is_not_enumerated() {
+        use crate::core::device::{invalidate_device_cache, list_audio_devices};
+
+        let _guard = crate::test_support::coreaudio_self_introspection_lock_async().await;
+        if !is_process_tap_available() {
+            eprintln!("skipping: CoreAudio Process Tap unavailable");
+            return;
+        }
+        let (tx, _rx) = broadcast::channel(16);
+        let is_disconnected = Arc::new(AtomicBool::new(false));
+        let Ok((_capture, _config, _uid)) =
+            build_inclusion_capture(&[std::process::id() as i32], tx, is_disconnected)
+        else {
+            eprintln!("skipping: could not create a tap (permission not granted?)");
+            return;
+        };
+
+        // Force a fresh enumeration — another test may have warmed the 30s
+        // cache before this tap existed.
+        invalidate_device_cache().await;
+        let devices = list_audio_devices().await.expect("device enumeration");
+        assert!(
+            devices
+                .iter()
+                .all(|d| d.name != crate::core::process_tap::TAP_AGGREGATE_DEVICE_NAME),
+            "our private tap aggregate leaked into the device list: {:?}",
+            devices.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn list_output_device_running_state() {
+        let _guard = crate::test_support::coreaudio_self_introspection_lock();
         // Diagnostic (run with --nocapture): for every output-capable device,
         // print is_running_somewhere BEFORE and DURING a live tap capture.
         // Answers two questions: (a) do registered-but-inaudible daemons
@@ -1527,6 +1566,7 @@ mod tests {
 
     #[test]
     fn build_inclusion_capture_for_self_starts() {
+        let _guard = crate::test_support::coreaudio_self_introspection_lock();
         if !is_process_tap_available() {
             eprintln!("skipping: CoreAudio Process Tap unavailable");
             return;

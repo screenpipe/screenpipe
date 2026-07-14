@@ -1152,6 +1152,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
             truncated: state.truncated,
             truncation_reason: state.truncation_reason,
             max_depth_reached: state.max_depth_reached,
+            window_bounds: None,
         }))
     }
 }

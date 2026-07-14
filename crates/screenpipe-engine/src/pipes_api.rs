@@ -58,6 +58,7 @@ pub struct ExecutionsQuery {
 pub struct ListPipesQuery {
     pub include_executions: Option<bool>,
     pub execution_limit: Option<i32>,
+    pub include_execution_counts: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,11 @@ pub async fn list_pipes(
     if let Err(e) = mgr.reload_pipes().await {
         tracing::warn!("failed to reload pipes from disk: {}", e);
     }
+    let execution_counts = if query.include_execution_counts.unwrap_or(false) {
+        mgr.get_all_execution_counts().await
+    } else {
+        HashMap::new()
+    };
     if query.include_executions.unwrap_or(false) {
         let execution_limit = query.execution_limit.unwrap_or(5).clamp(1, 100);
         let pipes_with_execs = mgr.list_pipes_with_executions(execution_limit).await;
@@ -85,6 +91,15 @@ pub async fn list_pipes(
                 let mut obj = serde_json::to_value(&status).unwrap_or(json!({}));
                 if let Some(map) = obj.as_object_mut() {
                     map.insert("recent_executions".to_string(), json!(execs));
+                    if query.include_execution_counts.unwrap_or(false) {
+                        map.insert(
+                            "execution_count".to_string(),
+                            json!(execution_counts
+                                .get(&status.config.name)
+                                .copied()
+                                .unwrap_or(0)),
+                        );
+                    }
                 }
                 obj
             })
@@ -93,7 +108,27 @@ pub async fn list_pipes(
     } else {
         let pipes = mgr.list_pipes().await;
         let total = pipes.len();
-        Json(json!({ "data": pipes, "total": total }))
+        if query.include_execution_counts.unwrap_or(false) {
+            let data: Vec<Value> = pipes
+                .into_iter()
+                .map(|status| {
+                    let mut obj = serde_json::to_value(&status).unwrap_or(json!({}));
+                    if let Some(map) = obj.as_object_mut() {
+                        map.insert(
+                            "execution_count".to_string(),
+                            json!(execution_counts
+                                .get(&status.config.name)
+                                .copied()
+                                .unwrap_or(0)),
+                        );
+                    }
+                    obj
+                })
+                .collect();
+            Json(json!({ "data": data, "total": total }))
+        } else {
+            Json(json!({ "data": pipes, "total": total }))
+        }
     }
 }
 

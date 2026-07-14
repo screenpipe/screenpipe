@@ -11,7 +11,9 @@
 use crate::store::SettingsStore;
 use base64::Engine;
 use screenpipe_connect::connections::all_integrations;
-use screenpipe_connect::oauth::{self, PendingOAuth, OAUTH_REDIRECT_URI, PENDING_OAUTH};
+use screenpipe_connect::oauth::{
+    self, OAuthCallbackResult, PendingOAuth, OAUTH_REDIRECT_URI, PENDING_OAUTH,
+};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
@@ -132,7 +134,7 @@ pub async fn oauth_connect(
     };
 
     let state = uuid::Uuid::new_v4().simple().to_string();
-    let (tx, rx) = oneshot::channel::<String>();
+    let (tx, rx) = oneshot::channel::<OAuthCallbackResult>();
     {
         let mut map = PENDING_OAUTH.lock().unwrap();
         map.insert(
@@ -180,7 +182,7 @@ pub async fn oauth_connect(
         integration_id, instance, variant
     );
 
-    let raw = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
+    let result = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
         .await
         .map_err(|_| {
             let mut map = PENDING_OAUTH.lock().unwrap();
@@ -189,19 +191,30 @@ pub async fn oauth_connect(
         })?
         .map_err(|_| "OAuth channel closed before code was received".to_string())?;
 
-    // Some providers (e.g. QuickBooks) send extra callback params alongside the code.
-    // The callback handler encodes them as JSON: {"code":"...","realmId":"..."}.
-    // Plain strings are treated as a bare authorization code for backward compatibility.
-    let (code, callback_extras): (String, Option<serde_json::Value>) = if raw.starts_with('{') {
-        match serde_json::from_str::<serde_json::Value>(&raw) {
-            Ok(v) => {
-                let c = v["code"].as_str().unwrap_or(&raw).to_string();
-                (c, Some(v))
-            }
-            Err(_) => (raw, None),
+    let (code, callback_extras): (String, Option<serde_json::Value>) = match result {
+        OAuthCallbackResult::Success { code, realm_id } => {
+            let extras = realm_id.map(|rid| serde_json::json!({ "realmId": rid }));
+            (code, extras)
         }
-    } else {
-        (raw, None)
+        OAuthCallbackResult::ProviderError {
+            error,
+            error_description,
+        } => {
+            info!(
+                "oauth callback for {} rejected by provider: {}",
+                integration_id, error
+            );
+            return Err(match error.as_str() {
+                "access_denied" => {
+                    "authorization was denied or cancelled in the browser — try connecting again"
+                        .to_string()
+                }
+                _ => match error_description {
+                    Some(desc) => format!("provider returned error: {} ({})", error, desc),
+                    None => format!("provider returned error: {}", error),
+                },
+            });
+        }
     };
 
     let client = reqwest::Client::builder()
@@ -666,7 +679,8 @@ fn derive_effective_instance(
 
 #[cfg(test)]
 mod tests {
-    use super::derive_effective_instance;
+    use super::{derive_effective_instance, oauth_cancel};
+    use screenpipe_connect::oauth::{OAuthCallbackResult, PendingOAuth, PENDING_OAUTH};
     use serde_json::json;
 
     #[test]
@@ -690,6 +704,51 @@ mod tests {
         });
 
         assert_eq!(derive_effective_instance(None, &token_data), None);
+    }
+
+    /// Canceled flow (#5092): oauth_cancel drops the pending sender, which
+    /// must close the channel so the awaiting oauth_connect fails fast
+    /// instead of hanging for the full 120s timeout.
+    #[tokio::test]
+    async fn oauth_cancel_drops_pending_flow_and_closes_channel() {
+        let state = "test-cancel-state";
+        let (tx, rx) = tokio::sync::oneshot::channel::<OAuthCallbackResult>();
+        PENDING_OAUTH.lock().unwrap().insert(
+            state.to_string(),
+            PendingOAuth {
+                integration_id: "test-cancel-integration".to_string(),
+                sender: tx,
+            },
+        );
+
+        oauth_cancel("test-cancel-integration".to_string()).unwrap();
+
+        assert!(!PENDING_OAUTH.lock().unwrap().contains_key(state));
+        // Dropped sender closes the channel — the waiter unblocks immediately.
+        assert!(rx.await.is_err());
+    }
+
+    /// oauth_cancel must only drop flows for the given integration.
+    #[tokio::test]
+    async fn oauth_cancel_leaves_other_integrations_pending() {
+        let state = "test-cancel-other-state";
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<OAuthCallbackResult>();
+        PENDING_OAUTH.lock().unwrap().insert(
+            state.to_string(),
+            PendingOAuth {
+                integration_id: "test-cancel-other-integration".to_string(),
+                sender: tx,
+            },
+        );
+
+        oauth_cancel("some-unrelated-integration".to_string()).unwrap();
+
+        assert!(PENDING_OAUTH.lock().unwrap().contains_key(state));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        PENDING_OAUTH.lock().unwrap().remove(state);
     }
 }
 

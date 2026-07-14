@@ -458,23 +458,41 @@ mod tests {
             "persistent-failure hook (the engine-restart request) must fire"
         );
         assert!(health.persistent_failure_signals() >= 1);
+        let recovery_epoch = health.fatal_run_recovery_epoch();
 
         // --- Simulate the cure the hook requests (an engine restart clears the fault).
         disarm();
 
-        // The queue heals in-process now the condition cleared: the next write
-        // succeeds and health returns to healthy. (The OLD code stayed wedged.)
-        let recovered = queue
-            .submit(WriteOp::InsertAudioChunk {
-                file_path: "/post/ok".into(),
-                timestamp: None,
-            })
-            .await;
-        assert!(
-            recovered.is_ok(),
-            "write must recover once the fault clears: {:?}",
-            recovered.as_ref().err()
-        );
+        // The queue heals in-process now the condition cleared. Operational
+        // health becomes green after the first write, but the recovery epoch
+        // advances only after three consecutive healthy batches. That preserves
+        // the July 2 protection against one lucky commit cancelling recovery.
+        for (index, path) in ["/post/ok", "/post/ok-2", "/post/ok-3"]
+            .into_iter()
+            .enumerate()
+        {
+            let recovered = queue
+                .submit(WriteOp::InsertAudioChunk {
+                    file_path: path.into(),
+                    timestamp: None,
+                })
+                .await;
+            assert!(
+                recovered.is_ok(),
+                "healthy write {index} must recover once the fault clears: {:?}",
+                recovered.as_ref().err()
+            );
+            let expected_epoch = if index < 2 {
+                recovery_epoch
+            } else {
+                recovery_epoch + 1
+            };
+            assert_eq!(
+                health.fatal_run_recovery_epoch(),
+                expected_epoch,
+                "recovery epoch must advance only after the full healthy streak"
+            );
+        }
         assert!(
             !health.is_degraded(),
             "health recovers after a successful write"

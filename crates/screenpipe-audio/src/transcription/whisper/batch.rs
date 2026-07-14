@@ -20,6 +20,13 @@ const MIN_RMS_ENERGY: f32 = 0.015;
 /// prompt window. Entries past this are dropped (whole entries only).
 const INITIAL_PROMPT_CHAR_BUDGET: usize = 800;
 
+// Whisper/ggml inference runs inline on the calling thread; dipping it makes
+// STT yield CPU to the user's foreground apps during the compute burst
+// (#4849). The extra worker thread ggml spawns (n_threads=2) stays at Normal;
+// the guard covers the calling thread's share of the compute. The guard lives
+// in screenpipe-core (`BackgroundWorkDip`) and is shared with the vision
+// pipeline's OCR/frame-diff/encode dips.
+
 /// Build the Whisper initial_prompt from vocabulary, capped to `budget` chars by
 /// adding *whole* comma-joined entries. Never byte-slices a joined string: a cut
 /// at a non-char boundary panics, and a unicode term (e.g. an accented attendee
@@ -64,6 +71,23 @@ pub async fn process_with_whisper(
         );
         return Ok(String::new());
     }
+
+    transcribe_sync(audio, languages, whisper_state, vocabulary)
+}
+
+/// Sync body of [`process_with_whisper`]. Deliberately NOT async: the
+/// thread-priority guard below must never live across an `.await` (the task
+/// could resume on a different tokio worker and the guard would restore the
+/// wrong thread). Keeping the compute in a sync fn makes that impossible.
+fn transcribe_sync(
+    audio: &[f32],
+    languages: Vec<Language>,
+    whisper_state: &mut WhisperState,
+    vocabulary: &[VocabularyEntry],
+) -> Result<String> {
+    // Yield to foreground apps for the duration of the mel/lang/inference
+    // compute below; restored when the guard drops at function exit.
+    let _priority_dip = screenpipe_core::thread_priority::BackgroundWorkDip::new();
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
@@ -129,6 +153,43 @@ pub async fn process_with_whisper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guard mechanics on a dedicated thread (never mutate the test runner's
+    /// worker threads): dips to BELOW_NORMAL while held, restores on drop,
+    /// and refuses to touch a thread that is already at or below the target.
+    #[cfg(windows)]
+    #[test]
+    fn stt_priority_dip_lowers_and_restores() {
+        use screenpipe_core::thread_priority::BackgroundWorkDip;
+        use windows::Win32::System::Threading::{
+            GetCurrentThread, GetThreadPriority, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+            THREAD_PRIORITY_LOWEST, THREAD_PRIORITY_NORMAL,
+        };
+
+        std::thread::spawn(|| unsafe {
+            let baseline = GetThreadPriority(GetCurrentThread());
+            assert_eq!(baseline, THREAD_PRIORITY_NORMAL.0);
+
+            {
+                let _dip = BackgroundWorkDip::new();
+                assert_eq!(
+                    GetThreadPriority(GetCurrentThread()),
+                    THREAD_PRIORITY_BELOW_NORMAL.0
+                );
+            }
+            assert_eq!(GetThreadPriority(GetCurrentThread()), baseline, "restored");
+
+            // Already lower than the target → guard must not raise it.
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST).unwrap();
+            let _dip = BackgroundWorkDip::new();
+            assert_eq!(
+                GetThreadPriority(GetCurrentThread()),
+                THREAD_PRIORITY_LOWEST.0
+            );
+        })
+        .join()
+        .unwrap();
+    }
 
     fn vocab(words: &[&str]) -> Vec<VocabularyEntry> {
         words

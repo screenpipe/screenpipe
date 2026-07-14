@@ -13,6 +13,7 @@ use sqlx::SqlitePool;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::crypto;
+use crate::telemetry::ReportSecretStoreSqliteIntegrity;
 
 /// Process-wide cache of secret-store connection pools, keyed by db file path.
 ///
@@ -79,6 +80,7 @@ pub async fn shared_secret_pool(db_path: &str) -> Result<SqlitePool> {
         .max_lifetime(None)
         .connect_with(secret_connect_options(db_path))
         .await
+        .report_secret_store_integrity("open_pool", None, None)
         .context("failed to open shared secret-store pool")?;
     cache.insert(db_path.to_string(), pool.clone());
     Ok(pool)
@@ -128,6 +130,7 @@ impl SecretStore {
         )
         .execute(&pool)
         .await
+        .report_secret_store_integrity("initialize", None, Some(key.is_some()))
         .context("failed to create secrets table")?;
 
         Ok(Self { pool, key })
@@ -174,6 +177,7 @@ impl SecretStore {
         .bind(&nonce)
         .execute(&self.pool)
         .await
+        .report_secret_store_integrity("set", Some(key), Some(self.key.is_some()))
         .context("failed to set secret")?;
 
         Ok(())
@@ -186,6 +190,7 @@ impl SecretStore {
                 .bind(key)
                 .fetch_optional(&self.pool)
                 .await
+                .report_secret_store_integrity("get", Some(key), Some(self.key.is_some()))
                 .context("failed to get secret")?;
 
         match row {
@@ -224,6 +229,7 @@ impl SecretStore {
             .bind(key)
             .fetch_optional(&self.pool)
             .await
+            .report_secret_store_integrity("get_updated_at", Some(key), Some(self.key.is_some()))
             .context("failed to get secret timestamp")?;
         Ok(row.map(|(t,)| t))
     }
@@ -234,6 +240,7 @@ impl SecretStore {
             .bind(key)
             .execute(&self.pool)
             .await
+            .report_secret_store_integrity("delete", Some(key), Some(self.key.is_some()))
             .context("failed to delete secret")?;
         Ok(())
     }
@@ -245,6 +252,7 @@ impl SecretStore {
             .bind(&pattern)
             .fetch_all(&self.pool)
             .await
+            .report_secret_store_integrity("list", Some(prefix), Some(self.key.is_some()))
             .context("failed to list secrets")?;
         Ok(rows.into_iter().map(|(k,)| k).collect())
     }
@@ -275,6 +283,7 @@ impl SecretStore {
             sqlx::query_as("SELECT key, value, nonce FROM secrets")
                 .fetch_all(&self.pool)
                 .await
+                .report_secret_store_integrity("reencrypt_list", None, Some(self.key.is_some()))
                 .context("failed to fetch secrets for re-encryption")?;
 
         let mut count = 0;
@@ -297,6 +306,11 @@ impl SecretStore {
             .bind(&secret_key)
             .execute(&self.pool)
             .await
+            .report_secret_store_integrity(
+                "reencrypt_update",
+                Some(&secret_key),
+                Some(self.key.is_some()),
+            )
             .context("failed to update secret during re-encryption")?;
 
             count += 1;
@@ -318,6 +332,7 @@ impl SecretStore {
             sqlx::query_as("SELECT key, value, nonce FROM secrets")
                 .fetch_all(&self.pool)
                 .await
+                .report_secret_store_integrity("decrypt_list", None, Some(self.key.is_some()))
                 .context("failed to fetch secrets for decryption")?;
 
         let mut count = 0;
@@ -342,6 +357,11 @@ impl SecretStore {
             .bind(&secret_key)
             .execute(&self.pool)
             .await
+            .report_secret_store_integrity(
+                "decrypt_update",
+                Some(&secret_key),
+                Some(self.key.is_some()),
+            )
             .context("failed to update secret during decryption")?;
 
             count += 1;
@@ -357,6 +377,7 @@ impl SecretStore {
         )
         .fetch_one(&self.pool)
         .await
+        .report_secret_store_integrity("encrypted_count", None, Some(self.key.is_some()))
         .context("failed to count encrypted secrets")?;
         Ok(row.0.max(0) as usize)
     }

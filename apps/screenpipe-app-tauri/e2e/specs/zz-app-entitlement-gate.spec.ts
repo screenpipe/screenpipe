@@ -22,8 +22,25 @@ import { invoke } from '../helpers/tauri.js';
 import { getLocalApiConfig, waitForLocalApi } from '../helpers/api-utils.js';
 
 const FORCE_KEY = 'screenpipe_e2e_force_billing_gate';
+const E2E_ACCOUNT_USER_KEY = 'screenpipe_e2e_account_user';
+const E2E_ACCOUNT_USER_EVENT = 'screenpipe-e2e-seed-account-user';
 const FAKE_DENIED_TOKEN = 'e2e-fake-token-cloud-sub-app-denied';
 const FAKE_DENIED_EMAIL = 'e2e-cloud-sub-app-denied@screenpipe.test';
+
+async function clearAccountState(): Promise<void> {
+  await browser.execute(
+    (key: string, eventName: string) => {
+      window.localStorage.setItem(key, 'null');
+      window.dispatchEvent(new Event(eventName));
+    },
+    E2E_ACCOUNT_USER_KEY,
+    E2E_ACCOUNT_USER_EVENT,
+  );
+
+  const result = await invoke('set_cloud_token', { token: null });
+  expect(result.ok).toBe(true);
+  await browser.pause(t(500));
+}
 
 /** Forcing the gate on drives the entitlement gate to stop the engine
  *  (components/app-entitlement-gate.tsx calls stopScreenpipe for an unentitled
@@ -148,6 +165,10 @@ describe('App entitlement gate', () => {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    // The preceding Basic billing spec intentionally seeds an entitled user.
+    // Start from an explicit signed-out state instead of depending on spec order
+    // or an eventual real-network 401 to clear that synthetic account.
+    await clearAccountState();
   });
 
   after(async () => {

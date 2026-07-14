@@ -12,14 +12,18 @@ import { activeSubscriptionFilter } from './subscription';
  * @returns Promise resolving to boolean indicating if token is valid
  */
 export async function verifyClerkToken(env: Env, token: string): Promise<{ valid: boolean; userId?: string }> {
-  console.log('verifying clerk token', token);
   try {
     const payload = await verifyToken(token, {
       secretKey: env.CLERK_SECRET_KEY,
     });
-    return { valid: payload.sub !== null, userId: payload.sub ?? undefined };
-  } catch (error) {
-    console.error('clerk verification failed:', error);
+    const userId = typeof payload.sub === 'string' && payload.sub.length > 0
+      ? payload.sub
+      : undefined;
+    return { valid: userId !== undefined, userId };
+  } catch {
+    // Never log the JWT or upstream verification error verbatim: worker logs
+    // are broadly accessible operational data and may retain request context.
+    console.error('clerk verification failed');
     return { valid: false };
   }
 }
@@ -69,58 +73,23 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
     };
   }
 
-  // Check if user has active subscription
-  const { isValid: hasSubscription, userId } = await validateSubscriptionWithId(env, token);
-
-  if (hasSubscription) {
-    // Use userId as deviceId for authenticated users so usage tracking is
-    // consistent regardless of which client sends the request (Pi agent
-    // doesn't send X-Device-Id, billing page does — using userId unifies them).
-    return {
-      isValid: true,
-      tier: 'subscribed',
-      deviceId: userId || headerDeviceId,
-      userId,
-    };
-  }
-
-  // UUID user without subscription = logged_in tier
-  // (they provided a valid Supabase user ID, just not subscribed)
-  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (UUID_REGEX.test(token)) {
-    console.log('UUID token detected without subscription, granting logged_in tier');
-    const resolvedUserId = userId || token;
-    return {
-      isValid: true,
-      tier: 'logged_in',
-      deviceId: resolvedUserId,
-      userId: resolvedUserId,
-    };
-  }
-
-  // Clerk user ID without subscription = logged_in tier
-  // (won't pass JWT verification below, so catch it here)
-  const CLERK_ID_PATTERN = /^user_[a-zA-Z0-9]+$/;
-  if (CLERK_ID_PATTERN.test(token)) {
-    return {
-      isValid: true,
-      tier: 'logged_in',
-      deviceId: token,
-      userId: token,
-    };
-  }
-
-  // Check if it's a valid Clerk JWT token
+  // Authenticate the caller before trusting any user identifier. A Supabase
+  // UUID or Clerk `user_*` ID names an account, but it is not proof that the
+  // caller owns that account. Treating those public identifiers as bearer
+  // credentials lets an attacker mint fresh logged-in identities, bypass the
+  // anonymous IP backstop, and impersonate a subscribed account.
   const clerkResult = await verifyClerkToken(env, token);
-  if (clerkResult.valid) {
-    const resolvedUserId = clerkResult.userId || token;
-    // Check subscription using the resolved Clerk user ID
-    const { isValid: hasSubscription } = await validateSubscriptionWithId(env, resolvedUserId);
+  if (clerkResult.valid && clerkResult.userId) {
+    const resolvedUserId = clerkResult.userId;
+    // Subscription lookup is safe only after the Clerk token has established
+    // ownership of this user ID.
+    const { isValid: hasSubscription, userId } = await validateSubscriptionWithId(env, resolvedUserId);
+    const canonicalUserId = userId || resolvedUserId;
     return {
       isValid: true,
       tier: hasSubscription ? 'subscribed' : 'logged_in',
-      deviceId: resolvedUserId,
-      userId: resolvedUserId,
+      deviceId: canonicalUserId,
+      userId: canonicalUserId,
     };
   }
 
@@ -208,10 +177,10 @@ async function validateSubscriptionWithId(env: Env, token: string): Promise<{ is
         const subs = await subsRes.json() as Array<{ id: string }>;
         hasSub = subs.length > 0;
       } else {
-        console.error('Supabase subscription check error:', await subsRes.text());
+        console.error('Supabase subscription check failed', subsRes.status);
       }
-    } catch (error) {
-      console.error('Error in UUID auth path:', error);
+    } catch {
+      console.error('UUID subscription check failed');
     }
     // Always return resolvedUserId (clerk_id when available, UUID otherwise)
     // so the non-subscribed UUID branch upstream also keys on the same id.
@@ -220,7 +189,6 @@ async function validateSubscriptionWithId(env: Env, token: string): Promise<{ is
 
   // Clerk user IDs - resolve to UUID first, then check subscription
   if (CLERK_USER_ID_REGEX.test(token)) {
-    console.log('Clerk user ID detected, resolving to UUID:', token);
     try {
       // Resolve clerk_id to Supabase UUID (has_active_cloud_subscription expects uuid)
       const userResponse = await fetch(
@@ -255,8 +223,8 @@ async function validateSubscriptionWithId(env: Env, token: string): Promise<{ is
           }
         }
       }
-    } catch (error) {
-      console.error('Error checking Clerk user subscription:', error);
+    } catch {
+      console.error('Clerk user subscription check failed');
     }
     // Not subscribed - don't auto-grant, return false so it falls through
     return { isValid: false };
@@ -292,18 +260,21 @@ async function validateScreenpipeToken(token: string): Promise<{ isValid: boolea
     if (response.ok) {
       const data = await response.json() as { success?: boolean; user?: ScreenpipeUserData };
       const userData = data.user;
-      console.log('Valid screenpipe user token, user:', userData?.email);
+      const userId = userData?.clerk_id || userData?.id || userData?.email;
+      if (data.success !== true || !userData || !userId) {
+        return { isValid: false };
+      }
       return {
         isValid: true,
-        userId: userData?.clerk_id || userData?.id || userData?.email,
+        userId,
         hasSubscription: userData?.cloud_subscribed === true,
       };
     } else {
       console.log('Invalid screenpipe user token');
       return { isValid: false };
     }
-  } catch (error) {
-    console.error('Error validating screenpipe token:', error);
+  } catch {
+    console.error('screenpipe token validation failed');
     return { isValid: false };
   }
 }

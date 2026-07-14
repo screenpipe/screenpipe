@@ -195,6 +195,12 @@ path = "examples/meeting_tap_probe.rs"
 name = "meeting_input_probe"
 path = "examples/meeting_input_probe.rs"
 
+# Diagnostic for the AirPods mic-open flicker (see examples/bt_reopen_probe.rs
+# doc comment). macOS-only; stubbed out on other platforms in source.
+[[example]]
+name = "bt_reopen_probe"
+path = "examples/bt_reopen_probe.rs"
+
 # These benchmark/eval examples use the optional `audiopipe` crate (linked only
 # by the `parakeet` / `qwen3-asr` features). Without a `required-features` guard,
 # `cargo {build,clippy} --all-targets` on default features tries to compile them,

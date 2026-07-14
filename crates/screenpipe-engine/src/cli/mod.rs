@@ -28,7 +28,7 @@ pub mod vault;
 pub mod vision;
 
 use clap::parser::ValueSource;
-use clap::{ArgMatches, ValueEnum};
+use clap::{ArgAction, ArgMatches, ValueEnum};
 use clap::{Parser, Subcommand, ValueHint};
 use screenpipe_audio::{
     audio_manager::builder::TranscriptionMode,
@@ -403,7 +403,7 @@ pub struct RecordArgs {
     pub audio_device: Vec<String>,
 
     /// Follow system default audio devices
-    #[arg(long, default_value_t = true)]
+    #[arg(long, action = ArgAction::Set, num_args = 0..=1, default_value_t = true, default_missing_value = "true")]
     pub use_system_default_audio: bool,
 
     /// [experimental, macOS 14.4+] Capture System Audio via CoreAudio Process
@@ -450,7 +450,7 @@ pub struct RecordArgs {
     pub monitor_id: Vec<u32>,
 
     /// Automatically record all monitors. Ignored when `--monitor-id` is passed.
-    #[arg(long, default_value_t = true)]
+    #[arg(long, action = ArgAction::Set, num_args = 0..=1, default_value_t = true, default_missing_value = "true")]
     pub use_all_monitors: bool,
 
     /// Languages for OCR/transcription
@@ -458,7 +458,7 @@ pub struct RecordArgs {
     pub language: Vec<Language>,
 
     /// Enable PII removal
-    #[arg(long, default_value_t = true)]
+    #[arg(long, action = ArgAction::Set, num_args = 0..=1, default_value_t = true, default_missing_value = "true")]
     pub use_pii_removal: bool,
 
     /// Enable the async PII reconciliation worker. Runs a background
@@ -727,7 +727,7 @@ pub struct RecordArgs {
     /// Require authentication for remote API access. When enabled, non-localhost
     /// requests must include Authorization: Bearer <SCREENPIPE_API_KEY>.
     /// Localhost requests are always allowed.
-    #[arg(long, default_value_t = true)]
+    #[arg(long, action = ArgAction::Set, num_args = 0..=1, default_value_t = true, default_missing_value = "true")]
     pub api_auth: bool,
 
     /// Bind the HTTP server to 0.0.0.0 so other devices on the LAN can
@@ -2646,6 +2646,98 @@ mod tests {
         assert!(
             settings.disable_vision,
             "absent vision flags must not flip a persisted disable_vision"
+        );
+    }
+
+    fn record_args<const N: usize>(args: [&str; N]) -> RecordArgs {
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Record(args) => args,
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_default_true_bools_default_to_true_without_flag() {
+        let args = record_args(["screenpipe", "record"]);
+        assert!(args.use_pii_removal);
+        assert!(args.api_auth);
+        assert!(args.use_all_monitors);
+        assert!(args.use_system_default_audio);
+    }
+
+    #[test]
+    fn test_default_true_bools_can_be_disabled_with_eq_false() {
+        let args = record_args([
+            "screenpipe",
+            "record",
+            "--use-pii-removal=false",
+            "--api-auth=false",
+            "--use-all-monitors=false",
+            "--use-system-default-audio=false",
+        ]);
+        assert!(
+            !args.use_pii_removal,
+            "--use-pii-removal=false must disable"
+        );
+        assert!(!args.api_auth, "--api-auth=false must disable");
+        assert!(
+            !args.use_all_monitors,
+            "--use-all-monitors=false must disable"
+        );
+        assert!(
+            !args.use_system_default_audio,
+            "--use-system-default-audio=false must disable"
+        );
+    }
+
+    #[test]
+    fn test_default_true_bools_accept_space_separated_value() {
+        let args = record_args(["screenpipe", "record", "--use-pii-removal", "false"]);
+        assert!(
+            !args.use_pii_removal,
+            "--use-pii-removal false must disable"
+        );
+    }
+
+    #[test]
+    fn test_default_true_bools_bare_flag_still_sets_true() {
+        // Bare flags (no value) must stay backward compatible: assert true even
+        // when followed by another flag.
+        let args = record_args([
+            "screenpipe",
+            "record",
+            "--use-pii-removal",
+            "--api-auth",
+            "--port",
+            "4040",
+        ]);
+        assert!(args.use_pii_removal);
+        assert!(args.api_auth);
+    }
+
+    #[test]
+    fn test_eq_false_registers_as_cli_source_and_overrides_persisted_settings() {
+        let args = ["screenpipe", "record", "--use-pii-removal=false"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let sources = record_sources(args);
+        assert!(
+            sources.use_pii_removal,
+            "--use-pii-removal=false must register as an explicit CLI source"
+        );
+
+        let mut settings = screenpipe_config::RecordingSettings {
+            use_pii_removal: true,
+            ..Default::default()
+        };
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+        assert!(
+            !settings.use_pii_removal,
+            "explicit --use-pii-removal=false must override persisted true"
         );
     }
 }

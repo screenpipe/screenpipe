@@ -112,3 +112,5 @@ pub use focus::restore_frontmost_app;
 pub use panel::{reset_to_regular_and_refresh_tray, MAIN_PANEL_SHOWN};
 #[cfg(target_os = "macos")]
 pub use util::run_on_main_thread_safe;
+#[cfg(target_os = "macos")]
+pub use show::apply_chat_panel_on_top;

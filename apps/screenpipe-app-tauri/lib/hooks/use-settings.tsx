@@ -22,6 +22,10 @@ import type {
 	EnterpriseInstallMetadata,
 } from "@ee/lib/app-update-policy";
 import { type FontSize, applyFontSize } from "@/lib/utils/font-size";
+import {
+	applyManagedOverrides,
+	type ManagedSettingValue,
+} from "./managed-settings";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -208,6 +212,8 @@ export interface ChatHistoryStore {
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
 	deviceId?: string;
+	/** Device-key values enforced by the current enterprise policy. */
+	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
 	updateChannel?: UpdateChannel;
 	chatHistory?: ChatHistoryStore;
 	ignoredUrls?: string[];
@@ -303,6 +309,12 @@ export type Settings = SettingsStore & {
 	 *  duration. Requires the meeting detector. Falls back to standard capture automatically if
 	 *  unavailable. */
 	experimentalMeetingPiggyback?: boolean;
+	/** Opening a Bluetooth mic always degrades the paired device's output audio (A2DP -> SCO,
+	 *  a macOS/OS limitation — issue #3750). Off by default: Bluetooth mics are only recorded
+	 *  during a detected meeting. Turn on to always record Bluetooth mics regardless of
+	 *  meeting state. No effect on wired/built-in mics, Bluetooth output devices, or a dedicated
+	 *  Bluetooth mic with no output side of its own — nothing to protect there. */
+	alwaysRecordBluetoothMic?: boolean;
 	/** Experimental: request Windows WASAPI microphone AEC when supported. */
 	windowsInputAecEnabled?: boolean;
 	/** Experimental: request Apple VoiceProcessingIO AEC on the default macOS microphone. */
@@ -543,10 +555,10 @@ const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
 // "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
 // OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
 // every paying user — not just Cloud Sync subscribers — gets Screenpipe Cloud
-// transcription on by default. Still requires a token/id so the cloud engine can
-// authenticate against api.screenpipe.com.
+// transcription on by default. A database ID identifies an account but is not
+// a credential, so cloud defaults require the verified session token.
 const isLoggedInProUser = (user: User | null | undefined) =>
-	hasAppEntitlement(user as any) && Boolean(user?.token || user?.id);
+	hasAppEntitlement(user as any) && Boolean(user?.token);
 
 const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	if (!isLoggedInProUser(settings.user)) return settings;
@@ -615,6 +627,8 @@ let DEFAULT_SETTINGS: Settings = {
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			analyticsEnabled: true,
+			remoteLogCollectionEnabled: false,
+			remoteLogCollectionUserId: null,
 			audioChunkDuration: 30,
 			useChineseMirror: false,
 			languages: [],
@@ -685,6 +699,7 @@ let DEFAULT_SETTINGS: Settings = {
 			keepComputerAwake: false,
 			experimentalCoreaudioSystemAudio: false,
 			experimentalMeetingPiggyback: false,
+			alwaysRecordBluetoothMic: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,
 			screenpipeAecEnabled: false,
@@ -1053,10 +1068,23 @@ function createSettingsStore() {
 		// Migration: backfill disabledShortcuts for installs that predate the
 		// field. Several call sites assume it's always an array (`.includes(...)`)
 		// and crash with "Cannot read properties of undefined" when it's missing.
-		if (!Array.isArray(settings.disabledShortcuts)) {
-			settings.disabledShortcuts = [];
-			needsUpdate = true;
-		}
+			if (!Array.isArray(settings.disabledShortcuts)) {
+				settings.disabledShortcuts = [];
+				needsUpdate = true;
+			}
+
+			// Migrations may touch recording defaults. Enterprise values are the
+			// final authority and must survive reads as well as explicit writes.
+			const managedValues = settings.enterpriseManagedSettings;
+			if (managedValues) {
+				const managedChanged = Object.entries(managedValues).some(
+					([key, value]) => JSON.stringify(settings[key]) !== JSON.stringify(value)
+				);
+				if (managedChanged) {
+					Object.assign(settings, applyManagedOverrides(settings, managedValues));
+					needsUpdate = true;
+				}
+			}
 
 		// Save migrations if needed
 		if (needsUpdate) {
@@ -1070,6 +1098,7 @@ function createSettingsStore() {
 	const set = async (value: Partial<Settings>) => {
 		const store = await getStore();
 		const current = await get();
+		const managedValues = current.enterpriseManagedSettings;
 		let newSettings = { ...current, ...value } as Settings;
 		if ("user" in value) {
 			// On logout / Pro→non-Pro transition, clear the V2 marker so a future
@@ -1079,13 +1108,25 @@ function createSettingsStore() {
 			}
 			newSettings = applyProCloudAudioDefaults(newSettings);
 		}
+		newSettings = applyManagedOverrides(
+			newSettings as Record<string, unknown>,
+			managedValues
+		) as Settings;
+		if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
 		await setSettingsStripped(store, newSettings);
 		await saveAndEncrypt(store);
 	};
 
 	const reset = async () => {
 		const store = await getStore();
-		await store.set("settings", createDefaultSettingsObject());
+		const current = await get();
+		const managedValues = current.enterpriseManagedSettings;
+		const defaults = applyManagedOverrides(
+			createDefaultSettingsObject() as Record<string, unknown>,
+			managedValues
+		) as Settings;
+		if (managedValues) defaults.enterpriseManagedSettings = managedValues;
+		await store.set("settings", defaults);
 		await saveAndEncrypt(store);
 	};
 

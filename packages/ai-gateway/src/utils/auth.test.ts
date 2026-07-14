@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'bun:test';
+import { afterEach, beforeEach, describe, it, expect, mock } from 'bun:test';
+import type { Env } from '../types';
 import { activeSubscriptionFilter } from './subscription';
+
+const verifyTokenMock = mock(async (_token: string, _options: unknown) => {
+  throw new Error('invalid token');
+});
+
+mock.module('@clerk/backend', () => ({
+  verifyToken: verifyTokenMock,
+}));
+
+const { validateAuth } = await import('./auth');
 
 // Canceling a subscription must not strip Pro access before the paid period
 // ends. Stripe stamps canceled_at / flips status to canceled the moment a
@@ -33,26 +44,136 @@ describe('activeSubscriptionFilter — keeps Pro until period end (#3843)', () =
   });
 });
 
-describe('Auth tier determination', () => {
-  it('should return anonymous tier when no auth header', () => {
-    const expectedBehavior = {
-      noAuthHeader: { tier: 'anonymous', isValid: true },
-      invalidToken: { tier: 'anonymous', isValid: true }, // Fail-open design
-      validTokenNoSub: { tier: 'logged_in', isValid: true },
-      validTokenWithSub: { tier: 'subscribed', isValid: true },
-    };
-    expect(expectedBehavior.noAuthHeader.tier).toBe('anonymous');
-    expect(expectedBehavior.invalidToken.tier).toBe('anonymous');
+describe('validateAuth — verified identities only', () => {
+  const originalFetch = globalThis.fetch;
+  const env = {
+    NODE_ENV: 'production',
+    CLERK_SECRET_KEY: 'clerk-test-secret',
+    SUPABASE_URL: 'https://supabase.test',
+    SUPABASE_ANON_KEY: 'supabase-test-key',
+  } as Env;
+
+  const requestFor = (token?: string) => new Request('https://gateway.test/v1/usage', {
+    headers: {
+      'X-Device-Id': 'device-from-header',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
 
-  it('should extract device ID from X-Device-Id header', () => {
-    const testDeviceId = 'test-uuid-1234';
-    expect(testDeviceId).toMatch(/^[a-z0-9-]+$/);
+  beforeEach(() => {
+    verifyTokenMock.mockImplementation(async () => {
+      throw new Error('invalid token');
+    });
+    globalThis.fetch = mock(async () => {
+      throw new Error('unexpected fetch');
+    }) as typeof fetch;
   });
 
-  it('should fall back to IP when no device ID header', () => {
-    const fallbackToIp = true;
-    expect(fallbackToIp).toBe(true);
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    verifyTokenMock.mockClear();
+  });
+
+  it('keeps requests without credentials anonymous', async () => {
+    expect(await validateAuth(requestFor(), env)).toEqual({
+      isValid: true,
+      tier: 'anonymous',
+      deviceId: 'device-from-header',
+    });
+  });
+
+  it('does not authenticate an arbitrary UUID, even if it names an account', async () => {
+    const fetchMock = mock(async () => new Response(JSON.stringify([{ id: 'active-subscription' }])));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    expect(await validateAuth(
+      requestFor('550e8400-e29b-41d4-a716-446655440000'),
+      env,
+    )).toEqual({
+      isValid: true,
+      tier: 'anonymous',
+      deviceId: 'device-from-header',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('does not authenticate an arbitrary Clerk user ID', async () => {
+    expect(await validateAuth(requestFor('user_attackerchosen'), env)).toEqual({
+      isValid: true,
+      tier: 'anonymous',
+      deviceId: 'device-from-header',
+    });
+  });
+
+  it('keeps a verified Clerk JWT logged in without a subscription', async () => {
+    verifyTokenMock.mockImplementation(async () => ({ sub: 'user_verified' }) as any);
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/rest/v1/users?')) {
+        return new Response(JSON.stringify([{ id: '11111111-1111-4111-8111-111111111111' }]), { status: 200 });
+      }
+      if (url.includes('/rest/v1/cloud_subscriptions?')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    expect(await validateAuth(requestFor('eyJ.verified.clerk'), env)).toEqual({
+      isValid: true,
+      tier: 'logged_in',
+      deviceId: 'user_verified',
+      userId: 'user_verified',
+    });
+  });
+
+  it('grants subscribed only after a Clerk JWT proves account ownership', async () => {
+    verifyTokenMock.mockImplementation(async () => ({ sub: 'user_subscribed' }) as any);
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/rest/v1/users?')) {
+        return new Response(JSON.stringify([{ id: '22222222-2222-4222-8222-222222222222' }]), { status: 200 });
+      }
+      if (url.includes('/rest/v1/cloud_subscriptions?')) {
+        return new Response(JSON.stringify([{ id: 'sub_123' }]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    expect(await validateAuth(requestFor('eyJ.subscribed.clerk'), env)).toEqual({
+      isValid: true,
+      tier: 'subscribed',
+      deviceId: 'user_subscribed',
+      userId: 'user_subscribed',
+    });
+  });
+
+  it('accepts a successfully validated legacy screenpipe JWT', async () => {
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('https://screenpipe.com/api/user');
+      return new Response(JSON.stringify({
+        success: true,
+        user: { clerk_id: 'user_legacy', cloud_subscribed: true },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    expect(await validateAuth(requestFor('eyJ.legacy.screenpipe'), env)).toEqual({
+      isValid: true,
+      tier: 'subscribed',
+      deviceId: 'user_legacy',
+      userId: 'user_legacy',
+    });
+  });
+
+  it('does not authenticate an unsuccessful 200 response from /api/user', async () => {
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({
+      success: false,
+    }), { status: 200 })) as typeof fetch;
+
+    expect(await validateAuth(requestFor('eyJ.invalid.screenpipe'), env)).toEqual({
+      isValid: true,
+      tier: 'anonymous',
+      deviceId: 'device-from-header',
+    });
   });
 });
 
@@ -124,37 +245,4 @@ describe('ScreenpipeUserData interface', () => {
     const resolvedUserId = userData.clerk_id || userData.id || userData.email;
     expect(resolvedUserId).toBe('test@test.com');
   });
-});
-
-describe('auth userId → credit resolution paths', () => {
-  // Document all auth paths and their userId formats
-  // This is critical: user_credits uses clerk_id (user_xxx) as key
-
-  const authPaths = [
-    { path: 'UUID token', example: 'e3dfa6a0-414c-4e79-883e-3dd4d802cd9c', needsResolution: true },
-    { path: 'Clerk user_id token', example: 'user_2ppjMkjVL86ft5q', needsResolution: false },
-    { path: 'Clerk JWT (verified)', example: 'user_2ppjMkjVL86ft5q', needsResolution: false },
-    { path: 'Screenpipe JWT (with clerk_id)', example: 'user_2ppjMkjVL86ft5q', needsResolution: false },
-    { path: 'Screenpipe JWT (UUID fallback)', example: 'e3dfa6a0-414c-4e79-883e-3dd4d802cd9c', needsResolution: true },
-    { path: 'Anonymous', example: undefined, needsResolution: false },
-  ];
-
-  const CLERK_ID_REGEX = /^user_[a-zA-Z0-9]+$/;
-  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-  for (const authPath of authPaths) {
-    it(`${authPath.path}: resolveClerkId should ${authPath.needsResolution ? 'look up' : 'pass through'}`, () => {
-      if (!authPath.example) {
-        // Anonymous — no userId, credits don't apply
-        expect(authPath.example).toBeUndefined();
-        return;
-      }
-      if (CLERK_ID_REGEX.test(authPath.example)) {
-        expect(authPath.needsResolution).toBe(false);
-      }
-      if (UUID_REGEX.test(authPath.example)) {
-        expect(authPath.needsResolution).toBe(true);
-      }
-    });
-  }
 });

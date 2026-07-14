@@ -47,6 +47,74 @@ export async function getInstalledMcpVersion(): Promise<string | null> {
   } catch { return null; }
 }
 
+// The exact `args` arrays our own installers (and the README) have ever
+// written for the screenpipe entry. Auto-repair ONLY touches entries matching
+// one of these verbatim — never a hand-customized entry.
+const KNOWN_DEFAULT_MCP_ARGS: readonly string[][] = [
+  ["-y", "screenpipe-mcp@latest"], // npx (current)
+  ["-y", "screenpipe-mcp"],        // npx (older README snippet)
+  ["x", "screenpipe-mcp@latest"],  // bundled bun / bunx (current)
+  ["x", "screenpipe-mcp"],         // bundled bun / bunx (older)
+];
+
+function argsMatchKnownDefault(args: unknown): boolean {
+  if (!Array.isArray(args)) return false;
+  return KNOWN_DEFAULT_MCP_ARGS.some(
+    (known) => known.length === args.length && known.every((a, i) => a === args[i]),
+  );
+}
+
+function commandLooksLikeOurs(command: unknown): boolean {
+  if (typeof command !== "string" || !command) return false;
+  const base = command.replace(/\\/g, "/").split("/").pop() || command;
+  // bare launchers we've written, or our bundled bun at an absolute path.
+  return base === "npx" || base === "npx.cmd" || base === "bunx" || base === "bun" || base === "bun.exe";
+}
+
+// A screenpipe entry is "stale" — written by an older build of ours or copied
+// from the README's raw `npx` snippet — when it uses one of OUR default
+// command/args shapes but lacks an injected local API key. Keyless configs
+// force the MCP into slow subprocess key discovery at startup, which on a cold
+// cache can stall Claude Desktop's attach ("Could not attach to MCP server
+// screenpipe"). Re-writing such an entry (bundled-bun path + injected key)
+// repairs it with zero loss, because it had no customizations to begin with.
+//
+// Deliberately CONSERVATIVE: a hand-customized entry — a remote
+// `--screenpipe-url`, a custom `--port`, extra args, or any env key other than
+// the one we manage — is NOT flagged, so auto-repair can never clobber a
+// user's bespoke setup.
+export function isStaleClaudeScreenpipeEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const e = entry as { command?: unknown; args?: unknown; env?: Record<string, unknown> };
+
+  // Already carries the key → nothing to repair.
+  const hasKey = !!(e.env && typeof e.env === "object" && e.env.SCREENPIPE_LOCAL_API_KEY);
+  if (hasKey) return false;
+
+  // Only repair entries that exactly match a shape we produced ourselves.
+  if (!commandLooksLikeOurs(e.command)) return false;
+  if (!argsMatchKnownDefault(e.args)) return false;
+
+  // Any env keys beyond the one we manage means the user customized it — leave it.
+  if (e.env && typeof e.env === "object") {
+    const extraKeys = Object.keys(e.env).filter((k) => k !== "SCREENPIPE_LOCAL_API_KEY");
+    if (extraKeys.length > 0) return false;
+  }
+
+  return true;
+}
+
+// Read the currently-installed Claude screenpipe entry (or null). Used to decide
+// whether an auto-repair rewrite is warranted.
+export async function getInstalledClaudeScreenpipeEntry(): Promise<unknown | null> {
+  try {
+    const configPath = await getClaudeConfigPath();
+    if (!configPath) return null;
+    const config = JSON.parse(await readTextFile(configPath));
+    return config?.mcpServers?.screenpipe ?? null;
+  } catch { return null; }
+}
+
 export async function getCursorMcpConfigPath(): Promise<string> {
   const home = await homeDir();
   return join(home, ".cursor", "mcp.json");

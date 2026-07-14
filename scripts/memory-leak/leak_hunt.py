@@ -110,10 +110,19 @@ def process_rows() -> list[dict[str, Any]]:
         cmd = [
             "powershell",
             "-NoProfile",
+            "-NonInteractive",
             "-Command",
             (
-                "Get-Process | "
-                "Select-Object Id,ProcessName,WorkingSet64,VirtualMemorySize64,CPU | "
+                "$live = @{}; Get-Process | ForEach-Object { $live[[int]$_.Id] = $_ }; "
+                "Get-CimInstance Win32_Process | ForEach-Object { "
+                "$p = $live[[int]$_.ProcessId]; "
+                "[pscustomobject]@{ Id=[int]$_.ProcessId; ParentProcessId=[int]$_.ParentProcessId; "
+                "ProcessName=$_.Name; WorkingSet64=if($p){[int64]$p.WorkingSet64}else{0}; "
+                "PrivateMemorySize64=if($p){[int64]$p.PrivateMemorySize64}else{0}; "
+                "VirtualMemorySize64=if($p){[int64]$p.VirtualMemorySize64}else{0}; "
+                "CPU=if($p -and $null -ne $p.CPU){[double]$p.CPU}else{0}; "
+                "HandleCount=if($p){[int]$p.HandleCount}else{0}; "
+                "ThreadCount=if($p){[int]$p.Threads.Count}else{0} } } | "
                 "ConvertTo-Json -Compress"
             ),
         ]
@@ -127,10 +136,14 @@ def process_rows() -> list[dict[str, Any]]:
                 rows.append(
                     {
                         "pid": int(row["Id"]),
+                        "parent_pid": int(row.get("ParentProcessId") or 0),
                         "comm": row["ProcessName"],
                         "rss_kb": int(row.get("WorkingSet64") or 0) // 1024,
+                        "private_kb": int(row.get("PrivateMemorySize64") or 0) // 1024,
                         "vsz_kb": int(row.get("VirtualMemorySize64") or 0) // 1024,
-                        "pcpu": float(row.get("CPU") or 0.0),
+                        "cpu_seconds": float(row.get("CPU") or 0.0),
+                        "handle_count": int(row.get("HandleCount") or 0),
+                        "thread_count": int(row.get("ThreadCount") or 0),
                     }
                 )
             return rows
@@ -139,7 +152,7 @@ def process_rows() -> list[dict[str, Any]]:
 
     try:
         raw = subprocess.check_output(
-            ["ps", "-axo", "pid=,rss=,vsz=,pcpu=,comm="],
+            ["ps", "-axo", "pid=,ppid=,rss=,vsz=,pcpu=,comm="],
             text=True,
             timeout=10,
         )
@@ -148,18 +161,22 @@ def process_rows() -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     for line in raw.splitlines():
-        parts = line.strip().split(None, 4)
-        if len(parts) < 5:
+        parts = line.strip().split(None, 5)
+        if len(parts) < 6:
             continue
-        pid_s, rss_s, vsz_s, pcpu_s, comm = parts
+        pid_s, ppid_s, rss_s, vsz_s, pcpu_s, comm = parts
         try:
             rows.append(
                 {
                     "pid": int(pid_s),
+                    "parent_pid": int(ppid_s),
                     "comm": comm,
                     "rss_kb": int(float(rss_s)),
+                    "private_kb": None,
                     "vsz_kb": int(float(vsz_s)),
                     "pcpu": float(pcpu_s),
+                    "handle_count": None,
+                    "thread_count": None,
                 }
             )
         except ValueError:
@@ -171,17 +188,65 @@ def basename(comm: str) -> str:
     return Path(comm).name.lower()
 
 
-def find_screenpipe_process(process_names: tuple[str, ...]) -> dict[str, Any] | None:
+def aggregate_process_tree(root: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return root process data plus recursive descendant totals."""
+    children_by_parent: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        children_by_parent.setdefault(int(row.get("parent_pid") or 0), []).append(row)
+    descendants: list[dict[str, Any]] = []
+    pending = [root["pid"]]
+    seen = {root["pid"]}
+    while pending:
+        parent_pid = pending.pop()
+        for row in children_by_parent.get(parent_pid, []):
+            if row["pid"] in seen:
+                continue
+            seen.add(row["pid"])
+            descendants.append(row)
+            pending.append(row["pid"])
+
+    tree = [root, *descendants]
+    private_values = [row.get("private_kb") for row in tree]
+    result = dict(root)
+    result.update(
+        {
+            "tree_rss_kb": sum(int(row.get("rss_kb") or 0) for row in tree),
+            "tree_private_kb": (
+                sum(int(value or 0) for value in private_values)
+                if any(value is not None for value in private_values)
+                else None
+            ),
+            "tree_vsz_kb": sum(int(row.get("vsz_kb") or 0) for row in tree),
+            "tree_pcpu": sum(float(row.get("pcpu") or 0.0) for row in tree),
+            "tree_cpu_seconds": sum(float(row.get("cpu_seconds") or 0.0) for row in tree),
+            "tree_handle_count": sum(int(row.get("handle_count") or 0) for row in tree),
+            "tree_thread_count": sum(int(row.get("thread_count") or 0) for row in tree),
+            "descendant_count": len(descendants),
+        }
+    )
+    return result
+
+
+def find_screenpipe_process(
+    process_names: tuple[str, ...],
+    rows: list[dict[str, Any]] | None = None,
+    target_pid: int | None = None,
+) -> dict[str, Any] | None:
     needles = {name.lower() for name in process_names}
     candidates = []
-    for row in process_rows():
+    rows = process_rows() if rows is None else rows
+    for row in rows:
+        if target_pid is not None:
+            if row["pid"] == target_pid:
+                return aggregate_process_tree(row, rows)
+            continue
         name = basename(row["comm"])
         if name in needles or any(name.startswith(f"{needle}.") for needle in needles):
             if row["pid"] != os.getpid():
-                candidates.append(row)
+                candidates.append(aggregate_process_tree(row, rows))
     if not candidates:
         return None
-    return max(candidates, key=lambda r: r["rss_kb"])
+    return max(candidates, key=lambda r: r["tree_rss_kb"])
 
 
 def fd_count(pid: int) -> int | None:
@@ -230,7 +295,34 @@ def capture_snapshot(pid: int, run_dir: Path, reason: str) -> list[str]:
     paths: list[str] = []
 
     commands: list[tuple[list[str], str, int]] = []
-    if not sys.platform.startswith("win"):
+    if sys.platform.startswith("win"):
+        commands.append(
+            (
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    f"Get-Process -Id {pid} | Format-List *",
+                ],
+                "get-process.txt",
+                15,
+            )
+        )
+        commands.append(
+            (
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,WorkingSetSize,VirtualSize | ConvertTo-Json",
+                ],
+                "process-tree.json",
+                30,
+            )
+        )
+    else:
         commands.append((["ps", "-M", "-p", str(pid)], "threads.txt", 10))
         commands.append((["lsof", "-nP", "-p", str(pid)], "lsof.txt", 15))
     if sys.platform == "darwin":
@@ -281,6 +373,7 @@ def sampler_loop(
     run_dir: Path,
     sample_interval_sec: float,
     process_names: tuple[str, ...],
+    target_pid: int | None,
     rss_threshold_mb: float,
     growth_threshold_mb_per_hour: float,
     snapshot_cooldown_sec: float,
@@ -291,6 +384,7 @@ def sampler_loop(
     recent: deque[dict[str, Any]] = deque(maxlen=max(20, int(7200 / max(sample_interval_sec, 1))))
     last_snapshot_at = 0.0
     wrote_header = False
+    previous_cpu_sample: tuple[int, float, float] | None = None
 
     with samples_path.open("a") as jsonl, csv_path.open("a", newline="") as csv_file:
         writer = csv.DictWriter(
@@ -301,8 +395,14 @@ def sampler_loop(
                 "pid",
                 "comm",
                 "rss_mb",
+                "self_rss_mb",
+                "private_mb",
+                "self_private_mb",
                 "vsz_mb",
                 "pcpu",
+                "descendant_count",
+                "handle_count",
+                "thread_count",
                 "fd_count",
                 "growth_mb_per_hour",
                 "snapshot_reason",
@@ -312,7 +412,7 @@ def sampler_loop(
             writer.writeheader()
             wrote_header = True
         while not state.should_stop():
-            proc = find_screenpipe_process(process_names)
+            proc = find_screenpipe_process(process_names, target_pid=target_pid)
             scenario = state.get_scenario()
             row: dict[str, Any] = {
                 "ts": utc_now(),
@@ -320,22 +420,56 @@ def sampler_loop(
                 "pid": None,
                 "comm": None,
                 "rss_mb": None,
+                "self_rss_mb": None,
+                "private_mb": None,
+                "self_private_mb": None,
                 "vsz_mb": None,
                 "pcpu": None,
+                "descendant_count": None,
+                "handle_count": None,
+                "thread_count": None,
                 "fd_count": None,
                 "growth_mb_per_hour": None,
                 "snapshot_reason": "",
             }
 
             if proc:
-                rss_mb = round(proc["rss_kb"] / 1024.0, 1)
+                rss_mb = round(proc["tree_rss_kb"] / 1024.0, 1)
+                tree_private_kb = proc.get("tree_private_kb")
+                cpu_percent: float | None = proc["tree_pcpu"]
+                if sys.platform.startswith("win"):
+                    now = time.monotonic()
+                    cpu_seconds = proc["tree_cpu_seconds"]
+                    cpu_percent = None
+                    if previous_cpu_sample and previous_cpu_sample[0] == proc["pid"]:
+                        elapsed = now - previous_cpu_sample[1]
+                        if elapsed > 0:
+                            cpu_percent = max(
+                                0.0,
+                                (cpu_seconds - previous_cpu_sample[2]) / elapsed * 100.0,
+                            )
+                    previous_cpu_sample = (proc["pid"], now, cpu_seconds)
                 row.update(
                     {
                         "pid": proc["pid"],
                         "comm": proc["comm"],
                         "rss_mb": rss_mb,
-                        "vsz_mb": round(proc["vsz_kb"] / 1024.0, 1),
-                        "pcpu": proc["pcpu"],
+                        "self_rss_mb": round(proc["rss_kb"] / 1024.0, 1),
+                        "private_mb": (
+                            round(tree_private_kb / 1024.0, 1)
+                            if tree_private_kb is not None
+                            else None
+                        ),
+                        "self_private_mb": (
+                            round(proc["private_kb"] / 1024.0, 1)
+                            if proc.get("private_kb") is not None
+                            else None
+                        ),
+                        "vsz_mb": round(proc["tree_vsz_kb"] / 1024.0, 1),
+                        "pcpu": round(cpu_percent, 1) if cpu_percent is not None else None,
+                        "descendant_count": proc["descendant_count"],
+                        "handle_count": proc["tree_handle_count"] or None,
+                        "thread_count": proc["tree_thread_count"] or None,
                         "fd_count": fd_count(proc["pid"]),
                     }
                 )
@@ -476,7 +610,7 @@ def scenario_health_poll(client: ApiClient, state: SharedState, duration_sec: fl
     fanout(state, "health_poll", duration_sec, concurrency, work)
 
 
-def scenario_search_fanout(client: ApiClient, state: SharedState, duration_sec: float, concurrency: int) -> None:
+def build_search_fanout_params(include_frame_images: bool) -> dict[str, Any]:
     queries = [
         "screenpipe",
         "meeting",
@@ -491,20 +625,38 @@ def scenario_search_fanout(client: ApiClient, state: SharedState, duration_sec: 
     ]
     content_types = ["all", "ocr", "audio", "input", "accessibility", "memory"]
 
+    include_frames = include_frame_images and random.choice([False, True])
+    limits = [5, 10, 20] if include_frames else [10, 25, 50, 100, 250]
+    return {
+        "q": random.choice(queries),
+        "content_type": random.choice(content_types),
+        "limit": random.choice(limits),
+        "offset": random.choice([0, 10, 50, 100, 250]),
+        "max_content_length": random.choice([None, 256, 1024, 4096]),
+        "include_frames": "true" if include_frames else "false",
+        "focused": random.choice([None, "true", "false"]),
+    }
+
+
+def scenario_search_fanout(
+    client: ApiClient,
+    state: SharedState,
+    duration_sec: float,
+    concurrency: int,
+    include_frame_images: bool,
+) -> None:
+
     def work() -> bool:
-        params = {
-            "q": random.choice(queries),
-            "content_type": random.choice(content_types),
-            "limit": random.choice([10, 25, 50, 100, 250]),
-            "offset": random.choice([0, 10, 50, 100, 250]),
-            "max_content_length": random.choice([None, 256, 1024, 4096]),
-            "include_frames": random.choice(["false", "true"]),
-            "focused": random.choice([None, "true", "false"]),
-        }
+        params = build_search_fanout_params(include_frame_images)
         ok, _, _, _ = client.request("GET", "/search", params=params)
         return ok
 
-    fanout(state, "search_fanout", duration_sec, concurrency, work)
+    # Inline frame payloads spawn ffmpeg and retain large base64 response
+    # buffers. Keep that pressure opt-in, low-cardinality, and serial so the
+    # default monitor cannot become the source of the memory pressure it is
+    # trying to measure.
+    effective_concurrency = 1 if include_frame_images else concurrency
+    fanout(state, "search_fanout", duration_sec, effective_concurrency, work)
 
 
 def scenario_timeline_stream(client: ApiClient, state: SharedState, duration_sec: float, concurrency: int) -> None:
@@ -772,6 +924,7 @@ def run_harness(args: argparse.Namespace) -> int:
                 "scenario_duration_sec": args.scenario_duration_sec,
                 "concurrency": args.concurrency,
                 "process_names": args.process_name,
+                "pid": args.pid,
                 "rss_threshold_mb": args.rss_threshold_mb,
                 "growth_threshold_mb_per_hour": args.growth_threshold_mb_per_hour,
                 "include_frame_images": args.include_frame_images,
@@ -799,6 +952,7 @@ def run_harness(args: argparse.Namespace) -> int:
             "run_dir": run_dir,
             "sample_interval_sec": args.sample_interval_sec,
             "process_names": tuple(args.process_name),
+            "target_pid": args.pid,
             "rss_threshold_mb": args.rss_threshold_mb,
             "growth_threshold_mb_per_hour": args.growth_threshold_mb_per_hour,
             "snapshot_cooldown_sec": args.snapshot_cooldown_sec,
@@ -811,7 +965,16 @@ def run_harness(args: argparse.Namespace) -> int:
     client = ApiClient(args.base_url, args.request_timeout_sec, args.api_key or os.environ.get("SCREENPIPE_API_KEY"))
     scenarios: list[tuple[str, Callable[[], None]]] = [
         ("health_poll", lambda: scenario_health_poll(client, state, args.scenario_duration_sec, args.concurrency)),
-        ("search_fanout", lambda: scenario_search_fanout(client, state, args.scenario_duration_sec, args.concurrency)),
+        (
+            "search_fanout",
+            lambda: scenario_search_fanout(
+                client,
+                state,
+                args.scenario_duration_sec,
+                args.concurrency,
+                args.include_frame_images,
+            ),
+        ),
         ("timeline_stream", lambda: scenario_timeline_stream(client, state, args.scenario_duration_sec, args.concurrency)),
         ("frame_walk", lambda: scenario_frame_walk(client, state, args.scenario_duration_sec, args.concurrency, args.include_frame_images)),
         ("meeting_walk", lambda: scenario_meeting_walk(client, state, args.scenario_duration_sec, args.concurrency)),
@@ -879,6 +1042,8 @@ def start_daemon(args: argparse.Namespace) -> int:
     ]
     for name in args.process_name:
         cmd.extend(["--process-name", name])
+    if args.pid is not None:
+        cmd.extend(["--pid", str(args.pid)])
     if args.include_frame_images:
         cmd.append("--include-frame-images")
     if args.allow_audio_toggle:
@@ -992,12 +1157,19 @@ def status(args: argparse.Namespace) -> int:
         print(f"daemon: running pid={pid}")
     else:
         print("daemon: not running")
-    proc = find_screenpipe_process(tuple(args.process_name))
+    proc = find_screenpipe_process(tuple(args.process_name), target_pid=args.pid)
     if proc:
+        private = (
+            f"{proc['tree_private_kb'] / 1024.0:.1f} MB"
+            if proc.get("tree_private_kb") is not None
+            else "n/a"
+        )
         print(
-            "screenpipe process: "
-            f"pid={proc['pid']} rss={proc['rss_kb'] / 1024.0:.1f} MB "
-            f"vsz={proc['vsz_kb'] / 1024.0:.1f} MB cpu={proc['pcpu']} comm={proc['comm']}"
+            "screenpipe process tree: "
+            f"pid={proc['pid']} rss={proc['tree_rss_kb'] / 1024.0:.1f} MB "
+            f"private={private} "
+            f"vsz={proc['tree_vsz_kb'] / 1024.0:.1f} MB "
+            f"descendants={proc['descendant_count']} comm={proc['comm']}"
         )
     else:
         print("screenpipe process: not found")
@@ -1008,6 +1180,7 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--process-name", action="append", default=list(DEFAULT_PROCESS_NAMES))
+    parser.add_argument("--pid", type=int, default=None, help="track this root PID and its descendants")
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--sample-interval-sec", type=float, default=30.0)
     parser.add_argument("--scenario-duration-sec", type=float, default=180.0)
@@ -1042,6 +1215,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_p = sub.add_parser("status", help="show daemon and current screenpipe process status")
     status_p.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     status_p.add_argument("--process-name", action="append", default=list(DEFAULT_PROCESS_NAMES))
+    status_p.add_argument("--pid", type=int, default=None, help="inspect this root PID and its descendants")
     status_p.add_argument("--analyze", action="store_true")
     status_p.add_argument("--since-hours", type=float, default=24.0)
     status_p.add_argument("--rss-threshold-mb", type=float, default=8192.0)

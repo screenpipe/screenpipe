@@ -132,7 +132,7 @@ export function StandaloneChat({
   const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
   const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useTagAutocomplete();
   const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
-  const { templatePipes } = usePipes();
+  const { pipes, templatePipes } = usePipes();
   // Connected integrations (google-calendar, google-docs, slack, etc.) surfaced in the
   // filter popover so users can mention them directly with @id — helps the
   // agent pick the right connection for a query instead of having to guess.
@@ -142,7 +142,6 @@ export function StandaloneChat({
   const {
     allConnectionItems,
     connectionAwareSuggestions,
-    connectionSetupSuggestions,
     connections,
     refreshConnectionState,
     refreshVisibleSuggestions,
@@ -1375,16 +1374,26 @@ export function StandaloneChat({
         }}
         summaryCardsProps={{
           onSendMessage: sendMessage,
-          onOpenConnection: openConnectionSetup,
-          connectionSetupSuggestions,
-          autoSuggestions: connectionAwareSuggestions,
-          suggestionsRefreshing,
-          onRefreshSuggestions: refreshVisibleSuggestions,
           customTemplates,
           onSaveCustomTemplate: saveCustomTemplate,
           onDeleteCustomTemplate: deleteCustomTemplate,
           userName: settings.userName,
           templatePipes,
+          existingPipes: pipes
+            .filter((pipe) => pipe.config.config?.template !== true)
+            .map((pipe) => ({
+              name: pipe.config.name,
+              title:
+                typeof pipe.config.config?.title === "string"
+                  ? pipe.config.config.title
+                  : pipe.config.name,
+              description:
+                typeof pipe.config.config?.description === "string"
+                  ? pipe.config.config.description
+                  : "",
+              enabled: pipe.config.enabled,
+              schedule: pipe.config.schedule,
+            })),
         }}
         messageListProps={messageListProps}
         isUserScrolledUp={isUserScrolledUp}

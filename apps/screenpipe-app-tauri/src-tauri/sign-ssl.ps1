@@ -18,19 +18,6 @@ if (-not $env:ESIGNER_USERNAME -or -not $env:ESIGNER_PASSWORD) {
     exit 0
 }
 
-# Skip non-PE files. NSIS scratch invokes signCommand on temp files (.tmp,
-# .nst, etc.) that CodeSignTool can't sign — it returns
-# "Unsupported file format for signing - tmp" and burns 3 retry attempts
-# for nothing. Observed on enterprise build 26301444082 (2026-05-22).
-# Authoritative list: signable Windows PE/COFF binaries. Anything else
-# means Tauri/NSIS handed us scratch.
-$ext = [System.IO.Path]::GetExtension($FilePath).ToLowerInvariant()
-$signableExts = @('.exe', '.dll', '.sys', '.msi', '.ocx', '.scr', '.cab', '.cat')
-if (-not ($signableExts -contains $ext)) {
-    Write-Host "Skipping non-PE file (ext=$ext): $FilePath"
-    exit 0
-}
-
 if (-not $env:CODESIGNTOOL_PATH) {
     Write-Host "ERROR: CODESIGNTOOL_PATH not set"
     exit 1
@@ -56,12 +43,46 @@ try {
     exit 1
 }
 
+# Tauri wires the signing command into NSIS via !uninstfinalize. NSIS passes
+# the generated uninstaller as an nst*.tmp PE file, but SSL.com's
+# CodeSignTool rejects signable PE content when its filename ends in .tmp.
+# Detect those files by their MZ header, sign an .exe copy, then copy the
+# signed bytes back to the original path before makensis continues.
+$ext = [System.IO.Path]::GetExtension($FilePath).ToLowerInvariant()
+$signableExts = @('.exe', '.dll', '.sys', '.msi', '.ocx', '.scr', '.cab', '.cat')
+$requiresExeAlias = $false
+if (-not ($signableExts -contains $ext)) {
+    $stream = [System.IO.File]::OpenRead($FilePath)
+    try {
+        $firstByte = $stream.ReadByte()
+        $secondByte = $stream.ReadByte()
+    } finally {
+        $stream.Dispose()
+    }
+
+    if ($firstByte -ne 0x4D -or $secondByte -ne 0x5A) {
+        Write-Host "Skipping non-PE file (ext=$ext): $FilePath"
+        exit 0
+    }
+
+    $requiresExeAlias = $true
+}
+
 $jarFile = Get-ChildItem $env:CODESIGNTOOL_PATH -Recurse -Filter "code_sign_tool*.jar" | Select-Object -First 1
 $javaFile = Get-ChildItem $env:CODESIGNTOOL_PATH -Recurse -Filter "java.exe" | Select-Object -First 1
 
 if (-not $jarFile -or -not $javaFile) {
     Write-Host "ERROR: CodeSignTool jar or java not found in $env:CODESIGNTOOL_PATH"
     exit 1
+}
+
+$originalFilePath = $FilePath
+$temporarySigningCopy = $null
+if ($requiresExeAlias) {
+    $temporarySigningCopy = "$FilePath.signing.exe"
+    Copy-Item $FilePath $temporarySigningCopy -Force
+    $FilePath = $temporarySigningCopy
+    Write-Host "Signing temporary PE payload via .exe alias: $originalFilePath"
 }
 
 $signedDir = Join-Path $env:CODESIGNTOOL_PATH "signed_binaries"
@@ -155,6 +176,9 @@ while (-not $signed -and $attempt -lt $maxAttempts) {
         Write-Host "ERROR: SSL.com signing quota exceeded - every retry will hit the same wall."
         Write-Host "ERROR: Top up the account at https://www.ssl.com/dashboard or wait for the monthly quota reset, then re-run this workflow."
         Write-Host "ERROR: Failed file: $FilePath"
+        if ($temporarySigningCopy -and (Test-Path $temporarySigningCopy)) {
+            Remove-Item $temporarySigningCopy -Force
+        }
         exit 1
     }
     Write-Host "WARN: sign attempt $attempt failed (exit=$signExit, signed file present=$(Test-Path $signedFile))"
@@ -162,9 +186,27 @@ while (-not $signed -and $attempt -lt $maxAttempts) {
 
 if (-not $signed) {
     Write-Host "ERROR: Code signing failed for $FilePath after $maxAttempts attempts"
+    if ($temporarySigningCopy -and (Test-Path $temporarySigningCopy)) {
+        Remove-Item $temporarySigningCopy -Force
+    }
     exit 1
 }
 
-Copy-Item $signedFile $FilePath -Force
+$signature = Get-AuthenticodeSignature $signedFile
+if ($signature.Status -ne 'Valid') {
+    Write-Host "ERROR: signed output failed Authenticode verification (status=$($signature.Status)): $signedFile"
+    if (Test-Path $signedDir) {
+        Remove-Item $signedDir -Recurse -Force
+    }
+    if ($temporarySigningCopy -and (Test-Path $temporarySigningCopy)) {
+        Remove-Item $temporarySigningCopy -Force
+    }
+    exit 1
+}
+
+Copy-Item $signedFile $originalFilePath -Force
 Remove-Item $signedDir -Recurse -Force
-Write-Host "Signed: $FilePath"
+if ($temporarySigningCopy -and (Test-Path $temporarySigningCopy)) {
+    Remove-Item $temporarySigningCopy -Force
+}
+Write-Host "Signed: $originalFilePath"

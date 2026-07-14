@@ -341,9 +341,9 @@ fn main() {
         // Build SwiftUI shortcut reminder
         build_shortcut_reminder();
 
-        // Copy mlx.metallib and libonnxruntime.dylib to src-tauri/ for bundle.macOS.files
-        // (Contents/MacOS/). MLX metallib must be next to the binary; onnx dylib
-        // is loaded via ort load-dynamic on x86_64.
+        // Stage macOS runtime sidecars into src-tauri/. Release builds bundle
+        // mlx.metallib as a Tauri externalBin on arm64 so Tauri signs it, and
+        // copy libonnxruntime.dylib via macOS.files on x86_64 for ort load-dynamic.
         stage_macos_sidecar_libs();
 
         // Stage permission-flow's resource bundle for Tauri to pick up.
@@ -554,8 +554,8 @@ int shortcut_is_available(void) { return 0; }
     println!("cargo:rustc-link-lib=static=shortcut_reminder");
 }
 
-/// Stage mlx.metallib and libonnxruntime.dylib into `src-tauri/` so Tauri's
-/// `bundle.macOS.files` can copy them into `Contents/MacOS/` before codesign.
+/// Stage mlx.metallib and libonnxruntime.dylib into `src-tauri/` for macOS
+/// release bundling.
 /// MLX needs metallib next to the binary at runtime (parakeet-mlx crashes without it).
 /// x86_64 Intel builds need libonnxruntime.dylib colocated for ort `load-dynamic`.
 /// Same build-time staging pattern as `copy_permission_flow_bundle` (#3990).
@@ -565,13 +565,22 @@ fn stage_macos_sidecar_libs() {
     stage_libonnxruntime_dylib();
 }
 
-/// Copy mlx.metallib to a known location so Tauri can bundle it via bundle.macOS.files.
-/// MLX compiles Metal shaders into this file during mlx-sys build. Without it,
-/// parakeet-mlx crashes with "Failed to load the default metallib".
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+/// Copy mlx.metallib to a known location so release packaging can bundle it as
+/// a Tauri externalBin on aarch64 macOS builds. MLX compiles Metal shaders into
+/// this file during mlx-sys build. Without it, parakeet-mlx crashes with
+/// "Failed to load the default metallib".
+#[cfg(target_os = "macos")]
 fn stage_mlx_metallib() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let metallib = std::path::Path::new(&manifest_dir).join("mlx.metallib");
+    let target_arch =
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "aarch64".to_string());
+
+    if target_arch != "aarch64" {
+        let _ = std::fs::remove_file(&metallib);
+        return;
+    }
+
     let min_size = 1_000_000; // real metallib is ~84MB
 
     let needs_download = !metallib.exists()
@@ -579,8 +588,8 @@ fn stage_mlx_metallib() {
 
     if needs_download {
         // Download mlx.metallib (pre-compiled MLX Metal shaders) for parakeet-mlx.
-        // MLX needs this file next to the binary at runtime. Tauri copies it into
-        // Contents/MacOS/ via bundle.macOS.files (see tauri.macos.conf.json).
+        // MLX needs this file next to the binary at runtime. The release
+        // workflow exposes the target-suffixed externalBin copy to Tauri.
         println!("cargo:warning=mlx-metallib: downloading from GitHub releases...");
         let url =
             "https://github.com/screenpipe/screenpipe/releases/download/mlx-metallib-v0.2.0/mlx.metallib";
@@ -603,17 +612,8 @@ fn stage_mlx_metallib() {
             size / 1_000_000
         );
     }
-}
 
-/// Ensure mlx.metallib exists so Tauri doesn't fail on the bundle.macOS.files entry.
-/// On non-aarch64-macOS builds, create an empty placeholder (it won't be used).
-#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
-fn stage_mlx_metallib() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let metallib = std::path::Path::new(&manifest_dir).join("mlx.metallib");
-    if !metallib.exists() {
-        let _ = std::fs::write(&metallib, b"");
-    }
+    sign_macos_sidecar_if_needed(&metallib);
 }
 
 /// Stage libonnxruntime.dylib for x86_64 Intel builds. ort `load-dynamic` resolves
@@ -668,8 +668,65 @@ fn stage_libonnxruntime_dylib() {
                 }
             }
         }
+        sign_macos_sidecar_if_needed(&dylib);
     } else if !dylib.exists() {
+        // aarch64 doesn't load this dylib at runtime, but the bundler's
+        // macOS.files mapping references it unconditionally, so it must exist.
         let _ = std::fs::write(&dylib, b"");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn sign_macos_sidecar_if_needed(path: &std::path::Path) {
+    let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
+    if !is_release {
+        return;
+    }
+
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size == 0 {
+        return;
+    }
+
+    let Ok(identity) = std::env::var("APPLE_SIGNING_IDENTITY") else {
+        println!(
+            "cargo:warning=macos-sidecar-sign: APPLE_SIGNING_IDENTITY missing; Tauri app signing may reject {}",
+            path.display()
+        );
+        return;
+    };
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let entitlements = std::path::Path::new(&manifest_dir).join("entitlements.plist");
+    let status = std::process::Command::new("codesign")
+        .arg("--force")
+        .arg("--sign")
+        .arg(identity)
+        .arg("--options")
+        .arg("runtime")
+        .arg("--timestamp")
+        .arg("--entitlements")
+        .arg(&entitlements)
+        .arg(path)
+        .status();
+
+    match status {
+        Ok(status) if status.success() => {
+            println!(
+                "cargo:warning=macos-sidecar-sign: signed {}",
+                path.file_name().and_then(|n| n.to_str()).unwrap_or("sidecar")
+            );
+        }
+        Ok(status) => panic!(
+            "codesign failed for staged macOS sidecar {} with status {}",
+            path.display(),
+            status
+        ),
+        Err(err) => panic!(
+            "failed to run codesign for staged macOS sidecar {}: {}",
+            path.display(),
+            err
+        ),
     }
 }
 

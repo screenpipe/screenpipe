@@ -295,6 +295,18 @@ impl PipeStore for SqlitePipeStore {
         }
         Ok(map)
     }
+
+    async fn get_all_execution_counts(&self) -> Result<std::collections::HashMap<String, i64>> {
+        let rows = sqlx::query_as::<_, (String, i64)>(
+            r#"SELECT pipe_name, COUNT(*)
+               FROM pipe_executions
+               GROUP BY pipe_name"#,
+        )
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        Ok(rows.into_iter().collect())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -939,5 +951,27 @@ mod tests {
         let (store, _tmp) = setup_test_store().await;
         let all = store.get_all_executions(5).await.unwrap();
         assert!(all.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_get_all_execution_counts_are_exact() {
+        let (store, _tmp) = setup_test_store().await;
+        for _ in 0..12 {
+            store
+                .create_execution("pipe-a", "scheduled", "m", None)
+                .await
+                .unwrap();
+        }
+        for _ in 0..3 {
+            store
+                .create_execution("pipe-b", "manual", "m", None)
+                .await
+                .unwrap();
+        }
+
+        let counts = store.get_all_execution_counts().await.unwrap();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts["pipe-a"], 12);
+        assert_eq!(counts["pipe-b"], 3);
     }
 }

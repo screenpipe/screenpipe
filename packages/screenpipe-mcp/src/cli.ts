@@ -11,10 +11,11 @@
  *   npx screenpipe-mcp               → stdio MCP server (Claude Desktop)
  *   npx screenpipe-mcp --http [...]  → Streamable HTTP MCP server
  *
- * We dispatch here — before evaluating `./index.js` — because index.ts
- * does heavy work at module-load time (API-key discovery shells out to
- * the screenpipe CLI). That work is irrelevant in HTTP mode and would
- * add multi-second startup latency for nothing.
+ * We dispatch here — before evaluating `./index.js` — so HTTP mode never
+ * imports the stdio server module (which registers stdio-specific handlers
+ * and warms local API-key discovery). Key discovery in index.ts is now lazy
+ * and off the connect path, but keeping the transports' module graphs
+ * separate avoids importing stdio-only setup into the HTTP process.
  *
  * Background: the previous README told users to run
  * `npx screenpipe-mcp-http`, but no `screenpipe-mcp-http` *package*

@@ -38,7 +38,7 @@
  *   bun run test:e2e -- --spec e2e/specs/chat-newchat-duplicate.spec.ts
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
@@ -82,6 +82,7 @@ function cleanupMarkerChats(): void {
  *  copy the write-side race persists under a second id (same first user
  *  message, near-identical createdAt, a completed reply + fallback title). */
 function writeTwinFile(id: string, firstUserText: string): void {
+  mkdirSync(CHATS_DIR, { recursive: true });
   const now = Date.now();
   const conv = {
     id,

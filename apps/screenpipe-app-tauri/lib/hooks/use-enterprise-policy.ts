@@ -276,68 +276,34 @@ async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<
 }
 
 /**
- * Apply enterprise-forced PII redaction settings to the local settings store so
- * the recording engine honors them. The admin sets these in the workspace
- * policy (lockedSettings.usePiiRemoval / piiBackend / piiRedactionLabels); we
- * write them into `settings` the same way the AI-preset + app-update policies
- * do, so the on-device ONNX + Tinfoil PII workers pick them up. The matching UI
- * controls are disabled separately so the employee can't override a forced
- * value. Keys map 1:1 to the engine's RecordingSettings fields
- * (use_pii_removal, pii_backend, pii_redaction_labels).
- */
-async function applyPiiPolicy(lockedSettings: Record<string, unknown>): Promise<void> {
-  const updates: Record<string, unknown> = {};
-
-  const master = lockedSettings.usePiiRemoval;
-  if (master === "true" || master === "false") {
-    updates.usePiiRemoval = master === "true";
-  }
-
-  const backend = lockedSettings.piiBackend;
-  if (backend === "local" || backend === "tinfoil") {
-    updates.piiBackend = backend;
-  }
-
-  const labels = lockedSettings.piiRedactionLabels;
-  if (Array.isArray(labels)) {
-    // canonical SpanLabel snake_case names; `secret` is always redacted
-    const clean = Array.from(new Set(labels.filter((l): l is string => typeof l === "string")));
-    if (!clean.includes("secret")) clean.push("secret");
-    updates.piiRedactionLabels = clean;
-  }
-
-  if (Object.keys(updates).length === 0) return;
-
-  const store = await getStore();
-  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
-  await store.set("settings", { ...settings, ...updates });
-  await store.save();
-}
-
-/**
  * Apply enterprise-forced managed settings to the local settings store so the
- * recording engine honors them. Engine-spawn settings (capture toggles, LAN
- * bind, transcription engine) only take effect at spawn, so a forced change
- * restarts the engine once; live settings (analytics) don't. The matching UI
- * controls are disabled separately so the employee can't override a forced value.
+ * recording engine honors them. Engine-spawn settings only take effect at
+ * spawn, so a forced change restarts the engine once; live settings don't.
+ * The enforced map is persisted as metadata so every local settings write
+ * reasserts policy, including controls that do not render a dedicated lock UI.
  */
 let managedSettingsRestartInFlight = false;
 
 async function applyManagedDeviceSettings(lockedSettings: Record<string, unknown>): Promise<void> {
   const store = await getStore();
   const settings = (await store.get<Record<string, unknown>>("settings")) || {};
-  const { engineUpdates, liveUpdates, engineChanged, liveChanged } = computeManagedSettingUpdates(
-    lockedSettings,
-    settings,
-  );
+  const { engineUpdates, liveUpdates, managedValues, engineChanged, liveChanged } =
+    computeManagedSettingUpdates(lockedSettings, settings);
+  const managedValuesChanged =
+    JSON.stringify(settings.enterpriseManagedSettings || {}) !== JSON.stringify(managedValues);
 
-  if (!engineChanged && !liveChanged) return;
+  if (!engineChanged && !liveChanged && !managedValuesChanged) return;
 
-  await store.set("settings", { ...settings, ...engineUpdates, ...liveUpdates });
+  await store.set("settings", {
+    ...settings,
+    ...engineUpdates,
+    ...liveUpdates,
+    enterpriseManagedSettings: managedValues,
+  });
   await store.save();
   console.log(
     `[enterprise] managed settings applied: ${Object.entries({ ...engineUpdates, ...liveUpdates })
-      .map(([k, v]) => `${k}=${v}`)
+      .map(([k, v]) => `${k}=${Array.isArray(v) ? JSON.stringify(v) : v}`)
       .join(", ")}${engineChanged ? " — restarting engine" : " (no restart needed)"}`,
   );
 
@@ -625,23 +591,12 @@ export function useEnterprisePolicy() {
         console.warn("[enterprise] failed to apply app update policy:", e);
       }
 
-      // Apply enterprise-forced PII redaction (master / local-vs-cloud backend /
-      // categories) to the settings store so the recording engine honors them.
-      try {
-        await applyPiiPolicy(result.lockedSettings);
-        console.log(
-          `[enterprise] applied PII policy: locked=[${["usePiiRemoval", "piiBackend", "piiRedactionLabels"].filter((k) => k in result.lockedSettings).join(",")}]`
-        );
-      } catch (e) {
-        console.warn("[enterprise] failed to apply PII policy:", e);
-      }
-
-      // Apply enterprise-forced input capture (keyboard / click rows).
-      // Restarts the engine when a forced value actually changed.
+      // Apply every validated managed device setting in one pass. PII, capture,
+      // audio, filters, and performance changes share one coordinated restart.
       try {
         await applyManagedDeviceSettings(result.lockedSettings);
       } catch (e) {
-        console.warn("[enterprise] failed to apply input capture policy:", e);
+        console.warn("[enterprise] failed to apply managed device policy:", e);
       }
 
       // Fire-and-forget heartbeat

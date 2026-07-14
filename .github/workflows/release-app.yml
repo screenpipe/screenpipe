@@ -690,6 +690,37 @@ jobs:
           echo "args=$ARGS" >> $GITHUB_OUTPUT
           echo "Final tauri args: $ARGS"
 
+      - name: Configure macOS sidecar bundle entries
+        if: matrix.os_type == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          node <<'NODE'
+          const fs = require("fs");
+          const path = "apps/screenpipe-app-tauri/src-tauri/tauri.macos.conf.json";
+          const target = process.env.TARGET;
+          const config = JSON.parse(fs.readFileSync(path, "utf8"));
+          config.bundle ??= {};
+          config.bundle.macOS ??= {};
+          config.bundle.externalBin = [...new Set(config.bundle.externalBin ?? [])]
+            .filter((entry) => entry !== "mlx.metallib");
+          if (target === "aarch64-apple-darwin") {
+            config.bundle.macOS.files = {};
+            config.bundle.externalBin.push("mlx.metallib");
+          } else if (target === "x86_64-apple-darwin") {
+            config.bundle.macOS.files = {
+              "MacOS/libonnxruntime.dylib": "libonnxruntime.dylib",
+            };
+          } else {
+            throw new Error(`unknown macOS release target: ${target}`);
+          }
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          console.log(`macOS bundle sidecars configured for ${target}`);
+          NODE
+        env:
+          TARGET: ${{ matrix.target }}
+
       - name: Re-unlock build keychain before signing (macOS)
         if: matrix.os_type == 'macos'
         shell: bash
@@ -937,6 +968,42 @@ jobs:
             Write-Host "Tauri updater signature regenerated"
           }
 
+      - name: Verify installed NSIS uninstaller signature (Windows)
+        if: matrix.os_type == 'windows'
+        shell: pwsh
+        run: |
+          $nsisDir = "apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
+          $installer = Get-ChildItem "$nsisDir/*.exe" -ErrorAction Stop | Select-Object -First 1
+          $installDir = Join-Path $env:RUNNER_TEMP "screenpipe-uninstaller-signature-${{ matrix.target }}"
+
+          $installerSignature = Get-AuthenticodeSignature $installer.FullName
+          if ($installerSignature.Status -ne 'Valid') {
+            throw "Installer Authenticode signature is $($installerSignature.Status): $($installer.FullName)"
+          }
+
+          Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "Silent NSIS install failed with exit code $($install.ExitCode)"
+          }
+
+          $uninstaller = Join-Path $installDir 'uninstall.exe'
+          if (-not (Test-Path $uninstaller)) {
+            throw "NSIS install did not create $uninstaller"
+          }
+
+          $uninstallerSignature = Get-AuthenticodeSignature $uninstaller
+          Write-Host "Uninstaller Authenticode status: $($uninstallerSignature.Status)"
+          Write-Host "Uninstaller signer: $($uninstallerSignature.SignerCertificate.Subject)"
+          if ($uninstallerSignature.Status -ne 'Valid') {
+            throw "Uninstaller Authenticode signature is $($uninstallerSignature.Status): $uninstaller"
+          }
+
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "Silent NSIS uninstall failed with exit code $($uninstall.ExitCode)"
+          }
+
       - name: Build (with codesign retry)
         if: matrix.os_type == 'macos'
         shell: bash
@@ -1069,8 +1136,8 @@ jobs:
         # build-keychain dance (the `errSecInternalComponent` class — see
         # the keychain setup above) only surfaces as a notarization failure
         # much later in the workflow.
-        # Covers the single Tauri codesign pass (mlx.metallib / libonnxruntime.dylib
-        # are staged into Contents/MacOS/ at build time via bundle.macOS.files).
+        # Covers the single Tauri codesign pass for architecture-specific
+        # sidecars staged into Contents/MacOS/ via externalBin/macOS.files.
         if: matrix.os_type == 'macos'
         shell: bash
         run: |

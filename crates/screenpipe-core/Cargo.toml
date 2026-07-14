@@ -99,7 +99,7 @@ core-graphics = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 uiautomation = { workspace = true }
-windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_System_JobObjects", "Win32_Foundation", "Win32_Security"] }
 
 [dev-dependencies]
 # Used by sync::client wire-compat test (asserts the PUT request shape

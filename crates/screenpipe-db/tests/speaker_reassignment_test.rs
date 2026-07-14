@@ -350,4 +350,212 @@ mod speaker_reassignment_tests {
         let alice_embedding_count = db.count_embeddings_for_speaker(alice_id).await.unwrap();
         assert_eq!(alice_embedding_count, 1); // Alice still has her original embedding
     }
+
+    #[tokio::test]
+    async fn test_reassign_speakerless_chunk() {
+        let db = setup_test_db().await;
+
+        // Mic rows and freshly-mirrored live rows carry speaker_id NULL until
+        // backfill — reassigning them must work, not error out.
+        let audio_chunk_id = db.insert_audio_chunk("mic_audio.mp4", None).await.unwrap();
+        db.insert_audio_transcription(
+            audio_chunk_id,
+            "actually my colleague talking on my mic",
+            0,
+            "",
+            &AudioDevice {
+                name: "test_mic".to_string(),
+                device_type: DeviceType::Input,
+            },
+            None,
+            Some(0.0),
+            Some(5.0),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (new_speaker_id, transcriptions_updated, embeddings_moved, old_assignments) = db
+            .reassign_speaker(audio_chunk_id, "Dana", false)
+            .await
+            .unwrap();
+
+        assert!(new_speaker_id > 0);
+        assert_eq!(transcriptions_updated, 1);
+        assert_eq!(embeddings_moved, 0); // no old speaker, nothing to move
+        assert!(old_assignments.is_empty()); // NULL old speaker can't be undone
+
+        let speaker = db.get_speaker_by_id(new_speaker_id).await.unwrap();
+        assert_eq!(speaker.name, "Dana");
+    }
+
+    #[tokio::test]
+    async fn test_reassign_syncs_meeting_transcript_segments() {
+        let db = setup_test_db().await;
+
+        // A live meeting segment and its mirrored audio_transcriptions row
+        // share the same text and timestamp. Renaming via the chunk must also
+        // relabel the segment, or the Meeting view keeps the old speaker.
+        let meeting_id = db
+            .insert_meeting("zoom", "test", Some("standup"), None)
+            .await
+            .unwrap();
+        let captured_at = chrono::Utc::now();
+        let segment_id = db
+            .insert_meeting_transcript_segment(
+                meeting_id,
+                "deepgram",
+                None,
+                "item-1",
+                "MacBook Pro Speakers",
+                "output",
+                Some("speaker 2"),
+                "let's ship it tomorrow",
+                captured_at,
+            )
+            .await
+            .unwrap();
+        assert!(segment_id > 0);
+
+        let audio_chunk_id = db
+            .insert_audio_chunk("macbook pro speakers (output)_123.mp4", None)
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            audio_chunk_id,
+            "let's ship it tomorrow",
+            0,
+            "live",
+            &AudioDevice {
+                name: "MacBook Pro Speakers".to_string(),
+                device_type: DeviceType::Output,
+            },
+            None,
+            Some(0.0),
+            Some(5.0),
+            Some(captured_at),
+        )
+        .await
+        .unwrap();
+
+        let (new_speaker_id, _, _, _) = db
+            .reassign_speaker(audio_chunk_id, "Priya", false)
+            .await
+            .unwrap();
+
+        let segments = db
+            .list_meeting_transcript_segments(meeting_id)
+            .await
+            .unwrap();
+        let live: Vec<_> = segments.iter().filter(|s| s.source == "live").collect();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].speaker_id, Some(new_speaker_id));
+        assert_eq!(live[0].speaker_name.as_deref(), Some("Priya"));
+    }
+
+    /// Helper: one live meeting segment + its mirrored audio_transcriptions row
+    /// on the given chunk (same text, same timestamp — what
+    /// `mirror_live_meeting_to_audio_transcriptions` produces).
+    async fn seed_mirrored_segment(
+        db: &DatabaseManager,
+        meeting_id: i64,
+        chunk_id: i64,
+        label: &str,
+        text: &str,
+        captured_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        db.insert_meeting_transcript_segment(
+            meeting_id,
+            "deepgram",
+            None,
+            &format!("item-{}-{}", chunk_id, text.replace(' ', "-")),
+            "MacBook Pro Speakers",
+            "output",
+            Some(label),
+            text,
+            captured_at,
+        )
+        .await
+        .unwrap();
+        db.insert_audio_transcription(
+            chunk_id,
+            text,
+            0,
+            "live",
+            &AudioDevice {
+                name: "MacBook Pro Speakers".to_string(),
+                device_type: DeviceType::Output,
+            },
+            None,
+            Some(0.0),
+            Some(5.0),
+            Some(captured_at),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_live_segments_resolve_chunk_links_even_when_sharing_a_chunk() {
+        let db = setup_test_db().await;
+
+        // Several ~5s live segments get mirrored onto ONE ~30s audio chunk
+        // (all offset_index 0). Every one of them must come back with the
+        // chunk link, or the UI renders them as unrenameable static text.
+        let meeting_id = db
+            .insert_meeting("zoom", "test", Some("standup"), None)
+            .await
+            .unwrap();
+        let chunk_id = db
+            .insert_audio_chunk("macbook pro speakers (output)_456.mp4", None)
+            .await
+            .unwrap();
+        let t0 = chrono::Utc::now();
+        seed_mirrored_segment(
+            &db,
+            meeting_id,
+            chunk_id,
+            "speaker 1",
+            "first utterance",
+            t0,
+        )
+        .await;
+        seed_mirrored_segment(
+            &db,
+            meeting_id,
+            chunk_id,
+            "speaker 2",
+            "second utterance",
+            t0 + chrono::Duration::seconds(5),
+        )
+        .await;
+        seed_mirrored_segment(
+            &db,
+            meeting_id,
+            chunk_id,
+            "speaker 1",
+            "third utterance",
+            t0 + chrono::Duration::seconds(10),
+        )
+        .await;
+
+        let segments = db
+            .list_meeting_transcript_segments(meeting_id)
+            .await
+            .unwrap();
+        let live: Vec<_> = segments.iter().filter(|s| s.source == "live").collect();
+        assert_eq!(live.len(), 3);
+        for seg in &live {
+            assert_eq!(
+                seg.audio_chunk_id,
+                Some(chunk_id),
+                "segment {:?} lost its chunk link",
+                seg.transcript
+            );
+            assert_eq!(
+                seg.audio_file_path.as_deref(),
+                Some("macbook pro speakers (output)_456.mp4")
+            );
+        }
+    }
 }

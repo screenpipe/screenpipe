@@ -24,12 +24,12 @@ public func shortcutSetMeetingActive(_ active: Int32) {
 
 // MARK: - Metrics data pushed from Rust
 
-struct OverlayMetrics {
-    var audioActive: Bool = false
-    var speechRatio: Double = 0
-    var screenActive: Bool = false
-    var captureFps: Double = 0
-    var meetingActive: Bool = false
+final class OverlayMetrics: ObservableObject {
+    @Published var audioActive: Bool = false
+    @Published var speechRatio: Double = 0
+    @Published var screenActive: Bool = false
+    @Published var captureFps: Double = 0
+    @Published var meetingActive: Bool = false
 }
 
 // MARK: - Font helper (same as notification panel)
@@ -52,36 +52,86 @@ private enum Brand {
 // MARK: - Audio Equalizer (native Canvas reimplementation)
 
 /// Shared animation driver with LERP state for smooth equalizer bars.
-/// Uses NSTimer on .common RunLoop mode — fires in non-key panels.
+/// The tiny status canvases do not need display-refresh-rate updates. Animate
+/// only while capture signals are active and keep the timer on the common run
+/// loop so it still fires in a non-key panel.
 @available(macOS 13.0, *)
 class AnimationTick: ObservableObject {
     static let shared = AnimationTick()
-    @Published var value: Double = 0
+    @Published private(set) var value: Double = 0
 
     // LERP state for equalizer bars (same as webview LERP_FACTOR = 0.12)
     var currentHeights: [Double] = Array(repeating: 1, count: 8)
     var targetHeights: [Double] = Array(repeating: 1, count: 8)
 
+    private static let frameInterval = 1.0 / 12.0
     private var timer: Timer?
+    private var lastTickUptime: TimeInterval?
+    private var isVisible = false
+    private var hasActiveSignal = false
 
-    func start() {
-        guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0/60, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            self.value += 1.0/60
-            // LERP bar heights toward targets each frame
-            for i in 0..<self.currentHeights.count {
-                self.currentHeights[i] += (self.targetHeights[i] - self.currentHeights[i]) * 0.12
-            }
-            // Publish change to trigger Canvas redraw
-            self.objectWillChange.send()
-        }
-        RunLoop.main.add(timer!, forMode: .common)
+    func setVisible(_ visible: Bool, hasActiveSignal: Bool) {
+        isVisible = visible
+        self.hasActiveSignal = hasActiveSignal
+        updateTimerState()
     }
 
-    func stop() {
+    func setActiveSignal(_ active: Bool) {
+        guard hasActiveSignal != active else {
+            if isVisible && active { start() }
+            return
+        }
+        hasActiveSignal = active
+        updateTimerState()
+    }
+
+    private func updateTimerState() {
+        guard isVisible && hasActiveSignal else {
+            stop(resetEqualizer: !hasActiveSignal)
+            return
+        }
+        start()
+    }
+
+    private func start() {
+        guard timer == nil else { return }
+        lastTickUptime = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: Self.frameInterval, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard self.isVisible && self.hasActiveSignal else {
+                self.stop(resetEqualizer: !self.hasActiveSignal)
+                return
+            }
+
+            let now = ProcessInfo.processInfo.systemUptime
+            let elapsed = min(max(now - (self.lastTickUptime ?? now), 0), 0.25)
+            self.lastTickUptime = now
+
+            // Preserve the original 60 Hz LERP response at the lower redraw rate.
+            let lerp = 1 - pow(1 - 0.12, elapsed * 60)
+            for i in 0..<self.currentHeights.count {
+                self.currentHeights[i] += (self.targetHeights[i] - self.currentHeights[i]) * lerp
+            }
+
+            // @Published emits exactly one redraw notification per tick.
+            self.value += elapsed
+        }
+        timer.tolerance = Self.frameInterval * 0.2
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stop(resetEqualizer: Bool) {
         timer?.invalidate()
         timer = nil
+        lastTickUptime = nil
+        let needsReset = currentHeights.contains { $0 != 1 }
+            || targetHeights.contains { $0 != 1 }
+        if resetEqualizer && needsReset {
+            currentHeights = Array(repeating: 1, count: currentHeights.count)
+            targetHeights = Array(repeating: 1, count: targetHeights.count)
+            objectWillChange.send()
+        }
     }
 }
 
@@ -120,7 +170,6 @@ struct AudioEqualizerView: View {
                 )
             }
         }
-        .drawingGroup()
     }
 }
 
@@ -136,8 +185,8 @@ struct ScreenMatrixView: View {
         Canvas { context, size in
             let tick = anim.value
             let fill = active ? min(1, captureFps / 2.0) : 0.0
-            let speed = active ? 0.003 + fill * 0.007 : 0.001
-            let sweepX = fmod(tick * speed * 60, 1.0) * size.width
+            let speed = 0.003 + fill * 0.007
+            let sweepX = active ? fmod(tick * speed * 60, 1.0) * size.width : 0
 
             let capturedAlpha = active ? 0.06 + fill * 0.06 : 0.02
             context.fill(
@@ -162,7 +211,6 @@ struct ScreenMatrixView: View {
                 )
             }
         }
-        .drawingGroup()
     }
 }
 
@@ -181,7 +229,7 @@ struct ShortcutReminderView: View {
     let overlayShortcut: String
     let chatShortcut: String
     let searchShortcut: String
-    let metrics: OverlayMetrics
+    @ObservedObject var metrics: OverlayMetrics
     let scale: CGFloat
     let onAction: (String) -> Void
     @Binding var isExpanded: Bool
@@ -451,9 +499,11 @@ class ShortcutReminderController: NSObject {
     /// Set from Rust `show_shortcut_reminder` when API auth is enabled (includes ?token=).
     private var metricsWsUrl = "ws://127.0.0.1:3030/ws/metrics"
     private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-status"
+    private var isVisible = false
 
     func show(shortcuts: String?) {
         DispatchQueue.main.async { [self] in
+            isVisible = true
             let prevScale = gOverlayScale
             if let shortcuts = shortcuts {
                 parseShortcuts(shortcuts)
@@ -468,17 +518,21 @@ class ShortcutReminderController: NSObject {
             updateContent()
             positionPanel()
             panel?.orderFrontRegardless()
-            AnimationTick.shared.start()
+            AnimationTick.shared.setVisible(
+                true,
+                hasActiveSignal: metrics.audioActive || metrics.screenActive
+            )
             connectWebSocket()
             connectMeetingEventsWebSocket()
         }
     }
 
     func hide() {
-        AnimationTick.shared.stop()
-        disconnectWebSocket()
-        disconnectMeetingEventsWebSocket()
         DispatchQueue.main.async { [self] in
+            isVisible = false
+            AnimationTick.shared.setVisible(false, hasActiveSignal: false)
+            disconnectWebSocket()
+            disconnectMeetingEventsWebSocket()
             panel?.orderOut(nil)
         }
     }
@@ -487,6 +541,7 @@ class ShortcutReminderController: NSObject {
 
     private func connectWebSocket() {
         disconnectWebSocket()
+        guard isVisible else { return }
         guard let url = URL(string: metricsWsUrl) else { return }
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: url)
@@ -514,6 +569,7 @@ class ShortcutReminderController: NSObject {
             case .failure:
                 // Retry after 2 seconds
                 DispatchQueue.main.async {
+                    guard self.isVisible else { return }
                     self.wsRetryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
                         self?.connectWebSocket()
                     }
@@ -542,11 +598,27 @@ class ShortcutReminderController: NSObject {
         prevOcrCompleted = curOcr
 
         DispatchQueue.main.async { [self] in
-            self.metrics.audioActive = audioLevel > 0.001
-            self.metrics.speechRatio = min(1, audioLevel * 15)
-            self.metrics.screenActive = deltaFrames > 0
-            self.metrics.captureFps = Double(deltaFrames) / 0.5
-            self.updateContent()
+            guard self.isVisible else { return }
+            let audioActive = audioLevel > 0.001
+            let speechRatio = min(1, audioLevel * 15)
+            let screenActive = deltaFrames > 0
+            let captureFps = Double(deltaFrames) / 0.5
+
+            if self.metrics.audioActive != audioActive {
+                self.metrics.audioActive = audioActive
+            }
+            if self.metrics.speechRatio != speechRatio {
+                self.metrics.speechRatio = speechRatio
+            }
+            if self.metrics.screenActive != screenActive {
+                self.metrics.screenActive = screenActive
+            }
+            if self.metrics.captureFps != captureFps {
+                self.metrics.captureFps = captureFps
+            }
+            AnimationTick.shared.setActiveSignal(
+                audioActive || screenActive
+            )
         }
     }
 
@@ -554,6 +626,7 @@ class ShortcutReminderController: NSObject {
 
     private func connectMeetingEventsWebSocket() {
         disconnectMeetingEventsWebSocket()
+        guard isVisible else { return }
         guard let url = URL(string: eventsWsUrl) else { return }
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: url)
@@ -580,6 +653,7 @@ class ShortcutReminderController: NSObject {
                 self.receiveMeetingEvent()
             case .failure:
                 DispatchQueue.main.async {
+                    guard self.isVisible else { return }
                     self.meetingWsRetryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
                         self?.connectMeetingEventsWebSocket()
                     }
@@ -599,7 +673,6 @@ class ShortcutReminderController: NSObject {
         DispatchQueue.main.async { [self] in
             if self.metrics.meetingActive != active {
                 self.metrics.meetingActive = active
-                self.updateContent()
             }
         }
     }

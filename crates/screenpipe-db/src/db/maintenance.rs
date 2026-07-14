@@ -1452,6 +1452,18 @@ impl DatabaseManager {
                     }
                     Err(e) => warn!("wal checkpoint failed: {}", e),
                 }
+
+                // Nothing else refreshes SQLite's query-planner statistics on a
+                // 24/7 recorder — ANALYZE otherwise only runs inside the
+                // emergency `repair_database()` path. `PRAGMA optimize` is
+                // designed to be cheap to call on every tick: it only does
+                // real work on tables whose content has changed enough since
+                // the last run to make stale stats likely, so piggybacking it
+                // on this existing 60s tick keeps planner stats fresh without
+                // a dedicated schedule.
+                if let Err(e) = sqlx::query("PRAGMA optimize").execute(&pool).await {
+                    warn!("pragma optimize failed: {}", e);
+                }
             }
         });
     }

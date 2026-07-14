@@ -14,6 +14,7 @@ import {
   waitForTestId,
   t,
 } from "../helpers/test-utils.js";
+import { invoke } from "../helpers/tauri.js";
 
 const FAKE_TOKEN = "e2e-fake-token-basic-upgrade";
 const FAKE_EMAIL = "e2e-basic-upgrade@screenpipe.test";
@@ -211,6 +212,25 @@ async function restoreMocks(): Promise<void> {
   }).catch(() => {});
 }
 
+async function clearBasicAccountUser(): Promise<void> {
+  const logout = await $('[data-testid="account-logout-button"]');
+  if (await logout.isExisting()) {
+    await logout.click();
+  }
+
+  // Keep this spec isolated even if the UI logout is interrupted by a reload.
+  const result = await invoke("set_cloud_token", { token: null });
+  expect(result.ok).toBe(true);
+  await browser.waitUntil(
+    async () => (await loginStatusText()).includes("not logged in"),
+    {
+      timeout: t(8_000),
+      interval: 200,
+      timeoutMsg: "Basic billing test did not clear its fake account",
+    },
+  );
+}
+
 async function forEachWindow(fn: () => Promise<void>): Promise<void> {
   const start = await browser.getWindowHandle().catch(() => null);
   for (const handle of await browser.getWindowHandles().catch(() => [] as string[])) {
@@ -259,7 +279,11 @@ describe("Basic subscriber upgrade uses billing, not fresh checkout", function (
   });
 
   after(async () => {
-    await forEachWindow(() => restoreMocks()).catch(() => {});
+    try {
+      await clearBasicAccountUser();
+    } finally {
+      await forEachWindow(() => restoreMocks()).catch(() => {});
+    }
   });
 
   it("does not hit /api/subscription/checkout when upgrading an existing Basic plan", async () => {

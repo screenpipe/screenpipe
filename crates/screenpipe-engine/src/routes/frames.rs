@@ -303,8 +303,9 @@ async fn try_nearest_frame(state: &Arc<AppState>, frame_id: i64) -> Option<Respo
 
         for (candidate_id, file_path, offset_index, _timestamp, is_snapshot) in candidates {
             if is_snapshot {
-                // Snapshot frame — just check file exists
-                if tokio::fs::metadata(&file_path).await.is_ok() {
+                // Snapshot frame — only serve regular files.
+                if matches!(tokio::fs::metadata(&file_path).await, Ok(metadata) if metadata.is_file())
+                {
                     if let Ok(response) = serve_file(&file_path).await {
                         debug!(
                             "Frame {} unavailable, serving nearest snapshot {} ({})",
@@ -316,9 +317,9 @@ async fn try_nearest_frame(state: &Arc<AppState>, frame_id: i64) -> Option<Respo
                 continue;
             }
 
-            // Legacy frame — quick pre-check: skip if file missing or too small (avoids ffmpeg spawn)
+            // Legacy frame — skip non-files and tiny files before spawning ffmpeg.
             match tokio::fs::metadata(&file_path).await {
-                Ok(meta) if meta.len() >= MIN_VIDEO_SIZE => {}
+                Ok(meta) if meta.is_file() && meta.len() >= MIN_VIDEO_SIZE => {}
                 _ => continue,
             }
 
@@ -398,10 +399,11 @@ pub async fn get_next_valid_frame(
         }
     };
 
-    // Check each frame's file exists on disk
+    // Check each frame points to a regular file on disk. Directories can have
+    // a non-zero size too, but must never become an FFmpeg input.
     let mut skipped = 0;
     for (frame_id, file_path, _offset_index, timestamp, _is_snapshot) in candidates {
-        if std::path::Path::new(&file_path).exists() {
+        if matches!(tokio::fs::metadata(&file_path).await, Ok(metadata) if metadata.is_file()) {
             return Ok(JsonResponse(NextValidFrameResponse {
                 frame_id,
                 timestamp,

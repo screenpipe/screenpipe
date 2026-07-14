@@ -56,41 +56,99 @@ before you begin:
 
 ### windows
 
-1. **install winget (Prerequisite)**:
-   - Before proceeding with the other installations, make sure you have `winget` installed. You can download and install it by following this guide: [Install winget](https://winget.pro/winget-install-powershell/).
+These steps build the local NSIS installer (`*-setup.exe`). The default Tauri
+configuration intentionally produces `screenpipe - Development`, which can live
+next to the released app without taking over its identity or updater settings.
 
-2. **install required tools**:
+1. **install winget**:
+   - `winget` ships with App Installer on current Windows 10 and Windows 11. If
+     the command is missing, follow the [official Windows Package Manager
+     installation guide](https://learn.microsoft.com/windows/package-manager/winget/).
+
+2. **install the required tools**:
    ```powershell
-   winget install -e --id Microsoft.VisualStudio.2022.BuildTools
+   winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
    winget install -e --id Rustlang.Rustup
    winget install -e --id LLVM.LLVM
    winget install -e --id Kitware.CMake
-   winget install -e --id GnuWin32.UnZip
    winget install -e --id Git.Git
-   winget install -e --id JernejSimoncic.Wget
    winget install -e --id 7zip.7zip
    irm https://bun.sh/install.ps1 | iex
    ```
 
-3. **set environment variables**:
+   The Visual Studio package alone is not enough: Tauri needs the **Desktop
+   development with C++** workload. The `--override` above installs that workload,
+   including MSVC and a Windows SDK. This is also the workload named in the
+   [official Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows).
+
+   Close and reopen PowerShell after the installers finish so the new commands
+   are on `PATH`.
+
+3. **configure and verify the toolchain**:
    ```powershell
-   [System.Environment]::SetEnvironmentVariable('LIBCLANG_PATH', 'C:\Program Files\LLVM\bin', 'User')
-   [System.Environment]::SetEnvironmentVariable('PATH', "$([System.Environment]::GetEnvironmentVariable('PATH', 'User'));C:\Program Files (x86)\GnuWin32\bin", 'User')
+   $llvmBin = 'C:\Program Files\LLVM\bin'
+   $env:LIBCLANG_PATH = $llvmBin
+   [System.Environment]::SetEnvironmentVariable('LIBCLANG_PATH', $llvmBin, 'User')
+
+   bun --version
+   cargo --version
+   cmake --version
+   if (-not (Test-Path "$env:LIBCLANG_PATH\libclang.dll")) { throw 'libclang.dll not found' }
+
+   $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+   if (-not (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)) {
+     throw 'install the Visual Studio Desktop development with C++ workload'
+   }
    ```
+
+   Setting the user environment variable only affects future terminals, so the
+   `$env:LIBCLANG_PATH` assignment is required for the current one.
 
 4. **clone the project**:
    ```powershell
-      git clone https://github.com/screenpipe/screenpipe.git
-      cd screenpipe
-   ```
-5. **build**:
-   ```powershell
+   git clone https://github.com/screenpipe/screenpipe.git
    cd screenpipe
-   cargo build --release
+   ```
+
+5. **build the Tauri installer**:
+   ```powershell
    cd apps/screenpipe-app-tauri
-   bun install
+   bun install --frozen-lockfile
    bun tauri build
    ```
+
+   Do not run the repository-root `cargo build --release` first unless you also
+   need the standalone CLI. The desktop app is a separate Cargo workspace with
+   its own `src-tauri/target` directory, so the root build does not warm this
+   build and makes a fresh setup substantially slower.
+
+6. **find the installer**:
+   ```powershell
+   Get-ChildItem .\src-tauri\target\release\bundle\nsis\*-setup.exe
+   ```
+
+#### what to expect from a fresh windows worktree
+
+- The first `bun tauri build` runs the frontend build and `scripts/pre_build.js`
+  automatically. The prebuild downloads and extracts FFmpeg and OpenBLAS, copies
+  the Bun sidecar and Visual C++ runtime DLLs, then Cargo compiles the native app.
+  You do not need to run the prebuild separately.
+- Plan for at least 10 GB of free disk space. In a clean x64 worktree the app-local
+  Cargo target alone can exceed 5 GB; `node_modules`, sidecars, and global Cargo
+  caches need additional space.
+- A fresh Git worktree shares Git objects and the global Cargo registry, but not
+  `node_modules`, downloaded sidecars, or `src-tauri/target`. A first installer
+  build can therefore take tens of minutes. Rebuilds in the same worktree reuse
+  dependency caches, but regenerating source, relinking the app, and compressing
+  the installer can still take several minutes.
+- `failed to get npm global prefix` is a non-fatal Bun-discovery fallback when it
+  is immediately followed by `found bun` and `bun binary copied successfully`.
+- The local development installer is unsigned. Official Windows release builds
+  are Authenticode-signed in the release workflow, but a local build without the
+  release certificate is expected to report `NotSigned`.
+- `Microsoft VC143/144/145 CRT not found` means the Visual Studio C++ workload is
+  missing. A `libclang.dll` or bindgen error usually means `LIBCLANG_PATH` is not
+  set in the current terminal.
 
 ### linux
 

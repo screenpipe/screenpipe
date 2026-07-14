@@ -947,6 +947,15 @@ pub struct SettingsStore {
     /// Better quality but sends activity context to the cloud (zero data retention).
     #[serde(rename = "enhancedAI", default)]
     pub enhanced_ai: bool,
+    /// Explicit consumer opt-in for on-demand remote diagnostic log requests.
+    /// Enterprise builds enforce remote log collection separately; this stored
+    /// value remains false unless a consumer chooses to enable it.
+    #[serde(rename = "remoteLogCollectionEnabled", default)]
+    pub remote_log_collection_enabled: bool,
+    /// Account that granted remote log collection consent on this device.
+    /// Consumer collection is allowed only while this matches the current user.
+    #[serde(rename = "remoteLogCollectionUserId", default)]
+    pub remote_log_collection_user_id: Option<String>,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
     /// "window" (normal resizable window with title bar).
     #[serde(rename = "overlayMode", default = "default_overlay_mode")]
@@ -1386,6 +1395,8 @@ Rules:
             auto_update: false,
             auto_update_pipes: true,
             enhanced_ai: false,
+            remote_log_collection_enabled: false,
+            remote_log_collection_user_id: None,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
             #[cfg(not(target_os = "macos"))]
@@ -1507,22 +1518,24 @@ impl SettingsStore {
     /// Since RecordingSettings is now embedded via flatten, this is mostly a
     /// clone with overrides for fields that need special handling (e.g. user_id
     /// comes from the User auth object, user_name has a fallback chain).
+    fn resolved_cloud_auth_token(&self, cached_token: Option<String>) -> Option<String> {
+        self.user
+            .token
+            .clone()
+            .filter(|token| !token.is_empty())
+            .or_else(|| cached_token.filter(|token| !token.is_empty()))
+    }
+
     pub fn to_recording_settings(&self) -> screenpipe_config::RecordingSettings {
         let mut settings = self.recording.clone();
         // Override user_id with the Clerk JWT token from the auth user object.
         // This token is used as the Bearer credential for screenpipe cloud
         // (transcription proxy, Pi agent, etc.), not as a database ID.
-        // Fallback to user.id if token is unavailable.
+        // #3943: the token no longer persists in store.bin; fall back to the
+        // secret-store-backed cache (seeded at startup and on every sign-in)
+        // so the engine still gets the cloud Bearer.
         settings.user_id = self
-            .user
-            .token
-            .clone()
-            .filter(|t| !t.is_empty())
-            // #3943: the token no longer persists in store.bin; fall back to the
-            // secret-store-backed cache (seeded at startup and on every sign-in)
-            // so the engine still gets the cloud Bearer.
-            .or_else(crate::auth_token::cached_cloud_token)
-            .or_else(|| self.user.id.clone().filter(|id| !id.is_empty()))
+            .resolved_cloud_auth_token(crate::auth_token::cached_cloud_token())
             .unwrap_or_default();
         // Fallback chain: userName setting → cloud name → cloud email
         settings.user_name = settings
@@ -1609,13 +1622,17 @@ impl SettingsStore {
     }
 
     pub fn audio_engine_resolution(&self) -> AudioEngineResolution {
-        let engine = self.recording.audio_transcription_engine.clone();
         let has_cloud_auth = self
-            .user
-            .token
-            .as_ref()
-            .map_or(false, |token| !token.is_empty())
-            || self.user.id.as_ref().map_or(false, |id| !id.is_empty());
+            .resolved_cloud_auth_token(crate::auth_token::cached_cloud_token())
+            .is_some();
+        self.audio_engine_resolution_with_cloud_auth(has_cloud_auth)
+    }
+
+    fn audio_engine_resolution_with_cloud_auth(
+        &self,
+        has_cloud_auth: bool,
+    ) -> AudioEngineResolution {
+        let engine = self.recording.audio_transcription_engine.clone();
         let is_subscribed = self.cloud_transcription_entitled();
         let has_deepgram_key = !self.recording.deepgram_api_key.is_empty()
             && self.recording.deepgram_api_key != "default";
@@ -1994,6 +2011,41 @@ mod tests {
     }
 
     #[test]
+    fn remote_log_collection_defaults_to_disabled() {
+        assert!(!SettingsStore::default().remote_log_collection_enabled);
+        assert!(SettingsStore::default()
+            .remote_log_collection_user_id
+            .is_none());
+    }
+
+    #[test]
+    fn missing_remote_log_collection_deserializes_disabled() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+
+        assert!(!settings.remote_log_collection_enabled);
+        assert!(settings.remote_log_collection_user_id.is_none());
+    }
+
+    #[test]
+    fn explicit_remote_log_collection_true_is_respected() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "remoteLogCollectionEnabled": true,
+            "remoteLogCollectionUserId": "user_123"
+        }))
+        .unwrap();
+
+        assert!(settings.remote_log_collection_enabled);
+        assert_eq!(
+            settings.remote_log_collection_user_id.as_deref(),
+            Some("user_123")
+        );
+    }
+
+    #[test]
     fn keep_computer_awake_defaults_to_disabled() {
         assert!(!SettingsStore::default().recording.keep_computer_awake);
     }
@@ -2073,6 +2125,26 @@ mod tests {
 
         let resolution = store.audio_engine_resolution();
 
+        assert_eq!(resolution.requested, "screenpipe-cloud");
+        assert_eq!(resolution.active, FALLBACK_ENGINE);
+        assert_eq!(
+            resolution.fallback_reason,
+            Some(AudioEngineFallbackReason::NotLoggedIn)
+        );
+    }
+
+    #[test]
+    fn raw_user_id_is_not_cloud_authentication() {
+        let mut store = SettingsStore::default();
+        store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+        store.user.id = Some("550e8400-e29b-41d4-a716-446655440000".to_string());
+        store.user.token = None;
+        store.user.cloud_subscribed = Some(true);
+
+        let token = store.resolved_cloud_auth_token(None);
+        assert!(token.is_none());
+
+        let resolution = store.audio_engine_resolution_with_cloud_auth(token.is_some());
         assert_eq!(resolution.requested, "screenpipe-cloud");
         assert_eq!(resolution.active, FALLBACK_ENGINE);
         assert_eq!(

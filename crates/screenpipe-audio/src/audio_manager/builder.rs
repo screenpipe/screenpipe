@@ -125,6 +125,13 @@ pub struct AudioManagerOptions {
     /// `audio_capture_mode`. Default false — see
     /// default_experimental_meeting_piggyback in screenpipe-config.
     pub experimental_meeting_piggyback: bool,
+    /// Gate Bluetooth mic capture to detected meetings by default. Read by
+    /// `AudioManager::start_device`'s gate and the device monitor's
+    /// reconcile sweep; no effect on wired/built-in mics or on Bluetooth
+    /// output devices. Default false (gated) — see
+    /// `RecordingSettings::always_record_bluetooth_mic` in screenpipe-config
+    /// for the SCO/A2DP rationale (issue #3750).
+    pub always_record_bluetooth_mic: bool,
     /// Experimental: request Windows WASAPI microphone AEC when the endpoint supports it.
     pub windows_input_aec_enabled: bool,
     /// Use Apple VoiceProcessingIO on the default macOS microphone when supported.
@@ -180,6 +187,7 @@ impl Default for AudioManagerOptions {
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
             experimental_meeting_piggyback: false,
+            always_record_bluetooth_mic: false,
             windows_input_aec_enabled: false,
             macos_input_vpio_enabled: false,
             screenpipe_aec_enabled: true,
@@ -286,6 +294,11 @@ impl AudioManagerBuilder {
 
     pub fn experimental_meeting_piggyback(mut self, enabled: bool) -> Self {
         self.options.experimental_meeting_piggyback = enabled;
+        self
+    }
+
+    pub fn always_record_bluetooth_mic(mut self, enabled: bool) -> Self {
+        self.options.always_record_bluetooth_mic = enabled;
         self
     }
 
