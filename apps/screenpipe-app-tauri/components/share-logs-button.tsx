@@ -15,6 +15,7 @@ import {
   Plus,
 } from "lucide-react";
 import { readTextFile, readFile } from "@tauri-apps/plugin-fs";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { commands } from "@/lib/utils/tauri";
 import { useState, useEffect, useRef } from "react";
@@ -35,7 +36,7 @@ import { localFetch } from "@/lib/api";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { loadAllConversations } from "@/lib/chat-storage";
 import {
-  ACCEPTED_ATTACHMENT_TYPES,
+  ATTACHMENT_EXTENSIONS,
   classifyAttachmentFile,
   classifyAttachmentMeta,
   firstTransferFile,
@@ -153,7 +154,6 @@ export const ShareLogsButton = ({
   const isDragActive = dragDepth > 0;
   const [includeChatHistory, setIncludeChatHistory] = useState(true);
   const { health } = useHealthCheck();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
   const sentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -391,11 +391,20 @@ export const ShareLogsButton = ({
     };
   }, []);
 
-  const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    // Reset so picking the same file twice re-fires onChange.
-    e.target.value = "";
-    if (file) await attachFromFile(file);
+  // Native picker filtered to the accepted extensions — the user can't even
+  // select a file we'd reject (HTML `accept` is only a hint in WKWebView).
+  const handleFilePicker = async () => {
+    try {
+      const selected = await openFileDialog({
+        multiple: false,
+        filters: [
+          { name: "screenshots & videos", extensions: ATTACHMENT_EXTENSIONS },
+        ],
+      });
+      if (typeof selected === "string") await attachFromPath(selected);
+    } catch (err) {
+      console.error("file picker error:", err);
+    }
   };
 
   // Paste-a-screenshot (Cmd/Ctrl+V) and drag-drop. We intercept only when a
@@ -841,20 +850,12 @@ export const ShareLogsButton = ({
             },
           })}
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={ACCEPTED_ATTACHMENT_TYPES}
-          className="hidden"
-          onChange={handleFilePick}
-        />
-
         <div className="grid grid-cols-2 gap-2">
           <Button
             variant="outline"
             size="sm"
             className="gap-1.5 h-8 text-xs"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={handleFilePicker}
           >
             <Plus className="h-3 w-3" />
             <span>add files</span>

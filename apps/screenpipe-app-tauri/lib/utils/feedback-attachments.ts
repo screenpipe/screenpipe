@@ -13,8 +13,8 @@ import type { ImageTransferLike } from "./clipboard-image";
  */
 export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
-export const ACCEPTED_ATTACHMENT_TYPES =
-  "image/png,image/jpeg,video/mp4,video/quicktime";
+/** Extensions for the native file-picker dialog filter. */
+export const ATTACHMENT_EXTENSIONS = ["png", "jpg", "jpeg", "mp4", "mov"];
 
 export type VideoExt = "mp4" | "mov";
 

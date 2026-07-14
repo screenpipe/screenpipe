@@ -13,6 +13,7 @@ const {
   commandsMock,
   loadAllConversationsMock,
   fsMock,
+  openFileDialogMock,
   dragDropHandlerRef,
 } = vi.hoisted(() => ({
   toastMock: vi.fn(),
@@ -27,6 +28,7 @@ const {
     readFile: vi.fn(),
     stat: vi.fn(),
   },
+  openFileDialogMock: vi.fn(),
   dragDropHandlerRef: {
     current: null as null | ((event: { payload: unknown }) => void),
   },
@@ -37,6 +39,7 @@ vi.mock("./ui/use-toast", () => ({
 }));
 vi.mock("@/lib/utils/tauri", () => ({ commands: commandsMock }));
 vi.mock("@tauri-apps/plugin-fs", () => fsMock);
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openFileDialogMock }));
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
     onDragDropEvent: (cb: (event: { payload: unknown }) => void) => {
@@ -299,6 +302,26 @@ describe("ShareLogsButton attachments", () => {
       ),
     );
     expect(screen.queryByTestId("video-attachment")).toBeNull();
+  });
+
+  it("attaches a file picked via the native dialog (extension-filtered)", async () => {
+    openFileDialogMock.mockResolvedValue("/tmp/picked.mp4");
+    render(<ShareLogsButton />);
+
+    fireEvent.click(screen.getByRole("button", { name: /add files/i }));
+
+    const row = await screen.findByTestId("video-attachment");
+    expect(row).toHaveTextContent("picked.mp4");
+    // the dialog is restricted to what we accept — no reject-after-pick
+    expect(openFileDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: [
+          expect.objectContaining({
+            extensions: ["png", "jpg", "jpeg", "mp4", "mov"],
+          }),
+        ],
+      }),
+    );
   });
 
   it("attaches a native Tauri path drop (webview drag-drop event)", async () => {
