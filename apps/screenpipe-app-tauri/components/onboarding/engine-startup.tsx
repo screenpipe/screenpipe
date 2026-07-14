@@ -1186,6 +1186,7 @@ if the input is sparse, just describe what little you have warmly. don't apologi
                       onClick={async () => {
                         setSpawnError(null);
                         setSpawnErrorKind(null);
+                        setBootPhase(null);
                         setState("starting");
                         try {
                           await commands.spawnScreenpipe(null);

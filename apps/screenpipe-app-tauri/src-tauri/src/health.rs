@@ -1353,9 +1353,6 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// Show a notification telling the user that capture has stalled, with a restart button.
-/// Skips showing if the main overlay panel is visible — the notification panel
-/// steals focus and causes a deadlock with the overlay's focus-loss handler.
 /// Show a notification when the HTTP port is occupied by another process.
 /// Uses the same notification panel as capture-stall alerts.
 async fn show_port_conflict_notification(app: &tauri::AppHandle, error_msg: &str) -> Result<()> {
@@ -1385,6 +1382,9 @@ async fn show_port_conflict_notification(app: &tauri::AppHandle, error_msg: &str
         .map_err(|e| anyhow::anyhow!(e))
 }
 
+/// Show a notification telling the user that capture has stalled, with a restart button.
+/// Skips showing if the main overlay panel is visible — the notification panel
+/// steals focus and causes a deadlock with the overlay's focus-loss handler.
 async fn show_capture_stall_notification(app: &tauri::AppHandle, system: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {

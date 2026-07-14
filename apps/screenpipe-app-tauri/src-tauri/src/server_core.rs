@@ -104,17 +104,30 @@ fn identify_port_holder(port: u16) -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        // netstat -ano | findstr :<port> → get PID, then resolve via tasklist
-        let output = std::process::Command::new("cmd")
-            .args(["/C", &format!("netstat -ano | findstr :{}", port)])
+        // netstat -ano → parse lines matching our exact port in LISTENING state.
+        // We filter in Rust rather than piping through findstr because
+        // `findstr :<port>` matches substrings (e.g. :3030 matches :30300).
+        let output = std::process::Command::new("netstat")
+            .args(["-ano"])
             .output()
             .ok()?;
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let port_suffix = format!(":{}", port);
         for line in stdout.lines() {
             if !line.contains("LISTENING") {
                 continue;
             }
-            let pid = line.split_whitespace().last()?;
+            // netstat columns: Proto LocalAddress ForeignAddress State PID
+            // Match local address ending in :<port> (with word boundary)
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 5 {
+                continue;
+            }
+            let local_addr = cols[1];
+            if !local_addr.ends_with(&port_suffix) {
+                continue;
+            }
+            let pid = cols[4];
             // Resolve PID to process name
             let tasklist = std::process::Command::new("tasklist")
                 .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
