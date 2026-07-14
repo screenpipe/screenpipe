@@ -6,22 +6,19 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Zap, ArrowRight, Loader } from "lucide-react";
+import { Zap, ArrowRight, Play } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { localFetch } from "@/lib/api";
 import { useChatStore } from "@/lib/stores/chat-store";
 import posthog from "posthog-js";
 
 // One-time guided first run, shown on the Home window right after onboarding.
 // It does NOT replace the chat — it guides the REAL chat:
-//   1. ASK       — drops a recall prompt into the real composer (chat-prefill
-//                  event) and points the user at it: "hit send". The real chat
-//                  answers with the real model.
-//   2. AUTOMATE  — once the AI finishes responding, show a contextual next step:
-//                  • pipe already enabled (from onboarding) → soft nudge to
-//                    explore pipes tab
-//                  • pipe NOT installed → offer one-tap to enable digital-clone
+//   1. ASK       — drops a pipe-creation prompt into the real composer
+//                  (chat-prefill event) and points the user at it: "hit send".
+//   2. AUTOMATE  — once the AI finishes, nudge the user to the pipes tab.
+//   3. RUN-PIPE  — on the pipes tab, tell the user to hit the play button
+//                  to start their new pipe.
 // Gating + persistence lives in app/home/page.tsx (settings.firstRunGuideDone).
 
 interface FirstRunGuideProps {
@@ -33,65 +30,10 @@ interface FirstRunGuideProps {
   onEnsureChatVisible?: () => void;
 }
 
-// digital-clone is the breakout store pipe — it keeps a running, searchable
-// memory of your work, so it's a truthful "keep doing this for me" payoff.
-const AUTOMATION_SLUG = "digital-clone";
-const PROMPT = "what did i spend my time on in the last hour?";
+const PROMPT = "create a pipe that tracks what i do every hour";
 
-type Phase = "ask" | "streaming" | "automate" | "dismissed";
+type Phase = "ask" | "streaming" | "automate" | "run-pipe" | "dismissed";
 
-// Enable a prebuilt pipe (install from store if needed, then enable + kick a
-// run). Mirrors the proven onboarding pick-pipe sequence; enable_pipe returns
-// HTTP 200 even on error, so we check the body.
-async function enablePipe(slug: string, retries = 3): Promise<void> {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const enableRes = await localFetch(`/pipes/${slug}/enable`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: true }),
-      });
-      if (enableRes.ok) {
-        const body = await enableRes.json().catch(() => ({}));
-        if (!body.error) {
-          void localFetch(`/pipes/${slug}/run`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          }).catch(() => {});
-          return;
-        }
-      }
-      const installRes = await localFetch("/pipes/store/install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug }),
-      });
-      const installBody = await installRes.json().catch(() => ({}));
-      if (!installRes.ok || installBody.error) {
-        throw new Error(`install ${slug}: ${installBody.error || installRes.status}`);
-      }
-      const enable2 = await localFetch(`/pipes/${slug}/enable`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: true }),
-      });
-      const enable2Body = await enable2.json().catch(() => ({}));
-      if (enable2.ok && !enable2Body.error) {
-        void localFetch(`/pipes/${slug}/run`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        }).catch(() => {});
-        return;
-      }
-      throw new Error(`enable ${slug}: ${enable2Body.error || enable2.status}`);
-    } catch (err) {
-      if (attempt === retries) throw err;
-      await new Promise((r) => setTimeout(r, 1500 * attempt));
-    }
-  }
-}
 
 export default function FirstRunGuide({
   onDone,
@@ -101,31 +43,13 @@ export default function FirstRunGuide({
   const [phase, setPhase] = useState<Phase>("ask");
   const phaseRef = useRef<Phase>("ask");
   phaseRef.current = phase;
-  // Whether digital-clone is already installed+enabled (from onboarding pick-pipe)
-  const [pipeAlreadyEnabled, setPipeAlreadyEnabled] = useState<boolean | null>(null);
-  const [enabling, setEnabling] = useState(false);
   // Use wall-clock time as baseline, not store state — the store hydrates
   // sessions from disk asynchronously, so reading maxUserMessageAt() at mount
   // often returns 0. When the hydrated sessions arrive a moment later their
   // old lastUserMessageAt values all exceed 0, instantly advancing the phase.
   const sendBaselineRef = useRef(Date.now());
-
-  // On mount: check if digital-clone is already enabled from onboarding.
-  useEffect(() => {
-    localFetch("/pipes")
-      .then((r) => (r.ok ? r.json() : { data: [] }))
-      .then((json) => {
-        const pipes: Array<{ config: { enabled?: boolean; source_slug?: string; name?: string } }> =
-          json.data || [];
-        const clone = pipes.find(
-          (p) =>
-            p.config.source_slug === AUTOMATION_SLUG ||
-            p.config.name === AUTOMATION_SLUG,
-        );
-        setPipeAlreadyEnabled(!!clone?.config.enabled);
-      })
-      .catch(() => setPipeAlreadyEnabled(false));
-  }, []);
+  // Position of the first pipe row for anchoring the run-pipe card
+  const [pipeRowRect, setPipeRowRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
 
   // On mount: show the chat, drop the prompt into the REAL composer, and start
   // watching for the user to send it.
@@ -229,40 +153,58 @@ export default function FirstRunGuide({
 
   const skip = useCallback(() => {
     posthog.capture("firstrun_guide_skipped", { phase: phaseRef.current });
+    setPhase("dismissed");
     onDone();
   }, [onDone]);
 
-  const createAutomation = useCallback(async () => {
-    if (enabling) return;
-    setEnabling(true);
-    posthog.capture("firstrun_automation_clicked");
-    try {
-      await enablePipe(AUTOMATION_SLUG);
-      posthog.capture("firstrun_automation_created", { slug: AUTOMATION_SLUG });
-    } catch {
-      // still navigate — best effort
-    }
-    setPhase("dismissed");
-    onDone();
-    onGoToAutomations();
-  }, [enabling, onDone, onGoToAutomations]);
-
-  const explorePipes = useCallback(() => {
+  const goToPipes = useCallback(() => {
     posthog.capture("firstrun_explore_clicked");
-    setPhase("dismissed");
-    onDone();
     onGoToAutomations();
-    // Switch to the Discover tab inside PipeStoreView (small delay so it mounts first)
+    // Switch to My Pipes tab so user sees the newly created pipe
     setTimeout(() => {
       window.dispatchEvent(
-        new CustomEvent("switch-pipes-tab", { detail: { tab: "discover" } }),
+        new CustomEvent("switch-pipes-tab", { detail: { tab: "my-pipes" } }),
       );
     }, 100);
-  }, [onDone, onGoToAutomations]);
+    setPhase("run-pipe");
+  }, [onGoToAutomations]);
+
+  const finishGuide = useCallback(() => {
+    posthog.capture("firstrun_guide_completed");
+    setPhase("dismissed");
+    onDone();
+  }, [onDone]);
+
+  // When entering run-pipe phase, find the first pipe row and track its position.
+  // Also listen for clicks on the play button to auto-finish the guide.
+  useEffect(() => {
+    if (phase !== "run-pipe") return;
+    const findRow = () => {
+      const el = document.querySelector("[data-pipe-row]");
+      if (el) {
+        const r = el.getBoundingClientRect();
+        setPipeRowRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+      }
+    };
+    const onPlayClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest('[title="run pipe"]');
+      if (btn) finishGuide();
+    };
+    // small delay for the pipes tab to mount
+    const t = setTimeout(findRow, 200);
+    window.addEventListener("resize", findRow);
+    document.addEventListener("click", onPlayClick, true);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("resize", findRow);
+      document.removeEventListener("click", onPlayClick, true);
+    };
+  }, [phase, finishGuide]);
 
   // Tag the document so CSS can lift elements above the scrim per phase.
   useEffect(() => {
-    if (phase === "ask" || phase === "streaming" || phase === "automate") {
+    if (phase === "ask" || phase === "streaming" || phase === "automate" || phase === "run-pipe") {
       document.documentElement.setAttribute("data-firstrun-scrim", phase);
       return () => document.documentElement.removeAttribute("data-firstrun-scrim");
     }
@@ -278,7 +220,7 @@ export default function FirstRunGuide({
   // ASK phase:       textarea + send button lifted above scrim
   // STREAMING phase: message area lifted (user reads the response), form dimmed
   // AUTOMATE phase:  message area lifted, form dimmed
-  const scrim = (phase === "ask" || phase === "streaming" || phase === "automate") ? (
+  const scrim = (phase === "ask" || phase === "streaming" || phase === "automate" || phase === "run-pipe") ? (
     <>
       <style dangerouslySetInnerHTML={{ __html: `
         /* --- ASK phase: only textarea + send button active --- */
@@ -305,6 +247,12 @@ export default function FirstRunGuide({
         [data-firstrun-scrim="automate"] form {
           opacity: 0.3;
           pointer-events: none;
+        }
+
+        /* --- RUN-PIPE phase: only pipe rows lifted above scrim --- */
+        [data-firstrun-scrim="run-pipe"] [data-pipe-row] {
+          position: relative;
+          z-index: 42;
         }
       `}} />
       <div className="fixed inset-0 z-40 bg-background/55" />
@@ -335,11 +283,11 @@ export default function FirstRunGuide({
                   </span>
                 </div>
                 <p className="font-sans text-sm text-foreground/90 leading-snug">
-                  i dropped a question in your chat below — hit{" "}
+                  i wrote a prompt below to create your first automation — hit{" "}
                   <span className="font-mono text-xs border border-foreground/25 px-1.5 py-0.5">
                     send ↵
                   </span>{" "}
-                  and i&apos;ll tell you what i saw.
+                  and screenpipe will set it up for you.
                 </p>
                 <button
                   onClick={skip}
@@ -365,7 +313,7 @@ export default function FirstRunGuide({
             </motion.div>
           )}
 
-          {/* BEAT 2: AUTOMATE — contextual based on pipe status */}
+          {/* BEAT 2: AUTOMATE — pipe was just created, nudge to pipes tab */}
           {phase === "automate" && (
             <motion.div
               key="automate"
@@ -374,52 +322,23 @@ export default function FirstRunGuide({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
             >
-              {pipeAlreadyEnabled ? (
-                <>
-                  <div className="flex items-start gap-2.5 mb-3">
-                    <Zap className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
-                    <div>
-                      <p className="font-mono text-xs font-semibold lowercase text-foreground">
-                        screenpipe is watching in the background
-                      </p>
-                      <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
-                        your ai twin is already building a picture of your work — explore what else is possible
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={explorePipes}
-                    className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
-                  >
-                    explore automations <ArrowRight className="w-3 h-3" strokeWidth={2} />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-start gap-2.5 mb-3">
-                    <Zap className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
-                    <div>
-                      <p className="font-mono text-xs font-semibold lowercase text-foreground">
-                        nice — turn this into an automation
-                      </p>
-                      <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
-                        keep a running picture of your work in the background — no asking
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={createAutomation}
-                    disabled={enabling}
-                    className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                    {enabling ? (
-                      <><Loader className="w-3 h-3 animate-spin" strokeWidth={2} /> setting up...</>
-                    ) : (
-                      <><Sparkles className="w-3 h-3" strokeWidth={2} /> create automation</>
-                    )}
-                  </button>
-                </>
-              )}
+              <div className="flex items-start gap-2.5 mb-3">
+                <Zap className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
+                <div>
+                  <p className="font-mono text-xs font-semibold lowercase text-foreground">
+                    your automation is being set up
+                  </p>
+                  <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                    head over to the pipes tab to see it running and explore more automations
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={goToPipes}
+                className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
+              >
+                go to pipes <ArrowRight className="w-3 h-3" strokeWidth={2} />
+              </button>
               <button
                 onClick={skip}
                 className="mt-3 w-full text-center font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase"
@@ -429,8 +348,63 @@ export default function FirstRunGuide({
             </motion.div>
           )}
 
+          {/* BEAT 3 is rendered outside this container, anchored to the pipe row */}
+
         </AnimatePresence>
       </div>
+
+      {/* BEAT 3: RUN PIPE — anchored to the left of the pipe row, pointing right at the play button */}
+      {phase === "run-pipe" && pipeRowRect && (
+        <motion.div
+          key="run-pipe"
+          className="fixed z-50 w-[300px] border border-foreground/20 bg-background shadow-lg p-4"
+          style={{
+            top: pipeRowRect.top + pipeRowRect.height / 2 - 80,
+            left: pipeRowRect.left - 300 - 16,
+          }}
+          initial={{ opacity: 0, x: 8 }}
+          animate={{ opacity: 1, x: 0 }}
+        >
+          {/* Arrow pointing right at the pipe row */}
+          <div className="absolute top-[80px] -right-[10px] -translate-y-1/2">
+            <svg width="10" height="20" viewBox="0 0 10 20">
+              <path
+                d="M0 0 L10 10 L0 20"
+                fill="hsl(var(--background))"
+                stroke="hsl(var(--foreground) / 0.15)"
+                strokeWidth="1"
+                strokeLinejoin="round"
+              />
+              <line x1="0" y1="0" x2="0" y2="20" stroke="hsl(var(--background))" strokeWidth="2" />
+            </svg>
+          </div>
+          <div className="flex items-start gap-2.5 mb-3">
+            <Play className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
+            <div>
+              <p className="font-mono text-xs font-semibold lowercase text-foreground">
+                one last thing — run your pipe
+              </p>
+              <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                hit the{" "}
+                <Play className="inline w-3 h-3 -mt-0.5" strokeWidth={2} />{" "}
+                button on your pipe to start it
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={finishGuide}
+            className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
+          >
+            got it <ArrowRight className="w-3 h-3" strokeWidth={2} />
+          </button>
+          <button
+            onClick={skip}
+            className="mt-3 w-full text-center font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase"
+          >
+            skip intro
+          </button>
+        </motion.div>
+      )}
     </>
   );
 }
