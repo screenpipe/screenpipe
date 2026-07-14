@@ -4,10 +4,20 @@
 
 import { Button } from "./ui/button";
 import { useToast } from "./ui/use-toast";
-import { Upload, Loader, X, Check, Video } from "lucide-react";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import {
+  Upload,
+  Loader,
+  X,
+  Check,
+  CheckCircle2,
+  Clock,
+  Play,
+  Plus,
+} from "lucide-react";
+import { readTextFile, readFile } from "@tauri-apps/plugin-fs";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { commands } from "@/lib/utils/tauri";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -27,8 +37,10 @@ import { loadAllConversations } from "@/lib/chat-storage";
 import {
   ACCEPTED_ATTACHMENT_TYPES,
   classifyAttachmentFile,
+  classifyAttachmentMeta,
   firstTransferFile,
   formatBytes,
+  mimeFromName,
   type VideoExt,
 } from "@/lib/utils/feedback-attachments";
 
@@ -59,6 +71,31 @@ async function compressImageFile(file: File): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 
+// PUT with real upload progress — fetch() has no upload progress events, and
+// the design shows a live "uploading… n%" line for dropped files.
+function putWithProgress(
+  url: string,
+  body: Blob,
+  contentType: string,
+  onProgress?: (pct: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", contentType);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress)
+        onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new Error(`upload failed with status ${xhr.status}`));
+    xhr.onerror = () => reject(new Error("upload failed"));
+    xhr.send(body);
+  });
+}
+
 interface VideoChunk {
   device_name: string;
   file_path: string;
@@ -67,16 +104,32 @@ interface VideoChunk {
 
 // One image slot + one video slot, matching the server which provisions one
 // `_screenshot.png` and one `_video.{ext}` upload per report. Last write wins
-// within each slot.
+// within each slot. `status: "processing"` covers image compression and the
+// last-5-min merge — the card renders with a spinner until ready.
 interface ImageAttachment {
-  dataUrl: string;
+  dataUrl: string | null;
   name: string;
   sizeBytes: number;
+  status: "processing" | "ready";
 }
 
 type VideoAttachment =
-  | { source: "file"; file: File; ext: VideoExt }
-  | { source: "recording"; localPath: string };
+  | {
+      source: "file";
+      file: File;
+      ext: VideoExt;
+      name: string;
+      sizeBytes: number;
+      status: "ready";
+    }
+  | {
+      source: "recording";
+      localPath: string | null;
+      name: string;
+      status: "processing" | "ready";
+    };
+
+type SendPhase = "idle" | "sending" | "sent";
 
 export const ShareLogsButton = ({
   onComplete,
@@ -87,19 +140,22 @@ export const ShareLogsButton = ({
 }) => {
   const { toast } = useToast();
   const { settings } = useSettings();
-  const [isSending, setIsSending] = useState(false);
   const [machineId, setMachineId] = useState("");
   const [feedbackText, setFeedbackText] = useState(prefillText ?? "");
-  const [isLoadingVideo, setIsLoadingVideo] = useState(false);
-  const [isCompressing, setIsCompressing] = useState(false);
   const [image, setImage] = useState<ImageAttachment | null>(null);
   const [video, setVideo] = useState<VideoAttachment | null>(null);
+  const [phase, setPhase] = useState<SendPhase>("idle");
+  // Real upload percentage for dropped files during send (null = no live pct).
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
   // dragenter/dragleave fire for every child element crossed, so track depth
   // instead of a boolean to avoid the drag-active style flickering off.
   const [dragDepth, setDragDepth] = useState(0);
   const isDragActive = dragDepth > 0;
   const [includeChatHistory, setIncludeChatHistory] = useState(true);
   const { health } = useHealthCheck();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+  const sentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const loadMachineId = async () => {
@@ -116,7 +172,15 @@ export const ShareLogsButton = ({
       setMachineId(id);
     };
     loadMachineId();
+    return () => {
+      if (sentTimerRef.current) clearTimeout(sentTimerRef.current);
+    };
   }, []);
+
+  const isProcessing =
+    image?.status === "processing" || video?.status === "processing";
+  const readyCount =
+    (image?.status === "ready" ? 1 : 0) + (video?.status === "ready" ? 1 : 0);
 
   const getLogFiles = async () => {
     try {
@@ -138,7 +202,13 @@ export const ShareLogsButton = ({
   };
 
   const captureLastFiveMinutes = async () => {
-    setIsLoadingVideo(true);
+    setPhase("idle");
+    setVideo({
+      source: "recording",
+      localPath: null,
+      name: "last 5 min recording",
+      status: "processing",
+    });
     try {
       const captureEnd = new Date();
       const captureStart = new Date(captureEnd.getTime() - 5 * 60 * 1000);
@@ -179,24 +249,34 @@ export const ShareLogsButton = ({
 
       if (!mergeResponse.ok) throw new Error("failed to merge video chunks");
       const { video_path } = await mergeResponse.json();
-      setVideo({ source: "recording", localPath: video_path });
+      setVideo({
+        source: "recording",
+        localPath: video_path,
+        name: "last 5 min recording",
+        status: "ready",
+      });
     } catch (err) {
       console.error("failed to capture video:", err);
+      setVideo(null);
+      // Distinguish "nothing was recorded" (recording off / video disabled)
+      // from a transient failure — the former isn't fixed by retrying.
       toast({
-        title: "video capture failed",
-        description: "could not record last 5 minutes",
+        title: "couldn't capture recording",
+        description: String(err).includes("no recent video chunks")
+          ? "no screen recording found for the last 5 minutes — check that video recording is on."
+          : "could not record the last 5 minutes — try again.",
         variant: "destructive",
       });
-    } finally {
-      setIsLoadingVideo(false);
     }
   };
 
   // Classify + attach a file from any entry point (picker, paste, drop).
   // Images are compressed; videos are kept verbatim for upload. Unsupported
-  // and oversized files get an immediate toast instead of a silent no-op
-  // (the original bug: dropped videos vanished without a trace, #5156).
+  // and oversized files get an immediate toast (the app-wide convention —
+  // see the chat composer) instead of a silent no-op, the original bug in
+  // #5156.
   const attachFromFile = async (file: File) => {
+    setPhase("idle");
     const classified = classifyAttachmentFile(file);
 
     if (classified.kind === "error") {
@@ -207,37 +287,109 @@ export const ShareLogsButton = ({
             : "unsupported file",
         description:
           classified.reason === "too-large"
-            ? "max 50mb — trim or compress the file and try again."
-            : "png, jpg, mp4, mov only.",
+            ? `file is ${formatBytes(file.size)} — the 50 mb limit was exceeded.`
+            : "accepts png, jpg, mov, mp4.",
         variant: "destructive",
       });
       return;
     }
 
     if (classified.kind === "video") {
-      setVideo({ source: "file", file, ext: classified.ext });
+      setVideo({
+        source: "file",
+        file,
+        ext: classified.ext,
+        name: file.name || `video.${classified.ext}`,
+        sizeBytes: file.size,
+        status: "ready",
+      });
       return;
     }
 
-    setIsCompressing(true);
+    const name = file.name || "screenshot";
+    setImage({ dataUrl: null, name, sizeBytes: file.size, status: "processing" });
     try {
       const dataUrl = await compressImageFile(file);
-      setImage({
-        dataUrl,
-        name: file.name || "screenshot",
-        sizeBytes: file.size,
-      });
+      setImage({ dataUrl, name, sizeBytes: file.size, status: "ready" });
     } catch (err) {
       console.error("failed to attach screenshot:", err);
+      setImage(null);
       toast({
         title: "couldn't attach screenshot",
         description: "that image couldn't be read — try a different file.",
         variant: "destructive",
       });
-    } finally {
-      setIsCompressing(false);
     }
   };
+
+  // Tauri intercepts native file drops (the webview never fires HTML5 drop
+  // events for them — the original "drop does nothing" bug), so drops arrive
+  // as filesystem paths via onDragDropEvent. Reject unsupported extensions
+  // before reading; size is validated by attachFromFile after the read (the
+  // fs capability set has no stat permission, same trade-off as the chat
+  // composer's drop handling).
+  const attachFromPath = async (path: string) => {
+    setPhase("idle");
+    const name = path.split(/[/\\]/).pop() || "file";
+    const classified = classifyAttachmentMeta(name, "", 0);
+    if (classified.kind === "error") {
+      toast({
+        title: "unsupported file",
+        description: "accepts png, jpg, mov, mp4.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      const bytes = await readFile(path);
+      const file = new File([bytes], name, {
+        type: mimeFromName(name) ?? "",
+      });
+      await attachFromFile(file);
+    } catch (err) {
+      console.error("failed to read dropped file:", err);
+      toast({
+        title: "couldn't attach",
+        description: "that file couldn't be read — try a different one.",
+        variant: "destructive",
+      });
+    }
+  };
+  const attachFromPathRef = useRef(attachFromPath);
+  attachFromPathRef.current = attachFromPath;
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    try {
+      getCurrentWebview()
+        .onDragDropEvent((event) => {
+          // Skip when this form isn't visible (e.g. dialog closed but mounted).
+          const form = formRef.current;
+          if (!form || form.offsetParent === null) return;
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            setDragDepth(1);
+          } else if (event.payload.type === "leave") {
+            setDragDepth(0);
+          } else if (event.payload.type === "drop") {
+            setDragDepth(0);
+            const path = event.payload.paths?.[0];
+            if (path) void attachFromPathRef.current(path);
+          }
+        })
+        .then((fn) => {
+          if (disposed) fn();
+          else unlisten = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // non-tauri environment (tests, plain browser) — HTML5 handlers cover it
+    }
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -262,7 +414,7 @@ export const ShareLogsButton = ({
 
   const handleDrop = (e: React.DragEvent) => {
     // Any file drop is ours: preventDefault unconditionally so an unsupported
-    // file shows an error toast instead of the webview navigating to it.
+    // file shows an inline error instead of the webview navigating to it.
     if (!e.dataTransfer?.types?.includes("Files")) return;
     e.preventDefault();
     e.stopPropagation();
@@ -289,7 +441,8 @@ export const ShareLogsButton = ({
   };
 
   const sendLogs = async () => {
-    setIsSending(true);
+    setPhase("sending");
+    setUploadPct(null);
     try {
       // Log files are best-effort. If none are found (fresh install, or an
       // unreadable/misconfigured data dir — common on Windows), we still send
@@ -418,8 +571,9 @@ export const ShareLogsButton = ({
         headers: { "Content-Type": "text/plain" },
       });
 
-      if (image && signedUrlScreenshot) {
-        const response = await fetch(image.dataUrl);
+      const imageReady = image?.status === "ready" && image.dataUrl;
+      if (imageReady && signedUrlScreenshot) {
+        const response = await fetch(image.dataUrl!);
         const blob = await response.blob();
 
         await fetch(signedUrlScreenshot, {
@@ -430,8 +584,8 @@ export const ShareLogsButton = ({
       }
 
       let videoUploaded = false;
-      if (video && signedUrlVideo) {
-        if (video.source === "recording") {
+      if (video?.status === "ready" && signedUrlVideo) {
+        if (video.source === "recording" && video.localPath) {
           const videoResult = await commands.uploadFileToS3(
             video.localPath,
             signedUrlVideo,
@@ -440,21 +594,19 @@ export const ShareLogsButton = ({
             throw new Error("Failed to upload video");
           videoUploaded = true;
         } else if (
+          video.source === "file" &&
           typeof videoPath === "string" &&
           videoPath.endsWith(`.${video.ext}`)
         ) {
-          const res = await fetch(signedUrlVideo, {
-            method: "PUT",
-            body: video.file,
-            headers: {
-              "Content-Type":
-                video.file.type ||
-                (video.ext === "mov" ? "video/quicktime" : "video/mp4"),
-            },
-          });
-          if (!res.ok) throw new Error("Failed to upload video");
+          await putWithProgress(
+            signedUrlVideo,
+            video.file,
+            video.file.type ||
+              (video.ext === "mov" ? "video/quicktime" : "video/mp4"),
+            setUploadPct,
+          );
           videoUploaded = true;
-        } else {
+        } else if (video.source === "file") {
           // Server predates `video_ext` and provisioned a `.mp4` key for a
           // `.mov` attachment — skip the video rather than store mislabeled
           // bytes. The rest of the report still goes out.
@@ -466,6 +618,7 @@ export const ShareLogsButton = ({
           });
         }
       }
+      setUploadPct(null);
 
       const os = osPlatform();
       const os_version = osVersion();
@@ -482,7 +635,7 @@ export const ShareLogsButton = ({
           os_version,
           app_version,
           feedback_text: feedbackText,
-          screenshot_url: image ? screenshotPath : undefined,
+          screenshot_url: imageReady ? screenshotPath : undefined,
           video_url: videoUploaded ? videoPath : undefined,
           screenpipe_id: settings.analyticsId,
         }),
@@ -498,7 +651,7 @@ export const ShareLogsButton = ({
       // Receipt states what was actually included so a user never believes a
       // video went out when it didn't.
       const attachedParts = [
-        image ? "screenshot" : null,
+        imageReady ? "screenshot" : null,
         videoUploaded ? "video" : null,
       ].filter(Boolean);
       const attachedNote = attachedParts.length
@@ -513,25 +666,118 @@ export const ShareLogsButton = ({
             : `we posted it to support${reference}; mention that ID in Discord if you need an update.`) +
           attachedNote,
       });
-      setFeedbackText("");
-      setImage(null);
-      setVideo(null);
-      if (onComplete) onComplete();
+      setPhase("sent");
+      // Hold the "sent ✓" state briefly so the receipt registers, then reset
+      // and let the dialog close.
+      sentTimerRef.current = setTimeout(() => {
+        setFeedbackText("");
+        setImage(null);
+        setVideo(null);
+        setPhase("idle");
+        if (onComplete) onComplete();
+      }, 1500);
     } catch (err) {
       console.error("log sharing failed:", err);
+      setPhase("idle");
+      setUploadPct(null);
       toast({
         title: "sharing failed",
         description: String(err),
         variant: "destructive",
       });
-    } finally {
-      setIsSending(false);
     }
   };
+
+  // No permanent drop zone: attachments are secondary to the feedback text
+  // (GitHub/Linear-style form), so idle shows only the buttons + a one-line
+  // hint, and the dashed drop target materializes as an overlay while a file
+  // is actually being dragged. Attach errors surface as toasts (the app-wide
+  // convention, same as the chat composer).
+  // State the one-per-slot limit once something is attached, so replacement
+  // (including "last 5 min" taking the video slot) reads as intended behavior
+  // rather than a bug.
+  const attachHint =
+    image || video
+      ? "one screenshot + one video per report — new files replace"
+      : "or drop / paste files — png, jpg, mov, mp4 · 50 mb max";
+
+  // Status line above the send button.
+  const sending = phase === "sending";
+  let status: { icon: React.ReactNode; text: string } | null = null;
+  if (phase === "sent") {
+    status = {
+      icon: <CheckCircle2 className="h-4 w-4 text-foreground" />,
+      text:
+        readyCount > 0 ? "report sent — attachment included" : "report sent",
+    };
+  } else if (sending) {
+    status = {
+      icon: <Loader className="h-4 w-4 animate-spin text-muted-foreground" />,
+      text: uploadPct !== null ? `uploading… ${uploadPct}%` : "sending…",
+    };
+  } else if (isProcessing) {
+    status = {
+      icon: <Loader className="h-4 w-4 animate-spin text-muted-foreground" />,
+      text: "preparing attachment…",
+    };
+  } else if (readyCount > 0) {
+    const parts = [
+      image?.status === "ready" ? "1 screenshot" : null,
+      video?.status === "ready" ? "1 video" : null,
+    ].filter(Boolean);
+    status = {
+      icon: <CheckCircle2 className="h-4 w-4 text-foreground" />,
+      text: `${parts.join(" + ")} attached`,
+    };
+  }
+
+  const attachmentCard = (a: {
+    key: string;
+    thumb: React.ReactNode;
+    name: string;
+    meta: string;
+    processing: boolean;
+    onRemove: () => void;
+    testId: string;
+  }) => (
+    <div
+      key={a.key}
+      data-testid={a.testId}
+      className="flex items-center gap-3 bg-secondary/10 border border-border p-2.5 text-left"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex-none w-[76px] h-[52px] bg-secondary/20 border border-border flex items-center justify-center overflow-hidden">
+        {a.thumb}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium truncate">{a.name}</div>
+        <div className="text-[10px] text-muted-foreground mt-0.5">{a.meta}</div>
+      </div>
+      {/* No standalone check icon here — next to the ✕ it reads as a
+          confirm/cancel button pair. "Attached" is communicated by the card
+          itself plus the status row below the form. */}
+      <div className="flex-none flex items-center gap-2">
+        {a.processing && (
+          <Loader className="h-4 w-4 animate-spin text-muted-foreground" />
+        )}
+        <button
+          type="button"
+          className="text-muted-foreground hover:text-foreground p-0.5 leading-none"
+          onClick={a.onRemove}
+          aria-label={`remove ${a.testId === "image-attachment" ? "screenshot" : "video"}`}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <TooltipProvider>
       <div
-        className="flex flex-col gap-2.5 w-full"
+        ref={formRef}
+        data-testid="feedback-form"
+        className="relative flex flex-col gap-2.5 w-full"
         onPaste={handlePaste}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
@@ -546,116 +792,87 @@ export const ShareLogsButton = ({
           className="min-h-[60px] resize-none text-xs bg-secondary/5 placeholder:text-muted-foreground/50 focus:border-secondary/30 focus:ring-0 transition-colors"
         />
 
-        <label
-          data-testid="attachment-drop-zone"
-          className={`cursor-pointer flex flex-col items-center justify-center gap-0.5 border border-dashed px-3 py-3 text-center transition-colors duration-150 ${
-            isDragActive
-              ? "border-foreground bg-secondary/20"
-              : "border-border bg-secondary/5 hover:border-foreground/40"
-          }`}
-        >
-          <input
-            type="file"
-            accept={ACCEPTED_ATTACHMENT_TYPES}
-            className="hidden"
-            onChange={handleFilePick}
-          />
-          <span className="text-xs">
-            {isCompressing
-              ? "attaching..."
-              : "drop screenshots or videos here, paste, or click to browse"}
-          </span>
-          <span className="text-[10px] text-muted-foreground">
-            png, jpg, mp4, mov · max 50mb
-          </span>
-        </label>
+        {image &&
+          attachmentCard({
+            key: "image",
+            testId: "image-attachment",
+            thumb: image.dataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={image.dataUrl}
+                alt="screenshot preview"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <Loader className="h-4 w-4 animate-spin text-muted-foreground" />
+            ),
+            name: image.name,
+            meta: `${formatBytes(image.sizeBytes)} · image`,
+            processing: image.status === "processing",
+            onRemove: () => {
+              setImage(null);
+              setPhase("idle");
+            },
+          })}
 
-        {image && (
-          <div
-            data-testid="image-attachment"
-            className="flex items-center gap-2 border border-border bg-secondary/5 px-2 py-1.5"
+        {video &&
+          attachmentCard({
+            key: "video",
+            testId: "video-attachment",
+            thumb: (
+              <div
+                className="w-9 h-9 border-2 border-foreground rounded-full flex items-center justify-center"
+                aria-hidden
+              >
+                <Play className="h-4 w-4 fill-foreground text-foreground ml-0.5" />
+              </div>
+            ),
+            name: video.name,
+            meta:
+              video.source === "file"
+                ? `${formatBytes(video.sizeBytes)} · video`
+                : video.status === "processing"
+                  ? "preparing recording…"
+                  : "video",
+            processing: video.status === "processing",
+            onRemove: () => {
+              setVideo(null);
+              setPhase("idle");
+            },
+          })}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPTED_ATTACHMENT_TYPES}
+          className="hidden"
+          onChange={handleFilePick}
+        />
+
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-8 text-xs"
+            onClick={() => fileInputRef.current?.click()}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={image.dataUrl}
-              alt="screenshot preview"
-              className="h-9 w-16 flex-none object-cover border border-border"
-            />
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-xs truncate">{image.name}</span>
-              <span className="text-[10px] text-muted-foreground">
-                {formatBytes(image.sizeBytes)} · image
-              </span>
-            </div>
-            <Check className="h-3 w-3 flex-none text-muted-foreground" />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5 flex-none"
-              onClick={() => setImage(null)}
-              aria-label="remove screenshot"
-            >
-              <X className="h-2.5 w-2.5" />
-            </Button>
-          </div>
-        )}
-
-        {video && (
-          <div
-            data-testid="video-attachment"
-            className="flex items-center gap-2 border border-border bg-secondary/5 px-2 py-1.5"
-          >
-            <Video className="h-4 w-4 flex-none text-muted-foreground" />
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-xs truncate">
-                {video.source === "file"
-                  ? video.file.name
-                  : "last 5 min recording"}
-              </span>
-              <span className="text-[10px] text-muted-foreground">
-                {video.source === "file"
-                  ? `${formatBytes(video.file.size)} · video`
-                  : "video"}
-              </span>
-            </div>
-            <Check className="h-3 w-3 flex-none text-muted-foreground" />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5 flex-none"
-              onClick={() => setVideo(null)}
-              aria-label="remove video"
-            >
-              <X className="h-2.5 w-2.5" />
-            </Button>
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-center gap-2">
+            <Plus className="h-3 w-3" />
+            <span>add files</span>
+          </Button>
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
               <Button
-                variant={
-                  video?.source === "recording" ? "secondary" : "outline"
-                }
+                variant="outline"
                 size="sm"
                 onClick={captureLastFiveMinutes}
-                className={`gap-1.5 h-7 text-xs transition-all ${
-                  video?.source === "recording"
-                    ? "bg-foreground/10 text-foreground"
-                    : ""
-                }`}
-                disabled={isLoadingVideo || health?.status === "error"}
+                className="gap-1.5 h-8 text-xs"
+                disabled={
+                  video?.status === "processing" ||
+                  health?.status === "error"
+                }
               >
-                {isLoadingVideo ? (
-                  <Loader className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Video className="h-3 w-3" />
-                )}
-                <span>recording</span>
-                <span className="ml-0.5 text-[10px] text-muted-foreground">
-                  5m
-                </span>
+                <Clock className="h-3 w-3" />
+                <span>last 5 min</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
@@ -664,22 +881,44 @@ export const ShareLogsButton = ({
           </Tooltip>
         </div>
 
+        <p
+          data-testid="attach-hint"
+          className="text-[10px] text-muted-foreground leading-tight"
+        >
+          {attachHint}
+        </p>
+
         <p className="text-[10px] text-muted-foreground leading-tight">
           logs, settings, and pi chat history are included to help us debug. api
           keys, secrets, and personal info are automatically removed.
         </p>
 
+        {status && (
+          <div
+            data-testid="attachment-status"
+            className="flex items-center gap-2"
+          >
+            {status.icon}
+            <span className="text-xs font-medium">{status.text}</span>
+          </div>
+        )}
+
         <Button
           variant="default"
           size="sm"
           onClick={sendLogs}
-          disabled={isSending || isCompressing || isLoadingVideo}
-          className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
+          disabled={sending || isProcessing || phase === "sent"}
+          className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150 disabled:opacity-100 disabled:bg-secondary/40 disabled:text-muted-foreground"
         >
-          {isSending ? (
+          {sending ? (
             <>
               <Loader className="h-3 w-3 animate-spin" />
-              <span>sending...</span>
+              <span>sending…</span>
+            </>
+          ) : phase === "sent" ? (
+            <>
+              <Check className="h-3 w-3" />
+              <span>sent</span>
             </>
           ) : (
             <>
@@ -688,6 +927,18 @@ export const ShareLogsButton = ({
             </>
           )}
         </Button>
+
+        {isDragActive && (
+          <div
+            data-testid="drop-overlay"
+            className="absolute inset-0 z-10 pointer-events-none border-2 border-dashed border-foreground bg-background/95 flex flex-col items-center justify-center gap-1"
+          >
+            <span className="text-xs font-medium">release to attach</span>
+            <span className="text-[10px] text-muted-foreground">
+              png, jpg, mov, mp4 · 50 mb max
+            </span>
+          </div>
+        )}
       </div>
     </TooltipProvider>
   );

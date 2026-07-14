@@ -42,23 +42,48 @@ function classifyByName(name: string): AttachmentClassification | null {
 }
 
 /**
- * Decide what a picked/pasted/dropped file is and whether we accept it.
- * `file.type` can be empty for drag-drop from some sources (e.g. Finder on
- * certain macOS versions), so fall back to the filename extension.
+ * Decide what a picked/pasted/dropped attachment is and whether we accept it.
+ * MIME `type` can be empty for drag-drop from some sources and is always
+ * absent for Tauri path drops, so fall back to the filename extension.
  */
-export function classifyAttachmentFile(file: File): AttachmentClassification {
+export function classifyAttachmentMeta(
+  name: string,
+  type: string,
+  size: number,
+): AttachmentClassification {
   let result: AttachmentClassification | null = null;
 
-  const type = (file.type || "").toLowerCase();
-  if (IMAGE_TYPES.has(type)) result = { kind: "image" };
-  else if (type in VIDEO_TYPE_TO_EXT)
-    result = { kind: "video", ext: VIDEO_TYPE_TO_EXT[type] };
-  else if (!type) result = classifyByName(file.name || "");
+  const mime = (type || "").toLowerCase();
+  if (IMAGE_TYPES.has(mime)) result = { kind: "image" };
+  else if (mime in VIDEO_TYPE_TO_EXT)
+    result = { kind: "video", ext: VIDEO_TYPE_TO_EXT[mime] };
+  else if (!mime) result = classifyByName(name || "");
 
   if (!result) return { kind: "error", reason: "unsupported" };
-  if (file.size > MAX_ATTACHMENT_BYTES)
-    return { kind: "error", reason: "too-large" };
+  if (size > MAX_ATTACHMENT_BYTES) return { kind: "error", reason: "too-large" };
   return result;
+}
+
+export function classifyAttachmentFile(file: File): AttachmentClassification {
+  return classifyAttachmentMeta(file.name || "", file.type || "", file.size);
+}
+
+/**
+ * MIME type for a Tauri path drop, derived from the filename — the webview
+ * only hands us a filesystem path, so the File we construct needs its type
+ * set explicitly for the upload's Content-Type.
+ */
+export function mimeFromName(name: string): string | null {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  return (
+    {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      mp4: "video/mp4",
+      mov: "video/quicktime",
+    }[ext] ?? null
+  );
 }
 
 /**

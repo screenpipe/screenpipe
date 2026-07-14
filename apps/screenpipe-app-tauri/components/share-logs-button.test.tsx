@@ -4,28 +4,46 @@
 
 import React from "react";
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ShareLogsButton } from "./share-logs-button";
 
-const { toastMock, commandsMock, loadAllConversationsMock } = vi.hoisted(
-  () => ({
-    toastMock: vi.fn(),
-    commandsMock: {
-      getLogFiles: vi.fn(),
-      redactPiiForFeedback: vi.fn(),
-      uploadFileToS3: vi.fn(),
-    },
-    loadAllConversationsMock: vi.fn(),
-  }),
-);
+const {
+  toastMock,
+  commandsMock,
+  loadAllConversationsMock,
+  fsMock,
+  dragDropHandlerRef,
+} = vi.hoisted(() => ({
+  toastMock: vi.fn(),
+  commandsMock: {
+    getLogFiles: vi.fn(),
+    redactPiiForFeedback: vi.fn(),
+    uploadFileToS3: vi.fn(),
+  },
+  loadAllConversationsMock: vi.fn(),
+  fsMock: {
+    readTextFile: vi.fn(),
+    readFile: vi.fn(),
+    stat: vi.fn(),
+  },
+  dragDropHandlerRef: {
+    current: null as null | ((event: { payload: unknown }) => void),
+  },
+}));
 
 vi.mock("./ui/use-toast", () => ({
   useToast: () => ({ toast: toastMock }),
 }));
 vi.mock("@/lib/utils/tauri", () => ({ commands: commandsMock }));
-vi.mock("@tauri-apps/plugin-fs", () => ({
-  readTextFile: vi.fn().mockResolvedValue(""),
+vi.mock("@tauri-apps/plugin-fs", () => fsMock);
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: (cb: (event: { payload: unknown }) => void) => {
+      dragDropHandlerRef.current = cb;
+      return Promise.resolve(() => {});
+    },
+  }),
 }));
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn().mockResolvedValue("0.0.0-test"),
@@ -82,6 +100,40 @@ function stubImagePipeline() {
   );
 }
 
+// The video PUT goes through XMLHttpRequest for real upload progress.
+class FakeXHR {
+  static requests: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: unknown;
+  }[] = [];
+  method = "";
+  url = "";
+  headers: Record<string, string> = {};
+  status = 200;
+  upload: { onprogress: ((e: unknown) => void) | null } = { onprogress: null };
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  open(method: string, url: string) {
+    this.method = method;
+    this.url = url;
+  }
+  setRequestHeader(key: string, value: string) {
+    this.headers[key] = value;
+  }
+  send(body: unknown) {
+    FakeXHR.requests.push({
+      method: this.method,
+      url: this.url,
+      headers: this.headers,
+      body,
+    });
+    this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 });
+    setTimeout(() => this.onload?.(), 0);
+  }
+}
+
 // Fake server for sendLogs. `videoPath` lets tests simulate an old server
 // that ignores video_ext and always provisions a .mp4 key.
 function stubServer({ videoPath }: { videoPath: string }) {
@@ -115,12 +167,26 @@ function stubServer({ videoPath }: { videoPath: string }) {
   return { fetchMock, calls };
 }
 
-const dropZone = () => screen.getByTestId("attachment-drop-zone");
+const dropZone = () => screen.getByTestId("feedback-form");
 const sendButton = () =>
   screen.getByRole("button", { name: /send logs & feedback/i });
 
 describe("ShareLogsButton attachments", () => {
   beforeEach(() => {
+    FakeXHR.requests = [];
+    vi.stubGlobal("XMLHttpRequest", FakeXHR);
+    dragDropHandlerRef.current = null;
+    // jsdom has no layout, so offsetParent is always null — the component uses
+    // it as a visibility guard for Tauri drops; make it truthy for tests.
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+      configurable: true,
+      get() {
+        return this.parentNode;
+      },
+    });
+    fsMock.readTextFile.mockResolvedValue("");
+    fsMock.readFile.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    fsMock.stat.mockResolvedValue({ size: 3 });
     loadAllConversationsMock.mockResolvedValue([]);
     commandsMock.getLogFiles.mockResolvedValue({ status: "ok", data: [] });
     commandsMock.redactPiiForFeedback.mockResolvedValue({
@@ -154,9 +220,14 @@ describe("ShareLogsButton attachments", () => {
     expect(
       screen.getByRole("button", { name: /remove screenshot/i }),
     ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("attachment-status")).toHaveTextContent(
+        "1 screenshot attached",
+      ),
+    );
   });
 
-  it("attaches a dropped mp4 as a video row", async () => {
+  it("attaches a dropped mp4 as a video card with attached status", async () => {
     render(<ShareLogsButton />);
 
     fireEvent.drop(
@@ -167,9 +238,12 @@ describe("ShareLogsButton attachments", () => {
     const row = await screen.findByTestId("video-attachment");
     expect(row).toHaveTextContent("repro.mp4");
     expect(row).toHaveTextContent("5.0 mb · video");
+    expect(screen.getByTestId("attachment-status")).toHaveTextContent(
+      "1 video attached",
+    );
   });
 
-  it("attaches a dropped mov as a video row", async () => {
+  it("attaches a dropped mov as a video card", async () => {
     render(<ShareLogsButton />);
 
     fireEvent.drop(
@@ -200,11 +274,14 @@ describe("ShareLogsButton attachments", () => {
         }),
       ),
     );
+    // the form keeps its neutral state — errors live in toasts only
+    expect(screen.queryByTestId("drop-overlay")).toBeNull();
+    expect(screen.queryByTestId("attachment-status")).toBeNull();
     expect(screen.queryByTestId("video-attachment")).toBeNull();
     expect(screen.queryByTestId("image-attachment")).toBeNull();
   });
 
-  it("rejects oversized files with a toast", async () => {
+  it("rejects oversized files with a size toast", async () => {
     render(<ShareLogsButton />);
 
     fireEvent.drop(
@@ -216,11 +293,87 @@ describe("ShareLogsButton attachments", () => {
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
           title: "file too large",
+          description: "file is 51.0 mb — the 50 mb limit was exceeded.",
           variant: "destructive",
         }),
       ),
     );
     expect(screen.queryByTestId("video-attachment")).toBeNull();
+  });
+
+  it("attaches a native Tauri path drop (webview drag-drop event)", async () => {
+    render(<ShareLogsButton />);
+    await waitFor(() => expect(dragDropHandlerRef.current).toBeTruthy());
+
+    act(() => {
+      dragDropHandlerRef.current!({
+        payload: { type: "drop", paths: ["/tmp/bug-report.mov"] },
+      });
+    });
+
+    const row = await screen.findByTestId("video-attachment");
+    expect(row).toHaveTextContent("bug-report.mov");
+    expect(fsMock.readFile).toHaveBeenCalledWith("/tmp/bug-report.mov");
+  });
+
+  it("rejects an oversized Tauri path drop with the size toast", async () => {
+    fsMock.readFile.mockResolvedValue(new Uint8Array(51 * 1024 * 1024));
+    render(<ShareLogsButton />);
+    await waitFor(() => expect(dragDropHandlerRef.current).toBeTruthy());
+
+    act(() => {
+      dragDropHandlerRef.current!({
+        payload: { type: "drop", paths: ["/tmp/huge.mp4"] },
+      });
+    });
+
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "file too large",
+          variant: "destructive",
+        }),
+      ),
+    );
+    expect(screen.queryByTestId("video-attachment")).toBeNull();
+  });
+
+  it("rejects an unsupported Tauri path drop without reading the file", async () => {
+    render(<ShareLogsButton />);
+    await waitFor(() => expect(dragDropHandlerRef.current).toBeTruthy());
+
+    act(() => {
+      dragDropHandlerRef.current!({
+        payload: { type: "drop", paths: ["/tmp/notes.txt"] },
+      });
+    });
+
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "unsupported file",
+          variant: "destructive",
+        }),
+      ),
+    );
+    expect(fsMock.readFile).not.toHaveBeenCalled();
+  });
+
+  it("shows drag-active state for native Tauri drag hover", async () => {
+    render(<ShareLogsButton />);
+    await waitFor(() => expect(dragDropHandlerRef.current).toBeTruthy());
+
+    act(() => {
+      dragDropHandlerRef.current!({ payload: { type: "over" } });
+    });
+    expect(screen.getByTestId("drop-overlay")).toHaveTextContent(
+      "release to attach",
+    );
+
+    act(() => {
+      dragDropHandlerRef.current!({ payload: { type: "leave" } });
+    });
+    expect(screen.queryByTestId("drop-overlay")).toBeNull();
   });
 
   it("supports removing and replacing a video attachment", async () => {
@@ -246,7 +399,8 @@ describe("ShareLogsButton attachments", () => {
     const { calls } = stubServer({
       videoPath: "logs/machine/m1/t_video.mp4",
     });
-    render(<ShareLogsButton />);
+    const onComplete = vi.fn();
+    render(<ShareLogsButton onComplete={onComplete} />);
 
     fireEvent.drop(dropZone(), transfer(makeFile("repro.mp4", "video/mp4")));
     await screen.findByTestId("video-attachment");
@@ -264,12 +418,12 @@ describe("ShareLogsButton attachments", () => {
       video_ext: "mp4",
     });
 
-    const videoPut = calls.find((c) => c.url === "https://storage.test/video");
+    const videoPut = FakeXHR.requests.find(
+      (r) => r.url === "https://storage.test/video",
+    );
     expect(videoPut).toBeTruthy();
-    expect(videoPut!.init!.method).toBe("PUT");
-    expect(
-      (videoPut!.init!.headers as Record<string, string>)["Content-Type"],
-    ).toBe("video/mp4");
+    expect(videoPut!.method).toBe("PUT");
+    expect(videoPut!.headers["Content-Type"]).toBe("video/mp4");
 
     const confirm = calls.find((c) => c.url.endsWith("/api/logs/confirm"));
     expect(JSON.parse(confirm!.init!.body as string).video_url).toBe(
@@ -282,6 +436,15 @@ describe("ShareLogsButton attachments", () => {
     expect(sentToast![0].description).toContain("included: video");
     // rust upload path is only for the generated last-5-min recording
     expect(commandsMock.uploadFileToS3).not.toHaveBeenCalled();
+
+    // sent phase: button flips to "sent", status confirms, dialog closes after
+    expect(screen.getByRole("button", { name: /sent/i })).toBeDisabled();
+    expect(screen.getByTestId("attachment-status")).toHaveTextContent(
+      "report sent — attachment included",
+    );
+    await waitFor(() => expect(onComplete).toHaveBeenCalled(), {
+      timeout: 3000,
+    });
   });
 
   it("skips a mov upload when an old server provisions a .mp4 key", async () => {
@@ -306,7 +469,7 @@ describe("ShareLogsButton attachments", () => {
 
     // never store quicktime bytes under a .mp4 key
     expect(
-      calls.find((c) => c.url === "https://storage.test/video"),
+      FakeXHR.requests.find((r) => r.url === "https://storage.test/video"),
     ).toBeUndefined();
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: "video not attached" }),
@@ -341,10 +504,10 @@ describe("ShareLogsButton attachments", () => {
     expect(JSON.parse(provision!.init!.body as string)).toMatchObject({
       video_ext: "mov",
     });
-    const videoPut = calls.find((c) => c.url === "https://storage.test/video");
-    expect(
-      (videoPut!.init!.headers as Record<string, string>)["Content-Type"],
-    ).toBe("video/quicktime");
+    const videoPut = FakeXHR.requests.find(
+      (r) => r.url === "https://storage.test/video",
+    );
+    expect(videoPut!.headers["Content-Type"]).toBe("video/quicktime");
     const confirm = calls.find((c) => c.url.endsWith("/api/logs/confirm"));
     expect(JSON.parse(confirm!.init!.body as string).video_url).toBe(
       "logs/machine/m1/t_video.mov",
@@ -358,7 +521,11 @@ describe("ShareLogsButton attachments", () => {
     fireEvent.drop(dropZone(), transfer(makeFile("shot.png", "image/png")));
 
     expect(sendButton()).toBeDisabled();
-    await screen.findByTestId("image-attachment");
+    await waitFor(() =>
+      expect(screen.getByTestId("attachment-status")).toHaveTextContent(
+        "1 screenshot attached",
+      ),
+    );
     expect(sendButton()).toBeEnabled();
   });
 });
