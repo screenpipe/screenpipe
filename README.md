@@ -338,9 +338,13 @@ Make sure to understand the main branch is moving fast and breaking things, if y
 The signed desktop app uses a subscription starting at $25/month; existing lifetime licenses remain valid. The source is available for personal, non-commercial use, so you can build and run it yourself (see [LICENSE.md](LICENSE.md)); commercial use of the source requires a license.
 
 **Does screenpipe send my data to the cloud?**
-Your captured data (screen frames, audio, transcripts) is stored locally by default and never leaves your device unless you enable cloud sync. Use local AI models via Ollama to keep prompts local too.
+Screen frames, audio, transcripts, and the search index are stored locally by default. That does not mean the desktop app makes no network requests:
 
-Telemetry: the desktop app ships with anonymous product analytics enabled by default (PostHog + Sentry). No screen content, audio, or transcripts are sent — only aggregate diagnostics (app version, OS, CPU/RAM, feature toggles, disk usage counters, crash reports). Opt out in **Settings → Privacy → Anonymous analytics**. The opt-out is respected on the next app start.
+- Product analytics is enabled by default through PostHog. It uses a stable installation identifier and, when you sign in, may associate account details such as your email with app, hostname, operating-system, hardware, and other device or feature metadata.
+- Sentry receives crash and error diagnostics while telemetry is enabled.
+- If you choose cloud transcription, hosted AI, or cloud sync, the audio, prompts and selected context, or synced data needed for that feature is processed remotely by the configured service.
+
+You can disable telemetry in **Settings → Privacy → Analytics**, then apply the settings change. To keep capture and AI processing local, leave cloud sync off and select local transcription and a local AI provider such as Ollama.
 
 **How much disk space does it use?**
 ~5–10 GB per month. Event-driven capture only stores frames when something changes, dramatically reducing storage compared to continuous recording.
