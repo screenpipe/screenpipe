@@ -79,6 +79,65 @@ pub struct ServerCore {
 const BIND_RETRY_ATTEMPTS: u32 = 20;
 const BIND_RETRY_DELAY: Duration = Duration::from_millis(500);
 
+/// Try to identify the process holding a TCP port in LISTEN state.
+/// Returns e.g. `"docker-proxy (PID 1234)"` or `None` if detection fails.
+/// Sync and best-effort — only called once after all bind retries are exhausted.
+fn identify_port_holder(port: u16) -> Option<String> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let output = std::process::Command::new("lsof")
+            .args(["-nP", &format!("-i:{}", port), "-sTCP:LISTEN"])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // lsof header: COMMAND PID USER ...
+        // Skip the header line, parse the first data line.
+        for line in stdout.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() >= 2 {
+                let command = cols[0];
+                let pid = cols[1];
+                return Some(format!("{} (PID {})", command, pid));
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // netstat -ano | findstr :<port> → get PID, then resolve via tasklist
+        let output = std::process::Command::new("cmd")
+            .args(["/C", &format!("netstat -ano | findstr :{}", port)])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if !line.contains("LISTENING") {
+                continue;
+            }
+            let pid = line.split_whitespace().last()?;
+            // Resolve PID to process name
+            let tasklist = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                .output()
+                .ok()?;
+            let tl_out = String::from_utf8_lossy(&tasklist.stdout);
+            let process_name = tl_out
+                .lines()
+                .next()
+                .and_then(|l| l.split(',').next())
+                .map(|s| s.trim_matches('"'))
+                .unwrap_or("unknown");
+            return Some(format!("{} (PID {})", process_name, pid));
+        }
+        None
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = port;
+        None
+    }
+}
+
 /// [`bind_listener`] with retry on `AddrInUse`. Only that error kind is
 /// retried — anything else (permission denied, bad address) fails fast on
 /// the first attempt.
@@ -734,7 +793,21 @@ impl ServerCore {
         )
         .await
         .map_err(|e| {
-            let msg = format!("Failed to bind port {}: {}", config.port, e);
+            let msg = if e.kind() == std::io::ErrorKind::AddrInUse {
+                let holder = identify_port_holder(config.port);
+                match holder {
+                    Some(proc) => format!(
+                        "port {} is already in use by {}. close that process or set SCREENPIPE_PORT to a different value",
+                        config.port, proc
+                    ),
+                    None => format!(
+                        "port {} is already in use by another process. close that process or set SCREENPIPE_PORT to a different value",
+                        config.port
+                    ),
+                }
+            } else {
+                format!("failed to bind port {}: {}", config.port, e)
+            };
             crate::health::set_boot_error(&msg);
             msg
         })?;

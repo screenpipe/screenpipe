@@ -541,6 +541,28 @@ fn respawn_engine_if_crashed(
         return;
     }
 
+    // Port conflict — restarting into the same occupied port is futile. Surface
+    // a notification so the user knows why recording stopped, and skip respawn.
+    {
+        let boot = get_boot_phase_snapshot();
+        if boot.phase == "error" {
+            if let Some(ref err) = boot.error {
+                if err.contains("in use") {
+                    warn!(
+                        "skipping auto-respawn: port conflict detected — {}",
+                        err
+                    );
+                    let app_clone = app.clone();
+                    let err_body = err.clone();
+                    tokio::spawn(async move {
+                        let _ = show_port_conflict_notification(&app_clone, &err_body).await;
+                    });
+                    return;
+                }
+            }
+        }
+    }
+
     let check = EngineRespawnCheck {
         wants_recording: app
             .try_state::<crate::recording::RecordingState>()
@@ -1320,6 +1342,35 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
 /// Show a notification telling the user that capture has stalled, with a restart button.
 /// Skips showing if the main overlay panel is visible — the notification panel
 /// steals focus and causes a deadlock with the overlay's focus-loss handler.
+/// Show a notification when the HTTP port is occupied by another process.
+/// Uses the same notification panel as capture-stall alerts.
+async fn show_port_conflict_notification(app: &tauri::AppHandle, error_msg: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if crate::window::MAIN_PANEL_SHOWN.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::debug!("skipping port conflict notification — overlay is visible");
+            return Ok(());
+        }
+    }
+    let body = format!(
+        "{}. close that process and restart recording.",
+        error_msg.trim_end_matches('.')
+    );
+    let payload = serde_json::json!({
+        "id": "port_conflict",
+        "type": "port_conflict",
+        "title": "port conflict — recording stopped",
+        "body": body,
+        "actions": [
+            { "label": "RESTART", "action": "restart_recording", "primary": true }
+        ],
+        "autoDismissMs": 0
+    });
+    crate::commands::show_notification_panel(app.clone(), payload.to_string())
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
 async fn show_capture_stall_notification(app: &tauri::AppHandle, system: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {

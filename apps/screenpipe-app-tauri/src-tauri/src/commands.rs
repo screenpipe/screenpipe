@@ -2786,16 +2786,19 @@ pub async fn show_notification_panel(
         // Server-side safety timeout: force-hide the notification if the JS
         // auto-dismiss timer fails (e.g. webview timer throttled on Windows).
         // Adds 5s buffer so JS normally handles it first.
-        let app_safety = app_handle.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(auto_dismiss_ms + 5000)).await;
-            if let Some(w) = app_safety.get_webview_window("notification-panel") {
-                if w.is_visible().unwrap_or(false) {
-                    info!("Safety timeout: force-hiding notification panel");
-                    let _ = w.hide();
+        // Skip when autoDismissMs == 0 (persistent notification, user must act).
+        if auto_dismiss_ms > 0 {
+            let app_safety = app_handle.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(auto_dismiss_ms + 5000)).await;
+                if let Some(w) = app_safety.get_webview_window("notification-panel") {
+                    if w.is_visible().unwrap_or(false) {
+                        info!("Safety timeout: force-hiding notification panel");
+                        let _ = w.hide();
+                    }
                 }
-            }
-        });
+            });
+        }
 
         return Ok(());
     }
@@ -2898,17 +2901,20 @@ pub async fn show_notification_panel(
     });
 
     // Server-side safety timeout for newly created windows too
-    let app_safety = app_handle.clone();
-    tokio::spawn(async move {
-        // 2s wait for mount + autoDismissMs + 5s buffer
-        tokio::time::sleep(std::time::Duration::from_millis(auto_dismiss_ms + 7000)).await;
-        if let Some(w) = app_safety.get_webview_window("notification-panel") {
-            if w.is_visible().unwrap_or(false) {
-                info!("Safety timeout: force-hiding notification panel (new window)");
-                let _ = w.hide();
+    // Skip when autoDismissMs == 0 (persistent notification, user must act).
+    if auto_dismiss_ms > 0 {
+        let app_safety = app_handle.clone();
+        tokio::spawn(async move {
+            // 2s wait for mount + autoDismissMs + 5s buffer
+            tokio::time::sleep(std::time::Duration::from_millis(auto_dismiss_ms + 7000)).await;
+            if let Some(w) = app_safety.get_webview_window("notification-panel") {
+                if w.is_visible().unwrap_or(false) {
+                    info!("Safety timeout: force-hiding notification panel (new window)");
+                    let _ = w.hide();
+                }
             }
-        }
-    });
+        });
+    }
 
     Ok(())
 }

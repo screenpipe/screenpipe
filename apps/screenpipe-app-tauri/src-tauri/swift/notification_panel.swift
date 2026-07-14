@@ -974,6 +974,9 @@ class NotificationPanelController: NSObject {
 
     private func startTimer() {
         timer?.invalidate()
+        // autoDismissMs == 0 means "don't auto-dismiss" (e.g. port-conflict
+        // notifications that need the user to act).
+        guard autoDismissMs > 0 else { return }
         let currentEpoch = self.epoch
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             guard let self = self else { return }

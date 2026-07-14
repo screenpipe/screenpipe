@@ -110,7 +110,7 @@ export default function EngineStartup({
   // which is exactly this case. Now we surface the real reason immediately.
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [spawnErrorKind, setSpawnErrorKind] = useState<
-    "permission" | "other" | null
+    "permission" | "port_conflict" | "other" | null
   >(null);
   const [isResettingPerm, setIsResettingPerm] = useState(false);
   // Bundle id of the running app — surfaces in the stuck UI so users who
@@ -266,6 +266,29 @@ export default function EngineStartup({
       clearInterval(interval);
     };
   }, [state]);
+
+  // React to boot phase "error" — e.g. port conflict detected by the Rust
+  // backend after all bind retries are exhausted. Flip straight to "stuck"
+  // with an actionable message instead of letting the generic timer fire.
+  useEffect(() => {
+    if (state === "running" || state === "live-feed" || state === "stuck") return;
+    if (bootPhase?.phase !== "error" || !bootPhase.error) return;
+
+    const isPortConflict = /port.*in use|already in use/i.test(bootPhase.error);
+    const kind: "port_conflict" | "other" = isPortConflict
+      ? "port_conflict"
+      : "other";
+
+    posthog.capture("onboarding_engine_boot_error", {
+      time_spent_ms: Date.now() - mountTimeRef.current,
+      error_message: bootPhase.error,
+      error_kind: kind,
+    });
+
+    setSpawnError(bootPhase.error);
+    setSpawnErrorKind(kind);
+    setState("stuck");
+  }, [state, bootPhase?.phase, bootPhase?.error]);
 
   // Transition from "running" to "live-feed" instead of auto-advancing
   useEffect(() => {
@@ -1147,10 +1170,76 @@ if the input is sparse, just describe what little you have warmly. don't apologi
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              {/* When we know exactly why startup failed (e.g. TCC permission
-                  denied) show the real reason instead of a generic
-                  "send-logs" prompt. */}
-              {spawnErrorKind === "permission" ? (
+              {/* When we know exactly why startup failed show the real
+                  reason instead of a generic "send-logs" prompt. */}
+              {spawnErrorKind === "port_conflict" ? (
+                <>
+                  <p className="font-mono text-sm text-foreground text-center">
+                    port conflict — cannot start recording.
+                  </p>
+                  <p className="font-mono text-[11px] text-muted-foreground text-center leading-relaxed break-words">
+                    {spawnError}
+                  </p>
+                  <div className="flex items-center gap-2 flex-wrap justify-center">
+                    <Button
+                      size="sm"
+                      onClick={async () => {
+                        setSpawnError(null);
+                        setSpawnErrorKind(null);
+                        setState("starting");
+                        try {
+                          await commands.spawnScreenpipe(null);
+                        } catch (err) {
+                          const message =
+                            typeof err === "string"
+                              ? err
+                              : err instanceof Error
+                                ? err.message
+                                : String(err ?? "unknown error");
+                          setSpawnError(message);
+                          setSpawnErrorKind(
+                            /port.*in use|already in use/i.test(message)
+                              ? "port_conflict"
+                              : "other"
+                          );
+                          setState("stuck");
+                        }
+                      }}
+                      className="font-mono text-xs h-8 px-3"
+                    >
+                      retry
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSkip}
+                      className="font-mono text-xs h-8 px-3"
+                    >
+                      continue without recording
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openLogsFolder}
+                      className="font-mono text-[10px] h-7 px-2"
+                    >
+                      logs
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        openUrl("https://cal.com/team/screenpipe/chat")
+                      }
+                      className="font-mono text-[10px] h-7 px-2"
+                    >
+                      <Calendar className="w-3 h-3 mr-1" /> help
+                    </Button>
+                  </div>
+                </>
+              ) : spawnErrorKind === "permission" ? (
                 <>
                   <p className="font-mono text-sm text-foreground text-center">
                     screen recording permission is required.
