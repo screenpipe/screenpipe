@@ -555,6 +555,18 @@ fn respawn_engine_if_crashed(
                     let port_free = std::net::TcpListener::bind(("127.0.0.1", api.port)).is_ok();
 
                     if port_free {
+                        // Only auto-restart if recording was intended — don't
+                        // start recording if the user deliberately stopped it.
+                        let wants_recording = app
+                            .try_state::<crate::recording::RecordingState>()
+                            .map(|s| s.capture_intended())
+                            .unwrap_or(false);
+                        if !wants_recording {
+                            info!("port {} is free but recording not intended — clearing error only", api.port);
+                            set_boot_phase("idle", None);
+                            *last_port_conflict_notified = None;
+                            return;
+                        }
                         info!("port {} is now free — restarting engine", api.port);
                         set_boot_phase("idle", None);
                         *last_port_conflict_notified = None;
