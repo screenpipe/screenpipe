@@ -389,20 +389,21 @@ mod imp {
                 // don't want to monopolize the tokio runtime. Bounded box: if
                 // anything goes wrong, fall through to the next candidate.
                 let bytes_vec = bytes.to_vec();
-                let encoded = tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
-                    let img = image::load_from_memory(&bytes_vec).ok()?;
-                    let resized = img.resize(320, 180, image::imageops::FilterType::Triangle);
-                    let (w, h) = (resized.width(), resized.height());
-                    let mut buf = Vec::with_capacity(40 * 1024);
-                    let mut cursor = std::io::Cursor::new(&mut buf);
-                    let encoder =
-                        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 60);
-                    resized.into_rgb8().write_with_encoder(encoder).ok()?;
-                    Some((buf, w, h))
-                })
-                .await
-                .ok()
-                .flatten();
+                let encoded =
+                    tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
+                        let img = image::load_from_memory(&bytes_vec).ok()?;
+                        let resized = img.resize(320, 180, image::imageops::FilterType::Triangle);
+                        let (w, h) = (resized.width(), resized.height());
+                        let mut buf = Vec::with_capacity(40 * 1024);
+                        let mut cursor = std::io::Cursor::new(&mut buf);
+                        let encoder =
+                            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 60);
+                        resized.into_rgb8().write_with_encoder(encoder).ok()?;
+                        Some((buf, w, h))
+                    })
+                    .await
+                    .ok()
+                    .flatten();
 
                 let (jpeg, w, h) = match encoded {
                     Some(v) => v,
