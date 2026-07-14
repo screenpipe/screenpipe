@@ -526,6 +526,7 @@ fn respawn_engine_if_crashed(
     start_elapsed: Duration,
     server_respawns: &mut std::collections::VecDeque<Instant>,
     last_restart_triggered: &mut Option<Instant>,
+    last_port_conflict_notified: &mut Option<Instant>,
 ) {
     let now = Instant::now();
     while server_respawns
@@ -552,11 +553,22 @@ fn respawn_engine_if_crashed(
                         "skipping auto-respawn: port conflict detected — {}",
                         err
                     );
-                    let app_clone = app.clone();
-                    let err_body = err.clone();
-                    tokio::spawn(async move {
-                        let _ = show_port_conflict_notification(&app_clone, &err_body).await;
-                    });
+                    // Show notification once, then respect cooldown so dismissing
+                    // it doesn't cause it to reappear every health-check cycle.
+                    // Shorter cooldown than capture-stall (60s vs 5min) so the
+                    // user gets a RESTART button fairly soon after freeing the port.
+                    const PORT_CONFLICT_COOLDOWN: Duration = Duration::from_secs(60);
+                    let cooldown_ok = last_port_conflict_notified
+                        .map(|t| now.duration_since(t) >= PORT_CONFLICT_COOLDOWN)
+                        .unwrap_or(true);
+                    if cooldown_ok {
+                        *last_port_conflict_notified = Some(now);
+                        let app_clone = app.clone();
+                        let err_body = err.clone();
+                        tokio::spawn(async move {
+                            let _ = show_port_conflict_notification(&app_clone, &err_body).await;
+                        });
+                    }
                     return;
                 }
             }
@@ -822,6 +834,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     // settings-triggered): suppress stall detection for 120s, giving the
     // new pipeline time to load models and produce its first DB write.
     let mut last_restart_triggered: Option<Instant> = None;
+    let mut last_port_conflict_notified: Option<Instant> = None;
     // Track last known spawn epoch to detect user-initiated restarts
     let mut last_known_spawn_epoch: u64 = 0;
     // How long the recording-session "start in progress" flags have been
@@ -948,6 +961,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 start_time.elapsed(),
                 &mut server_respawns,
                 &mut last_restart_triggered,
+                &mut last_port_conflict_notified,
             );
 
             // NOTE: Runtime permission-loss detection has moved to
