@@ -39,10 +39,8 @@ export function cacheAnalyticsId(id: string | undefined | null): void {
 }
 
 // Same pattern for the analytics opt-out preference: cache it in localStorage
-// so posthog.init() in providers.tsx can read it SYNCHRONOUSLY on boot —
-// before the async settings IPC resolves. Without this, users with
-// analyticsEnabled=false still get PostHog initialized (session cookie set,
-// feature flags fetched) on every cold boot.
+// so providers.tsx can read it SYNCHRONOUSLY on boot and sync PostHog
+// opt-in/out right after init — before the async settings IPC resolves.
 export const ANALYTICS_ENABLED_KEY = "screenpipe_analytics_enabled";
 
 export function readCachedAnalyticsEnabled(): boolean | undefined {
