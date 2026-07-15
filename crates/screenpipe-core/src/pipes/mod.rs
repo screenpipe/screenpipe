@@ -1328,6 +1328,20 @@ const STORE_MAGIC: &[u8; 8] = b"SPSTORE1";
 /// in agreement on encrypted stores; before this helper the runner did a plain
 /// `read_to_string` and silently failed when the file was encrypted.
 fn read_store_bin(path: &Path) -> Option<serde_json::Value> {
+    read_store_bin_once(path).or_else(|| {
+        // Tauri's plugin-store writes store.bin via tmp-file + rename; a read
+        // racing the rename can observe partial content on some filesystems.
+        // One immediate re-read sees the completed file (spec A1/I3).
+        if path.exists() {
+            warn!("store.bin read/parse failed, retrying once (possible concurrent write)");
+            read_store_bin_once(path)
+        } else {
+            None
+        }
+    })
+}
+
+fn read_store_bin_once(path: &Path) -> Option<serde_json::Value> {
     let data = std::fs::read(path).ok()?;
     if data.len() >= STORE_MAGIC.len() && &data[..STORE_MAGIC.len()] == STORE_MAGIC {
         #[cfg(feature = "secrets")]
@@ -1361,6 +1375,77 @@ fn read_store_bin(path: &Path) -> Option<serde_json::Value> {
         return Some(serde_json::json!({}));
     }
     serde_json::from_slice(&data).ok()
+}
+
+/// Pre-flight for local Ollama providers (spec A7): confirm the daemon is
+/// reachable and the model is pulled before spawning the agent, so failures
+/// surface immediately as structured errors instead of the subprocess hanging
+/// on connection retries until the execution timeout.
+///
+/// Returns `Err((error_type, message))` on a definitive failure. Unexpected
+/// response shapes are treated as OK — the check must never block a run that
+/// could have succeeded.
+async fn ollama_preflight(
+    provider: Option<&str>,
+    provider_url: Option<&str>,
+    model: &str,
+) -> std::result::Result<(), (&'static str, String)> {
+    if !matches!(provider, Some("native-ollama") | Some("ollama")) {
+        return Ok(());
+    }
+    let base = provider_url.unwrap_or("http://localhost:11434");
+    let base = base.trim_end_matches('/');
+    // Presets may store the OpenAI-compat endpoint; the tags API is native.
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    let url = format!("{base}/api/tags");
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return Err((
+                "ollama_not_running",
+                format!(
+                    "Ollama is not reachable at {base} — start it with `ollama serve` ({e})"
+                ),
+            ))
+        }
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    if !ollama_model_available(&body, model) {
+        return Err((
+            "model_not_found",
+            format!("model '{model}' is not pulled in Ollama — run `ollama pull {model}`"),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether an Ollama `/api/tags` response lists `model`. Tag-insensitive:
+/// `llama3.2` matches `llama3.2:latest` and `llama3.2:3b`. An unexpected
+/// response shape counts as available — pre-flight must never produce a
+/// false negative.
+fn ollama_model_available(tags_body: &serde_json::Value, model: &str) -> bool {
+    let Some(models) = tags_body.get("models").and_then(|m| m.as_array()) else {
+        return true;
+    };
+    models
+        .iter()
+        .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+        .any(|n| {
+            n == model
+                || n.strip_suffix(":latest") == Some(model)
+                || n.starts_with(&format!("{model}:"))
+        })
 }
 
 /// Read `~/.screenpipe/store.bin` and find the preset by id.
@@ -2710,6 +2795,44 @@ impl PipeManager {
         }
     }
 
+    /// Release the run claim (running-map entry + PID lock file) taken at the
+    /// top of a run before the subprocess spawned. Every early bail-out after
+    /// the claim MUST call this, or the pipe stays "already running" until
+    /// restart.
+    async fn release_run_claim(&self, name: &str) {
+        self.running.lock().await.remove(name);
+        remove_pid_file(&self.pipes_dir, name);
+    }
+
+    /// Fail an execution before the subprocess spawned: record a structured
+    /// failure in the store (if a row was already created), release the run
+    /// claim, and return the error to surface to the caller.
+    async fn fail_before_spawn(
+        &self,
+        name: &str,
+        exec_id: Option<i64>,
+        error_type: &str,
+        message: String,
+    ) -> anyhow::Error {
+        if let (Some(store), Some(id)) = (self.store.as_ref(), exec_id) {
+            let _ = store
+                .finish_execution(
+                    id,
+                    "failed",
+                    "",
+                    "",
+                    None,
+                    Some(error_type),
+                    Some(&message),
+                    None,
+                )
+                .await;
+            self.running_execution_ids.lock().await.remove(name);
+        }
+        self.release_run_claim(name).await;
+        anyhow!(message)
+    }
+
     /// Run a pipe once (manual trigger or scheduled).
     /// NOTE: this blocks for the entire execution — avoid calling while
     /// holding the outer PipeManager mutex from an API handler.
@@ -2800,13 +2923,30 @@ impl PipeManager {
                         resolved.api_key,
                         resolved.prompt,
                     ),
-                    None => (
-                        config.model.clone(),
-                        config.provider.clone(),
-                        None,
-                        None,
-                        None,
-                    ),
+                    None => {
+                        // Explicit failure instead of a silent fallback to
+                        // pipe.md defaults (spec A3) — mirrors run_pipe_with_trigger.
+                        let available = list_available_preset_ids(&self.pipes_dir);
+                        let available_hint = if available.is_empty() {
+                            String::from("no presets are configured")
+                        } else {
+                            format!("available presets: {}", available.join(", "))
+                        };
+                        return Err(self
+                            .fail_before_spawn(
+                                name,
+                                None,
+                                "preset_not_found",
+                                format!(
+                                    "pipe '{}': preset '{}' not found in settings — {}. \
+                                     Set one of those in the pipe's `preset:` field, or \
+                                     create a new preset with `screenpipe pipe models create {} --provider … --model …`, \
+                                     or remove the `preset:` line to use the default.",
+                                    name, preset_id, available_hint, preset_id
+                                ),
+                            )
+                            .await);
+                    }
                 }
             } else {
                 // No preset — use user's default preset
@@ -2847,6 +2987,18 @@ impl PipeManager {
         } else {
             None
         };
+
+        // Pre-flight: fail fast with a structured error when the local Ollama
+        // daemon is down or the model isn't pulled (spec A7).
+        if let Err((error_type, msg)) = ollama_preflight(
+            run_provider.as_deref(),
+            run_provider_url.as_deref(),
+            &run_model,
+        )
+        .await
+        {
+            return Err(self.fail_before_spawn(name, exec_id, error_type, msg).await);
+        }
 
         // Check if history/session continuation is enabled for this pipe
         let history_enabled = config
@@ -3295,10 +3447,24 @@ impl PipeManager {
                 // start at `retry_depth` so an in-run fallback retry advances to
                 // the next preset even when the failed one's breaker never
                 // tripped (timeouts/crashes don't trip it) — see #3914.
-                let (preset_id, idx) = self
+                let (preset_id, idx) = match self
                     .fallback_registry
                     .pick_preset_with_floor(&config.preset, retry_depth)
-                    .ok_or_else(|| anyhow!("pipe '{}': no presets configured", name))?;
+                {
+                    Some(v) => v,
+                    None => {
+                        // Must release the run claim taken above — a bare
+                        // return here would leave the pipe "already running".
+                        return Err(self
+                            .fail_before_spawn(
+                                name,
+                                None,
+                                "preset_not_found",
+                                format!("pipe '{}': no presets configured", name),
+                            )
+                            .await);
+                    }
+                };
 
                 match resolve_preset(&self.pipes_dir, preset_id) {
                     Some(resolved) => {
@@ -3331,16 +3497,22 @@ impl PipeManager {
                         } else {
                             format!("available presets: {}", available.join(", "))
                         };
-                        return Err(anyhow!(
-                            "pipe '{}': preset '{}' not found in settings — {}. \
-                             Set one of those in the pipe's `preset:` field, or \
-                             create a new preset with `screenpipe pipe models create {} --provider … --model …`, \
-                             or remove the `preset:` line to use the default.",
-                            name,
-                            preset_id,
-                            available_hint,
-                            preset_id
-                        ));
+                        // fail_before_spawn releases the run claim taken above —
+                        // a bare return would leave the pipe "already running".
+                        return Err(self
+                            .fail_before_spawn(
+                                name,
+                                None,
+                                "preset_not_found",
+                                format!(
+                                    "pipe '{}': preset '{}' not found in settings — {}. \
+                                     Set one of those in the pipe's `preset:` field, or \
+                                     create a new preset with `screenpipe pipe models create {} --provider … --model …`, \
+                                     or remove the `preset:` line to use the default.",
+                                    name, preset_id, available_hint, preset_id
+                                ),
+                            )
+                            .await);
                     }
                 }
             } else {
@@ -3398,6 +3570,18 @@ impl PipeManager {
             } else {
                 None
             };
+
+            // Pre-flight: fail fast with a structured error when the local
+            // Ollama daemon is down or the model isn't pulled (spec A7).
+            if let Err((error_type, msg)) = ollama_preflight(
+                run_provider.as_deref(),
+                run_provider_url.as_deref(),
+                &run_model,
+            )
+            .await
+            {
+                return Err(self.fail_before_spawn(name, exec_id, error_type, msg).await);
+            }
 
             // Check if history/session continuation is enabled for this pipe
             let history_enabled = config
@@ -8769,5 +8953,65 @@ mod tests {
                 "should be queueable after removal"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_ollama_preflight_skips_non_ollama_providers() {
+        assert!(ollama_preflight(None, None, "llama3.2").await.is_ok());
+        assert!(ollama_preflight(Some("openai"), None, "gpt-4o")
+            .await
+            .is_ok());
+        assert!(
+            ollama_preflight(Some("screenpipe-cloud"), None, "claude-haiku-4-5")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ollama_preflight_unreachable_daemon() {
+        // Port 9 (discard) is closed on dev/CI machines — connection refused.
+        let err = ollama_preflight(
+            Some("native-ollama"),
+            Some("http://127.0.0.1:9"),
+            "llama3.2",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.0, "ollama_not_running");
+        assert!(err.1.contains("not reachable"), "message: {}", err.1);
+    }
+
+    #[test]
+    fn test_ollama_model_available_matches_tags() {
+        let body = serde_json::json!({
+            "models": [
+                { "name": "llama3.2:latest" },
+                { "name": "qwen2.5-coder:7b" }
+            ]
+        });
+        // Bare name matches :latest and any tag
+        assert!(ollama_model_available(&body, "llama3.2"));
+        assert!(ollama_model_available(&body, "llama3.2:latest"));
+        assert!(ollama_model_available(&body, "qwen2.5-coder"));
+        assert!(ollama_model_available(&body, "qwen2.5-coder:7b"));
+        // Missing model
+        assert!(!ollama_model_available(&body, "mistral"));
+        // Unexpected shape → treated as available (no false negatives)
+        assert!(ollama_model_available(&serde_json::json!({}), "mistral"));
+    }
+
+    #[test]
+    fn test_read_store_bin_valid_and_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.bin");
+
+        std::fs::write(&path, r#"{"settings":{"aiPresets":[]}}"#).unwrap();
+        let v = read_store_bin(&path).expect("valid json should parse");
+        assert!(v.get("settings").is_some());
+
+        // Corrupt content: both the first read and the single retry fail.
+        std::fs::write(&path, "{truncated").unwrap();
+        assert!(read_store_bin(&path).is_none());
     }
 }
