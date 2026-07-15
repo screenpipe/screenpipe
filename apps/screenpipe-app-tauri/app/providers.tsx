@@ -69,10 +69,8 @@ export const Providers = forwardRef<
       // plus pollute prod analytics with test traffic.
       const isE2E = process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true";
       if (isDebug || isE2E) return;
-      // Respect the user's analytics opt-out preference synchronously, before
-      // PostHog init. The cached value mirrors settings.analyticsEnabled (kept
-      // in sync by use-settings and privacy-section). undefined = first boot
-      // (no cached value yet) → allow init, matching the default of true.
+      // Read the cached analytics preference to sync PostHog opt-in/out
+      // after init. undefined = first boot → allow capturing (default true).
       const cachedEnabled = readCachedAnalyticsEnabled();
       // Bootstrap with the stable per-install id (mirrors settings.analyticsId,
       // cached by the identify() effect in use-settings) so EVERY event — incl.

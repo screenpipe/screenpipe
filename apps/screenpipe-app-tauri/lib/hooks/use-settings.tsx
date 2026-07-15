@@ -1337,8 +1337,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// person instead of a fresh per-webview anonymous id. See lib/analytics-id.
 		cacheAnalyticsId(settings.analyticsId);
 
-		// Cache the analytics opt-out preference so posthog.init() can skip
-		// entirely on the next boot for users who opted out. See lib/analytics-id.
+		// Cache the analytics opt-out preference so providers.tsx can sync
+		// PostHog opt-in/out on the next boot. See lib/analytics-id.
 		cacheAnalyticsEnabled(settings.analyticsEnabled);
 
 		const clerkId = settings.user?.clerk_id || undefined;
