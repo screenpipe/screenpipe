@@ -10,14 +10,14 @@
   <text x="1078" y="181" fill="#777" font-family="monospace" font-size="18">◷ 1h</text>
   <text x="1270" y="181" fill="#777" font-family="monospace" font-size="18">just now</text>
   <line x1="56" y1="252" x2="1384" y2="252" stroke="#eeeeee"/>
-  <rect x="58" y="277" width="250" height="48" fill="#111"/>
-  <text x="79" y="308" fill="#fff" font-family="Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="1.25">✧  OPTIMIZE WITH AI</text>
-  <rect x="324" y="277" width="114" height="48" fill="#fff" stroke="#cfcfcf"/>
-  <text x="345" y="308" fill="#4a4a4a" font-family="Arial, sans-serif" font-size="17" font-weight="700" letter-spacing="1.4">⌘  REMIX</text>
-  <rect x="454" y="277" width="48" height="48" fill="#fff" stroke="#cfcfcf"/>
-  <path d="M472 290l17 11-17 11z" fill="#111"/>
-  <rect x="518" y="277" width="48" height="48" fill="#fff" stroke="#cfcfcf"/>
-  <circle cx="534" cy="301" r="3" fill="#111"/><circle cx="542" cy="301" r="3" fill="#111"/><circle cx="550" cy="301" r="3" fill="#111"/>
+  <rect x="58" y="268" width="66" height="66" fill="#111"/>
+  <path d="M82 284l25 17-25 17z" fill="#fff"/>
+  <rect x="140" y="277" width="250" height="48" fill="#fff" stroke="#cfcfcf"/>
+  <text x="161" y="308" fill="#4a4a4a" font-family="Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="1.25">✧  OPTIMIZE WITH AI</text>
+  <rect x="406" y="277" width="114" height="48" fill="#fff" stroke="#cfcfcf"/>
+  <text x="427" y="308" fill="#4a4a4a" font-family="Arial, sans-serif" font-size="17" font-weight="700" letter-spacing="1.4">⌘  REMIX</text>
+  <rect x="536" y="277" width="48" height="48" fill="#fff" stroke="#cfcfcf"/>
+  <circle cx="552" cy="301" r="3" fill="#111"/><circle cx="560" cy="301" r="3" fill="#111"/><circle cx="568" cy="301" r="3" fill="#111"/>
   <rect x="1248" y="277" width="106" height="48" fill="#111"/>
   <rect x="1316" y="288" width="26" height="26" fill="#fff"/>
   <rect x="1166" y="137" width="176" height="33" fill="#111"/>

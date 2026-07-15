@@ -501,6 +501,33 @@ describe.skip('Pipes: discover → install → play', function () {
     );
     await browser.pause(400);
 
+    const actionHierarchy = await browser.execute((name: string) => {
+      for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
+        if (nameEl.textContent?.trim() !== name) continue;
+        const row = nameEl.closest<HTMLElement>('div.group');
+        if (!row) continue;
+        const actions = Array.from(row.querySelectorAll<HTMLButtonElement>('[data-testid="pipe-card-actions"] button'));
+        const runButton = row.querySelector<HTMLButtonElement>('button[title="run pipe"]');
+        const optimizeButton = row.querySelector<HTMLButtonElement>('button[title^="optimize this pipe"]');
+        if (!runButton || !optimizeButton) return null;
+        return {
+          runIndex: actions.indexOf(runButton),
+          optimizeIndex: actions.indexOf(optimizeButton),
+          runHeight: runButton.getBoundingClientRect().height,
+          optimizeHeight: optimizeButton.getBoundingClientRect().height,
+          playIconWidth: runButton.querySelector('svg')?.getBoundingClientRect().width ?? 0,
+          optimizeIconWidth: optimizeButton.querySelector('svg')?.getBoundingClientRect().width ?? 0,
+        };
+      }
+      return null;
+    }, installedPipeName);
+
+    expect(actionHierarchy).not.toBeNull();
+    expect(actionHierarchy!.runIndex).toBe(0);
+    expect(actionHierarchy!.runIndex).toBeLessThan(actionHierarchy!.optimizeIndex);
+    expect(actionHierarchy!.runHeight).toBeGreaterThan(actionHierarchy!.optimizeHeight);
+    expect(actionHierarchy!.playIconWidth).toBeGreaterThan(actionHierarchy!.optimizeIconWidth);
+
     const played = await browser.execute((name: string) => {
       for (const nameBtn of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
         if (nameBtn.textContent?.trim() !== name) continue;
