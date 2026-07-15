@@ -500,16 +500,6 @@ export function PrivacySection() {
   const managedKeyboardCapture = getManagedValue("disableKeyboardCapture");
   const managedClickCapture = getManagedValue("disableClickCapture");
 
-  // Apply PostHog opt-out on mount when the persisted setting is false.
-  // Without this, a user who set analyticsEnabled=false in a previous session
-  // but never opens the settings save handler this session would still have
-  // PostHog capturing (if it was initialized before the cache was populated).
-  useEffect(() => {
-    if (!settings.analyticsEnabled) {
-      posthog.opt_out_capturing();
-    }
-  }, [settings.analyticsEnabled]);
-
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -900,7 +890,17 @@ export function PrivacySection() {
   };
 
   const handleAnalyticsToggle = (checked: boolean) => {
-    handleSettingsChange({ analyticsEnabled: checked }, true);
+    // no restart needed — analytics is purely frontend
+    handleSettingsChange({ analyticsEnabled: checked }, false);
+    cacheAnalyticsEnabled(checked);
+    const isDebug = process.env.TAURI_ENV_DEBUG === "true";
+    if (!isDebug) {
+      if (checked) {
+        posthog.opt_in_capturing();
+      } else {
+        posthog.opt_out_capturing();
+      }
+    }
   };
 
   // Add one pattern from the WindowPicker. Reuses the MultiSelect change

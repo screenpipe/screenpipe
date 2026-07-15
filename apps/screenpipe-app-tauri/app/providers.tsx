@@ -74,7 +74,6 @@ export const Providers = forwardRef<
       // in sync by use-settings and privacy-section). undefined = first boot
       // (no cached value yet) → allow init, matching the default of true.
       const cachedEnabled = readCachedAnalyticsEnabled();
-      if (cachedEnabled === false) return;
       // Bootstrap with the stable per-install id (mirrors settings.analyticsId,
       // cached by the identify() effect in use-settings) so EVERY event — incl.
       // ones fired by overlay windows like the floating search bar before the
@@ -92,6 +91,12 @@ export const Providers = forwardRef<
           ? { bootstrap: { distinctID: cachedAnalyticsId, isIdentifiedID: true } }
           : {}),
       });
+      // sync opt-in/out with cached preference on every boot
+      if (cachedEnabled === false) {
+        posthog.opt_out_capturing();
+      } else {
+        posthog.opt_in_capturing();
+      }
     }
   }, []);
 
