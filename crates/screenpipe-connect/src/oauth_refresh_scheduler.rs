@@ -50,7 +50,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::connections::{all_integrations, RefreshPolicy};
+use crate::connections::{all_integrations, build_default_client, RefreshPolicy};
 use crate::oauth::{refresh_token_instance, STORE_KEY_PREFIX};
 
 // ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ pub struct ProxyRefreshRunner {
 impl Default for ProxyRefreshRunner {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: build_default_client(),
         }
     }
 }
