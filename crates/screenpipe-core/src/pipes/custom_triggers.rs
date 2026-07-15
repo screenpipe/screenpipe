@@ -297,7 +297,7 @@ async fn fetch_recent_activity(
     client: &reqwest::Client,
     api_base: &str,
     api_key: Option<&str>,
-) -> Option<Vec<ActivityEntry>> {
+) -> std::result::Result<Vec<ActivityEntry>, String> {
     let now = chrono::Utc::now();
     let window_start = now - chrono::Duration::minutes(2);
     let url = format!(
@@ -310,22 +310,39 @@ async fn fetch_recent_activity(
     if let Some(key) = api_key {
         req = req.bearer_auth(key);
     }
-    let resp = req.send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
+    let resp = req.send().await.map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!(
+            "/search returned {status}{}",
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                " — local API auth is enabled but the matcher has no valid key"
+            } else {
+                ""
+            }
+        ));
     }
-    let json: serde_json::Value = resp.json().await.ok()?;
-    Some(parse_search_response(&json))
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid response body: {e}"))?;
+    Ok(parse_search_response(&json))
 }
 
 // ---------------------------------------------------------------------------
 // Context file + event emission
 // ---------------------------------------------------------------------------
 
+/// Cap on matched OCR text persisted to disk — the context file is about
+/// *why* the pipe fired, not a transcript. Screen content on disk is a
+/// liability (pipe dirs get synced/committed), so keep it minimal.
+const MAX_CONTEXT_TEXT: usize = 200;
+
 fn write_trigger_context(pipe_dir: &Path, trigger: &str, score: f32, entry: &ActivityEntry) {
     if !pipe_dir.is_dir() {
         return;
     }
+    let text: String = entry.text.chars().take(MAX_CONTEXT_TEXT).collect();
     let ctx = serde_json::json!({
         "kind": "custom_trigger",
         "trigger": trigger,
@@ -334,7 +351,7 @@ fn write_trigger_context(pipe_dir: &Path, trigger: &str, score: f32, entry: &Act
         "matched_activity": {
             "app": entry.app,
             "window": entry.window,
-            "text": entry.text,
+            "text": text,
         },
     });
     if let Ok(s) = serde_json::to_string_pretty(&ctx) {
@@ -362,10 +379,32 @@ fn emit_custom_trigger(pipe: &str, trigger: &str, score: f32, entry: &ActivityEn
 // Matcher tick
 // ---------------------------------------------------------------------------
 
-/// One matcher tick: fetch activity, skip if unchanged, score every enabled
-/// pipe's custom triggers, fire the winners. Returns the new activity hash
-/// (or the previous one when the fetch failed / nothing changed).
-#[allow(clippy::too_many_arguments)]
+/// Mutable state the matcher carries across ticks.
+#[derive(Default)]
+pub struct MatcherState {
+    pub cooldowns: CooldownMap,
+    /// Hash of the last-seen (app, window) activity set.
+    last_activity_hash: u64,
+    /// Hash of the last-seen trigger configuration — a config change forces
+    /// re-evaluation even when the screen didn't change, so a freshly added
+    /// trigger doesn't sit unevaluated until the next app switch.
+    last_config_hash: u64,
+    /// One-time warn latch for fetch failures (e.g. local API auth).
+    warned_fetch_failure: bool,
+}
+
+/// Hash of the (pipe, triggers) configuration set.
+fn config_hash(pipe_triggers: &[(String, Vec<String>)]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    pipe_triggers.hash(&mut h);
+    h.finish()
+}
+
+/// One matcher tick: fetch activity, skip when neither the screen context nor
+/// the trigger config changed, then fire at most one (the best-scoring)
+/// trigger per pipe.
 pub async fn poll_once(
     client: &reqwest::Client,
     api_base: &str,
@@ -373,52 +412,70 @@ pub async fn poll_once(
     pipes_dir: &Path,
     // (pipe_name, custom triggers) for enabled pipes only
     pipe_triggers: &[(String, Vec<String>)],
-    cooldowns: &mut CooldownMap,
-    last_hash: u64,
-) -> u64 {
+    state: &mut MatcherState,
+) {
     if pipe_triggers.is_empty() {
-        return last_hash;
+        return;
     }
-    let Some(entries) = fetch_recent_activity(client, api_base, api_key).await else {
-        return last_hash;
+    let cfg_hash = config_hash(pipe_triggers);
+    let config_changed = cfg_hash != state.last_config_hash;
+    state.last_config_hash = cfg_hash;
+
+    let entries = match fetch_recent_activity(client, api_base, api_key).await {
+        Ok(e) => {
+            state.warned_fetch_failure = false;
+            e
+        }
+        Err(e) => {
+            if !state.warned_fetch_failure {
+                warn!("custom trigger: cannot read recent activity: {}", e);
+                state.warned_fetch_failure = true;
+            }
+            return;
+        }
     };
     if entries.is_empty() {
-        return last_hash;
+        return;
     }
     let hash = activity_hash(&entries);
-    if hash == last_hash {
-        return hash;
+    if hash == state.last_activity_hash && !config_changed {
+        return;
     }
+    state.last_activity_hash = hash;
 
     for (pipe, triggers) in pipe_triggers {
-        for trigger in triggers {
-            let Some((score, idx)) = best_match(trigger, &entries) else {
-                continue;
-            };
-            if score < MIN_SCORE {
-                debug!(
-                    "custom trigger: '{}' best score {:.2} (< {:.2}) for pipe '{}'",
-                    trigger, score, MIN_SCORE, pipe
-                );
-                continue;
-            }
-            if !cooldowns.try_fire(pipe, trigger) {
-                debug!(
-                    "custom trigger: '{}' matched pipe '{}' but is in cooldown",
-                    trigger, pipe
-                );
-                continue;
-            }
-            let entry = &entries[idx];
-            info!(
-                "custom trigger: '{}' matched activity (app='{}', window='{}') with score {:.2} — firing pipe '{}'",
-                trigger, entry.app, entry.window, score, pipe
+        // Score all of this pipe's triggers, keep the single best — the pipe
+        // runs once per firing anyway, and the context file must describe the
+        // trigger that actually caused the run, not the last one scored.
+        let best = triggers
+            .iter()
+            .filter_map(|t| best_match(t, &entries).map(|(score, idx)| (t, score, idx)))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let Some((trigger, score, idx)) = best else {
+            continue;
+        };
+        if score < MIN_SCORE {
+            debug!(
+                "custom trigger: best score {:.2} (< {:.2}) for pipe '{}' ('{}')",
+                score, MIN_SCORE, pipe, trigger
             );
-            write_trigger_context(&pipes_dir.join(pipe), trigger, score, entry);
-            emit_custom_trigger(pipe, trigger, score, entry);
+            continue;
         }
+        if !state.cooldowns.try_fire(pipe, trigger) {
+            debug!(
+                "custom trigger: '{}' matched pipe '{}' but is in cooldown",
+                trigger, pipe
+            );
+            continue;
+        }
+        let entry = &entries[idx];
+        info!(
+            "custom trigger: '{}' matched activity (app='{}', window='{}') with score {:.2} — firing pipe '{}'",
+            trigger, entry.app, entry.window, score, pipe
+        );
+        write_trigger_context(&pipes_dir.join(pipe), trigger, score, entry);
+        emit_custom_trigger(pipe, trigger, score, entry);
     }
-    hash
 }
 
 #[cfg(test)]

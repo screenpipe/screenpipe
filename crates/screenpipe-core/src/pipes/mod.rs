@@ -5008,6 +5008,44 @@ impl PipeManager {
                             None
                         };
 
+                        // Pre-flight: fail fast with a structured error when the
+                        // local Ollama daemon is down or the model isn't pulled
+                        // (spec A7). Must release the claim taken above.
+                        if let Err((error_type, msg)) =
+                            ollama_preflight(provider.as_deref(), provider_url.as_deref(), &model)
+                                .await
+                        {
+                            warn!("scheduler: pipe '{}' pre-flight failed: {}", pipe_name, msg);
+                            if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
+                                let _ = store
+                                    .finish_execution(
+                                        id,
+                                        "failed",
+                                        "",
+                                        "",
+                                        None,
+                                        Some(error_type),
+                                        Some(&msg),
+                                        None,
+                                    )
+                                    .await;
+                            }
+                            {
+                                let mut exec_ids = running_exec_ids_ref.lock().await;
+                                exec_ids.remove(&pipe_name);
+                            }
+                            {
+                                let mut r = running_ref.lock().await;
+                                r.remove(&pipe_name);
+                            }
+                            {
+                                let mut qr = queued_ref.lock().await;
+                                qr.remove(&pipe_name);
+                            }
+                            remove_pid_file(&pipes_dir_for_mark, &pipe_name);
+                            return;
+                        }
+
                         // Mark running in DB
                         if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                             let _ = store.set_execution_running(id, None).await;
@@ -5412,8 +5450,7 @@ impl PipeManager {
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .unwrap_or_default();
-            let mut cooldowns = custom_triggers::CooldownMap::default();
-            let mut last_hash: u64 = 0;
+            let mut matcher_state = custom_triggers::MatcherState::default();
             info!("custom-trigger matcher started (generation {})", generation);
             // Let the scheduler subscribe to `custom_trigger` before the first
             // poll can emit, so a fire on the very first tick isn't dropped.
@@ -5447,14 +5484,13 @@ impl PipeManager {
                         .collect()
                 };
 
-                last_hash = custom_triggers::poll_once(
+                custom_triggers::poll_once(
                     &http,
                     &api_base,
                     api_key.as_deref(),
                     &pipes_dir,
                     &pipe_triggers,
-                    &mut cooldowns,
-                    last_hash,
+                    &mut matcher_state,
                 )
                 .await;
 
