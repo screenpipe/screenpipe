@@ -6,7 +6,9 @@
 //!
 //! Manages the pi coding agent via RPC mode (stdin/stdout JSON protocol).
 
-use screenpipe_core::agents::pi::screenpipe_cloud_models;
+use screenpipe_core::agents::pi::{
+    screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR, PI_PACKAGE, SCREENPIPE_API_URL,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
@@ -292,11 +294,6 @@ fn check_package_bin(pkg_dir: std::path::PathBuf, bin_name: &str) -> Option<Stri
         None
     }
 }
-
-const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.80.6";
-const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.80.6";
-const PI_NAMESPACE_DIR: &str = "@earendil-works";
-const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 
 /// Pool of Pi sessions — each session_id gets its own PiManager/process.
 pub struct PiPool {

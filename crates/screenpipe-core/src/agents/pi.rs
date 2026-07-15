@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
-const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
-const PI_NAMESPACE_DIR: &str = "@earendil-works";
+pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.80.6";
+pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.80.6";
+pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 
 /// Windows creation flags for background agent spawns: CREATE_NO_WINDOW
