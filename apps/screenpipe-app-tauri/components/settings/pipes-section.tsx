@@ -328,12 +328,11 @@ function buildOptimizeDisplayLabel(pipeName: string): string {
   return `Optimize pipe: ${pipeName.trim()}`;
 }
 
-// "remix" = make your own version of an existing pipe. We don't mutate the
+// "fork" = make your own version of an existing pipe. We don't mutate the
 // original — the agent reads it and creates a NEW customized pipe. Framing
-// authoring as "customize a working thing" is the lever that turns installers
-// into creators (see Replit remix / Notion duplicate).
-function buildRemixPrompt(pipeName: string): string {
-  return `i want to remix my existing pipe "${pipeName}" into a new one.
+// authoring as "customize a working thing" turns installers into creators.
+function buildForkPrompt(pipeName: string): string {
+  return `i want to fork my existing pipe "${pipeName}" into a new one.
 
 ## your task
 1. read the original pipe: ~/.screenpipe/pipes/${pipeName}/pipe.md
@@ -2620,7 +2619,7 @@ export function PipesSection() {
                   </Button>
                 )}
 
-                {/* remix — create a NEW pipe based on this one and customize it */}
+                {/* fork — create a NEW pipe based on this one and customize it */}
                 {!isReceivedTeamPipe(pipe) && (
                   <Button
                     variant="ghost"
@@ -2629,16 +2628,16 @@ export function PipesSection() {
                     onClick={() => {
                       posthog.capture("pipe_remix_started", { source: "row_button" });
                       navigateHomeAndPrefill({
-                        context: "the user wants to remix their pipe into a new one",
-                        prompt: buildRemixPrompt(pipe.config.name),
-                        displayLabel: `Remix pipe: ${pipe.config.name}`,
+                        context: "the user wants to fork their pipe into a new one",
+                        prompt: buildForkPrompt(pipe.config.name),
+                        displayLabel: `Fork pipe: ${pipe.config.name}`,
                         autoSend: true,
                       });
                     }}
-                    title="remix — create a new pipe based on this one and customize it"
+                    title="fork — create a new pipe based on this one and customize it"
                   >
                     <GitFork className="h-3.5 w-3.5" />
-                    remix
+                    fork
                   </Button>
                 )}
 
