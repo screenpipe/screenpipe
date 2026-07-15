@@ -882,13 +882,14 @@ impl PiExecutor {
         };
 
         if should_add_screenpipe {
-            // Use actual token value in apiKey — Pi doesn't resolve env var names,
-            // so writing the literal string "SCREENPIPE_API_KEY" causes tier=anonymous.
-            // Resolve from: argument > env var > literal fallback (last resort).
+            // Use actual token value in apiKey — Pi doesn't resolve bare env var
+            // names, so writing the literal string "SCREENPIPE_API_KEY" causes
+            // tier=anonymous. Resolve from: argument > env var > `$` env-var
+            // reference (last resort; resolves at pi runtime if the var appears).
             let api_key_value = user_token
                 .map(|t| t.to_string())
                 .or_else(|| std::env::var("SCREENPIPE_API_KEY").ok())
-                .unwrap_or_else(|| "SCREENPIPE_API_KEY".to_string());
+                .unwrap_or_else(|| "$SCREENPIPE_API_KEY".to_string());
             let api_key_value = api_key_value.as_str();
             let models = screenpipe_cloud_models(api_url, user_token).await;
             // PiExecutor only runs pipes (PipeManager: scheduled / run-now),
@@ -924,22 +925,24 @@ impl PiExecutor {
                         provider_url.unwrap_or("http://localhost:11434/v1"),
                         "ollama",
                     ),
+                    // `$NAME` is pi's explicit env-var reference syntax; pi >= 0.80
+                    // sends bare names to the provider as literal API keys.
                     "openai" => (
                         "openai-byok",
                         provider_url.unwrap_or("https://api.openai.com/v1"),
-                        "OPENAI_API_KEY",
+                        "$OPENAI_API_KEY",
                     ),
                     "openai-chatgpt" => (
                         "openai-chatgpt",
                         "https://chatgpt.com/backend-api",
-                        "OPENAI_CHATGPT_TOKEN",
+                        "$OPENAI_CHATGPT_TOKEN",
                     ),
                     "anthropic" => (
                         "anthropic-byok",
                         provider_url.unwrap_or("https://api.anthropic.com"),
-                        "ANTHROPIC_API_KEY",
+                        "$ANTHROPIC_API_KEY",
                     ),
-                    other => (other, provider_url.unwrap_or(""), "CUSTOM_API_KEY"),
+                    other => (other, provider_url.unwrap_or(""), "$CUSTOM_API_KEY"),
                 };
 
                 // Pi's models.json schema requires baseUrl to have minLength: 1.

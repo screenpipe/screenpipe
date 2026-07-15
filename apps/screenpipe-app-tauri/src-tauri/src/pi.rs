@@ -1318,8 +1318,10 @@ async fn build_models_json(
 ) -> serde_json::Value {
     let mut providers_map = serde_json::Map::new();
 
-    // Always add screenpipe cloud provider
-    let api_key_value = user_token.unwrap_or("SCREENPIPE_API_KEY");
+    // Always add screenpipe cloud provider. A real token is inlined as a
+    // literal; the logged-out fallback must use `$` env-var syntax (pi >= 0.80
+    // treats bare names as literal keys).
+    let api_key_value = user_token.unwrap_or("$SCREENPIPE_API_KEY");
     let models = screenpipe_cloud_models(SCREENPIPE_API_URL, user_token).await;
     let screenpipe_provider = json!({
         "baseUrl": SCREENPIPE_API_URL,
@@ -1360,12 +1362,15 @@ async fn build_models_json(
                     provider_name
                 );
             } else {
+                // pi >= 0.80 requires explicit `$NAME` syntax for env-var
+                // references; a bare name is sent to the provider as a literal
+                // API key (401 "Incorrect API key provided: CUSTOM_A**_KEY").
                 let api_key = match config.provider.as_str() {
                     "native-ollama" => "ollama".to_string(),
-                    "openai" => "OPENAI_API_KEY".to_string(),
-                    "openai-chatgpt" => "OPENAI_CHATGPT_TOKEN".to_string(),
-                    "anthropic" => "ANTHROPIC_API_KEY".to_string(),
-                    "custom" => "CUSTOM_API_KEY".to_string(),
+                    "openai" => "$OPENAI_API_KEY".to_string(),
+                    "openai-chatgpt" => "$OPENAI_CHATGPT_TOKEN".to_string(),
+                    "anthropic" => "$ANTHROPIC_API_KEY".to_string(),
+                    "custom" => "$CUSTOM_API_KEY".to_string(),
                     _ => "".to_string(),
                 };
 
@@ -4722,7 +4727,8 @@ error: InstallFailed extracting tarball"#;
         let sp = &providers["screenpipe"];
         assert_eq!(sp["baseUrl"], "https://api.screenpipe.com/v1");
         assert_eq!(sp["api"], "openai-completions");
-        assert_eq!(sp["apiKey"], "SCREENPIPE_API_KEY");
+        // `$` prefix is required: pi >= 0.80 treats bare names as literal keys
+        assert_eq!(sp["apiKey"], "$SCREENPIPE_API_KEY");
         assert_eq!(sp["authHeader"], true);
         assert!(sp["models"].as_array().unwrap().len() > 0);
     }
@@ -4756,11 +4762,36 @@ error: InstallFailed extracting tarball"#;
         let openai = &providers["openai-byok"];
         assert_eq!(openai["baseUrl"], "https://api.openai.com/v1");
         assert_eq!(openai["api"], "openai-completions");
-        assert_eq!(openai["apiKey"], "OPENAI_API_KEY");
+        assert_eq!(openai["apiKey"], "$OPENAI_API_KEY");
         let models = openai["models"].as_array().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["id"], "gpt-4o");
         assert_eq!(models[0]["reasoning"], false);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_api_keys_use_env_var_syntax() {
+        // Regression: pi >= 0.80 sends bare apiKey strings to the provider as
+        // literal keys (user-reported 401 "Incorrect API key provided:
+        // CUSTOM_A**_KEY"; ChatGPT OAuth failed the same way via
+        // "Failed to extract accountId from token"). Env references must be
+        // written as `$NAME`.
+        for (provider, provider_key, expected) in [
+            ("openai", "openai-byok", "$OPENAI_API_KEY"),
+            ("openai-chatgpt", "openai-chatgpt", "$OPENAI_CHATGPT_TOKEN"),
+            ("anthropic", "anthropic-byok", "$ANTHROPIC_API_KEY"),
+            ("custom", "custom", "$CUSTOM_API_KEY"),
+        ] {
+            let mut pc = make_provider_config(provider, "some-model");
+            if provider == "custom" {
+                pc.url = "https://example.com/v1".to_string();
+            }
+            let config = build_models_json(None, Some(&pc)).await;
+            assert_eq!(
+                config["providers"][provider_key]["apiKey"], expected,
+                "provider {provider} must reference its key as {expected}"
+            );
+        }
     }
 
     #[tokio::test]
