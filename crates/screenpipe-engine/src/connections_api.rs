@@ -1548,9 +1548,9 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
                 );
                 oauth_callback_page(
                     StatusCode::BAD_REQUEST,
-                    "Took too long",
-                    "The screenpipe app stopped waiting for this authorization.",
-                    "It waits 10 minutes. Open screenpipe, click connect again, and finish the browser steps within 10 minutes.",
+                    "Sign-in expired",
+                    "This sign-in took a while, so screenpipe stopped waiting.",
+                    "Open screenpipe and click connect again — a fresh sign-in stays valid for 10 minutes.",
                 )
             }
         }
@@ -4549,10 +4549,10 @@ mod tests {
     }
 
     /// A callback arriving after oauth_connect stopped waiting (timeout or
-    /// cancel dropped the receiver) must get the actionable "Took too long"
+    /// cancel dropped the receiver) must get the actionable "Sign-in expired"
     /// page — not a success page, and not the unknown-state one.
     #[tokio::test]
-    async fn oauth_callback_after_timeout_reports_took_too_long() {
+    async fn oauth_callback_after_timeout_reports_sign_in_expired() {
         let state = "test-cb-timeout-state";
         let rx = register_pending(state);
         drop(rx); // simulate oauth_connect timing out / being cancelled
@@ -4567,7 +4567,7 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body.0.contains("Took too long"));
+        assert!(body.0.contains("Sign-in expired"));
         assert!(!pending_contains(state));
 
         // A second hit with the same state is now an unknown-state callback.

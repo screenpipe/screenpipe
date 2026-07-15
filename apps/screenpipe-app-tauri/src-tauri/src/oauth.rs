@@ -220,14 +220,9 @@ pub async fn oauth_connect(
             // `rx` makes the callback's send() fail, which lets it render a
             // "took too long" page instead of "session expired". The entry is
             // swept on the next oauth_connect.
-            let wait = if callback_timeout.as_secs() >= 60 {
-                format!("{} minutes", callback_timeout.as_secs() / 60)
-            } else {
-                format!("{} seconds", callback_timeout.as_secs())
-            };
             format!(
-                "{} OAuth timed out after {} — click connect and finish the browser steps within {}",
-                integration_id, wait, wait
+                "{} sign-in expired before the browser steps finished — click connect to try again",
+                integration_id
             )
         })?
         .map_err(|_| "OAuth channel closed before code was received".to_string())?;
