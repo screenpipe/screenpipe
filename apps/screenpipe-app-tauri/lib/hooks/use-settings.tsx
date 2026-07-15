@@ -10,7 +10,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { emit, listen } from "@tauri-apps/api/event";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
-import { cacheAnalyticsId } from "@/lib/analytics-id";
+import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor, stripSessionToken } from "../auth-guard";
@@ -1336,6 +1336,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// keeping every window (esp. the floating search overlay) on one durable
 		// person instead of a fresh per-webview anonymous id. See lib/analytics-id.
 		cacheAnalyticsId(settings.analyticsId);
+
+		// Cache the analytics opt-out preference so posthog.init() can skip
+		// entirely on the next boot for users who opted out. See lib/analytics-id.
+		cacheAnalyticsEnabled(settings.analyticsEnabled);
 
 		const clerkId = settings.user?.clerk_id || undefined;
 		const distinctId = clerkId || settings.analyticsId;

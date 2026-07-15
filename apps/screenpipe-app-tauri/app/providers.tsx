@@ -17,7 +17,7 @@ import { useUpdateListener } from "@/components/update-banner";
 import { AppEntitlementGate } from "@/components/app-entitlement-gate";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { usePathname } from "next/navigation";
-import { readCachedAnalyticsId } from "@/lib/analytics-id";
+import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 
@@ -69,6 +69,12 @@ export const Providers = forwardRef<
       // plus pollute prod analytics with test traffic.
       const isE2E = process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true";
       if (isDebug || isE2E) return;
+      // Respect the user's analytics opt-out preference synchronously, before
+      // PostHog init. The cached value mirrors settings.analyticsEnabled (kept
+      // in sync by use-settings and privacy-section). undefined = first boot
+      // (no cached value yet) → allow init, matching the default of true.
+      const cachedEnabled = readCachedAnalyticsEnabled();
+      if (cachedEnabled === false) return;
       // Bootstrap with the stable per-install id (mirrors settings.analyticsId,
       // cached by the identify() effect in use-settings) so EVERY event — incl.
       // ones fired by overlay windows like the floating search bar before the

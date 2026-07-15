@@ -60,6 +60,7 @@ import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
+import { cacheAnalyticsEnabled } from "@/lib/analytics-id";
 import {
   validateField,
   sanitizeValue,
@@ -499,6 +500,16 @@ export function PrivacySection() {
   const managedKeyboardCapture = getManagedValue("disableKeyboardCapture");
   const managedClickCapture = getManagedValue("disableClickCapture");
 
+  // Apply PostHog opt-out on mount when the persisted setting is false.
+  // Without this, a user who set analyticsEnabled=false in a previous session
+  // but never opens the settings save handler this session would still have
+  // PostHog capturing (if it was initialized before the cache was populated).
+  useEffect(() => {
+    if (!settings.analyticsEnabled) {
+      posthog.opt_out_capturing();
+    }
+  }, [settings.analyticsEnabled]);
+
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -589,6 +600,10 @@ export function PrivacySection() {
 
       const analyticsEnabled =
         pendingSettings.analyticsEnabled ?? settings.analyticsEnabled;
+
+      // Cache immediately so the next boot picks up the change before
+      // settings IPC resolves (see readCachedAnalyticsEnabled in providers.tsx).
+      cacheAnalyticsEnabled(analyticsEnabled);
 
       if (!analyticsEnabled) {
         posthog.capture("telemetry", { enabled: false });
