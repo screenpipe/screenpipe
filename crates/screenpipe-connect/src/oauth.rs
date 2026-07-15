@@ -64,6 +64,12 @@ use tokio::sync::oneshot;
 
 pub const OAUTH_REDIRECT_URI: &str = "http://localhost:3030/connections/oauth/callback";
 
+/// How long `oauth_connect` waits for the browser callback. Matches the
+/// ~10-minute lifetime of provider authorization codes; consent flows with
+/// account pickers, 2FA, or "unverified app" interstitials routinely exceed
+/// shorter limits.
+pub const OAUTH_CALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 // ---------------------------------------------------------------------------
 // Pending callback map — shared between oauth_connect (Tauri) and the
 // /connections/oauth/callback HTTP handler (screenpipe-engine)
@@ -89,9 +95,15 @@ pub enum OAuthCallbackResult {
 
 /// A pending OAuth flow: the sender that delivers the callback payload,
 /// tagged with its `integration_id` so `oauth_cancel` can find and drop it.
+///
+/// Entries are deliberately left in the map when `oauth_connect` times out:
+/// the dropped receiver makes `sender.send()` fail, which lets the callback
+/// handler tell "the app stopped waiting" apart from a truly unknown state.
+/// Stale entries are swept on the next insert (see `created_at`).
 pub struct PendingOAuth {
     pub integration_id: String,
     pub sender: oneshot::Sender<OAuthCallbackResult>,
+    pub created_at: std::time::Instant,
 }
 
 pub static PENDING_OAUTH: Lazy<Mutex<HashMap<String, PendingOAuth>>> =

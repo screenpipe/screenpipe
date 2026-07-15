@@ -1457,7 +1457,7 @@ pub struct OAuthCallbackQuery {
 async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode, Html<String>) {
     if let Some(err) = params.error {
         // Provider rejection (e.g. access_denied on cancel). Resolve the waiting
-        // flow immediately instead of leaving it to hit the 120s timeout.
+        // flow immediately instead of leaving it to hit the callback timeout.
         let pending = params.state.as_ref().and_then(|state| {
             let mut map = PENDING_OAUTH.lock().unwrap();
             map.remove(state)
@@ -1469,10 +1469,19 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
                     err,
                     pending.integration_id
                 );
-                let _ = pending.sender.send(OAuthCallbackResult::ProviderError {
-                    error: err.clone(),
-                    error_description: params.error_description,
-                });
+                if pending
+                    .sender
+                    .send(OAuthCallbackResult::ProviderError {
+                        error: err.clone(),
+                        error_description: params.error_description,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(
+                        "oauth callback: {} provider error arrived after the app stopped waiting",
+                        pending.integration_id
+                    );
+                }
             }
             None => tracing::warn!(
                 "oauth callback: provider returned error '{}' with {} state — no pending flow to resolve",
@@ -1512,28 +1521,46 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
 
     match sender {
         Some(pending) => {
-            tracing::info!(
-                "oauth callback: authorization received for {}",
-                pending.integration_id
-            );
-            let _ = pending.sender.send(OAuthCallbackResult::Success {
-                code,
-                realm_id: params.realm_id,
-            });
-            oauth_callback_page(
-                StatusCode::OK,
-                "Connected",
-                "screenpipe can now use this connection.",
-                "You can close this tab and return to screenpipe.",
-            )
+            let delivered = pending
+                .sender
+                .send(OAuthCallbackResult::Success {
+                    code,
+                    realm_id: params.realm_id,
+                })
+                .is_ok();
+            if delivered {
+                tracing::info!(
+                    "oauth callback: authorization received for {}",
+                    pending.integration_id
+                );
+                oauth_callback_page(
+                    StatusCode::OK,
+                    "Connected",
+                    "screenpipe can now use this connection.",
+                    "You can close this tab and return to screenpipe.",
+                )
+            } else {
+                // Receiver dropped: oauth_connect timed out (or was cancelled)
+                // before the user finished the browser steps.
+                tracing::warn!(
+                    "oauth callback: {} authorization arrived after the app stopped waiting",
+                    pending.integration_id
+                );
+                oauth_callback_page(
+                    StatusCode::BAD_REQUEST,
+                    "Took too long",
+                    "The screenpipe app stopped waiting for this authorization.",
+                    "It waits 10 minutes. Open screenpipe, click connect again, and finish the browser steps within 10 minutes.",
+                )
+            }
         }
         None => {
             tracing::warn!("oauth callback: unknown or stale state — no pending flow");
             oauth_callback_page(
                 StatusCode::BAD_REQUEST,
-                "Session expired",
-                "screenpipe could not find the waiting app session.",
-                "The authorization session was not found or already completed. Please try again.",
+                "Link already used",
+                "This authorization link was already used or has expired.",
+                "If screenpipe already shows the connection, you can close this tab. Otherwise click connect in the app to try again.",
             )
         }
     }
@@ -4365,6 +4392,7 @@ mod tests {
             PendingOAuth {
                 integration_id: "test-integration".to_string(),
                 sender: tx,
+                created_at: std::time::Instant::now(),
             },
         );
         rx
@@ -4506,7 +4534,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_callback_success_with_stale_state_reports_session_expired() {
+    async fn oauth_callback_success_with_stale_state_reports_link_already_used() {
         let (status, body) = oauth_callback(callback_query(
             Some("auth-code-2"),
             Some("test-cb-stale-state"),
@@ -4517,6 +4545,41 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body.0.contains("Session expired"));
+        assert!(body.0.contains("already used or has expired"));
+    }
+
+    /// A callback arriving after oauth_connect stopped waiting (timeout or
+    /// cancel dropped the receiver) must get the actionable "Took too long"
+    /// page — not a success page, and not the unknown-state one.
+    #[tokio::test]
+    async fn oauth_callback_after_timeout_reports_took_too_long() {
+        let state = "test-cb-timeout-state";
+        let rx = register_pending(state);
+        drop(rx); // simulate oauth_connect timing out / being cancelled
+
+        let (status, body) = oauth_callback(callback_query(
+            Some("auth-code-late"),
+            Some(state),
+            None,
+            None,
+            None,
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.0.contains("Took too long"));
+        assert!(!pending_contains(state));
+
+        // A second hit with the same state is now an unknown-state callback.
+        let (status, body) = oauth_callback(callback_query(
+            Some("auth-code-late"),
+            Some(state),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.0.contains("already used or has expired"));
     }
 }

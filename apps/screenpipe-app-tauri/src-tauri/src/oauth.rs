@@ -12,7 +12,8 @@ use crate::store::SettingsStore;
 use base64::Engine;
 use screenpipe_connect::connections::all_integrations;
 use screenpipe_connect::oauth::{
-    self, OAuthCallbackResult, PendingOAuth, OAUTH_REDIRECT_URI, PENDING_OAUTH,
+    self, OAuthCallbackResult, PendingOAuth, OAUTH_CALLBACK_TIMEOUT, OAUTH_REDIRECT_URI,
+    PENDING_OAUTH,
 };
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -96,15 +97,32 @@ pub async fn oauth_connect(
         None => config.extra_auth_params,
     };
 
+    let settings = SettingsStore::get(&app_handle)
+        .unwrap_or_default()
+        .unwrap_or_default();
+
     // Gate OAuth behind Pro subscription
-    let is_pro = SettingsStore::get(&app_handle)
-        .unwrap_or_default()
-        .unwrap_or_default()
-        .user
-        .cloud_subscribed
-        == Some(true);
+    let is_pro = settings.user.cloud_subscribed == Some(true);
     if !is_pro {
         return Err("OAuth integrations require a Pro subscription. Please upgrade to connect third-party services.".to_string());
+    }
+
+    // The provider redirect URI is registered as localhost:3030 (Web-type
+    // OAuth clients require an exact match), so a flow started while the API
+    // server is bound elsewhere can never receive its callback. Fail fast
+    // with an explanation instead of opening a browser flow that dead-ends
+    // on a "Session expired" page.
+    if config.redirect_uri_override.is_none() {
+        let effective_port = std::env::var("SCREENPIPE_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(settings.recording.port);
+        if effective_port != 3030 {
+            return Err(format!(
+                "OAuth callbacks require the screenpipe API on port 3030, but it is configured for port {}. Reset the port in settings to use connections.",
+                effective_port
+            ));
+        }
     }
 
     // Per-account providers (Zendesk) host OAuth on the customer's own subdomain,
@@ -137,11 +155,16 @@ pub async fn oauth_connect(
     let (tx, rx) = oneshot::channel::<OAuthCallbackResult>();
     {
         let mut map = PENDING_OAUTH.lock().unwrap();
+        // Timed-out flows leave their entry behind so a late callback can be
+        // told "the app stopped waiting" (see the timeout branch below).
+        // Reclaim those tombstones here — this is the only insert point.
+        map.retain(|_, p| p.created_at.elapsed() < 2 * OAUTH_CALLBACK_TIMEOUT);
         map.insert(
             state.clone(),
             PendingOAuth {
                 integration_id: integration_id.clone(),
                 sender: tx,
+                created_at: std::time::Instant::now(),
             },
         );
     }
@@ -182,12 +205,30 @@ pub async fn oauth_connect(
         integration_id, instance, variant
     );
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
+    // E2E escape hatch: shrink the wait so tests can exercise the timeout
+    // path without idling for 10 minutes.
+    let callback_timeout = std::env::var("SCREENPIPE_OAUTH_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(OAUTH_CALLBACK_TIMEOUT);
+
+    let result = tokio::time::timeout(callback_timeout, rx)
         .await
         .map_err(|_| {
-            let mut map = PENDING_OAUTH.lock().unwrap();
-            map.remove(&state);
-            format!("{} OAuth timed out (120s)", integration_id)
+            // Deliberately leave the PENDING_OAUTH entry in place: dropping
+            // `rx` makes the callback's send() fail, which lets it render a
+            // "took too long" page instead of "session expired". The entry is
+            // swept on the next oauth_connect.
+            let wait = if callback_timeout.as_secs() >= 60 {
+                format!("{} minutes", callback_timeout.as_secs() / 60)
+            } else {
+                format!("{} seconds", callback_timeout.as_secs())
+            };
+            format!(
+                "{} OAuth timed out after {} — click connect and finish the browser steps within {}",
+                integration_id, wait, wait
+            )
         })?
         .map_err(|_| "OAuth channel closed before code was received".to_string())?;
 
@@ -536,7 +577,7 @@ pub async fn oauth_connect(
 /// Cancel any in-flight OAuth flow(s) for the given integration.
 /// Dropping the stored sender makes the awaiting `oauth_connect` call fail fast
 /// with "OAuth channel closed before code was received" instead of hanging for
-/// the full 120s timeout.
+/// the full callback timeout.
 #[tauri::command]
 #[specta::specta]
 pub fn oauth_cancel(integration_id: String) -> Result<(), String> {
@@ -708,7 +749,7 @@ mod tests {
 
     /// Canceled flow (#5092): oauth_cancel drops the pending sender, which
     /// must close the channel so the awaiting oauth_connect fails fast
-    /// instead of hanging for the full 120s timeout.
+    /// instead of hanging for the full callback timeout.
     #[tokio::test]
     async fn oauth_cancel_drops_pending_flow_and_closes_channel() {
         let state = "test-cancel-state";
@@ -718,6 +759,7 @@ mod tests {
             PendingOAuth {
                 integration_id: "test-cancel-integration".to_string(),
                 sender: tx,
+                created_at: std::time::Instant::now(),
             },
         );
 
@@ -738,6 +780,7 @@ mod tests {
             PendingOAuth {
                 integration_id: "test-cancel-other-integration".to_string(),
                 sender: tx,
+                created_at: std::time::Instant::now(),
             },
         );
 
@@ -749,6 +792,53 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
         PENDING_OAUTH.lock().unwrap().remove(state);
+    }
+
+    /// Tombstones from timed-out flows are reclaimed by the sweep that runs
+    /// on the next insert: entries older than 2× the callback timeout go,
+    /// fresh ones stay.
+    #[tokio::test]
+    async fn stale_pending_entries_are_swept_fresh_ones_kept() {
+        use screenpipe_connect::oauth::OAUTH_CALLBACK_TIMEOUT;
+
+        // Instant can't represent times before boot; skip on a machine that
+        // just started (never the case in CI).
+        let Some(stale_instant) = std::time::Instant::now().checked_sub(3 * OAUTH_CALLBACK_TIMEOUT)
+        else {
+            return;
+        };
+
+        let stale_state = "test-sweep-stale-state";
+        let fresh_state = "test-sweep-fresh-state";
+        let (stale_tx, _stale_rx) = tokio::sync::oneshot::channel::<OAuthCallbackResult>();
+        let (fresh_tx, _fresh_rx) = tokio::sync::oneshot::channel::<OAuthCallbackResult>();
+        {
+            let mut map = PENDING_OAUTH.lock().unwrap();
+            map.insert(
+                stale_state.to_string(),
+                PendingOAuth {
+                    integration_id: "test-sweep-integration".to_string(),
+                    sender: stale_tx,
+                    created_at: stale_instant,
+                },
+            );
+            map.insert(
+                fresh_state.to_string(),
+                PendingOAuth {
+                    integration_id: "test-sweep-integration".to_string(),
+                    sender: fresh_tx,
+                    created_at: std::time::Instant::now(),
+                },
+            );
+        }
+
+        {
+            let mut map = PENDING_OAUTH.lock().unwrap();
+            map.retain(|_, p| p.created_at.elapsed() < 2 * OAUTH_CALLBACK_TIMEOUT);
+            assert!(!map.contains_key(stale_state));
+            assert!(map.contains_key(fresh_state));
+            map.remove(fresh_state);
+        }
     }
 }
 
