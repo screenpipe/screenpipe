@@ -65,6 +65,30 @@ describe("provider error copy", () => {
     ).toContain("Can't reach the AI provider");
   });
 
+  it("maps the ChatGPT missing-account-id error to reconnect guidance", () => {
+    // exact string thrown by pi's openai-codex-responses provider when the
+    // OAuth access token lacks the chatgpt_account_id claim (Enterprise/
+    // Business workspaces without Codex local access enabled)
+    const msg = buildProviderErrorMessage("Failed to extract accountId from token", {
+      provider: "openai-chatgpt",
+      model: "gpt-5.2-codex",
+    });
+
+    expect(msg).toContain("ChatGPT account id");
+    expect(msg).toContain("Reconnect ChatGPT");
+    // provider-independent: the error string alone identifies the failure
+    expect(
+      buildProviderErrorMessage("Error: Failed to extract accountId from token", null)
+    ).toContain("ChatGPT account id");
+  });
+
+  it("does not map unrelated token errors to the ChatGPT account-id message", () => {
+    expect(buildProviderErrorMessage("invalid token", { provider: "openai-chatgpt" })).toBeNull();
+    expect(
+      buildProviderErrorMessage("failed to extract something else", { provider: "openai-chatgpt" })
+    ).toBeNull();
+  });
+
   it("leaves non-connection cloud errors untouched (quota/auth handled elsewhere)", () => {
     expect(
       buildProviderErrorMessage("model_not_allowed", { provider: "screenpipe-cloud", model: "auto" })

@@ -92,6 +92,10 @@ export function buildContextOverflowMessage(): string {
   return "This chat is too long for the selected model. Start a new chat, ask a narrower question, or remove large attachments/screenshots before trying again.";
 }
 
+export function buildChatGptAccountIdMessage(): string {
+  return "Your ChatGPT sign-in doesn't include chat access: the login token has no ChatGPT account id. This usually means an Enterprise/Business workspace where the admin hasn't enabled Codex local app access. Reconnect ChatGPT in Settings → AI with a personal account, or ask your workspace admin to enable access.";
+}
+
 export function buildProviderErrorMessage(
   errorStr: string,
   preset?: ProviderLike | null
@@ -102,6 +106,13 @@ export function buildProviderErrorMessage(
 
   if (isContextOverflowError(errorStr)) {
     return buildContextOverflowMessage();
+  }
+
+  // ChatGPT OAuth tokens from Enterprise/Business workspaces can lack the
+  // chatgpt_account_id claim the Codex backend requires — the pi provider
+  // then throws "Failed to extract accountId from token" on every turn.
+  if (normalized.includes("failed to extract accountid")) {
+    return buildChatGptAccountIdMessage();
   }
 
   if (isNativeOllamaProvider(provider)) {

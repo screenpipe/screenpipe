@@ -171,6 +171,40 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
+// ── Account-id claim validation ────────────────────────────────────────
+
+/// JWT claim namespace that carries the ChatGPT account id. The Codex
+/// backend requires this id as the `chatgpt-account-id` header on every
+/// chat request, so a token without it can never be used for chat.
+const JWT_AUTH_CLAIM: &str = "https://api.openai.com/auth";
+
+/// User-facing explanation for tokens missing the account-id claim.
+/// Enterprise/Business workspace tokens lack it unless the workspace admin
+/// enables Codex local app access (same failure class as Codex CLI's
+/// "No eligible ChatGPT workspaces found").
+const MISSING_ACCOUNT_ID_MSG: &str = "This ChatGPT account can't be used for chat: its login \
+    token has no ChatGPT account id. This usually means an Enterprise/Business workspace where \
+    the admin hasn't enabled Codex local app access. Ask your workspace admin to enable it, or \
+    sign in with a personal ChatGPT account.";
+
+/// Extract the `chatgpt_account_id` claim from an access token JWT.
+/// Returns `None` for non-JWT strings (e.g. API keys) or tokens without
+/// the claim — the same check pi's Codex provider performs on every request.
+fn extract_chatgpt_account_id(access_token: &str) -> Option<String> {
+    let mut parts = access_token.split('.');
+    let payload_b64 = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(_), Some(payload), Some(_), None) => payload,
+        _ => return None,
+    };
+    let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+    let account_id = payload.get(JWT_AUTH_CLAIM)?.get("chatgpt_account_id")?;
+    account_id
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 // ── PKCE helpers ───────────────────────────────────────────────────────
 
 fn generate_pkce() -> (String, String) {
@@ -230,6 +264,14 @@ async fn do_refresh_token(refresh_token: &str) -> Result<OAuthTokens, String> {
         .to_string();
 
     let expires_in = v["expires_in"].as_u64().unwrap_or(3600);
+
+    // A refreshed token without the account-id claim would make every chat
+    // turn fail in the Codex provider — keep the old (still stored) token
+    // instead of overwriting a working credential.
+    if extract_chatgpt_account_id(&new_access_token).is_none() {
+        warn!("ChatGPT token refresh returned a token without chatgpt_account_id — not storing it");
+        return Err(MISSING_ACCOUNT_ID_MSG.to_string());
+    }
 
     let tokens = OAuthTokens {
         access_token: new_access_token,
@@ -507,6 +549,13 @@ pub async fn chatgpt_oauth_login(app_handle: AppHandle) -> Result<bool, String> 
 
     let expires_in = v["expires_in"].as_u64().unwrap_or(3600);
 
+    // Fail fast at login instead of letting every chat turn die later with
+    // the pi provider's opaque "Failed to extract accountId from token".
+    if extract_chatgpt_account_id(&access_token).is_none() {
+        warn!("ChatGPT OAuth login returned a token without chatgpt_account_id — rejecting login");
+        return Err(MISSING_ACCOUNT_ID_MSG.to_string());
+    }
+
     let tokens = OAuthTokens {
         access_token,
         refresh_token,
@@ -618,5 +667,63 @@ pub async fn chatgpt_oauth_check_token() -> Result<bool, String> {
     match get_valid_token().await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_jwt(payload: serde_json::Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let body = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+        format!("{}.{}.sig", header, body)
+    }
+
+    #[test]
+    fn extracts_account_id_from_valid_token() {
+        let token = make_jwt(serde_json::json!({
+            JWT_AUTH_CLAIM: { "chatgpt_account_id": "acc-123" }
+        }));
+        assert_eq!(
+            extract_chatgpt_account_id(&token),
+            Some("acc-123".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_token_without_claim() {
+        // Enterprise/workspace-shaped token: auth namespace present but no account id.
+        let token = make_jwt(serde_json::json!({
+            JWT_AUTH_CLAIM: { "organizations": ["org-1"] }
+        }));
+        assert_eq!(extract_chatgpt_account_id(&token), None);
+    }
+
+    #[test]
+    fn rejects_token_without_auth_namespace() {
+        let token = make_jwt(serde_json::json!({ "sub": "user-1" }));
+        assert_eq!(extract_chatgpt_account_id(&token), None);
+    }
+
+    #[test]
+    fn rejects_empty_account_id() {
+        let token = make_jwt(serde_json::json!({
+            JWT_AUTH_CLAIM: { "chatgpt_account_id": "" }
+        }));
+        assert_eq!(extract_chatgpt_account_id(&token), None);
+    }
+
+    #[test]
+    fn rejects_non_jwt_strings() {
+        assert_eq!(extract_chatgpt_account_id("sk-proj-not-a-jwt"), None);
+        assert_eq!(extract_chatgpt_account_id(""), None);
+        assert_eq!(extract_chatgpt_account_id("a.b"), None);
+        assert_eq!(extract_chatgpt_account_id("a.b.c.d"), None);
+    }
+
+    #[test]
+    fn rejects_malformed_base64_payload() {
+        assert_eq!(extract_chatgpt_account_id("head.%%%not-base64%%%.sig"), None);
     }
 }
