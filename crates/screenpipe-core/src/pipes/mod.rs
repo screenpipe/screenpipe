@@ -11,6 +11,7 @@
 //! [`AgentExecutor`].
 
 pub mod connection_triggers;
+pub mod custom_triggers;
 pub mod connections;
 pub mod favorites;
 pub mod mcp_access;
@@ -69,8 +70,9 @@ pub struct TriggerConfig {
     /// Matched exactly against WorkflowEvent.event_type.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<String>,
-    /// Plain-language custom triggers (future: matched via embedding similarity).
-    /// Reserved for v2 — currently parsed but not evaluated.
+    /// Plain-language custom triggers (e.g. "when I open an invoice email").
+    /// Matched locally against recent screen activity by the custom-trigger
+    /// matcher — see [`custom_triggers`]. No cloud involved.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom: Vec<String>,
     /// Per-app "watch" triggers — run the pipe when a connected app produces a
@@ -4494,6 +4496,10 @@ impl PipeManager {
             // emits these addressed to a specific pipe — see connection_triggers.
             let mut connection_trigger_rx =
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("connection_trigger");
+            // Natural-language triggers (trigger.custom). The matcher emits
+            // these addressed to a specific pipe — see custom_triggers.
+            let mut custom_trigger_rx =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("custom_trigger");
 
             // Circular chain detection: track recently-triggered pipe→pipe chains.
             // If A→B→A would fire, suppress the second link.
@@ -4569,6 +4575,29 @@ impl PipeManager {
                             for (name, config, _body) in &pipe_snapshot {
                                 if name == target && config.enabled {
                                     info!("scheduler: connection trigger fired pipe '{}'", name);
+                                    last_run.remove(name);
+                                    event_triggered.insert(name.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    // custom_trigger events are likewise addressed to a specific
+                    // pipe (the matcher already scored the trigger and wrote
+                    // .trigger-context.json) — fire that pipe directly.
+                    while let Some(e) = custom_trigger_rx.next().now_or_never().flatten() {
+                        if let Some(target) = e.data.get("pipe").and_then(|v| v.as_str()) {
+                            for (name, config, _body) in &pipe_snapshot {
+                                if name == target && config.enabled {
+                                    let trigger = e
+                                        .data
+                                        .get("trigger")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("?");
+                                    info!(
+                                        "scheduler: custom trigger '{}' fired pipe '{}'",
+                                        trigger, name
+                                    );
                                     last_run.remove(name);
                                     event_triggered.insert(name.clone());
                                 }
@@ -5356,7 +5385,88 @@ impl PipeManager {
 
         self.scheduler_handle = Some(handle);
         self.spawn_connection_trigger_watcher();
+        self.spawn_custom_trigger_matcher();
         Ok(())
+    }
+
+    /// Spawn the custom-trigger matcher alongside the scheduler. It polls the
+    /// local `/search` API for recent activity, scores it against every
+    /// enabled pipe's `trigger.custom` phrases (locally — see
+    /// [`custom_triggers`]), and emits `custom_trigger` events the scheduler
+    /// consumes. Same lifecycle as the connection-trigger watcher: it
+    /// self-terminates on shutdown or scheduler-generation change.
+    fn spawn_custom_trigger_matcher(&self) {
+        let mut shutdown_rx = match self.shutdown_tx.as_ref() {
+            Some(tx) => tx.subscribe(),
+            None => return,
+        };
+        let pipes = self.pipes.clone();
+        let pipes_dir = self.pipes_dir.clone();
+        let generation_ref = self.scheduler_generation.clone();
+        let generation = generation_ref.load(std::sync::atomic::Ordering::SeqCst);
+        let api_base = format!("http://127.0.0.1:{}", self.api_port);
+        let api_key = self.local_api_key.clone();
+
+        tokio::spawn(async move {
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default();
+            let mut cooldowns = custom_triggers::CooldownMap::default();
+            let mut last_hash: u64 = 0;
+            info!("custom-trigger matcher started (generation {})", generation);
+            // Let the scheduler subscribe to `custom_trigger` before the first
+            // poll can emit, so a fire on the very first tick isn't dropped.
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                _ = shutdown_rx.changed() => {}
+            }
+            loop {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+                if generation_ref.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                    break;
+                }
+
+                // Snapshot enabled pipes with custom triggers. Cheap when none
+                // are configured — the tick becomes a no-op.
+                let pipe_triggers: Vec<(String, Vec<String>)> = {
+                    let p = pipes.lock().await;
+                    p.iter()
+                        .filter(|(_, (c, _, _))| c.enabled)
+                        .filter_map(|(n, (c, _, _))| {
+                            c.trigger.as_ref().and_then(|t| {
+                                if t.custom.is_empty() {
+                                    None
+                                } else {
+                                    Some((n.clone(), t.custom.clone()))
+                                }
+                            })
+                        })
+                        .collect()
+                };
+
+                last_hash = custom_triggers::poll_once(
+                    &http,
+                    &api_base,
+                    api_key.as_deref(),
+                    &pipes_dir,
+                    &pipe_triggers,
+                    &mut cooldowns,
+                    last_hash,
+                )
+                .await;
+
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(
+                        custom_triggers::POLL_INTERVAL_SECS,
+                    )) => {}
+                    _ = shutdown_rx.changed() => {}
+                }
+            }
+            info!("custom-trigger matcher stopped (generation {})", generation);
+        });
     }
 
     /// Spawn the connection-trigger watcher alongside the scheduler. It polls
