@@ -99,15 +99,38 @@ function CursorIcon({ className = "w-5 h-5" }: { className?: string }) {
  * `components/settings/connections-section.tsx` — both code paths must
  * write identical configs.
  */
+/**
+ * Resolve the local API key for MCP configs. The fetch can race engine
+ * startup and return key:null even though auth is enabled — writing a keyless
+ * entry then produces an MCP server that 403s on every call. Retry once, and
+ * if the key still isn't there while auth is on, fail loudly so connect shows
+ * an error instead of silently writing a broken config.
+ * Keep in sync with the same helper in settings/connections-section.tsx.
+ */
+async function resolveLocalApiKeyForMcp(): Promise<string | undefined> {
+  type LocalApiConfig = { key: string | null; auth_enabled?: boolean };
+  const fetchOnce = () =>
+    (commands.getLocalApiConfig() as Promise<LocalApiConfig>).catch(() => null);
+  let cfg = await fetchOnce();
+  if (!cfg?.key && cfg?.auth_enabled !== false) {
+    await new Promise((r) => setTimeout(r, 1500));
+    cfg = await fetchOnce();
+    if (!cfg?.key && cfg?.auth_enabled !== false) {
+      throw new Error(
+        "screenpipe's local API key isn't available yet (engine still starting?) — try connecting again in a moment"
+      );
+    }
+  }
+  return cfg?.key ?? undefined;
+}
+
 async function buildMcpConfig(): Promise<{ command: string; args: string[]; env?: Record<string, string> }> {
   // Inject the local API key so the spawned MCP hits its fast env-var path
   // instead of falling into the slow subprocess key-discovery ladder (bundled
   // bun / npx / sqlite), which on a cold cache can stall Claude Desktop's MCP
   // startup and produce "Could not attach to MCP server screenpipe". This MUST
   // match the settings helper — see connections-section.tsx::buildMcpConfig.
-  const apiKey = await (commands.getLocalApiConfig() as Promise<{ key: string | null }>)
-    .then(r => r.key ?? undefined)
-    .catch(() => undefined);
+  const apiKey = await resolveLocalApiKeyForMcp();
   const env: Record<string, string> | undefined = apiKey
     ? { SCREENPIPE_LOCAL_API_KEY: apiKey }
     : undefined;
