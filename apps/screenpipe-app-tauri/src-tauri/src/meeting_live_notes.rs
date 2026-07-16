@@ -455,12 +455,7 @@ fn hd_recording_default(app: &AppHandle) -> String {
         Ok(Some(s)) => s,
         _ => return "ask".to_string(),
     };
-    settings
-        .extra
-        .get("hdRecordingDefault")
-        .and_then(|v| v.as_str())
-        .unwrap_or("ask")
-        .to_string()
+    settings.recording.hd_recording_default
 }
 
 /// Build the HD notification action. Returns `None` when the user's
