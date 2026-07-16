@@ -22,6 +22,7 @@ interface SummaryCardsProps {
   onSendMessage: (message: string, displayLabel?: string) => void;
   customTemplates: CustomTemplate[];
   onSaveCustomTemplate: (template: CustomTemplate) => void;
+  onUpdateCustomTemplate: (template: CustomTemplate) => void;
   onDeleteCustomTemplate: (id: string) => void;
   userName?: string;
   templatePipes?: TemplatePipe[];
@@ -41,6 +42,7 @@ export function SummaryCards({
   onSendMessage,
   customTemplates,
   onSaveCustomTemplate,
+  onUpdateCustomTemplate,
   onDeleteCustomTemplate,
   userName,
   templatePipes = [],
@@ -48,6 +50,7 @@ export function SummaryCards({
 }: SummaryCardsProps) {
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(null);
 
   // Curated home grid — kept deliberately small to reduce cognitive load.
   // Order matters. Definitions come from the app bundle (FALLBACK_TEMPLATES)
@@ -78,13 +81,16 @@ export function SummaryCards({
     onSendMessage(prompt, `${pipe.icon} ${pipe.title}`);
   };
 
+  // Opens the builder pre-filled for review/editing instead of running
+  // immediately — saved prompts often reference dates or context that
+  // changed since they were saved (#5239). Run lives inside the dialog.
   const handleCustomTemplateClick = (template: CustomTemplate) => {
     posthog.capture("home_card_clicked", {
       kind: "custom_template",
       template_id: template.id,
       template_title: template.title,
     });
-    onSendMessage(template.prompt, `\u{1F4CC} ${template.title}`);
+    setEditingTemplate(template);
   };
 
   // Connection suggestions are shown as an inline nudge bar, not grid cards.
@@ -272,6 +278,28 @@ export function SummaryCards({
             });
             setShowBuilder(false);
             onSendMessage(prompt, `\u2728 Custom Summary \u2014 ${timeRange}`);
+          }}
+          onSaveTemplate={onSaveCustomTemplate}
+        />
+      )}
+
+      {/* Saved template review/edit modal \u2014 keyed so reopening a different
+          template remounts with fresh initial state */}
+      {editingTemplate && (
+        <CustomSummaryBuilder
+          key={editingTemplate.id}
+          open
+          onClose={() => setEditingTemplate(null)}
+          editingTemplate={editingTemplate}
+          onUpdateTemplate={onUpdateCustomTemplate}
+          onGenerate={(prompt) => {
+            posthog.capture("home_card_clicked", {
+              kind: "custom_template_run",
+              template_id: editingTemplate.id,
+              template_title: editingTemplate.title,
+            });
+            setEditingTemplate(null);
+            onSendMessage(prompt, `\u{1F4CC} ${editingTemplate.title}`);
           }}
           onSaveTemplate={onSaveCustomTemplate}
         />
