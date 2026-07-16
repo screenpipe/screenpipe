@@ -138,7 +138,7 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
             if is_in_app {
                 let target = if is_meeting_deeplink(&url) {
                     ShowRewindWindow::Home {
-                        page: Some("meetings".to_string()),
+                        page: Some(meeting_page_with_id(&url)),
                     }
                 } else {
                     ShowRewindWindow::Main
@@ -205,10 +205,11 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
                 return;
             }
 
+            let meeting_page = meeting_page_with_id(&deeplink_url);
             let app_for_show = app_clone.clone();
             let _ = app_clone.run_on_main_thread(move || {
                 if let Err(e) = (ShowRewindWindow::Home {
-                    page: Some("meetings".to_string()),
+                    page: Some(meeting_page),
                 })
                 .show(&app_for_show)
                 {
@@ -255,7 +256,7 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
             if is_in_app {
                 let target = if is_meeting_deeplink(&url) {
                     ShowRewindWindow::Home {
-                        page: Some("meetings".to_string()),
+                        page: Some(meeting_page_with_id(&url)),
                     }
                 } else {
                     ShowRewindWindow::Main
@@ -348,10 +349,11 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
                 // "open note + HD": also navigate to the live meeting note.
                 if let Some(ref url) = deeplink_url {
                     if is_meeting_deeplink(url) {
+                        let meeting_page = meeting_page_with_id(url);
                         let app_for_show = app_clone.clone();
                         let _ = app_clone.run_on_main_thread(move || {
                             if let Err(e) = (ShowRewindWindow::Home {
-                                page: Some("meetings".to_string()),
+                                page: Some(meeting_page),
                             })
                             .show(&app_for_show)
                             {
@@ -402,6 +404,18 @@ fn parse_meeting_deeplink(url: &str) -> Option<(u64, bool)> {
     Some((meeting_id, transcript))
 }
 
+/// Build the `page` string for `ShowRewindWindow::Home` that encodes the
+/// meeting ID into the URL query string. When `show.rs` formats this into
+/// `/home?section={page}`, the result becomes
+/// `/home?section=meetings&meetingId=42&transcript=true` which the React
+/// page reads on initial mount — surviving full-page navigations.
+fn meeting_page_with_id(deeplink_url: &str) -> String {
+    match parse_meeting_deeplink(deeplink_url) {
+        Some((id, transcript)) => format!("meetings&meetingId={}&transcript={}", id, transcript),
+        None => "meetings".to_string(),
+    }
+}
+
 fn emit_meeting_note_route_with_retries(app: &tauri::AppHandle, deeplink_url: &str) {
     let Some((meeting_id, transcript)) = parse_meeting_deeplink(deeplink_url) else {
         warn!(
@@ -415,7 +429,11 @@ fn emit_meeting_note_route_with_retries(app: &tauri::AppHandle, deeplink_url: &s
         "meetingId": meeting_id,
         "transcript": transcript,
     });
-    let nav = serde_json::json!({ "url": "/home?section=meetings" });
+    let nav_url = format!(
+        "/home?section=meetings&meetingId={}&transcript={}",
+        meeting_id, transcript
+    );
+    let nav = serde_json::json!({ "url": nav_url });
 
     // A notification click can cold-open the Home webview. React listeners are
     // not guaranteed to be mounted when `show()` returns, so a single emit is

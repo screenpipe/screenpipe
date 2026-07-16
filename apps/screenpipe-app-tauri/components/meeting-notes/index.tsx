@@ -159,6 +159,53 @@ export function MeetingNotesSection({
   // so this also dedupes the burst — same meeting within 5s is a no-op.
   const pendingOpenRef = useRef<{ id: number; at: number } | null>(null);
 
+  // Fetch a single meeting by id, insert/update it in the list, and select it.
+  const openMeetingNote = useCallback(
+    async (id: number, transcript: boolean) => {
+      pendingOpenRef.current = { id, at: Date.now() };
+      try {
+        const res = await localFetch(`/meetings/${id}`);
+        if (res.ok) {
+          const meeting: MeetingRecord = await res.json();
+          setMeetings((prev) => {
+            const exists = prev.some((m) => m.id === meeting.id);
+            return exists
+              ? prev.map((m) => (m.id === meeting.id ? meeting : m))
+              : [meeting, ...prev];
+          });
+        } else {
+          await fetchPage(0, false, appliedQueryRef.current);
+        }
+      } catch (err) {
+        console.warn("meeting notes: failed to open deep-linked meeting", err);
+        await fetchPage(0, false, appliedQueryRef.current);
+      }
+      if (transcript) {
+        setOpenTranscriptRequest({ id, token: Date.now() });
+      }
+      setSelectedId(id);
+    },
+    [fetchPage],
+  );
+
+  // On mount, if the URL contains a meetingId param (set by Rust when the
+  // user clicks a notification from /settings), open that meeting after
+  // the initial fetchPage finishes.
+  const urlMeetingRef = useRef<{ id: number; transcript: boolean } | null>(
+    (() => {
+      const params = new URLSearchParams(window.location.search);
+      const id = Number(params.get("meetingId"));
+      if (!Number.isFinite(id) || id <= 0) return null;
+      return { id, transcript: params.get("transcript") !== "false" };
+    })(),
+  );
+  useEffect(() => {
+    if (loading || !urlMeetingRef.current) return;
+    const { id, transcript } = urlMeetingRef.current;
+    urlMeetingRef.current = null;
+    void openMeetingNote(id, transcript);
+  }, [loading, openMeetingNote]);
+
   useEffect(() => {
     const unlisten = listen<{ meetingId: number; transcript?: boolean }>(
       "open-meeting-note",
@@ -173,47 +220,14 @@ export function MeetingNotesSection({
         ) {
           return;
         }
-        pendingOpenRef.current = { id, at: now };
 
-        // Fetch and insert into `meetings` BEFORE selecting. The
-        // "selection vanished" effect below resets selectedId to null
-        // whenever the id isn't in the list — if we set selectedId first
-        // and await the fetch after, that effect fires in the gap and
-        // drops the selection, leaving the user on the list view instead
-        // of the note. Notification-triggered opens (a freshly-started
-        // meeting) hit this every time because the new row isn't in the
-        // initial page yet.
-        try {
-          const res = await localFetch(`/meetings/${id}`);
-          if (res.ok) {
-            const meeting: MeetingRecord = await res.json();
-            setMeetings((prev) => {
-              const exists = prev.some((m) => m.id === meeting.id);
-              return exists
-                ? prev.map((m) => (m.id === meeting.id ? meeting : m))
-                : [meeting, ...prev];
-            });
-          } else {
-            await fetchPage(0, false, appliedQueryRef.current);
-          }
-        } catch (err) {
-          console.warn(
-            "meeting notes: failed to open deep-linked meeting",
-            err,
-          );
-          await fetchPage(0, false, appliedQueryRef.current);
-        }
-
-        if (event.payload.transcript !== false) {
-          setOpenTranscriptRequest({ id, token: Date.now() });
-        }
-        setSelectedId(id);
+        await openMeetingNote(id, event.payload.transcript !== false);
       },
     );
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [fetchPage]);
+  }, [openMeetingNote]);
 
   // Refetch on visibility change — picks up changes made elsewhere.
   // Skip the meetings list refetch when the user is inside a note: a Mac
