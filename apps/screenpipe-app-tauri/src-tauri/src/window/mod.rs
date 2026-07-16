@@ -54,13 +54,11 @@ pub fn finalize_webview_window(window: tauri::WebviewWindow) -> tauri::WebviewWi
 /// (see the close path in `show.rs`), and hiding keeps the webviews warm for a
 /// later policy reversal.
 pub fn enforce_enterprise_ui_visibility(app: &tauri::AppHandle) {
-    use tauri::Manager;
-
     let hidden = crate::enterprise_policy::is_app_ui_hidden();
 
     // The enterprise policy hook calls this on every 5-min poll. Only do work
-    // on an actual transition — otherwise we'd hide-already-hidden windows and
-    // (worse) rebuild the tray every poll, flickering the menu-bar icon.
+    // on an actual transition — otherwise we'd tear down an already-dormant UI
+    // and (worse) rebuild the tray every poll, flickering the menu-bar icon.
     // -1 = unknown (first call), 0 = visible, 1 = hidden.
     static LAST_APPLIED: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
     let next = if hidden { 1 } else { 0 };
@@ -68,22 +66,18 @@ pub fn enforce_enterprise_ui_visibility(app: &tauri::AppHandle) {
         return;
     }
 
-    // Flip the headless dormant/record-only flags so scheduled pipes are
-    // suppressed and the tray wake path stays closed the moment the policy
-    // changes — the startup gate only ran once, so a mid-session flip needs this.
-    crate::headless::set_enterprise_hidden(app, hidden);
-
     if hidden {
-        let recovery = show::RewindWindowId::PermissionRecovery.label();
-        for (label, window) in app.webview_windows() {
-            if label.as_str() == recovery {
-                continue;
-            }
-            let _ = window.hide();
-        }
-        #[cfg(target_os = "macos")]
-        panel::MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
-        tracing::info!("enterprise: hidden-UI policy enforced — app windows hidden");
+        // A mid-session flip uses the same teardown as the new headless mode:
+        // destroy (not merely hide) the webviews so their memory is freed, exactly
+        // like the tray-driven headless close. request_enter also flips the
+        // dormant + record-only flags and defers the destroy off this callback so
+        // we don't re-enter the event loop. Permission recovery is preserved.
+        crate::headless::request_enter(app.clone());
+        tracing::info!("enterprise: hidden-UI policy enforced — headless teardown");
+    } else {
+        // Un-hide: restore dormant/record-only to the user's own headless prefs.
+        // Windows reopen on demand via the tray/shortcut.
+        crate::headless::set_enterprise_hidden(app, false);
     }
 
     // Always re-apply the activation policy + tray so a policy change in EITHER
