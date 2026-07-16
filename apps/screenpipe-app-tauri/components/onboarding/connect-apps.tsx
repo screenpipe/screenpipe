@@ -16,7 +16,7 @@ import {
   humanizeConnectError,
 } from "@/lib/connect-errors";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { readTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
+import { readTextFile, writeFile, mkdir, exists } from "@tauri-apps/plugin-fs";
 import { homeDir, join, dirname } from "@tauri-apps/api/path";
 import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
@@ -181,6 +181,42 @@ async function installCursorMcp(): Promise<void> {
   const configPath = await getCursorMcpConfigPath();
   const config = await readMcpConfig(configPath);
   await writeMcpConfig(configPath, config);
+}
+
+// ─── Connect-all: local AI tools detected on this machine ────────────────────
+//
+// One click wires every DETECTED tool through the same per-tool connect path
+// the individual cards use (bundled-bun MCP with the local API key, plus both
+// skills where supported). Tools that are not detected are never touched —
+// installing into absent tools would create config dirs for apps the user
+// doesn't have (the core objection to the #5152 approach).
+const CONNECT_ALL_TOOL_IDS = ["claude", "codex", "cursor"] as const;
+type ConnectAllToolId = (typeof CONNECT_ALL_TOOL_IDS)[number];
+
+async function detectAiTools(): Promise<ConnectAllToolId[]> {
+  const home = await homeDir();
+  const checks: Array<[ConnectAllToolId, () => Promise<boolean>]> = [
+    [
+      "claude",
+      async () => {
+        // Claude Desktop creates its config dir on first launch.
+        const configPath = await getClaudeConfigPath();
+        return configPath ? exists(await dirname(configPath)) : false;
+      },
+    ],
+    ["codex", async () => exists(await join(home, ".codex"))],
+    ["cursor", async () => exists(await join(home, ".cursor"))],
+  ];
+
+  const detected: ConnectAllToolId[] = [];
+  for (const [id, check] of checks) {
+    try {
+      if (await check()) detected.push(id);
+    } catch {
+      /* not detected */
+    }
+  }
+  return detected;
 }
 
 // Claude Desktop
@@ -569,10 +605,14 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   const [errorMessages, setErrorMessages] = useState<Record<string, string>>({});
   const [seconds, setSeconds] = useState(0);
   const mountTimeRef = useRef(Date.now());
+  const [detectedAiTools, setDetectedAiTools] = useState<ConnectAllToolId[]>([]);
+  const [connectAllRunning, setConnectAllRunning] = useState(false);
 
   // Check existing connections on mount
   useEffect(() => {
     const check = async () => {
+      detectAiTools().then(setDetectedAiTools).catch(() => {});
+
       const stateUpdates: Record<string, CardState> = {};
       const nameUpdates: Record<string, string> = {};
 
@@ -814,6 +854,21 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
     [isPro, setCardState]
   );
 
+  // Connect every detected AI tool through the same per-tool path the cards
+  // use. handleConnect never throws (it classifies errors into card state),
+  // so one failing tool can't stop the rest. Sequential on purpose: each
+  // install is fast local file IO and the per-tool chips animate in order.
+  const handleConnectAll = useCallback(async () => {
+    setConnectAllRunning(true);
+    posthog.capture("onboarding_connect_all_clicked", { tools: detectedAiTools });
+    for (const id of detectedAiTools) {
+      const integration = INTEGRATIONS.find((i) => i.id === id);
+      if (!integration || cardStates[integration.cardKey] === "connected") continue;
+      await handleConnect(integration);
+    }
+    setConnectAllRunning(false);
+  }, [detectedAiTools, cardStates, handleConnect]);
+
   const handleContinue = useCallback(() => {
     posthog.capture("onboarding_connect_apps_completed", {
       num_connected: numConnected,
@@ -870,6 +925,75 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
             : "screenpipe sees your screen — connect the tools it acts on"}
         </p>
       </motion.div>
+
+      {/* Connect-all card — only shown when at least one AI tool is detected */}
+      {detectedAiTools.length > 0 && (() => {
+        const tools = detectedAiTools
+          .map((id) => INTEGRATIONS.find((i) => i.id === id))
+          .filter((i): i is Integration => !!i);
+        const allConnected = tools.every((t) => (cardStates[t.cardKey] ?? "idle") === "connected");
+        return (
+          <motion.div
+            className="w-full mb-3 p-3 rounded-lg border border-border/40 bg-card/40"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.18 }}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col min-w-0">
+                <span className="font-mono text-xs font-semibold lowercase">
+                  connect all your ai tools in one click
+                </span>
+                {/* Status list, not chips: passive text indicators, never
+                    clickable pills. Monochrome like the cards below — state
+                    is carried by brightness and glyph (✓ / dot / spinner),
+                    not color, per the black-and-white design system. */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
+                  {tools.map((t) => {
+                    const state = cardStates[t.cardKey] ?? "idle";
+                    return (
+                      <span
+                        key={t.cardKey}
+                        className={`font-mono text-[10px] inline-flex items-center gap-1.5 ${
+                          state === "connected"
+                            ? "text-muted-foreground"
+                            : state === "error"
+                            ? "text-muted-foreground"
+                            : "text-muted-foreground/40"
+                        }`}
+                      >
+                        {state === "connecting" ? (
+                          <Loader className="h-2.5 w-2.5 animate-spin" />
+                        ) : state === "connected" ? (
+                          <Check className="h-2.5 w-2.5" />
+                        ) : (
+                          <span className="h-1 w-1 rounded-full bg-muted-foreground/30" />
+                        )}
+                        {t.name.toLowerCase()}
+                        {state === "error" && " · failed"}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              {allConnected ? (
+                <span className="font-mono text-[11px] text-muted-foreground inline-flex items-center gap-1.5 shrink-0">
+                  <Check className="h-3 w-3" />
+                  all connected
+                </span>
+              ) : (
+                <button
+                  onClick={handleConnectAll}
+                  disabled={connectAllRunning}
+                  className="font-mono text-[11px] px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-all shrink-0"
+                >
+                  {connectAllRunning ? "connecting..." : "connect all"}
+                </button>
+              )}
+            </div>
+          </motion.div>
+        );
+      })()}
 
       <div className="grid grid-cols-3 gap-2 w-full auto-rows-fr">
         {INTEGRATIONS.map((integration, i) => (
