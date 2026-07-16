@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Sparkles, Save, CalendarIcon } from "lucide-react";
+import { toast } from "@/components/ui/use-toast";
 import {
   parseTemplateInstructions,
   type CustomTemplate,
@@ -103,6 +104,12 @@ export function CustomSummaryBuilder({
     onSaveTemplate(template);
     setShowSave(false);
     setTemplateTitle("");
+    // The dialog stays open so the user can still hit Generate; the toast is
+    // the only signal the save happened.
+    toast({
+      title: "Template saved",
+      description: `"${template.title}" added to your templates`,
+    });
   };
 
   const handleUpdate = () => {
