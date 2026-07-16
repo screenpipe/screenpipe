@@ -230,7 +230,7 @@ async function isCodexMcpInstalled(): Promise<boolean> {
 
 async function installCodexMcp(): Promise<void> {
   const configPath = await getCodexConfigPath();
-  const { command, args } = await buildMcpConfig();
+  const { command, args, env } = await buildMcpConfig();
   let existing = "";
   try { existing = await readTextFile(configPath); } catch { /* fresh */ }
 
@@ -240,12 +240,23 @@ async function installCodexMcp(): Promise<void> {
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 
-  const block = [
+  // Keep this in sync with buildCodexMcpToml in settings/connections-section.tsx
+  // — the env table carries the local API key; without it the MCP server 403s
+  // on every call.
+  const lines = [
     "[mcp_servers.screenpipe]",
     `command = ${JSON.stringify(command)}`,
     `args = [${args.map(a => JSON.stringify(a)).join(", ")}]`,
     "enabled = true",
-  ].join("\n");
+  ];
+  const envEntries = Object.entries(env ?? {});
+  if (envEntries.length > 0) {
+    lines.push("", "[mcp_servers.screenpipe.env]");
+    for (const [key, value] of envEntries) {
+      lines.push(`${key} = ${JSON.stringify(value)}`);
+    }
+  }
+  const block = lines.join("\n");
 
   const next = `${withoutScreenpipe}${withoutScreenpipe ? "\n\n" : ""}${block}\n`;
   await mkdir(await dirname(configPath), { recursive: true });
