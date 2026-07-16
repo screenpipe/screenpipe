@@ -431,7 +431,8 @@ impl DatabaseManager {
             sql.push_str(
                 " AND (LOWER(IFNULL(title, '')) LIKE ? \
                  OR LOWER(IFNULL(attendees, '')) LIKE ? \
-                 OR LOWER(IFNULL(note, '')) LIKE ?)",
+                 OR LOWER(IFNULL(note, '')) LIKE ? \
+                 OR LOWER(IFNULL(meeting_app, '')) LIKE ?)",
             );
         }
         sql.push_str(" ORDER BY meeting_start DESC LIMIT ? OFFSET ?");
@@ -448,7 +449,7 @@ impl DatabaseManager {
             }
             if let Some(qs) = query {
                 let pattern = format!("%{}%", qs.to_lowercase());
-                q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
+                q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
             }
             q = q.bind(limit).bind(offset);
 

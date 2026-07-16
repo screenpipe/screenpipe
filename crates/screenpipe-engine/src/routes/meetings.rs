@@ -142,7 +142,7 @@ pub struct ListMeetingsRequest {
     pub limit: u32,
     #[serde(default)]
     pub offset: u32,
-    /// Case-insensitive substring match against title, attendees, and note.
+    /// Case-insensitive substring match against title, attendees, note, and meeting app.
     /// Empty / whitespace-only values are ignored.
     #[serde(default)]
     pub q: Option<String>,
