@@ -180,6 +180,14 @@
           "requireLiteralLeadingDot": false
         },
         {
+          "path": "$HOME/.claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
           "path": "$HOME/Library/Application Support/Claude",
           "requireLiteralLeadingDot": false
         },
