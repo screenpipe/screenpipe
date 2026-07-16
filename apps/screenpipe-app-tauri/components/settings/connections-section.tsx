@@ -4035,11 +4035,16 @@ export function ConnectionsSection({
     detectInstalledConnectionIds()
       .then(setDetectedConnectionIds)
       .catch(() => setDetectedConnectionIds(new Set()));
-    getInstalledMcpVersion()
-      .then(v => setClaudeInstalled(!!v))
+    // Connected = MCP entry AND both built-in skills, matching the panels
+    // (ClaudePanel/CodexPanel) — an MCP-only setup shows as not connected so
+    // one click can repair it.
+    Promise.all([getInstalledMcpVersion(), areExternalAgentSkillsInstalled("claude")])
+      .then(([v, skills]) => setClaudeInstalled(!!v && skills))
       .catch(() => setClaudeInstalled(false));
     isCursorMcpInstalled().then(setCursorInstalled).catch(() => {});
-    isCodexMcpInstalled().then(setCodexInstalled).catch(() => {});
+    Promise.all([isCodexMcpInstalled(), areExternalAgentSkillsInstalled("codex")])
+      .then(([mcp, skills]) => setCodexInstalled(mcp && skills))
+      .catch(() => setCodexInstalled(false));
     isGrokMcpInstalled().then(setGrokInstalled).catch(() => {});
     commands.chatgptOauthStatus().then(res => {
       setChatgptConnected(res.status === "ok" && res.data.logged_in);
