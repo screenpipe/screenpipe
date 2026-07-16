@@ -1030,7 +1030,7 @@ async lockSync() : Promise<Result<null, string>> {
  * Cancel any in-flight OAuth flow(s) for the given integration.
  * Dropping the stored sender makes the awaiting `oauth_connect` call fail fast
  * with "OAuth channel closed before code was received" instead of hanging for
- * the full 120s timeout.
+ * the full callback timeout.
  */
 async oauthCancel(integrationId: string) : Promise<Result<null, string>> {
     try {
@@ -1691,6 +1691,19 @@ async remoteSyncStopScheduler() : Promise<Result<null, string>> {
 async remoteSyncTest(config: RemoteSyncConfig) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("remote_sync_test", { config }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Remove the two built-in screenpipe skills from a supported external agent.
+ * Mirror of `install_external_agent_skills`; MCP entry removal stays in the
+ * frontend, next to the code that wrote it.
+ */
+async removeExternalAgentSkills(target: string) : Promise<Result<string[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_external_agent_skills", { target }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

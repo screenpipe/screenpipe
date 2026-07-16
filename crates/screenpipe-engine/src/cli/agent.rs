@@ -194,6 +194,33 @@ pub fn install_skills(target: &str, api_url: &str) -> Result<Vec<PathBuf>> {
     ])
 }
 
+/// Remove the two built-in screenpipe skills from an external agent.
+///
+/// Mirror of [`install_skills`]: deletes only `<skills_dir>/screenpipe-api`
+/// and `<skills_dir>/screenpipe-cli`, never the parent skills directory or any
+/// sibling skill the user installed themselves. Missing folders are a no-op,
+/// so calling this twice (or on a machine that never installed) succeeds.
+pub fn remove_skills(target: &str) -> Result<Vec<PathBuf>> {
+    let l = layout(target)?;
+    let Some(skills_dir) = &l.skills_dir else {
+        return Ok(Vec::new());
+    };
+
+    remove_skills_from(skills_dir)
+}
+
+fn remove_skills_from(skills_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    for name in ["screenpipe-api", "screenpipe-cli"] {
+        let dir = skills_dir.join(name);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
+            removed.push(dir);
+        }
+    }
+    Ok(removed)
+}
+
 /// Idempotently add the `screenpipe` server to a JSON MCP config (OpenClaw,
 /// Claude), preserving any existing servers/keys.
 fn merge_mcp_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
@@ -337,6 +364,30 @@ mod tests {
             .skills_dir
             .as_deref()
             .is_some_and(|path| path.ends_with(".claude/skills")));
+    }
+
+    #[test]
+    fn test_remove_skills_deletes_only_screenpipe_dirs() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-remove-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Two screenpipe skills plus a user skill that must survive.
+        write_skill(&dir, "screenpipe-api", "api", "http://localhost:3030").unwrap();
+        write_skill(&dir, "screenpipe-cli", "cli", "http://localhost:3030").unwrap();
+        write_skill(&dir, "my-own-skill", "mine", "http://localhost:3030").unwrap();
+
+        let removed = remove_skills_from(&dir).unwrap();
+        assert_eq!(
+            removed,
+            vec![dir.join("screenpipe-api"), dir.join("screenpipe-cli")]
+        );
+        assert!(!dir.join("screenpipe-api").exists());
+        assert!(!dir.join("screenpipe-cli").exists());
+        assert!(dir.join("my-own-skill/SKILL.md").exists());
+
+        // Idempotent: nothing left to remove, still Ok.
+        assert!(remove_skills_from(&dir).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

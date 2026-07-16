@@ -20,6 +20,14 @@ export async function installExternalAgentSkills(
   return result.data;
 }
 
+export async function removeExternalAgentSkills(
+  target: ExternalAgentWithSkills,
+): Promise<string[]> {
+  const result = await commands.removeExternalAgentSkills(target);
+  if (result.status === "error") throw new Error(result.error);
+  return result.data;
+}
+
 export async function areExternalAgentSkillsInstalled(
   target: ExternalAgentWithSkills,
 ): Promise<boolean> {

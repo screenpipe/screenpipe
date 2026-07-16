@@ -51,6 +51,7 @@ import posthog from "posthog-js";
 import {
   areExternalAgentSkillsInstalled,
   installExternalAgentSkills,
+  removeExternalAgentSkills,
 } from "@/lib/external-agent-skills";
 
 // ---------------------------------------------------------------------------
@@ -1245,6 +1246,7 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
 
   const handleDisconnect = async () => {
     try { await uninstallClaudeMcp(); } catch (e) { console.warn("claude config remove failed:", e); }
+    try { await removeExternalAgentSkills("claude"); } catch (e) { console.warn("claude skills remove failed:", e); }
     setState("idle");
     onDisconnected?.();
   };
@@ -1417,6 +1419,7 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
 
   const handleDisconnect = async () => {
     try { await uninstallCodexMcp(); } catch (e) { console.warn("codex config remove failed:", e); }
+    try { await removeExternalAgentSkills("codex"); } catch (e) { console.warn("codex skills remove failed:", e); }
     setState("idle");
     onDisconnected?.();
   };
