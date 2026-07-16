@@ -449,7 +449,11 @@ impl DatabaseManager {
             }
             if let Some(qs) = query {
                 let pattern = format!("%{}%", qs.to_lowercase());
-                q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
+                q = q
+                    .bind(pattern.clone())
+                    .bind(pattern.clone())
+                    .bind(pattern.clone())
+                    .bind(pattern);
             }
             q = q.bind(limit).bind(offset);
 
