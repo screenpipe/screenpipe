@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Sparkles, Save, CalendarIcon } from "lucide-react";
+import { Sparkles, Save, CalendarIcon, Pin, Trash2 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import {
   parseTemplateInstructions,
@@ -46,6 +46,7 @@ interface CustomSummaryBuilderProps {
   /** When set, the dialog edits this saved template instead of building a new one. */
   editingTemplate?: CustomTemplate;
   onUpdateTemplate?: (template: CustomTemplate) => void;
+  onDeleteTemplate?: () => void;
 }
 
 export function CustomSummaryBuilder({
@@ -55,6 +56,7 @@ export function CustomSummaryBuilder({
   onSaveTemplate,
   editingTemplate,
   onUpdateTemplate,
+  onDeleteTemplate,
 }: CustomSummaryBuilderProps) {
   const [selectedTime, setSelectedTime] = useState(
     editingTemplate?.timeRange || "today",
@@ -149,7 +151,7 @@ export function CustomSummaryBuilder({
           <DialogTitle className="flex items-center gap-2">
             {editingTemplate ? (
               <>
-                <span>{"\u{1F4CC}"}</span> {editingTemplate.title}
+                <Pin className="w-4 h-4" strokeWidth={1.5} /> {editingTemplate.title}
               </>
             ) : (
               <>
@@ -249,9 +251,21 @@ export function CustomSummaryBuilder({
 
         {/* Bottom bar */}
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/30">
-          <div className="text-[11px] text-muted-foreground">
-            Summarizing <span className="font-medium text-foreground">{getTimeLabel().toLowerCase()}</span>
-          </div>
+          {editingTemplate && onDeleteTemplate ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onDeleteTemplate}
+              className="h-8 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <Trash2 className="w-3 h-3 mr-1" />
+              Delete
+            </Button>
+          ) : (
+            <div className="text-[11px] text-muted-foreground">
+              Summarizing <span className="font-medium text-foreground">{getTimeLabel().toLowerCase()}</span>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             {editingTemplate ? (
               <Button

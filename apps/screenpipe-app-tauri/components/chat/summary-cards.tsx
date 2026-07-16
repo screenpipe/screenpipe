@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, CalendarDays, Plus, Zap } from "lucide-react";
+import { ArrowRight, CalendarDays, Pin, Zap } from "lucide-react";
 import posthog from "posthog-js";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
@@ -157,8 +157,13 @@ export function SummaryCards({
       })()}
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
-      <div className="w-full max-w-xl mb-4 flex flex-wrap items-center gap-1 px-1">
-        <span className="text-[0.65em] text-muted-foreground/40 uppercase tracking-wider mr-1">more</span>
+      {/* Gutter-labeled rows ("1C" from the Central Redesign canvas): built-in
+          chips and the user's pinned templates get separately labeled rows in a
+          fixed-gutter grid, all inside the same 512px column as the cards, so
+          any template count wraps within its own row instead of floating. */}
+      <div className="w-full max-w-lg mb-4 grid grid-cols-[60px_1fr] gap-x-3 gap-y-2 items-start px-1">
+        <span className="text-[0.65em] text-muted-foreground/40 uppercase tracking-wider text-right pt-1">more</span>
+        <div className="flex flex-wrap items-center gap-1">
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
         {featured.filter((p) => p.name === "time-breakdown" || p.name === "missed-todos").map((pipe) => (
           <button
@@ -190,15 +195,36 @@ export function SummaryCards({
             {qt.label}
           </button>
         ))}
-        <button
-          onClick={() => {
-            posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
-            setShowBuilder(true);
-          }}
-          className="px-2 py-0.5 text-[11px] border border-dashed border-border/40 text-muted-foreground/50 hover:text-foreground hover:border-foreground transition-all duration-150 cursor-pointer"
-        >
-          + custom
-        </button>
+        </div>
+        {/* User's saved templates — own labeled row, chips slightly fainter
+            than built-ins with a pin glyph marking them as user-owned. Full
+            text and management (edit/delete) live in the edit dialog. */}
+        <span className="text-[0.65em] text-muted-foreground/30 uppercase tracking-wider text-right pt-1 inline-flex items-center justify-end gap-1">
+          <Pin className="w-2 h-2 shrink-0" strokeWidth={2.2} />
+          pinned
+        </span>
+        <div className="flex flex-wrap items-center gap-1">
+          {customTemplates.map((ct) => (
+            <button
+              key={ct.id}
+              onClick={() => handleCustomTemplateClick(ct)}
+              title={ct.description || ct.timeRange}
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-muted/10 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground/80 transition-all duration-150 cursor-pointer max-w-[140px]"
+            >
+              <Pin className="w-3 h-3 shrink-0" strokeWidth={1.5} />
+              <span className="truncate">{ct.title}</span>
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
+              setShowBuilder(true);
+            }}
+            className="px-2 py-0.5 text-[11px] border border-dashed border-border/40 text-muted-foreground/50 hover:text-foreground hover:border-foreground transition-all duration-150 cursor-pointer"
+          >
+            + custom
+          </button>
+        </div>
       </div>
 
       {/* Expanded: more templates */}
@@ -227,45 +253,6 @@ export function SummaryCards({
         </motion.div>
       )}
 
-      {/* User's custom saved templates */}
-      {customTemplates.length > 0 && (
-        <div className="w-full max-w-lg mb-2">
-          <div className="text-[0.65em] text-muted-foreground/60 uppercase tracking-wider font-medium mb-1 px-1">
-            your templates
-          </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            {customTemplates.map((ct) => (
-              <div
-                key={ct.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => handleCustomTemplateClick(ct)}
-                onKeyDown={(e) => e.key === "Enter" && handleCustomTemplateClick(ct)}
-                className="group text-left p-2 border border-border/30 bg-muted/10 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer relative"
-              >
-                <div className="text-sm mb-0.5">{"\u{1F4CC}"}</div>
-                <div className="text-xs font-medium group-hover:text-background mb-0.5 leading-tight">
-                  {ct.title}
-                </div>
-                <div className="text-xs text-muted-foreground group-hover:text-background/60 leading-tight line-clamp-1">
-                  {ct.description || ct.timeRange}
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteCustomTemplate(ct.id);
-                  }}
-                  className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1 hover:bg-background/20 text-background transition-all"
-                  title="Delete template"
-                >
-                  <Plus className="w-3 h-3 rotate-45" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Custom Summary Builder modal */}
       {showBuilder && (
         <CustomSummaryBuilder
@@ -292,6 +279,10 @@ export function SummaryCards({
           onClose={() => setEditingTemplate(null)}
           editingTemplate={editingTemplate}
           onUpdateTemplate={onUpdateCustomTemplate}
+          onDeleteTemplate={() => {
+            onDeleteCustomTemplate(editingTemplate.id);
+            setEditingTemplate(null);
+          }}
           onGenerate={(prompt) => {
             posthog.capture("home_card_clicked", {
               kind: "custom_template_run",

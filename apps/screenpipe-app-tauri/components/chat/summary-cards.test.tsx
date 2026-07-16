@@ -61,21 +61,22 @@ describe("SummaryCards", () => {
     const renderWithTemplate = (overrides: Record<string, unknown> = {}) => {
       const onSendMessage = vi.fn();
       const onUpdateCustomTemplate = vi.fn();
+      const onDeleteCustomTemplate = vi.fn();
       render(
         <SummaryCards
           onSendMessage={onSendMessage}
           customTemplates={[savedTemplate]}
           onSaveCustomTemplate={vi.fn()}
           onUpdateCustomTemplate={onUpdateCustomTemplate}
-          onDeleteCustomTemplate={vi.fn()}
+          onDeleteCustomTemplate={onDeleteCustomTemplate}
           {...overrides}
         />,
       );
-      return { onSendMessage, onUpdateCustomTemplate };
+      return { onSendMessage, onUpdateCustomTemplate, onDeleteCustomTemplate };
     };
 
     const openTemplate = () => {
-      fireEvent.click(screen.getByText("Daily Recap"));
+      fireEvent.click(screen.getByRole("button", { name: /^Daily Recap$/ }));
     };
 
     it("opens an editable preview instead of running immediately", () => {
@@ -126,6 +127,15 @@ describe("SummaryCards", () => {
         }),
       );
       expect(onSendMessage).not.toHaveBeenCalled();
+    });
+
+    it("deletes the template from the dialog's Delete action", () => {
+      const { onDeleteCustomTemplate } = renderWithTemplate();
+
+      openTemplate();
+      fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+
+      expect(onDeleteCustomTemplate).toHaveBeenCalledWith("custom-123");
     });
 
     it("pre-fills instructions parsed from the prompt for legacy templates", () => {
