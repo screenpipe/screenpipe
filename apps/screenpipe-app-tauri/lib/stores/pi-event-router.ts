@@ -190,29 +190,11 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   }
 
   const store = useChatStore.getState();
-  const existing = store.sessions[sid];
+  let existing = store.sessions[sid];
 
   const nextStatus = statusForEvent(inner);
   const snippet = previewSnippet(inner);
   const err = errorMessage(inner);
-
-  // Phase 3: accumulate full message-content state in the store for
-  // EVERY session (current + background). This is what makes it possible
-  // for the chat panel to switch back to a previously-backgrounded
-  // session and see live tokens that arrived while it was away — the
-  // router has been writing them to the store the whole time. The chat
-  // panel either reads the store directly or syncs its local state from
-  // the store on session switch.
-  //
-  // Pipe-watch sessions are written by `pipe-watch-writer` instead —
-  // pipe streams don't follow chat-shaped lifecycles (missing
-  // message_start between turns, terminal `agent_end` carrying the
-  // canonical messages array), and double-writing here would race
-  // against that writer. Status mirroring (the sidebar dot / preview)
-  // still happens below for both kinds.
-  if (existing?.kind !== "pipe-watch") {
-    applyEventToSessionContent(sid, inner);
-  }
 
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
@@ -235,7 +217,26 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
       ...(snippet ? { lastContentAt: now } : {}),
     });
     if (snippet) previewLastEmittedAt.set(sid, Date.now());
-    return;
+    existing = useChatStore.getState().sessions[sid];
+    if (!existing) return;
+  }
+
+  // Phase 3: accumulate full message-content state in the store for
+  // EVERY session (current + background). This is what makes it possible
+  // for the chat panel to switch back to a previously-backgrounded
+  // session and see live tokens that arrived while it was away — the
+  // router has been writing them to the store the whole time. The chat
+  // panel either reads the store directly or syncs its local state from
+  // the store on session switch.
+  //
+  // Pipe-watch sessions are written by `pipe-watch-writer` instead —
+  // pipe streams don't follow chat-shaped lifecycles (missing
+  // message_start between turns, terminal `agent_end` carrying the
+  // canonical messages array), and double-writing here would race
+  // against that writer. Status mirroring (the sidebar dot / preview)
+  // still happens below for both kinds.
+  if (existing.kind !== "pipe-watch") {
+    applyEventToSessionContent(sid, inner);
   }
 
   // Decide whether to write a preview update — throttled per session.
@@ -298,6 +299,7 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   if (!sid) return;
   const store = useChatStore.getState();
   if (!store.sessions[sid]) return;
+  removeAgentActionsFromSession(sid);
   const isCleanExit = payload.exitCode === 0 || payload.exitCode == null;
   store.actions.patch(sid, {
     status: isCleanExit ? "idle" : "error",
@@ -438,6 +440,79 @@ interface MutableMessage {
   [k: string]: unknown;
 }
 
+function removeAgentActionsFromSession(sid: string): void {
+  const store = useChatStore.getState();
+  const session = store.sessions[sid];
+  if (!session?.messages) return;
+  const messages = (session.messages as MutableMessage[]).flatMap((message) => {
+    const blocks = message.contentBlocks;
+    if (!blocks?.some((block: any) => block?.type === "agent_action")) return [message];
+    const nextBlocks = blocks.filter((block: any) => block?.type !== "agent_action");
+    if (!message.content.trim() && nextBlocks.length === 0) return [];
+    return [{ ...message, contentBlocks: nextBlocks }];
+  });
+  store.actions.setMessages(sid, messages);
+}
+
+function appendAgentActionRequest(sid: string, payload: PiInnerEvent): boolean {
+  if (payload.type !== "extension_ui_request" || payload.method !== "select") return false;
+  const rawTitle = typeof payload.title === "string" ? payload.title : "";
+  const actionKind = rawTitle.startsWith("acp:permission:")
+    ? "permission"
+    : rawTitle.startsWith("acp:auth:")
+      ? "auth"
+      : null;
+  if (!actionKind || typeof payload.id !== "string" || !payload.id) return false;
+
+  const store = useChatStore.getState();
+  const session = store.sessions[sid];
+  if (!session) return false;
+  const messages = (session.messages as MutableMessage[] | undefined) ?? [];
+  const alreadyVisible = messages.some((message) =>
+    message.contentBlocks?.some(
+      (block: any) => block?.type === "agent_action" && block.requestId === payload.id,
+    ),
+  );
+  if (alreadyVisible) return true;
+
+  const options = Array.isArray(payload.options)
+    ? payload.options.flatMap((candidate) => {
+        if (!candidate || typeof candidate !== "object") return [];
+        const option = candidate as Record<string, unknown>;
+        if (typeof option.optionId !== "string" || typeof option.name !== "string") return [];
+        return [{
+          optionId: option.optionId,
+          name: option.name,
+          ...(typeof option.kind === "string" ? { kind: option.kind } : {}),
+        }];
+      })
+    : [];
+  const suffix = rawTitle.split(":").slice(2).join(":").trim();
+  const title = suffix || (actionKind === "auth" ? "sign in to continue" : "permission needed");
+  const messageText = typeof payload.message === "string" ? payload.message : undefined;
+  store.actions.appendMessage(sid, {
+    id: `agent-action-${payload.id}`,
+    role: "assistant",
+    content: "",
+    timestamp: Date.now(),
+    contentBlocks: [{
+      type: "agent_action",
+      actionKind,
+      requestId: payload.id,
+      sessionId: sid,
+      title,
+      message: messageText,
+      options,
+    }],
+  } satisfies MutableMessage);
+  store.actions.patch(sid, {
+    status: "tool",
+    preview: actionKind === "auth" ? "sign-in needed" : "permission needed",
+    lastContentAt: Date.now(),
+  });
+  return true;
+}
+
 function textFromPiMessageContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -490,6 +565,16 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   // attached; any events in that window were dropped by both writers.
 
   const t = payload.type;
+
+  if (appendAgentActionRequest(sid, payload)) return;
+  if (
+    t === "agent_end" ||
+    t === "acp_authenticated" ||
+    t === "acp_fatal" ||
+    t === "acp_auth_cancelled"
+  ) {
+    removeAgentActionsFromSession(sid);
+  }
 
   // Queued follow-ups begin with `message_start(role=user)`. When the user has
   // switched away, the foreground panel does not see that event, so the

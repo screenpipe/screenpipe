@@ -1438,13 +1438,29 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         other => other,
     };
 
+    let is_pipe_compatible = |preset: &serde_json::Value| {
+        preset.get("provider").and_then(|value| value.as_str()) != Some("acp")
+    };
+
     let preset = if normalized_id == "default" {
-        // find the one with defaultPreset: true
-        presets.iter().find(|p| {
-            p.get("defaultPreset")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        })
+        // An ACP chat preset cannot run in the headless raw-Pi scheduler. If
+        // it is the user's default, preserve existing pipes by preferring the
+        // dedicated `pipes` preset, then another compatible raw preset.
+        presets
+            .iter()
+            .filter(|preset| is_pipe_compatible(preset))
+            .find(|p| {
+                p.get("defaultPreset")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                presets
+                    .iter()
+                    .filter(|preset| is_pipe_compatible(preset))
+                    .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("pipes"))
+            })
+            .or_else(|| presets.iter().find(|preset| is_pipe_compatible(preset)))
     } else {
         presets
             .iter()
@@ -1456,6 +1472,17 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                     .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(preset_id))
             })
     }?;
+
+    // ACP presets launch an interactive desktop harness through the Tauri
+    // bridge. The headless pipe runtime still uses raw Pi, so treating the ACP
+    // adapter id as a model would silently route to the wrong provider.
+    if preset.get("provider").and_then(|value| value.as_str()) == Some("acp") {
+        warn!(
+            "preset '{}' uses ACP and is not available to the raw Pi pipe runtime",
+            preset_id
+        );
+        return None;
+    }
 
     let model = preset.get("model")?.as_str()?.to_string();
 
@@ -1523,6 +1550,9 @@ fn list_available_preset_ids(pipes_dir: &Path) -> Vec<String> {
         .and_then(|p| p.as_array())
         .map(|arr| {
             arr.iter()
+                .filter(|preset| {
+                    preset.get("provider").and_then(|value| value.as_str()) != Some("acp")
+                })
                 .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string))
                 .collect()
         })
@@ -7121,6 +7151,44 @@ mod tests {
             7,
             "human schedule must encode the local hour, not a UTC-shifted hour"
         );
+    }
+
+    #[test]
+    fn acp_presets_are_not_exposed_to_raw_pi_pipes() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+        std::fs::write(
+            temp.path().join("store.bin"),
+            serde_json::to_vec(&serde_json::json!({
+                "settings": {
+                    "aiPresets": [
+                        {
+                            "id": "coding-agent",
+                            "provider": "acp",
+                            "model": "codex-acp",
+                            "defaultPreset": true
+                        },
+                        {
+                            "id": "raw-pi",
+                            "provider": "screenpipe-cloud",
+                            "model": "auto",
+                            "defaultPreset": false
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let default = resolve_preset(&pipes_dir, "default").expect("raw Pi default fallback");
+        assert_eq!(default.provider.as_deref(), Some("screenpipe"));
+        assert_eq!(default.model, "auto");
+        assert!(resolve_preset(&pipes_dir, "coding-agent").is_none());
+        let raw = resolve_preset(&pipes_dir, "raw-pi").expect("raw Pi preset");
+        assert_eq!(raw.provider.as_deref(), Some("screenpipe"));
+        assert_eq!(list_available_preset_ids(&pipes_dir), vec!["raw-pi"]);
     }
 
     #[test]

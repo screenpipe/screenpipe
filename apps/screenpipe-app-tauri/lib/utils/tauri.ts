@@ -2405,8 +2405,34 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "acp" | "pi" | "anthropic"
+export type AcpAgentConfig = {
+/**
+ * Registry id (for example `codex-acp`) or `custom`.
+ */
+id: string;
+/**
+ * Optional executable. Built-in registry adapters resolve by id when absent.
+ */
+command?: string | null;
+/**
+ * Arguments passed verbatim without a shell.
+ */
+args?: string[];
+/**
+ * Environment passed only to the supervised adapter process.
+ */
+env?: { [key in string]: string };
+/**
+ * Optional ACP authentication method id.
+ */
+authMethod?: string | null }
+export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
+/**
+ * Keys with empty values inherit from the desktop process environment.
+ */
+env?: { [key in string]: string } }
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -2574,17 +2600,32 @@ downloaded: boolean;
  * True when download failed with 401/403 — user must sign in.
  */
 auth_required: boolean }
+/**
+ * Configuration for which AI provider Pi should use
+ */
+export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
 export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
 /**
  * Image content for Pi RPC protocol (pi-ai ImageContent format)
  */
 export type PiImageContent = { type: string; mimeType: string; data: string }
-export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
+export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null;
 /**
- * Configuration for which AI provider Pi should use
+ * A non-fatal startup outcome, such as the user declining an ACP login.
+ * Genuine process/configuration failures still use the command error.
  */
+startupError: string | null }
 export type PiProviderConfig = {
+/**
+ * Transport backend. Omitted keeps the native Pi RPC implementation;
+ * `acp` runs a registry-compatible ACP adapter through the bridge.
+ */
+backend?: PiBackend | null;
+/**
+ * ACP adapter configuration when `backend` is `acp`.
+ */
+acpAgent?: AcpAgentConfig | null;
 /**
  * Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
  */

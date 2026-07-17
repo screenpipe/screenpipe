@@ -90,6 +90,14 @@ const APP_SUGGESTION_LIMIT = 10;
 const TAG_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
 
+function agentActionTitle(rawTitle: string, actionKind: "permission" | "auth"): string {
+  const prefix = `acp:${actionKind}:`;
+  const suffix = rawTitle.slice(prefix.length).trim();
+  if (!suffix) return actionKind === "auth" ? "sign in to continue" : "permission needed";
+  const humanized = suffix.replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  return humanized.charAt(0).toUpperCase() + humanized.slice(1);
+}
+
 const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
   { tag: "@today", description: "today's activity", category: "time" },
   { tag: "@yesterday", description: "yesterday", category: "time" },
@@ -226,6 +234,7 @@ export function StandaloneChat({
   const messagesRef = useRef<Message[]>([]);
   const connectionCardCleanupTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const inlineConnectAbortRef = useRef<AbortController | null>(null);
+  const answeredAgentRequestIdsRef = useRef<Set<string>>(new Set());
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -978,20 +987,34 @@ export function StandaloneChat({
   const answerPiExtensionUiRequest = useCallback(async (
     requestId: string | undefined,
     response: JsonValue,
+    sessionId = piSessionIdRef.current,
+    failureTitle = "failed to answer connection request",
   ) => {
-    if (!requestId) return;
-    const result = await commands.piExtensionUiResponse(
-      piSessionIdRef.current,
-      requestId,
-      response,
-    );
+    if (!requestId) return false;
+    let result;
+    try {
+      result = await commands.piExtensionUiResponse(
+        sessionId,
+        requestId,
+        response,
+      );
+    } catch (error) {
+      toast({
+        title: failureTitle,
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+      return false;
+    }
     if (result.status === "error") {
       toast({
-        title: "failed to answer connection request",
+        title: failureTitle,
         description: result.error,
         variant: "destructive",
       });
+      return false;
     }
+    return true;
   }, [piSessionIdRef]);
 
   const removeConnectionActionByRequestId = useCallback((requestId: string | undefined) => {
@@ -1010,6 +1033,62 @@ export function StandaloneChat({
       }),
     );
   }, [setMessages]);
+
+  const removeAgentActionByRequestId = useCallback((requestId: string, sessionId: string) => {
+    const stripRequest = (rows: Message[]) =>
+      rows.flatMap((message) => {
+        const blocks = message.contentBlocks;
+        if (!blocks?.some((block) => block.type === "agent_action" && block.requestId === requestId)) {
+          return [message];
+        }
+        const nextBlocks = blocks.filter(
+          (block) => block.type !== "agent_action" || block.requestId !== requestId,
+        );
+        if (!message.content.trim() && nextBlocks.length === 0) return [];
+        return [{ ...message, contentBlocks: nextBlocks }];
+      });
+    setMessages(stripRequest);
+    const store = useChatStore.getState();
+    const stored = store.sessions[sessionId]?.messages as Message[] | undefined;
+    if (stored) store.actions.setMessages(sessionId, stripRequest(stored));
+  }, [setMessages]);
+
+  const removeAgentActionsForSession = useCallback((sessionId: string) => {
+    const stripSession = (rows: Message[]) =>
+      rows.flatMap((message) => {
+        const blocks = message.contentBlocks;
+        if (!blocks?.some(
+          (block) => block.type === "agent_action" && block.sessionId === sessionId,
+        )) {
+          return [message];
+        }
+        const nextBlocks = blocks.filter(
+          (block) => block.type !== "agent_action" || block.sessionId !== sessionId,
+        );
+        if (!message.content.trim() && nextBlocks.length === 0) return [];
+        return [{ ...message, contentBlocks: nextBlocks }];
+      });
+    setMessages(stripSession);
+    const store = useChatStore.getState();
+    const stored = store.sessions[sessionId]?.messages as Message[] | undefined;
+    if (stored) store.actions.setMessages(sessionId, stripSession(stored));
+  }, [setMessages]);
+
+  const answerAgentAction = useCallback(async (
+    block: Extract<ContentBlock, { type: "agent_action" }>,
+    selectedOptionId?: string,
+  ): Promise<boolean> => {
+    const answered = await answerPiExtensionUiRequest(
+      block.requestId,
+      selectedOptionId ? { selectedOptionId } : { cancelled: true },
+      block.sessionId,
+      "could not continue the agent",
+    );
+    if (!answered) return false;
+    answeredAgentRequestIdsRef.current.add(`${block.sessionId}:${block.requestId}`);
+    removeAgentActionByRequestId(block.requestId, block.sessionId);
+    return true;
+  }, [answerPiExtensionUiRequest, removeAgentActionByRequestId]);
 
   useEffect(() => {
     return () => {
@@ -1122,6 +1201,91 @@ export function StandaloneChat({
     };
   }, [allConnectionItems, piSessionIdRef, setMessages]);
 
+  const handleAgentActionEvent = useCallback((value: unknown, sessionId: string): boolean => {
+    const trace = (stage: string, details?: Record<string, unknown>) => {
+      if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true" || typeof window === "undefined") return;
+      const target = window as typeof window & { __e2eAgentActionTrace?: unknown[] };
+      target.__e2eAgentActionTrace = target.__e2eAgentActionTrace ?? [];
+      target.__e2eAgentActionTrace.push({ stage, sessionId, ...details });
+    };
+    if (!value || typeof value !== "object") return false;
+    const inner = value as Record<string, unknown>;
+    if (
+      inner.type === "extension_ui_request" ||
+      inner.type === "acp_fatal" ||
+      inner.type === "acp_auth_cancelled"
+    ) {
+      trace("action-handler", { type: inner.type, method: inner.method });
+    }
+    if (
+      inner.type === "agent_end" ||
+      inner.type === "acp_authenticated" ||
+      inner.type === "acp_fatal" ||
+      inner.type === "acp_auth_cancelled"
+    ) {
+      removeAgentActionsForSession(sessionId);
+      return false;
+    }
+    if (inner.type !== "extension_ui_request" || inner.method !== "select") return false;
+
+    const rawTitle = typeof inner.title === "string" ? inner.title : "";
+    const actionKind = rawTitle.startsWith("acp:permission:")
+      ? "permission"
+      : rawTitle.startsWith("acp:auth:")
+        ? "auth"
+        : null;
+    if (!actionKind) return false;
+
+    const requestId = typeof inner.id === "string" ? inner.id : "";
+    if (!requestId) return true;
+    const requestKey = `${sessionId}:${requestId}`;
+    if (answeredAgentRequestIdsRef.current.has(requestKey)) return true;
+
+    const options = Array.isArray(inner.options)
+      ? inner.options.flatMap((candidate) => {
+          if (!candidate || typeof candidate !== "object") return [];
+          const option = candidate as Record<string, unknown>;
+          if (typeof option.optionId !== "string" || typeof option.name !== "string") return [];
+          return [{
+            optionId: option.optionId,
+            name: option.name,
+            kind: typeof option.kind === "string" ? option.kind : undefined,
+          }];
+        })
+      : [];
+    const messageText = typeof inner.message === "string" ? inner.message : undefined;
+    const message: Message = {
+      id: `agent-action-${requestId}`,
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      contentBlocks: [{
+        type: "agent_action",
+        actionKind,
+        requestId,
+        sessionId,
+        title: agentActionTitle(rawTitle, actionKind),
+        message: messageText,
+        options,
+      }],
+    };
+
+    setMessages((prev) => {
+      const alreadyVisible = prev.some((row) =>
+        row.contentBlocks?.some(
+          (block) => block.type === "agent_action" && block.requestId === requestId,
+        ),
+      );
+      trace("action-state-update", {
+        requestId,
+        alreadyVisible,
+        previousMessageCount: prev.length,
+      });
+      return alreadyVisible ? prev : [...prev, message];
+    });
+    return true;
+  }, [removeAgentActionsForSession, setMessages]);
+
   usePiForegroundEvents({
     activePreset,
     activePresetRef,
@@ -1134,6 +1298,8 @@ export function StandaloneChat({
     flushStreamingMessageRender,
     forceQueueModeRef,
     handleAgentEventDataRef,
+    handleAgentActionEvent,
+    clearAgentActionsForSession: removeAgentActionsForSession,
     handleInvalidatedAuthToken,
     lastUserMessageRef,
     markTurnIntentConsumed,
@@ -1264,6 +1430,7 @@ export function StandaloneChat({
     onOpenConnectionSetup: openConnectionSetup,
     onConnectConnectionAction: connectFromInlineCard,
     onDeclineConnectionAction: declineConnectionAction,
+    onAnswerAgentAction: answerAgentAction,
     scheduleMessage: (message, displayLabel) => {
       piMessageIdRef.current = null;
       sendMessage(message, displayLabel);

@@ -7,6 +7,7 @@ use screenpipe_secrets::keychain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
@@ -1054,10 +1055,25 @@ pub enum AIProviderType {
     Custom,
     #[serde(rename = "screenpipe-cloud", alias = "claude-code")]
     ScreenpipeCloud,
+    #[serde(rename = "acp")]
+    Acp,
     #[serde(rename = "pi", alias = "opencode")]
     Pi,
     #[serde(rename = "anthropic")]
     Anthropic,
+}
+
+#[derive(Serialize, Deserialize, Type, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentPresetConfig {
+    pub id: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Keys with empty values inherit from the desktop process environment.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -1066,6 +1082,8 @@ pub struct AIPreset {
     pub id: String,
     pub prompt: String,
     pub provider: AIProviderType,
+    #[serde(rename = "acpAgent", default)]
+    pub acp_agent: Option<AcpAgentPresetConfig>,
     #[serde(default)]
     pub url: String,
     #[serde(default)]
@@ -1090,6 +1108,7 @@ impl Default for AIPreset {
             id: String::new(),
             prompt: String::new(),
             provider: AIProviderType::ScreenpipeCloud,
+            acp_agent: None,
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "qwen/qwen3.5-flash-02-23".to_string(),
             default_preset: false,
@@ -1333,6 +1352,7 @@ Rules:
 - Always answer my question/intent, do not make up things
 "#.to_string(),
             provider: AIProviderType::ScreenpipeCloud,
+            acp_agent: None,
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "auto".to_string(),
             default_preset: true,
@@ -1471,6 +1491,7 @@ impl SettingsStore {
                 "native-ollama",
                 "custom",
                 "screenpipe-cloud",
+                "acp",
                 "opencode",
                 "pi",
                 "anthropic",
@@ -2754,6 +2775,17 @@ mod tests {
             presets[0].get("provider").unwrap().as_str().unwrap(),
             "custom"
         );
+
+        let acp = json!({
+            "aiPresets": [{
+                "provider": "acp",
+                "acpAgent": {"id": "codex-acp"}
+            }]
+        });
+        let sanitized_acp = SettingsStore::sanitize_legacy_fields(acp);
+        let preset = &sanitized_acp["aiPresets"][0];
+        assert_eq!(preset["provider"].as_str(), Some("acp"));
+        assert_eq!(preset["acpAgent"]["id"].as_str(), Some("codex-acp"));
     }
 
     #[test]

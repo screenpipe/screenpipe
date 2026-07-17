@@ -29,6 +29,7 @@ const isCi = Boolean(process.env.CI);
 const isWindowsCi = isCi && process.platform === 'win32';
 const allSpecs = [resolve(__dirname, 'specs', '**', '*.spec.ts')];
 const windowsCiSpecs = [
+  'acp-backend.spec.ts',
   'windows-system-integration.spec.ts',
   'windows-user-journey.spec.ts',
 ].map((spec) => resolve(__dirname, 'specs', spec));

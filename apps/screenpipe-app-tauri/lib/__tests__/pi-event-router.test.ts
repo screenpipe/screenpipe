@@ -63,6 +63,13 @@ function seed(id: string, overrides: Partial<SessionRecord> = {}) {
   });
 }
 
+function agentActionsFor(id: string) {
+  const messages = useChatStore.getState().sessions[id]?.messages ?? [];
+  return messages.flatMap((message: any) =>
+    (message.contentBlocks ?? []).filter((block: any) => block.type === "agent_action"),
+  );
+}
+
 describe("pi-event-router: envelope destructuring (the actual day-1 bug)", () => {
   beforeEach(reset);
 
@@ -392,6 +399,131 @@ describe("pi-event-router: background content accumulation (the parallel-chat re
     expect((session.messages![0] as any).content).toBe("queued while switching back");
     expect((session.messages![1] as any).role).toBe("assistant");
     expect((session.messages![1] as any).content).toBe("still here");
+  });
+});
+
+describe("pi-event-router: background ACP action requests", () => {
+  beforeEach(reset);
+
+  it("persists a permission request in a switched-away session", async () => {
+    seed("A");
+    useChatStore.setState({ currentId: "B" });
+
+    await handlePiEvent(
+      piEvt("A", {
+        type: "extension_ui_request",
+        method: "select",
+        id: "permission-1",
+        title: "acp:permission:allow terminal command?",
+        message: "The agent wants to run a command.",
+        options: [
+          { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+        ],
+      }),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.status).toBe("tool");
+    expect(session.preview).toBe("permission needed");
+    expect(session.unread).toBe(true);
+    expect(agentActionsFor("A")).toEqual([
+      expect.objectContaining({
+        actionKind: "permission",
+        requestId: "permission-1",
+        sessionId: "A",
+        title: "allow terminal command?",
+        message: "The agent wants to run a command.",
+        options: [
+          { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+          { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+        ],
+      }),
+    ]);
+  });
+
+  it("lazy-creates an unknown session before persisting its auth request", async () => {
+    useChatStore.setState({ currentId: "B" });
+
+    await handlePiEvent(
+      piEvt("fresh-acp", {
+        type: "extension_ui_request",
+        method: "select",
+        id: "auth-1",
+        title: "acp:auth:sign in to Gemini",
+        options: [{ optionId: "google", name: "Log in with Google" }],
+      }),
+    );
+
+    const session = useChatStore.getState().sessions["fresh-acp"];
+    expect(session).toBeDefined();
+    expect(session.status).toBe("tool");
+    expect(session.preview).toBe("sign-in needed");
+    expect(agentActionsFor("fresh-acp")).toEqual([
+      expect.objectContaining({
+        actionKind: "auth",
+        requestId: "auth-1",
+        sessionId: "fresh-acp",
+        title: "sign in to Gemini",
+      }),
+    ]);
+  });
+
+  it.each(["agent_end", "acp_authenticated", "acp_fatal", "acp_auth_cancelled"])(
+    "removes pending actions when %s arrives",
+    async (terminalType) => {
+      seed("A");
+      useChatStore.setState({ currentId: "B" });
+      await handlePiEvent(
+        piEvt("A", {
+          type: "extension_ui_request",
+          method: "select",
+          id: `request-${terminalType}`,
+          title: "acp:auth:sign in",
+          options: [{ optionId: "browser", name: "Open browser" }],
+        }),
+      );
+      expect(agentActionsFor("A")).toHaveLength(1);
+
+      await handlePiEvent(piEvt("A", { type: terminalType }));
+
+      expect(agentActionsFor("A")).toHaveLength(0);
+      expect(useChatStore.getState().sessions.A.messages).toEqual([]);
+    },
+  );
+
+  it("removes pending actions when the background agent process terminates", async () => {
+    seed("A", {
+      messages: [
+        { id: "user-1", role: "user", content: "keep me", timestamp: 1_234 },
+      ],
+      messageCount: 1,
+    });
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(
+      piEvt("A", {
+        type: "extension_ui_request",
+        method: "select",
+        id: "permission-before-exit",
+        title: "acp:permission:approve command",
+        options: [{ optionId: "allow", name: "Allow" }],
+      }),
+    );
+    expect(agentActionsFor("A")).toHaveLength(1);
+
+    handleTerminated({ sessionId: "A", source: "pi", exitCode: 0 });
+
+    expect(agentActionsFor("A")).toHaveLength(0);
+    expect(useChatStore.getState().sessions.A.messages).toEqual([
+      expect.objectContaining({ id: "user-1", content: "keep me" }),
+    ]);
+    await flushPendingSaves();
+    expect(saveConversationFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "A",
+        messages: [expect.objectContaining({ id: "user-1", content: "keep me" })],
+      }),
+    );
   });
 });
 

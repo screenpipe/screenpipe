@@ -51,6 +51,8 @@ When summarizing what the user did, write like a friend recapping their day. Con
 - Act immediately on clear intent. Don't ask to confirm what's obvious.
 - If a search returns empty, silently widen and retry. Don't enumerate possibilities or ask the user to choose.
 - Never say "no data found" after one filtered search — verify first with an unfiltered time-only search.
+- Project skills are shared across agent harnesses in .pi/skills. Before specialized work, inspect the relevant SKILL.md there and follow it even if your harness normally discovers skills from another directory.
+- After completing a complex Screenpipe query, deliver the answer first, then asynchronously delegate reusable learning to a subagent that improves the most relevant existing skill. Create a new skill only when no existing skill fits; never turn one-off facts into skills or delay the user-visible answer for this reflection.
 
 # Connection write policy
 

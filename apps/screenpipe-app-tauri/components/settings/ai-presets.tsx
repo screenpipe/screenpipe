@@ -10,6 +10,7 @@ export const searchIndex: SettingsField[] = [
   { label: "AI presets", keywords: ["preset"] },
   { label: "API key", keywords: ["openai", "anthropic", "key"] },
   { label: "Model", keywords: ["gpt", "claude", "gemini", "llm"] },
+  { label: "Agent harness", keywords: ["acp", "codex", "claude code", "opencode", "cursor"] },
   { label: "Embedding" },
 ];
 import { open as openUrl } from "@tauri-apps/plugin-shell";
@@ -168,7 +169,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud" | "acp";
   title: string;
   description: string;
   imageSrc: string;
@@ -178,6 +179,53 @@ export interface AIProviderCardProps {
   warningText?: string;
   imageClassName?: string;
 }
+
+const ACP_ADAPTERS = [
+  {
+    id: "pi-acp",
+    name: "Pi",
+    description: "Screenpipe's current agent through the shared ACP interface.",
+  },
+  {
+    id: "codex-acp",
+    name: "Codex",
+    description: "Use your existing Codex account and configuration.",
+  },
+  {
+    id: "claude-acp",
+    name: "Claude Code",
+    description: "Use your existing Claude Code account and configuration.",
+  },
+  {
+    id: "gemini",
+    name: "Gemini CLI",
+    description: "Use your existing Gemini CLI account and configuration.",
+  },
+  {
+    id: "opencode",
+    name: "OpenCode",
+    description: "Use the OpenCode agent installed on this computer.",
+  },
+  {
+    id: "cursor",
+    name: "Cursor",
+    description: "Use Cursor's ACP agent installed on this computer.",
+  },
+  {
+    id: "custom",
+    name: "Another ACP agent",
+    description: "Connect any ACP-compatible command installed on this computer.",
+  },
+] as const;
+
+const inheritedEnvFromText = (value: string): Record<string, string> =>
+  Object.fromEntries(
+    value
+      .split(/[,\n]/)
+      .map((name) => name.trim())
+      .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      .map((name) => [name, ""]),
+  );
 
 export interface OllamaModel {
   name: string;
@@ -222,7 +270,16 @@ export const AIProviderCard = ({
 }: AIProviderCardProps) => {
   return (
     <Card
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      onKeyDown={(event) => {
+        if (disabled || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onClick();
+      }}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
+      aria-pressed={selected}
       className={cn(
         "flex py-3 px-4 rounded-lg hover:bg-accent transition-colors h-[110px] w-full cursor-pointer",
         selected ? "border-black/60 border-[1.5px]" : "",
@@ -370,10 +427,15 @@ const AISection = ({
 
 
   const isFormValid = useMemo(() => {
+    const hasAgent =
+      settingsPreset?.provider !== "acp" ||
+      (Boolean(settingsPreset.acpAgent?.id) &&
+        (settingsPreset.acpAgent?.id !== "custom" || Boolean(settingsPreset.acpAgent?.command?.trim())));
     return Object.keys(validationErrors).length === 0 && 
            settingsPreset?.id && 
            settingsPreset?.provider && 
-           settingsPreset?.model;
+           hasAgent &&
+           (settingsPreset.provider === "acp" || settingsPreset?.model);
   }, [validationErrors, settingsPreset]);
 
   const updateStoreSettings = async () => {
@@ -563,6 +625,7 @@ const AISection = ({
       "anthropic": "claude",
       "native-ollama": "ollama",
       "screenpipe-cloud": "screenpipe-cloud",
+      "acp": "coding-agent",
     };
 
     let newUrl = "";
@@ -590,16 +653,29 @@ const AISection = ({
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "auto";
         break;
+      case "acp":
+        newUrl = "";
+        newModel = settingsPreset?.acpAgent?.id || "pi-acp";
+        break;
     }
 
     const updates: Partial<AIPreset> = { provider: newValue, url: newUrl, model: newModel };
+    if (newValue === "acp") {
+      updates.acpAgent = settingsPreset?.acpAgent || { id: "pi-acp" };
+    }
     // Auto-fill name only when creating a new preset (no existing id)
     if (!settingsPreset?.id && defaultNames[newValue]) {
       updates.id = defaultNames[newValue];
     }
 
     updateSettingsPreset(updates);
-  }, [settingsPreset?.id, settingsPreset?.url, settingsPreset?.model, updateSettingsPreset]);
+  }, [settingsPreset?.acpAgent, settingsPreset?.id, settingsPreset?.model, settingsPreset?.provider, settingsPreset?.url, updateSettingsPreset]);
+
+  const updateAcpAgent = useCallback((changes: Partial<NonNullable<AIPreset["acpAgent"]>>) => {
+    const current = settingsPreset?.acpAgent || { id: "pi-acp" };
+    const next = { ...current, ...changes };
+    updateSettingsPreset({ acpAgent: next, model: next.id });
+  }, [settingsPreset?.acpAgent, updateSettingsPreset]);
 
   const [models, setModels] = useState<AIModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -607,7 +683,7 @@ const AISection = ({
   const [modelSearch, setModelSearch] = useState("");
 
   const runDiagnostics = useCallback(async () => {
-    if (settingsPreset?.provider === "screenpipe-cloud") return;
+    if (settingsPreset?.provider === "screenpipe-cloud" || settingsPreset?.provider === "acp") return;
 
     // Abort any previous run
     diagnosticsAbortRef.current?.abort();
@@ -1173,7 +1249,7 @@ const AISection = ({
 
   // Auto-trigger diagnostics when provider + url + apiKey are set (debounced)
   useEffect(() => {
-    if (settingsPreset?.provider === "screenpipe-cloud") return;
+    if (settingsPreset?.provider === "screenpipe-cloud" || settingsPreset?.provider === "acp") return;
     if (!settingsPreset?.provider) return;
 
     const needsApiKey =
@@ -1249,6 +1325,15 @@ const AISection = ({
           />
 
           <AIProviderCard
+            type="acp"
+            title="Coding agent"
+            description="Use Pi, Codex, Claude Code, Gemini, OpenCode, Cursor, or any ACP-compatible agent"
+            imageSrc="/images/screenpipe.png"
+            selected={settingsPreset?.provider === "acp"}
+            onClick={() => handleAiProviderChange("acp")}
+          />
+
+          <AIProviderCard
             type="native-ollama"
             title="Ollama"
             description="Run AI models locally using your existing Ollama installation"
@@ -1286,6 +1371,93 @@ const AISection = ({
         disabled={!!preset && !isDuplicating && preset.id !== undefined}
         helperText="Only letters, numbers, spaces, hyphens, and underscores allowed"
       />
+
+      {settingsPreset?.provider === "acp" && (
+        <div className="w-full space-y-4 rounded-lg border p-4">
+          <div className="space-y-1">
+            <Label htmlFor="acpAgent">Agent</Label>
+            <p className="text-xs text-muted-foreground">
+              Choose the coding agent Screenpipe should run. Your existing sign-in and agent settings stay in that app.
+            </p>
+          </div>
+          <select
+            id="acpAgent"
+            value={settingsPreset.acpAgent?.id || "pi-acp"}
+            onChange={(event) => {
+              const id = event.target.value;
+              updateAcpAgent({
+                id,
+                command: id === "custom" ? settingsPreset.acpAgent?.command || "" : undefined,
+                args: id === "custom" ? settingsPreset.acpAgent?.args || [] : undefined,
+                env: settingsPreset.acpAgent?.env || {},
+              });
+            }}
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            {ACP_ADAPTERS.map((adapter) => (
+              <option key={adapter.id} value={adapter.id}>{adapter.name}</option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {ACP_ADAPTERS.find((adapter) => adapter.id === (settingsPreset.acpAgent?.id || "pi-acp"))?.description}
+          </p>
+
+          <p className="text-xs text-muted-foreground">
+            Sign-in happens in the chat when the agent asks for it. Browser login is recommended;
+            key-based methods are shown only when their environment variables are available.
+          </p>
+
+          {settingsPreset.acpAgent?.id === "custom" && (
+            <div className="space-y-4 border-t pt-4">
+              <div className="space-y-2">
+                <Label htmlFor="acpCommand" className="flex items-center gap-1">
+                  Agent command <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="acpCommand"
+                  value={settingsPreset.acpAgent.command || ""}
+                  onChange={(event) => updateAcpAgent({ command: event.target.value })}
+                  placeholder="Path or command used to start your agent"
+                  spellCheck={false}
+                  autoCorrect="off"
+                />
+                <p className="text-xs text-muted-foreground">
+                  This command must start an ACP-compatible agent on this computer.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="acpArgs">Startup options</Label>
+                <Textarea
+                  id="acpArgs"
+                  value={(settingsPreset.acpAgent.args || []).join("\n")}
+                  onChange={(event) => updateAcpAgent({
+                    args: event.target.value.split("\n").map((arg) => arg.trim()).filter(Boolean),
+                  })}
+                  placeholder={"One option per line\n--acp"}
+                  className="min-h-[80px] font-mono text-xs"
+                  spellCheck={false}
+                />
+                <p className="text-xs text-muted-foreground">Add one command-line option per line.</p>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2 border-t pt-4">
+            <Label htmlFor="acpEnv">Environment access</Label>
+            <Textarea
+              id="acpEnv"
+              value={Object.keys(settingsPreset.acpAgent?.env || {}).join("\n")}
+              onChange={(event) => updateAcpAgent({ env: inheritedEnvFromText(event.target.value) })}
+              placeholder={"Optional variable names, one per line\nGEMINI_API_KEY"}
+              className="min-h-[80px] font-mono text-xs"
+              spellCheck={false}
+            />
+            <p className="text-xs text-muted-foreground">
+              Only variable names are saved. Secret values are inherited at launch and are never stored in this preset.
+            </p>
+          </div>
+        </div>
+      )}
 
       {settingsPreset?.provider === "custom" && (
         <ValidatedInput
@@ -1424,6 +1596,7 @@ const AISection = ({
         </div>
       )}
 
+      {settingsPreset?.provider !== "acp" && (
       <div className="w-full">
         <div className="flex flex-col gap-4 mb-4 w-full">
           <Label htmlFor="aiModel" className="flex items-center gap-1">
@@ -1650,6 +1823,7 @@ const AISection = ({
           )}
         </div>
       </div>
+      )}
 
       <ValidatedTextarea
         id="customPrompt"
@@ -1670,7 +1844,7 @@ const AISection = ({
         helperText="This prompt will be used to guide the AI's responses"
       />
 
-      {settingsPreset?.provider !== "screenpipe-cloud" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
         <div className="w-full">
           <Label htmlFor="maxTokens" className="text-sm font-medium">
             Max Output Tokens
@@ -1715,7 +1889,7 @@ const AISection = ({
         </div>
       )}
 
-      {settingsPreset?.provider !== "screenpipe-cloud" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
         <div className="w-full border rounded-lg">
           <button
             type="button"
@@ -1878,6 +2052,7 @@ const providerImageSrc: Record<string, string> = {
   pi: "/images/screenpipe.png",
   screenpipe: "/images/screenpipe.png",
   "screenpipe-cloud": "/images/screenpipe.png",
+  acp: "/images/screenpipe.png",
 };
 
 // Sortable preset card for drag-and-drop reordering
@@ -1994,8 +2169,10 @@ function SortablePresetCard({
           )}
         </div>
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="font-mono bg-muted px-1.5 py-0.5 rounded truncate max-w-[180px]" title={preset.model || 'Not set'}>
-            {preset.model || 'Not set'}
+          <span className="font-mono bg-muted px-1.5 py-0.5 rounded truncate max-w-[180px]" title={preset.provider === "acp" ? preset.acpAgent?.id : (preset.model || "Not set")}>
+            {preset.provider === "acp"
+              ? ACP_ADAPTERS.find((adapter) => adapter.id === preset.acpAgent?.id)?.name || preset.acpAgent?.id || "No agent"
+              : preset.model || "Not set"}
           </span>
         </div>
         <div className="flex items-center gap-0.5 pt-1.5 border-t border-border">
@@ -2372,7 +2549,9 @@ useEffect(() => {
                     key={preset.id}
                     preset={preset}
                     isDefault={preset.defaultPreset}
-                    hasValidation={!!(preset.provider && preset.model && (preset.url || preset.provider === "screenpipe-cloud" || preset.provider === "openai-chatgpt"))}
+                    hasValidation={preset.provider === "acp"
+                      ? Boolean(preset.acpAgent?.id && (preset.acpAgent.id !== "custom" || preset.acpAgent.command?.trim()))
+                      : !!(preset.provider && preset.model && (preset.url || preset.provider === "screenpipe-cloud" || preset.provider === "openai-chatgpt"))}
                     chatgptTokenExpired={preset.provider === "openai-chatgpt" && chatgptTokenValid === false}
                     onEdit={() => {
                       setSelectedPreset(preset);

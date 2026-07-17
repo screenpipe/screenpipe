@@ -5,9 +5,10 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
-import { commands, type Result } from "@/lib/utils/tauri";
+import { commands, type PiInfo, type Result } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorMessage, preflightChatProvider } from "@/lib/chat/provider-errors";
+import { isAcpAuthenticationCancelledError } from "@/lib/chat/auth-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";
@@ -22,6 +23,43 @@ import {
 } from "@/components/chat/standalone/hooks/pi-message-preparation";
 import type { Message } from "@/lib/chat/types";
 import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/pi-types";
+
+type LivePiSessionCheck =
+  | { running: true; info: PiInfo }
+  | { running: false; error: string };
+
+export async function awaitPendingPiPresetSwitch(
+  promiseRef: { current: Promise<void> | null },
+): Promise<void> {
+  const pendingSwitch = promiseRef.current;
+  if (pendingSwitch) await pendingSwitch;
+}
+
+/** Read the process manager instead of trusting the render-time `piInfo`. */
+export async function checkLivePiSession(
+  sessionId: string,
+  setPiInfo: (info: PiInfo | null) => void,
+  readPiInfo: (sessionId: string) => Promise<Result<PiInfo, string>> = commands.piInfo,
+): Promise<LivePiSessionCheck> {
+  try {
+    const result = await readPiInfo(sessionId);
+    if (result.status !== "ok") {
+      setPiInfo(null);
+      return { running: false, error: result.error || "Could not check the AI assistant" };
+    }
+    setPiInfo(result.data);
+    if (!result.data.running) {
+      return { running: false, error: "The AI assistant is not running" };
+    }
+    return { running: true, info: result.data };
+  } catch (error) {
+    setPiInfo(null);
+    return {
+      running: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 export function usePiSendTransport(options: PiSendTransportOptions) {
   const {
@@ -45,7 +83,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     piActiveStopRequestedRef,
     piContentBlocksRef,
     piCrashCountRef,
-    piInfo,
     piMessageIdRef,
     piPresetSwitchPromiseRef,
     piRateLimitRetries,
@@ -165,8 +202,32 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
   async function sendPiMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
     clearPendingSteerTransportState();
 
-    // Auto-start Pi if it's not running yet (new session or crash recovery)
-    if (!piInfo?.running) {
+    // A selector change may be in the narrow gap before React disables the
+    // composer. Wait for it here as the authoritative boundary. Rejections
+    // (including "not now" during ACP authentication) abort this send before
+    // a user bubble is persisted or a provider receives the prompt.
+    try {
+      await awaitPendingPiPresetSwitch(piPresetSwitchPromiseRef);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isAcpAuthenticationCancelledError(message)) {
+        toast({
+          title: "could not switch AI assistant",
+          description: message,
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    // React's `piInfo` may still describe the process from before a completed
+    // preset switch. Ask the process manager first so a successful switch is
+    // not immediately started a second time, and a failed one cannot reuse the
+    // stale provider.
+    let liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+
+    // Auto-start Pi if it is actually not running (new session or recovery).
+    if (!liveSession.running) {
       if (piStartInFlightRef.current) {
         if (!autoSendBypassRef.current) {
           toast({ title: "Pi starting", description: "Please wait a moment", variant: "destructive" });
@@ -189,7 +250,11 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         const activeP = getActivePreset();
         const allPresets = settings.aiPresets ?? [];
         const fallbackPresets = allPresets.filter(
-          (p) => p.id !== activeP?.id && p.model && p.model.trim() !== "",
+          (p) =>
+            p.id !== activeP?.id &&
+            p.provider !== "acp" &&
+            p.model &&
+            p.model.trim() !== "",
         );
         const presetsToTry = activeP ? [activeP, ...fallbackPresets] : [...fallbackPresets];
 
@@ -255,12 +320,40 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 started = true;
                 break;
               } else {
-                lastError = result.status === "error" ? result.error ?? "Unknown error" : "Unknown error";
+                lastError = result.status === "error"
+                  ? result.error ?? "Unknown error"
+                  : result.data.startupError ?? "Unknown error";
                 console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) failed: ${lastError}`);
+                if (
+                  providerConfig.backend === "acp"
+                ) {
+                  // An ACP selection is an explicit harness boundary. Never
+                  // fall through and send its prompt through another provider.
+                  if (!isAcpAuthenticationCancelledError(lastError)) {
+                    toast({
+                      title: `failed to start AI assistant (${preset.id})`,
+                      description: lastError,
+                      variant: "destructive",
+                    });
+                  }
+                  return;
+                }
               }
             } catch (e) {
               lastError = String(e);
               console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) threw: ${lastError}`);
+                if (
+                  providerConfig.backend === "acp"
+                ) {
+                  if (!isAcpAuthenticationCancelledError(lastError)) {
+                    toast({
+                      title: `failed to start AI assistant (${preset.id})`,
+                      description: lastError,
+                      variant: "destructive",
+                    });
+                  }
+                  return;
+                }
             }
           }
 
@@ -282,8 +375,16 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       }
     }
 
-    if (piPresetSwitchPromiseRef.current) {
-      await piPresetSwitchPromiseRef.current;
+    // Verify once more after a possible start/wait immediately before mutating
+    // chat state or dispatching the prompt.
+    liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+    if (!liveSession.running) {
+      toast({
+        title: "AI assistant is not ready",
+        description: liveSession.error,
+        variant: "destructive",
+      });
+      return;
     }
 
     await interruptActivePiTurn();

@@ -954,6 +954,8 @@ interface AIPresetsSelectorProps {
   triggerClassName?: string;
   /** For tight composer UIs, show the active model instead of preset details. */
   showModelOnly?: boolean;
+  /** Scheduled pipes still run through raw Pi and cannot execute ACP adapters. */
+  includeAgentPresets?: boolean;
 }
 
 export const AIPresetDialog = ({
@@ -1045,6 +1047,7 @@ export const AIPresetsSelector = ({
   containerClassName,
   triggerClassName,
   showModelOnly = false,
+  includeAgentPresets = true,
 }: AIPresetsSelectorProps) => {
   const { settings, updateSettings } = useSettings();
   const [open, setOpen] = useState(false);
@@ -1063,11 +1066,20 @@ export const AIPresetsSelector = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {
     const presets = (settings?.aiPresets || []) as AIPreset[];
-    return isEnterprise ? filterPresetsForEnterprisePolicy(presets, aiPresetPolicy) : presets;
-  }, [settings?.aiPresets, isEnterprise, aiPresetPolicy]);
+    const policyPresets = isEnterprise
+      ? filterPresetsForEnterprisePolicy(presets, aiPresetPolicy)
+      : presets;
+    return includeAgentPresets
+      ? policyPresets
+      : policyPresets.filter((preset) => preset.provider !== "acp");
+  }, [settings?.aiPresets, isEnterprise, aiPresetPolicy, includeAgentPresets]);
 
   const selectedPreset = useMemo(() => {
-    if (isControlled) return controlledPresetId ?? undefined;
+    if (isControlled) {
+      return aiPresets.some((preset) => preset.id === controlledPresetId)
+        ? controlledPresetId ?? undefined
+        : undefined;
+    }
     // Use the first preset or default preset
     const defaultPreset = aiPresets.find(
       (preset) => preset.defaultPreset,

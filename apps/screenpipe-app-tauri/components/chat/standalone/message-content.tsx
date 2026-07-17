@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, Plug, RefreshCw } from "lucide-react";
+import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, KeyRound, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { AskUserToolCard, isAskUserToolCall } from "@/components/chat/standalone/ask-user-tool-card";
@@ -760,6 +760,7 @@ type GroupedBlock =
   | { type: "text"; text: string; key: number }
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number; key: number }
   | { type: "connection-action"; block: Extract<ContentBlock, { type: "connection_action" }>; key: number }
+  | { type: "agent-action"; block: Extract<ContentBlock, { type: "agent_action" }>; key: number }
   | { type: "tool-group"; toolCalls: ToolCall[]; key: number }
   | { type: "work-group"; toolCalls: ToolCall[]; durationMs: number; key: number };
 
@@ -782,6 +783,8 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
         result.push({ type: "thinking", text: block.text, isThinking: block.isThinking, durationMs: block.durationMs, key: result.length });
       } else if (block.type === "connection_action") {
         result.push({ type: "connection-action", block, key: result.length });
+      } else if (block.type === "agent_action") {
+        result.push({ type: "agent-action", block, key: result.length });
       }
     }
   }
@@ -887,7 +890,7 @@ function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
     } else if (g.type === "tool-group") {
       firstKey ??= g.key;
       allToolCalls.push(...g.toolCalls);
-    } else if (g.type === "connection-action") {
+    } else if (g.type === "connection-action" || g.type === "agent-action") {
       finalBlocks.push(g);
     }
     // text and thinking blocks before the boundary are dropped
@@ -1022,6 +1025,99 @@ function InlineConnectionActionCard({
               </button>
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function InlineAgentActionCard({
+  block,
+  onRespond,
+}: {
+  block: Extract<ContentBlock, { type: "agent_action" }>;
+  onRespond: (selectedOptionId?: string) => Promise<boolean> | boolean;
+}) {
+  const [responseState, setResponseState] = useState<"idle" | "waiting" | "error">("idle");
+  const titleId = React.useId();
+  const isAuth = block.actionKind === "auth";
+  const defaultTitle = isAuth ? "sign in to continue" : "permission needed";
+
+  const respond = async (selectedOptionId?: string) => {
+    if (responseState === "waiting") return;
+    setResponseState("waiting");
+    try {
+      const answered = await onRespond(selectedOptionId);
+      if (!answered) setResponseState("error");
+    } catch {
+      setResponseState("error");
+    }
+  };
+
+  // The click is the UI completion boundary. Some ACP adapters start sending
+  // authenticated/tool updates before the desktop invoke resolves, and a
+  // background-restored card can otherwise sit disabled even though the agent
+  // already continued. A real failure flips the state to `error` and brings
+  // the same card back with retry enabled.
+  if (responseState === "waiting") return null;
+
+  return (
+    <div
+      className="w-full max-w-xl border border-border bg-background p-3 font-mono"
+      data-testid="agent-action-card"
+      data-agent-action-kind={block.actionKind}
+      role="group"
+      aria-live="polite"
+      aria-labelledby={titleId}
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-foreground">
+          {isAuth ? (
+            <KeyRound className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+          ) : (
+            <ShieldCheck className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div id={titleId} className="text-sm font-semibold leading-5 text-foreground">
+            {block.title || defaultTitle}
+          </div>
+          <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+            {responseState === "error"
+              ? "that did not work. please try again."
+              : block.message ?? (isAuth
+                ? "choose how you want to connect this agent."
+                : "the agent needs your approval before it can continue.")}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {block.options.map((option, index) => {
+              const semanticKind = `${option.kind ?? ""} ${option.name}`.toLowerCase();
+              const isReject = /reject|deny|decline|cancel/.test(semanticKind);
+              const isPrimary = !isReject && (index === 0 || /allow|approve|connect|sign in|continue/.test(semanticKind));
+              return (
+                <button
+                  key={option.optionId}
+                  type="button"
+                  onClick={() => void respond(option.optionId)}
+                  className={cn(
+                    "border px-2.5 py-1.5 text-xs uppercase tracking-wide transition-opacity duration-150 disabled:opacity-60",
+                    isPrimary
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border text-foreground hover:bg-muted/50",
+                  )}
+                >
+                  {option.name}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => void respond()}
+              className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background disabled:opacity-60"
+            >
+              not now
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1260,6 +1356,7 @@ export function MessageContent({
   onConnectConnectionAction,
   onContinueConnectionAction,
   onDismissConnectionAction,
+  onAnswerAgentAction,
   onAskUserReply,
 }: {
   message: Message;
@@ -1275,6 +1372,7 @@ export function MessageContent({
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
+  onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
   const isUser = message.role === "user";
@@ -1462,6 +1560,17 @@ export function MessageContent({
                 }}
                 onContinue={onContinueConnectionAction}
                 onDismiss={() => onDismissConnectionAction?.(message.id, group.block.connectionId)}
+              />
+            );
+          }
+          if (group.type === "agent-action") {
+            return (
+              <InlineAgentActionCard
+                key={`agent-action-${group.block.requestId}`}
+                block={group.block}
+                onRespond={(selectedOptionId) =>
+                  onAnswerAgentAction?.(group.block, selectedOptionId) ?? false
+                }
               />
             );
           }

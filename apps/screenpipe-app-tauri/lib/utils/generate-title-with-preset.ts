@@ -247,6 +247,11 @@ export async function titleCreatedByAI(
   if (!selectedPreset) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
+  // Title generation is an internal, short-lived raw Pi session. Starting a
+  // second ACP harness here can reopen interactive auth and, without ACP
+  // config, previously fell through to Screenpipe Cloud. Let the caller use
+  // its normal title fallback for ACP conversations instead.
+  if (selectedPreset.provider === "acp") return null;
 
   try {
     return await generateTitleViaPi(trimmed, selectedPreset, userToken ?? null, onDelta);

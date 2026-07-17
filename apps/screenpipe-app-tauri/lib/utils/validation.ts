@@ -41,7 +41,7 @@ export const userSchema = z.object({
   entitlement: z.any().nullable().optional(),
 });
 
-export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "screenpipe-cloud", "pi", "anthropic"]);
+export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "screenpipe-cloud", "acp", "pi", "anthropic"]);
 
 export const aiPresetSchema = z.object({
   id: z.string().min(1, "Preset name is required").regex(/^[a-zA-Z0-9\s\-_]+$/, "Only letters, numbers, spaces, hyphens, and underscores allowed").refine(

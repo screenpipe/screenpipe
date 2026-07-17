@@ -36,6 +36,16 @@ describe("pickPipePreset", () => {
     expect(pickPipePreset(presets)).toBeNull();
   });
 
+  it("never assigns an ACP chat harness to a raw Pi pipe", () => {
+    expect(pickPipePreset([
+      { id: "coding-agent", provider: "acp", model: "codex-acp", defaultPreset: true },
+    ])).toBeNull();
+    expect(pickPipePreset([
+      { id: "pipes", provider: "acp", model: "pi-acp", defaultPreset: false },
+      { id: "raw", provider: "screenpipe-cloud", model: "auto", defaultPreset: true },
+    ])?.id).toBe("raw");
+  });
+
   it("coerces a frontier-model preset to 'auto' (pipes must not run frontier)", () => {
     // No "pipes" preset; default is pinned to Opus → pipe would inherit a cost bomb.
     const opusDefault = pickPipePreset([{ id: "chat", model: "claude-opus-4-8", defaultPreset: true }]);

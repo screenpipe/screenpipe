@@ -16,3 +16,7 @@ export function isInvalidatedAuthTokenError(message: unknown): boolean {
 export function buildInvalidatedAuthTokenMessage() {
   return "Your screenpipe session expired. Sign in again to continue using AI.";
 }
+
+export function isAcpAuthenticationCancelledError(message: unknown): boolean {
+  return typeof message === "string" && /ACP authentication cancelled/i.test(message);
+}

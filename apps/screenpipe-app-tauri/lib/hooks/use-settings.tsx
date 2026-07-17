@@ -36,7 +36,18 @@ export type AIProviderType =
 	| "custom"
 	| "embedded"
 	| "screenpipe-cloud"
+	| "acp"
 	| "pi";
+
+export type AcpAgentPresetConfig = {
+	/** Stable adapter id from the ACP registry, or "custom". */
+	id: string;
+	/** Only needed for custom/local adapters. Curated adapters are resolved by id. */
+	command?: string;
+	args?: string[];
+	/** Empty values mean "inherit this variable from the app environment". */
+	env?: Record<string, string>;
+};
 
 export type EmbeddedLLMConfig = {
 	enabled: boolean;
@@ -68,6 +79,10 @@ export type AIPreset = {
 	  }
 	| {
 			provider: "screenpipe-cloud";
+	  }
+	| {
+			provider: "acp";
+			acpAgent: AcpAgentPresetConfig;
 	  }
 	| {
 			provider: "anthropic";

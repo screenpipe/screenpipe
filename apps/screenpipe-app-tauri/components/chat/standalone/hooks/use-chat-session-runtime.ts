@@ -69,6 +69,23 @@ export function useChatSessionRuntime({
       await mountAgentEventBus();
       if (cancelled) return;
       off = registerForeground(conversationId, (envelope) => {
+        if (
+          process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+          typeof window !== "undefined" &&
+          ["extension_ui_request", "acp_fatal", "acp_auth_cancelled"].includes(
+            envelope.event?.type ?? "",
+          )
+        ) {
+          const target = window as typeof window & { __e2eAgentActionTrace?: unknown[] };
+          target.__e2eAgentActionTrace = target.__e2eAgentActionTrace ?? [];
+          target.__e2eAgentActionTrace.push({
+            stage: "foreground-dispatch",
+            sessionId: envelope.sessionId,
+            currentSessionId: piSessionIdRef.current,
+            type: envelope.event?.type,
+            hasHandler: Boolean(handleAgentEventDataRef.current),
+          });
+        }
         if (envelope.sessionId !== piSessionIdRef.current) {
           void handlePiEvent(envelope);
           return;

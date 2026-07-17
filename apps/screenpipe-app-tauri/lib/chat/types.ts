@@ -24,10 +24,25 @@ export interface ToolCall {
   endedAtMs?: number;
 }
 
+export type AgentActionOption = {
+  optionId: string;
+  name: string;
+  kind?: string;
+};
+
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool"; toolCall: ToolCall }
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number }
+  | {
+      type: "agent_action";
+      actionKind: "permission" | "auth";
+      requestId: string;
+      sessionId: string;
+      title: string;
+      message?: string;
+      options: AgentActionOption[];
+    }
   | {
       type: "connection_action";
       connectionId: string;
