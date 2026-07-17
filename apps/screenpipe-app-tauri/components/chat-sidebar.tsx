@@ -442,14 +442,14 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
   }, []);
 
-  // Inventory + exact counts are lazy at the section level. A collapsed Pipes
-  // section does no disk reload or execution-count query.
+  // Always fetch inventory to ensure correct execution counts for pipe groups
+  // that may appear in the Recents section, regardless of Pipes section collapse state.
   useEffect(() => {
-    if (!pipesCollapsed) void fetchPipeInventory();
-  }, [pipesCollapsed, fetchPipeInventory]);
+    void fetchPipeInventory();
+  }, [fetchPipeInventory]);
   useInterval(
     () => void fetchPipeInventory(),
-    pipesCollapsed ? null : 15_000,
+    15_000,
   );
 
   const loadPipeRuns = useCallback(async (pipeName: string) => {
@@ -978,6 +978,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   existingGroups={existingGroups}
                   openConversationMenuId={openConversationMenuId}
                   setOpenConversationMenuId={setOpenConversationMenuId}
+                  pipeExecutionCounts={pipeExecutionCounts}
+                  pipeInventoryLoaded={pipeInventoryLoaded}
+                  loadingPipeRuns={loadingPipeRuns}
+                  loadedPipeRuns={loadedPipeRuns}
                 />
               )}
             </Section>
@@ -1548,6 +1552,10 @@ function RecentsBody({
   existingGroups: string[];
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
+  pipeExecutionCounts: Record<string, number>;
+  pipeInventoryLoaded: boolean;
+  loadingPipeRuns: ReadonlySet<string>;
+  loadedPipeRuns: Record<string, SessionRecord[]>;
 }) {
   const renderItem = (item: SidebarItem) =>
     item.kind === "single" ? (
@@ -1587,6 +1595,10 @@ function RecentsBody({
         existingGroups={existingGroups}
         openConversationMenuId={openConversationMenuId}
         setOpenConversationMenuId={setOpenConversationMenuId}
+        executionCount={pipeExecutionCounts[item.title]}
+        executionCountLoading={!pipeInventoryLoaded}
+        runsLoading={loadingPipeRuns.has(item.title)}
+        runsLoaded={loadedPipeRuns[item.title] != null}
       />
     );
 
