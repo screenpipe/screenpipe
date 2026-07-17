@@ -162,14 +162,16 @@ export function SummaryCards({
           per-chip pin glyph is the sole user-created marker — it also cues the
           behavior split (built-ins run immediately, templates open the edit
           dialog). Labels and forced rows reviewed out in #5243. */}
-      <div className="w-full max-w-lg mb-4 flex flex-wrap items-center gap-1 px-1">
+      {/* Chips carry flex-grow so each wrap line stretches flush to the card
+          column's edges (brick fill) instead of leaving a ragged right edge. */}
+      <div className="w-full max-w-lg mb-4 flex flex-wrap items-center gap-1">
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
         {featured.filter((p) => p.name === "time-breakdown" || p.name === "missed-todos").map((pipe) => (
           <button
             key={pipe.name}
             data-testid={`summary-card-${pipe.name}`}
             onClick={() => handleCardClick(pipe)}
-            className="px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+            className="grow px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
             {pipe.title}
           </button>
@@ -189,7 +191,7 @@ export function SummaryCards({
               const prompt = `Analyze my screen and audio recordings from today.\n\nUser instructions: ${qt.prompt}\n\nOnly report activities you can verify from the recordings. If uncertain, say so. Format with clear headings and bullet points.`;
               onSendMessage(prompt, `\u2728 ${qt.label} \u2014 Today`);
             }}
-            className="px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+            className="grow px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
             {qt.label}
           </button>
@@ -202,7 +204,7 @@ export function SummaryCards({
             key={ct.id}
             onClick={() => handleCustomTemplateClick(ct)}
             title={ct.description || ct.timeRange}
-            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-muted/10 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground/80 transition-all duration-150 cursor-pointer max-w-[140px]"
+            className="grow inline-flex items-center justify-center gap-1 px-2 py-0.5 text-[11px] bg-muted/10 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground/80 transition-all duration-150 cursor-pointer max-w-[140px]"
           >
             <Pin className="w-3 h-3 shrink-0" strokeWidth={1.5} />
             <span className="truncate">{ct.title}</span>
