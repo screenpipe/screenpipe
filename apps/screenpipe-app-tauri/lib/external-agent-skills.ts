@@ -6,10 +6,17 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { commands } from "@/lib/utils/tauri";
 
-export type ExternalAgentWithSkills = "claude" | "codex";
+export type ExternalAgentWithSkills = "claude" | "codex" | "cursor" | "openclaw" | "hermes";
 
+// Paths mirror the CLI's layout() in crates/screenpipe-engine/src/cli/agent.rs.
 function skillsDirectoryName(target: ExternalAgentWithSkills): string {
-  return target === "claude" ? ".claude" : ".codex";
+  switch (target) {
+    case "claude": return ".claude";
+    case "codex": return ".codex";
+    case "cursor": return ".cursor";
+    case "openclaw": return ".openclaw";
+    case "hermes": return ".hermes";
+  }
 }
 
 export async function installExternalAgentSkills(

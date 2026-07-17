@@ -60,6 +60,9 @@ pub fn install_external_agent_skills(target: String) -> Result<Vec<String>, Stri
     let cli_target = match target.as_str() {
         "claude" => "claude-code",
         "codex" => "codex",
+        "cursor" => "cursor",
+        "openclaw" => "openclaw",
+        "hermes" => "hermes",
         _ => return Err(format!("unsupported external agent: {target}")),
     };
 
@@ -82,6 +85,9 @@ pub fn remove_external_agent_skills(target: String) -> Result<Vec<String>, Strin
     let cli_target = match target.as_str() {
         "claude" => "claude-code",
         "codex" => "codex",
+        "cursor" => "cursor",
+        "openclaw" => "openclaw",
+        "hermes" => "hermes",
         _ => return Err(format!("unsupported external agent: {target}")),
     };
 

@@ -16,7 +16,7 @@ import {
   humanizeConnectError,
 } from "@/lib/connect-errors";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { readTextFile, writeFile, mkdir, exists } from "@tauri-apps/plugin-fs";
+import { readTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
 import { homeDir, join, dirname } from "@tauri-apps/api/path";
 import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
@@ -24,6 +24,22 @@ import {
   areExternalAgentSkillsInstalled,
   installExternalAgentSkills,
 } from "@/lib/external-agent-skills";
+// Connect-all: one click wires every DETECTED tool through the same per-tool
+// connect path the individual cards use (bundled-bun MCP with the local API
+// key, plus both skills where supported). Tools that are not detected are
+// never touched. Shared with settings' disconnect-all — see lib/ai-tools-mcp.
+import {
+  CONNECT_ALL_TOOL_NAMES,
+  type ConnectAllToolId,
+  detectAiTools,
+  buildMcpConfig,
+  installOpenclawMcp,
+  isOpenclawMcpInstalled,
+  installHermesMcp,
+  isHermesMcpInstalled,
+  installWindsurfMcp,
+  isWindsurfMcpInstalled,
+} from "@/lib/ai-tools-mcp";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -82,72 +98,6 @@ function CursorIcon({ className = "w-5 h-5" }: { className?: string }) {
 
 // ─── MCP helpers (shared pattern for Claude Desktop & Cursor) ────────────────
 
-/**
- * MCP install config for screenpipe.
- *
- * Prefers our bundled `bun` binary (always present when the desktop app
- * is installed) over `npx`. Falls back to `npx` only if bun isn't found.
- *
- * Why: many users (incl. Louis's MBA, IT consultants like Brad) don't
- * have Node/npx installed at all. Claude Desktop tries to spawn `npx`,
- * gets "No such file or directory", and the MCP server never starts.
- * Using the bun we ship sidesteps the entire Node dependency.
- *
- * `@latest` is pinned so npx/bunx don't lock onto a stale cached version.
- *
- * Keep this in sync with the same helper in
- * `components/settings/connections-section.tsx` — both code paths must
- * write identical configs.
- */
-/**
- * Resolve the local API key for MCP configs. The fetch can race engine
- * startup and return key:null even though auth is enabled — writing a keyless
- * entry then produces an MCP server that 403s on every call. Retry once, and
- * if the key still isn't there while auth is on, fail loudly so connect shows
- * an error instead of silently writing a broken config.
- * Keep in sync with the same helper in settings/connections-section.tsx.
- */
-async function resolveLocalApiKeyForMcp(): Promise<string | undefined> {
-  type LocalApiConfig = { key: string | null; auth_enabled?: boolean };
-  const fetchOnce = () =>
-    (commands.getLocalApiConfig() as Promise<LocalApiConfig>).catch(() => null);
-  let cfg = await fetchOnce();
-  if (!cfg?.key && cfg?.auth_enabled !== false) {
-    await new Promise((r) => setTimeout(r, 1500));
-    cfg = await fetchOnce();
-    if (!cfg?.key && cfg?.auth_enabled !== false) {
-      throw new Error(
-        "screenpipe's local API key isn't available yet (engine still starting?) — try connecting again in a moment"
-      );
-    }
-  }
-  return cfg?.key ?? undefined;
-}
-
-async function buildMcpConfig(): Promise<{ command: string; args: string[]; env?: Record<string, string> }> {
-  // Inject the local API key so the spawned MCP hits its fast env-var path
-  // instead of falling into the slow subprocess key-discovery ladder (bundled
-  // bun / npx / sqlite), which on a cold cache can stall Claude Desktop's MCP
-  // startup and produce "Could not attach to MCP server screenpipe". This MUST
-  // match the settings helper — see connections-section.tsx::buildMcpConfig.
-  const apiKey = await resolveLocalApiKeyForMcp();
-  const env: Record<string, string> | undefined = apiKey
-    ? { SCREENPIPE_LOCAL_API_KEY: apiKey }
-    : undefined;
-
-  try {
-    const res = await commands.bunCheck();
-    if (res.status === "ok" && res.data.available && res.data.path) {
-      return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"], env };
-    }
-  } catch { /* fall through to npx */ }
-  // Unintended fallback: the app should always ship a bundled `bun`. Reaching
-  // here means it couldn't be resolved, and the npx config needs Node (which
-  // many users lack). Don't fail silently.
-  console.warn("[mcp] bundled bun not found — falling back to npx (requires Node). MCP setup may not work without Node installed.");
-  return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
-}
-
 async function readMcpConfig(configPath: string): Promise<Record<string, unknown>> {
   try {
     return JSON.parse(await readTextFile(configPath));
@@ -181,42 +131,6 @@ async function installCursorMcp(): Promise<void> {
   const configPath = await getCursorMcpConfigPath();
   const config = await readMcpConfig(configPath);
   await writeMcpConfig(configPath, config);
-}
-
-// ─── Connect-all: local AI tools detected on this machine ────────────────────
-//
-// One click wires every DETECTED tool through the same per-tool connect path
-// the individual cards use (bundled-bun MCP with the local API key, plus both
-// skills where supported). Tools that are not detected are never touched —
-// installing into absent tools would create config dirs for apps the user
-// doesn't have (the core objection to the #5152 approach).
-const CONNECT_ALL_TOOL_IDS = ["claude", "codex", "cursor"] as const;
-type ConnectAllToolId = (typeof CONNECT_ALL_TOOL_IDS)[number];
-
-async function detectAiTools(): Promise<ConnectAllToolId[]> {
-  const home = await homeDir();
-  const checks: Array<[ConnectAllToolId, () => Promise<boolean>]> = [
-    [
-      "claude",
-      async () => {
-        // Claude Desktop creates its config dir on first launch.
-        const configPath = await getClaudeConfigPath();
-        return configPath ? exists(await dirname(configPath)) : false;
-      },
-    ],
-    ["codex", async () => exists(await join(home, ".codex"))],
-    ["cursor", async () => exists(await join(home, ".cursor"))],
-  ];
-
-  const detected: ConnectAllToolId[] = [];
-  for (const [id, check] of checks) {
-    try {
-      if (await check()) detected.push(id);
-    } catch {
-      /* not detected */
-    }
-  }
-  return detected;
 }
 
 // Claude Desktop
@@ -642,7 +556,12 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
       // Cursor MCP
       try {
-        if (await isCursorMcpInstalled()) stateUpdates["cursor"] = "connected";
+        if (
+          (await isCursorMcpInstalled()) &&
+          (await areExternalAgentSkillsInstalled("cursor"))
+        ) {
+          stateUpdates["cursor"] = "connected";
+        }
       } catch { /* ignore */ }
 
       // Claude Desktop MCP
@@ -663,6 +582,27 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         ) {
           stateUpdates["codex"] = "connected";
         }
+      } catch { /* ignore */ }
+
+      // OpenClaw / Hermes — local installs, surfaced via the connect-all card
+      try {
+        if (
+          (await isOpenclawMcpInstalled()) &&
+          (await areExternalAgentSkillsInstalled("openclaw"))
+        ) {
+          stateUpdates["openclaw"] = "connected";
+        }
+      } catch { /* ignore */ }
+      try {
+        if (
+          (await isHermesMcpInstalled()) &&
+          (await areExternalAgentSkillsInstalled("hermes"))
+        ) {
+          stateUpdates["hermes"] = "connected";
+        }
+      } catch { /* ignore */ }
+      try {
+        if (await isWindsurfMcpInstalled()) stateUpdates["windsurf"] = "connected";
       } catch { /* ignore */ }
 
       // Obsidian (via local API)
@@ -777,6 +717,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
         if (integration.type === "mcp") {
           await installCursorMcp();
+          await installExternalAgentSkills("cursor");
           setCardState(integration.cardKey, "connected");
           posthog.capture("onboarding_integration_connected", { integration: integration.id });
           return;
@@ -862,12 +803,43 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
     setConnectAllRunning(true);
     posthog.capture("onboarding_connect_all_clicked", { tools: detectedAiTools });
     for (const id of detectedAiTools) {
+      // cardKey === id for every connect-all tool, so this covers both kinds.
+      if (cardStates[id] === "connected") continue;
+
       const integration = INTEGRATIONS.find((i) => i.id === id);
-      if (!integration || cardStates[integration.cardKey] === "connected") continue;
-      await handleConnect(integration);
+      if (integration) {
+        await handleConnect(integration);
+        continue;
+      }
+
+      // Tools without an onboarding card (openclaw, hermes) — same
+      // connect/error contract as handleConnect, inline.
+      setCardState(id, "connecting");
+      try {
+        if (id === "openclaw") {
+          await installOpenclawMcp();
+          await installExternalAgentSkills("openclaw");
+        } else if (id === "hermes") {
+          await installHermesMcp();
+          await installExternalAgentSkills("hermes");
+        } else if (id === "windsurf") {
+          await installWindsurfMcp(); // MCP-only, no skills dir
+        }
+        setCardState(id, "connected");
+        posthog.capture("onboarding_integration_connected", { integration: id });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        posthog.capture("onboarding_integration_connect_failed", {
+          integration: id,
+          error_message: msg,
+        });
+        setErrorMessages((prev) => ({ ...prev, [id]: msg }));
+        setCardState(id, "error");
+        setTimeout(() => setCardState(id, "idle"), 4000);
+      }
     }
     setConnectAllRunning(false);
-  }, [detectedAiTools, cardStates, handleConnect]);
+  }, [detectedAiTools, cardStates, handleConnect, setCardState]);
 
   const handleContinue = useCallback(() => {
     posthog.capture("onboarding_connect_apps_completed", {
@@ -928,10 +900,9 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
       {/* Connect-all card — only shown when at least one AI tool is detected */}
       {detectedAiTools.length > 0 && (() => {
-        const tools = detectedAiTools
-          .map((id) => INTEGRATIONS.find((i) => i.id === id))
-          .filter((i): i is Integration => !!i);
-        const allConnected = tools.every((t) => (cardStates[t.cardKey] ?? "idle") === "connected");
+        const allConnected = detectedAiTools.every(
+          (id) => (cardStates[id] ?? "idle") === "connected"
+        );
         return (
           <motion.div
             className="w-full mb-3 p-3 rounded-lg border border-border/40 bg-card/40"
@@ -949,11 +920,11 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                     is carried by brightness and glyph (✓ / dot / spinner),
                     not color, per the black-and-white design system. */}
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
-                  {tools.map((t) => {
-                    const state = cardStates[t.cardKey] ?? "idle";
+                  {detectedAiTools.map((id) => {
+                    const state = cardStates[id] ?? "idle";
                     return (
                       <span
-                        key={t.cardKey}
+                        key={id}
                         className={`font-mono text-[10px] inline-flex items-center gap-1.5 ${
                           state === "connected"
                             ? "text-muted-foreground"
@@ -969,7 +940,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                         ) : (
                           <span className="h-1 w-1 rounded-full bg-muted-foreground/30" />
                         )}
-                        {t.name.toLowerCase()}
+                        {CONNECT_ALL_TOOL_NAMES[id].toLowerCase()}
                         {state === "error" && " · failed"}
                       </span>
                     );

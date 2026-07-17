@@ -36,11 +36,20 @@ pub enum AgentCommand {
         #[arg(long, default_value = "http://localhost:3030")]
         api_url: String,
     },
+    /// Remove the screenpipe skills + MCP server entry from an agent.
+    /// Exact inverse of `setup`: deletes only what setup wrote, never the
+    /// agent's own config or other skills.
+    Remove {
+        /// Which agent to unwire.
+        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf"])]
+        target: String,
+    },
 }
 
 pub async fn handle_agent_command(cmd: &AgentCommand) -> Result<()> {
     match cmd {
         AgentCommand::Setup { target, api_url } => setup(target, api_url),
+        AgentCommand::Remove { target } => remove(target),
     }
 }
 
@@ -64,10 +73,13 @@ enum McpFormat {
 fn layout(target: &str) -> Result<AgentLayout> {
     let h = dirs::home_dir().context("could not resolve home dir")?;
     Ok(match target {
+        // OpenClaw's real layout (verified against a live install + docs):
+        // root is ~/.openclaw, skills under ~/.openclaw/skills, MCP servers
+        // under mcpServers in ~/.openclaw/openclaw.json.
         "openclaw" => AgentLayout {
             name: "OpenClaw",
-            skills_dir: Some(h.join("openclaw/skills")),
-            mcp_path: h.join("openclaw/mcp.json"),
+            skills_dir: Some(h.join(".openclaw/skills")),
+            mcp_path: h.join(".openclaw/openclaw.json"),
             mcp_format: McpFormat::Json,
         },
         "hermes" => AgentLayout {
@@ -94,9 +106,12 @@ fn layout(target: &str) -> Result<AgentLayout> {
             mcp_path: h.join(".codex/config.toml"),
             mcp_format: McpFormat::Toml,
         },
+        // Cursor loads global skills from ~/.cursor/skills (also ~/.agents/skills
+        // and, for compat, ~/.claude/skills + ~/.codex/skills) — see
+        // https://cursor.com/docs/skills
         "cursor" => AgentLayout {
             name: "Cursor",
-            skills_dir: None,
+            skills_dir: Some(h.join(".cursor/skills")),
             mcp_path: h.join(".cursor/mcp.json"),
             mcp_format: McpFormat::Json,
         },
@@ -221,6 +236,174 @@ fn remove_skills_from(skills_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(removed)
 }
 
+/// `screenpipe agent remove <target>` — undo `setup`. Removes the two
+/// screenpipe skills and the screenpipe MCP entry; idempotent, missing
+/// files/entries are a no-op.
+fn remove(target: &str) -> Result<()> {
+    let l = layout(target)?;
+    println!("removing screenpipe from {}", l.name);
+
+    let removed = remove_skills(target)?;
+    if l.skills_dir.is_none() {
+        println!("  · {} is MCP-only (no skills dir)", l.name);
+    } else if removed.is_empty() {
+        println!("  · no screenpipe skills installed");
+    } else {
+        for path in removed {
+            println!("  ✓ removed skill {}", path.display());
+        }
+    }
+
+    match l.mcp_format {
+        McpFormat::Json => remove_mcp_json(&l.mcp_path)?,
+        McpFormat::Toml => remove_mcp_toml(&l.mcp_path)?,
+        McpFormat::Yaml => remove_mcp_yaml(&l.mcp_path)?,
+    }
+
+    println!(
+        "\ndone — restart {} so it drops the screenpipe tools.",
+        l.name
+    );
+    Ok(())
+}
+
+/// Remove `mcpServers.screenpipe` from a JSON config, preserving everything
+/// else (other servers, non-MCP keys like OpenClaw's gateway config).
+fn remove_mcp_json(path: &Path) -> Result<()> {
+    use serde_json::Value;
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => {
+            println!("  · no screenpipe mcp entry in {}", path.display());
+            return Ok(());
+        }
+    };
+    let mut root: Value = serde_json::from_str(&existing)
+        .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?;
+    let removed = root
+        .get_mut("mcpServers")
+        .and_then(|s| s.as_object_mut())
+        .and_then(|s| s.remove("screenpipe"))
+        .is_some();
+    if !removed {
+        println!("  · no screenpipe mcp entry in {}", path.display());
+        return Ok(());
+    }
+    std::fs::write(path, serde_json::to_string_pretty(&root)? + "\n")?;
+    println!("  ✓ mcp removed from {}", path.display());
+    Ok(())
+}
+
+/// Strip the `[mcp_servers.screenpipe]` table and its `.env` subtable from a
+/// TOML config (Codex), preserving all other tables and top-level keys.
+fn remove_mcp_toml(path: &Path) -> Result<()> {
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("  · no screenpipe mcp entry in {}", path.display());
+            return Ok(());
+        }
+    };
+    if !existing.contains("[mcp_servers.screenpipe]") {
+        println!("  · no screenpipe mcp entry in {}", path.display());
+        return Ok(());
+    }
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_screenpipe = false;
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[mcp_servers.screenpipe]" || trimmed == "[mcp_servers.screenpipe.env]" {
+            in_screenpipe = true;
+            continue;
+        }
+        if in_screenpipe && trimmed.starts_with('[') {
+            in_screenpipe = false;
+        }
+        if !in_screenpipe {
+            out.push(line);
+        }
+    }
+    let mut next = out.join("\n");
+    while next.contains("\n\n\n") {
+        next = next.replace("\n\n\n", "\n\n");
+    }
+    let next = format!("{}\n", next.trim_matches('\n'));
+    std::fs::write(path, next)?;
+    println!("  ✓ mcp removed from {}", path.display());
+    Ok(())
+}
+
+/// Remove only the exact `mcp_servers:` block `merge_mcp_yaml` writes (a sole
+/// `screenpipe:` child referencing screenpipe-mcp). Anything hand-authored is
+/// left untouched with manual instructions — we never string-slice foreign YAML.
+fn remove_mcp_yaml(path: &Path) -> Result<()> {
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("  · no screenpipe mcp entry in {}", path.display());
+            return Ok(());
+        }
+    };
+    // Comment-aware: a commented `# screenpipe` mention isn't an entry.
+    let has_uncommented_screenpipe = existing
+        .lines()
+        .any(|l| !l.trim_start().starts_with('#') && l.contains("screenpipe"));
+    if !has_uncommented_screenpipe {
+        println!("  · no screenpipe mcp entry in {}", path.display());
+        return Ok(());
+    }
+    let lines: Vec<&str> = existing.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.trim_end() == "mcp_servers:") else {
+        println!(
+            "  • {} references screenpipe outside an mcp_servers block — remove it manually",
+            path.display()
+        );
+        return Ok(());
+    };
+    let mut end = start + 1;
+    let mut children: Vec<String> = Vec::new();
+    while end < lines.len()
+        && (lines[end].trim().is_empty()
+            || lines[end].starts_with(' ')
+            || lines[end].starts_with('\t'))
+    {
+        if let Some(name) = lines[end]
+            .strip_prefix("  ")
+            .filter(|l| !l.starts_with(' '))
+            .and_then(|l| l.split(':').next())
+        {
+            children.push(name.to_string());
+        }
+        end += 1;
+    }
+    let block = lines[start..end].join("\n");
+    if children != ["screenpipe"] || !block.contains("screenpipe-mcp") {
+        println!(
+            "  • {} has a customized mcp_servers block — delete the screenpipe entry manually",
+            path.display()
+        );
+        return Ok(());
+    }
+    let next: Vec<&str> = lines[..start]
+        .iter()
+        .chain(lines[end..].iter())
+        .copied()
+        .collect();
+    let mut next = next.join("\n");
+    while next.contains("\n\n\n") {
+        next = next.replace("\n\n\n", "\n\n");
+    }
+    let trimmed = next.trim_matches('\n');
+    let next = if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed}\n")
+    };
+    std::fs::write(path, next)?;
+    println!("  ✓ mcp removed from {}", path.display());
+    Ok(())
+}
+
 /// Idempotently add the `screenpipe` server to a JSON MCP config (OpenClaw,
 /// Claude), preserving any existing servers/keys.
 fn merge_mcp_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
@@ -270,14 +453,22 @@ fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     );
     let existing = std::fs::read_to_string(path).unwrap_or_default();
 
-    if existing.contains("screenpipe-mcp") {
+    // Only uncommented lines count: Hermes ships a commented-out
+    // `# mcp_servers:` example block in its default config.yaml, and substring
+    // checks would wrongly treat it as a hand-authored block.
+    let uncommented = |needle: &str| {
+        existing
+            .lines()
+            .any(|l| !l.trim_start().starts_with('#') && l.contains(needle))
+    };
+    if uncommented("screenpipe-mcp") {
         println!(
             "  • {} already references screenpipe-mcp; left as-is",
             path.display()
         );
         return Ok(());
     }
-    if existing.contains("mcp_servers:") {
+    if existing.lines().any(|l| l.starts_with("mcp_servers:")) {
         println!(
             "  • {} already has an mcp_servers block — add this under it manually:\n{server}",
             path.display()
@@ -416,6 +607,146 @@ mod tests {
             v["mcpServers"]["screenpipe"]["env"]["SCREENPIPE_API_URL"],
             "http://box:3030"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_mcp_json_preserves_other_servers() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-rmjson-{}", std::process::id()));
+        let path = dir.join("mcp.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "mcpServers": {"other": {"command": "x"}, "screenpipe": {"command": "bun"}},
+                "theme": "dark"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        remove_mcp_json(&path).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["other"]["command"], "x");
+        assert_eq!(v["theme"], "dark");
+        assert!(v["mcpServers"]["screenpipe"].is_null());
+
+        // Idempotent + missing file is a no-op.
+        remove_mcp_json(&path).unwrap();
+        remove_mcp_json(&dir.join("missing.json")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_mcp_json_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-rtjson-{}", std::process::id()));
+        let path = dir.join("mcp.json");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        merge_mcp_json(&path, false, "http://localhost:3030").unwrap();
+        remove_mcp_json(&path).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(v["mcpServers"].as_object().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_mcp_toml_strips_table_and_env() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-rmtoml-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(&path, "model = \"o3\"\n").unwrap();
+        merge_mcp_toml(&path, true, "http://box:3030").unwrap(); // remote=true adds .env subtable
+        remove_mcp_toml(&path).unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("model = \"o3\""));
+        assert!(!s.contains("mcp_servers.screenpipe"));
+        assert!(!s.contains("SCREENPIPE_API_URL"));
+
+        // Idempotent.
+        remove_mcp_toml(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_mcp_toml_preserves_following_table() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-rmtoml2-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            &path,
+            "[mcp_servers.screenpipe]\ncommand = \"bun\"\n\n[mcp_servers.screenpipe.env]\nK = \"v\"\n\n[other_section]\nkey = \"kept\"\n",
+        )
+        .unwrap();
+        remove_mcp_toml(&path).unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("[other_section]"));
+        assert!(s.contains("key = \"kept\""));
+        assert!(!s.contains("screenpipe"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_mcp_yaml_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-rmyaml-{}", std::process::id()));
+        let path = dir.join("config.yaml");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(&path, "model: gpt\n").unwrap();
+        merge_mcp_yaml(&path, false, "http://localhost:3030").unwrap();
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("screenpipe-mcp"));
+        remove_mcp_yaml(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "model: gpt\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_merge_mcp_yaml_ignores_commented_example_block() {
+        // Hermes's default config.yaml ships a commented-out `# mcp_servers:`
+        // example — merge must append a real block, not bail to manual mode.
+        let dir = std::env::temp_dir().join(format!("sp-agent-ycmt-{}", std::process::id()));
+        let path = dir.join("config.yaml");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let seeded = "model: x\n# mcp_servers:\n#   time:\n#     command: uvx\n";
+        std::fs::write(&path, seeded).unwrap();
+        merge_mcp_yaml(&path, false, "http://localhost:3030").unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("\nmcp_servers:\n"));
+        assert!(s.contains("screenpipe-mcp"));
+        // Commented example untouched.
+        assert!(s.contains("# mcp_servers:"));
+
+        // And remove restores the seeded file.
+        remove_mcp_yaml(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seeded);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_mcp_yaml_leaves_foreign_block() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-rmyaml2-{}", std::process::id()));
+        let path = dir.join("config.yaml");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Hand-authored: screenpipe alongside another server — must not touch.
+        let content =
+            "mcp_servers:\n  screenpipe:\n    url: http://custom\n  other:\n    command: x\n";
+        std::fs::write(&path, content).unwrap();
+        remove_mcp_yaml(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
