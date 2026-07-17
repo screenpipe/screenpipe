@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, Check, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import posthog from "posthog-js";
+import { CursorLogo } from "./tool-logos";
 import {
   CONNECT_ALL_TOOL_NAMES,
   type ConnectAllToolId,
@@ -100,6 +101,26 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
 }
 
 type ToolBusy = "connecting" | "removing";
+
+// Real product logos, shipped in public/images.
+function ToolIcon({ id }: { id: ConnectAllToolId }) {
+  const img = "h-5 w-5";
+  switch (id) {
+    case "claude":
+      return <img src="/images/claude-ai.svg" alt="" className={img} />;
+    case "codex":
+      return <img src="/images/codex.svg" alt="" className={`${img} rounded dark:invert`} />;
+    case "cursor":
+      return <CursorLogo className={img} />;
+    case "openclaw":
+      return <img src="/images/openclaw.png" alt="" className={`${img} rounded`} />;
+    case "hermes":
+      return <img src="/images/hermes.png" alt="" className={`${img} rounded`} />;
+    case "windsurf":
+      // Devin mark (black vector) — Windsurf was rebranded to Devin Desktop.
+      return <img src="/images/devin.svg" alt="" className={`${img} dark:invert`} />;
+  }
+}
 
 export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
   const [detected, setDetected] = useState<ConnectAllToolId[]>([]);
@@ -292,6 +313,9 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
               const err = errors[id];
               return (
                 <div key={id} className="flex items-center gap-3 py-2.5 border-b border-border/60 last:border-b-0">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted">
+                    <ToolIcon id={id} />
+                  </div>
                   <div className="min-w-0 flex-1">
                     <span className="text-[13px] text-foreground">{DISPLAY_NAMES[id]}</span>
                     <span className="ml-2 text-xs text-muted-foreground">
@@ -328,21 +352,26 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                       variant="outline"
                       onClick={() => connectTool(id)}
                       disabled={bulkRunning}
-                      className="h-7 text-xs normal-case font-sans tracking-normal"
+                      aria-label={`Connect ${DISPLAY_NAMES[id]}`}
+                      title={`Connect ${DISPLAY_NAMES[id]}`}
+                      className="h-7 w-7 p-0 shrink-0"
                     >
-                      Connect
+                      <Plus className="h-3.5 w-3.5" />
                     </Button>
                   )}
                 </div>
               );
             })}
           </div>
-          <div className="flex items-center justify-between pt-2.5">
-            <span className="text-[11px] text-muted-foreground/70">
-              Bulk actions apply to every detected tool
-            </span>
-            <span className="flex items-center gap-2">
-              {connectedCount > 0 && (
+          {/* Bulk-action placement rule: one bulk action per place. When
+              nothing is connected the header's "+ Connect all" is the only
+              bulk control — no footer duplicate. */}
+          {connectedCount > 0 && (
+            <div className="flex items-center justify-between pt-2.5">
+              <span className="text-[11px] text-muted-foreground/70">
+                {connectedCount} of {detected.length} connected
+              </span>
+              <span className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handleDisconnectAll}
@@ -351,22 +380,22 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                 >
                   {confirmingDisconnect ? "Click again to confirm" : "Disconnect all…"}
                 </button>
-              )}
-              {!allConnected && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleConnectAll}
-                  disabled={bulkRunning}
-                  className="h-7 gap-1 text-xs normal-case font-sans tracking-normal"
-                >
-                  <Plus className="h-3 w-3" />
-                  Connect all
-                </Button>
-              )}
-            </span>
-          </div>
+                {!allConnected && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={handleConnectAll}
+                    disabled={bulkRunning}
+                    className="h-7 gap-1 text-xs normal-case font-sans tracking-normal"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Connect all
+                  </Button>
+                )}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
