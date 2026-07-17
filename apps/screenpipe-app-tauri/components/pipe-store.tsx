@@ -10,6 +10,7 @@ import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { apiCache } from "@/lib/cache";
 import { localFetch } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -465,6 +466,12 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [activePackSlug, setActivePackSlug] = useState<string | null>(null);
+  const [showPackDetail, setShowPackDetail] = useState(false);
+  const [packInstalling, setPackInstalling] = useState(false);
+  const [packInstallProgress, setPackInstallProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
 
   // Prefill search from ?q= URL param after mount, then strip it so it doesn't persist
   useEffect(() => {
@@ -831,8 +838,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       if (pipeConnections.length > 0) {
         sessionStorage.setItem(`justInstalled:${pipeName}`, "1");
       }
-      // Switch to my-pipes tab — PipesSection mounts and auto-opens the connection modal
-      onInstalled?.();
+      // Switch to my-pipes tab — unless user is browsing a pack detail
+      if (!showPackDetail) onInstalled?.();
     } catch (err: any) {
       toast({
         title: "failed to install pipe",
@@ -853,6 +860,65 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     } finally {
       setInstalling(null);
     }
+  };
+
+  // Batch install all pipes from a pack
+  const installPackPipes = async (pack: StorePack) => {
+    if (packInstalling) return;
+    const toInstall = pack.pipes.filter((p) => !installedNames.has(p.slug));
+    if (toInstall.length === 0) {
+      toast({ title: "all pipes in this pack are already installed" });
+      return;
+    }
+
+    setPackInstalling(true);
+    setPackInstallProgress({ current: 0, total: toInstall.length });
+    let installed = 0;
+
+    for (const pipe of toInstall) {
+      setPackInstallProgress({ current: installed, total: toInstall.length });
+      try {
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await localFetch("/pipes/store/install", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ slug: pipe.slug }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+
+        const pipeName = data.name || pipe.slug;
+        const pipePreset = pickPipePreset(settings.aiPresets);
+        if (pipePreset?.id) {
+          try {
+            await localFetch(`/pipes/${pipeName}/config`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ preset: pipePreset.id }),
+            });
+          } catch {}
+        }
+
+        setInstalledNames((prev) => new Set([...prev, pipeName]));
+        installed++;
+      } catch (err: any) {
+        console.error(`failed to install ${pipe.slug}:`, err);
+      }
+    }
+
+    setPackInstallProgress({ current: installed, total: toInstall.length });
+    apiCache.invalidate("pipes/installed");
+    posthog.capture("pipe_pack_batch_install", {
+      pack_slug: pack.slug,
+      installed_count: installed,
+      total_count: toInstall.length,
+    });
+    toast({
+      title: `pack installed — ${installed} pipe${installed !== 1 ? "s" : ""} added`,
+    });
+    setPackInstalling(false);
+    setPackInstallProgress(null);
   };
 
   // Submit review
@@ -922,33 +988,37 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     [activePackSlug, packs]
   );
 
-  const visiblePipes = activePack ? activePack.pipes : pipes;
+  const pipeToPackMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const pack of packs) {
+      for (const pipe of pack.pipes) {
+        if (!map.has(pipe.slug)) {
+          map.set(pipe.slug, pack.title);
+        }
+      }
+    }
+    return map;
+  }, [packs]);
+
+  const visiblePipes = pipes;
 
   const selectPack = useCallback(
     (slug: string) => {
-      const nextSlug = activePackSlug === slug ? null : slug;
-      setActivePackSlug(nextSlug);
-      setCategory("All");
-      setSearchQuery("");
-      setDebouncedQuery("");
-      posthog.capture("pipe_pack_selected", { slug, active: !!nextSlug });
+      setActivePackSlug(slug);
+      setShowPackDetail(true);
+      posthog.capture("pipe_pack_detail_viewed", { slug });
     },
-    [activePackSlug]
+    []
   );
-
-  const clearPack = useCallback(() => {
-    setActivePackSlug(null);
-    posthog.capture("pipe_pack_cleared");
-  }, []);
 
   // Client-side category filter (must be before any early returns to keep hook count stable)
   const filteredPipes = useMemo(() => {
-    if (activePack || category === "All") return visiblePipes;
+    if (category === "All") return visiblePipes;
     return visiblePipes.filter((p) => {
       const cat = (p.category || "other").charAt(0).toUpperCase() + (p.category || "other").slice(1);
       return cat === category;
     });
-  }, [activePack, visiblePipes, category]);
+  }, [visiblePipes, category]);
 
   const sortedPipes = useMemo(
     () =>
@@ -1003,7 +1073,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     </Dialog>
   );
 
-  // If showing detail view, render full-width detail panel
+  // If showing pipe detail view, render full-width detail panel
+  // (checked before pack detail so pipe detail takes precedence when opened from a pack)
   if (showDetail) {
     return (
       <div className="space-y-6">
@@ -1015,7 +1086,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          back to discover
+          {showPackDetail ? "back to pack" : "back to discover"}
         </button>
 
         {detailLoading ? (
@@ -1037,6 +1108,42 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             onRefresh={() => openDetail(selectedPipe.slug)}
           />
         ) : null}
+
+        {installGateDialog}
+      </div>
+    );
+  }
+
+  // If showing pack detail view, render full-width pack detail panel
+  if (showPackDetail && activePack) {
+    return (
+      <div className="space-y-6">
+        <button
+          onClick={() => {
+            setShowPackDetail(false);
+            setActivePackSlug(null);
+          }}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          back to discover
+        </button>
+
+        <PackDetailPanel
+          pack={activePack}
+          installedNames={installedNames}
+          installing={installing}
+          packInstalling={packInstalling}
+          packInstallProgress={packInstallProgress}
+          onInstallPipe={(pipe) => requestInstall(pipe)}
+          onInstallAll={() => installPackPipes(activePack)}
+          onOpenPipeDetail={(slug) => openDetail(slug)}
+          onGoToMyPipes={() => {
+            setShowPackDetail(false);
+            setActivePackSlug(null);
+            onInstalled?.();
+          }}
+        />
 
         {installGateDialog}
       </div>
@@ -1079,61 +1186,12 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
       {/* Packs */}
       {(loadingPacks || packs.length > 0) && (
-        <section className="space-y-3" data-testid="pipe-packs-section">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Packs</p>
-              <p className="text-xs text-muted-foreground">
-                curated groups for common workflows
-              </p>
-            </div>
-            {activePack && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 text-xs text-muted-foreground"
-                onClick={clearPack}
-              >
-                clear pack
-              </Button>
-            )}
-          </div>
-
-          {loadingPacks ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Card key={i} className="rounded-none">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center gap-3">
-                      <Skeleton className="h-9 w-9 rounded-none" />
-                      <div className="space-y-1.5 flex-1">
-                        <Skeleton className="h-4 w-2/5" />
-                        <Skeleton className="h-3 w-1/3" />
-                      </div>
-                    </div>
-                    <Skeleton className="h-3 w-full" />
-                    <Skeleton className="h-3 w-3/4" />
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {packs.map((pack) => (
-                <PipePackCard
-                  key={pack.slug}
-                  pack={pack}
-                  active={pack.slug === activePackSlug}
-                  installedCount={
-                    pack.pipes.filter((pipe) => installedNames.has(pipe.slug))
-                      .length
-                  }
-                  onSelect={() => selectPack(pack.slug)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+        <PacksCarousel
+          loadingPacks={loadingPacks}
+          packs={packs}
+          installedNames={installedNames}
+          onSelectPack={selectPack}
+        />
       )}
 
       {/* Search & Filters */}
@@ -1144,10 +1202,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             <Input
               placeholder="search pipes..."
               value={searchQuery}
-              onChange={(e) => {
-                setActivePackSlug(null);
-                setSearchQuery(e.target.value);
-              }}
+              onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9"
             />
           </div>
@@ -1170,10 +1225,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           {dynamicCategories.map((c) => (
             <button
               key={c}
-              onClick={() => {
-                setActivePackSlug(null);
-                setCategory(c);
-              }}
+              onClick={() => setCategory(c)}
               className={cn(
                 "px-3 py-1.5 rounded-none text-xs font-medium transition-colors duration-150 whitespace-nowrap",
                 category === c
@@ -1187,32 +1239,10 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         </div>
       </div>
 
-      {activePack && (
-        <div
-          className="flex items-center justify-between border border-border bg-muted/30 px-3 py-2"
-          data-testid="active-pipe-pack"
-        >
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide">
-              {activePack.title} pack ({activePack.available_count})
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {activePack.outcome}
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs"
-            onClick={clearPack}
-          >
-            clear
-          </Button>
-        </div>
-      )}
+
 
       {/* Pipe Grid */}
-      {loading && !activePack ? (
+      {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
             <Card key={i} className="overflow-hidden">
@@ -1250,6 +1280,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               onInstall={() => requestInstall(pipe)}
               installing={installing === pipe.slug}
               onClick={() => openDetail(pipe.slug)}
+              packName={pipeToPackMap.get(pipe.slug)}
             />
           ))}
         </div>
@@ -1314,14 +1345,133 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
 // --- Sub-components ---
 
+function PacksCarousel({
+  loadingPacks,
+  packs,
+  installedNames,
+  onSelectPack,
+}: {
+  loadingPacks: boolean;
+  packs: StorePack[];
+  installedNames: Set<string>;
+  onSelectPack: (slug: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollState = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 0);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateScrollState();
+    el.addEventListener("scroll", updateScrollState, { passive: true });
+    const observer = new ResizeObserver(updateScrollState);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener("scroll", updateScrollState);
+      observer.disconnect();
+    };
+  }, [updateScrollState, loadingPacks, packs]);
+
+  const scroll = (direction: "left" | "right") => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = 340;
+    el.scrollBy({ left: direction === "left" ? -distance : distance, behavior: "smooth" });
+  };
+
+  const sortedPacks = [...packs].sort((a, b) => {
+    const aInstalled = a.pipes.every((p) => installedNames.has(p.slug));
+    const bInstalled = b.pipes.every((p) => installedNames.has(p.slug));
+    if (aInstalled === bInstalled) return 0;
+    return aInstalled ? 1 : -1;
+  });
+
+  return (
+    <section className="space-y-3" data-testid="pipe-packs-section">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium">Packs</p>
+          <p className="text-xs text-muted-foreground">
+            starter kits — install everything you need for a workflow
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => scroll("left")}
+            disabled={!canScrollLeft}
+            className={cn(
+              "h-7 w-7 flex items-center justify-center border border-border rounded-none transition-colors",
+              canScrollLeft
+                ? "hover:bg-accent text-foreground"
+                : "text-muted-foreground/30 cursor-default"
+            )}
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => scroll("right")}
+            disabled={!canScrollRight}
+            className={cn(
+              "h-7 w-7 flex items-center justify-center border border-border rounded-none transition-colors",
+              canScrollRight
+                ? "hover:bg-accent text-foreground"
+                : "text-muted-foreground/30 cursor-default"
+            )}
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div
+        ref={scrollRef}
+        className="flex gap-3 overflow-x-auto scrollbar-hide"
+      >
+        {loadingPacks
+          ? Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i} className="rounded-none shrink-0 w-[320px]">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-9 w-9 rounded-none" />
+                    <div className="space-y-1.5 flex-1">
+                      <Skeleton className="h-4 w-2/5" />
+                      <Skeleton className="h-3 w-1/3" />
+                    </div>
+                  </div>
+                  <Skeleton className="h-3 w-full" />
+                  <Skeleton className="h-3 w-3/4" />
+                </CardContent>
+              </Card>
+            ))
+          : sortedPacks.map((pack) => (
+              <PipePackCard
+                key={pack.slug}
+                pack={pack}
+                installedCount={
+                  pack.pipes.filter((pipe) => installedNames.has(pipe.slug)).length
+                }
+                onSelect={() => onSelectPack(pack.slug)}
+              />
+            ))}
+      </div>
+    </section>
+  );
+}
+
 function PipePackCard({
   pack,
-  active,
   installedCount,
   onSelect,
 }: {
   pack: StorePack;
-  active: boolean;
   installedCount: number;
   onSelect: () => void;
 }) {
@@ -1334,6 +1484,10 @@ function PipePackCard({
     pack.available_count === pack.planned_count
       ? `${pack.available_count} pipes`
       : `${pack.available_count}/${pack.planned_count} pipes`;
+  const remaining = pack.available_count - installedCount;
+  const allInstalled = remaining === 0 && pack.available_count > 0;
+  const progressPercent =
+    pack.available_count > 0 ? (installedCount / pack.available_count) * 100 : 0;
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -1349,10 +1503,9 @@ function PipePackCard({
       onClick={onSelect}
       onKeyDown={handleKeyDown}
       className={cn(
-        "cursor-pointer",
-        "border bg-card p-4 text-left rounded-none transition-colors duration-150",
-        "hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground",
-        active ? "border-foreground bg-accent/60" : "border-border"
+        "cursor-pointer flex flex-col shrink-0 w-[320px]",
+        "border border-border bg-card p-4 text-left rounded-none transition-colors duration-150",
+        "hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -1362,14 +1515,19 @@ function PipePackCard({
           </div>
           <div className="min-w-0">
             <h4 className="truncate text-sm font-semibold">{pack.title}</h4>
-            <p className="truncate text-[11px] uppercase tracking-wide text-muted-foreground">
+            <p className="truncate text-xs text-muted-foreground">
               {pack.outcome}
             </p>
           </div>
         </div>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          {pipeCount}
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge variant="outline" className="text-[9px] px-1.5 py-0 rounded-none uppercase tracking-wider">
+            pack
+          </Badge>
+          <span className="text-[11px] text-muted-foreground">
+            {pipeCount}
+          </span>
+        </div>
       </div>
 
       <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
@@ -1396,7 +1554,11 @@ function PipePackCard({
         )}
       </div>
 
-      <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+      <div className="mt-auto pt-3">
+        <Progress value={progressPercent} className="h-1.5 rounded-none" />
+      </div>
+
+      <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
         <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <Download className="h-3 w-3" />
@@ -1408,11 +1570,231 @@ function PipePackCard({
             </span>
           )}
         </div>
-        <span className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide">
-          {active ? "showing" : "view pack"}
-          <ChevronRight className="h-3.5 w-3.5" />
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+          {allInstalled ? (
+            <CheckCircle2 className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
         </span>
       </div>
+    </div>
+  );
+}
+
+function PackDetailPanel({
+  pack,
+  installedNames,
+  installing,
+  packInstalling,
+  packInstallProgress,
+  onInstallPipe,
+  onInstallAll,
+  onOpenPipeDetail,
+  onGoToMyPipes,
+}: {
+  pack: StorePack;
+  installedNames: Set<string>;
+  installing: string | null;
+  packInstalling: boolean;
+  packInstallProgress: { current: number; total: number } | null;
+  onInstallPipe: (pipe: StorePipe) => void;
+  onInstallAll: () => void;
+  onOpenPipeDetail: (slug: string) => void;
+  onGoToMyPipes: () => void;
+}) {
+  const Icon =
+    PACK_ICON_COMPONENTS[pack.icon as keyof typeof PACK_ICON_COMPONENTS] ||
+    PackageCheck;
+
+  const installedCount = pack.pipes.filter((p) => installedNames.has(p.slug)).length;
+  const totalCount = pack.pipes.length;
+  const remaining = totalCount - installedCount;
+  const progressPercent = totalCount > 0 ? (installedCount / totalCount) * 100 : 0;
+  const allInstalled = remaining === 0;
+
+  const unionPermissions = useMemo(() => {
+    const perms: { key: string; status: "allowed" | "denied" | "unset" }[] = [];
+    for (const perm of PERMISSION_LABELS) {
+      let bestStatus: "allowed" | "denied" | "unset" = "unset";
+      for (const pipe of pack.pipes) {
+        const s = getPermissionStatus(pipe.permissions, perm.key);
+        if (s === "allowed") { bestStatus = "allowed"; break; }
+        if (s === "denied" && bestStatus === "unset") bestStatus = "denied";
+      }
+      perms.push({ key: perm.key, status: bestStatus });
+    }
+    return perms;
+  }, [pack.pipes]);
+
+  const hasAnyPermissions = unionPermissions.some((p) => p.status !== "unset");
+
+  return (
+    <div className="space-y-6">
+      {/* Pack header */}
+      <div className="flex items-start gap-4">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center border border-border bg-background">
+          <Icon className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold tracking-tight">{pack.title}</h2>
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 rounded-none uppercase tracking-wider">
+              pack
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground mt-0.5">{pack.outcome}</p>
+          <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{pack.description}</p>
+          <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <Download className="h-3 w-3" />
+              {formatCount(pack.install_count)} installs
+            </span>
+            <span>{totalCount} pipes</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Progress + install all */}
+      <div className="space-y-3 border border-border p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">
+            {installedCount} of {totalCount} pipes installed
+          </span>
+          {packInstallProgress && (
+            <span className="text-xs text-muted-foreground">
+              installing {packInstallProgress.current + 1}/{packInstallProgress.total}...
+            </span>
+          )}
+        </div>
+        <Progress
+          value={
+            packInstalling && packInstallProgress
+              ? (packInstallProgress.current / packInstallProgress.total) * 100
+              : progressPercent
+          }
+          className="h-2 rounded-none"
+        />
+        {allInstalled && !packInstalling ? (
+          <Button
+            className="w-full rounded-none uppercase tracking-wide font-semibold"
+            variant="outline"
+            onClick={onGoToMyPipes}
+          >
+            <CheckCircle2 className="h-4 w-4 mr-1.5" />
+            all installed — go to my pipes
+          </Button>
+        ) : (
+          <Button
+            className="w-full rounded-none uppercase tracking-wide font-semibold"
+            disabled={packInstalling}
+            onClick={onInstallAll}
+          >
+            {packInstalling ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                installing {packInstallProgress?.current ?? 0}/{packInstallProgress?.total ?? remaining}...
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4 mr-1.5" />
+                install all remaining ({remaining})
+              </>
+            )}
+          </Button>
+        )}
+      </div>
+
+      {/* Pipe list */}
+      <div className="space-y-3">
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+          pipes in this pack
+        </h4>
+        <div className="space-y-2">
+          {pack.pipes.map((pipe) => {
+            const isInstalled = installedNames.has(pipe.slug);
+            const isInstallingThis = installing === pipe.slug;
+            return (
+              <div
+                key={pipe.slug}
+                role="button"
+                tabIndex={0}
+                className="flex items-center gap-3 border border-border p-3 cursor-pointer hover:bg-accent/50 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+                onClick={() => onOpenPipeDetail(pipe.slug)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpenPipeDetail(pipe.slug);
+                  }
+                }}
+              >
+                <div className="text-xl h-9 w-9 flex items-center justify-center bg-muted shrink-0">
+                  {pipe.icon || "🔧"}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold truncate">{pipe.title}</p>
+                  <p className="text-xs text-muted-foreground truncate">{pipe.description}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] text-muted-foreground">
+                    {formatCount(pipe.install_count ?? 0)}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant={isInstalled ? "outline" : "default"}
+                    className="h-7 px-3 text-xs font-semibold rounded-none uppercase tracking-wide"
+                    disabled={isInstallingThis || isInstalled || packInstalling}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onInstallPipe(pipe);
+                    }}
+                  >
+                    {isInstallingThis ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : isInstalled ? (
+                      "installed"
+                    ) : (
+                      "get"
+                    )}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Permissions summary */}
+      {hasAnyPermissions && (
+        <div className="space-y-3">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+            combined permissions
+          </h4>
+          <p className="text-[11px] text-muted-foreground">
+            aggregate of all pipe permissions in this pack
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            {unionPermissions.map((perm) => {
+              const label = PERMISSION_LABELS.find((l) => l.key === perm.key);
+              if (!label || perm.status === "unset") return null;
+              return (
+                <div
+                  key={perm.key}
+                  className="flex items-center gap-2 border border-border px-3 py-2 text-xs"
+                >
+                  {label.icon}
+                  <span className="flex-1">{label.label}</span>
+                  {perm.status === "allowed" ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-foreground" />
+                  ) : (
+                    <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1424,6 +1806,7 @@ function PipeCard({
   onInstall,
   installing,
   onClick,
+  packName,
 }: {
   pipe: StorePipe;
   isInstalled: boolean;
@@ -1431,6 +1814,7 @@ function PipeCard({
   onInstall: () => void;
   installing: boolean;
   onClick: () => void;
+  packName?: string;
 }) {
   const permissionPills = PERMISSION_LABELS.filter((p) => {
     const status = getPermissionStatus(pipe.permissions, p.key);
@@ -1500,6 +1884,11 @@ function PipeCard({
           <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
             {pipe.category}
           </Badge>
+          {packName && (
+            <Badge variant="outline" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
+              {packName}
+            </Badge>
+          )}
         </div>
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
           <Download className="h-3 w-3" />
