@@ -157,12 +157,12 @@ export function SummaryCards({
       })()}
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
-      {/* Two stacked rows in the same 512px column as the cards: built-in chips,
-          then the user's saved templates. Each row wraps within itself so any
-          template count stays bounded instead of floating. The per-chip pin
-          glyph is the sole user-created marker (labels reviewed out in #5243). */}
-      <div className="w-full max-w-lg mb-4 flex flex-col gap-2 px-1">
-        <div className="flex flex-wrap items-center gap-1">
+      {/* One wrapping flow in the same 512px column as the cards: built-in
+          chips first, then the user's saved templates, then "+ custom". The
+          per-chip pin glyph is the sole user-created marker — it also cues the
+          behavior split (built-ins run immediately, templates open the edit
+          dialog). Labels and forced rows reviewed out in #5243. */}
+      <div className="w-full max-w-lg mb-4 flex flex-wrap items-center gap-1 px-1">
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
         {featured.filter((p) => p.name === "time-breakdown" || p.name === "missed-todos").map((pipe) => (
           <button
@@ -194,32 +194,29 @@ export function SummaryCards({
             {qt.label}
           </button>
         ))}
-        </div>
         {/* User's saved templates — chips slightly fainter than built-ins with
             a pin glyph marking them as user-owned. Full text and management
             (edit/delete) live in the edit dialog. */}
-        <div className="flex flex-wrap items-center gap-1">
-          {customTemplates.map((ct) => (
-            <button
-              key={ct.id}
-              onClick={() => handleCustomTemplateClick(ct)}
-              title={ct.description || ct.timeRange}
-              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-muted/10 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground/80 transition-all duration-150 cursor-pointer max-w-[140px]"
-            >
-              <Pin className="w-3 h-3 shrink-0" strokeWidth={1.5} />
-              <span className="truncate">{ct.title}</span>
-            </button>
-          ))}
+        {customTemplates.map((ct) => (
           <button
-            onClick={() => {
-              posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
-              setShowBuilder(true);
-            }}
-            className="px-2 py-0.5 text-[11px] border border-dashed border-border/40 text-muted-foreground/50 hover:text-foreground hover:border-foreground transition-all duration-150 cursor-pointer"
+            key={ct.id}
+            onClick={() => handleCustomTemplateClick(ct)}
+            title={ct.description || ct.timeRange}
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-muted/10 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground/80 transition-all duration-150 cursor-pointer max-w-[140px]"
           >
-            + custom
+            <Pin className="w-3 h-3 shrink-0" strokeWidth={1.5} />
+            <span className="truncate">{ct.title}</span>
           </button>
-        </div>
+        ))}
+        <button
+          onClick={() => {
+            posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
+            setShowBuilder(true);
+          }}
+          className="px-2 py-0.5 text-[11px] border border-dashed border-border/40 text-muted-foreground/50 hover:text-foreground hover:border-foreground transition-all duration-150 cursor-pointer"
+        >
+          + custom
+        </button>
       </div>
 
       {/* Expanded: more templates */}
