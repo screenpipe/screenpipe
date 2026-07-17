@@ -157,12 +157,11 @@ export function SummaryCards({
       })()}
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
-      {/* Gutter-labeled rows ("1C" from the Central Redesign canvas): built-in
-          chips and the user's pinned templates get separately labeled rows in a
-          fixed-gutter grid, all inside the same 512px column as the cards, so
-          any template count wraps within its own row instead of floating. */}
-      <div className="w-full max-w-lg mb-4 grid grid-cols-[60px_1fr] gap-x-3 gap-y-2 items-start px-1">
-        <span className="text-[0.65em] text-muted-foreground/40 uppercase tracking-wider text-right pt-1">more</span>
+      {/* Two stacked rows in the same 512px column as the cards: built-in chips,
+          then the user's saved templates. Each row wraps within itself so any
+          template count stays bounded instead of floating. The per-chip pin
+          glyph is the sole user-created marker (labels reviewed out in #5243). */}
+      <div className="w-full max-w-lg mb-4 flex flex-col gap-2 px-1">
         <div className="flex flex-wrap items-center gap-1">
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
         {featured.filter((p) => p.name === "time-breakdown" || p.name === "missed-todos").map((pipe) => (
@@ -196,13 +195,9 @@ export function SummaryCards({
           </button>
         ))}
         </div>
-        {/* User's saved templates — own labeled row, chips slightly fainter
-            than built-ins with a pin glyph marking them as user-owned. Full
-            text and management (edit/delete) live in the edit dialog. */}
-        <span className="text-[0.65em] text-muted-foreground/30 uppercase tracking-wider text-right pt-1 inline-flex items-center justify-end gap-1">
-          <Pin className="w-2 h-2 shrink-0" strokeWidth={2.2} />
-          pinned
-        </span>
+        {/* User's saved templates — chips slightly fainter than built-ins with
+            a pin glyph marking them as user-owned. Full text and management
+            (edit/delete) live in the edit dialog. */}
         <div className="flex flex-wrap items-center gap-1">
           {customTemplates.map((ct) => (
             <button
