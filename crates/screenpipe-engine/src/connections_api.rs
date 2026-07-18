@@ -1523,9 +1523,7 @@ async fn imap_message(
 }
 
 /// GET /connections/imap/mailboxes — list folder names.
-async fn imap_mailboxes(
-    State(state): State<ConnectionsState>,
-) -> (StatusCode, Json<Value>) {
+async fn imap_mailboxes(State(state): State<ConnectionsState>) -> (StatusCode, Json<Value>) {
     let creds = match imap_creds(&state).await {
         Ok(c) => c,
         Err(e) => return e,

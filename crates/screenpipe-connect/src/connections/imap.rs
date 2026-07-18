@@ -96,7 +96,10 @@ type ImapSession = async_imap::Session<tokio_rustls::client::TlsStream<tokio::ne
 /// and the engine's /connections/imap/* read routes.
 pub async fn open_session(creds: &Map<String, Value>) -> Result<ImapSession> {
     let host = require_str(creds, "imap_host")?.trim().to_string();
-    let port: u16 = require_str(creds, "imap_port")?.trim().parse().unwrap_or(993);
+    let port: u16 = require_str(creds, "imap_port")?
+        .trim()
+        .parse()
+        .unwrap_or(993);
     let username = require_str(creds, "username")?.trim().to_string();
     // App passwords are shown as "xxxx xxxx xxxx xxxx" — strip the spaces the
     // user copied along.
@@ -318,7 +321,10 @@ mod tests {
 
     #[test]
     fn gmail_auth_failure_mentions_two_step() {
-        let e = friendly_login_error("NO [AUTHENTICATIONFAILED] Invalid credentials", "imap.gmail.com");
+        let e = friendly_login_error(
+            "NO [AUTHENTICATIONFAILED] Invalid credentials",
+            "imap.gmail.com",
+        );
         assert!(e.to_string().contains("2-Step Verification"));
     }
 
