@@ -55,7 +55,11 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
 
   const inferredHost = useMemo(() => inferHost(email), [email]);
   const gmail = isGmail(email);
-  const effectiveHost = inferredHost ?? host;
+  const domain = email.split("@")[1]?.toLowerCase().trim() || "";
+  // Manual override (advanced) wins; then known providers; then the
+  // imap.<domain> convention most providers follow. Users should never
+  // need to think about this — it lives behind the advanced disclosure.
+  const effectiveHost = host || inferredHost || (domain ? `imap.${domain}` : "");
 
   const refresh = useCallback(async () => {
     try {
@@ -192,17 +196,22 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
           className="h-8 text-xs"
         />
       </div>
-      {email.includes("@") && !inferredHost && (
-        <div className="flex gap-2">
-          <div className="flex-1 space-y-1">
-            <Label className="text-xs">IMAP Host</Label>
-            <Input placeholder={`imap.${email.split("@")[1] || "example.com"}`} value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" />
+      {email.includes("@") && (
+        <details>
+          <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+            advanced: IMAP server settings
+          </summary>
+          <div className="flex gap-2 pt-2">
+            <div className="flex-1 space-y-1">
+              <Label className="text-xs">IMAP Host</Label>
+              <Input placeholder={inferredHost || `imap.${domain || "example.com"}`} value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" />
+            </div>
+            <div className="w-24 space-y-1">
+              <Label className="text-xs">Port</Label>
+              <Input placeholder="993" value={port} onChange={(e) => setPort(e.target.value)} className="h-8 text-xs" />
+            </div>
           </div>
-          <div className="w-24 space-y-1">
-            <Label className="text-xs">Port</Label>
-            <Input placeholder="993" value={port} onChange={(e) => setPort(e.target.value)} className="h-8 text-xs" />
-          </div>
-        </div>
+        </details>
       )}
       {gmail && (
         <div className="space-y-2">
