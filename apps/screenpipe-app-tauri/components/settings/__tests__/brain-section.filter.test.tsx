@@ -160,6 +160,28 @@ describe("BrainSection type filter", () => {
     expect(artifactRows().length).toBe(0);
   });
 
+  it("keeps the stale warning specific to memories", async () => {
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(new Date("2026-07-14T00:00:00Z").getTime());
+
+    try {
+      render(<BrainSection />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/memories haven't updated in/i)).toBeTruthy();
+        expect(
+          screen.getByText(
+            /check that a memory-writing pipe is installed and enabled/i,
+          ),
+        ).toBeTruthy();
+      });
+      expect(screen.queryByText(/artifact-writing/)).toBeNull();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("artifacts tab hides every memory row", async () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBeGreaterThan(0));
