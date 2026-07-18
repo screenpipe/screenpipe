@@ -885,21 +885,17 @@ function createSettingsStore() {
 			needsUpdate = true;
 		}
 
-		// One-time migration (V3 — supersedes V2): flip the CoreAudio Process
-		// Tap toggle back ON. The VoiceProcessing AudioUnit issue that prompted
-		// V2 has been resolved; CoreAudio is now the preferred system audio
-		// backend on macOS 14.4+. The toggle is removed from the UI — the
-		// backend auto-detects process tap availability and uses it when
-		// possible, falling back to SCK on older macOS. (Issue #5236)
+		// One-time migration (V3 — supersedes V2): flip CoreAudio Process Tap
+		// back ON. The VoiceProcessing AudioUnit issue from V2 is resolved;
+		// toggle removed from UI, auto-enabled when available (#5236).
 		if (!(settings as any).coreaudioTapMigrationV3) {
 			settings.experimentalCoreaudioSystemAudio = true;
 			(settings as any).coreaudioTapMigrationV3 = true;
 			needsUpdate = true;
 		}
 
-		// One-time migration: default filterMusic to ON. Transcribing Spotify
-		// lyrics as speech is noise — users who actually want music transcribed
-		// can re-enable this in advanced transcription settings. (Issue #5236)
+		// One-time migration: default filterMusic to ON — transcribing music
+		// as speech is noise, users can turn it off in advanced settings (#5236).
 		if (!(settings as any).filterMusicDefaultedOn) {
 			settings.filterMusic = true;
 			(settings as any).filterMusicDefaultedOn = true;

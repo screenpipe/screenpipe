@@ -32,7 +32,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
   // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
   { label: "Echo cancellation mode", keywords: ["echo", "aec", "voiceprocessingio", "wasapi"], conditional: true },
-  // CoreAudio system audio capture toggle removed (auto-enabled, issue #5236)
+  // CoreAudio system audio capture — auto-enabled, toggle removed
   { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
   { label: "Bluetooth microphones", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
@@ -3104,7 +3104,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </div>
               </div>
             )}
-          {/* Languages — folded into the transcription engine card (issue #5236) */}
+          {/* Languages — folded into the transcription engine card */}
             {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
               <div className="mt-2.5 pt-2.5 border-t border-border/50">
                 <div className="flex items-center justify-between">
@@ -3147,9 +3147,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* Advanced audio — single collapsible for all niche/power-user audio
-            settings: batch transcription, filter music, echo cancellation,
-            smart recording, bluetooth mics, per-app exclusions (issue #5236). */}
+        {/* Advanced audio — collapsible for power-user audio settings */}
         {!settings.disableAudio && (
           <button
             type="button"
@@ -3166,7 +3164,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </button>
         )}
 
-        {/* Batch Transcription - hidden behind advanced (issue #5236) */}
+        {/* Batch Transcription - behind advanced */}
         {!settings.disableAudio && settings.advancedAudioExpanded && settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
@@ -3223,7 +3221,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
-        {/* Filter Music - hidden behind advanced (issue #5236) */}
+        {/* Filter Music - behind advanced */}
         {!settings.disableAudio && settings.advancedAudioExpanded && settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
@@ -3250,7 +3248,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
-        {/* Echo cancellation - hidden behind advanced (issue #5236) */}
+        {/* Echo cancellation - behind advanced */}
         {!settings.disableAudio && settings.advancedAudioExpanded && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -3289,7 +3287,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* Smart recording - hidden behind advanced (issue #5236) */}
+        {/* Smart recording - behind advanced */}
         {!settings.disableAudio && settings.advancedAudioExpanded && (isMacOS || isWindows) && processTapAvailable && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -3324,7 +3322,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* Bluetooth mic recording - hidden behind advanced (issue #5236) */}
+        {/* Bluetooth mic recording - behind advanced */}
         {!settings.disableAudio && settings.advancedAudioExpanded && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -3348,8 +3346,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* Per-app exclusion list — behind the unified advanced section.
-            Only meaningful when the CoreAudio Process Tap is available. */}
+        {/* Per-app audio exclusions - behind advanced */}
         {!settings.disableAudio && settings.advancedAudioExpanded && isMacOS && processTapAvailable && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5 space-y-2">
