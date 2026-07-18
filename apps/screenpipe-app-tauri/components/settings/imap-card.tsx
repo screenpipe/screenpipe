@@ -230,7 +230,7 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
             </p>
           )}
           <p className="text-[11px] text-muted-foreground">
-            requires 2-Step Verification on your Google account
+            requires 2-Step Verification on your Google account — on Workspace accounts your admin may need to allow it
           </p>
         </div>
       )}

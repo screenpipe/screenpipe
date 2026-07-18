@@ -150,7 +150,8 @@ fn friendly_login_error(raw: &str, host: &str) -> anyhow::Error {
             return anyhow!(
                 "login failed — check the email address and app password. App passwords \
                  require 2-Step Verification on your Google account \
-                 (https://myaccount.google.com/apppasswords)."
+                 (https://myaccount.google.com/apppasswords). On a Google Workspace \
+                 account, your admin may need to allow 2-Step Verification and IMAP first."
             );
         }
         return anyhow!("login failed — check the username and password/app password.");
