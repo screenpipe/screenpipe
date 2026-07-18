@@ -32,7 +32,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
   // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
   { label: "Echo cancellation mode", keywords: ["echo", "aec", "voiceprocessingio", "wasapi"], conditional: true },
-  { label: "CoreAudio system audio capture", keywords: ["coreaudio", "system audio"], conditional: true },
+  // CoreAudio system audio capture toggle removed (auto-enabled, issue #5236)
   { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
   { label: "Bluetooth microphones", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
@@ -3104,57 +3104,70 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </div>
               </div>
             )}
-          </CardContent>
-        </Card>
-        )}
-
-        {/* Languages */}
-        {!settings.disableAudio && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Languages className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">Languages</h3>
-                  <p className="text-xs text-muted-foreground">{languageSupportDescription}</p>
+          {/* Languages — folded into the transcription engine card (issue #5236) */}
+            {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
+              <div className="mt-2.5 pt-2.5 border-t border-border/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Languages className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-xs text-muted-foreground">{languageSupportDescription}</span>
+                  </div>
+                  <Popover open={openLanguages} onOpenChange={setOpenLanguages}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-7 text-xs">
+                        {languageTriggerLabel}
+                        <ChevronsUpDown className="ml-1 h-3 w-3 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[250px] p-0">
+                      <Command>
+                        <CommandInput placeholder="Search languages..." />
+                        <CommandList>
+                          <CommandEmpty>No languages found.</CommandEmpty>
+                          <CommandGroup>
+                            <CommandItem value="auto-detect" onSelect={() => handleLanguageChange(null)}>
+                              <Check className={cn("mr-2 h-3 w-3", settings.languages.length === 0 ? "opacity-100" : "opacity-0")} />
+                              <span className="text-xs">Auto-detect</span>
+                            </CommandItem>
+                            {supportedLanguageOptions.map((language) => (
+                              <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code)}>
+                                <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code) ? "opacity-100" : "opacity-0")} />
+                                <span className="text-xs">{language.name}</span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </div>
               </div>
-              <Popover open={openLanguages} onOpenChange={setOpenLanguages}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-7 text-xs">
-                    {languageTriggerLabel}
-                    <ChevronsUpDown className="ml-1 h-3 w-3 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[250px] p-0">
-                  <Command>
-                    <CommandInput placeholder="Search languages..." />
-                    <CommandList>
-                      <CommandEmpty>No languages found.</CommandEmpty>
-                      <CommandGroup>
-                        <CommandItem value="auto-detect" onSelect={() => handleLanguageChange(null)}>
-                          <Check className={cn("mr-2 h-3 w-3", settings.languages.length === 0 ? "opacity-100" : "opacity-0")} />
-                          <span className="text-xs">Auto-detect</span>
-                        </CommandItem>
-                        {supportedLanguageOptions.map((language) => (
-                          <CommandItem key={language.code} value={language.code} onSelect={() => handleLanguageChange(language.code)}>
-                            <Check className={cn("mr-2 h-3 w-3", settings.languages.includes(language.code) ? "opacity-100" : "opacity-0")} />
-                            <span className="text-xs">{language.name}</span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
+            )}
           </CardContent>
         </Card>
         )}
 
-        {/* Transcription Mode - hidden when transcription engine is disabled */}
-        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
+        {/* Advanced audio — single collapsible for all niche/power-user audio
+            settings: batch transcription, filter music, echo cancellation,
+            smart recording, bluetooth mics, per-app exclusions (issue #5236). */}
+        {!settings.disableAudio && (
+          <button
+            type="button"
+            className="flex items-center gap-1.5 px-1 pt-2 pb-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer"
+            onClick={() => handleSettingsChange({ advancedAudioExpanded: !settings.advancedAudioExpanded }, false)}
+          >
+            {settings.advancedAudioExpanded ? (
+              <ChevronUp className="h-3 w-3" />
+            ) : (
+              <ChevronDown className="h-3 w-3" />
+            )}
+            <span>advanced</span>
+            <div className="h-px flex-1 bg-border/60 ml-1" />
+          </button>
+        )}
+
+        {/* Batch Transcription - hidden behind advanced (issue #5236) */}
+        {!settings.disableAudio && settings.advancedAudioExpanded && settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">
@@ -3210,8 +3223,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
-        {/* Filter Music - hidden when transcription engine is disabled */}
-        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
+        {/* Filter Music - hidden behind advanced (issue #5236) */}
+        {!settings.disableAudio && settings.advancedAudioExpanded && settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">
@@ -3227,7 +3240,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </div>
                 <Switch
                   id="filterMusic"
-                  checked={settings.filterMusic ?? false}
+                  checked={settings.filterMusic ?? true}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ filterMusic: checked }, true)
                   }
@@ -3235,6 +3248,186 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* Echo cancellation - hidden behind advanced (issue #5236) */}
+        {!settings.disableAudio && settings.advancedAudioExpanded && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-1.5">
+                    <h3 className="text-sm font-medium text-foreground">
+                      Echo cancellation
+                    </h3>
+                    <HelpTooltip text="Reduces speaker audio leaking into microphone transcripts during calls and screen recordings." />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {aecDetails.description}
+                  </p>
+                </div>
+              </div>
+              <Select value={aecMode} onValueChange={(value) => handleAecModeChange(value as AecMode)}>
+                <SelectTrigger id="aecMode" className="h-8 w-full text-xs sm:w-[300px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">{AEC_MODE_DETAILS.off.label}</SelectItem>
+                  <SelectItem value="screenpipe">{AEC_MODE_DETAILS.screenpipe.label}</SelectItem>
+                  {isMacOS && (
+                    <SelectItem value="macos">{AEC_MODE_DETAILS.macos.label}</SelectItem>
+                  )}
+                  {isWindows && (
+                    <SelectItem value="windows">{AEC_MODE_DETAILS.windows.label}</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Smart recording - hidden behind advanced (issue #5236) */}
+        {!settings.disableAudio && settings.advancedAudioExpanded && (isMacOS || isWindows) && processTapAvailable && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Smart recording
+                    <Badge variant="secondary" aria-label="beta" className="px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide">
+                      beta
+                    </Badge>
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    during meetings, records your meeting&apos;s audio and whichever microphone you pick in the meeting app — taking precedence over your other audio settings. falls back to your configured capture automatically if unavailable.
+                  </p>
+                  {settings.disableMeetingDetector && (
+                    <p className="text-xs text-amber-600 dark:text-amber-500">
+                      requires automatic meeting detection — turn it back on above to use this.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <Switch
+                id="experimentalMeetingPiggyback"
+                checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
+                disabled={Boolean(settings.disableMeetingDetector)}
+                onCheckedChange={(checked) => handleSettingsChange({ experimentalMeetingPiggyback: checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Bluetooth mic recording - hidden behind advanced (issue #5236) */}
+        {!settings.disableAudio && settings.advancedAudioExpanded && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Bluetooth className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Bluetooth microphones</h3>
+                  <p className="text-xs text-muted-foreground">
+                    connecting to a bluetooth mic degrades your headphones&apos; audio quality, an OS limitation we can&apos;t avoid. by default we only record bluetooth mics while you&apos;re in a detected meeting.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="alwaysRecordBluetoothMic"
+                checked={Boolean(settings.alwaysRecordBluetoothMic ?? false)}
+                onCheckedChange={(checked) => handleSettingsChange({ alwaysRecordBluetoothMic: checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Per-app exclusion list — behind the unified advanced section.
+            Only meaningful when the CoreAudio Process Tap is available. */}
+        {!settings.disableAudio && settings.advancedAudioExpanded && isMacOS && processTapAvailable && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5 space-y-2">
+            <div className="flex items-center space-x-2.5">
+              <VolumeX className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground">
+                  Exclude apps from system audio
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Audio from these apps will be filtered out of system-audio capture.
+                </p>
+              </div>
+            </div>
+            <div
+              className="flex flex-wrap gap-1.5 pl-6"
+              onClick={() => setSelectedBundleId(null)}
+            >
+              {effectiveAudioExclusions.map((app) => (
+                <Badge
+                  key={app.bundleId}
+                  variant={selectedBundleId === app.bundleId ? "default" : "secondary"}
+                  className="gap-1.5 pr-1 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedBundleId === app.bundleId}
+                  title={app.bundleId}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedBundleId(
+                      selectedBundleId === app.bundleId ? null : app.bundleId
+                    );
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelectedBundleId(
+                        selectedBundleId === app.bundleId ? null : app.bundleId
+                      );
+                    }
+                  }}
+                >
+                  {app.icon && (
+                    <img src={app.icon} alt="" className="h-4 w-4 rounded-sm" />
+                  )}
+                  <span className="text-xs">{app.name ?? app.bundleId}</span>
+                  <button
+                    type="button"
+                    className="inline-flex rounded-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    aria-label={`Remove ${app.name ?? app.bundleId} from audio exclusions`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeAudioExclusion(app.bundleId);
+                    }}
+                  >
+                    <XCircle className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  pickAppToExclude();
+                }}
+              >
+                + add app
+              </Button>
+              {effectiveAudioExclusions.length === 0 && (
+                <span className="text-xs text-muted-foreground italic self-center">
+                  No apps excluded. All system audio is captured.
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
         )}
 
         {!settings.disableAudio && (
@@ -3309,14 +3502,11 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 Pick an audio transcription engine above, or choose a cloud/direct live provider.
               </p>
             )}
-            <div className="mt-2.5 pt-2.5 border-t border-border/50 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Append typed text to note
-                  <HelpTooltip text="When the meeting stops, screenpipe appends what you typed (and the files you edited) during the meeting to the meeting note. Turn off to keep notes clean." />
-                </h3>
-                <p className="text-xs text-muted-foreground">Auto-add your typed text + edited files at the end of the note</p>
-              </div>
+            <div className="mt-2 pt-2 border-t border-border/50 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                Append typed text + edited files to note
+                <HelpTooltip text="When the meeting stops, screenpipe appends what you typed (and the files you edited) during the meeting to the meeting note. Turn off to keep notes clean." />
+              </span>
               <Switch
                 id="appendTypedTextToMeetingNote"
                 checked={settings.appendTypedTextToMeetingNote ?? true}
@@ -3374,6 +3564,11 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 />
               </div>
             </div>
+            {settings.disableMeetingDetector && (
+              <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
+                disabling this also stops live meeting notes, smart recording, and &quot;during meetings only&quot; capture mode.
+              </p>
+            )}
           </CardContent>
         </Card>
         )}
@@ -3504,221 +3699,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </Card>
           );
         })()}
-
-        {/* Echo cancellation */}
-        {!settings.disableAudio && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div className="min-w-0">
-                  <div className="flex items-center space-x-1.5">
-                    <h3 className="text-sm font-medium text-foreground">
-                      Echo cancellation
-                    </h3>
-                    <HelpTooltip text="Reduces speaker audio leaking into microphone transcripts during calls and screen recordings." />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {aecDetails.description}
-                  </p>
-                </div>
-              </div>
-              <Select value={aecMode} onValueChange={(value) => handleAecModeChange(value as AecMode)}>
-                <SelectTrigger id="aecMode" className="h-8 w-full text-xs sm:w-[300px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="off">{AEC_MODE_DETAILS.off.label}</SelectItem>
-                  <SelectItem value="screenpipe">{AEC_MODE_DETAILS.screenpipe.label}</SelectItem>
-                  {isMacOS && (
-                    <SelectItem value="macos">{AEC_MODE_DETAILS.macos.label}</SelectItem>
-                  )}
-                  {isWindows && (
-                    <SelectItem value="windows">{AEC_MODE_DETAILS.windows.label}</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {/* CoreAudio System Audio (macOS 14.4+ only) */}
-        {!settings.disableAudio && isMacOS && processTapAvailable && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    CoreAudio system audio capture
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    New system audio API on macOS 14.4+. May fix some capture issues. Restart recording after changing.
-                  </p>
-                </div>
-              </div>
-              <Switch
-                id="experimentalCoreaudioSystemAudio"
-                checked={Boolean(settings.experimentalCoreaudioSystemAudio ?? false)}
-                onCheckedChange={(checked) => handleSettingsChange({ experimentalCoreaudioSystemAudio: checked }, true)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {/* Smart recording (beta; internally "meeting piggyback"): during
-            meetings, capture only the meeting app's audio and the mic it
-            actually uses. Takes precedence over every other audio setting —
-            engages in ANY capture mode (continuous or meetings-only), not just
-            meetings-only. Uses CoreAudio Process Tap on macOS and WASAPI
-            process loopback on Windows. */}
-        {!settings.disableAudio && (isMacOS || isWindows) && processTapAvailable && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Smart recording
-                    <Badge variant="secondary" aria-label="beta" className="px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide">
-                      beta
-                    </Badge>
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    during meetings, records your meeting&apos;s audio and whichever microphone you pick in the meeting app — taking precedence over your other audio settings. falls back to your configured capture automatically if unavailable.
-                  </p>
-                  {settings.disableMeetingDetector && (
-                    <p className="text-xs text-amber-600 dark:text-amber-500">
-                      requires automatic meeting detection — turn it back on above to use this.
-                    </p>
-                  )}
-                </div>
-              </div>
-              <Switch
-                id="experimentalMeetingPiggyback"
-                checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
-                disabled={Boolean(settings.disableMeetingDetector)}
-                onCheckedChange={(checked) => handleSettingsChange({ experimentalMeetingPiggyback: checked }, true)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {/* Bluetooth mic recording: opening a Bluetooth mic always degrades
-            the paired device's output audio quality (A2DP -> SCO, a macOS/OS
-            limitation — issue #3750). Off by default, Bluetooth mics are only
-            recorded during a detected meeting; this override records them
-            always, like any other mic. */}
-        {!settings.disableAudio && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Bluetooth className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">Bluetooth microphones</h3>
-                  <p className="text-xs text-muted-foreground">
-                    connecting to a bluetooth mic degrades your headphones&apos; audio quality, an OS limitation we can&apos;t avoid. by default we only record bluetooth mics while you&apos;re in a detected meeting.
-                  </p>
-                </div>
-              </div>
-              <Switch
-                id="alwaysRecordBluetoothMic"
-                checked={Boolean(settings.alwaysRecordBluetoothMic ?? false)}
-                onCheckedChange={(checked) => handleSettingsChange({ alwaysRecordBluetoothMic: checked }, true)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {/* Per-app exclusion list for the CoreAudio Process Tap. Only
-            meaningful when the tap is the active backend. */}
-        {!settings.disableAudio && isMacOS && processTapAvailable && settings.experimentalCoreaudioSystemAudio && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5 space-y-2">
-            <div className="flex items-center space-x-2.5">
-              <VolumeX className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground">
-                  Exclude apps from system audio
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Audio from these apps will be filtered out of system-audio capture.
-                </p>
-              </div>
-            </div>
-            <div
-              className="flex flex-wrap gap-1.5 pl-6"
-              onClick={() => setSelectedBundleId(null)}
-            >
-              {effectiveAudioExclusions.map((app) => (
-                <Badge
-                  key={app.bundleId}
-                  variant={selectedBundleId === app.bundleId ? "default" : "secondary"}
-                  className="gap-1.5 pr-1 cursor-pointer"
-                  role="button"
-                  tabIndex={0}
-                  aria-pressed={selectedBundleId === app.bundleId}
-                  title={app.bundleId}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedBundleId(
-                      selectedBundleId === app.bundleId ? null : app.bundleId
-                    );
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setSelectedBundleId(
-                        selectedBundleId === app.bundleId ? null : app.bundleId
-                      );
-                    }
-                  }}
-                >
-                  {app.icon && (
-                    <img src={app.icon} alt="" className="h-4 w-4 rounded-sm" />
-                  )}
-                  <span className="text-xs">{app.name ?? app.bundleId}</span>
-                  <button
-                    type="button"
-                    className="inline-flex rounded-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                    aria-label={`Remove ${app.name ?? app.bundleId} from audio exclusions`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeAudioExclusion(app.bundleId);
-                    }}
-                  >
-                    <XCircle className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-6 text-xs"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  pickAppToExclude();
-                }}
-              >
-                + add app
-              </Button>
-              {effectiveAudioExclusions.length === 0 && (
-                <span className="text-xs text-muted-foreground italic self-center">
-                  No apps excluded. All system audio is captured.
-                </span>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-        )}
 
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">

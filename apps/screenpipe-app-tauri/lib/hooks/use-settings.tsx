@@ -323,6 +323,8 @@ export type Settings = SettingsStore & {
 	screenpipeAecEnabled?: boolean;
 	/** Selected echo cancellation engine. Missing values default to off. */
 	aecMode?: "off" | "screenpipe" | "macos" | "windows";
+	/** Whether the advanced audio settings section is expanded in recording settings UI. */
+	advancedAudioExpanded?: boolean;
 	/** Continue recording audio when the screen is locked (default: false) */
 	recordWhileLocked?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
@@ -685,20 +687,21 @@ let DEFAULT_SETTINGS: Settings = {
 			cloudArchiveEnabled: false,
 			cloudArchiveRetentionDays: 7,
 			meetingSummaryPipeSlug: "meeting-summary",
-			filterMusic: false,
+			filterMusic: true,
 			ignoreIncognitoWindows: true,
 			pauseOnDrmContent: false,
 			disableClipboardCapture: true,
 			disableKeyboardCapture: true,
 			disableClickCapture: false,
 			keepComputerAwake: false,
-			experimentalCoreaudioSystemAudio: false,
+			experimentalCoreaudioSystemAudio: true,
 			experimentalMeetingPiggyback: false,
 			alwaysRecordBluetoothMic: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,
 			screenpipeAecEnabled: false,
 			aecMode: "off",
+			advancedAudioExpanded: false,
 			recordWhileLocked: false,
 			localRetentionEnabled: false,
 			localRetentionDays: 14,
@@ -879,6 +882,27 @@ function createSettingsStore() {
 		if (!(settings as any).coreaudioTapMigrationV2) {
 			settings.experimentalCoreaudioSystemAudio = false;
 			(settings as any).coreaudioTapMigrationV2 = true;
+			needsUpdate = true;
+		}
+
+		// One-time migration (V3 — supersedes V2): flip the CoreAudio Process
+		// Tap toggle back ON. The VoiceProcessing AudioUnit issue that prompted
+		// V2 has been resolved; CoreAudio is now the preferred system audio
+		// backend on macOS 14.4+. The toggle is removed from the UI — the
+		// backend auto-detects process tap availability and uses it when
+		// possible, falling back to SCK on older macOS. (Issue #5236)
+		if (!(settings as any).coreaudioTapMigrationV3) {
+			settings.experimentalCoreaudioSystemAudio = true;
+			(settings as any).coreaudioTapMigrationV3 = true;
+			needsUpdate = true;
+		}
+
+		// One-time migration: default filterMusic to ON. Transcribing Spotify
+		// lyrics as speech is noise — users who actually want music transcribed
+		// can re-enable this in advanced transcription settings. (Issue #5236)
+		if (!(settings as any).filterMusicDefaultedOn) {
+			settings.filterMusic = true;
+			(settings as any).filterMusicDefaultedOn = true;
 			needsUpdate = true;
 		}
 
