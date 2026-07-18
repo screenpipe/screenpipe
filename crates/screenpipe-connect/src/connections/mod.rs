@@ -30,6 +30,7 @@ pub mod google_docs;
 pub mod granola;
 pub mod hermes;
 pub mod hubspot;
+pub mod imap;
 pub mod intercom;
 pub mod jira;
 pub mod lexi;
@@ -229,6 +230,15 @@ pub trait Integration: Send + Sync {
         &[]
     }
 
+    /// Static note rendered into the Pi context instead of raw credential
+    /// values. Return `Some` for credential integrations whose secrets must
+    /// never reach the LLM context (e.g. passwords) and whose data is served
+    /// by dedicated local endpoints instead. Default `None` keeps the
+    /// existing behavior (webhook-style integrations expose their values).
+    fn context_note(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Extra PEM-encoded root certificate to trust when calling this
     /// integration's API. Required for providers that run on a private
     /// CA (e.g. Bee uses `CN=BeeCertificateAuthority`, not WebPKI).
@@ -274,6 +284,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(slack::Slack),
         Box::new(discord::Discord),
         Box::new(email::Email),
+        Box::new(imap::Imap),
         Box::new(todoist::Todoist),
         Box::new(teams::Teams),
         Box::new(notion::Notion),
@@ -775,6 +786,10 @@ pub async fn render_context(
                 "  config: {}/{}/config{}  (non-secret settings)\n",
                 base, def.id, suffix
             ));
+        } else if let Some(note) = integration.context_note() {
+            // Integration opted out of credential exposure — its data is
+            // served by dedicated local endpoints instead.
+            out.push_str(note);
         } else {
             // No proxy config — fall back to raw credentials (webhook-style integrations)
             for (key, value) in creds {

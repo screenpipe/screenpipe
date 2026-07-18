@@ -399,6 +399,18 @@ async e2eEmitSettledAgentFollowUp(sessionId: string) : Promise<Result<null, stri
 }
 },
 /**
+ * E2E helper: read the status text from the menu that was successfully
+ * installed into the native tray, not merely the desired health state.
+ */
+async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_installed_tray_recording_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: report whether the main overlay is logically visible.
  *
  * The main window uses platform-specific "hide" semantics (macOS NSPanel with
@@ -434,6 +446,17 @@ async e2eOwnedBrowserDetach() : Promise<Result<null, string>> {
  */
 async e2eOwnedBrowserVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_owned_browser_visible");
+},
+/**
+ * E2E helper: drive the health-to-native-tray status transition.
+ */
+async e2eSetTrayRecordingStatus(status: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_set_tray_recording_status", { status }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * E2E helper: report whether the shortcut reminder overlay is visibly shown.
@@ -1553,6 +1576,20 @@ async readAppBundleMetadata(path: string) : Promise<Result<ExcludedApp, string>>
 async readAudioExclusions() : Promise<Result<ExcludedApp[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("read_audio_exclusions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read text from the system clipboard (native API — navigator.clipboard.readText()
+ * is not permitted in the Tauri webview). Returns empty string when the
+ * clipboard has no text. Used by the IMAP card to auto-detect a copied
+ * Gmail app password.
+ */
+async readClipboardText() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_clipboard_text") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

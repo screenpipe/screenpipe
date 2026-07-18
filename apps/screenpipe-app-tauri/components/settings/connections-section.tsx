@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare, Inbox } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -38,6 +38,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
+import { ImapCard } from "./imap-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { RemoteAgentCard } from "./remote-agent-card";
@@ -645,6 +646,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     "remote-agent": <img src="/openclaw-icon.svg" alt="Remote agent" className="w-5 h-5" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
     email: <Send className="h-5 w-5 text-muted-foreground" />,
+    imap: <Inbox className="h-5 w-5 text-muted-foreground" />,
     todoist: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#E44332">
         <path d="M21 0H3C1.34 0 0 1.34 0 3v18c0 1.66 1.34 3 3 3h18c1.66 0 3-1.34 3-3V3c0-1.66-1.34-3-3-3zM5.8 15.2l1.06-1.58c.12-.18.36-.24.54-.12 1.46.94 3.1 1.44 4.8 1.44 1.7 0 3.34-.5 4.8-1.44.18-.12.42-.06.54.12l1.06 1.58c.12.18.06.42-.12.54C16.56 17.16 14.34 17.8 12 17.8s-4.56-.64-6.48-2.06c-.18-.12-.24-.36-.12-.54zm0-4l1.06-1.58c.12-.18.36-.24.54-.12 1.46.94 3.1 1.44 4.8 1.44 1.7 0 3.34-.5 4.8-1.44.18-.12.42-.06.54.12l1.06 1.58c.12.18.06.42-.12.54C16.56 13.16 14.34 13.8 12 13.8s-4.56-.64-6.48-2.06c-.18-.12-.24-.36-.12-.54zm0-4l1.06-1.58c.12-.18.36-.24.54-.12C8.86 6.44 10.5 6.94 12.2 6.94c1.7 0 3.34-.5 4.8-1.44.18-.12.42-.06.54.12l1.06 1.58c.12.18.06.42-.12.54C16.56 9.16 14.34 9.8 12 9.8s-4.56-.64-6.48-2.06c-.18-.12-.24-.36-.12-.54z"/>
@@ -873,6 +875,7 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   "apple-calendar": "What meetings do I have this week?",
   "ics-calendar": "What events are coming up this week?",
   granola: "Show notes from my recent meetings",
+  imap: "Summarize my recent emails",
   zoom: "Summarize my recent Zoom calls",
   krisp: "Search my meeting transcripts for action items",
   excalidraw: "What's on my recent Excalidraw boards?",
@@ -4205,6 +4208,7 @@ export function ConnectionsSection({
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
       case "google-docs": return <GoogleDocsCard />;
+      case "imap": return <ImapCard onChanged={fetchIntegrations} />;
       case "ics-calendar": return <IcsCalendarCard />;
       case "remote-agent": return <RemoteAgentCard />;
       case "whatsapp": return <WhatsAppPanel />;

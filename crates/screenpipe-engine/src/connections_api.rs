@@ -1433,6 +1433,113 @@ async fn gcal_disconnect(
 }
 
 // ---------------------------------------------------------------------------
+// IMAP inbox routes — IMAP is not HTTP, so the generic credential proxy
+// can't serve it; these endpoints do the protocol work server-side and the
+// app password never leaves the process.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ImapMessagesQuery {
+    limit: Option<usize>,
+    mailbox: Option<String>,
+    query: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ImapMailboxQuery {
+    mailbox: Option<String>,
+}
+
+/// Load stored IMAP credentials or produce the standard "not connected" error.
+async fn imap_creds(
+    state: &ConnectionsState,
+) -> Result<Map<String, Value>, (StatusCode, Json<Value>)> {
+    let creds = {
+        let cm = state.cm.lock().await;
+        cm.get_credentials("imap").await
+    };
+    match creds {
+        Ok(Some(c)) if !c.is_empty() => Ok(c),
+        Ok(_) => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "Email inbox (IMAP) is not connected. Connect it from the Connections page in the desktop app.",
+                "reason": "auth_required",
+                "connected": false,
+            })),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )),
+    }
+}
+
+/// GET /connections/imap/messages — list recent messages (headers only).
+async fn imap_messages(
+    State(state): State<ConnectionsState>,
+    Query(q): Query<ImapMessagesQuery>,
+) -> (StatusCode, Json<Value>) {
+    let creds = match imap_creds(&state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let limit = q.limit.unwrap_or(20).clamp(1, 100);
+    let mailbox = q.mailbox.as_deref().unwrap_or("INBOX");
+    match screenpipe_connect::connections::imap::list_messages(
+        &creds,
+        mailbox,
+        limit,
+        q.query.as_deref(),
+    )
+    .await
+    {
+        Ok(messages) => (StatusCode::OK, Json(json!({ "messages": messages }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("{e:#}") })),
+        ),
+    }
+}
+
+/// GET /connections/imap/messages/:uid — fetch one full message.
+async fn imap_message(
+    State(state): State<ConnectionsState>,
+    Path(uid): Path<u32>,
+    Query(q): Query<ImapMailboxQuery>,
+) -> (StatusCode, Json<Value>) {
+    let creds = match imap_creds(&state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let mailbox = q.mailbox.as_deref().unwrap_or("INBOX");
+    match screenpipe_connect::connections::imap::get_message(&creds, mailbox, uid).await {
+        Ok(message) => (StatusCode::OK, Json(message)),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("{e:#}") })),
+        ),
+    }
+}
+
+/// GET /connections/imap/mailboxes — list folder names.
+async fn imap_mailboxes(
+    State(state): State<ConnectionsState>,
+) -> (StatusCode, Json<Value>) {
+    let creds = match imap_creds(&state).await {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    match screenpipe_connect::connections::imap::list_mailboxes(&creds).await {
+        Ok(mailboxes) => (StatusCode::OK, Json(json!({ "mailboxes": mailboxes }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("{e:#}") })),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OAuth callback route
 // ---------------------------------------------------------------------------
 
@@ -3182,6 +3289,10 @@ where
             "/google-calendar/disconnect",
             axum::routing::delete(gcal_disconnect),
         )
+        // IMAP inbox routes (must be before /:id to avoid conflict)
+        .route("/imap/messages", get(imap_messages))
+        .route("/imap/messages/:uid", get(imap_message))
+        .route("/imap/mailboxes", get(imap_mailboxes))
         // Slack-specific send route (must be before /:id to avoid conflict)
         .route("/slack/send", post(slack_send))
         .route("/slack/search", get(slack_search))

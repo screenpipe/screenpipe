@@ -3386,6 +3386,17 @@ pub async fn copy_deeplink_to_clipboard(frame_id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Read text from the system clipboard (native API — navigator.clipboard.readText()
+/// is not permitted in the Tauri webview). Returns empty string when the
+/// clipboard has no text. Used by the IMAP card to auto-detect a copied
+/// Gmail app password.
+#[tauri::command]
+#[specta::specta]
+pub async fn read_clipboard_text() -> Result<String, String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
+    Ok(clipboard.get_text().unwrap_or_default())
+}
+
 /// Copy arbitrary text to the system clipboard (native API, works in Tauri webview).
 /// Use this instead of navigator.clipboard.writeText() which fails after async operations.
 #[tauri::command]
