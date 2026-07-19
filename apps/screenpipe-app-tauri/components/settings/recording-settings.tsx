@@ -25,16 +25,13 @@ export const searchIndex: SettingsField[] = [
   // conditional: rendered only when audio is enabled / engine selected.
   { label: "Live meeting notes", keywords: ["captions", "meeting", "live"], conditional: true },
   { label: "Append typed text to note", keywords: ["note", "append"], conditional: true },
-  { label: "Batch Transcription", keywords: ["batch", "chunks", "quality"], conditional: true },
-  { label: "Filter Music", keywords: ["music", "background music", "filter"], conditional: true },
+  // Batch Transcription and Filter Music removed from UI — auto-defaulted
   { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"], conditional: true },
   { label: "Languages", keywords: ["transcript language", "language"], conditional: true },
   { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
-  // conditional: platform/OS-gated (Windows-only / macOS CoreAudio tap).
-  { label: "Echo cancellation mode", keywords: ["echo", "aec", "voiceprocessingio", "wasapi"], conditional: true },
-  // CoreAudio system audio capture — auto-enabled, toggle removed
+  // Echo cancellation is now an inline toggle (no heading), so no search index entry
   { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
-  { label: "Bluetooth microphones", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
+  { label: "Always record bluetooth mic", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
   { label: "Screenshot images", keywords: ["screenshot", "pixels", "ocr", "jpeg"] },
   { label: "Use all monitors", keywords: ["monitor", "display"], conditional: true },
@@ -82,7 +79,6 @@ import {
   Globe,
   Shield,
   Zap,
-  Music,
   FileAudio,
   FileText,
   User,
@@ -244,25 +240,6 @@ const getAecModeSettings = (mode: AecMode) => ({
   macosInputVpioEnabled: mode === "macos",
   windowsInputAecEnabled: mode === "windows",
 });
-
-const AEC_MODE_DETAILS: Record<AecMode, { label: string; description: string }> = {
-  off: {
-    label: "Off",
-    description: "Echo cancellation is disabled",
-  },
-  screenpipe: {
-    label: "Screenpipe software AEC",
-    description: "Uses software AEC3 to remove speaker bleed from microphone transcripts",
-  },
-  macos: {
-    label: "Apple VoiceProcessingIO",
-    description: "Uses Apple's microphone AEC on the default macOS input",
-  },
-  windows: {
-    label: "Windows WASAPI AEC",
-    description: "Uses Windows microphone AEC when the input endpoint supports it",
-  },
-};
 
 const getAudioEngineResolution = (
   settings: AudioEngineResolutionSettings
@@ -2060,7 +2037,6 @@ export function RecordingSettings() {
   }, [settings, updateSettings, debouncedValidateSettings]);
 
   const aecMode = getAecMode(settings, isMacOS, isWindows);
-  const aecDetails = AEC_MODE_DETAILS[aecMode];
   const screenContextEnabled = !settings.disableVision;
   const screenshotImagesEnabled = screenContextEnabled && !(settings.disableScreenshots ?? false);
 
@@ -3143,211 +3119,36 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </div>
               </div>
             )}
-          </CardContent>
-        </Card>
-        )}
-
-        {/* Advanced audio — collapsible for power-user audio settings */}
-        {!settings.disableAudio && (
-          <button
-            type="button"
-            className="flex items-center gap-1.5 px-1 pt-2 pb-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer"
-            onClick={() => handleSettingsChange({ advancedAudioExpanded: !settings.advancedAudioExpanded }, false)}
-          >
-            {settings.advancedAudioExpanded ? (
-              <ChevronUp className="h-3 w-3" />
-            ) : (
-              <ChevronDown className="h-3 w-3" />
-            )}
-            <span>advanced</span>
-            <div className="h-px flex-1 bg-border/60 ml-1" />
-          </button>
-        )}
-
-        {/* Batch Transcription - behind advanced */}
-        {!settings.disableAudio && settings.advancedAudioExpanded && settings.audioTranscriptionEngine !== "disabled" && (
-          <Card className="border-border bg-card">
-            <CardContent className="px-3 py-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2.5">
-                  <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div>
-                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Batch Transcription
-                      <HelpTooltip text="Groups audio into longer stretches (30s–5min) before transcribing. More context means more accurate transcripts and a better job telling speakers apart." />
-                    </h3>
-                    <p className="text-xs text-muted-foreground">Group audio into longer stretches for more accurate transcripts</p>
-                  </div>
-                </div>
-                <Switch
-                  id="transcriptionMode"
-                  checked={["smart", "batch"].includes(settings.transcriptionMode ?? "realtime")}
-                  onCheckedChange={(checked) =>
-                    handleSettingsChange({ transcriptionMode: checked ? "batch" : "realtime" }, true)
-                  }
-                />
-              </div>
-              {["smart", "batch"].includes(settings.transcriptionMode ?? "realtime") &&
-                settings.audioTranscriptionEngine === "openai-compatible" && (
-                <div className="mt-2.5 pt-2.5 border-t border-border/50">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-                      Max batch duration
-                      <HelpTooltip text="The most audio to group together before transcribing. Set 0 for automatic (~50min). Going higher needs a provider that accepts bigger uploads." />
-                    </span>
-                    <span className="text-xs font-mono text-foreground">
-                      {(settings.batchMaxDurationSecs ?? 0) === 0
-                        ? "auto"
-                        : `${Math.floor((settings.batchMaxDurationSecs ?? 0) / 60)}min`}
+            {/* Echo cancellation — inline toggle, auto-picks platform engine */}
+            {!settings.disableAudio && (
+              <div className="mt-2.5 pt-2.5 border-t border-border/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Mic className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      Reduce echo in calls
+                      <HelpTooltip text="Reduces speaker audio leaking into microphone transcripts during calls. Auto-selects the best engine for your platform." />
                     </span>
                   </div>
-                  <Slider
-                    value={[settings.batchMaxDurationSecs ?? 0]}
-                    onValueChange={([value]) =>
-                      handleSettingsChange({ batchMaxDurationSecs: value ?? 0 } as any, true)
-                    }
-                    min={0}
-                    max={5400}
-                    step={60}
-                    className="w-full"
+                  <Switch
+                    id="aecToggle"
+                    checked={aecMode !== "off"}
+                    onCheckedChange={(checked) => {
+                      const mode: AecMode = checked
+                        ? (isMacOS ? "macos" : isWindows ? "windows" : "screenpipe")
+                        : "off";
+                      handleAecModeChange(mode);
+                    }}
                   />
-                  <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-                    <span>auto</span>
-                    <span>90min</span>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Filter Music - behind advanced */}
-        {!settings.disableAudio && settings.advancedAudioExpanded && settings.audioTranscriptionEngine !== "disabled" && (
-          <Card className="border-border bg-card">
-            <CardContent className="px-3 py-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2.5">
-                  <Music className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div>
-                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Filter Music
-                      <HelpTooltip text="Skips audio that's mostly music (e.g. Spotify, YouTube) so it isn't transcribed. Cuts the gibberish background music tends to produce." />
-                    </h3>
-                    <p className="text-xs text-muted-foreground">Remove background music from transcriptions</p>
-                  </div>
-                </div>
-                <Switch
-                  id="filterMusic"
-                  checked={settings.filterMusic ?? true}
-                  onCheckedChange={(checked) =>
-                    handleSettingsChange({ filterMusic: checked }, true)
-                  }
-                />
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Echo cancellation - behind advanced */}
-        {!settings.disableAudio && settings.advancedAudioExpanded && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div className="min-w-0">
-                  <div className="flex items-center space-x-1.5">
-                    <h3 className="text-sm font-medium text-foreground">
-                      Echo cancellation
-                    </h3>
-                    <HelpTooltip text="Reduces speaker audio leaking into microphone transcripts during calls and screen recordings." />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {aecDetails.description}
-                  </p>
                 </div>
               </div>
-              <Select value={aecMode} onValueChange={(value) => handleAecModeChange(value as AecMode)}>
-                <SelectTrigger id="aecMode" className="h-8 w-full text-xs sm:w-[300px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="off">{AEC_MODE_DETAILS.off.label}</SelectItem>
-                  <SelectItem value="screenpipe">{AEC_MODE_DETAILS.screenpipe.label}</SelectItem>
-                  {isMacOS && (
-                    <SelectItem value="macos">{AEC_MODE_DETAILS.macos.label}</SelectItem>
-                  )}
-                  {isWindows && (
-                    <SelectItem value="windows">{AEC_MODE_DETAILS.windows.label}</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
+            )}
           </CardContent>
         </Card>
         )}
 
-        {/* Smart recording - behind advanced */}
-        {!settings.disableAudio && settings.advancedAudioExpanded && (isMacOS || isWindows) && processTapAvailable && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Smart recording
-                    <Badge variant="secondary" aria-label="beta" className="px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide">
-                      beta
-                    </Badge>
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    during meetings, records your meeting&apos;s audio and whichever microphone you pick in the meeting app — taking precedence over your other audio settings. falls back to your configured capture automatically if unavailable.
-                  </p>
-                  {settings.disableMeetingDetector && (
-                    <p className="text-xs text-amber-600 dark:text-amber-500">
-                      requires automatic meeting detection — turn it back on above to use this.
-                    </p>
-                  )}
-                </div>
-              </div>
-              <Switch
-                id="experimentalMeetingPiggyback"
-                checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
-                disabled={Boolean(settings.disableMeetingDetector)}
-                onCheckedChange={(checked) => handleSettingsChange({ experimentalMeetingPiggyback: checked }, true)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {/* Bluetooth mic recording - behind advanced */}
-        {!settings.disableAudio && settings.advancedAudioExpanded && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Bluetooth className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">Bluetooth microphones</h3>
-                  <p className="text-xs text-muted-foreground">
-                    connecting to a bluetooth mic degrades your headphones&apos; audio quality, an OS limitation we can&apos;t avoid. by default we only record bluetooth mics while you&apos;re in a detected meeting.
-                  </p>
-                </div>
-              </div>
-              <Switch
-                id="alwaysRecordBluetoothMic"
-                checked={Boolean(settings.alwaysRecordBluetoothMic ?? false)}
-                onCheckedChange={(checked) => handleSettingsChange({ alwaysRecordBluetoothMic: checked }, true)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {/* Per-app audio exclusions - behind advanced */}
-        {!settings.disableAudio && settings.advancedAudioExpanded && isMacOS && processTapAvailable && (
+        {/* Per-app audio exclusions — visible when process tap is available (macOS only) */}
+        {!settings.disableAudio && isMacOS && processTapAvailable && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5 space-y-2">
             <div className="flex items-center space-x-2.5">
@@ -3577,6 +3378,41 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           onToggle={handleToggleIgnoredMeetingApp}
         />
 
+        {/* Smart recording — in the meetings section where it belongs */}
+        {!settings.disableAudio && (isMacOS || isWindows) && processTapAvailable && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Smart recording
+                    <Badge variant="secondary" aria-label="beta" className="px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide">
+                      beta
+                    </Badge>
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    during meetings, records your meeting&apos;s audio and whichever microphone you pick in the meeting app — taking precedence over your other audio settings. falls back to your configured capture automatically if unavailable.
+                  </p>
+                  {settings.disableMeetingDetector && (
+                    <p className="text-xs text-amber-600 dark:text-amber-500">
+                      requires automatic meeting detection — turn it back on above to use this.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <Switch
+                id="experimentalMeetingPiggyback"
+                checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
+                disabled={Boolean(settings.disableMeetingDetector)}
+                onCheckedChange={(checked) => handleSettingsChange({ experimentalMeetingPiggyback: checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">
             <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">devices & capture</span>
@@ -3696,6 +3532,30 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </Card>
           );
         })()}
+
+        {/* Bluetooth mic — only shown when a combo BT headset is detected */}
+        {!settings.disableAudio && availableAudioDevices.some(d => d.isComboBluetoothMic) && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Bluetooth className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Always record bluetooth mic</h3>
+                  <p className="text-xs text-muted-foreground">
+                    by default bluetooth mics are only recorded during meetings to avoid degrading headphone audio quality. turn on to record always.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="alwaysRecordBluetoothMic"
+                checked={Boolean(settings.alwaysRecordBluetoothMic ?? false)}
+                onCheckedChange={(checked) => handleSettingsChange({ alwaysRecordBluetoothMic: checked }, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
 
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">

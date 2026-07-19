@@ -323,8 +323,6 @@ export type Settings = SettingsStore & {
 	screenpipeAecEnabled?: boolean;
 	/** Selected echo cancellation engine. Missing values default to off. */
 	aecMode?: "off" | "screenpipe" | "macos" | "windows";
-	/** Whether the advanced audio settings section is expanded in recording settings UI. */
-	advancedAudioExpanded?: boolean;
 	/** Continue recording audio when the screen is locked (default: false) */
 	recordWhileLocked?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
@@ -701,7 +699,6 @@ let DEFAULT_SETTINGS: Settings = {
 			macosInputVpioEnabled: false,
 			screenpipeAecEnabled: false,
 			aecMode: "off",
-			advancedAudioExpanded: false,
 			recordWhileLocked: false,
 			localRetentionEnabled: false,
 			localRetentionDays: 14,
