@@ -353,33 +353,56 @@ export default function FirstRunGuide({
         </AnimatePresence>
       </div>
 
-      {/* BEAT 3: RUN PIPE — anchored to the left of the pipe row, pointing right at the play button */}
-      {phase === "run-pipe" && pipeRowRect && (
+      {/* BEAT 3: RUN PIPE — anchored next to the pipe row, with arrow pointing at the play button */}
+      {phase === "run-pipe" && pipeRowRect && (() => {
+        const cardW = 300;
+        const gap = 16;
+        const margin = 12;
+        const placeRight = pipeRowRect.left - gap < cardW + margin;
+        const cardLeft = placeRight
+          ? Math.min(pipeRowRect.left + pipeRowRect.width + gap, window.innerWidth - cardW - margin)
+          : Math.max(margin, pipeRowRect.left - cardW - gap);
+
+        return (
         <motion.div
           key="run-pipe"
           className="fixed z-50 w-[300px] border border-foreground/20 bg-background shadow-lg p-4"
           style={{
             top: pipeRowRect.top + pipeRowRect.height / 2 - 80,
-            left: pipeRowRect.left - 300 - 16,
+            left: cardLeft,
           }}
-          initial={{ opacity: 0, x: 8 }}
+          initial={{ opacity: 0, x: placeRight ? -8 : 8 }}
           animate={{ opacity: 1, x: 0 }}
         >
-          {/* Arrow pointing right at the pipe row */}
-          <div className="absolute top-[80px] -right-[10px] -translate-y-1/2">
-            <svg width="10" height="20" viewBox="0 0 10 20">
-              <path
-                d="M0 0 L10 10 L0 20"
-                fill="hsl(var(--background))"
-                stroke="hsl(var(--foreground) / 0.15)"
-                strokeWidth="1"
-                strokeLinejoin="round"
-              />
-              <line x1="0" y1="0" x2="0" y2="20" stroke="hsl(var(--background))" strokeWidth="2" />
-            </svg>
-          </div>
+          {/* Arrow pointing at the pipe row */}
+          {placeRight ? (
+            <div className="absolute top-[80px] -left-[10px] -translate-y-1/2">
+              <svg width="10" height="20" viewBox="0 0 10 20">
+                <path
+                  d="M10 0 L0 10 L10 20"
+                  fill="hsl(var(--background))"
+                  stroke="hsl(var(--foreground) / 0.15)"
+                  strokeWidth="1"
+                  strokeLinejoin="round"
+                />
+                <line x1="10" y1="0" x2="10" y2="20" stroke="hsl(var(--background))" strokeWidth="2" />
+              </svg>
+            </div>
+          ) : (
+            <div className="absolute top-[80px] -right-[10px] -translate-y-1/2">
+              <svg width="10" height="20" viewBox="0 0 10 20">
+                <path
+                  d="M0 0 L10 10 L0 20"
+                  fill="hsl(var(--background))"
+                  stroke="hsl(var(--foreground) / 0.15)"
+                  strokeWidth="1"
+                  strokeLinejoin="round"
+                />
+                <line x1="0" y1="0" x2="0" y2="20" stroke="hsl(var(--background))" strokeWidth="2" />
+              </svg>
+            </div>
+          )}
           <div className="flex items-start gap-2.5 mb-3">
-            <Play className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
             <div>
               <p className="font-mono text-xs font-semibold lowercase text-foreground">
                 one last thing — run your pipe
@@ -404,7 +427,8 @@ export default function FirstRunGuide({
             skip intro
           </button>
         </motion.div>
-      )}
+        );
+      })()}
     </>
   );
 }
