@@ -223,7 +223,7 @@ export type Settings = SettingsStore & {
 	useSystemDefaultAudio?: boolean;
 	/** Enable AI workflow event detection (cloud, triggers event-based pipes) */
 	enableWorkflowEvents?: boolean;
-	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
+	/** Audio transcription scheduling: "batch" (default, longer chunks for quality) or "realtime". */
 	transcriptionMode?: "realtime" | "smart" | "batch";
 	/** Live notes for manually-started meetings. Separate from background 24/7 transcription. */
 	meetingLiveTranscriptionEnabled?: boolean;
