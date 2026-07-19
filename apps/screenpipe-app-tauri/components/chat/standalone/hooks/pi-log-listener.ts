@@ -5,6 +5,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type * as React from "react";
 import { toast } from "@/components/ui/use-toast";
+import { buildTlsTrustMessage, isTlsTrustError } from "@/lib/chat/provider-errors";
 import type { Message } from "@/lib/chat/types";
 import type { PiForegroundEventsOptions } from "@/components/chat/standalone/hooks/pi-types";
 
@@ -57,6 +58,12 @@ export function registerPiLogListener({
         piMessageIdRef.current,
         "This model doesn't support images — try a vision-capable model (e.g. llama-4-scout on Groq, gpt-4o on OpenAI).",
       );
+    } else if (isTlsTrustError(line)) {
+      // Certificate trust failure (e.g. "unable to get local issuer
+      // certificate" on TLS-inspecting corporate networks) — end the turn
+      // with an actionable hint instead of leaving a raw cert string.
+      cancelStreamingMessageRender();
+      patchActiveMessage(setMessages, piMessageIdRef.current, buildTlsTrustMessage());
     } else if (line.includes("not found") || line.includes("ECONNREFUSED") || line.includes("connection refused")) {
       let hint = line;
       if (line.includes("not found")) {

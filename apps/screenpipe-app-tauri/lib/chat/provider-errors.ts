@@ -76,6 +76,39 @@ export function buildRemoteConnectionMessage(provider?: string | null): string {
   return `Can't reach the AI provider${named}. Check your internet connection and try again.`;
 }
 
+// Certificate-trust failures from bun/node (openssl-style messages + node
+// error codes) and from rustls/reqwest. Deliberately narrower than
+// isConnectionLikeError: bare "tls handshake" / "error sending request"
+// signatures stay classified as connection outages (see the 2026-06-18
+// gateway outage tests) — only cert-trust-specific strings land here, since
+// they mean the chain was rejected, not that the host was unreachable.
+const TLS_TRUST_SIGNATURES = [
+  // openssl-style messages surfaced by bun/node fetch
+  "unable to get local issuer certificate",
+  "unable to verify the first certificate",
+  "self-signed certificate",
+  "self signed certificate",
+  "certificate verify failed",
+  // node error codes (UNABLE_TO_GET_ISSUER_CERT_LOCALLY, SELF_SIGNED_CERT_IN_CHAIN, ...)
+  "unable_to_get_issuer_cert",
+  "unable_to_verify_leaf_signature",
+  "self_signed_cert",
+  "depth_zero_self_signed",
+  "cert_untrusted",
+  // rustls / reqwest-style messages
+  "invalid peer certificate",
+  "unknownissuer",
+];
+
+export function isTlsTrustError(errorStr: string): boolean {
+  const normalized = errorStr.toLowerCase();
+  return TLS_TRUST_SIGNATURES.some((signature) => normalized.includes(signature));
+}
+
+export function buildTlsTrustMessage(): string {
+  return "Secure connection failed: your network is intercepting HTTPS (usually a corporate proxy or antivirus). Restart screenpipe so it can pick up your system's trusted certificates. If that doesn't help, ask IT to install your company's root certificate on this machine, or try an unfiltered network.";
+}
+
 function isContextOverflowError(errorStr: string): boolean {
   const normalized = errorStr.toLowerCase();
   return (
@@ -113,6 +146,13 @@ export function buildProviderErrorMessage(
   // then throws "Failed to extract accountId from token" on every turn.
   if (normalized.includes("failed to extract accountid")) {
     return buildChatGptAccountIdMessage();
+  }
+
+  // Must run before isConnectionLikeError: a rejected certificate chain would
+  // otherwise be misreported as a generic outage ("brief outage on our end"),
+  // hiding the real fix (trust the corporate root / restart / change network).
+  if (isTlsTrustError(errorStr)) {
+    return buildTlsTrustMessage();
   }
 
   if (isNativeOllamaProvider(provider)) {

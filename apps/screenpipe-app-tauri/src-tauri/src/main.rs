@@ -40,6 +40,7 @@ use crate::analytics::start_analytics;
 mod agent_event_emitter;
 mod audio_exclusions;
 mod auth_token;
+mod ca_bundle;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -100,7 +101,6 @@ mod tray_monitor_preview;
 mod updates;
 mod voice_training;
 mod window;
-mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
 #[cfg(target_os = "windows")]
@@ -341,13 +341,13 @@ async fn main() {
         }
     }
 
-    // Export the Windows root/CA cert stores to a PEM file and set
-    // NODE_EXTRA_CA_CERTS before any bun/node subprocess can spawn. Fixes
-    // "unable to verify the first certificate" on corporate networks where
-    // antivirus (ESET, Zscaler, etc.) injects a private root CA. No-op on
-    // macOS/Linux. Must run before Pi, PortableGit download, and pipe
-    // subprocesses are touched.
-    windows_ca_bundle::install();
+    // Export the OS trust store (Windows cert stores / macOS keychains) to a
+    // PEM file and set NODE_EXTRA_CA_CERTS before any bun/node subprocess can
+    // spawn. Fixes "unable to verify the first certificate" (Windows) and
+    // "unable to get local issuer certificate" (macOS) on corporate networks
+    // where antivirus or MDM injects a private root CA. No-op on Linux. Must
+    // run before Pi, PortableGit download, and pipe subprocesses are touched.
+    ca_bundle::install();
 
     // Handle --check-arc-automation / --trigger-arc-automation flags early,
     // before any Tauri initialization. Used by the permission system to run

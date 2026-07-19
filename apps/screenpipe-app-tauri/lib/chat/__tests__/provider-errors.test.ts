@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNoResponseMessage,
   buildProviderErrorMessage,
+  buildTlsTrustMessage,
+  isTlsTrustError,
   normalizeOllamaBaseUrl,
   preflightChatProvider,
 } from "../provider-errors";
@@ -136,6 +138,58 @@ describe("provider error copy", () => {
   it("is case-insensitive on the gateway signatures", () => {
     expect(
       buildProviderErrorMessage("TLS HANDSHAKE EOF", { provider: "screenpipe-cloud" })
+    ).toContain("screenpipe cloud");
+  });
+
+  // --- TLS certificate-trust failures (issue #5142): bun/node child
+  // processes on TLS-inspecting corporate networks reject the re-signed
+  // chain. These must surface an actionable hint, never the raw cert string.
+  it.each([
+    // exact string from the macOS ChatGPT OAuth report
+    "unable to get local issuer certificate",
+    "Error: unable to get local issuer certificate",
+    // node error codes surfaced by fetch/undici
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    // openssl-style messages
+    "self signed certificate in certificate chain",
+    "unable to verify the first certificate",
+    "certificate verify failed",
+    // rustls / reqwest-style messages
+    "invalid peer certificate: UnknownIssuer",
+  ])("maps certificate-trust error %j to the TLS hint", (raw) => {
+    expect(isTlsTrustError(raw)).toBe(true);
+    const msg = buildProviderErrorMessage(raw, {
+      provider: "openai-chatgpt",
+      model: "gpt-5.2-codex",
+    });
+    expect(msg).toBe(buildTlsTrustMessage());
+    expect(msg).toContain("intercepting HTTPS");
+    // works without a preset too — the error string alone identifies it
+    expect(buildProviderErrorMessage(raw, null)).toBe(buildTlsTrustMessage());
+  });
+
+  it("prefers the TLS-trust hint over the generic outage copy on cloud", () => {
+    // a rejected chain on the hosted gateway is the user's network, not an
+    // outage — the outage copy would point them at the wrong fix
+    expect(
+      buildProviderErrorMessage("invalid peer certificate: UnknownIssuer", {
+        provider: "screenpipe-cloud",
+        model: "auto",
+      })
+    ).toBe(buildTlsTrustMessage());
+  });
+
+  it("keeps outage-signature strings out of the TLS-trust hint", () => {
+    // pinned by the 2026-06-18 outage: bare handshake/send failures mean the
+    // host was unreachable, not that a certificate was rejected
+    for (const raw of ["tls handshake eof", "error sending request", "fetch failed"]) {
+      expect(isTlsTrustError(raw)).toBe(false);
+    }
+    expect(
+      buildProviderErrorMessage("tls handshake eof", { provider: "screenpipe-cloud" })
     ).toContain("screenpipe cloud");
   });
 
