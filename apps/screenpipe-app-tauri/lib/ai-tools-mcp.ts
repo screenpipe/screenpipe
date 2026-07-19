@@ -615,22 +615,27 @@ export function friendlyToolError(err: unknown): FriendlyToolError {
   // open-file action. Tildify only what gets displayed.
   const pathMatch = raw.match(/(\/[^\s(]+|[A-Z]:\\[^\s(]+)/);
   const path = pathMatch?.[1];
-  const shortPath = path ? tildify(path) : "the config file";
   const detail = tildify(raw);
 
+  // Cause only — the fix is inferable from the retry button + open-file
+  // action every surface renders next to this message. No embedded paths:
+  // that's the open-file button's job.
   if (detail.includes("not valid JSON")) {
-    return { message: `config file has a syntax error — fix or delete ${shortPath} and retry`, path, detail };
+    return { message: "config file has a syntax error", path, detail };
   }
   if (detail.includes("could not read")) {
-    return { message: `can't read ${shortPath} — check its permissions and retry`, path, detail };
+    return { message: "can't read the config file — check its permissions", path, detail };
   }
   if (detail.includes("mcp_servers block")) {
-    return { message: `${shortPath} has a custom mcp_servers block — add the screenpipe server there manually`, path, detail };
+    return { message: "config has a custom mcp_servers block — add screenpipe there manually", path, detail };
   }
   if (detail.includes("local API key isn't available")) {
     // Covers engine startup AND a mid-session crash/restart — "isn't
     // responding" is true in both; "starting" would lie in the second.
     return { message: "screenpipe isn't responding — give it a few seconds and try again", detail };
+  }
+  if (detail.includes("unsupported platform")) {
+    return { message: "app not installed — open it once, then retry", detail };
   }
   return { message: tildify(detail), path, detail };
 }

@@ -286,7 +286,7 @@
           "args": [
             "-c",
             {
-              "validator": "\\S+"
+              "validator": "\\S[\\s\\S]*"
             }
           ],
           "sidecar": false

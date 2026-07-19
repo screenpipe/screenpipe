@@ -201,9 +201,9 @@ describe("friendlyToolError", () => {
       )
     );
     expect(err.path).toBe("/Users/ansh/.cursor/mcp.json"); // absolute — feeds `open -R`
-    expect(err.message).toBe(
-      "config file has a syntax error — fix or delete ~/.cursor/mcp.json and retry"
-    );
+    // Cause only — no embedded path (that's the open-file button's job), no
+    // fix instructions (the retry button is the instruction).
+    expect(err.message).toBe("config file has a syntax error");
     expect(err.detail).toContain("~/.cursor/mcp.json");
     expect(err.detail).not.toContain("/Users/");
   });
