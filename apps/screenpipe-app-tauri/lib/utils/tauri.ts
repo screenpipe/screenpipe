@@ -818,6 +818,18 @@ async getSyncStatus() : Promise<Result<SyncStatusResponse, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Expose the durable update failure state to the frontend for enterprise
+ * heartbeat telemetry (#5080). Returns `None` when no failure is recorded.
+ */
+async getUpdateFailureState() : Promise<Result<FailedUpdateRecord | null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_update_failure_state") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async hideMainWindow() : Promise<void> {
     await TAURI_INVOKE("hide_main_window");
 },
@@ -2602,6 +2614,15 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
 export type ExportRequestInfo = { meetingId: number | null; start: string | null; end: string | null; outputPath: string }
+/**
+ * Persisted record of a failed update attempt. Stored in the Tauri key-value
+ * store under `"lastUpdateFailure"`. Survives app restarts.
+ */
+export type FailedUpdateRecord = { target_version: string;
+/**
+ * Unix epoch seconds when the failure was recorded.
+ */
+failed_at_epoch: number; error: string; attempt_count: number }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 /**

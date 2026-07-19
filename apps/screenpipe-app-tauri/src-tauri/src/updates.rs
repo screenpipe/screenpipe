@@ -246,6 +246,204 @@ const BANNER_GATE_TIMEOUT_SECS: u64 = 60;
 /// (which passes `force=true`). In-memory only — a restart re-attempts once.
 const UPDATE_FAILURE_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 
+/// Shorter cooldown for managed devices with hidden UI. These devices have no
+/// "Check for updates" button, so the standard 6h window leaves them stranded
+/// with no employee recovery path. This 1h window provides bounded automatic
+/// retries while still preventing tight download loops. (#5080)
+const MANAGED_UPDATE_FAILURE_COOLDOWN: Duration = Duration::from_secs(60 * 60);
+
+/// After this many short-cooldown retries on a hidden-UI device, fall back to
+/// the standard `UPDATE_FAILURE_COOLDOWN` to avoid indefinite restart churn.
+const MAX_MANAGED_SHORT_RETRIES: u32 = 3;
+
+// ---------------------------------------------------------------------------
+// Durable update-failure state (#5080)
+//
+// When a managed device with hidden UI fails to install an update, the
+// in-memory cooldown blocks retries — and the employee has no retry button.
+// Persisting failure state across restarts lets us (a) detect post-restart
+// install failures (booted back into old version), (b) use a shorter bounded
+// retry schedule for hidden-UI devices, and (c) report failures via the
+// enterprise heartbeat so the admin dashboard can see them.
+// ---------------------------------------------------------------------------
+
+/// Persisted record of a failed update attempt. Stored in the Tauri key-value
+/// store under `"lastUpdateFailure"`. Survives app restarts.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct FailedUpdateRecord {
+    pub target_version: String,
+    /// Unix epoch seconds when the failure was recorded.
+    pub failed_at_epoch: u64,
+    pub error: String,
+    pub attempt_count: u32,
+}
+
+fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn load_failed_update_record(app: &tauri::AppHandle) -> Option<FailedUpdateRecord> {
+    get_store(app, None)
+        .ok()
+        .and_then(|store| store.get("lastUpdateFailure"))
+        .and_then(|v| serde_json::from_value(v).ok())
+}
+
+fn save_failed_update_record(app: &tauri::AppHandle, record: &FailedUpdateRecord) {
+    if let Ok(store) = get_store(app, None) {
+        if let Ok(val) = serde_json::to_value(record) {
+            store.set("lastUpdateFailure", val);
+            let _ = store.save();
+        }
+    }
+}
+
+fn clear_failed_update_record(app: &tauri::AppHandle) {
+    if let Ok(store) = get_store(app, None) {
+        store.delete("lastUpdateFailure");
+        let _ = store.save();
+    }
+}
+
+fn save_target_update_version(app: &tauri::AppHandle, version: &str) {
+    if let Ok(store) = get_store(app, None) {
+        store.set("targetUpdateVersion", serde_json::json!(version));
+        let _ = store.save();
+        info!("saved target update version {} for post-restart detection", version);
+    }
+}
+
+fn clear_target_update_version(app: &tauri::AppHandle) {
+    if let Ok(store) = get_store(app, None) {
+        store.delete("targetUpdateVersion");
+        let _ = store.save();
+    }
+}
+
+/// Pure computation of effective cooldown for testability. Hidden-UI managed
+/// devices get a shorter initial cooldown so they have a recovery path without
+/// employee interaction (#5080). After `MAX_MANAGED_SHORT_RETRIES` attempts,
+/// the standard long cooldown applies to prevent indefinite churn.
+fn compute_effective_cooldown(
+    app_ui_hidden: bool,
+    updates_managed_externally: bool,
+    attempt_count: u32,
+) -> Duration {
+    if app_ui_hidden && !updates_managed_externally {
+        if attempt_count < MAX_MANAGED_SHORT_RETRIES {
+            MANAGED_UPDATE_FAILURE_COOLDOWN
+        } else {
+            UPDATE_FAILURE_COOLDOWN
+        }
+    } else {
+        UPDATE_FAILURE_COOLDOWN
+    }
+}
+
+/// Compute effective cooldown from live app state.
+fn effective_update_cooldown(app: &tauri::AppHandle) -> Duration {
+    let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
+    let updates_managed_externally =
+        is_enterprise_build(app) && enterprise_updates_managed_locally(app);
+    let attempt_count = load_failed_update_record(app)
+        .map(|r| r.attempt_count)
+        .unwrap_or(0);
+    compute_effective_cooldown(app_ui_hidden, updates_managed_externally, attempt_count)
+}
+
+/// Detect cross-restart install failures and return initial in-memory failure
+/// state for `UpdatesManager::last_failed_update`. (#5080)
+///
+/// If `targetUpdateVersion` was set before the last restart but the current
+/// running version doesn't match, the install failed — we booted back into
+/// the old version. The durable `lastUpdateFailure` record is created/updated
+/// so the enterprise heartbeat can surface it.
+fn detect_and_hydrate_failure_state(
+    app: &tauri::AppHandle,
+) -> Option<(String, std::time::Instant)> {
+    let store = get_store(app, None).ok()?;
+
+    if let Some(target_version) = store
+        .get("targetUpdateVersion")
+        .and_then(|v| v.as_str().map(String::from))
+    {
+        // Consume the pending marker
+        store.delete("targetUpdateVersion");
+        let _ = store.save();
+
+        let current_version = app.package_info().version.to_string();
+
+        if current_version == target_version {
+            // Update succeeded — clear any prior failure record
+            store.delete("lastUpdateFailure");
+            let _ = store.save();
+            info!("startup: update to v{} confirmed successful", current_version);
+            return None;
+        }
+
+        // Install failed — we booted back into the old version
+        let mut rec = store
+            .get("lastUpdateFailure")
+            .and_then(|v| serde_json::from_value::<FailedUpdateRecord>(v).ok())
+            .filter(|r| r.target_version == target_version)
+            .unwrap_or_else(|| FailedUpdateRecord {
+                target_version: target_version.clone(),
+                failed_at_epoch: now_epoch(),
+                error: String::new(),
+                attempt_count: 0,
+            });
+        rec.attempt_count += 1;
+        rec.failed_at_epoch = now_epoch();
+        rec.error = format!(
+            "install failed: booted into v{} instead of v{}",
+            current_version, target_version
+        );
+
+        if let Ok(val) = serde_json::to_value(&rec) {
+            store.set("lastUpdateFailure", val);
+            let _ = store.save();
+        }
+
+        warn!(
+            "startup: detected failed update to v{} (attempt {}); \
+             durable failure record saved for admin visibility",
+            target_version, rec.attempt_count
+        );
+
+        let _ = app.emit(
+            "update-install-failed",
+            serde_json::json!({
+                "target_version": rec.target_version,
+                "current_version": current_version,
+                "attempt_count": rec.attempt_count,
+                "error": rec.error,
+            }),
+        );
+
+        return Some((target_version, std::time::Instant::now()));
+    }
+
+    // No pending target — hydrate from existing durable failure record
+    let rec: FailedUpdateRecord = store
+        .get("lastUpdateFailure")
+        .and_then(|v| serde_json::from_value(v).ok())?;
+
+    let elapsed_secs = now_epoch().saturating_sub(rec.failed_at_epoch);
+    let synthetic = std::time::Instant::now()
+        .checked_sub(Duration::from_secs(elapsed_secs))?;
+
+    info!(
+        "startup: hydrated in-memory failure state for v{} \
+         (attempt {}, {}s ago)",
+        rec.target_version, rec.attempt_count, elapsed_secs
+    );
+
+    Some((rec.target_version, synthetic))
+}
+
 /// Wait for boot to reach "ready" or "error", with timeout. Logs the
 /// outcome with `label` so deferrals are searchable in support logs.
 pub async fn await_restart_gate(timeout: Duration, label: &str) -> RestartGate {
@@ -457,6 +655,9 @@ impl UpdatesManager {
             )
         };
 
+        // Detect cross-restart install failures and hydrate durable state (#5080)
+        let initial_failure = detect_and_hydrate_failure_state(app);
+
         Ok(Self {
             interval: Duration::from_secs(interval_minutes * 60),
             update_available: Arc::new(Mutex::new(false)),
@@ -465,7 +666,7 @@ impl UpdatesManager {
             app: app.clone(),
             update_menu_item,
             is_checking: AtomicBool::new(false),
-            last_failed_update: Arc::new(Mutex::new(None)),
+            last_failed_update: Arc::new(Mutex::new(initial_failure)),
         })
     }
 
@@ -587,20 +788,23 @@ impl UpdatesManager {
             // ships — but we skip the expensive binary fetch (and the
             // `app_downloaded` event it triggers) until then.
             if !force {
+                // #5080: hidden-UI managed devices get a shorter cooldown so
+                // they have a recovery path without employee interaction.
+                let cooldown = effective_update_cooldown(&self.app);
                 let in_cooldown = {
                     let guard = self.last_failed_update.lock().await;
                     failed_version_in_cooldown(
                         guard.as_ref().map(|(v, at)| (v.as_str(), at.elapsed())),
                         &update.version,
-                        UPDATE_FAILURE_COOLDOWN,
+                        cooldown,
                     )
                 };
                 if in_cooldown {
                     info!(
                         "update v{} recently failed to install; skipping auto-download \
-                         (cooldown {}h) — click 'check for updates' to retry",
+                         (cooldown {}m) — click 'check for updates' to retry",
                         update.version,
-                        UPDATE_FAILURE_COOLDOWN.as_secs() / 3600
+                        cooldown.as_secs() / 60
                     );
                     if let Some(ref item) = self.update_menu_item {
                         item.set_enabled(true)?;
@@ -728,6 +932,11 @@ impl UpdatesManager {
                 }
             }
 
+            // Save target version for post-restart failure detection (#5080).
+            // On Windows, download_and_install exits the process on success,
+            // so we must save before the call. Cleared on download failure.
+            save_target_update_version(&self.app, &update.version);
+
             // Retry transient download failures with exponential backoff.
             // Auth errors (401/403) short-circuit out of the loop — see error arm.
             let retry_delays = [
@@ -818,6 +1027,7 @@ impl UpdatesManager {
                 Ok(_) => {
                     // Clear any prior failure marker — this version is good now.
                     *self.last_failed_update.lock().await = None;
+                    clear_failed_update_record(&self.app);
                     *self.update_installed.lock().await = true;
                     if let Some(snap) = self.pending_update.lock().await.as_mut() {
                         snap.downloaded = true;
@@ -859,6 +1069,7 @@ impl UpdatesManager {
                             item.set_enabled(true)?;
                             item.set_text("Sign in to update")?;
                         }
+                        clear_target_update_version(&self.app);
                         return Ok(false);
                     }
                     // Generic failure (network/disk/server/signature). Clear
@@ -870,6 +1081,20 @@ impl UpdatesManager {
                     warn!("update download failed after retries: {}", err_str);
                     *self.last_failed_update.lock().await =
                         Some((update.version.clone(), std::time::Instant::now()));
+                    // Persist durable failure record for admin visibility (#5080)
+                    let mut rec = load_failed_update_record(&self.app)
+                        .filter(|r| r.target_version == update.version)
+                        .unwrap_or_else(|| FailedUpdateRecord {
+                            target_version: update.version.clone(),
+                            failed_at_epoch: now_epoch(),
+                            error: String::new(),
+                            attempt_count: 0,
+                        });
+                    rec.attempt_count += 1;
+                    rec.failed_at_epoch = now_epoch();
+                    rec.error = err_str.clone();
+                    save_failed_update_record(&self.app, &rec);
+                    clear_target_update_version(&self.app);
                     *self.update_available.lock().await = false;
                     *self.pending_update.lock().await = None;
                     if let Some(ref item) = self.update_menu_item {
@@ -1193,6 +1418,16 @@ pub async fn get_pending_update(
     Ok(state.pending_update_snapshot().await)
 }
 
+/// Expose the durable update failure state to the frontend for enterprise
+/// heartbeat telemetry (#5080). Returns `None` when no failure is recorded.
+#[specta::specta]
+#[tauri::command]
+pub async fn get_update_failure_state(
+    app: tauri::AppHandle,
+) -> Result<Option<FailedUpdateRecord>, ()> {
+    Ok(load_failed_update_record(&app))
+}
+
 /// User-initiated update check from Settings → General. Returns:
 /// - `Ok(true)`  when an update was found (banner will appear after download).
 /// - `Ok(false)` when already up to date or the build can't auto-update.
@@ -1420,5 +1655,97 @@ mod tests {
         assert_eq!(RestartGate::Proceed.as_str(), "proceed");
         assert_eq!(RestartGate::Errored.as_str(), "errored");
         assert_eq!(RestartGate::DeferPending.as_str(), "pending");
+    }
+
+    // ── Managed hidden-UI update recovery (#5080) ──────────────────────────
+
+    #[test]
+    fn managed_hidden_ui_gets_shorter_initial_cooldown() {
+        // Hidden UI + screenpipe updater (not MDM) + first attempt → 1h cooldown
+        let cd = compute_effective_cooldown(true, false, 0);
+        assert_eq!(cd, MANAGED_UPDATE_FAILURE_COOLDOWN);
+    }
+
+    #[test]
+    fn managed_hidden_ui_escalates_after_max_retries() {
+        // After MAX_MANAGED_SHORT_RETRIES, fall back to standard 6h cooldown
+        let cd = compute_effective_cooldown(true, false, MAX_MANAGED_SHORT_RETRIES);
+        assert_eq!(cd, UPDATE_FAILURE_COOLDOWN);
+    }
+
+    #[test]
+    fn visible_ui_always_uses_standard_cooldown() {
+        let cd = compute_effective_cooldown(false, false, 0);
+        assert_eq!(cd, UPDATE_FAILURE_COOLDOWN);
+    }
+
+    #[test]
+    fn mdm_managed_updates_use_standard_cooldown_even_when_hidden() {
+        // When updates are managed by MDM, the in-app updater is off; if it
+        // somehow runs, it should use the standard cooldown, not the shorter
+        // managed one.
+        let cd = compute_effective_cooldown(true, true, 0);
+        assert_eq!(cd, UPDATE_FAILURE_COOLDOWN);
+    }
+
+    #[test]
+    fn failed_update_record_serialization_roundtrips() {
+        let rec = FailedUpdateRecord {
+            target_version: "2.5.99".to_string(),
+            failed_at_epoch: 1750000000,
+            error: "install failed".to_string(),
+            attempt_count: 3,
+        };
+        let json = serde_json::to_value(&rec).unwrap();
+        let deserialized: FailedUpdateRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized.target_version, "2.5.99");
+        assert_eq!(deserialized.attempt_count, 3);
+        assert_eq!(deserialized.failed_at_epoch, 1750000000);
+        assert_eq!(deserialized.error, "install failed");
+    }
+
+    #[test]
+    fn managed_hidden_cooldown_blocks_within_window() {
+        // 30 min into a 1h managed cooldown → still blocked
+        assert!(failed_version_in_cooldown(
+            Some(("2.5.99", Duration::from_secs(30 * 60))),
+            "2.5.99",
+            MANAGED_UPDATE_FAILURE_COOLDOWN,
+        ));
+    }
+
+    #[test]
+    fn managed_hidden_cooldown_allows_after_window() {
+        // 61 min past a 1h managed cooldown → allowed
+        assert!(!failed_version_in_cooldown(
+            Some(("2.5.99", Duration::from_secs(61 * 60))),
+            "2.5.99",
+            MANAGED_UPDATE_FAILURE_COOLDOWN,
+        ));
+    }
+
+    #[test]
+    fn short_retry_count_boundary() {
+        // Exactly at the boundary: attempt 2 (0-indexed) with max=3 → still short
+        assert_eq!(
+            compute_effective_cooldown(true, false, 2),
+            MANAGED_UPDATE_FAILURE_COOLDOWN,
+        );
+        // Attempt 3 → escalated to standard cooldown
+        assert_eq!(
+            compute_effective_cooldown(true, false, 3),
+            UPDATE_FAILURE_COOLDOWN,
+        );
+    }
+
+    #[test]
+    fn cooldown_with_managed_shorter_duration_ignores_different_version() {
+        // A newer version than the one that failed must download immediately,
+        // regardless of the cooldown duration used.
+        assert!(!failed_version_in_cooldown(
+            Some(("2.5.99", Duration::from_secs(10 * 60))),
+            "2.5.100",
+            MANAGED_UPDATE_FAILURE_COOLDOWN,
+        ));
     }
 }

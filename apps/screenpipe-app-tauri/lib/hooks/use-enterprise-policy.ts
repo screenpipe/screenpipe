@@ -394,6 +394,12 @@ async function sendHeartbeat(credential: EnterpriseCredential): Promise<Heartbea
       pipeStatuses = await gatherPipeStatuses();
     } catch {}
 
+    // Read durable update failure state for admin visibility (#5080)
+    let lastUpdateFailure: Record<string, unknown> | null = null;
+    try {
+      lastUpdateFailure = await store.get<Record<string, unknown>>("lastUpdateFailure") || null;
+    } catch {}
+
     const credentialHeaders: Record<string, string> = credential.type === "license_key"
       ? { "X-License-Key": credential.value }
       : { Authorization: `Bearer ${credential.value}` };
@@ -418,6 +424,7 @@ async function sendHeartbeat(credential: EnterpriseCredential): Promise<Heartbea
           default_auto_update: appUpdatePolicy.default_auto_update,
           allow_employee_override: appUpdatePolicy.allow_employee_override,
           channel: appUpdatePolicy.channel,
+          last_failure: lastUpdateFailure,
         },
         pipe_statuses: pipeStatuses,
       }),
