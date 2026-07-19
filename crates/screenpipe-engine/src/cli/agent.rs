@@ -175,11 +175,7 @@ fn replace_config(path: &Path, contents: &str) -> Result<()> {
             .with_context(|| format!("backup {} before changing it", path.display()))?;
         prune_config_backups(path);
     }
-    let tmp = PathBuf::from(format!(
-        "{}.{}.tmp",
-        path.display(),
-        std::process::id()
-    ));
+    let tmp = PathBuf::from(format!("{}.{}.tmp", path.display(), std::process::id()));
     std::fs::write(&tmp, contents).with_context(|| format!("write {}", tmp.display()))?;
     if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
@@ -195,7 +191,9 @@ fn prune_config_backups(path: &Path) {
         return;
     };
     let prefix = format!("{name}.screenpipe-backup-");
-    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
     let mut backups: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
@@ -694,7 +692,11 @@ mod tests {
         // Each change of an existing file takes a backup; pruned to newest 2.
         for (i, v) in ["v2", "v3", "v4", "v5"].iter().enumerate() {
             // Distinct timestamps: the backup name has second precision.
-            std::thread::sleep(std::time::Duration::from_millis(if i == 0 { 0 } else { 1100 }));
+            std::thread::sleep(std::time::Duration::from_millis(if i == 0 {
+                0
+            } else {
+                1100
+            }));
             replace_config(&path, v).unwrap();
         }
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "v5");
@@ -704,9 +706,18 @@ mod tests {
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        let backups = names.iter().filter(|n| n.contains(".screenpipe-backup-")).count();
-        assert!(backups >= 1 && backups <= MAX_CONFIG_BACKUPS, "backups = {backups}");
-        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "tmp left behind: {names:?}");
+        let backups = names
+            .iter()
+            .filter(|n| n.contains(".screenpipe-backup-"))
+            .count();
+        assert!(
+            backups >= 1 && backups <= MAX_CONFIG_BACKUPS,
+            "backups = {backups}"
+        );
+        assert!(
+            !names.iter().any(|n| n.ends_with(".tmp")),
+            "tmp left behind: {names:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -720,12 +731,18 @@ mod tests {
         std::fs::write(&path, "{ definitely not json").unwrap();
         let err = merge_mcp_json(&path, false, "http://localhost:3030").unwrap_err();
         assert!(err.to_string().contains("not valid JSON"));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ definitely not json");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{ definitely not json"
+        );
 
         // remove refuses it the same way.
         let err = remove_mcp_json(&path).unwrap_err();
         assert!(err.to_string().contains("not valid JSON"));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ definitely not json");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{ definitely not json"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
