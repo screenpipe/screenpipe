@@ -12,10 +12,12 @@
 // this card and the onboarding connect-all can never drift.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Check, Loader2, Plus } from "lucide-react";
+import { Bot, Check, Loader2, Plus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import posthog from "posthog-js";
 import { CursorLogo } from "./tool-logos";
+import { Command } from "@tauri-apps/plugin-shell";
+import { platform } from "@tauri-apps/plugin-os";
 import {
   CONNECT_ALL_TOOL_NAMES,
   type ConnectAllToolId,
@@ -23,6 +25,8 @@ import {
   connectAiTool,
   disconnectAiTool,
   detectAiTools,
+  friendlyToolError,
+  type FriendlyToolError,
   isOpenclawMcpInstalled,
   isHermesMcpInstalled,
   isWindsurfMcpInstalled,
@@ -83,7 +87,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
   const [detected, setDetected] = useState<ConnectAllToolId[]>([]);
   const [connected, setConnected] = useState<Partial<Record<ConnectAllToolId, boolean>>>({});
   const [busy, setBusy] = useState<Partial<Record<ConnectAllToolId, ToolBusy>>>({});
-  const [errors, setErrors] = useState<Partial<Record<ConnectAllToolId, string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<ConnectAllToolId, FriendlyToolError>>>({});
   const [expanded, setExpanded] = useState(false);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
@@ -122,9 +126,8 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
         setConnected((prev) => ({ ...prev, [id]: true }));
         posthog.capture("settings_ai_tool_connected", { tool: id });
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
         console.warn(`[ai-tools] ${id} connect failed:`, e);
-        setErrors((prev) => ({ ...prev, [id]: msg }));
+        setErrors((prev) => ({ ...prev, [id]: friendlyToolError(e) }));
       } finally {
         setBusy((prev) => ({ ...prev, [id]: undefined }));
       }
@@ -141,10 +144,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
       posthog.capture("settings_ai_tool_removed", { tool: id });
     } catch (e) {
       console.warn(`[ai-tools] ${id} remove failed:`, e);
-      setErrors((prev) => ({
-        ...prev,
-        [id]: e instanceof Error ? e.message : String(e),
-      }));
+      setErrors((prev) => ({ ...prev, [id]: friendlyToolError(e) }));
     } finally {
       setBusy((prev) => ({ ...prev, [id]: undefined }));
     }
@@ -188,6 +188,17 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
       setBulkRunning(false);
     }
   }, [confirmingDisconnect, detected, connected, removeTool, refresh, onChanged]);
+
+  // Reveal the offending config next to the error so the fix is one click
+  // away. macOS `open -R` selects the file in Finder (the shell "open" command
+  // is already in the app's allowlist); other platforms fall back silently.
+  const revealPath = async (path: string) => {
+    try {
+      if (platform() === "macos") await Command.create("open", ["-R", path]).execute();
+    } catch (e) {
+      console.warn("[ai-tools] reveal failed:", e);
+    }
+  };
 
   // Machines with zero AI tools never see this card.
   if (detected.length === 0) return null;
@@ -271,7 +282,21 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                       {SKILLS_TARGET[id] ? "MCP + skills" : "MCP"}
                     </span>
                     {err && (
-                      <p className="text-[11px] text-destructive mt-0.5 break-words">{err}</p>
+                      <p className="text-[11px] mt-1 flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500/15 text-red-500 text-[9px] font-bold shrink-0">
+                          !
+                        </span>
+                        <span className="text-muted-foreground">{err.message}</span>
+                        {err.path && platform() === "macos" && (
+                          <button
+                            type="button"
+                            onClick={() => revealPath(err.path!)}
+                            className="underline text-foreground/80 hover:text-foreground"
+                          >
+                            open file
+                          </button>
+                        )}
+                      </p>
                     )}
                   </div>
                   {toolBusy ? (
@@ -301,11 +326,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                       variant="outline"
                       onClick={() => connectTool(id)}
                       disabled={bulkRunning}
-                      aria-label={`Connect ${DISPLAY_NAMES[id]}`}
-                      title={`Connect ${DISPLAY_NAMES[id]}`}
+                      aria-label={`${err ? "Retry" : "Connect"} ${DISPLAY_NAMES[id]}`}
+                      title={`${err ? "Retry" : "Connect"} ${DISPLAY_NAMES[id]}`}
                       className="h-7 w-7 p-0 shrink-0"
                     >
-                      <Plus className="h-3.5 w-3.5" />
+                      {err ? <RotateCw className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
                     </Button>
                   )}
                 </div>

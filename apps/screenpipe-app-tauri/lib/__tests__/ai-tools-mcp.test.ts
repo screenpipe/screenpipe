@@ -83,6 +83,7 @@ import {
   uninstallHermesMcp,
   connectAiTool,
   disconnectAiTool,
+  friendlyToolError,
 } from "@/lib/ai-tools-mcp";
 
 const CURSOR = "/Users/test/.cursor/mcp.json";
@@ -189,6 +190,30 @@ describe("hermes yaml handling", () => {
 
     await expect(installHermesMcp()).rejects.toThrow(/add the screenpipe server manually/);
     expect(fsMock.files.get(HERMES)).toBe("mcp_servers:\n  other:\n    command: x\n");
+  });
+});
+
+describe("friendlyToolError", () => {
+  it("keeps the absolute path for the open-file action but displays it tildified", () => {
+    const err = friendlyToolError(
+      new Error(
+        "/Users/ansh/.cursor/mcp.json is not valid JSON (JSON Parse error: Expected '}') — fix or remove it; screenpipe won't overwrite it"
+      )
+    );
+    expect(err.path).toBe("/Users/ansh/.cursor/mcp.json"); // absolute — feeds `open -R`
+    expect(err.message).toBe(
+      "config file has a syntax error — fix or delete ~/.cursor/mcp.json and retry"
+    );
+    expect(err.detail).toContain("~/.cursor/mcp.json");
+    expect(err.detail).not.toContain("/Users/");
+  });
+
+  it("maps the engine-starting error without a path", () => {
+    const err = friendlyToolError(
+      new Error("screenpipe's local API key isn't available yet (engine still starting?) — try connecting again in a moment")
+    );
+    expect(err.message).toBe("screenpipe isn't responding — give it a few seconds and try again");
+    expect(err.path).toBeUndefined();
   });
 });
 

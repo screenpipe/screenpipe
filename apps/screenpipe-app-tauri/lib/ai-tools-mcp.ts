@@ -589,3 +589,89 @@ export async function disconnectAiTool(id: ConnectAllToolId): Promise<void> {
   }
   if (mcpError) throw mcpError;
 }
+
+// ─── Friendly error mapping for the UI ───────────────────────────────────────
+//
+// The lib throws precise, machine-flavored errors (full path, parser detail).
+// The UI shows a short human line instead: what happened + what to do, with a
+// ~ path. The raw message stays available as `detail` for tooltips/console.
+
+export type FriendlyToolError = {
+  /** One-line human message, safe to render. */
+  message: string;
+  /** Config file involved, absolute — for an "open file" action. */
+  path?: string;
+  /** The raw error text, for tooltips and logs. */
+  detail: string;
+};
+
+function tildify(p: string): string {
+  return p.replace(/^\/Users\/[^/]+/, "~").replace(/^C:\\Users\\[^\\]+/i, "~");
+}
+
+export function friendlyToolError(err: unknown): FriendlyToolError {
+  const raw = err instanceof Error ? err.message : String(err);
+  // Extract the path from the RAW message: `path` must stay absolute for the
+  // open-file action. Tildify only what gets displayed.
+  const pathMatch = raw.match(/(\/[^\s(]+|[A-Z]:\\[^\s(]+)/);
+  const path = pathMatch?.[1];
+  const shortPath = path ? tildify(path) : "the config file";
+  const detail = tildify(raw);
+
+  if (detail.includes("not valid JSON")) {
+    return { message: `config file has a syntax error — fix or delete ${shortPath} and retry`, path, detail };
+  }
+  if (detail.includes("could not read")) {
+    return { message: `can't read ${shortPath} — check its permissions and retry`, path, detail };
+  }
+  if (detail.includes("mcp_servers block")) {
+    return { message: `${shortPath} has a custom mcp_servers block — add the screenpipe server there manually`, path, detail };
+  }
+  if (detail.includes("local API key isn't available")) {
+    // Covers engine startup AND a mid-session crash/restart — "isn't
+    // responding" is true in both; "starting" would lie in the second.
+    return { message: "screenpipe isn't responding — give it a few seconds and try again", detail };
+  }
+  return { message: tildify(detail), path, detail };
+}
+
+/**
+ * Pre-flight health check used by onboarding's connect-all: the one-click
+ * list only promises tools whose config we know we can safely write into.
+ * A broken config is NOT an error here — the tool simply isn't listed;
+ * its own card and the settings AI tools card carry the full error + repair.
+ * Missing config = healthy (fresh install writes it).
+ */
+export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean> {
+  try {
+    switch (id) {
+      case "claude": {
+        const p = await getClaudeConfigPath();
+        if (!p) return false;
+        await readJsonConfigStrict(p);
+        return true;
+      }
+      case "cursor":
+        await readJsonConfigStrict(await getCursorMcpConfigPath());
+        return true;
+      case "openclaw":
+        await readJsonConfigStrict(await getOpenclawMcpConfigPath());
+        return true;
+      case "windsurf":
+        await readJsonConfigStrict(await getWindsurfMcpConfigPath());
+        return true;
+      case "codex":
+        // The TOML merge is append-based and tolerates any content — only an
+        // unreadable file can make it fail.
+        await readConfigText(await getCodexConfigPath());
+        return true;
+      case "hermes": {
+        const text = (await readConfigText(await getHermesConfigPath())) ?? "";
+        // Our one refusal: a hand-authored mcp_servers block without screenpipe.
+        return hermesHasScreenpipe(text) || !HERMES_MCP_BLOCK.test(text);
+      }
+    }
+  } catch {
+    return false;
+  }
+}

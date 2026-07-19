@@ -31,6 +31,10 @@ const skillsMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/ai-tools-mcp", () => ({
   ...libMocks,
+  friendlyToolError: (e: unknown) => ({
+    message: e instanceof Error ? e.message : String(e),
+    detail: e instanceof Error ? e.message : String(e),
+  }),
   CONNECT_ALL_TOOL_NAMES: {
     claude: "Claude",
     codex: "Codex",
