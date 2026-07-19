@@ -16,14 +16,11 @@ import {
   humanizeConnectError,
 } from "@/lib/connect-errors";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { readTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
-import { homeDir, join, dirname } from "@tauri-apps/api/path";
+import { readTextFile } from "@tauri-apps/plugin-fs";
+import { homeDir, join } from "@tauri-apps/api/path";
 import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
-import {
-  areExternalAgentSkillsInstalled,
-  installExternalAgentSkills,
-} from "@/lib/external-agent-skills";
+import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 // Connect-all: one click wires every DETECTED tool through the same per-tool
 // connect path the individual cards use (bundled-bun MCP with the local API
 // key, plus both skills where supported). Tools that are not detected are
@@ -31,13 +28,10 @@ import {
 import {
   CONNECT_ALL_TOOL_NAMES,
   type ConnectAllToolId,
+  connectAiTool,
   detectAiTools,
-  buildMcpConfig,
-  installOpenclawMcp,
   isOpenclawMcpInstalled,
-  installHermesMcp,
   isHermesMcpInstalled,
-  installWindsurfMcp,
   isWindsurfMcpInstalled,
 } from "@/lib/ai-tools-mcp";
 
@@ -98,22 +92,6 @@ function CursorIcon({ className = "w-5 h-5" }: { className?: string }) {
 
 // ─── MCP helpers (shared pattern for Claude Desktop & Cursor) ────────────────
 
-async function readMcpConfig(configPath: string): Promise<Record<string, unknown>> {
-  try {
-    return JSON.parse(await readTextFile(configPath));
-  } catch {
-    return {};
-  }
-}
-
-async function writeMcpConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
-  if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-  (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
-  // Ensure parent directory exists (Claude Desktop may not have created it yet)
-  await mkdir(await dirname(configPath), { recursive: true });
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
-}
-
 // Cursor
 async function getCursorMcpConfigPath(): Promise<string> {
   const home = await homeDir();
@@ -127,12 +105,6 @@ async function isCursorMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
-async function installCursorMcp(): Promise<void> {
-  const configPath = await getCursorMcpConfigPath();
-  const config = await readMcpConfig(configPath);
-  await writeMcpConfig(configPath, config);
-}
-
 // Claude Desktop
 async function isClaudeMcpInstalled(): Promise<boolean> {
   try {
@@ -144,21 +116,6 @@ async function isClaudeMcpInstalled(): Promise<boolean> {
   } catch (e) {
     console.log("[claude-mcp] isInstalled check failed:", e);
     return false;
-  }
-}
-
-async function installClaudeMcp(): Promise<void> {
-  const configPath = await getClaudeConfigPath();
-  if (!configPath) throw new Error("unsupported platform");
-  console.log("[claude-mcp] installing to:", configPath);
-  const config = await readMcpConfig(configPath);
-  console.log("[claude-mcp] existing config:", JSON.stringify(config));
-  try {
-    await writeMcpConfig(configPath, config);
-    console.log("[claude-mcp] write succeeded");
-  } catch (e) {
-    console.error("[claude-mcp] write failed:", e);
-    throw e;
   }
 }
 
@@ -178,40 +135,6 @@ async function isCodexMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
-async function installCodexMcp(): Promise<void> {
-  const configPath = await getCodexConfigPath();
-  const { command, args, env } = await buildMcpConfig();
-  let existing = "";
-  try { existing = await readTextFile(configPath); } catch { /* fresh */ }
-
-  const withoutScreenpipe = existing
-    .replace(CODEX_SCREENPIPE_TABLE, "")
-    .replace(/^\n+/, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd();
-
-  // Keep this in sync with buildCodexMcpToml in settings/connections-section.tsx
-  // — the env table carries the local API key; without it the MCP server 403s
-  // on every call.
-  const lines = [
-    "[mcp_servers.screenpipe]",
-    `command = ${JSON.stringify(command)}`,
-    `args = [${args.map(a => JSON.stringify(a)).join(", ")}]`,
-    "enabled = true",
-  ];
-  const envEntries = Object.entries(env ?? {});
-  if (envEntries.length > 0) {
-    lines.push("", "[mcp_servers.screenpipe.env]");
-    for (const [key, value] of envEntries) {
-      lines.push(`${key} = ${JSON.stringify(value)}`);
-    }
-  }
-  const block = lines.join("\n");
-
-  const next = `${withoutScreenpipe}${withoutScreenpipe ? "\n\n" : ""}${block}\n`;
-  await mkdir(await dirname(configPath), { recursive: true });
-  await writeFile(configPath, new TextEncoder().encode(next));
-}
 
 // Obsidian — auto-discover vaults from obsidian.json, save first one to local API
 async function getObsidianConfigPath(): Promise<string | null> {
@@ -716,24 +639,21 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         }
 
         if (integration.type === "mcp") {
-          await installCursorMcp();
-          await installExternalAgentSkills("cursor");
+          await connectAiTool("cursor");
           setCardState(integration.cardKey, "connected");
           posthog.capture("onboarding_integration_connected", { integration: integration.id });
           return;
         }
 
         if (integration.type === "claude") {
-          await installClaudeMcp();
-          await installExternalAgentSkills("claude");
+          await connectAiTool("claude");
           setCardState(integration.cardKey, "connected");
           posthog.capture("onboarding_integration_connected", { integration: integration.id });
           return;
         }
 
         if (integration.type === "codex") {
-          await installCodexMcp();
-          await installExternalAgentSkills("codex");
+          await connectAiTool("codex");
           setCardState(integration.cardKey, "connected");
           posthog.capture("onboarding_integration_connected", { integration: integration.id });
           return;
@@ -801,6 +721,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   // install is fast local file IO and the per-tool chips animate in order.
   const handleConnectAll = useCallback(async () => {
     setConnectAllRunning(true);
+    try {
     posthog.capture("onboarding_connect_all_clicked", { tools: detectedAiTools });
     for (const id of detectedAiTools) {
       // cardKey === id for every connect-all tool, so this covers both kinds.
@@ -816,15 +737,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       // connect/error contract as handleConnect, inline.
       setCardState(id, "connecting");
       try {
-        if (id === "openclaw") {
-          await installOpenclawMcp();
-          await installExternalAgentSkills("openclaw");
-        } else if (id === "hermes") {
-          await installHermesMcp();
-          await installExternalAgentSkills("hermes");
-        } else if (id === "windsurf") {
-          await installWindsurfMcp(); // MCP-only, no skills dir
-        }
+        await connectAiTool(id);
         setCardState(id, "connected");
         posthog.capture("onboarding_integration_connected", { integration: id });
       } catch (err) {
@@ -838,7 +751,9 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         setTimeout(() => setCardState(id, "idle"), 4000);
       }
     }
-    setConnectAllRunning(false);
+    } finally {
+      setConnectAllRunning(false);
+    }
   }, [detectedAiTools, cardStates, handleConnect, setCardState]);
 
   const handleContinue = useCallback(() => {

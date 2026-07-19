@@ -9,13 +9,27 @@
 // crates/screenpipe-engine/src/cli/agent.rs.
 
 import { homeDir, join, dirname } from "@tauri-apps/api/path";
-import { readTextFile, writeFile, mkdir, exists } from "@tauri-apps/plugin-fs";
+import {
+  readTextFile,
+  writeFile,
+  mkdir,
+  exists,
+  rename,
+  remove,
+  copyFile,
+  readDir,
+} from "@tauri-apps/plugin-fs";
 import { commands } from "@/lib/utils/tauri";
 import {
   getClaudeConfigPath,
   getCodexConfigPath,
   getCursorMcpConfigPath,
 } from "@/lib/hooks/use-hardcoded-tiles";
+import {
+  installExternalAgentSkills,
+  removeExternalAgentSkills,
+  type ExternalAgentWithSkills,
+} from "@/lib/external-agent-skills";
 
 type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
 
@@ -132,48 +146,137 @@ export async function buildMcpConfig(opts?: { forceNpx?: boolean }): Promise<Mcp
   return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
 }
 
-// ─── Small shared JSON helpers ───────────────────────────────────────────────
+// ─── Safe config IO (issue #5291) ────────────────────────────────────────────
+//
+// Rules: a connect either preserves-and-extends a valid config or fails
+// visibly without touching it. Missing file ≠ broken file — only a missing
+// file starts fresh. Every modification of an existing config takes a
+// timestamped backup first and lands via tmp-file + atomic rename (pattern
+// from lib/chat-storage.ts / src-tauri store.rs durable_write).
 
-async function readJsonConfig(configPath: string): Promise<Record<string, unknown>> {
+/** How many `.screenpipe-backup-*` siblings to keep per config file. */
+const MAX_CONFIG_BACKUPS = 2;
+
+/**
+ * Read a config as text. Missing file → null (caller starts fresh). A file
+ * that exists but cannot be read (permissions, IO) throws a clear error —
+ * never treated as empty, which is how configs get silently wiped.
+ */
+async function readConfigText(configPath: string): Promise<string | null> {
+  if (!(await exists(configPath))) return null;
   try {
-    return JSON.parse(await readTextFile(configPath));
-  } catch {
-    return {};
+    return await readTextFile(configPath);
+  } catch (e) {
+    throw new Error(
+      `could not read ${configPath} (${e instanceof Error ? e.message : e}) — fix its permissions and retry`
+    );
   }
 }
 
-async function writeJsonConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
-  await mkdir(await dirname(configPath), { recursive: true });
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+/**
+ * Strict JSON read: missing → fresh {}. Present but invalid → throw, so the
+ * caller shows a per-tool error instead of overwriting the user's file.
+ */
+async function readJsonConfigStrict(configPath: string): Promise<Record<string, unknown>> {
+  const text = await readConfigText(configPath);
+  if (text === null || text.trim() === "") return {};
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("top level is not an object");
+    }
+    return parsed;
+  } catch (e) {
+    throw new Error(
+      `${configPath} is not valid JSON (${e instanceof Error ? e.message : e}) — fix or remove it; screenpipe won't overwrite it`
+    );
+  }
 }
 
-/** Delete only mcpServers.screenpipe; missing/invalid file is a no-op. */
+/**
+ * Timestamped backup of an existing config, pruned to the newest
+ * MAX_CONFIG_BACKUPS. Backup failure aborts the change — modifying a config
+ * we couldn't back up defeats the point.
+ */
+async function backupConfigIfExists(configPath: string): Promise<void> {
+  if (!(await exists(configPath))) return;
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  await copyFile(configPath, `${configPath}.screenpipe-backup-${ts}`);
+  // Prune old backups; best-effort — never fail the actual change over it.
+  try {
+    const dir = await dirname(configPath);
+    const base = configPath.split("/").pop()!;
+    const entries = await readDir(dir);
+    const backups = entries
+      .map((e) => e.name)
+      .filter((n): n is string => !!n && n.startsWith(`${base}.screenpipe-backup-`))
+      .sort();
+    for (const old of backups.slice(0, Math.max(0, backups.length - MAX_CONFIG_BACKUPS))) {
+      await remove(await join(dir, old));
+    }
+  } catch { /* pruning is optional */ }
+}
+
+/**
+ * Atomic write: stage to a unique sibling .tmp, rename onto the target. A
+ * crash mid-write leaves the previous file intact or an orphan .tmp — never
+ * a torn config the next read would refuse or misparse.
+ */
+async function writeConfigAtomic(configPath: string, text: string): Promise<void> {
+  await mkdir(await dirname(configPath), { recursive: true });
+  const tmpPath = `${configPath}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
+  await writeFile(tmpPath, new TextEncoder().encode(text));
+  try {
+    await rename(tmpPath, configPath);
+  } catch (e) {
+    try { await remove(tmpPath); } catch { /* ignore */ }
+    throw e;
+  }
+}
+
+/** Backup (if existing) + atomic write, the standard mutation path. */
+async function replaceConfig(configPath: string, text: string): Promise<void> {
+  await backupConfigIfExists(configPath);
+  await writeConfigAtomic(configPath, text);
+}
+
+async function writeJsonConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
+  await replaceConfig(configPath, JSON.stringify(config, null, 2));
+}
+
+/**
+ * Delete only mcpServers.screenpipe. Missing file / no entry is a no-op;
+ * an invalid file throws so disconnect shows an honest per-tool error.
+ */
 async function removeScreenpipeFromJsonConfig(configPath: string): Promise<void> {
-  let config: Record<string, unknown> = {};
-  try { config = JSON.parse(await readTextFile(configPath)); } catch { return; }
+  const config = await readJsonConfigStrict(configPath);
   const servers = config.mcpServers as Record<string, unknown> | undefined;
   if (!servers?.screenpipe) return;
   delete servers.screenpipe;
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+  await replaceConfig(configPath, JSON.stringify(config, null, 2));
 }
 
 // ─── Claude Desktop / Cursor / Codex install + uninstall ────────────────────
 
-export async function installClaudeMcp(): Promise<void> {
+export async function installClaudeMcp(): Promise<McpCommand> {
   const configPath = await getClaudeConfigPath();
   if (!configPath) throw new Error("unsupported platform");
-  const config = await readJsonConfig(configPath);
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig();
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-  (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
+  (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
   await writeJsonConfig(configPath, config);
+  return mcp;
 }
 
-export async function installCursorMcp(): Promise<void> {
+export async function installCursorMcp(): Promise<McpCommand> {
   const configPath = await getCursorMcpConfigPath();
-  const config = await readJsonConfig(configPath);
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig();
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-  (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
+  (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
   await writeJsonConfig(configPath, config);
+  return mcp;
 }
 
 function tomlString(value: string): string {
@@ -203,17 +306,16 @@ export function buildCodexMcpToml(config: McpCommand): string {
   return lines.join("\n");
 }
 
-export async function installCodexMcp(): Promise<void> {
+export async function installCodexMcp(): Promise<McpCommand> {
   const configPath = await getCodexConfigPath();
-  let existing = "";
-  try { existing = await readTextFile(configPath); } catch { /* fresh */ }
+  const existing = (await readConfigText(configPath)) ?? "";
 
   const config = await buildMcpConfig();
   const withoutScreenpipe = removeCodexMcpConfig(existing);
   const next = `${withoutScreenpipe}${withoutScreenpipe ? "\n\n" : ""}${buildCodexMcpToml(config)}\n`;
 
-  await mkdir(await dirname(configPath), { recursive: true });
-  await writeFile(configPath, new TextEncoder().encode(next));
+  await replaceConfig(configPath, next);
+  return config;
 }
 
 export async function uninstallClaudeMcp(): Promise<void> {
@@ -238,10 +340,10 @@ export function removeCodexMcpConfig(content: string): string {
 
 export async function uninstallCodexMcp(): Promise<void> {
   const configPath = await getCodexConfigPath();
-  let existing = "";
-  try { existing = await readTextFile(configPath); } catch { return; }
+  const existing = await readConfigText(configPath);
+  if (existing === null) return;
   const next = removeCodexMcpConfig(existing);
-  await writeFile(configPath, new TextEncoder().encode(next ? `${next}\n` : ""));
+  await replaceConfig(configPath, next ? `${next}\n` : "");
 }
 
 // ─── OpenClaw ─────────────────────────────────────────────────────────────────
@@ -260,17 +362,16 @@ export async function isOpenclawMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
-export async function installOpenclawMcp(): Promise<void> {
+export async function installOpenclawMcp(): Promise<McpCommand> {
   const configPath = await getOpenclawMcpConfigPath();
   // openclaw.json holds the whole gateway/agent config — preserve everything
   // and only set mcpServers.screenpipe.
-  const config = await readJsonConfig(configPath);
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig();
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-  (config.mcpServers as Record<string, unknown>).screenpipe = {
-    ...(await buildMcpConfig()),
-    transport: "stdio",
-  };
+  (config.mcpServers as Record<string, unknown>).screenpipe = { ...mcp, transport: "stdio" };
   await writeJsonConfig(configPath, config);
+  return mcp;
 }
 
 export async function uninstallOpenclawMcp(): Promise<void> {
@@ -306,14 +407,14 @@ export async function isHermesMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
-export async function installHermesMcp(): Promise<void> {
+export async function installHermesMcp(): Promise<McpCommand> {
   const configPath = await getHermesConfigPath();
-  const { command, args, env } = await buildMcpConfig();
-  let existing = "";
-  try { existing = await readTextFile(configPath); } catch { /* fresh */ }
+  const mcp = await buildMcpConfig();
+  const { command, args, env } = mcp;
+  const existing = (await readConfigText(configPath)) ?? "";
 
   if (hermesHasScreenpipe(existing)) {
-    return; // already wired — leave hand-edited YAML alone
+    return mcp; // already wired — leave hand-edited YAML alone
   }
 
   const envBlock =
@@ -338,14 +439,14 @@ export async function installHermesMcp(): Promise<void> {
   let out = existing;
   if (out && !out.endsWith("\n")) out += "\n";
   out += `mcp_servers:\n${server}`;
-  await mkdir(await dirname(configPath), { recursive: true });
-  await writeFile(configPath, new TextEncoder().encode(out));
+  await replaceConfig(configPath, out);
+  return mcp;
 }
 
 export async function uninstallHermesMcp(): Promise<void> {
   const configPath = await getHermesConfigPath();
-  let existing = "";
-  try { existing = await readTextFile(configPath); } catch { return; }
+  const existing = await readConfigText(configPath);
+  if (existing === null) return;
 
   // Strip exactly the block installHermesMcp writes: the `mcp_servers:` line
   // plus its indented children — but only when screenpipe is its sole child.
@@ -372,7 +473,7 @@ export async function uninstallHermesMcp(): Promise<void> {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/^\n+/, "");
-  await writeFile(configPath, new TextEncoder().encode(next));
+  await replaceConfig(configPath, next);
 }
 
 // ─── Windsurf ────────────────────────────────────────────────────────────────
@@ -391,14 +492,100 @@ export async function isWindsurfMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
-export async function installWindsurfMcp(): Promise<void> {
+export async function installWindsurfMcp(): Promise<McpCommand> {
   const configPath = await getWindsurfMcpConfigPath();
-  const config = await readJsonConfig(configPath);
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig();
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-  (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
+  (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
   await writeJsonConfig(configPath, config);
+  return mcp;
 }
 
 export async function uninstallWindsurfMcp(): Promise<void> {
   await removeScreenpipeFromJsonConfig(await getWindsurfMcpConfigPath());
+}
+
+// ─── Transactional connect / disconnect orchestrators (issue #5291) ─────────
+//
+// Every surface (onboarding per-tool cards, onboarding connect-all, settings
+// panels, settings AI tools card) goes through these two functions so the
+// ordering and rollback rules live in exactly one place.
+
+// Tools whose agent reads global SKILL.md skills. Windsurf (Devin Desktop)
+// only discovers skills per-project (docs.devin.ai/product-guides/skills),
+// so it stays MCP-only. Grok is not in the matrix: it isn't part of
+// connect-all and its settings panel has its own disconnect.
+export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSkills>> = {
+  claude: "claude",
+  codex: "codex",
+  cursor: "cursor",
+  openclaw: "openclaw",
+  hermes: "hermes",
+};
+
+const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
+  claude: installClaudeMcp,
+  codex: installCodexMcp,
+  cursor: installCursorMcp,
+  openclaw: installOpenclawMcp,
+  hermes: installHermesMcp,
+  windsurf: installWindsurfMcp,
+};
+
+const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
+  claude: uninstallClaudeMcp,
+  codex: uninstallCodexMcp,
+  cursor: uninstallCursorMcp,
+  openclaw: uninstallOpenclawMcp,
+  hermes: uninstallHermesMcp,
+  windsurf: uninstallWindsurfMcp,
+};
+
+/**
+ * Connect one tool transactionally: skills first (additive and trivially
+ * reversible), then the MCP config write (the risky step — it can refuse an
+ * invalid config). If the MCP step fails the skills are rolled back, so the
+ * tool is left exactly as it was — never half-connected. Returns the MCP
+ * command written so callers can warn about the npx fallback.
+ */
+export async function connectAiTool(id: ConnectAllToolId): Promise<McpCommand> {
+  const skillsTarget = SKILLS_TARGET[id];
+  if (skillsTarget) await installExternalAgentSkills(skillsTarget);
+  try {
+    return await INSTALL_MCP[id]();
+  } catch (e) {
+    if (skillsTarget) {
+      try {
+        await removeExternalAgentSkills(skillsTarget);
+      } catch (rollbackErr) {
+        console.warn(`[ai-tools] ${id} skills rollback failed:`, rollbackErr);
+      }
+    }
+    throw e;
+  }
+}
+
+/**
+ * Disconnect one tool. Both steps always run — an MCP failure must not strand
+ * the skills and vice versa — but an MCP failure is rethrown afterwards so the
+ * caller can show an honest per-tool error. Idempotent: nothing installed is
+ * a no-op.
+ */
+export async function disconnectAiTool(id: ConnectAllToolId): Promise<void> {
+  let mcpError: unknown = null;
+  try {
+    await UNINSTALL_MCP[id]();
+  } catch (e) {
+    mcpError = e;
+  }
+  const skillsTarget = SKILLS_TARGET[id];
+  if (skillsTarget) {
+    try {
+      await removeExternalAgentSkills(skillsTarget);
+    } catch (e) {
+      console.warn(`[ai-tools] ${id} skills remove failed:`, e);
+    }
+  }
+  if (mcpError) throw mcpError;
 }

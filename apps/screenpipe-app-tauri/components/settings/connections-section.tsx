@@ -49,21 +49,15 @@ import { SkillsCard } from "./skills-card";
 import { PiExtensionsCard } from "./pi-extensions-card";
 import { WhatsAppPanel } from "./whatsapp-panel";
 import posthog from "posthog-js";
-import {
-  areExternalAgentSkillsInstalled,
-  installExternalAgentSkills,
-  removeExternalAgentSkills,
-} from "@/lib/external-agent-skills";
+import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 // Shared MCP matrix (build/install/uninstall per tool) — same module the
 // onboarding connect-all uses, so connect and disconnect can never drift.
 import {
   buildMcpConfig,
   buildCodexMcpToml,
-  installCursorMcp,
-  installCodexMcp,
-  uninstallClaudeMcp,
-  uninstallCursorMcp,
-  uninstallCodexMcp,
+  connectAiTool,
+  disconnectAiTool,
+  installClaudeMcp,
 } from "@/lib/ai-tools-mcp";
 import { AiToolsCard } from "./ai-tools-card";
 import { CursorLogo } from "./tool-logos";
@@ -197,9 +191,7 @@ async function openWindowsShellTarget(target: string): Promise<void> {
 }
 
 import {
-  getClaudeConfigPath,
   getCodexConfigPath,
-  getCursorMcpConfigPath,
   getGrokConfigPath,
   getInstalledMcpVersion,
   getInstalledClaudeScreenpipeEntry,
@@ -1029,7 +1021,7 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
         try {
           const next = await buildMcpConfig();
           if (next.env?.SCREENPIPE_LOCAL_API_KEY) {
-            await writeClaudeScreenpipeConfig();
+            await installClaudeMcp();
           }
         } catch (e) {
           console.warn("claude mcp auto-repair skipped:", e);
@@ -1055,27 +1047,10 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
     }
   }, []);
 
-  // Write the screenpipe entry into Claude's config with the reliable, current
-  // shape (bundled-bun path + injected key). Used by both the explicit connect
-  // action and the on-mount auto-repair of stale/keyless configs.
-  const writeClaudeScreenpipeConfig = async (): Promise<McpCommand> => {
-    const configPath = await getClaudeConfigPath();
-    if (!configPath) throw new Error("unsupported platform");
-    let config: Record<string, unknown> = {};
-    try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
-    if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-    const mcp = await buildMcpConfig();
-    (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
-    await mkdir(await dirname(configPath), { recursive: true });
-    await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
-    return mcp;
-  };
-
   const handleConnect = async () => {
     try {
       setState("connecting");
-      const mcp = await writeClaudeScreenpipeConfig();
-      await installExternalAgentSkills("claude");
+      const mcp = await connectAiTool("claude");
       setState("connected");
       onConnected?.();
       // The desktop app ships a bundled `bun`, so an npx fallback here means bun
@@ -1098,8 +1073,7 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
   };
 
   const handleDisconnect = async () => {
-    try { await uninstallClaudeMcp(); } catch (e) { console.warn("claude config remove failed:", e); }
-    try { await removeExternalAgentSkills("claude"); } catch (e) { console.warn("claude skills remove failed:", e); }
+    try { await disconnectAiTool("claude"); } catch (e) { console.warn("claude disconnect failed:", e); }
     setState("idle");
     onDisconnected?.();
   };
@@ -1187,8 +1161,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
   const handleConnect = async () => {
     try {
       setState("installing");
-      await installCursorMcp();
-      await installExternalAgentSkills("cursor");
+      await connectAiTool("cursor");
       setState("installed");
       onConnected?.();
     } catch (error) {
@@ -1203,8 +1176,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
   };
 
   const handleDisconnect = async () => {
-    try { await uninstallCursorMcp(); } catch (e) { console.warn("cursor config remove failed:", e); }
-    try { await removeExternalAgentSkills("cursor"); } catch (e) { console.warn("cursor skills remove failed:", e); }
+    try { await disconnectAiTool("cursor"); } catch (e) { console.warn("cursor disconnect failed:", e); }
     setState("idle");
     onDisconnected?.();
   };
@@ -1265,8 +1237,7 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
   const handleConnect = async () => {
     try {
       setState("installing");
-      await installCodexMcp();
-      await installExternalAgentSkills("codex");
+      await connectAiTool("codex");
       setState("installed");
       onConnected?.();
     } catch (error) {
@@ -1280,8 +1251,7 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
   };
 
   const handleDisconnect = async () => {
-    try { await uninstallCodexMcp(); } catch (e) { console.warn("codex config remove failed:", e); }
-    try { await removeExternalAgentSkills("codex"); } catch (e) { console.warn("codex skills remove failed:", e); }
+    try { await disconnectAiTool("codex"); } catch (e) { console.warn("codex disconnect failed:", e); }
     setState("idle");
     onDisconnected?.();
   };

@@ -141,6 +141,76 @@ fn claude_desktop_config(home: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Read a config file. Missing → None (caller starts fresh). Present but
+/// unreadable (permissions, IO) → error — never treated as empty, which is
+/// how a subsequent write would wipe the user's config (issue #5291).
+fn read_config_text(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => anyhow::bail!(
+            "could not read {} ({e}) — fix its permissions and retry",
+            path.display()
+        ),
+    }
+}
+
+/// How many `.screenpipe-backup-*` siblings to keep per config file.
+const MAX_CONFIG_BACKUPS: usize = 2;
+
+/// Timestamped backup of an existing config (pruned to the newest
+/// MAX_CONFIG_BACKUPS), then write via a sibling tmp file + atomic rename.
+/// A crash mid-write leaves the previous file intact, never a torn config.
+fn replace_config(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    if path.exists() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backup = PathBuf::from(format!("{}.screenpipe-backup-{ts}", path.display()));
+        std::fs::copy(path, &backup)
+            .with_context(|| format!("backup {} before changing it", path.display()))?;
+        prune_config_backups(path);
+    }
+    let tmp = PathBuf::from(format!(
+        "{}.{}.tmp",
+        path.display(),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, contents).with_context(|| format!("write {}", tmp.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("rename onto {}", path.display()));
+    }
+    Ok(())
+}
+
+/// Best-effort: drop all but the newest MAX_CONFIG_BACKUPS backups.
+fn prune_config_backups(path: &Path) {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+    else {
+        return;
+    };
+    let prefix = format!("{name}.screenpipe-backup-");
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    let mut backups: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&prefix))
+        })
+        .collect();
+    backups.sort();
+    for old in backups.iter().rev().skip(MAX_CONFIG_BACKUPS) {
+        let _ = std::fs::remove_file(old);
+    }
+}
+
 /// Strip the scheme from an API URL to get the `host:port` the SKILL.md uses.
 fn host_port(api_url: &str) -> &str {
     api_url
@@ -271,8 +341,8 @@ fn remove(target: &str) -> Result<()> {
 /// else (other servers, non-MCP keys like OpenClaw's gateway config).
 fn remove_mcp_json(path: &Path) -> Result<()> {
     use serde_json::Value;
-    let existing = match std::fs::read_to_string(path) {
-        Ok(s) if !s.trim().is_empty() => s,
+    let existing = match read_config_text(path)? {
+        Some(s) if !s.trim().is_empty() => s,
         _ => {
             println!("  · no screenpipe mcp entry in {}", path.display());
             return Ok(());
@@ -289,7 +359,7 @@ fn remove_mcp_json(path: &Path) -> Result<()> {
         println!("  · no screenpipe mcp entry in {}", path.display());
         return Ok(());
     }
-    std::fs::write(path, serde_json::to_string_pretty(&root)? + "\n")?;
+    replace_config(path, &(serde_json::to_string_pretty(&root)? + "\n"))?;
     println!("  ✓ mcp removed from {}", path.display());
     Ok(())
 }
@@ -297,9 +367,9 @@ fn remove_mcp_json(path: &Path) -> Result<()> {
 /// Strip the `[mcp_servers.screenpipe]` table and its `.env` subtable from a
 /// TOML config (Codex), preserving all other tables and top-level keys.
 fn remove_mcp_toml(path: &Path) -> Result<()> {
-    let existing = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => {
+    let existing = match read_config_text(path)? {
+        Some(s) => s,
+        None => {
             println!("  · no screenpipe mcp entry in {}", path.display());
             return Ok(());
         }
@@ -328,7 +398,7 @@ fn remove_mcp_toml(path: &Path) -> Result<()> {
         next = next.replace("\n\n\n", "\n\n");
     }
     let next = format!("{}\n", next.trim_matches('\n'));
-    std::fs::write(path, next)?;
+    replace_config(path, &next)?;
     println!("  ✓ mcp removed from {}", path.display());
     Ok(())
 }
@@ -337,9 +407,9 @@ fn remove_mcp_toml(path: &Path) -> Result<()> {
 /// `screenpipe:` child referencing screenpipe-mcp). Anything hand-authored is
 /// left untouched with manual instructions — we never string-slice foreign YAML.
 fn remove_mcp_yaml(path: &Path) -> Result<()> {
-    let existing = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => {
+    let existing = match read_config_text(path)? {
+        Some(s) => s,
+        None => {
             println!("  · no screenpipe mcp entry in {}", path.display());
             return Ok(());
         }
@@ -399,7 +469,7 @@ fn remove_mcp_yaml(path: &Path) -> Result<()> {
     } else {
         format!("{trimmed}\n")
     };
-    std::fs::write(path, next)?;
+    replace_config(path, &next)?;
     println!("  ✓ mcp removed from {}", path.display());
     Ok(())
 }
@@ -411,8 +481,8 @@ fn merge_mcp_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let mut root: Value = match std::fs::read_to_string(path) {
-        Ok(s) if !s.trim().is_empty() => serde_json::from_str(&s)
+    let mut root: Value = match read_config_text(path)? {
+        Some(s) if !s.trim().is_empty() => serde_json::from_str(&s)
             .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?,
         _ => json!({}),
     };
@@ -430,7 +500,7 @@ fn merge_mcp_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
         .as_object_mut()
         .context("mcpServers is present but not an object")?;
     servers.insert("screenpipe".to_string(), entry);
-    std::fs::write(path, serde_json::to_string_pretty(&root)? + "\n")?;
+    replace_config(path, &(serde_json::to_string_pretty(&root)? + "\n"))?;
     println!("  ✓ mcp   {}", path.display());
     Ok(())
 }
@@ -451,7 +521,7 @@ fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     let server = format!(
         "  screenpipe:\n    command: npx\n    args:\n      - \"-y\"\n      - screenpipe-mcp@latest{env_block}\n"
     );
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let existing = read_config_text(path)?.unwrap_or_default();
 
     // Only uncommented lines count: Hermes ships a commented-out
     // `# mcp_servers:` example block in its default config.yaml, and substring
@@ -480,7 +550,7 @@ fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
         out.push('\n');
     }
     out.push_str(&format!("mcp_servers:\n{server}"));
-    std::fs::write(path, out)?;
+    replace_config(path, &out)?;
     println!("  ✓ mcp   {}", path.display());
     Ok(())
 }
@@ -500,7 +570,7 @@ fn merge_mcp_toml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     let block = format!(
         "[mcp_servers.screenpipe]\ncommand = \"npx\"\nargs = [\"-y\", \"screenpipe-mcp@latest\"]\n{env_block}"
     );
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let existing = read_config_text(path)?.unwrap_or_default();
     if existing.contains("[mcp_servers.screenpipe]") {
         println!(
             "  • {} already has [mcp_servers.screenpipe]; left as-is",
@@ -516,7 +586,7 @@ fn merge_mcp_toml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
         out.push('\n');
     }
     out.push_str(&block);
-    std::fs::write(path, out)?;
+    replace_config(path, &out)?;
     println!("  ✓ mcp   {}", path.display());
     Ok(())
 }
@@ -607,6 +677,55 @@ mod tests {
             v["mcpServers"]["screenpipe"]["env"]["SCREENPIPE_API_URL"],
             "http://box:3030"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_replace_config_backs_up_prunes_and_leaves_no_tmp() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-atomic-{}", std::process::id()));
+        let path = dir.join("config.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Fresh file: no backup taken.
+        replace_config(&path, "v1").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "v1");
+
+        // Each change of an existing file takes a backup; pruned to newest 2.
+        for (i, v) in ["v2", "v3", "v4", "v5"].iter().enumerate() {
+            // Distinct timestamps: the backup name has second precision.
+            std::thread::sleep(std::time::Duration::from_millis(if i == 0 { 0 } else { 1100 }));
+            replace_config(&path, v).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "v5");
+
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let backups = names.iter().filter(|n| n.contains(".screenpipe-backup-")).count();
+        assert!(backups >= 1 && backups <= MAX_CONFIG_BACKUPS, "backups = {backups}");
+        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "tmp left behind: {names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_merge_mcp_json_refuses_invalid_and_leaves_file_untouched() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-badjson-{}", std::process::id()));
+        let path = dir.join("mcp.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(&path, "{ definitely not json").unwrap();
+        let err = merge_mcp_json(&path, false, "http://localhost:3030").unwrap_err();
+        assert!(err.to_string().contains("not valid JSON"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ definitely not json");
+
+        // remove refuses it the same way.
+        let err = remove_mcp_json(&path).unwrap_err();
+        assert!(err.to_string().contains("not valid JSON"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ definitely not json");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

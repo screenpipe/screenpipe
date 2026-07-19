@@ -19,29 +19,15 @@ import { CursorLogo } from "./tool-logos";
 import {
   CONNECT_ALL_TOOL_NAMES,
   type ConnectAllToolId,
+  SKILLS_TARGET,
+  connectAiTool,
+  disconnectAiTool,
   detectAiTools,
-  installClaudeMcp,
-  installCodexMcp,
-  installCursorMcp,
-  installOpenclawMcp,
-  installHermesMcp,
-  installWindsurfMcp,
   isOpenclawMcpInstalled,
   isHermesMcpInstalled,
   isWindsurfMcpInstalled,
-  uninstallClaudeMcp,
-  uninstallCodexMcp,
-  uninstallCursorMcp,
-  uninstallOpenclawMcp,
-  uninstallHermesMcp,
-  uninstallWindsurfMcp,
 } from "@/lib/ai-tools-mcp";
-import {
-  areExternalAgentSkillsInstalled,
-  installExternalAgentSkills,
-  removeExternalAgentSkills,
-  type ExternalAgentWithSkills,
-} from "@/lib/external-agent-skills";
+import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import {
   getInstalledMcpVersion,
   isCodexMcpInstalled,
@@ -51,35 +37,6 @@ import {
 const DISPLAY_NAMES: Record<ConnectAllToolId, string> = {
   ...CONNECT_ALL_TOOL_NAMES,
   claude: "Claude Desktop",
-};
-
-const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
-  claude: installClaudeMcp,
-  codex: installCodexMcp,
-  cursor: installCursorMcp,
-  openclaw: installOpenclawMcp,
-  hermes: installHermesMcp,
-  windsurf: installWindsurfMcp,
-};
-
-const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
-  claude: uninstallClaudeMcp,
-  codex: uninstallCodexMcp,
-  cursor: uninstallCursorMcp,
-  openclaw: uninstallOpenclawMcp,
-  hermes: uninstallHermesMcp,
-  windsurf: uninstallWindsurfMcp,
-};
-
-// Every tool with a global skills dir gets both skills. Windsurf (Devin
-// Desktop) only discovers skills per-project, so it stays MCP-only:
-// https://docs.devin.ai/product-guides/skills
-const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSkills>> = {
-  claude: "claude",
-  codex: "codex",
-  cursor: "cursor",
-  openclaw: "openclaw",
-  hermes: "hermes",
 };
 
 // Connected = MCP entry AND both skills where supported — same rule as tiles.
@@ -161,9 +118,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
       setBusy((prev) => ({ ...prev, [id]: "connecting" }));
       setErrors((prev) => ({ ...prev, [id]: undefined }));
       try {
-        await INSTALL_MCP[id]();
-        const skillsTarget = SKILLS_TARGET[id];
-        if (skillsTarget) await installExternalAgentSkills(skillsTarget);
+        await connectAiTool(id);
         setConnected((prev) => ({ ...prev, [id]: true }));
         posthog.capture("settings_ai_tool_connected", { tool: id });
       } catch (e) {
@@ -180,44 +135,35 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
   const removeTool = useCallback(async (id: ConnectAllToolId) => {
     setBusy((prev) => ({ ...prev, [id]: "removing" }));
     setErrors((prev) => ({ ...prev, [id]: undefined }));
-    let mcpFailed = false;
     try {
-      await UNINSTALL_MCP[id]();
+      await disconnectAiTool(id);
+      setConnected((prev) => ({ ...prev, [id]: false }));
+      posthog.capture("settings_ai_tool_removed", { tool: id });
     } catch (e) {
-      console.warn(`[ai-tools] ${id} mcp remove failed:`, e);
-      mcpFailed = true;
+      console.warn(`[ai-tools] ${id} remove failed:`, e);
       setErrors((prev) => ({
         ...prev,
         [id]: e instanceof Error ? e.message : String(e),
       }));
+    } finally {
+      setBusy((prev) => ({ ...prev, [id]: undefined }));
     }
-    // Skill removal runs even when the MCP step failed and vice versa.
-    const skillsTarget = SKILLS_TARGET[id];
-    if (skillsTarget) {
-      try {
-        await removeExternalAgentSkills(skillsTarget);
-      } catch (e) {
-        console.warn(`[ai-tools] ${id} skills remove failed:`, e);
-      }
-    }
-    if (!mcpFailed) {
-      setConnected((prev) => ({ ...prev, [id]: false }));
-      posthog.capture("settings_ai_tool_removed", { tool: id });
-    }
-    setBusy((prev) => ({ ...prev, [id]: undefined }));
   }, []);
 
   const handleConnectAll = useCallback(async () => {
     setExpanded(true);
     setBulkRunning(true);
-    const targets = detected.filter((id) => !connected[id]);
-    posthog.capture("settings_ai_tools_connect_all_clicked", { tools: targets });
-    for (const id of targets) {
-      await connectTool(id);
+    try {
+      const targets = detected.filter((id) => !connected[id]);
+      posthog.capture("settings_ai_tools_connect_all_clicked", { tools: targets });
+      for (const id of targets) {
+        await connectTool(id);
+      }
+      await refresh();
+      onChanged?.();
+    } finally {
+      setBulkRunning(false);
     }
-    setBulkRunning(false);
-    await refresh();
-    onChanged?.();
   }, [detected, connected, connectTool, refresh, onChanged]);
 
   const handleDisconnectAll = useCallback(async () => {
@@ -230,14 +176,17 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
     setConfirmingDisconnect(false);
     setBulkRunning(true);
-    const targets = detected.filter((id) => connected[id]);
-    posthog.capture("settings_ai_tools_disconnect_all_clicked", { tools: targets });
-    for (const id of targets) {
-      await removeTool(id);
+    try {
+      const targets = detected.filter((id) => connected[id]);
+      posthog.capture("settings_ai_tools_disconnect_all_clicked", { tools: targets });
+      for (const id of targets) {
+        await removeTool(id);
+      }
+      await refresh();
+      onChanged?.();
+    } finally {
+      setBulkRunning(false);
     }
-    setBulkRunning(false);
-    await refresh();
-    onChanged?.();
   }, [confirmingDisconnect, detected, connected, removeTool, refresh, onChanged]);
 
   // Machines with zero AI tools never see this card.
