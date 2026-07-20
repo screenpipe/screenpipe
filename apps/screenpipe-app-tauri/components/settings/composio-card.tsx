@@ -161,6 +161,11 @@ export function ComposioCard({
         },
         body: JSON.stringify({ toolkit }),
       });
+      if (res.status === 404) {
+        // Server half not deployed yet (or an old app against a rolled-back
+        // backend) — surface something a human can act on, not "Load failed".
+        throw new Error("this connection isn't available yet — update screenpipe and try again");
+      }
       const data = await res.json();
       if (!res.ok || !data.redirect_url) {
         throw new Error(data.error || "could not start the connection");
@@ -169,7 +174,10 @@ export function ComposioCard({
       setWaiting(true);
       await openUrl(data.redirect_url);
     } catch (e: any) {
-      setError(e?.message || "could not start the connection");
+      const msg = e?.message === "Load failed" || e?.name === "TypeError"
+        ? "couldn't reach screenpipe.com — check your internet connection and try again"
+        : e?.message || "could not start the connection";
+      setError(msg);
     } finally {
       setBusy(false);
     }
