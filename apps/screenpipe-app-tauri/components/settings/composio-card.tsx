@@ -208,42 +208,47 @@ export function ComposioCard({
     }
   };
 
+  // Option B (design round 3): the third-party fact lives in the header as a
+  // neutral "via composio" chip (rendered by connections-section); the body
+  // sells the feature and keeps the honest data-path detail one click away.
+  const valueLine = (
+    <p className="text-xs text-foreground/90">
+      {toolkit === "gmail"
+        ? "let your AI read and search your gmail inbox — one click, sign in with google."
+        : "let your AI see your zoom meetings, recordings and transcripts."}
+    </p>
+  );
+
   const privacyNote = (
-    <div className="space-y-1">
-      <p className="text-[11px] text-muted-foreground leading-relaxed">
-        this connection runs through composio.dev, a third-party service — your{" "}
-        {toolkit === "gmail" ? "emails" : "meetings"} are accessed via their servers, not
-        locally.
-      </p>
-      <details>
-        <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-          more about privacy
-        </summary>
-        <div className="pt-1 space-y-1 text-[11px] text-muted-foreground leading-relaxed">
+    <details>
+      <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+        more about privacy
+      </summary>
+      <div className="pt-1 space-y-1 text-[11px] text-muted-foreground leading-relaxed">
+        <p>
+          sign-in and data access are managed by composio.dev (SOC 2 Type II, AES-256
+          encrypted). your {toolkit === "gmail" ? "Google" : "Zoom"} password never touches
+          screenpipe, and your {toolkit === "gmail" ? "emails are" : "meeting data is"}{" "}
+          processed through composio&apos;s cloud rather than on this device.
+        </p>
+        <p>
+          the {toolkit === "gmail" ? "google" : "zoom"} consent screen says
+          &quot;Composio&quot; — that&apos;s them handling the authentication.
+        </p>
+        {toolkit === "gmail" && (
           <p>
-            composio stores the OAuth token for your {label} account and each request&apos;s
-            data passes through their cloud (SOC 2 Type II certified). screenpipe never sees
-            your {toolkit === "gmail" ? "Google" : "Zoom"} password.
+            prefer fully local? use the Email Inbox (IMAP) connection instead — it talks to
+            your mail server directly from this device.
           </p>
-          <p>
-            the sign-in screen shows &quot;Composio&quot; — that&apos;s expected, they manage
-            the authentication.
-          </p>
-          {toolkit === "gmail" && (
-            <p>
-              prefer local-only? use the Email Inbox (IMAP) connection instead — it talks to
-              your mail server directly from this device.
-            </p>
-          )}
-          <button
-            onClick={() => openUrl("https://composio.dev")}
-            className="underline hover:text-foreground cursor-pointer"
-          >
-            about composio →
-          </button>
-        </div>
-      </details>
-    </div>
+        )}
+        <button
+          onClick={() => openUrl("https://composio.dev")}
+          className="underline hover:text-foreground cursor-pointer"
+        >
+          about composio →
+        </button>
+      </div>
+    </details>
   );
 
   if (!loaded) {
@@ -258,8 +263,9 @@ export function ComposioCard({
   if (!token) {
     return (
       <div className="space-y-3">
-        {privacyNote}
+        {valueLine}
         <p className="text-xs text-muted-foreground">log in to your screenpipe account to connect {label}.</p>
+        {privacyNote}
       </div>
     );
   }
@@ -267,7 +273,7 @@ export function ComposioCard({
   if (!isPro && !connected) {
     return (
       <div className="space-y-3">
-        {privacyNote}
+        {valueLine}
         <div className="flex flex-col gap-1.5">
           <Button disabled size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap opacity-60">
             <Lock className="h-3 w-3" />pro required
@@ -279,13 +285,14 @@ export function ComposioCard({
             upgrade to pro to connect
           </button>
         </div>
+        {privacyNote}
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      {privacyNote}
+      {!connected && valueLine}
       {connected ? (
         <div className="space-y-2">
           <p className="text-xs">
@@ -303,6 +310,7 @@ export function ComposioCard({
           >
             <X className="h-3 w-3" />disconnect
           </Button>
+          {privacyNote}
         </div>
       ) : (
         <div className="space-y-2">
@@ -330,6 +338,7 @@ export function ComposioCard({
               </>
             )}
           </Button>
+          {privacyNote}
         </div>
       )}
     </div>

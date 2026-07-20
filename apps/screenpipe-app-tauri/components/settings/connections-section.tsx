@@ -4447,6 +4447,11 @@ export function ConnectionsSection({
                         macOS
                       </span>
                     )}
+                    {(selectedTile.id === "gmail" || selectedTile.id === "zoom") && (
+                      <span className="px-2 py-0.5 text-[10px] font-mono border border-border text-muted-foreground inline-flex items-center">
+                        via composio
+                      </span>
+                    )}
                   </div>
                   {selectedTile.connected && (
                     <span className="text-xs text-foreground">connected</span>
