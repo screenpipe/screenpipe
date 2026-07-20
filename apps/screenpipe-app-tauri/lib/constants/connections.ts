@@ -65,6 +65,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   calcom: "Calendar",
 
   // Communication — messaging & email
+  gmail: "Communication",
   "outlook-email": "Communication",
   email: "Communication",
   microsoft365: "Communication",
@@ -162,6 +163,7 @@ export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
   "apple-calendar": "Search Apple Calendar events with AI",
   "google-calendar": "Search Google Calendar events with AI",
   "google-docs": "Read and search your Google Docs",
+  gmail: "Read your Gmail inbox (via composio.dev managed auth)",
   "outlook-email": "Read and send your Outlook email",
   "ics-calendar": "Subscribe to any ICS calendar feed",
   "remote-agent": "Run a 24/7 agent (OpenClaw, Hermes, Claude, Codex) on your VPS, wired to screenpipe",

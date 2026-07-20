@@ -38,6 +38,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
+import { ComposioCard } from "./composio-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { RemoteAgentCard } from "./remote-agent-card";
@@ -510,6 +511,11 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
         />
       </svg>
     ),
+    gmail: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5">
+        <path fill="#EA4335" d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/>
+      </svg>
+    ),
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
@@ -745,6 +751,7 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   "ics-calendar": "What events are coming up this week?",
   granola: "Show notes from my recent meetings",
   zoom: "Summarize my recent Zoom calls",
+  gmail: "Summarize my recent emails",
   krisp: "Search my meeting transcripts for action items",
   excalidraw: "What's on my recent Excalidraw boards?",
   whatsapp: "What were the latest messages in my WhatsApp?",
@@ -3715,6 +3722,21 @@ export function ConnectionsSection({
   const [excalidrawConnected, setExcalidrawConnected] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
   const [piExtensionCount, setPiExtensionCount] = useState(0);
+  // Gmail/Zoom via Composio (managed auth through screenpipe.com; see composio-card.tsx)
+  const { settings: composioSettings } = useSettings();
+  const [composioConnected, setComposioConnected] = useState({ gmail: false, zoom: false });
+  const composioToken = composioSettings.user?.token;
+  useEffect(() => {
+    if (!composioToken) return;
+    fetch("https://screenpipe.com/api/composio/status", {
+      headers: { Authorization: `Bearer ${composioToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (s) setComposioConnected({ gmail: !!s.gmail?.connected, zoom: !!s.zoom?.connected });
+      })
+      .catch(() => {});
+  }, [composioToken]);
 
   const loadSkillsCount = useCallback(() => {
     commands
@@ -3892,6 +3914,7 @@ export function ConnectionsSection({
       ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: appleCalendarConnected }] : []),
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
+      { id: "gmail", name: "Gmail", icon: "gmail", connected: composioConnected.gmail },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
       { id: "remote-agent", name: "Remote agent", icon: "remote-agent", connected: false },
       { id: "whatsapp", name: "WhatsApp", icon: "whatsapp", connected: false, detected: detectedConnectionIds.has("whatsapp") },
@@ -3953,6 +3976,9 @@ export function ConnectionsSection({
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     const googleDocsTile = hardcoded.find(h => h.id === "google-docs");
     if (googleDocsTile) googleDocsTile.connected = googleDocsConnected;
+    // Zoom's dot lights for the Composio connection OR a legacy Zoom OAuth connection.
+    const zoomTile = apiTiles.find(t => t.id === "zoom");
+    if (zoomTile) zoomTile.connected = zoomTile.connected || composioConnected.zoom;
     // Custom MCP tile shows the dot when any user-registered MCP server is enabled.
     const customMcpTile = hardcoded.find(h => h.id === "custom-mcp");
     if (customMcpTile) {
@@ -3965,7 +3991,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, grokInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, mcpProviderConnected, excalidrawConnected, importedSkillsCount, piExtensionCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, grokInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, mcpProviderConnected, excalidrawConnected, importedSkillsCount, piExtensionCount, detectedConnectionIds, composioConnected]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -4101,6 +4127,30 @@ export function ConnectionsSection({
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
       case "google-docs": return <GoogleDocsCard />;
+      case "gmail": return <ComposioCard toolkit="gmail" onChanged={setComposioConnected} />;
+      case "zoom": return (
+        <div className="space-y-3">
+          <ComposioCard toolkit="zoom" onChanged={setComposioConnected} />
+          {/* The legacy Zoom OAuth app is stuck in marketplace review; keep the
+              old connector reachable for anyone who connected before. */}
+          {selectedIntegration?.is_oauth && (
+            <details>
+              <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                advanced: manage the legacy zoom connection
+              </summary>
+              <div className="pt-2">
+                <OAuthPanel
+                  integrationId="zoom"
+                  integrationName="Zoom"
+                  supportsOAuthInstances={!!selectedIntegration.supports_oauth_instances}
+                  onConnected={() => refreshIntegrationConnection("zoom", true)}
+                  onDisconnected={() => refreshIntegrationConnection("zoom", false)}
+                />
+              </div>
+            </details>
+          )}
+        </div>
+      );
       case "ics-calendar": return <IcsCalendarCard />;
       case "remote-agent": return <RemoteAgentCard />;
       case "whatsapp": return <WhatsAppPanel />;
