@@ -81,15 +81,11 @@ export function ChatHistoryView({
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
   const sentinelRef = React.useRef<HTMLDivElement | null>(null);
-  const conversationsRef = React.useRef<ConversationMeta[]>([]);
   // Increment to invalidate in-flight loads from a previous tab/query.
   const loadTokenRef = React.useRef(0);
   // Track raw (pre-filter) row count so the storage offset stays correct
   // when we do client-side filtering (e.g. pipes tab).
   const rawOffsetRef = React.useRef(0);
-
-  // Latest value mirrored during render (read only from the load-more callback).
-  conversationsRef.current = conversations;
 
   const load = useCallback(
     async (mode: "reset" | "append" = "reset") => {
