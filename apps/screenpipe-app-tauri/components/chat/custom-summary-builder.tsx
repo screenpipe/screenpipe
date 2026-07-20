@@ -15,7 +15,6 @@ import {
   type CustomTemplate,
 } from "@/lib/summary-templates";
 import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { type DateRange } from "react-day-picker";
 
@@ -188,30 +187,28 @@ export function CustomSummaryBuilder({
               ))}
             </div>
             <div className="mt-2 pt-2 border-t border-border/20">
-              <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    className={`w-full text-left px-3 py-1.5 text-[12px] rounded-lg transition-colors flex items-center gap-2 ${
-                      dateRange?.from
-                        ? "bg-primary/15 text-primary border border-primary/30 font-medium"
-                        : "hover:bg-muted/50 text-muted-foreground border border-transparent"
-                    }`}
-                  >
-                    <CalendarIcon className="w-3.5 h-3.5" />
-                    {dateRange?.from ? getTimeLabel() : "Pick a date..."}
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
+              <button
+                onClick={() => setCalendarOpen((v) => !v)}
+                className={`w-full text-left px-3 py-1.5 text-[12px] rounded-lg transition-colors flex items-center gap-2 ${
+                  dateRange?.from
+                    ? "bg-primary/15 text-primary border border-primary/30 font-medium"
+                    : "hover:bg-muted/50 text-muted-foreground border border-transparent"
+                }`}
+              >
+                <CalendarIcon className="w-3.5 h-3.5" />
+                {dateRange?.from ? getTimeLabel() : "Pick a date..."}
+              </button>
+              {calendarOpen && (
+                <div className="mt-1">
                   <Calendar
                     mode="range"
                     selected={dateRange}
                     onSelect={handleDateSelect}
                     disabled={{ after: new Date() }}
                     numberOfMonths={1}
-                    initialFocus
                   />
-                </PopoverContent>
-              </Popover>
+                </div>
+              )}
             </div>
           </div>
 
