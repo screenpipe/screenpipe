@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Sparkles, Save, CalendarIcon, Pin, Trash2 } from "lucide-react";
+import { Save, CalendarIcon, Pin, Trash2 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import {
   parseTemplateInstructions,
@@ -76,6 +76,9 @@ export function CustomSummaryBuilder({
     return TIME_RANGES.find((r) => r.value === selectedTime)?.label || selectedTime;
   };
 
+  const isPresetSelected = (value: string) =>
+    selectedTime === value && !dateRange?.from;
+
   const buildPrompt = () => {
     const timeContext = `Analyze my screen and audio recordings from ${selectedTime}.`;
     const userInstructions = instructions.trim()
@@ -105,8 +108,6 @@ export function CustomSummaryBuilder({
     onSaveTemplate(template);
     setShowSave(false);
     setTemplateTitle("");
-    // The dialog stays open so the user can still hit Generate; the toast is
-    // the only signal the save happened.
     toast({
       title: "Template saved",
       description: `"${template.title}" added to your templates`,
@@ -145,7 +146,7 @@ export function CustomSummaryBuilder({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {editingTemplate ? (
@@ -153,59 +154,81 @@ export function CustomSummaryBuilder({
                 <Pin className="w-4 h-4" strokeWidth={1.5} /> {editingTemplate.title}
               </>
             ) : (
-              <>
-                <span>✨</span> Custom Summary
-              </>
+              "custom summary"
             )}
           </DialogTitle>
           <DialogDescription>
             {editingTemplate
-              ? "Review or tweak the prompt, then run it — Update Template persists your changes"
-              : "Choose a time period and describe what you want to know"}
+              ? "review or tweak the prompt, then run it — update template persists your changes"
+              : "choose a time period and describe what you want to know"}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-2">
           {/* Left: Time Range */}
           <div>
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
+            <label className="text-[11px] font-mono font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
               Time Period
             </label>
-            <div className="space-y-1">
+            <div className="flex flex-wrap gap-1">
               {TIME_RANGES.map((range) => (
                 <button
                   key={range.value}
-                  onClick={() => { setSelectedTime(range.value); setDateRange(undefined); }}
-                  className={`w-full text-left px-3 py-1.5 text-[12px] rounded-lg transition-colors ${
-                    selectedTime === range.value
-                      ? "bg-primary/15 text-primary border border-primary/30 font-medium"
-                      : "hover:bg-muted/50 text-muted-foreground border border-transparent"
+                  onClick={() => { setSelectedTime(range.value); setDateRange(undefined); setCalendarOpen(false); }}
+                  className={`px-2 py-0.5 text-[11px] font-mono transition-all duration-150 border cursor-pointer ${
+                    isPresetSelected(range.value)
+                      ? "bg-foreground text-background border-foreground"
+                      : "bg-muted/20 text-muted-foreground border-border/30 hover:bg-foreground hover:text-background hover:border-foreground"
                   }`}
                 >
                   {range.label}
                 </button>
               ))}
             </div>
-            <div className="mt-2 pt-2 border-t border-border/20">
+            <div className="mt-3 pt-3 border-t border-border/20">
               <button
                 onClick={() => setCalendarOpen((v) => !v)}
-                className={`w-full text-left px-3 py-1.5 text-[12px] rounded-lg transition-colors flex items-center gap-2 ${
+                className={`px-2 py-0.5 text-[11px] font-mono transition-all duration-150 border cursor-pointer inline-flex items-center gap-1.5 ${
                   dateRange?.from
-                    ? "bg-primary/15 text-primary border border-primary/30 font-medium"
-                    : "hover:bg-muted/50 text-muted-foreground border border-transparent"
+                    ? "bg-foreground text-background border-foreground"
+                    : "bg-muted/20 text-muted-foreground border-border/30 hover:bg-foreground hover:text-background hover:border-foreground"
                 }`}
               >
-                <CalendarIcon className="w-3.5 h-3.5" />
-                {dateRange?.from ? getTimeLabel() : "Pick a date..."}
+                <CalendarIcon className="w-3 h-3" />
+                {dateRange?.from ? getTimeLabel() : "pick a date"}
               </button>
               {calendarOpen && (
-                <div className="mt-1">
+                <div className="mt-2 border border-border/30">
                   <Calendar
                     mode="range"
                     selected={dateRange}
                     onSelect={handleDateSelect}
                     disabled={{ after: new Date() }}
                     numberOfMonths={1}
+                    className="p-2"
+                    classNames={{
+                      months: "flex flex-col space-y-2",
+                      month: "space-y-2",
+                      caption: "flex justify-center pt-1 relative items-center",
+                      caption_label: "text-[11px] font-mono",
+                      nav: "space-x-1 flex items-center",
+                      nav_button: "h-6 w-6 bg-transparent p-0 opacity-50 hover:opacity-100 border border-border/30 inline-flex items-center justify-center",
+                      nav_button_previous: "absolute left-1",
+                      nav_button_next: "absolute right-1",
+                      table: "w-full border-collapse",
+                      head_row: "flex",
+                      head_cell: "text-muted-foreground w-7 font-normal text-[10px]",
+                      row: "flex w-full mt-1",
+                      cell: "h-7 w-7 text-center text-[11px] p-0 relative [&:has([aria-selected])]:bg-foreground/10",
+                      day: "h-7 w-7 p-0 font-normal text-[11px] inline-flex items-center justify-center cursor-pointer hover:bg-foreground/10 aria-selected:opacity-100",
+                      day_range_end: "day-range-end",
+                      day_selected: "bg-foreground text-background hover:bg-foreground hover:text-background focus:bg-foreground focus:text-background",
+                      day_today: "bg-foreground/5 text-foreground font-medium",
+                      day_outside: "day-outside text-muted-foreground opacity-50 aria-selected:bg-foreground/5 aria-selected:text-muted-foreground aria-selected:opacity-30",
+                      day_disabled: "text-muted-foreground opacity-50",
+                      day_range_middle: "aria-selected:bg-foreground/10 aria-selected:text-foreground",
+                      day_hidden: "invisible",
+                    }}
                   />
                 </div>
               )}
@@ -214,21 +237,21 @@ export function CustomSummaryBuilder({
 
           {/* Right: Instructions */}
           <div className="flex flex-col">
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
+            <label className="text-[11px] font-mono font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
               What should the summary focus on?
             </label>
             <Textarea
               value={instructions}
               onChange={(e) => setInstructions(e.target.value.slice(0, 1000))}
-              placeholder={`Type your custom instructions for ${getTimeLabel().toLowerCase()}...`}
+              placeholder={`type your custom instructions for ${getTimeLabel().toLowerCase()}...`}
               className="flex-1 min-h-[140px] text-[12px] resize-none"
             />
-            <div className="text-[10px] text-muted-foreground/50 text-right mt-1">
+            <div className="text-[10px] text-muted-foreground/50 text-right mt-1 font-mono">
               {instructions.length}/1000
             </div>
 
             <div className="mt-2">
-              <label className="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5 block">
+              <label className="text-[10px] font-mono font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5 block">
                 Quick Templates
               </label>
               <div className="flex flex-wrap gap-1">
@@ -236,7 +259,7 @@ export function CustomSummaryBuilder({
                   <button
                     key={qt.label}
                     onClick={() => handleQuickTemplate(qt.prompt)}
-                    className="px-2 py-0.5 text-[10px] bg-muted/30 hover:bg-muted/60 rounded-full border border-border/30 hover:border-border/60 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                    className="px-2 py-0.5 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
                   >
                     {qt.label}
                   </button>
@@ -259,8 +282,8 @@ export function CustomSummaryBuilder({
               Delete
             </Button>
           ) : (
-            <div className="text-[11px] text-muted-foreground">
-              Summarizing <span className="font-medium text-foreground">{getTimeLabel().toLowerCase()}</span>
+            <div className="text-[11px] text-muted-foreground font-mono">
+              summarizing <span className="font-medium text-foreground">{getTimeLabel().toLowerCase()}</span>
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -279,7 +302,7 @@ export function CustomSummaryBuilder({
                 <Input
                   value={templateTitle}
                   onChange={(e) => setTemplateTitle(e.target.value)}
-                  placeholder="Template name..."
+                  placeholder="template name..."
                   className="h-8 w-36 text-[11px]"
                   onKeyDown={(e) => e.key === "Enter" && handleSave()}
                   autoFocus
@@ -298,8 +321,7 @@ export function CustomSummaryBuilder({
                 Save as Template
               </Button>
             )}
-            <Button size="sm" onClick={handleGenerate} className="h-8 text-[11px] gap-1.5">
-              <Sparkles className="w-3 h-3" />
+            <Button size="sm" onClick={handleGenerate} className="h-8 text-[11px]">
               {editingTemplate ? "Run" : "Generate"}
             </Button>
           </div>
