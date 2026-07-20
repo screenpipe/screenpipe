@@ -215,7 +215,7 @@ export default function OnboardingPage() {
         completedForHiddenUiRef.current = true;
         posthog.capture("onboarding_hidden_ui_completed_after_permissions");
         try {
-          await completeOnboarding();
+          await completeOnboarding({ method: "hidden_enterprise" });
         } catch (error) {
           // Never fall through to UI-only onboarding on a hidden deployment.
           // Closing lets the persisted permission state be recovered on the

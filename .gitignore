@@ -41,7 +41,7 @@ onnxruntime-win-x64*/
 # JavaScript stuff
 node_modules/
 
-# Swift build artifacts (ee/sdk)
+# Swift build artifacts (sdk)
 .build/
 
 # Python stuff
@@ -91,5 +91,5 @@ apps/screenpipe-app-tauri/src-tauri/libonnxruntime.dylib
 # license copies staged into npm packages at publish time (canonical: /LICENSE.md)
 packages/cli/*/LICENSE.md
 packages/screenpipe-mcp/LICENSE.md
-ee/sdk/LICENSE.md
-ee/sdk/npm/*/LICENSE.md
+packages/sdk/LICENSE.md
+packages/sdk/npm/*/LICENSE.md

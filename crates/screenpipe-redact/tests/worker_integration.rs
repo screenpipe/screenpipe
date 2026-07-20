@@ -39,8 +39,11 @@ fn test_worker_config() -> WorkerConfig {
 }
 
 async fn setup_db() -> sqlx::SqlitePool {
+    // A plain `sqlite::memory:` database is private to each connection.
+    // Keep this pool single-connection so the worker and assertions always
+    // observe the schema and rows created by this test.
     let pool = SqlitePoolOptions::new()
-        .max_connections(2)
+        .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .unwrap();
@@ -764,6 +767,72 @@ async fn frame_fulltext_propagates_to_all_derived_copies_once() {
         0,
         "derived copies must be propagated, never independently redacted"
     );
+}
+
+/// Accessibility semantics participate in the SAME text inference pass.
+/// `hunter2` has no standalone secret shape, but an API-key input label makes
+/// it unambiguous. The detected payload is mapped back to full_text and the
+/// structured tree without persisting the synthetic context.
+#[tokio::test]
+async fn frame_fulltext_uses_accessibility_input_context_without_extra_model_pass() {
+    let pool = setup_db().await;
+    let tree = r#"[{"role":"AXTextField","text":"hunter2","value":"hunter2","placeholder":"API key","depth":1,"bounds":{"left":0.1,"top":0.2,"width":0.3,"height":0.04},"on_screen":true}]"#;
+    sqlx::query(
+        "INSERT INTO frames (id, full_text, accessibility_text, accessibility_tree_json) \
+         VALUES (1, 'typed hunter2', 'AXTextField hunter2', ?1)",
+    )
+    .bind(tree)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let redactor = Arc::new(CountingPipeline {
+        inner: Pipeline::regex_only(),
+        map_calls: AtomicUsize::new(0),
+        batch_calls: AtomicUsize::new(0),
+    });
+    let cfg = WorkerConfig {
+        batch_size: 16,
+        idle_between_batches: Duration::from_millis(1),
+        poll_interval: Duration::from_millis(20),
+        tables: vec![TargetTable::FullText],
+        columns: all_columns(),
+        ..test_worker_config()
+    };
+    let handle = Worker::new(pool.clone(), redactor.clone(), cfg).spawn();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    handle.abort();
+
+    let row = sqlx::query(
+        "SELECT full_text, accessibility_text, accessibility_tree_json \
+         FROM frames WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let full: String = row.get(0);
+    let accessibility: String = row.get(1);
+    let tree: String = row.get(2);
+    for (surface, value) in [
+        ("full_text", full.as_str()),
+        ("accessibility_text", accessibility.as_str()),
+        ("accessibility_tree_json", tree.as_str()),
+    ] {
+        assert!(
+            !value.contains("hunter2"),
+            "secret survived in {surface}: {value}"
+        );
+        assert!(
+            value.contains("[SECRET]"),
+            "placeholder missing in {surface}: {value}"
+        );
+        assert!(
+            !value.contains("a11y_input"),
+            "synthetic context leaked into {surface}"
+        );
+    }
+    assert_eq!(redactor.map_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(redactor.batch_calls.load(Ordering::SeqCst), 0);
 }
 
 /// Don't clobber an `accessibility_text` that was already redacted in a

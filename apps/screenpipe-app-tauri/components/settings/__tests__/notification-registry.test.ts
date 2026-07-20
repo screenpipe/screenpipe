@@ -62,9 +62,9 @@ describe("notification registry", () => {
     expect(categoryEnabled({ [cat.id]: "yes" }, cat)).toBe(cat.default);
   });
 
-  it("exposes exactly one frequency-owning and one per-pipe category", () => {
-    expect(NOTIFICATION_CATEGORIES.filter((c) => c.hasFrequency)).toHaveLength(
-      1
+  it("exposes exactly one per-pipe category and no generic suggestions", () => {
+    expect(NOTIFICATION_CATEGORIES.map((c) => c.id)).not.toContain(
+      "pipeSuggestions"
     );
     expect(NOTIFICATION_CATEGORIES.filter((c) => c.hasPerPipe)).toHaveLength(1);
   });

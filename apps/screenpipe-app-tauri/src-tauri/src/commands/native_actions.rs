@@ -53,6 +53,23 @@ extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char
     }));
 }
 
+/// Fire-and-forget product analytics for native inbox interactions, tagged
+/// with surface="native_overlay" so PostHog funnels line up with the webview
+/// bell's identically-named events.
+fn track_inbox_event(app: &tauri::AppHandle, event: &'static str, mut props: serde_json::Value) {
+    if let Some(analytics) =
+        app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
+    {
+        let analytics = std::sync::Arc::clone(&analytics);
+        if let Some(obj) = props.as_object_mut() {
+            obj.insert("surface".into(), serde_json::json!("native_overlay"));
+        }
+        tauri::async_runtime::spawn(async move {
+            let _ = analytics.send_event(event, Some(props)).await;
+        });
+    }
+}
+
 fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
     if json_ptr.is_null() {
         return;
@@ -73,6 +90,79 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
         .as_ref()
         .and_then(|v| v.get("type"))
         .and_then(|v| v.as_str());
+
+    // Native inbox housekeeping (mark read / remove / clear) + product
+    // analytics. Internal to the inbox panel — handled before the JS emit so
+    // React handlers never see them. Event names mirror the webview bell's
+    // (notification_bell_*) with surface="native_overlay", so PostHog funnels
+    // unify across surfaces. The store's write_all pushes the updated list +
+    // bell dot back.
+    if let Some(inbox_op) = action_type.and_then(|t| t.strip_prefix("inbox_")) {
+        let id = parsed
+            .as_ref()
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str());
+        // Look up before mutating — a removed entry can't be described after.
+        let entry_props = |id: Option<&str>| -> serde_json::Value {
+            let Some(id) = id else {
+                return serde_json::json!({});
+            };
+            match crate::notifications::store::read_all()
+                .into_iter()
+                .find(|e| e.id == id)
+            {
+                Some(e) => serde_json::json!({
+                    "notification_type": e.notification_type,
+                    "pipe_name": e.pipe_name,
+                }),
+                None => serde_json::json!({}),
+            }
+        };
+        match inbox_op {
+            "mark_read" => {
+                let props = entry_props(id);
+                if let Some(id) = id {
+                    crate::notifications::store::mark_read_by_id(id);
+                }
+                track_inbox_event(app, "notification_bell_expand", props);
+            }
+            "remove" => {
+                let props = entry_props(id);
+                if let Some(id) = id {
+                    crate::notifications::store::remove_by_id(id);
+                }
+                track_inbox_event(app, "notification_bell_dismiss", props);
+            }
+            "clear_all" => {
+                let count = crate::notifications::store::read_all().len();
+                crate::notifications::store::clear();
+                track_inbox_event(
+                    app,
+                    "notification_bell_clear_all",
+                    serde_json::json!({ "count": count }),
+                );
+            }
+            "copy" => {
+                track_inbox_event(app, "notification_bell_copy", entry_props(id));
+            }
+            "action_clicked" => {
+                let mut props = entry_props(id);
+                if let (Some(obj), Some(label)) = (
+                    props.as_object_mut(),
+                    parsed
+                        .as_ref()
+                        .and_then(|v| v.get("label"))
+                        .and_then(|v| v.as_str()),
+                ) {
+                    obj.insert("action_label".into(), serde_json::json!(label));
+                }
+                track_inbox_event(app, "notification_bell_action", props);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     crate::events::emit_notification_action(
         app,
         crate::events::NotificationActionEvent {
@@ -490,6 +580,30 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                     // Emit to JS so it can persist the setting, then hide
                     let _ = app_clone.emit("native-shortcut-close", "");
                     native_shortcut_reminder::hide();
+                }
+                "restart_recording" => {
+                    // Recording-health overlay: restart the engine in place.
+                    // Same flow as the webview's overlay_restart_recording
+                    // command; the health loop confirms the recovery.
+                    tauri::async_runtime::spawn(crate::overlay_health::restart_recording(
+                        app_clone.clone(),
+                    ));
+                }
+                "dismiss_incident" => {
+                    tauri::async_runtime::spawn(crate::overlay_health::dismiss_incident(
+                        app_clone.clone(),
+                    ));
+                }
+                "open_inbox" => {
+                    track_inbox_event(
+                        &app_clone,
+                        "shortcut_reminder_inbox_clicked",
+                        serde_json::json!({}),
+                    );
+                    let app = app_clone.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = crate::commands::show_notification_inbox(app).await;
+                    });
                 }
                 "toggle_meeting" => {
                     // Directly call the meetings API instead of relying on JS

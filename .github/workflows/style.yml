@@ -77,7 +77,7 @@ jobs:
         continue-on-error: true
         run: |
           cargo consolidate
-          cargo consolidate --path ee/sdk
+          cargo consolidate --path packages/sdk
 
   knip:
     name: Knip (frontend dead code)

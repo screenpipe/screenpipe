@@ -51,6 +51,56 @@ pub struct ImportedSkill {
     pub path: String,
 }
 
+/// Install the two built-in screenpipe skills into a supported external agent.
+/// MCP registration stays in the frontend because that path uses the app's
+/// bundled bun binary and injects the current local API key.
+#[tauri::command]
+#[specta::specta]
+pub fn install_external_agent_skills(target: String) -> Result<Vec<String>, String> {
+    let cli_target = match target.as_str() {
+        "claude" => "claude-code",
+        "codex" => "codex",
+        "cursor" => "cursor",
+        "openclaw" => "openclaw",
+        "hermes" => "hermes",
+        _ => return Err(format!("unsupported external agent: {target}")),
+    };
+
+    screenpipe_engine::cli::agent::install_skills(cli_target, "http://localhost:3030")
+        .map(|paths| {
+            paths
+                .into_iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect()
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Remove the two built-in screenpipe skills from a supported external agent.
+/// Mirror of `install_external_agent_skills`; MCP entry removal stays in the
+/// frontend, next to the code that wrote it.
+#[tauri::command]
+#[specta::specta]
+pub fn remove_external_agent_skills(target: String) -> Result<Vec<String>, String> {
+    let cli_target = match target.as_str() {
+        "claude" => "claude-code",
+        "codex" => "codex",
+        "cursor" => "cursor",
+        "openclaw" => "openclaw",
+        "hermes" => "hermes",
+        _ => return Err(format!("unsupported external agent: {target}")),
+    };
+
+    screenpipe_engine::cli::agent::remove_skills(cli_target)
+        .map(|paths| {
+            paths
+                .into_iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect()
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// A skill offered by the curated registry. Installing one downloads its folder
 /// (the directory containing `SKILL.md`) from a public GitHub repo into the
 /// store, reusing the same store the device/folder importers write to.

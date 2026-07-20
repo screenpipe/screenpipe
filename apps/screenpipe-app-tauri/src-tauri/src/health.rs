@@ -1318,9 +1318,14 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                     }
 
                     // Vision stall tracking — also trigger on DB write stalls
-                    // (capture loop alive but pool exhaustion blocking writes)
+                    // (capture loop alive but pool exhaustion blocking writes).
+                    // A DRM pause stops all vision monitors on purpose, which
+                    // reads as frame_status "stale" — excuse it like audio
+                    // excuses meetings, or every long Netflix session becomes
+                    // a fake incident.
+                    let vision_excused = health.drm_content_paused;
                     let vision_db_stalled = health.vision_db_write_stalled;
-                    if vision_bad || vision_db_stalled {
+                    if (vision_bad || vision_db_stalled) && !vision_excused {
                         consecutive_vision_stall = consecutive_vision_stall.saturating_add(1);
                     } else {
                         if consecutive_vision_stall >= CAPTURE_STALL_THRESHOLD {
@@ -1397,6 +1402,37 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 consecutive_audio_stall = 0;
                 consecutive_vision_stall = 0;
             }
+
+            // ── Recording-health overlay (issue #5127) ──
+            // `broken` only fires for confirmed incidents: the engine is down
+            // while capture is *intended* (deliberate stops keep intent OFF and
+            // never alert), a capture stall survived the full debounce above,
+            // or the debug-only simulated break. `healthy` is the only signal
+            // that confirms recovery after a restart.
+            //
+            // Guards mirror the respawn watchdog's: no alert while a start is
+            // in flight (slow first boots / restarts are not incidents), right
+            // after wake from sleep, or — for plain connection loss — before
+            // the server was ever up. RecordingStatus::Error (a spawn that
+            // definitively failed: TCC denied, port conflict) alerts even on
+            // first boot.
+            let stall_active = consecutive_audio_stall >= CAPTURE_STALL_THRESHOLD
+                || consecutive_vision_stall >= CAPTURE_STALL_THRESHOLD;
+            let engine_down = capture_intended
+                && !start_in_progress
+                && !screenpipe_engine::sleep_monitor::recently_woke_from_sleep()
+                && (status == RecordingStatus::Error
+                    || (status == RecordingStatus::Stopped && ever_connected));
+            let sim_break = crate::overlay_health::simulated_break_active();
+            let overlay_broken = engine_down || stall_active || sim_break;
+            // Recovery needs a real successful health response this tick:
+            // decide_status holds "Recording" through up to 30 failed checks
+            // (anti-flicker), which must not read as "recovered" mid-restart.
+            let overlay_healthy = health_result.is_ok()
+                && status == RecordingStatus::Recording
+                && !stall_active
+                && !sim_break;
+            crate::overlay_health::on_tick(&app, overlay_broken, overlay_healthy).await;
         }
     });
 

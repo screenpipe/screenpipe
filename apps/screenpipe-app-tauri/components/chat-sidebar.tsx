@@ -106,10 +106,16 @@ import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { localFetch } from "@/lib/api";
 import {
+  PIPES_SIDEBAR_COLLAPSED_EVENT,
+  PIPES_SIDEBAR_COLLAPSED_KEY,
+} from "@/lib/sidebar-pipes";
+import {
   applySidebarRecentsCap,
   buildSidebarRecentsSections,
   listMoveTargetGroups,
   recurringPipeGroupKeys,
+  pipeHasSidebarSchedule,
+  visibleSidebarPipeNames,
   sessionGroupKey,
   type SidebarItem,
   type SidebarRecentsSection,
@@ -122,6 +128,7 @@ const PIPE_RUNS_PER_GROUP = 10;
 
 interface SidebarPipeInventoryItem {
   name: string;
+  hasSchedule: boolean;
   executionCount?: number;
   lastRun?: string | null;
 }
@@ -403,8 +410,12 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   );
 
   const [pipesCollapsed, setPipesCollapsed] = useCollapsedPref(
-    "screenpipe:pipes-collapsed",
+    PIPES_SIDEBAR_COLLAPSED_KEY,
     true
+  );
+  useTauriEvent<{ collapsed: boolean }>(
+    PIPES_SIDEBAR_COLLAPSED_EVENT,
+    (event) => setPipesCollapsed(event.payload.collapsed),
   );
   const [pipeInventory, setPipeInventory] = useState<SidebarPipeInventoryItem[]>([]);
   const [pipeInventoryLoaded, setPipeInventoryLoaded] = useState(false);
@@ -423,6 +434,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         if (typeof name !== "string") continue;
         inventory.push({
           name,
+          hasSchedule: pipeHasSidebarSchedule(pipe?.config ?? {}),
           executionCount:
             typeof pipe.execution_count === "number" ? pipe.execution_count : undefined,
           lastRun: typeof pipe.last_run === "string" ? pipe.last_run : null,
@@ -487,11 +499,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       else sessionsByPipe.set(name, [session]);
     }
 
-    const inventoryNames = new Set(pipeInventory.map((pipe) => pipe.name));
-    const orderedNames = [
-      ...pipeInventory.map((pipe) => pipe.name),
-      ...Array.from(sessionsByPipe.keys()).filter((name) => !inventoryNames.has(name)),
-    ];
+    const orderedNames = visibleSidebarPipeNames(pipeInventory, sessionsByPipe.keys());
 
     return orderedNames.map((name) => {
       // Keep a newly-started watch/run visible after history was loaded, while
@@ -1001,7 +1009,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   </div>
                 ) : pipeItems.length === 0 ? (
                   <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                    no pipes installed
+                    no scheduled pipes
                   </div>
                 ) : pipeItems.map((item) => (
                     <PipeGroupRow

@@ -55,6 +55,11 @@ pub struct ImageWorkerConfig {
     /// pipelines might still be writing related rows; redacting the
     /// JPG out from under them is rude. Default 60 s.
     pub min_age_seconds: i64,
+    /// Maximum age of a reused accessibility tree relative to this frame.
+    /// Fresh same-frame trees are always accepted. Older reused geometry may
+    /// point at content that moved after a scroll/layout change, so it is
+    /// discarded (the current tree and RF-DETR remain eligible).
+    pub max_a11y_age_seconds: i64,
     /// Per-frame redaction policy (allow-list + score floor).
     pub policy: ImageRedactionPolicy,
 }
@@ -67,6 +72,7 @@ impl Default for ImageWorkerConfig {
             max_cpu_cooldown: Duration::from_secs(60),
             resource_governor: Some(ResourceGovernor::global()),
             min_age_seconds: 60,
+            max_a11y_age_seconds: 5,
             policy: ImageRedactionPolicy::default(),
         }
     }
@@ -254,22 +260,35 @@ impl ImageWorker {
     async fn process_one(&self) -> Result<Option<FrameRedactionOutcome>, anyhow::Error> {
         let row = sqlx::query(
             r#"
-            SELECT id, name
-              FROM frames
-             WHERE name IS NOT NULL
-               AND image_redacted_at IS NULL
-               AND ( strftime('%s','now') - CAST(strftime('%s', timestamp) AS INTEGER) ) >= ?1
-             ORDER BY id DESC
+            SELECT f.id, f.name,
+                   CASE
+                     WHEN ctx.id IS NOT NULL
+                      AND ABS((julianday(f.timestamp) - julianday(ctx.timestamp)) * 86400.0) <= ?2
+                      AND f.app_name IS NOT NULL
+                      AND f.app_name = ctx.app_name
+                      AND f.window_name IS NOT NULL
+                      AND f.window_name = ctx.window_name
+                       THEN COALESCE(ctx.accessibility_tree_json, f.accessibility_tree_json)
+                     ELSE f.accessibility_tree_json
+                   END AS accessibility_tree_json
+              FROM frames f
+              LEFT JOIN frames ctx ON ctx.id = f.elements_ref_frame_id
+             WHERE f.name IS NOT NULL
+               AND f.image_redacted_at IS NULL
+               AND ( strftime('%s','now') - CAST(strftime('%s', f.timestamp) AS INTEGER) ) >= ?1
+             ORDER BY f.id DESC
              LIMIT 1
             "#,
         )
         .bind(self.cfg.min_age_seconds)
+        .bind(self.cfg.max_a11y_age_seconds)
         .fetch_optional(&self.pool)
         .await?;
 
         let Some(row) = row else { return Ok(None) };
         let id: i64 = row.get("id");
         let name: String = row.get("name");
+        let accessibility_tree_json: Option<String> = row.get("accessibility_tree_json");
 
         let path = std::path::Path::new(&name);
         if !path.exists() {
@@ -305,7 +324,21 @@ impl ImageWorker {
             return Ok(Some(FrameRedactionOutcome::default()));
         }
 
-        let regions = self.redactor.detect(path).await?;
+        // RF-DETR always runs. Accessibility is an additive semantic/spatial
+        // signal, never a gate that skips image inference.
+        let mut regions = self.redactor.detect(path).await?;
+        if let Some(tree) = accessibility_tree_json.as_deref() {
+            let (image_width, image_height) = image::image_dimensions(path).map_err(|e| {
+                anyhow::anyhow!("read image dimensions for {}: {e}", path.display())
+            })?;
+
+            // Parse once and add only deterministic high-confidence fields.
+            // Generic inputs remain RF-DETR-confirmed. If text redaction ran
+            // first, values it marked `[SECRET]` are also force-masked here.
+            let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
+            let a11y_regions = context.forced_image_regions(image_width, image_height);
+            crate::a11y_context::merge_image_regions(&mut regions, a11y_regions);
+        }
         let outcome =
             redact_frame(path, &regions, &self.cfg.policy).map_err(anyhow::Error::from)?;
 
@@ -343,6 +376,7 @@ mod tests {
     use async_trait::async_trait;
     use sqlx::sqlite::SqlitePoolOptions;
     use std::path::Path;
+    use std::sync::atomic::AtomicUsize;
 
     async fn setup() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -356,6 +390,10 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 name TEXT,
+                app_name TEXT,
+                window_name TEXT,
+                accessibility_tree_json TEXT,
+                elements_ref_frame_id INTEGER,
                 image_redacted_at INTEGER
             );
             "#,
@@ -383,6 +421,34 @@ mod tests {
                 score: 0.99,
             }])
         }
+    }
+
+    struct CountingSecretDetector {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ImageRedactor for CountingSecretDetector {
+        fn name(&self) -> &str {
+            "counting-secret"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        async fn detect(&self, _path: &Path) -> Result<Vec<ImageRegion>, RedactError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![ImageRegion {
+                bbox: [0, 0, 10, 10],
+                label: SpanLabel::Secret,
+                score: 0.99,
+            }])
+        }
+    }
+
+    fn white_test_image(path: &Path) {
+        image::RgbImage::from_pixel(100, 100, image::Rgb([255, 255, 255]))
+            .save(path)
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -419,6 +485,165 @@ mod tests {
             .unwrap();
         let when: Option<i64> = row.get(0);
         assert!(when.is_some(), "must mark redacted_at to skip");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runs_image_model_and_adds_fresh_accessibility_secret_region() {
+        let pool = setup().await;
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("frame.png");
+        white_test_image(&image_path);
+        let tree = r#"[{"role":"AXTextField","value":"opaque-value","placeholder":"API key","bounds":{"left":0.5,"top":0.5,"width":0.2,"height":0.1},"on_screen":true}]"#;
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, app_name, window_name, accessibility_tree_json) VALUES (1, datetime('now','-1 hour','-2 seconds'), 'Arc', 'Inbox', ?1)",
+        )
+        .bind(tree)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, app_name, window_name, elements_ref_frame_id) VALUES (2, datetime('now','-1 hour'), ?1, 'Arc', 'Inbox', 1)",
+        )
+        .bind(image_path.to_string_lossy().into_owned())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let detector = Arc::new(CountingSecretDetector {
+            calls: AtomicUsize::new(0),
+        });
+        let cfg = ImageWorkerConfig {
+            min_age_seconds: 0,
+            resource_governor: None,
+            ..Default::default()
+        };
+        let worker = ImageWorker::new(pool, detector.clone(), cfg);
+        let outcome = worker.process_one().await.unwrap().unwrap();
+
+        assert_eq!(
+            detector.calls.load(Ordering::SeqCst),
+            1,
+            "RF-DETR must still run"
+        );
+        assert_eq!(outcome.regions_redacted, 2);
+        let image = image::open(&image_path).unwrap().to_rgb8();
+        assert_eq!(image.get_pixel(2, 2).0, [0, 0, 0], "model region missing");
+        assert_eq!(image.get_pixel(55, 55).0, [0, 0, 0], "a11y region missing");
+        assert_eq!(image.get_pixel(90, 90).0, [255, 255, 255]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn generic_input_stays_model_confirmed() {
+        let pool = setup().await;
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("frame.png");
+        white_test_image(&image_path);
+        let tree = r#"[{"role":"AXTextArea","value":"ordinary prompt","bounds":{"left":0.5,"top":0.5,"width":0.2,"height":0.1},"on_screen":true}]"#;
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, app_name, window_name, accessibility_tree_json) VALUES (1, datetime('now','-1 hour'), ?1, 'Arc', 'Chat', ?2)",
+        )
+        .bind(image_path.to_string_lossy().into_owned())
+        .bind(tree)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let detector = Arc::new(CountingSecretDetector {
+            calls: AtomicUsize::new(0),
+        });
+        let cfg = ImageWorkerConfig {
+            min_age_seconds: 0,
+            resource_governor: None,
+            ..Default::default()
+        };
+        let worker = ImageWorker::new(pool, detector.clone(), cfg);
+        let outcome = worker.process_one().await.unwrap().unwrap();
+
+        assert_eq!(detector.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(outcome.regions_redacted, 1);
+        let image = image::open(&image_path).unwrap().to_rgb8();
+        assert_eq!(image.get_pixel(55, 55).0, [255, 255, 255]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ignores_stale_reused_accessibility_geometry_but_still_runs_model() {
+        let pool = setup().await;
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("frame.png");
+        white_test_image(&image_path);
+        let tree = r#"[{"role":"AXSecureTextField","is_password":true,"bounds":{"left":0.5,"top":0.5,"width":0.2,"height":0.1},"on_screen":true}]"#;
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, app_name, window_name, accessibility_tree_json) VALUES (1, datetime('now','-2 hours'), 'Arc', 'Inbox', ?1)",
+        )
+        .bind(tree)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, app_name, window_name, elements_ref_frame_id) VALUES (2, datetime('now','-1 hour'), ?1, 'Arc', 'Inbox', 1)",
+        )
+        .bind(image_path.to_string_lossy().into_owned())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let detector = Arc::new(CountingSecretDetector {
+            calls: AtomicUsize::new(0),
+        });
+        let cfg = ImageWorkerConfig {
+            min_age_seconds: 0,
+            resource_governor: None,
+            ..Default::default()
+        };
+        let worker = ImageWorker::new(pool, detector.clone(), cfg);
+        let outcome = worker.process_one().await.unwrap().unwrap();
+
+        assert_eq!(detector.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            outcome.regions_redacted, 1,
+            "stale a11y box must not be merged"
+        );
+        let image = image::open(&image_path).unwrap().to_rgb8();
+        assert_eq!(image.get_pixel(55, 55).0, [255, 255, 255]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ignores_fresh_geometry_from_a_different_window() {
+        let pool = setup().await;
+        let dir = tempfile::tempdir().unwrap();
+        let image_path = dir.path().join("frame.png");
+        white_test_image(&image_path);
+        let tree = r#"[{"role":"AXSecureTextField","is_password":true,"bounds":{"left":0.5,"top":0.5,"width":0.2,"height":0.1},"on_screen":true}]"#;
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, app_name, window_name, accessibility_tree_json) VALUES (1, datetime('now','-1 hour','-2 seconds'), 'ChatGPT', 'ChatGPT', ?1)",
+        )
+        .bind(tree)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO frames (id, timestamp, name, app_name, window_name, elements_ref_frame_id) VALUES (2, datetime('now','-1 hour'), ?1, 'Arc', 'Inbox', 1)",
+        )
+        .bind(image_path.to_string_lossy().into_owned())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let detector = Arc::new(CountingSecretDetector {
+            calls: AtomicUsize::new(0),
+        });
+        let cfg = ImageWorkerConfig {
+            min_age_seconds: 0,
+            resource_governor: None,
+            ..Default::default()
+        };
+        let worker = ImageWorker::new(pool, detector.clone(), cfg);
+        let outcome = worker.process_one().await.unwrap().unwrap();
+
+        assert_eq!(detector.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(outcome.regions_redacted, 1);
+        let image = image::open(&image_path).unwrap().to_rgb8();
+        assert_eq!(image.get_pixel(55, 55).0, [255, 255, 255]);
     }
 
     /// `frames.name` can hold an mp4 chunk path on the legacy capture

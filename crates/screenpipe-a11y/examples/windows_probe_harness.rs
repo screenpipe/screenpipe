@@ -4,7 +4,7 @@
 
 //! Windows foreground-responsiveness harness: runs the full production
 //! `UiRecorder` thread set (input hooks + app observer + UIA worker) for a
-//! fixed duration so an external probe (dev/windows-cpu-investigation/
+//! fixed duration so an external probe (scripts/windows/cpu-investigation/
 //! experiments/measure-ui-latency.ps1) can measure victim-app message-pump
 //! stalls while capture is running.
 //!

@@ -162,6 +162,7 @@ export function StandaloneChat({
   const {
     customTemplates,
     saveCustomTemplate,
+    updateCustomTemplate,
     deleteCustomTemplate,
   } = useChatTemplateSettings({
     isSettingsLoaded,
@@ -1377,6 +1378,7 @@ export function StandaloneChat({
           onSendMessage: sendMessage,
           customTemplates,
           onSaveCustomTemplate: saveCustomTemplate,
+          onUpdateCustomTemplate: updateCustomTemplate,
           onDeleteCustomTemplate: deleteCustomTemplate,
           userName: settings.userName,
           templatePipes,

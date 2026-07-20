@@ -275,7 +275,7 @@ fn chacha_decrypt(
 
 /// Test-friendly inverse — given a recipient's root key and a wrapped
 /// data key + body nonce + ciphertext, recover the plaintext. Exposed at
-/// the crate root so ee/ migration tests can verify round-trip without
+/// the crate root so enterprise migration tests can verify round-trip without
 /// reimplementing the unwrap dance.
 pub fn decrypt_body_for_recipient(
     encrypted: &EncryptedBody,

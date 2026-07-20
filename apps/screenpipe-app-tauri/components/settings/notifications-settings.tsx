@@ -8,14 +8,6 @@ import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
 import type { SettingsField } from "./settings-search";
 import { NotificationSamplePreview } from "./setting-previews";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import { Search, ChevronRight } from "lucide-react";
 import {
@@ -114,23 +106,12 @@ export function NotificationsSettings() {
     } as unknown as Partial<Settings>);
   };
 
-  // Write a batch of category booleans, keeping the two categories that drive
-  // extra state in sync: `captureStalls` mirrors `showRestartNotifications`,
-  // and `pipeSuggestions` mirrors the scheduler flag `pipeSuggestionsEnabled`
-  // (and pings the scheduler). So group toggles / presets stay consistent.
+  // Write a batch of category booleans, keeping capture-stall notifications
+  // mirrored into the legacy watchdog flag.
   const writeCategoryPatch = (patch: Record<string, boolean>) => {
     const extra: Record<string, unknown> = {};
     if ("captureStalls" in patch) {
       extra.showRestartNotifications = patch.captureStalls;
-    }
-    if ("pipeSuggestions" in patch) {
-      extra.pipeSuggestionsEnabled = patch.pipeSuggestions;
-      commands
-        .pipeSuggestionsUpdateSettings(
-          patch.pipeSuggestions,
-          settings.pipeSuggestionFrequencyHours ?? 24
-        )
-        .catch(() => {});
     }
     updateSettings({
       notificationPrefs: { ...prefs, ...patch },
@@ -142,20 +123,11 @@ export function NotificationsSettings() {
     writeCategoryPatch(categoryValuesForPreset(kind));
 
   const resetToDefaults = () => {
-    const suggestionsDefault =
-      DEFAULT_NOTIFICATION_PREFS.pipeSuggestions as boolean;
     updateSettings({
       notificationPrefs: { ...DEFAULT_NOTIFICATION_PREFS },
       showRestartNotifications:
         DEFAULT_NOTIFICATION_PREFS.captureStalls as boolean,
-      pipeSuggestionsEnabled: suggestionsDefault,
     } as unknown as Partial<Settings>);
-    commands
-      .pipeSuggestionsUpdateSettings(
-        suggestionsDefault,
-        settings.pipeSuggestionFrequencyHours ?? 24
-      )
-      .catch(() => {});
   };
 
   const q = query.trim().toLowerCase();
@@ -264,23 +236,7 @@ export function NotificationsSettings() {
                 category={category}
                 checked={categoryEnabled(prefs, category)}
                 disabled={false}
-                settings={settings}
-                updateSettings={updateSettings}
                 onToggle={(v) => {
-                  if (category.hasFrequency) {
-                    // pipe suggestions drive three values — keep them in one write
-                    updateSettings({
-                      pipeSuggestionsEnabled: v,
-                      notificationPrefs: { ...prefs, [category.id]: v },
-                    } as unknown as Partial<Settings>);
-                    commands
-                      .pipeSuggestionsUpdateSettings(
-                        v,
-                        settings.pipeSuggestionFrequencyHours ?? 24
-                      )
-                      .catch(() => {});
-                    return;
-                  }
                   if (category.mirrorsShowRestartNotifications) {
                     // legacy flag kept in sync so the engine watchdog agrees
                     updateSettings({
@@ -349,33 +305,21 @@ interface CategoryRowProps {
   category: NotificationCategory;
   checked: boolean;
   disabled: boolean;
-  settings: Settings;
-  updateSettings: (s: Partial<Settings>) => void;
   onToggle: (value: boolean) => void;
   children?: React.ReactNode;
 }
 
 /**
- * One notification category row. The switch is generic; categories that own
- * extra controls (the pipe-suggestion frequency selector) render them inline
- * to the left of the switch. Per-pipe expansion is passed in as `children`.
+ * One notification category row. Per-pipe expansion is passed in as
+ * `children`.
  */
 function CategoryRow({
   category,
   checked,
   disabled,
-  settings,
-  updateSettings,
   onToggle,
   children,
 }: CategoryRowProps) {
-  // The pipe-suggestion category drives two stored values (frequency + the
-  // dedicated scheduler-enabled flag) and pings the scheduler command, so it
-  // gets its own toggle handler that keeps all three in sync.
-  const isFrequency = category.hasFrequency;
-  const suggestionsOn = settings.pipeSuggestionsEnabled !== false;
-  const effectiveChecked = isFrequency ? suggestionsOn : checked;
-
   return (
     <div className="border-b border-border py-3 last:border-b-0">
       <div className="flex items-center justify-between gap-3">
@@ -392,36 +336,9 @@ function CategoryRow({
         </div>
 
         <div className="flex shrink-0 items-center gap-3">
-          {isFrequency && (
-            <Select
-              value={String(settings.pipeSuggestionFrequencyHours ?? 24)}
-              onValueChange={(value) => {
-                const freq = parseInt(value, 10);
-                updateSettings({ pipeSuggestionFrequencyHours: freq });
-                commands
-                  .pipeSuggestionsUpdateSettings(suggestionsOn, freq)
-                  .catch(() => {});
-              }}
-              disabled={disabled || !suggestionsOn}
-            >
-              <SelectTrigger className="h-7 w-[110px] text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1">every 1h</SelectItem>
-                <SelectItem value="2">every 2h</SelectItem>
-                <SelectItem value="3">every 3h</SelectItem>
-                <SelectItem value="6">every 6h</SelectItem>
-                <SelectItem value="12">every 12h</SelectItem>
-                <SelectItem value="24">daily</SelectItem>
-                <SelectItem value="72">every 3 days</SelectItem>
-                <SelectItem value="168">weekly</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
           <Switch
             data-testid={`notification-pref-${category.id}`}
-            checked={effectiveChecked}
+            checked={checked}
             disabled={disabled}
             onCheckedChange={(v) => onToggle(v)}
           />

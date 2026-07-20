@@ -47,9 +47,22 @@ pub fn read_all() -> Vec<NotificationHistoryEntry> {
     }
 }
 
+pub fn unread_count() -> usize {
+    read_all().iter().filter(|e| !e.read).count()
+}
+
 pub fn write_all(entries: &[NotificationHistoryEntry]) {
     if let Ok(data) = serde_json::to_string(entries) {
         let _ = std::fs::write(path(), data);
+    }
+    // Every mutation funnels through here — keep the shortcut overlay's bell
+    // dot and the native inbox list in sync without instrumenting each
+    // caller. (The webview overlay polls the app server itself; only the
+    // native panels need a push. update_inbox no-ops while hidden.)
+    let unread = entries.iter().filter(|e| !e.read).count();
+    crate::native_shortcut_reminder::set_inbox_unread(unread as i32);
+    if let Ok(json) = serde_json::to_string(entries) {
+        crate::native_notification::update_inbox(&json);
     }
 }
 

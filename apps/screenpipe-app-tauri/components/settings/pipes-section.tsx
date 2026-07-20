@@ -2326,7 +2326,7 @@ export function PipesSection() {
                     : "idle";
 
             return (
-            <div key={pipe.config.name} className={cn("group border border-border hover:bg-accent/40 transition-colors", !pipe.config.enabled && "opacity-60")}>
+            <div key={pipe.config.name} data-pipe-row={pipe.config.name} className={cn("group border border-border hover:bg-accent/40 transition-colors", !pipe.config.enabled && "opacity-60")}>
               {/* Card top line — the whole row is the expand affordance:
                   click anywhere (except the star / badges) to open runs,
                   config and logs. Keyboard-operable via role=button. */}

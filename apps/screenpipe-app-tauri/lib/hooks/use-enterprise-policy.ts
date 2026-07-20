@@ -26,7 +26,7 @@ import {
   EnterpriseAppUpdatePolicy,
   EnterpriseInstallMetadata,
   normalizeEnterpriseAppUpdatePolicy,
-} from "@ee/lib/app-update-policy";
+} from "@/lib/enterprise/app-update-policy";
 
 export type EnterpriseAuthenticationMethod = "account" | "license_key";
 export type EnterpriseAuthenticationState =

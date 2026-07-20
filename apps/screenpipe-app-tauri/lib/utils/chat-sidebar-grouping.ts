@@ -4,6 +4,34 @@
 
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
+type SidebarPipeSchedule = {
+  schedule?: string | null;
+  schedule_config?: unknown | null;
+};
+
+/** The sidebar Pipes section is for recurring automations, not manual templates. */
+export function pipeHasSidebarSchedule(config: SidebarPipeSchedule): boolean {
+  return (
+    config.schedule_config != null ||
+    (typeof config.schedule === "string" &&
+      config.schedule.length > 0 &&
+      config.schedule !== "manual")
+  );
+}
+
+export function visibleSidebarPipeNames(
+  inventory: Array<{ name: string; hasSchedule: boolean }>,
+  sessionPipeNames: Iterable<string>,
+): string[] {
+  const inventoryNames = new Set(inventory.map((pipe) => pipe.name));
+  return [
+    ...inventory.filter((pipe) => pipe.hasSchedule).map((pipe) => pipe.name),
+    // Preserve history for pipes that were deleted after they ran. Known
+    // manual pipes are intentionally absent from this recurring section.
+    ...Array.from(sessionPipeNames).filter((name) => !inventoryNames.has(name)),
+  ];
+}
+
 // ── Types ────────────────────────────────────────────────────────────
 
 export type SidebarItem =

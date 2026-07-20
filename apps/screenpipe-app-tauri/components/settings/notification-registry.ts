@@ -44,8 +44,6 @@ export interface NotificationCategory {
   default: boolean;
   /** flags an alert that can false-positive — rendered with a subtle tag */
   experimental?: boolean;
-  /** this category owns the pipe-suggestion frequency selector */
-  hasFrequency?: boolean;
   /** this category expands into the per-pipe list (progressive disclosure) */
   hasPerPipe?: boolean;
   /** toggling this also mirrors into the legacy `showRestartNotifications` flag */
@@ -137,15 +135,6 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
     group: "system",
     default: true,
     keywords: ["battery", "saver", "power", "thermal", "ac"],
-  },
-  {
-    id: "pipeSuggestions",
-    label: "Pipe suggestions",
-    description: "AI automation ideas based on your data",
-    group: "automation",
-    default: true,
-    hasFrequency: true,
-    keywords: ["automation ideas", "suggestions", "discover"],
   },
   {
     id: "pipeNotifications",

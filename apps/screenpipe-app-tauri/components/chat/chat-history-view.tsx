@@ -45,11 +45,12 @@ import {
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
 
-type HistoryTab = "active" | "archived" | "all";
+type HistoryTab = "chats" | "pipes" | "archived" | "all";
 
 const HISTORY_PAGE_SIZE = 30;
 const TABS: ReadonlyArray<{ value: HistoryTab; label: string }> = [
-  { value: "active", label: "Active" },
+  { value: "chats", label: "Chats" },
+  { value: "pipes", label: "Pipes" },
   { value: "archived", label: "Archived" },
   { value: "all", label: "All" },
 ];
@@ -64,7 +65,7 @@ export function ChatHistoryView({
   onSelectConversation: (conversationId: string) => void;
 }) {
   const { isMac } = usePlatform();
-  const [tab, setTab] = useState<HistoryTab>("active");
+  const [tab, setTab] = useState<HistoryTab>("chats");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -80,12 +81,11 @@ export function ChatHistoryView({
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
   const sentinelRef = React.useRef<HTMLDivElement | null>(null);
-  const conversationsRef = React.useRef<ConversationMeta[]>([]);
   // Increment to invalidate in-flight loads from a previous tab/query.
   const loadTokenRef = React.useRef(0);
-
-  // Latest value mirrored during render (read only from the load-more callback).
-  conversationsRef.current = conversations;
+  // Track raw (pre-filter) row count so the storage offset stays correct
+  // when we do client-side filtering (e.g. pipes tab).
+  const rawOffsetRef = React.useRef(0);
 
   const load = useCallback(
     async (mode: "reset" | "append" = "reset") => {
@@ -106,21 +106,32 @@ export function ChatHistoryView({
         }
         const includeHidden = tab === "archived" || tab === "all";
         const hiddenOnly = tab === "archived";
+        const kindFilter =
+          tab === "chats" ? ("chat" as const)
+          : tab === "pipes" ? ("all" as const)
+          : ("all" as const);
         const q = query.trim();
-        const offset = mode === "reset" ? 0 : conversationsRef.current.length;
+        if (mode === "reset") rawOffsetRef.current = 0;
+        const offset = rawOffsetRef.current;
         const options = {
           includeHidden,
           hiddenOnly,
-          kind: "all" as const,
+          kind: kindFilter,
           limit: HISTORY_PAGE_SIZE,
           offset,
         };
-        const metas = q
+        let metas = q
           ? await searchConversations(q, options)
           : await listConversations(options);
         if (token !== loadTokenRef.current) return; // superseded
+        const rawCount = metas.length;
+        rawOffsetRef.current += rawCount;
+        // Client-side filter for pipes tab (matches both pipe-watch and pipe-run)
+        if (tab === "pipes") {
+          metas = metas.filter((m) => m.kind === "pipe-watch" || m.kind === "pipe-run");
+        }
         setConversations((prev) => (mode === "reset" ? metas : [...prev, ...metas]));
-        setHasMore(metas.length === HISTORY_PAGE_SIZE);
+        setHasMore(rawCount === HISTORY_PAGE_SIZE);
       } catch {
         if (token !== loadTokenRef.current) return;
         if (mode === "reset") setConversations([]);
@@ -377,7 +388,9 @@ export function ChatHistoryView({
         <div className="h-5 w-5 flex items-center justify-center relative">
           {/* Chat icon (or Timer for pipe sessions) — hidden on hover (unless selected via selection mode) */}
           {React.createElement(
-            conv.kind === "pipe-run" || conv.kind === "pipe-watch" ? Timer : MessageSquare,
+            conv.pinned ? Pin
+              : conv.kind === "pipe-run" || conv.kind === "pipe-watch" ? Timer
+              : MessageSquare,
             {
               className: cn(
                 "h-4 w-4 absolute inset-0 m-auto transition-opacity duration-75",
@@ -739,9 +752,9 @@ export function ChatHistoryView({
                       const canArchive = ids.some((id) => !visibleById.get(id)?.hidden);
                       const canRestore = ids.some((id) => visibleById.get(id)?.hidden);
                       const showArchive =
-                        tab === "active" ? true : tab === "archived" ? false : canArchive;
+                        tab === "chats" || tab === "pipes" ? true : tab === "archived" ? false : canArchive;
                       const showRestore =
-                        tab === "archived" ? true : tab === "active" ? false : canRestore;
+                        tab === "archived" ? true : tab === "chats" || tab === "pipes" ? false : canRestore;
                       return (
                         <>
                           {showArchive && (
@@ -833,7 +846,12 @@ export function ChatHistoryView({
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     ref={searchInputRef}
-                    placeholder="search chat"
+                    placeholder={
+                      tab === "chats" ? "search chats"
+                      : tab === "pipes" ? "search pipes"
+                      : tab === "archived" ? "search archived"
+                      : "search all"
+                    }
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => {
@@ -883,12 +901,26 @@ export function ChatHistoryView({
           <div className="min-h-[40vh] flex items-center justify-center">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-              <span>Loading chats…</span>
+              <span>
+                {tab === "chats" ? "Loading chats…"
+                  : tab === "pipes" ? "Loading pipes…"
+                  : "Loading…"}
+              </span>
             </div>
           </div>
         ) : list.length === 0 ? (
-          <div className="text-sm text-muted-foreground">
-            {query.trim() ? "No matching chats." : "No chats yet."}
+          <div className="min-h-[40vh] flex items-center justify-center">
+            <span className="text-sm text-muted-foreground">
+              {query.trim()
+                ? (tab === "chats" ? "No matching chats."
+                  : tab === "pipes" ? "No matching pipes."
+                  : tab === "archived" ? "No matching archived."
+                  : "No results.")
+                : (tab === "chats" ? "No chats yet."
+                  : tab === "pipes" ? "No pipes yet."
+                  : tab === "archived" ? "No archived yet."
+                  : "No chats yet.")}
+            </span>
           </div>
         ) : (
           <div className="divide-y divide-border/30">

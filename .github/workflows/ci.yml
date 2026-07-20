@@ -434,6 +434,12 @@ jobs:
       - name: Run PII removal tests
         run: cargo test -p screenpipe-core pii_removal
 
+      # A crash here is a real data race in livetext_bridge.swift; the test
+      # skips itself when VisionKit is unavailable on the runner.
+      - name: Run Live Text bridge race stress test
+        timeout-minutes: 10
+        run: cargo test --release --manifest-path apps/screenpipe-app-tauri/src-tauri/livetext-stress/Cargo.toml
+
       # PII redaction tests skipped on macOS due to whisper-rs build issues
       # - name: Run PII redaction tests
       #   run: cargo test -p screenpipe-engine --lib pii_redaction_tests

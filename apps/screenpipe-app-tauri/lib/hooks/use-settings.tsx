@@ -20,7 +20,7 @@ import type { SourceCitation } from "@/lib/source-citations";
 import type {
 	EnterpriseAppUpdatePolicy,
 	EnterpriseInstallMetadata,
-} from "@ee/lib/app-update-policy";
+} from "@/lib/enterprise/app-update-policy";
 import { type FontSize, applyFontSize } from "@/lib/utils/font-size";
 import {
 	applyManagedOverrides,
@@ -284,10 +284,6 @@ export type Settings = SettingsStore & {
 	filterMusic?: boolean;
 	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 5000s, OpenAI 3000s, Whisper 600s) */
 	batchMaxDurationSecs?: number;
-	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */
-	pipeSuggestionsEnabled?: boolean;
-	/** Hours between pipe suggestion notifications (default: 24) */
-	pipeSuggestionFrequencyHours?: number;
 	/** User's power mode preference — persisted so it survives app restarts */
 	powerMode?: "auto" | "performance" | "battery_saver";
 	/** Show restart notifications when audio/vision capture stalls (default: false for now) */
@@ -367,7 +363,6 @@ export type Settings = SettingsStore & {
 		allowDuringPause?: string[];
 		captureStalls: boolean;
 		appUpdates: boolean;
-		pipeSuggestions: boolean;
 		pipeNotifications: boolean;
 		/** Toast when a monitor is plugged, unplugged, or switched (clamshell, dock). Default true. */
 		displayChanges?: boolean;
@@ -438,6 +433,10 @@ export type Settings = SettingsStore & {
 	 * visible. Read by reset_to_regular_and_refresh_tray in
 	 * src-tauri/src/window/panel.rs at startup and on window events. Default off. */
 	hideDockIcon?: boolean;
+	/** True once the in-app first-run guide (shown after onboarding on the Home
+	 * window) has been completed or skipped. Stored here so it persists in the
+	 * normal settings store with no bindings regen. Default off. */
+	firstRunGuideDone?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -680,6 +679,7 @@ let DEFAULT_SETTINGS: Settings = {
 			overlayMode: "fullscreen",
 			showOverlayInScreenRecording: false,
 			disableTimeline: false,
+			firstRunGuideDone: false,
 			videoQuality: "balanced",
 			transcriptionMode: "batch",
 			cloudArchiveEnabled: false,

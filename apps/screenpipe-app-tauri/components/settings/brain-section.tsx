@@ -1084,8 +1084,8 @@ export function BrainSection() {
         <div className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400">
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span>
-            hasn&apos;t updated in {staleDays} day{staleDays !== 1 ? "s" : ""}.
-            check that a memory-writing or artifact-writing pipe is installed and enabled
+            memories haven&apos;t updated in {staleDays} day{staleDays !== 1 ? "s" : ""}.
+            check that a memory-writing pipe is installed and enabled
             &mdash;{" "}
             <a
               href="?section=pipes&tab=discover&q=memory"

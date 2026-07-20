@@ -55,7 +55,8 @@ export const Providers = forwardRef<
   // "sign in required" screen unmounts it and the login token is dropped, so
   // sign-in can never complete and the user is locked out for good.
   const pathname = usePathname();
-  const isOverlay = pathname === "/shortcut-reminder";
+  const isOverlay =
+    pathname === "/shortcut-reminder" || pathname === "/notification-inbox";
   useEffect(() => {
     setMounted(true);
   }, []);

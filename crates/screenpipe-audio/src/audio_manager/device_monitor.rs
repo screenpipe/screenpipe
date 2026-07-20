@@ -90,6 +90,46 @@ fn is_session_type_streaming(
 
 use super::{AudioManager, AudioManagerStatus};
 
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ScreenLockAudioGate {
+    suspended: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScreenLockAudioAction {
+    None,
+    Suspend,
+    EnforceSuspended,
+    Resume,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl ScreenLockAudioAction {
+    fn enforces_stream_shutdown(self) -> bool {
+        matches!(self, Self::Suspend | Self::EnforceSuspended)
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl ScreenLockAudioGate {
+    fn update(&mut self, should_suspend: bool) -> ScreenLockAudioAction {
+        match (self.suspended, should_suspend) {
+            (false, true) => {
+                self.suspended = true;
+                ScreenLockAudioAction::Suspend
+            }
+            (true, false) => {
+                self.suspended = false;
+                ScreenLockAudioAction::Resume
+            }
+            (true, true) => ScreenLockAudioAction::EnforceSuspended,
+            (false, false) => ScreenLockAudioAction::None,
+        }
+    }
+}
+
 /// Exponential backoff for device recovery.
 ///
 /// Transient errors (e.g., ScreenCaptureKit not yet initialized) use a short
@@ -585,6 +625,15 @@ pub async fn start_device_monitor(
         // the stable path on any gap. Pure decider in `meeting_piggyback.rs`.
         let mut piggyback_state = super::meeting_piggyback::PiggybackState::default();
 
+        // macOS CoreAudio keeps a PreventUserIdleSystemSleep assertion for as
+        // long as an input/output stream remains open. Merely skipping samples
+        // while the display is locked leaves that assertion alive and prevents
+        // the machine from completing idle sleep. Track the lock edge so every
+        // stream is torn down exactly once, then enrolled for normal reconnect
+        // after unlock.
+        #[cfg(target_os = "macos")]
+        let mut screen_lock_audio_gate = ScreenLockAudioGate::default();
+
         // Initialize tracker with current defaults
         let _ = default_tracker.check_input_changed();
         let _ = default_tracker.check_output_changed().await;
@@ -605,6 +654,115 @@ pub async fn start_device_monitor(
 
         loop {
             if audio_manager.status().await == AudioManagerStatus::Running {
+                #[cfg(target_os = "macos")]
+                {
+                    let should_suspend = screenpipe_config::should_pause_audio_for_lock();
+                    let lock_action = screen_lock_audio_gate.update(should_suspend);
+                    match lock_action {
+                        ScreenLockAudioAction::Suspend => {
+                            // Piggyback may have suspended the stable mic/output
+                            // while session streams were active. Lift those
+                            // guards without restarting yet; the screen-lock
+                            // gate below keeps every start path closed.
+                            for device_name in audio_manager.suspended_devices() {
+                                audio_manager.unsuspend_device(&device_name);
+                            }
+                            piggyback_state = super::meeting_piggyback::PiggybackState::default();
+                        }
+                        ScreenLockAudioAction::EnforceSuspended => {}
+                        ScreenLockAudioAction::Resume => {
+                            let enabled_devices = audio_manager.enabled_devices().await;
+                            for device_name in enabled_devices {
+                                disconnected_devices.insert(device_name.clone());
+                                disconnected_device_backoffs.remove(&device_name);
+                            }
+                            info!("screen unlocked: scheduling audio stream recovery");
+                        }
+                        ScreenLockAudioAction::None => {}
+                    }
+
+                    if lock_action.enforces_stream_shutdown() {
+                        // Enforce the invariant on every locked tick, not only
+                        // on the edge. This closes two races: a stream whose
+                        // start was already in flight when the lock flag
+                        // changed, and a transient CoreAudio stop failure.
+                        let session_devices = audio_manager.session_devices();
+                        let mut observed_device_names = session_devices.clone();
+                        for device_name in &session_devices {
+                            match parse_audio_device(device_name) {
+                                Ok(device) => {
+                                    if let Err(e) =
+                                        audio_manager.stop_session_device(&device).await
+                                    {
+                                        warn!(
+                                            "failed to stop meeting-session audio device {} for screen lock: {}",
+                                            device, e
+                                        );
+                                    }
+                                }
+                                Err(e) => warn!(
+                                    "failed to parse meeting-session audio device '{}' during screen-lock cleanup: {}",
+                                    device_name, e
+                                ),
+                            }
+                        }
+
+                        // Snapshot again after session teardown so a session
+                        // stream is not normally stopped twice. If its first
+                        // stop failed, it remains here and gets an immediate
+                        // retry through the generic path.
+                        let current_devices = audio_manager.current_devices();
+                        observed_device_names
+                            .extend(current_devices.iter().map(std::string::ToString::to_string));
+                        for device in &current_devices {
+                            if let Err(e) = audio_manager.stop_device_recording(device).await {
+                                warn!(
+                                    "failed to stop audio device {} for screen lock: {}",
+                                    device, e
+                                );
+                            }
+                        }
+
+                        let mut remaining_device_names = audio_manager.session_devices();
+                        remaining_device_names.extend(
+                            audio_manager
+                                .current_devices()
+                                .iter()
+                                .map(std::string::ToString::to_string),
+                        );
+                        let released_streams = observed_device_names
+                            .len()
+                            .saturating_sub(remaining_device_names.len());
+                        if lock_action == ScreenLockAudioAction::Suspend {
+                            if remaining_device_names.is_empty() {
+                                info!(
+                                    "screen locked: released {} audio stream(s) so macOS can idle sleep",
+                                    released_streams
+                                );
+                            } else {
+                                warn!(
+                                    "screen locked: released {} of {} audio stream(s); {} remain and will be retried",
+                                    released_streams,
+                                    observed_device_names.len(),
+                                    remaining_device_names.len()
+                                );
+                            }
+                        } else if !observed_device_names.is_empty() {
+                            debug!(
+                                "screen-lock cleanup found {} late or retrying audio stream(s); {} remain",
+                                observed_device_names.len(),
+                                remaining_device_names.len()
+                            );
+                        }
+
+                        tokio::select! {
+                            _ = sleep(Duration::from_secs(1)) => {}
+                            _ = super::piggyback_listeners::sweep_wake_notified() => {}
+                        }
+                        continue;
+                    }
+                }
+
                 // Check if sleep/wake or display reconfiguration requested
                 // audio stream invalidation. Force-cycle all running devices
                 // to recover from silent CoreAudio stream failures.
@@ -2167,6 +2325,66 @@ impl RestartCooldown {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_lock_audio_gate_tears_down_and_resumes_once_per_edge() {
+        let mut gate = ScreenLockAudioGate::default();
+
+        assert_eq!(gate.update(false), ScreenLockAudioAction::None);
+        assert_eq!(gate.update(true), ScreenLockAudioAction::Suspend);
+        assert_eq!(gate.update(true), ScreenLockAudioAction::EnforceSuspended);
+        assert_eq!(gate.update(false), ScreenLockAudioAction::Resume);
+        assert_eq!(gate.update(false), ScreenLockAudioAction::None);
+    }
+
+    #[test]
+    fn screen_lock_audio_gate_enforces_shutdown_for_every_locked_tick() {
+        let mut gate = ScreenLockAudioGate::default();
+
+        for expected in [
+            ScreenLockAudioAction::Suspend,
+            ScreenLockAudioAction::EnforceSuspended,
+            ScreenLockAudioAction::EnforceSuspended,
+        ] {
+            let action = gate.update(true);
+            assert_eq!(action, expected);
+            assert!(action.enforces_stream_shutdown());
+        }
+
+        assert_eq!(gate.update(false), ScreenLockAudioAction::Resume);
+        assert!(!ScreenLockAudioAction::Resume.enforces_stream_shutdown());
+        assert!(!ScreenLockAudioAction::None.enforces_stream_shutdown());
+    }
+
+    #[test]
+    fn screen_lock_audio_gate_matches_all_short_lock_sequences() {
+        // Exhaust every lock/unlock sequence up to eight monitor ticks. This
+        // covers rapid flapping, repeated locks, and preference toggles while
+        // the display remains locked (the input is the effective pause flag).
+        for mask in 0u16..=u8::MAX as u16 {
+            let mut gate = ScreenLockAudioGate::default();
+            let mut previously_locked = false;
+
+            for tick in 0..8 {
+                let locked = mask & (1 << tick) != 0;
+                let expected = match (previously_locked, locked) {
+                    (false, false) => ScreenLockAudioAction::None,
+                    (false, true) => ScreenLockAudioAction::Suspend,
+                    (true, true) => ScreenLockAudioAction::EnforceSuspended,
+                    (true, false) => ScreenLockAudioAction::Resume,
+                };
+                let action = gate.update(locked);
+
+                assert_eq!(action, expected, "mask={mask:08b}, tick={tick}");
+                assert_eq!(
+                    action.enforces_stream_shutdown(),
+                    locked,
+                    "mask={mask:08b}, tick={tick}"
+                );
+                previously_locked = locked;
+            }
+        }
+    }
 
     lazy_static::lazy_static! {
         /// Default for builders that don't exercise the fail-over-to-any-available

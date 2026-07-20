@@ -11,7 +11,13 @@ Local REST API at `http://localhost:3030`.
 
 ## Authentication
 
-**Every request needs auth.** `$SCREENPIPE_LOCAL_API_KEY` is already in your env; without it you get 403.
+**If screenpipe MCP tools are available in your session, prefer them** — same data, no key or network handling. Some agent sandboxes (e.g. Codex) block all shell network access including localhost, so curl can never work there.
+
+**Every curl request needs auth** (403 without it). Resolve the key in order, stop at the first hit:
+
+1. `$SCREENPIPE_LOCAL_API_KEY` is already set in your env → use it as-is.
+2. Not set → fetch it once: `export SCREENPIPE_LOCAL_API_KEY="$(cd "$(mktemp -d)" && bun x screenpipe@latest auth token)"`
+3. curl fails instantly (`Failed to connect ... after 0 ms`) even though screenpipe is running → your shell is network-sandboxed; stop retrying curl and use the MCP tools.
 
 ```bash
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/..."

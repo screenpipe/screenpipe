@@ -261,6 +261,9 @@ int notif_show(const char* json) { (void)json; return -2; }
 int notif_hide(void) { return -2; }
 int notif_is_available(void) { return 0; }
 void notif_free_string(char* ptr) { if (ptr) free(ptr); }
+int inbox_toggle(const char* json) { (void)json; return -2; }
+void inbox_update(const char* json) { (void)json; }
+void inbox_hide(void) {}
 "#,
     )
     .expect("failed to write notification panel stub");
@@ -525,6 +528,12 @@ void shortcut_set_action_callback(action_callback_t cb) { (void)cb; }
 int shortcut_show(const char* json) { (void)json; return -2; }
 int shortcut_hide(void) { return -2; }
 int shortcut_is_available(void) { return 0; }
+void shortcut_set_meeting_active(int active) { (void)active; }
+void shortcut_set_inbox_unread(int count) { (void)count; }
+int shortcut_set_health_state(const char* state) { (void)state; return -2; }
+int shortcut_get_frame(double* x, double* y, double* w, double* h) {
+    (void)x; (void)y; (void)w; (void)h; return -2;
+}
 "#,
     )
     .expect("failed to write shortcut reminder stub");

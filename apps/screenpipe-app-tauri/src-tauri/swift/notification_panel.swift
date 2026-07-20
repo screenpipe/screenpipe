@@ -1061,3 +1061,533 @@ public func notifIsAvailable() -> Int32 {
     }
     return 0
 }
+
+// MARK: - Notification inbox (opened from the shortcut overlay's bell)
+// A native list of the notification history — same data as the pipes-store
+// bell's popover, rendered as a nonactivating panel just below the overlay
+// pill. Row actions reuse the toast's action-callback plumbing so pipe /
+// deeplink / source actions behave identically to the toast's buttons.
+
+struct InboxEntry: Codable, Identifiable {
+    let id: String
+    var type: String?
+    var title: String
+    var body: String
+    var pipe_name: String?
+    var timestamp: String?
+    var read: Bool?
+    var actions: [NotificationAction]?
+}
+
+/// Screen rect of the shortcut pill (bottom-left AppKit coords) so the inbox
+/// can drop from wherever the user dragged the pill, not a fixed spot.
+struct InboxAnchor: Codable {
+    let x: Double
+    let y: Double
+    let w: Double
+    let h: Double
+}
+
+struct InboxShowPayload: Codable {
+    let entries: [InboxEntry]
+    var anchor: InboxAnchor?
+}
+
+fileprivate func inboxSendJson(_ json: String) {
+    if let cb = gActionCallback {
+        json.withCString { cb($0) }
+    }
+}
+
+fileprivate func inboxSendPayload(_ payload: [String: String]) {
+    guard JSONSerialization.isValidJSONObject(payload),
+          let data = try? JSONSerialization.data(withJSONObject: payload),
+          let json = String(data: data, encoding: .utf8) else { return }
+    inboxSendJson(json)
+}
+
+extension View {
+    /// Kill the blue macOS focus ring inside the inbox — the panel becomes
+    /// key for scrolling/Esc, and SwiftUI hands default focus to the first
+    /// button ("clear all"), painting it with the accent ring on every open.
+    @ViewBuilder
+    fileprivate func inboxNoFocusRing() -> some View {
+        if #available(macOS 14.0, *) {
+            self.focusEffectDisabled()
+        } else {
+            self
+        }
+    }
+}
+
+/// Actions worth rendering as row buttons — mirrors the webview bell's
+/// filter: dismiss (the row ✕ covers it), copy and source (dedicated
+/// affordances) are excluded.
+fileprivate func inboxRowActions(_ entry: InboxEntry) -> [NotificationAction] {
+    (entry.actions ?? []).filter { a in
+        let label = (a.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = a.type ?? ""
+        return !label.isEmpty && t != "dismiss" && t != "copy" && t != "source"
+    }
+}
+
+fileprivate func inboxTimeAgo(_ ts: String?) -> String {
+    guard let ts = ts else { return "" }
+    let iso = ISO8601DateFormatter()
+    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    var date = iso.date(from: ts)
+    if date == nil {
+        iso.formatOptions = [.withInternetDateTime]
+        date = iso.date(from: ts)
+    }
+    guard let d = date else { return "" }
+    let diff = Date().timeIntervalSince(d)
+    if diff < 60 { return "just now" }
+    if diff < 3600 { return "\(Int(diff / 60))m ago" }
+    if diff < 86400 { return "\(Int(diff / 3600))h ago" }
+    let df = DateFormatter()
+    df.dateStyle = .short
+    return df.string(from: d)
+}
+
+@available(macOS 13.0, *)
+private struct InboxRowView: View {
+    let entry: InboxEntry
+    let isExpanded: Bool
+    let onToggleExpand: () -> Void
+    let onRemove: () -> Void
+    let onRunAction: (NotificationAction) -> Void
+    @State private var hovered = false
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
+                Button(action: onToggleExpand) {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
+                            .padding(.top, 3)
+                        if entry.read != true {
+                            Circle().fill(Color.primary)
+                                .frame(width: 5, height: 5)
+                                .padding(.top, 5)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title)
+                                .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                            if !isExpanded && !entry.body.isEmpty {
+                                Text(entry.body)
+                                    .font(Brand.swiftUIMonoFont(size: 9))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        Text(inboxTimeAgo(entry.timestamp))
+                            .font(Brand.swiftUIMonoFont(size: 8))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .padding(.top, 3)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                // Sibling of the expand button, not nested inside it — nested
+                // buttons make the ✕ also toggle the row.
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(hovered ? 1 : 0)
+                .padding(.leading, 2)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !entry.body.isEmpty {
+                        MarkdownText(entry.body)
+                    }
+                    if let pipe = entry.pipe_name, !pipe.isEmpty {
+                        Text(pipe)
+                            .font(Brand.swiftUIMonoFont(size: 8))
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                    HStack(spacing: 6) {
+                        ForEach(Array(inboxRowActions(entry).enumerated()), id: \.offset) { _, action in
+                            BrandTextButton(label: action.label ?? "action", fontSize: 9) {
+                                onRunAction(action)
+                            }
+                        }
+                        BrandTextButton(label: copied ? "copied" : "copy", fontSize: 9) {
+                            let pb = NSPasteboard.general
+                            pb.clearContents()
+                            pb.setString("\(entry.title)\n\n\(entry.body)", forType: .string)
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
+                            inboxSendPayload(["type": "inbox_copy", "id": entry.id])
+                        }
+                    }
+                }
+                .padding(.horizontal, 26)
+                .padding(.bottom, 8)
+            }
+
+            Divider().opacity(0.4)
+        }
+        .background(hovered ? Color.primary.opacity(0.04) : Color.clear)
+        .onHover { hovered = $0 }
+    }
+}
+
+@available(macOS 13.0, *)
+private struct InboxListView: View {
+    let entries: [InboxEntry]
+    let expandedId: String?
+    let onToggleExpand: (String) -> Void
+    let onRemove: (String) -> Void
+    let onClearAll: () -> Void
+    let onRunAction: (InboxEntry, NotificationAction) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("notifications")
+                    .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
+                    .foregroundColor(.primary)
+                Spacer()
+                if !entries.isEmpty {
+                    BrandTextButton(label: "clear all", fontSize: 9, action: onClearAll)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            Divider()
+            if entries.isEmpty {
+                Spacer()
+                Text("no notifications yet")
+                    .font(Brand.swiftUIMonoFont(size: 10))
+                    .foregroundColor(.secondary)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(entries) { entry in
+                            InboxRowView(
+                                entry: entry,
+                                isExpanded: expandedId == entry.id,
+                                onToggleExpand: { onToggleExpand(entry.id) },
+                                onRemove: { onRemove(entry.id) },
+                                onRunAction: { onRunAction(entry, $0) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@available(macOS 13.0, *)
+class InboxPanelController: NSObject {
+    static let shared = InboxPanelController()
+
+    private var panel: NSPanel?
+    private var hostingView: NSHostingView<AnyView>?
+    private var entries: [InboxEntry] = []
+    private var expandedId: String?
+    private var visible = false
+    private var globalClickMonitor: Any?
+    private var localClickMonitor: Any?
+    private var localKeyMonitor: Any?
+    /// When the click-outside monitor dismissed the panel. The bell's own
+    /// click ALSO trips that monitor an instant before its action reaches
+    /// toggle() — without this, clicking the bell to close would immediately
+    /// reopen.
+    private var lastOutsideDismissAt: Date = .distantPast
+
+    private var anchor: InboxAnchor?
+
+    private static let panelWidth: CGFloat = 340
+    private static let panelHeight: CGFloat = 440
+    private static let cornerRadius: CGFloat = 12
+
+    /// Toggle from the bell. Returns whether the panel is visible after.
+    func toggle(json: String?) -> Bool {
+        var nowVisible = false
+        let work = { [self] in
+            if visible {
+                hideOnMain()
+            } else if Date().timeIntervalSince(lastOutsideDismissAt) < 0.4 {
+                // The same physical click already dismissed the panel via the
+                // click-outside monitor — the user meant "close".
+            } else {
+                if let json = json { decode(json) }
+                showOnMain()
+                nowVisible = true
+            }
+        }
+        if Thread.isMainThread { work() } else { DispatchQueue.main.sync(execute: work) }
+        return nowVisible
+    }
+
+    func update(json: String) {
+        DispatchQueue.main.async { [self] in
+            decode(json)
+            if visible { updateContent() }
+        }
+    }
+
+    func hide() {
+        DispatchQueue.main.async { [self] in hideOnMain() }
+    }
+
+    private func decode(_ json: String) {
+        guard let data = json.data(using: .utf8) else { return }
+        if let payload = try? JSONDecoder().decode(InboxShowPayload.self, from: data) {
+            entries = payload.entries
+            if let a = payload.anchor { anchor = a }
+        } else if let list = try? JSONDecoder().decode([InboxEntry].self, from: data) {
+            // Store-update pushes send the bare entry list; keep the anchor.
+            entries = list
+        }
+    }
+
+    private func showOnMain() {
+        visible = true
+        expandedId = nil
+        if panel == nil { createPanel() }
+        updateContent()
+        positionPanel()
+        // Unfurl from the pill: start slightly higher (toward the pill) and
+        // transparent, settle down into place.
+        if let panel = panel {
+            let finalOrigin = panel.frame.origin
+            panel.setFrameOrigin(NSPoint(x: finalOrigin.x, y: finalOrigin.y + 10))
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            panel.makeKey()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrameOrigin(finalOrigin)
+                panel.animator().alphaValue = 1
+            }
+        }
+        installMonitors()
+    }
+
+    private func hideOnMain() {
+        visible = false
+        removeMonitors()
+        guard let panel = panel, panel.isVisible else { return }
+        // Retreat back up into the pill and fade.
+        let shownOrigin = panel.frame.origin
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().setFrameOrigin(NSPoint(x: shownOrigin.x, y: shownOrigin.y + 8))
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self = self, !self.visible else { return }
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            panel.setFrameOrigin(shownOrigin)
+        })
+    }
+
+    private func createPanel() {
+        let p = ClickablePanel(
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight),
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
+        )
+        p.isFloatingPanel = true
+        p.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)) + 2)
+        p.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle, .fullScreenAuxiliary]
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.hidesOnDeactivate = false
+        p.isReleasedWhenClosed = false
+        p.sharingType = .readOnly
+        self.panel = p
+    }
+
+    private func positionPanel() {
+        guard let panel = panel else { return }
+        // Prefer dropping from the pill's actual frame (it's draggable);
+        // fall back to top-center of the screen under the mouse.
+        if let a = anchor {
+            let pillMidX = a.x + a.w / 2
+            var x = pillMidX - Self.panelWidth / 2
+            var y = a.y - 8 - Self.panelHeight
+            for screen in NSScreen.screens
+            where NSPointInRect(NSPoint(x: pillMidX, y: a.y + a.h / 2), screen.frame) {
+                let vf = screen.visibleFrame
+                x = max(vf.minX + 8, min(x, vf.maxX - Self.panelWidth - 8))
+                y = max(vf.minY + 8, y)
+                break
+            }
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+            return
+        }
+        let mouse = NSEvent.mouseLocation
+        for screen in NSScreen.screens where NSMouseInRect(mouse, screen.frame, false) {
+            let visibleFrame = screen.visibleFrame
+            let x = screen.frame.origin.x + (screen.frame.size.width - Self.panelWidth) / 2
+            let y = visibleFrame.origin.y + visibleFrame.size.height - 34 - Self.panelHeight
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+            break
+        }
+    }
+
+    private func updateContent() {
+        guard let panel = panel else { return }
+        let view = InboxListView(
+            entries: entries,
+            expandedId: expandedId,
+            onToggleExpand: { [weak self] id in
+                guard let self = self else { return }
+                if self.expandedId == id {
+                    self.expandedId = nil
+                } else {
+                    self.expandedId = id
+                    if let idx = self.entries.firstIndex(where: { $0.id == id }),
+                       self.entries[idx].read != true {
+                        self.entries[idx].read = true
+                        inboxSendPayload(["type": "inbox_mark_read", "id": id])
+                    }
+                }
+                self.updateContent()
+            },
+            onRemove: { [weak self] id in
+                guard let self = self else { return }
+                self.entries.removeAll { $0.id == id }
+                if self.expandedId == id { self.expandedId = nil }
+                inboxSendPayload(["type": "inbox_remove", "id": id])
+                self.updateContent()
+            },
+            onClearAll: { [weak self] in
+                guard let self = self else { return }
+                self.entries = []
+                self.expandedId = nil
+                inboxSendPayload(["type": "inbox_clear_all"])
+                self.updateContent()
+            },
+            onRunAction: { [weak self] entry, action in
+                guard let self = self else { return }
+                // Analytics first (routes to Rust's inbox_* branch), then the
+                // real action — same JSON the toast sends, so Rust + the JS
+                // notification handler execute it identically.
+                inboxSendPayload([
+                    "type": "inbox_action_clicked",
+                    "id": entry.id,
+                    "label": action.label ?? "",
+                ])
+                self.hideOnMain()
+                if let data = try? JSONEncoder().encode(action),
+                   let json = String(data: data, encoding: .utf8) {
+                    inboxSendJson(json)
+                }
+            }
+        )
+        // Same surface as the native toast and macOS system overlays
+        // (Notification Center / Spotlight): vibrancy material that follows
+        // the system theme, soft rounding, hairline border. Adaptive colors
+        // stay readable in light AND dark mode — a hardcoded dark card made
+        // AppKit-resolved text invisible in light mode.
+        let framed = view
+            .frame(width: Self.panelWidth, height: Self.panelHeight)
+            .background(VisualEffectView())
+            .overlay(
+                RoundedRectangle(cornerRadius: Self.cornerRadius)
+                    .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
+            .inboxNoFocusRing()
+
+        if let hosting = hostingView {
+            hosting.rootView = AnyView(framed)
+        } else {
+            let hosting = NSHostingView(rootView: AnyView(framed))
+            hosting.frame = NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight)
+            hosting.autoresizingMask = [.width, .height]
+            panel.contentView = hosting
+            self.hostingView = hosting
+        }
+    }
+
+    private func installMonitors() {
+        removeMonitors()
+        // Click anywhere outside the panel dismisses it — other apps arrive
+        // via the global monitor, our own windows (the pill, main windows)
+        // via the local one. Clicks inside the panel hit neither condition.
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            self?.lastOutsideDismissAt = Date()
+            self?.hide()
+        }
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] event in
+            guard let self = self else { return event }
+            if event.window !== self.panel {
+                self.lastOutsideDismissAt = Date()
+                self.hide()
+            }
+            return event
+        }
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            if event.keyCode == 53 { // esc
+                self?.hide()
+                return nil
+            }
+            return event
+        }
+    }
+
+    private func removeMonitors() {
+        if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
+        if let m = localClickMonitor { NSEvent.removeMonitor(m); localClickMonitor = nil }
+        if let m = localKeyMonitor { NSEvent.removeMonitor(m); localKeyMonitor = nil }
+    }
+}
+
+// MARK: - Inbox C FFI
+
+@_cdecl("inbox_toggle")
+public func inboxToggle(_ jsonPtr: UnsafePointer<CChar>?) -> Int32 {
+    let json = jsonPtr != nil ? String(cString: jsonPtr!) : nil
+    if #available(macOS 13.0, *) {
+        return InboxPanelController.shared.toggle(json: json) ? 1 : 0
+    }
+    return -2
+}
+
+@_cdecl("inbox_update")
+public func inboxUpdate(_ jsonPtr: UnsafePointer<CChar>?) {
+    guard let jsonPtr = jsonPtr else { return }
+    let json = String(cString: jsonPtr)
+    if #available(macOS 13.0, *) {
+        InboxPanelController.shared.update(json: json)
+    }
+}
+
+@_cdecl("inbox_hide")
+public func inboxHide() {
+    if #available(macOS 13.0, *) {
+        InboxPanelController.shared.hide()
+    }
+}

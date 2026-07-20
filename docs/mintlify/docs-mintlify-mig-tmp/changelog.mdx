@@ -13,6 +13,7 @@ icon: "newspaper"
 
 ### bug fixes
 
+- **cleaner pipe sidebar after onboarding** — pipes you added manually (not from the pipe store) no longer clutter the sidebar list, and the pipes section now auto-expands the first time you finish onboarding so your newly installed pipes are visible instead of hidden behind a collapsed group. See [pipe store](/pipe-store).
 - **streaming capture keeps running over RDP** — the SDK's streaming capture path could stop delivering frames when the desktop app was accessed over a Remote Desktop (RDP) session, because RDP swaps the active session's graphics stack out from under the capture stream. Streaming now survives the session transition and keeps producing frames while you're connected over RDP. See [for developers](/for-developers).
 
 ## week of july 13, 2026

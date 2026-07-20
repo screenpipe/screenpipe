@@ -25,7 +25,7 @@ This crate has no knowledge of screenpipe's database, no knowledge of any specif
 
 ## Why a separate crate
 
-Today the same patterns are re-implemented in three places: consumer cloud sync (`screenpipe-core::sync`), the enterprise telemetry sync (`ee/desktop-rust/enterprise_sync.rs`), and the cloud-archive media path (`screenpipe-engine/archive.rs`). Extracting the generic plumbing lets each caller keep its own wire format and crypto policy while sharing the transport, encryption, and retry logic.
+Today the same patterns are re-implemented in three places: consumer cloud sync (`screenpipe-core::sync`), the enterprise telemetry sync (`apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs`), and the cloud-archive media path (`screenpipe-engine/archive.rs`). Extracting the generic plumbing lets each caller keep its own wire format and crypto policy while sharing the transport, encryption, and retry logic.
 
 ## Feature flags
 

@@ -25,9 +25,10 @@ type Pipe = {
   defaultOn: boolean;
 };
 
-// Two-pipe bundle. digital-clone is the breakout install (~4.8k organic
-// store installs in 30d); personal-crm is the second. Other pipes are
-// reachable from the pipe store after onboarding.
+// Two-pipe bundle: durable memory plus an immediate action-oriented reward.
+// Digital Clone already maintains person records and open loops, so pairing it
+// with Personal CRM duplicated work. Todo List Assistant is complementary and
+// has stronger observed usage/retention. Other pipes remain in the store.
 const PIPES: Pipe[] = [
   {
     slug: "digital-clone",
@@ -36,9 +37,9 @@ const PIPES: Pipe[] = [
     defaultOn: true,
   },
   {
-    slug: "personal-crm",
-    title: "People memory",
-    subtitle: "remember everyone you meet",
+    slug: "todo-list-assistant",
+    title: "Todo tracker",
+    subtitle: "catches tasks you might miss",
     defaultOn: true,
   },
 ];
@@ -46,6 +47,14 @@ const PIPES: Pipe[] = [
 const DEFAULT_SLUGS = PIPES.filter((p) => p.defaultOn).map((p) => p.slug);
 
 type Phase = "choose" | "enabling";
+
+function pipeSetupFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("server not ready")) return "server_not_ready";
+  if (message.startsWith("install ")) return "install_failed";
+  if (message.startsWith("enable ")) return "enable_failed";
+  return "unknown";
+}
 
 async function waitForServer(maxWaitMs = 30000): Promise<void> {
   const start = Date.now();
@@ -248,7 +257,11 @@ export default function PickPipe() {
       });
 
       try {
-        await completeOnboarding();
+        await completeOnboarding({
+          method: "pipes_installed",
+          pipeCount: slugs.length,
+          customized,
+        });
       } catch {}
       try {
         scheduleFirstRunNotification();
@@ -268,6 +281,12 @@ export default function PickPipe() {
       const msg =
         (err as Error)?.stack ?? (err as Error)?.message ?? String(err);
       console.error("failed to enable pipes:", msg);
+      posthog.capture("onboarding_pipe_install_failed", {
+        failure_reason: pipeSetupFailureReason(err),
+        pipe_count: slugs.length,
+        customized,
+        time_spent_ms: Date.now() - mountTimeRef.current,
+      });
       setError("Couldn't set everything up — try again or skip");
       setPhase("choose");
       // Release guard on failure so retry works; success path keeps it set
@@ -281,10 +300,9 @@ export default function PickPipe() {
     isCompletingRef.current = true;
 
     posthog.capture("onboarding_pipe_skipped");
-    posthog.capture("onboarding_completed");
 
     try {
-      await completeOnboarding();
+      await completeOnboarding({ method: "pipe_step_skipped" });
     } catch {}
     try {
       scheduleFirstRunNotification();

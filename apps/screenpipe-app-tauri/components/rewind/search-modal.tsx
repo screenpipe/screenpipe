@@ -5,7 +5,12 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { Search, X, Loader2, Clock, MessageSquare, User, ArrowLeft, Mic, Volume2, Hash, Tag, Monitor, Keyboard, ClipboardCopy, AppWindow } from "lucide-react";
-import { useKeywordSearchStore, SearchMatch, UiEventResult } from "@/lib/hooks/use-keyword-search-store";
+import {
+  useKeywordSearchStore,
+  SearchMatch,
+  UiEventResult,
+  type SearchAnalyticsSurface,
+} from "@/lib/hooks/use-keyword-search-store";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSearchFocus } from "./hooks/use-search-focus";
 import { listen, emit } from "@tauri-apps/api/event";
@@ -26,6 +31,7 @@ import { NearViewport } from "./near-viewport";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { buildBoundedFacetSql, sanitizeFts5Query } from "@/lib/search/facet-sql";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
+import posthog from "posthog-js";
 
 interface SpeakerResult {
   id: number;
@@ -57,6 +63,41 @@ interface SearchModalProps {
   embedded?: boolean;
   /** When true, this is rendered in its own Tauri window (no backdrop, always open) */
   standalone?: boolean;
+}
+
+type SearchResultType =
+  | "screen"
+  | "input"
+  | "chat"
+  | "person"
+  | "speaker_transcription"
+  | "tagged_frame";
+
+type SearchSelectionMethod = "click" | "keyboard";
+
+function createAnalyticsId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function buildSearchAnalyticsKey(
+  searchEpoch: number,
+  query: string,
+  contentFilter: string,
+  appFilter: string | null,
+  domainFilter: string | null,
+  timeFilter: string | null,
+): string {
+  return JSON.stringify([
+    searchEpoch,
+    query,
+    contentFilter,
+    appFilter,
+    domainFilter,
+    timeFilter,
+  ]);
 }
 
 // stopwords to filter out from suggestions — keep this minimal so real
@@ -407,11 +448,27 @@ function UiEventItem({ evt, onNavigate }: { evt: UiEventResult; onNavigate: () =
 }
 
 export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded = false, standalone = false }: SearchModalProps) {
+  const analyticsSurface: SearchAnalyticsSurface = standalone
+    ? "standalone"
+    : embedded
+      ? "embedded"
+      : "modal";
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const { inputRef, inputElRef, focusInput } = useSearchFocus(isOpen);
   const gridRef = useRef<HTMLDivElement>(null);
+  const settledSearchKeysRef = useRef(new Set<string>());
+  const searchAnalyticsIdsRef = useRef(new Map<string, string>());
+  const searchSessionIdRef = useRef("");
+
+  const getSearchAnalyticsId = useCallback((key: string) => {
+    const existing = searchAnalyticsIdsRef.current.get(key);
+    if (existing) return existing;
+    const next = createAnalyticsId();
+    searchAnalyticsIdsRef.current.set(key, next);
+    return next;
+  }, []);
 
   // Programmatically scroll via native-scroll events (macOS).
   // WKWebView in settings WebviewWindow doesn't dispatch JS wheel events,
@@ -861,6 +918,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       const initialQuery = standalone
         ? new URLSearchParams(window.location.search).get("q") ?? ""
         : "";
+      settledSearchKeysRef.current.clear();
+      searchAnalyticsIdsRef.current.clear();
+      searchSessionIdRef.current = createAnalyticsId();
+      posthog.capture("search_ui_opened", {
+        surface: analyticsSurface,
+        search_session_id: searchSessionIdRef.current,
+        has_prefilled_query: initialQuery.trim().length > 0,
+      });
       setQuery(initialQuery);
       resetSearch();
       setSearchEpoch(e => e + 1);
@@ -880,7 +945,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setTranscriptionOffset(0);
       setHasMoreTranscriptions(true);
     }
-  }, [isOpen, resetSearch, standalone]);
+  }, [analyticsSurface, isOpen, resetSearch, standalone]);
 
   // A raw keystroke starts a new search epoch immediately. Abort and clear the
   // previous epoch now; the debounced effect below starts its replacement.
@@ -912,12 +977,25 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setTagResults([]);
     setOcrOffset(0);
     setHasMoreOcr(true);
+    const searchId = getSearchAnalyticsId(
+      buildSearchAnalyticsKey(
+        searchEpoch,
+        q,
+        contentFilterRef.current === "chats" ? "chats" : "all",
+        null,
+        null,
+        null,
+      ),
+    );
     searchKeywords(debouncedQuery, {
       limit: OCR_PAGE_SIZE,
       offset: 0,
+      analytics_surface: analyticsSurface,
+      analytics_search_id: searchId,
+      analytics_session_id: searchSessionIdRef.current,
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQuery, query, searchKeywords, resetSearch, searchEpoch]);
+  }, [analyticsSurface, debouncedQuery, getSearchAnalyticsId, query, searchKeywords, resetSearch, searchEpoch]);
 
   // Search tags when query starts with #
   useEffect(() => {
@@ -1125,10 +1203,80 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return () => { cancelled = true; controller.abort(); };
   }, [selectedSpeaker]);
 
+  const trackSearchResultSelected = useCallback(
+    (
+      resultType: SearchResultType,
+      selectionMethod: SearchSelectionMethod,
+      destination: "timeline" | "chat" | "drilldown",
+    ) => {
+      posthog.capture("search_ui_result_selected", {
+        surface: analyticsSurface,
+        search_id: getSearchAnalyticsId(
+          buildSearchAnalyticsKey(
+            searchEpoch,
+            query.trim(),
+            contentFilter,
+            appFilter,
+            domainFilter,
+            timeFilter,
+          ),
+        ),
+        search_session_id: searchSessionIdRef.current,
+        result_type: resultType,
+        selection_method: selectionMethod,
+        destination,
+        query_length: query.trim().length,
+        content_filter: contentFilter,
+        has_app_filter: Boolean(appFilter),
+        has_domain_filter: Boolean(domainFilter),
+        has_time_filter: Boolean(timeFilter),
+      });
+    },
+    [
+      analyticsSurface,
+      appFilter,
+      contentFilter,
+      domainFilter,
+      getSearchAnalyticsId,
+      query,
+      searchEpoch,
+      timeFilter,
+    ],
+  );
+
+  const handleOpenChatResult = useCallback(
+    (conversationId: string, selectionMethod: SearchSelectionMethod) => {
+      trackSearchResultSelected("chat", selectionMethod, "chat");
+      void emit("chat-load-conversation", { conversationId });
+      onClose();
+    },
+    [onClose, trackSearchResultSelected],
+  );
+
   // Send to AI handler
   const handleSendToAI = useCallback(async () => {
     const result = filteredResults[selectedIndex];
     if (!result) return;
+
+    posthog.capture("search_ui_ask_ai", {
+      surface: analyticsSurface,
+      search_id: getSearchAnalyticsId(
+        buildSearchAnalyticsKey(
+          searchEpoch,
+          query.trim(),
+          contentFilter,
+          appFilter,
+          domainFilter,
+          timeFilter,
+        ),
+      ),
+      search_session_id: searchSessionIdRef.current,
+      query_length: query.trim().length,
+      result_type: "screen",
+      has_app_filter: Boolean(appFilter),
+      has_domain_filter: Boolean(domainFilter),
+      has_time_filter: Boolean(timeFilter),
+    });
 
     const context = `Context from search result:\n${result.app_name} - ${result.window_name}\nTime: ${format(new Date(result.timestamp), "PPpp")}\n\nText:\n${result.text || ""}`;
 
@@ -1137,7 +1285,19 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
     // Show chat window and deliver prefill (handles fresh webview creation)
     await showChatWithPrefill({ context, frameId: result.frame_id });
-  }, [filteredResults, selectedIndex, onClose]);
+  }, [
+    analyticsSurface,
+    appFilter,
+    contentFilter,
+    domainFilter,
+    filteredResults,
+    getSearchAnalyticsId,
+    onClose,
+    query,
+    searchEpoch,
+    selectedIndex,
+    timeFilter,
+  ]);
 
   // Handle going back from speaker drill-down
   const handleBackFromSpeaker = useCallback(() => {
@@ -1157,16 +1317,23 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setIsLoadingMore(true);
     const newOffset = ocrOffset + OCR_PAGE_SIZE;
     setOcrOffset(newOffset);
-    const opts: { limit: number; offset: number; start_time?: Date; end_time?: Date } = {
+    const opts: {
+      limit: number;
+      offset: number;
+      start_time?: Date;
+      end_time?: Date;
+      analytics_surface: SearchAnalyticsSurface;
+    } = {
       limit: OCR_PAGE_SIZE,
       offset: newOffset,
+      analytics_surface: analyticsSurface,
     };
     if (timeFilter) {
       opts.start_time = new Date(timeFilter + "T00:00:00");
       opts.end_time = new Date(timeFilter + "T23:59:59.999");
     }
     searchKeywords(debouncedQuery, opts).finally(() => setIsLoadingMore(false));
-  }, [isLoadingMore, hasMoreOcr, debouncedQuery, ocrOffset, searchKeywords, timeFilter]);
+  }, [analyticsSurface, isLoadingMore, hasMoreOcr, debouncedQuery, ocrOffset, searchKeywords, timeFilter]);
 
   // Track if we got fewer results than page size (= no more pages).
   // The server may filter results after fetching (e.g. app_name filter),
@@ -1235,7 +1402,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     }
   }, [selectedSpeaker, loadMoreOcr, loadMoreTranscriptions]);
 
-  const handleSelectResult = useCallback((result: SearchMatch) => {
+  const handleSelectResult = useCallback((
+    result: SearchMatch,
+    selectionMethod: SearchSelectionMethod = "click",
+  ) => {
+    trackSearchResultSelected("screen", selectionMethod, "timeline");
     if (queryTokens.length > 0) {
       setHighlight(queryTokens, result.frame_id);
     }
@@ -1245,7 +1416,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     const resultsJson = JSON.stringify(searchResults);
     onNavigateToTimestamp(result.timestamp, result.frame_id, queryTokens, resultsJson, query);
     onClose();
-  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex]);
+  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex, trackSearchResultSelected]);
 
   // Keyboard navigation — uses refs for data arrays to avoid re-mounting when results change
   useEffect(() => {
@@ -1274,6 +1445,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             e.preventDefault();
             setSelectedTranscriptionIndex(i => {
               if (transcriptions[i]?.timestamp) {
+                trackSearchResultSelected(
+                  "speaker_transcription",
+                  "keyboard",
+                  "timeline",
+                );
                 onNavigateToTimestamp(transcriptions[i].timestamp);
                 onClose();
               }
@@ -1304,8 +1480,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             {
               const chat = chats[selectedChatIndexRef.current];
               if (chat) {
-                void emit("chat-load-conversation", { conversationId: chat.id });
-                onClose();
+                handleOpenChatResult(chat.id, "keyboard");
               }
             }
             break;
@@ -1348,7 +1523,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           } else {
             setSelectedIndex(i => {
               const r = filteredResultsRef.current[i];
-              if (r) handleSelectResult(r);
+              if (r) handleSelectResult(r, "keyboard");
               return i;
             });
           }
@@ -1365,7 +1540,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker]);
+  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected]);
 
   // Scroll selected item into view (only on arrow-key navigation, not on new page load)
   const prevSelectedIndex = useRef(selectedIndex);
@@ -1388,6 +1563,97 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     if (!standalone || !isOpen) return;
     commands.resizeSearchWindow(680, standaloneTargetH).catch(() => {});
   }, [standalone, isOpen, standaloneTargetH]);
+
+  useEffect(() => {
+    if (!isOpen || selectedSpeaker) return;
+
+    const settledQuery = debouncedQuery.trim();
+    if (query.trim() !== settledQuery || !settledQuery) return;
+
+    const queryMode = settledQuery.startsWith("#")
+      ? "tag"
+      : settledQuery.startsWith("@")
+        ? "person"
+        : "keyword";
+    if (queryMode === "keyword" && settledQuery.length < 3) return;
+    if (queryMode === "keyword" && searchQuery.trim() !== settledQuery) return;
+    if (
+      isSearching ||
+      isSearchingUiEvents ||
+      isSearchingSpeakers ||
+      isSearchingTags ||
+      isLoadingChats
+    ) {
+      return;
+    }
+
+    const analyticsKey = buildSearchAnalyticsKey(
+      searchEpoch,
+      settledQuery,
+      contentFilter,
+      appFilter,
+      domainFilter,
+      timeFilter,
+    );
+    if (settledSearchKeysRef.current.has(analyticsKey)) return;
+    settledSearchKeysRef.current.add(analyticsKey);
+
+    const resultCounts = {
+      screen_result_count: filteredResults.length,
+      input_result_count: uiEventResults.length,
+      chat_result_count: filteredChats.length,
+      person_result_count: speakerResults.length,
+      tag_result_count: tagResults.length,
+    };
+    const totalResultCount = Object.values(resultCounts).reduce(
+      (sum, count) => sum + count,
+      0,
+    );
+    // The local key may contain filters, but analytics receives only opaque IDs,
+    // counts, booleans, and enum values — never query or result content.
+    const properties = {
+      surface: analyticsSurface,
+      search_id: getSearchAnalyticsId(analyticsKey),
+      search_session_id: searchSessionIdRef.current,
+      query_mode: queryMode,
+      query_length: settledQuery.length,
+      content_filter: contentFilter,
+      ...resultCounts,
+      total_result_count: totalResultCount,
+      has_results: totalResultCount > 0,
+      has_app_filter: Boolean(appFilter),
+      has_domain_filter: Boolean(domainFilter),
+      has_time_filter: Boolean(timeFilter),
+    };
+
+    posthog.capture("search_ui_query_settled", properties);
+    if (totalResultCount === 0) {
+      posthog.capture("search_ui_no_results", properties);
+    }
+  }, [
+    analyticsSurface,
+    appFilter,
+    contentFilter,
+    debouncedQuery,
+    domainFilter,
+    filteredChats.length,
+    filteredResults.length,
+    getSearchAnalyticsId,
+    isLoadingChats,
+    isOpen,
+    isSearching,
+    isSearchingSpeakers,
+    isSearchingTags,
+    isSearchingUiEvents,
+    query,
+    searchEpoch,
+    searchQuery,
+    selectedSpeaker,
+    speakerResults.length,
+    tagResults.length,
+    timeFilter,
+    uiEventResults.length,
+  ]);
 
   if (!isOpen) return null;
 
@@ -1511,6 +1777,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     data-index={index}
                     onClick={() => {
                       if (t.timestamp) {
+                        trackSearchResultSelected(
+                          "speaker_transcription",
+                          "click",
+                          "timeline",
+                        );
                         onNavigateToTimestamp(t.timestamp);
                         if (!embedded) onClose();
                       }
@@ -1613,7 +1884,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   return (
                     <button
                       key={t}
-                      onClick={() => setQuery(`#${t}`)}
+                      onClick={() => {
+                        setQuery(`#${t}`);
+                        setSearchEpoch((epoch) => epoch + 1);
+                      }}
                       className={cn(
                         "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors cursor-pointer",
                         isActive
@@ -1642,6 +1916,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 <div
                   key={frame.frame_id}
                   onClick={() => {
+                    trackSearchResultSelected(
+                      "tagged_frame",
+                      "click",
+                      "timeline",
+                    );
                     const resultsJson = JSON.stringify(searchResults);
                     onNavigateToTimestamp(frame.timestamp, frame.frame_id, queryTokens, resultsJson, query);
                     if (!embedded) onClose();
@@ -1761,6 +2040,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   <button
                     key={speaker.id}
                     onClick={() => {
+                      trackSearchResultSelected(
+                        "person",
+                        "click",
+                        "drilldown",
+                      );
                       setSelectedSpeaker(speaker);
                       setSelectedTranscriptionIndex(0);
                     }}
@@ -1788,7 +2072,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   return (
                     <button
                       key={chat.id}
-                      onClick={() => { void emit("chat-load-conversation", { conversationId: chat.id }); onClose(); }}
+                      onClick={() => handleOpenChatResult(chat.id, "click")}
                       className="w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors hover:bg-muted/50"
                     >
                       <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
@@ -1849,8 +2133,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                             key={chat.id}
                             data-chat-index={absoluteIdx}
                             onClick={() => {
-                              void emit("chat-load-conversation", { conversationId: chat.id });
-                              onClose();
+                              handleOpenChatResult(chat.id, "click");
                             }}
                             onMouseEnter={() => setSelectedChatIndex(absoluteIdx)}
                             className={cn(
@@ -1911,6 +2194,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     key={evt.id}
                     evt={evt}
                     onNavigate={() => {
+                      trackSearchResultSelected("input", "click", "timeline");
                       onNavigateToTimestamp(evt.timestamp);
                       if (!embedded) onClose();
                     }}
@@ -2017,7 +2301,22 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       setSelectedIndex(0);
                       setOcrOffset(0);
                       setHasMoreOcr(true);
-                      searchKeywords(debouncedQuery, { limit: OCR_PAGE_SIZE, offset: 0 });
+                      searchKeywords(debouncedQuery, {
+                        limit: OCR_PAGE_SIZE,
+                        offset: 0,
+                        analytics_surface: analyticsSurface,
+                        analytics_search_id: getSearchAnalyticsId(
+                          buildSearchAnalyticsKey(
+                            searchEpoch,
+                            debouncedQuery.trim(),
+                            contentFilter,
+                            appFilter,
+                            domainFilter,
+                            null,
+                          ),
+                        ),
+                        analytics_session_id: searchSessionIdRef.current,
+                      });
                     }}
                     className={cn(
                       "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
@@ -2042,9 +2341,41 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                         if (newFilter) {
                           const start = new Date(newFilter + "T00:00:00");
                           const end = new Date(newFilter + "T23:59:59.999");
-                          searchKeywords(debouncedQuery, { limit: OCR_PAGE_SIZE, offset: 0, start_time: start, end_time: end });
+                          searchKeywords(debouncedQuery, {
+                            limit: OCR_PAGE_SIZE,
+                            offset: 0,
+                            start_time: start,
+                            end_time: end,
+                            analytics_surface: analyticsSurface,
+                            analytics_search_id: getSearchAnalyticsId(
+                              buildSearchAnalyticsKey(
+                                searchEpoch,
+                                debouncedQuery.trim(),
+                                contentFilter,
+                                appFilter,
+                                domainFilter,
+                                newFilter,
+                              ),
+                            ),
+                            analytics_session_id: searchSessionIdRef.current,
+                          });
                         } else {
-                          searchKeywords(debouncedQuery, { limit: OCR_PAGE_SIZE, offset: 0 });
+                          searchKeywords(debouncedQuery, {
+                            limit: OCR_PAGE_SIZE,
+                            offset: 0,
+                            analytics_surface: analyticsSurface,
+                            analytics_search_id: getSearchAnalyticsId(
+                              buildSearchAnalyticsKey(
+                                searchEpoch,
+                                debouncedQuery.trim(),
+                                contentFilter,
+                                appFilter,
+                                domainFilter,
+                                null,
+                              ),
+                            ),
+                            analytics_session_id: searchSessionIdRef.current,
+                          });
                         }
                       }}
                       className={cn(
@@ -2170,7 +2501,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       return (
                         <button
                           key={chat.id}
-                          onClick={() => { void emit("chat-load-conversation", { conversationId: chat.id }); onClose(); }}
+                          onClick={() => handleOpenChatResult(chat.id, "click")}
                           className="w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors hover:bg-muted/50"
                         >
                           <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
@@ -2192,7 +2523,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     {suggestions.map((suggestion) => (
                       <button
                         key={suggestion}
-                        onClick={() => setQuery(suggestion)}
+                        onClick={() => {
+                          setQuery(suggestion);
+                          setSearchEpoch((epoch) => epoch + 1);
+                        }}
                         className="px-3 py-1.5 text-sm border border-border rounded-md
                           hover:bg-muted hover:border-foreground/30 transition-colors
                           text-foreground/80 hover:text-foreground cursor-pointer"
@@ -2236,6 +2570,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
+              setSearchEpoch((epoch) => epoch + 1);
               if (selectedSpeaker) {
                 setSelectedSpeaker(null);
                 setSpeakerTranscriptions([]);
@@ -2254,7 +2589,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (
             <button
-              onClick={() => setQuery("")}
+              onClick={() => {
+                setQuery("");
+                setSearchEpoch((epoch) => epoch + 1);
+              }}
               className="p-1 hover:bg-muted rounded"
             >
               <X className="w-3.5 h-3.5 text-muted-foreground" />
@@ -2346,6 +2684,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
+              setSearchEpoch((epoch) => epoch + 1);
               // Exit speaker drill-down when user edits search query
               if (selectedSpeaker) {
                 setSelectedSpeaker(null);
@@ -2362,7 +2701,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (
             <button
-              onClick={() => setQuery("")}
+              onClick={() => {
+                setQuery("");
+                setSearchEpoch((epoch) => epoch + 1);
+              }}
               className="p-1 hover:bg-muted rounded"
             >
               <X className="w-3 h-3 text-muted-foreground" />

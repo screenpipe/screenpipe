@@ -142,15 +142,15 @@ Thanks to all contributors:
 
 ## Translations
 
-- [日本語 (Japanese)](translated_readmes/README-ja.md)
-- [简体中文 (Simplified Chinese)](translated_readmes/README-zh_CN.md)
-- [Français (French)](translated_readmes/README-fr.md)
-- [Español (Spanish)](translated_readmes/README-es.md)
-- [Português BR (Brazilian Portuguese)](translated_readmes/README-pt_BR.md)
-- [Deutsch (German)](translated_readmes/README-de.md)
-- [Українська (Ukrainian)](translated_readmes/README-uk.md)
+- [日本語 (Japanese)](docs/translations/README-ja.md)
+- [简体中文 (Simplified Chinese)](docs/translations/README-zh_CN.md)
+- [Français (French)](docs/translations/README-fr.md)
+- [Español (Spanish)](docs/translations/README-es.md)
+- [Português BR (Brazilian Portuguese)](docs/translations/README-pt_BR.md)
+- [Deutsch (German)](docs/translations/README-de.md)
+- [Українська (Ukrainian)](docs/translations/README-uk.md)
 
-Want to translate screenpipe into another language? See [`translated_readmes/`](translated_readmes/README.md).
+Want to translate screenpipe into another language? See [`docs/translations/`](docs/translations/README.md).
 
 <details>
 <summary>📖 LLM reference</summary>

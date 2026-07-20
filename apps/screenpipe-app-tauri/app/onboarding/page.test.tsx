@@ -157,7 +157,11 @@ describe("enterprise onboarding authentication", () => {
       await screen.findByRole("button", { name: /finish permissions/i })
     );
 
-    await waitFor(() => expect(mocks.completeOnboarding).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "hidden_enterprise",
+      }),
+    );
     expect(mocks.setOnboardingStep).not.toHaveBeenCalledWith("engine");
     expect(screen.queryByText("engine")).not.toBeInTheDocument();
   });

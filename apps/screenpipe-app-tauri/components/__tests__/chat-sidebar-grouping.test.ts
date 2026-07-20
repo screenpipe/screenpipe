@@ -9,11 +9,43 @@ import {
   sessionGroupTitle,
   buildGroupedRecents,
   buildSidebarRecentsSections,
+  pipeHasSidebarSchedule,
+  visibleSidebarPipeNames,
   listMoveTargetGroups,
   recurringPipeGroupKeys,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
 import type { SessionRecord } from "@/lib/stores/chat-store";
+
+describe("pipeHasSidebarSchedule", () => {
+  test("excludes manual pipes from the recurring sidebar section", () => {
+    expect(pipeHasSidebarSchedule({ schedule: "manual" })).toBe(false);
+  });
+
+  test("includes legacy and structured schedules", () => {
+    expect(pipeHasSidebarSchedule({ schedule: "every 30m" })).toBe(true);
+    expect(
+      pipeHasSidebarSchedule({
+        schedule: "manual",
+        schedule_config: { frequency: "days", interval: 1 },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("visibleSidebarPipeNames", () => {
+  test("does not restore a known manual pipe from its run history", () => {
+    expect(
+      visibleSidebarPipeNames(
+        [
+          { name: "manual-template", hasSchedule: false },
+          { name: "daily-recap", hasSchedule: true },
+        ],
+        ["manual-template", "daily-recap", "deleted-pipe"],
+      ),
+    ).toEqual(["daily-recap", "deleted-pipe"]);
+  });
+});
 
 function s(
   id: string,

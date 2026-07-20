@@ -26,9 +26,6 @@
     "paths": {
       "@/*": [
         "./*"
-      ],
-      "@ee/*": [
-        "../../ee/desktop/*"
       ]
     },
     "types": ["@tauri-apps/api"]

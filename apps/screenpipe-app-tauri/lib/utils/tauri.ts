@@ -763,6 +763,15 @@ async getPendingUpdate() : Promise<Result<PendingUpdateSnapshot | null, null>> {
 }
 },
 /**
+ * Current recording-health overlay state: "normal" | "failure" | "fixing" |
+ * "recovered", optionally suffixed "|<detail>" (boot-phase label while
+ * fixing). The shortcut-reminder webview pulls this on mount, then stays
+ * current via the "recording-health-state" event.
+ */
+async getRecordingHealthState() : Promise<string> {
+    return await TAURI_INVOKE("get_recording_health_state");
+},
+/**
  * Tauri command: absolute path of the screenpipe base dir (where store.bin
  * lives). Honors SCREENPIPE_DATA_DIR; the webview must use this instead of
  * hardcoding ~/.screenpipe, or it reads/writes a different settings file
@@ -881,6 +890,19 @@ async importSkill(sourcePath: string) : Promise<Result<ImportedSkill, string>> {
 async initSync(password: string) : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("init_sync", { password }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Install the two built-in screenpipe skills into a supported external agent.
+ * MCP registration stays in the frontend because that path uses the app's
+ * bundled bun binary and injects the current local API key.
+ */
+async installExternalAgentSkills(target: string) : Promise<Result<string[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_external_agent_skills", { target }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1191,6 +1213,30 @@ async openViewerWindow(path: string) : Promise<Result<null, string>> {
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Dismiss the current recording incident shown in the overlay.
+ */
+async overlayDismissIncident() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("overlay_dismiss_incident") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Restart the recording engine from the overlay's failure state. Runs the
+ * same stop → settle → spawn sequence as the native panel's restart action;
+ * the health loop confirms recovery and pushes "recovered" to the overlay.
+ */
+async overlayRestartRecording() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("overlay_restart_recording") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1535,28 +1581,6 @@ async piUpdateConfig(userToken: string | null, providerConfig: PiProviderConfig 
 }
 },
 /**
- * Get current pipe suggestions settings.
- */
-async pipeSuggestionsGetSettings() : Promise<Result<PipeSuggestionsSettings, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("pipe_suggestions_get_settings") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Update pipe suggestions settings and restart the scheduler.
- */
-async pipeSuggestionsUpdateSettings(enabled: boolean, frequencyHours: number) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("pipe_suggestions_update_settings", { enabled, frequencyHours }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Read bundle ID, display name, and icon from a `.app` bundle selected in Finder.
  */
 async readAppBundleMetadata(path: string) : Promise<Result<ExcludedApp, string>> {
@@ -1735,6 +1759,19 @@ async remoteSyncStopScheduler() : Promise<Result<null, string>> {
 async remoteSyncTest(config: RemoteSyncConfig) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("remote_sync_test", { config }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Remove the two built-in screenpipe skills from a supported external agent.
+ * Mirror of `install_external_agent_skills`; MCP entry removal stays in the
+ * frontend, next to the code that wrote it.
+ */
+async removeExternalAgentSkills(target: string) : Promise<Result<string[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_external_agent_skills", { target }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2162,6 +2199,19 @@ async setWindowSize(window: ShowRewindWindow, width: number, height: number) : P
 },
 async showMainWindow() : Promise<void> {
     await TAURI_INVOKE("show_main_window");
+},
+/**
+ * Toggle the standalone notification inbox opened from the shortcut
+ * overlay's bell: a small always-on-top window just below the pill,
+ * rendering the same list as the pipes-store bell. Hides itself on blur.
+ */
+async showNotificationInbox() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("show_notification_inbox") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async showNotificationPanel(payload: string) : Promise<Result<null, string>> {
     try {
@@ -2672,7 +2722,6 @@ preview: string;
  * label in the UI ("queued 4s ago").
  */
 queuedAtMs: number }
-export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number }
 /**
  * A skill offered by the curated registry. Installing one downloads its folder
  * (the directory containing `SKILL.md`) from a public GitHub repo into the

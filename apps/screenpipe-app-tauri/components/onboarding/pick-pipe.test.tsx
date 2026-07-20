@@ -95,7 +95,7 @@ describe("PickPipe", () => {
     );
     fireEvent.click(
       screen.getByRole("checkbox", {
-        name: /people memory: remember everyone you meet/i,
+        name: /todo tracker: catches tasks you might miss/i,
       }),
     );
 
@@ -112,7 +112,9 @@ describe("PickPipe", () => {
     });
 
     expect(mocks.localFetch).not.toHaveBeenCalled();
-    expect(mocks.completeOnboarding).toHaveBeenCalledTimes(1);
+    expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+      method: "pipe_step_skipped",
+    });
     expect(mocks.scheduleFirstRunNotification).toHaveBeenCalledTimes(1);
   });
 
@@ -130,13 +132,15 @@ describe("PickPipe", () => {
     });
 
     expect(mocks.localFetch).not.toHaveBeenCalled();
-    expect(mocks.completeOnboarding).toHaveBeenCalledTimes(1);
+    expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+      method: "pipe_step_skipped",
+    });
     expect(mocks.scheduleFirstRunNotification).toHaveBeenCalledTimes(1);
   });
 
   it("enables only the pipes the user keeps selected", async () => {
     vi.useRealTimers();
-    mockSuccessfulPipeEnable("personal-crm");
+    mockSuccessfulPipeEnable("todo-list-assistant");
 
     await act(async () => {
       render(<PickPipe />);
@@ -155,13 +159,13 @@ describe("PickPipe", () => {
     await waitFor(() => {
       expect(mocks.localFetch).toHaveBeenCalledWith("/health");
       expect(mocks.localFetch).toHaveBeenCalledWith(
-        "/pipes/personal-crm/enable",
+        "/pipes/todo-list-assistant/enable",
         expect.objectContaining({
           method: "POST",
         }),
       );
       expect(mocks.localFetch).toHaveBeenCalledWith(
-        "/pipes/personal-crm/run",
+        "/pipes/todo-list-assistant/run",
         expect.objectContaining({
           method: "POST",
         }),
@@ -173,7 +177,59 @@ describe("PickPipe", () => {
         String(url).includes("/pipes/digital-clone/"),
       ),
     ).toBe(false);
-    expect(mocks.completeOnboarding).toHaveBeenCalledTimes(1);
+    expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+      method: "pipes_installed",
+      pipeCount: 1,
+      customized: true,
+    });
     expect(mocks.scheduleFirstRunNotification).toHaveBeenCalledTimes(1);
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_path_selected",
+      expect.objectContaining({
+        pipes: ["todo-list-assistant"],
+        pipe_count: 1,
+        customized: true,
+      }),
+    );
+  });
+
+  it("records a categorized failure when the onboarding bundle cannot install", async () => {
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url === "/health") return Promise.resolve({ ok: true });
+      if (url.includes("/enable")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ error: "not installed" }),
+        });
+      }
+      if (url === "/pipes/store/install") {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          json: async () => ({ error: "download failed" }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url: ${url}`));
+    });
+
+    await act(async () => {
+      render(<PickPipe />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /turn them on/i }));
+      await vi.advanceTimersByTimeAsync(7000);
+    });
+
+    expect(mocks.completeOnboarding).not.toHaveBeenCalled();
+    expect(mocks.scheduleFirstRunNotification).not.toHaveBeenCalled();
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_pipe_install_failed",
+      expect.objectContaining({
+        failure_reason: "install_failed",
+        pipe_count: 2,
+        customized: false,
+      }),
+    );
   });
 });

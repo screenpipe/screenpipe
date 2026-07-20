@@ -12,21 +12,21 @@ results and `cargo llvm-cov` data on top when judging release confidence.
 ## Dashboards
 
 - E2E dashboard: [apps/screenpipe-app-tauri/e2e/COVERAGE.md](apps/screenpipe-app-tauri/e2e/COVERAGE.md)
-- Core engine dashboard: [coverage/CORE.md](coverage/CORE.md)
+- Core engine dashboard: [docs/coverage/CORE.md](docs/coverage/CORE.md)
 
 ## Current Snapshot
 
 ### Tauri E2E
 
-- Mapped specs: 40
-- Declared test blocks: 142
-- Weighted coverage points: 113.2
+- Mapped specs: 67
+- Declared test blocks: 210
+- Weighted coverage points: 160.7
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 33 | 131 | 109.8 | 14 | 39 | 92% |
-| macos | 37 | 112 | 87.4 | 14 | 40 | 89% |
-| linux | 28 | 100 | 83.9 | 12 | 36 | 86% |
+| windows | 57 | 196 | 155.3 | 15 | 61 | 92% |
+| macos | 64 | 175 | 132.9 | 17 | 63 | 89% |
+| linux | 49 | 159 | 126.9 | 13 | 58 | 86% |
 
 ### Core Engine
 

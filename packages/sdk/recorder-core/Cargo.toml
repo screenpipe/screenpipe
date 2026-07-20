@@ -1,0 +1,29 @@
+[package]
+name = "screenpipe-recorder"
+version = "0.4.3"
+edition = "2021"
+description = "Pure-Rust recorder orchestration for the screenpipe SDK — screen + MP4 + event-driven paired capture. Consumed by both the napi addon (packages/sdk) and the Tauri plugin (packages/sdk/tauri/rust) so neither has to spawn a Node bridge."
+license = "LicenseRef-Screenpipe-Enterprise"
+publish = false
+
+[dependencies]
+screenpipe-screen  = { path = "../../../crates/screenpipe-screen" }
+screenpipe-core    = { path = "../../../crates/screenpipe-core", default-features = false }
+screenpipe-a11y    = { path = "../../../crates/screenpipe-a11y", default-features = false }
+screenpipe-capture = { path = "../../../crates/screenpipe-capture" }
+screenpipe-db      = { path = "../../../crates/screenpipe-db" }
+screenpipe-config  = { path = "../../../crates/screenpipe-config" }
+
+anyhow = { workspace = true }
+chrono = { workspace = true }
+crossbeam-channel = "0.5"
+image = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "01b68e60c80a59bbc1cac3629e725cf3bb2e4901" }
+
+[dev-dependencies]
+chrono = { workspace = true }
+screenpipe-sqlite-coordinator = { path = "../../../crates/screenpipe-sqlite-coordinator" }
+tempfile = { workspace = true }

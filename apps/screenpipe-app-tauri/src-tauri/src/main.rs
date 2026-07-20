@@ -51,6 +51,7 @@ mod diagnostic_logs;
 mod disk_usage;
 mod e2e_seed;
 mod embedded_server;
+mod enterprise;
 mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
@@ -66,6 +67,7 @@ mod meeting_export;
 mod meeting_live_notes;
 mod meeting_stall_notifications;
 mod oauth;
+mod overlay_health;
 mod owned_browser;
 mod owned_browser_transport;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
@@ -78,7 +80,6 @@ mod owned_browser_cookies;
 mod permissions;
 mod pi;
 mod pi_command_queue;
-mod pipe_suggestions_scheduler;
 mod power_awake;
 mod process_exit;
 mod recording;
@@ -703,7 +704,6 @@ async fn main() {
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
-    let pipe_suggestions_state = pipe_suggestions_scheduler::PipeSuggestionsState::new();
     #[allow(clippy::single_match)]
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -877,7 +877,6 @@ async fn main() {
     let app = app.manage(recording_state)
         .manage(pi_state)
         .manage(suggestions_state)
-        .manage(pipe_suggestions_state)
         .manage(sync_scheduler)
         .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
@@ -1934,17 +1933,6 @@ async fn main() {
                     &suggestions_state_clone,
                 )
                 .await;
-            });
-
-            // Auto-start pipe suggestions scheduler if enabled
-            let app_handle_clone = app_handle.clone();
-            let pipe_suggestions_state = app_handle.state::<pipe_suggestions_scheduler::PipeSuggestionsState>();
-            let pipe_suggestions_state_clone = pipe_suggestions_scheduler::PipeSuggestionsState {
-                scheduler_handle: pipe_suggestions_state.scheduler_handle.clone(),
-            };
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                pipe_suggestions_scheduler::auto_start_scheduler(app_handle_clone, &pipe_suggestions_state_clone).await;
             });
 
             // Start calendar events publisher (publishes to event bus for meeting detection)

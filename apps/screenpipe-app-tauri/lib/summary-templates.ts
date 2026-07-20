@@ -12,6 +12,22 @@ export interface CustomTemplate {
   prompt: string;
   timeRange: string;
   createdAt: string;
+  // Raw user instructions the prompt was built from. Optional because
+  // templates saved before edit-before-run existed only store the
+  // composed prompt — see parseTemplateInstructions for the fallback.
+  instructions?: string;
+}
+
+/**
+ * Recovers the raw user instructions from a builder-composed prompt
+ * (legacy templates saved without an `instructions` field). Returns null
+ * when the prompt doesn't match the builder's fixed format.
+ */
+export function parseTemplateInstructions(prompt: string): string | null {
+  const match = prompt.match(
+    /\n\nUser instructions: ([\s\S]*?)\n\nOnly report activities you can verify/,
+  );
+  return match ? match[1] : null;
 }
 
 export const AUTOMATE_MY_WORK_TEMPLATE_NAME = "automate-my-work";

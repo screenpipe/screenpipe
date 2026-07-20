@@ -22,6 +22,33 @@ public func shortcutSetMeetingActive(_ active: Int32) {
     }
 }
 
+/// Unread pipe-notification count, pushed from the Rust notification store —
+/// drives the bell dot on the collapsed pill.
+@_cdecl("shortcut_set_inbox_unread")
+public func shortcutSetInboxUnread(_ count: Int32) {
+    if #available(macOS 13.0, *) {
+        ShortcutReminderController.shared.setInboxUnread(count > 0)
+    }
+}
+
+/// Recording-health state pushed from the Rust health loop (issue #5127):
+/// "normal" | "failure" | "fixing" | "recovered", optionally "state|detail"
+/// where detail is a boot-phase label shown while fixing. Swift only renders
+/// it — all detection/debounce/recovery logic lives in Rust.
+@_cdecl("shortcut_set_health_state")
+public func shortcutSetHealthState(_ statePtr: UnsafePointer<CChar>?) -> Int32 {
+    guard let statePtr = statePtr else { return -1 }
+    let payload = String(cString: statePtr)
+    let parts = payload.split(separator: "|", maxSplits: 1).map(String.init)
+    let state = parts.first ?? "normal"
+    let detail = parts.count > 1 ? parts[1] : ""
+    if #available(macOS 13.0, *) {
+        ShortcutReminderController.shared.setHealthState(state, detail: detail)
+        return 0
+    }
+    return -2
+}
+
 // MARK: - Metrics data pushed from Rust
 
 final class OverlayMetrics: ObservableObject {
@@ -30,6 +57,13 @@ final class OverlayMetrics: ObservableObject {
     @Published var screenActive: Bool = false
     @Published var captureFps: Double = 0
     @Published var meetingActive: Bool = false
+    /// Unread pipe notifications exist — bell dot on the collapsed pill.
+    @Published var inboxUnread: Bool = false
+    /// "normal" | "failure" | "fixing" | "recovered" — set only via
+    /// ShortcutReminderController.setHealthState (pushed from Rust).
+    @Published var healthState: String = "normal"
+    /// Boot-phase label shown while fixing ("updating database", ...).
+    @Published var healthDetail: String = ""
 }
 
 // MARK: - Font helper (same as notification panel)
@@ -239,7 +273,13 @@ struct ShortcutReminderView: View {
 
     var body: some View {
         ZStack {
-            if isExpanded {
+            if metrics.healthState == "failure" {
+                failureView
+            } else if metrics.healthState == "fixing" {
+                fixingView
+            } else if metrics.healthState == "recovered" {
+                recoveredView
+            } else if isExpanded {
                 // Once expanded, collapse only when the mouse leaves the
                 // entire expanded bar (so hovering individual buttons inside
                 // doesn't bounce us back).
@@ -256,7 +296,145 @@ struct ShortcutReminderView: View {
         .fixedSize()
         .accessibilityHidden(true)
         .animation(.easeInOut(duration: kAnimDur), value: isExpanded)
+        .animation(.easeInOut(duration: kAnimDur), value: metrics.healthState)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    // MARK: - Recording-health states (issue #5127)
+    // Rendered from metrics.healthState, which the Rust health loop pushes.
+    // Failure keeps the collapsed pill footprint and expands horizontally on
+    // hover to show the repair action, per the issue's mockups.
+
+    private var failureView: some View {
+        HStack(spacing: 0) {
+            // The message zone is itself a Button — and clicking it RESTARTS.
+            // Users click the thing that says "recording needs help" expecting
+            // the fix (observed repeatedly in testing); a separate restart
+            // button to the right of the text reads as "nothing happened".
+            // Hover has already expanded the row by the time a click is
+            // possible, so expand-on-click would always be a no-op anyway.
+            // (Plain Button, NOT .onTapGesture: tap recognizers delay/steal
+            // mouse events in this nonactivating panel.)
+            Button(action: {
+                if isExpanded {
+                    metrics.healthState = "fixing"
+                    onAction("restart_recording")
+                } else {
+                    isExpanded = true
+                }
+            }) {
+                HStack(spacing: 0) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: s(6), height: s(6))
+                        .padding(.leading, s(8))
+                        .padding(.trailing, s(4))
+
+                    // Shorter label while expanded so the whole action row
+                    // fits the fixed 200pt panel — the panel frame is never
+                    // resized (setFrame on this nonactivating panel breaks
+                    // its mouse routing; observed as a dead-click pill).
+                    Text(isExpanded ? "needs help" : "recording needs help")
+                        .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
+                        .foregroundColor(.white.opacity(0.85))
+                        .padding(.trailing, isExpanded ? s(8) : s(2))
+
+                    if !isExpanded {
+                        // Repair affordance: hint that an action lives here.
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 6 * scale, weight: .bold))
+                            .foregroundColor(.white.opacity(0.45))
+                            .padding(.trailing, s(8))
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5).frame(height: s(12))
+
+                Button(action: {
+                    // Optimistic — Rust pushes the authoritative "fixing"
+                    // right after it receives the action.
+                    metrics.healthState = "fixing"
+                    onAction("restart_recording")
+                }) {
+                    HStack(spacing: s(2)) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 6 * scale, weight: .bold))
+                            .foregroundColor(.white.opacity(0.95))
+                        Text("restart")
+                            .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .bold))
+                            .foregroundColor(.white.opacity(0.95))
+                    }
+                    .padding(.horizontal, s(8))
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5).frame(height: s(12))
+
+                Button(action: {
+                    onAction("dismiss_incident")
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 6 * scale, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
+                        .padding(.horizontal, s(8))
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(height: kBaseCollapsedH * scale)
+        .background(Capsule().fill(Color.black.opacity(0.85)))
+        .overlay(Capsule().stroke(Color.red.opacity(0.4), lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isExpanded = hovering
+        }
+    }
+
+    private var fixingView: some View {
+        HStack(spacing: s(4)) {
+            ProgressView()
+                .scaleEffect(0.45)
+                .frame(width: s(12), height: s(12))
+                .padding(.leading, s(8))
+
+            Text(
+                metrics.healthDetail.isEmpty
+                    ? "fixing recording..."
+                    : "fixing — \(metrics.healthDetail)..."
+            )
+                .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.trailing, s(8))
+        }
+        .frame(height: kBaseCollapsedH * scale)
+        .background(Capsule().fill(Color.black.opacity(0.85)))
+        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+    }
+
+    private var recoveredView: some View {
+        HStack(spacing: s(4)) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 8 * scale))
+                .foregroundColor(.green)
+                .padding(.leading, s(8))
+
+            Text("recording again")
+                .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.trailing, s(8))
+        }
+        .frame(height: kBaseCollapsedH * scale)
+        .background(Capsule().fill(Color.black.opacity(0.85)))
+        .overlay(Capsule().stroke(Color.green.opacity(0.4), lineWidth: 0.5))
     }
 
     // MARK: - Collapsed pill
@@ -285,10 +463,10 @@ struct ShortcutReminderView: View {
                 if hovering { isExpanded = true }
             }
 
-            CollapsedPhoneButton(
-                isActive: metrics.meetingActive,
+            CollapsedBellButton(
+                unread: metrics.inboxUnread,
                 scale: scale,
-                action: { onAction("toggle_meeting") }
+                action: { onAction("open_inbox") }
             )
             .padding(.trailing, s(5))
         }
@@ -324,8 +502,8 @@ struct ShortcutReminderView: View {
 
             Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5)
 
-            HoverIconButton(icon: "phone.fill", isActive: metrics.meetingActive, edge: nil, scale: scale) {
-                onAction("toggle_meeting")
+            HoverIconButton(icon: "bell.fill", isActive: metrics.inboxUnread, edge: nil, scale: scale) {
+                onAction("open_inbox")
             }
             HoverIconButton(icon: "xmark", isActive: false, edge: .trailing, scale: scale) {
                 onAction("close")
@@ -398,13 +576,14 @@ struct CollapsedAppIconButton: View {
     }
 }
 
-// Phone button shown in the collapsed pill. Same look as the bare icon it
-// replaces, plus a subtle hover halo so the click target is discoverable.
-// Crucially: no .onHover wired to isExpanded — clicking it toggles the
-// meeting without forcing the user through the expanded layout.
+// Bell button shown in the collapsed pill (replaced the phone / meeting
+// toggle, which still lives in the expanded bar). Opens the notification
+// inbox; the dot mirrors the pipes-store bell's unread marker. Crucially:
+// no .onHover wired to isExpanded — clicking it opens the inbox without
+// forcing the user through the expanded layout.
 @available(macOS 13.0, *)
-struct CollapsedPhoneButton: View {
-    let isActive: Bool
+struct CollapsedBellButton: View {
+    let unread: Bool
     let scale: CGFloat
     let action: () -> Void
     @State private var hovered = false
@@ -412,13 +591,13 @@ struct CollapsedPhoneButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                Image(systemName: "phone.fill")
+                Image(systemName: "bell.fill")
                     .font(.system(size: 6 * scale))
                     .foregroundColor(
-                        isActive ? .white :
+                        unread ? .white.opacity(hovered ? 1.0 : 0.85) :
                             (hovered ? .white.opacity(0.6) : .white.opacity(0.2))
                     )
-                if isActive {
+                if unread {
                     Circle().fill(.white)
                         .frame(width: 4 * scale, height: 4 * scale)
                         .offset(x: 5 * scale, y: -5 * scale)
@@ -677,6 +856,32 @@ class ShortcutReminderController: NSObject {
         }
     }
 
+    func setInboxUnread(_ unread: Bool) {
+        DispatchQueue.main.async { [self] in
+            if self.metrics.inboxUnread != unread {
+                self.metrics.inboxUnread = unread
+            }
+        }
+    }
+
+    /// Apply a recording-health state pushed from Rust. Kept even while the
+    /// panel is hidden so a later show renders the active incident. The panel
+    /// frame is deliberately NOT resized — all health content is sized to fit
+    /// the existing 200pt panel, because setFrame on this nonactivating panel
+    /// breaks its mouse routing (dead-click pill).
+    func setHealthState(_ state: String, detail: String = "") {
+        DispatchQueue.main.async { [self] in
+            if self.metrics.healthDetail != detail {
+                self.metrics.healthDetail = detail
+            }
+            guard self.metrics.healthState != state else { return }
+            self.metrics.healthState = state
+            // Health states replace the hover-expand UI; don't leave the
+            // normal bar stuck expanded when the state clears.
+            self.isExpanded = false
+        }
+    }
+
     private func parseShortcuts(_ json: String) {
         // Expects shortcut labels, size, and optional authenticated API URLs from Rust.
         guard let data = json.data(using: .utf8),
@@ -787,6 +992,13 @@ class ShortcutReminderController: NSObject {
     private func sendAction(_ action: String) {
         guard let cb = gShortcutCallback else { return }
         action.withCString { cb($0) }
+    }
+
+    /// Current panel frame in screen coords, or nil while hidden — lets the
+    /// notification inbox anchor itself under the (draggable) pill.
+    func panelFrameIfVisible() -> NSRect? {
+        guard isVisible, let panel = panel else { return nil }
+        return panel.frame
     }
 }
 
@@ -914,4 +1126,27 @@ public func shortcutIsAvailable() -> Int32 {
         return 1
     }
     return 0
+}
+
+/// Screen frame of the visible pill (bottom-left coords). Returns 0 and fills
+/// the out-params when visible, -1 when hidden.
+@_cdecl("shortcut_get_frame")
+public func shortcutGetFrame(
+    _ x: UnsafeMutablePointer<Double>?,
+    _ y: UnsafeMutablePointer<Double>?,
+    _ w: UnsafeMutablePointer<Double>?,
+    _ h: UnsafeMutablePointer<Double>?
+) -> Int32 {
+    if #available(macOS 13.0, *) {
+        var frame: NSRect?
+        let work = { frame = ShortcutReminderController.shared.panelFrameIfVisible() }
+        if Thread.isMainThread { work() } else { DispatchQueue.main.sync(execute: work) }
+        guard let f = frame else { return -1 }
+        x?.pointee = f.origin.x
+        y?.pointee = f.origin.y
+        w?.pointee = f.size.width
+        h?.pointee = f.size.height
+        return 0
+    }
+    return -2
 }

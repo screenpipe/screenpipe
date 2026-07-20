@@ -709,10 +709,11 @@ impl Worker {
     /// detection pass, propagate the result to that frame's DERIVED copies —
     /// `accessibility_text`, `accessibility_tree_json` (issue #4116), `window_name`,
     /// `browser_url` and the per-word OCR `text_json` (issue #4117). They are
-    /// all decompositions of `full_text`, so every
-    /// PII value in them is in the detected map; applying it is pure string
-    /// work (microseconds), the model runs ONCE for the whole frame instead
-    /// of once per column.
+    /// all decompositions of `full_text`. Editable accessibility nodes add a
+    /// compact semantic suffix to that same inference input, improving recall
+    /// for otherwise-ambiguous credentials without another model pass. Only
+    /// detected payload substrings are mapped back; applying the resulting map
+    /// is pure string work (microseconds).
     /// Falls back to driving the redactor over each derived copy directly
     /// (still no second detection on `full_text`) when the redactor can't
     /// yield a value map (the span-less enclave). Returns the number of
@@ -730,8 +731,19 @@ impl Worker {
 
         let mut writes = 0u32;
         for row in &rows {
-            match self.redactor.redact_with_map(&row.full_text).await? {
-                Some((out, map)) => {
+            // Keep one model pass, but append compact semantic context for
+            // editable accessibility nodes. A value such as `hunter2` is
+            // ambiguous in flat screen text; `placeholder=API key` or
+            // `is_password=true` makes the same value unambiguous. Only spans
+            // intersecting the synthetic payload are mapped back, so the
+            // metadata itself never pollutes stored/searchable text.
+            let augmented = crate::a11y_context::augment_text(
+                &row.full_text,
+                row.accessibility_tree_json.as_deref(),
+            );
+            match self.redactor.redact_with_map(&augmented.text).await? {
+                Some((out, mut map)) => {
+                    map.extend_pairs(augmented.secret_pairs(&out.spans));
                     // Propagate the single detection to every derived copy that
                     // still needs it (no extra model pass) — CRITICAL: before
                     // stamping full_text, mirroring the enclave arm below. The
@@ -753,7 +765,7 @@ impl Worker {
                         &self.pool,
                         TargetTable::FullText,
                         row.id,
-                        &out.redacted,
+                        &map.apply(&row.full_text),
                     )
                     .await?;
                     writes += 1;

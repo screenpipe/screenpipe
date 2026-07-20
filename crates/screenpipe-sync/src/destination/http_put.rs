@@ -28,7 +28,7 @@
 //! takes a [`tokio::sync::watch::Receiver<bool>`] — when it flips to
 //! `true`, an in-flight retry sleep aborts and the call returns a
 //! transient error so the caller can move on cleanly. Matches the
-//! shutdown channel shape already used in `ee/desktop-rust/enterprise_sync.rs`.
+//! shutdown channel shape already used in `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs`.
 
 use std::time::Duration;
 

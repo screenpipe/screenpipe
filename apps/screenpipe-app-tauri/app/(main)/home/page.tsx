@@ -64,6 +64,7 @@ import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
+import FirstRunGuide from "@/components/onboarding/first-run-guide";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
@@ -120,8 +121,39 @@ function HomeContent() {
   });
   const [connectionFocusRequest, setConnectionFocusRequest] = useState<ConnectionFocusRequest | null>(null);
 
-  const { settings } = useSettings();
+  const { settings, updateSettings, isSettingsLoaded } = useSettings();
   const { isTranslucent } = useSidebarContext();
+  const [e2eSeedFlags, setE2eSeedFlags] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    void commands
+      .getE2eSeedFlags()
+      .then((flags) => {
+        if (mounted) setE2eSeedFlags(flags);
+      })
+      .catch(() => {
+        if (mounted) setE2eSeedFlags([]);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // One-time in-app first-run guide. Gate on isSettingsLoaded so the overlay
+  // never flashes before the store hydrates the (already-done) flag. The
+  // `onboarding` E2E seed represents an app that has already completed every
+  // first-run surface; showing this click-blocking guide breaks otherwise
+  // unrelated regression specs that start from the seeded home screen.
+  const showFirstRunGuide =
+    isSettingsLoaded &&
+    e2eSeedFlags !== null &&
+    !e2eSeedFlags.includes("onboarding") &&
+    !settings.firstRunGuideDone;
+  const markFirstRunGuideDone = useCallback(() => {
+    void updateSettings({ firstRunGuideDone: true });
+  }, [updateSettings]);
+
   const teamState = useTeam();
   const { isSectionHidden, isSettingLocked } = useEnterprisePolicy();
   const runningPipes = useRunningPipes();
@@ -1226,6 +1258,14 @@ function HomeContent() {
             )}
 
           </div>
+
+          {showFirstRunGuide && (
+            <FirstRunGuide
+              onDone={markFirstRunGuideDone}
+              onGoToAutomations={() => setActiveSection("pipes")}
+              onEnsureChatVisible={() => setActiveSection("home")}
+            />
+          )}
     </>
   );
 }

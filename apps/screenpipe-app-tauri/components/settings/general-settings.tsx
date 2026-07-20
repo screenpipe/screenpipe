@@ -40,7 +40,7 @@ import {
   DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
   describeEnterpriseUpdateMode,
   normalizeEnterpriseAppUpdatePolicy,
-} from "@ee/lib/app-update-policy";
+} from "@/lib/enterprise/app-update-policy";
 
 export default function GeneralSettings() {
   const isEnterprise = useIsEnterpriseBuild();
