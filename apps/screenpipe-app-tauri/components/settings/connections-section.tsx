@@ -4135,9 +4135,11 @@ export function ConnectionsSection({
       case "zoom": return (
         <div className="space-y-3">
           <ComposioCard toolkit="zoom" onChanged={setComposioConnected} />
-          {/* The legacy Zoom OAuth app is stuck in marketplace review; keep the
-              old connector reachable for anyone who connected before. */}
-          {selectedIntegration?.is_oauth && (
+          {/* The legacy Zoom OAuth app was rejected in marketplace review, so its
+              authorize page is dead for new connections. Surface the old panel
+              only for users who still HAVE a legacy connection (to manage or
+              disconnect it) — never as a connect path. */}
+          {selectedIntegration?.is_oauth && selectedIntegration.connected && (
             <details>
               <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
                 advanced: manage the legacy zoom connection

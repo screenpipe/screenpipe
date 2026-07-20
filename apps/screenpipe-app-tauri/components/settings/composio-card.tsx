@@ -214,38 +214,73 @@ export function ComposioCard({
   const valueLine = (
     <p className="text-xs text-foreground/90">
       {toolkit === "gmail"
-        ? "let your AI read and search your gmail inbox — one click, sign in with google."
-        : "let your AI see your zoom meetings, recordings and transcripts."}
+        ? "let your AI read and search your Gmail inbox."
+        : "let your AI see your Zoom meetings, recordings, and transcripts."}
     </p>
   );
 
+  // Treatment 1 (design round 4): the expanded state is a labeled fact grid
+  // that uses the full panel width instead of a narrow text column.
+  const provider = toolkit === "gmail" ? "Google" : "Zoom";
+  const factRows: Array<[string, React.ReactNode]> = [
+    [
+      "sign-in",
+      <>
+        handled by <b className="font-medium text-foreground/80">Composio</b>. the {provider}{" "}
+        sign-in screen will show their name, and your password is never shared with
+        screenpipe.
+      </>,
+    ],
+    [
+      "your data",
+      <>
+        {toolkit === "gmail" ? "emails are" : "meeting data is"} processed through
+        Composio&apos;s cloud (
+        <b className="font-medium text-foreground/80">SOC 2 certified, encrypted</b>), not
+        stored by screenpipe.
+      </>,
+    ],
+    ...(toolkit === "gmail"
+      ? ([
+          [
+            "local option",
+            <>
+              prefer fully local? use the{" "}
+              <b className="font-medium text-foreground/80">Email Inbox (IMAP)</b> connection
+              instead.
+            </>,
+          ],
+        ] as Array<[string, React.ReactNode]>)
+      : []),
+  ];
+
   const privacyNote = (
-    <details>
+    <details className="pt-1">
       <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
         more about privacy
       </summary>
-      <div className="pt-1 space-y-1 text-[11px] text-muted-foreground leading-relaxed">
-        <p>
-          sign-in and data access are managed by composio.dev (SOC 2 Type II, AES-256
-          encrypted). your {toolkit === "gmail" ? "Google" : "Zoom"} password never touches
-          screenpipe, and your {toolkit === "gmail" ? "emails are" : "meeting data is"}{" "}
-          processed through composio&apos;s cloud rather than on this device.
-        </p>
-        <p>
-          the {toolkit === "gmail" ? "google" : "zoom"} consent screen says
-          &quot;Composio&quot; — that&apos;s them handling the authentication.
-        </p>
-        {toolkit === "gmail" && (
-          <p>
-            prefer fully local? use the Email Inbox (IMAP) connection instead — it talks to
-            your mail server directly from this device.
-          </p>
-        )}
+      <div className="mt-2 space-y-2">
+        <div className="grid grid-cols-[130px_1fr] border border-border">
+          {factRows.map(([key, node], i) => (
+            <React.Fragment key={key}>
+              <div
+                className={`px-3.5 py-2.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70 border-r border-border flex items-center ${i < factRows.length - 1 ? "border-b" : ""}`}
+              >
+                {key}
+              </div>
+              <div
+                className={`px-3.5 py-2.5 text-[11px] text-muted-foreground leading-relaxed ${i < factRows.length - 1 ? "border-b border-border" : ""}`}
+              >
+                {node}
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
         <button
           onClick={() => openUrl("https://composio.dev")}
-          className="underline hover:text-foreground cursor-pointer"
+          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground cursor-pointer"
         >
-          about composio →
+          learn more about Composio →
         </button>
       </div>
     </details>
