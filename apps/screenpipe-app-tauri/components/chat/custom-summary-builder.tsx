@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Save, CalendarIcon, Pin, Trash2 } from "lucide-react";
+import { Save, CalendarIcon, Trash2 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import {
   parseTemplateInstructions,
@@ -88,13 +88,44 @@ export function CustomSummaryBuilder({
 
   const hasValidTime = !!selectedTime;
 
+  const initialInstructions = editingTemplate
+    ? editingTemplate.instructions ??
+        parseTemplateInstructions(editingTemplate.prompt) ??
+        editingTemplate.prompt
+    : "";
+  const hasChanges = editingTemplate
+    ? selectedTime !== editingTemplate.timeRange || instructions !== initialInstructions
+    : false;
+
   const getTimeLabel = () => {
-    if (!selectedTime) return "select a date range";
-    return TIME_RANGES.find((r) => r.value === selectedTime)?.label || selectedTime;
+    return TIME_RANGES.find((r) => r.value === selectedTime)?.label || selectedTime || "";
   };
 
   const isPresetSelected = (value: string) =>
     selectedTime === value && !dateRange?.from;
+
+  const quickTemplatesBlock = (
+    <div>
+      <label className="text-[10px] font-mono font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5 block">
+        Quick Templates
+      </label>
+      <div className="flex flex-wrap gap-1">
+        {QUICK_TEMPLATES.map((qt) => (
+          <button
+            key={qt.label}
+            onClick={() => handleQuickTemplate(qt.prompt)}
+            className={`px-2 py-0.5 text-[11px] font-mono transition-all duration-150 border cursor-pointer ${
+              instructions === qt.prompt
+                ? "bg-foreground text-background border-foreground"
+                : "bg-muted/20 text-muted-foreground border-border/30 hover:bg-foreground hover:text-background hover:border-foreground"
+            }`}
+          >
+            {qt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   const buildPrompt = () => {
     const timeContext = `Analyze my screen and audio recordings from ${selectedTime}.`;
@@ -129,6 +160,7 @@ export function CustomSummaryBuilder({
       title: "Template saved",
       description: `"${template.title}" added to your templates`,
     });
+    onClose();
   };
 
   const handleUpdate = () => {
@@ -140,6 +172,10 @@ export function CustomSummaryBuilder({
       prompt: buildPrompt(),
       timeRange: selectedTime,
       instructions: instructions.trim(),
+    });
+    toast({
+      title: "Template updated",
+      description: `"${editingTemplate.title}" has been updated`,
     });
     onClose();
   };
@@ -171,17 +207,15 @@ export function CustomSummaryBuilder({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {editingTemplate ? (
-              <>
-                <Pin className="w-4 h-4" strokeWidth={1.5} /> {editingTemplate.title}
-              </>
+              editingTemplate.title
             ) : (
               "custom summary"
             )}
           </DialogTitle>
           <DialogDescription>
             {editingTemplate
-              ? "review or tweak the prompt, then run it — update template persists your changes"
-              : "choose a time period and describe what you want to know"}
+              ? "edit the time range or instructions, then run or save your changes"
+              : "pick a time range and tell us what to focus on"}
           </DialogDescription>
         </DialogHeader>
 
@@ -259,24 +293,7 @@ export function CustomSummaryBuilder({
               </div>
             ) : (
               <div className="mt-4">
-                <label className="text-[10px] font-mono font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5 block">
-                  Quick Templates
-                </label>
-                <div className="flex flex-wrap gap-1">
-                  {QUICK_TEMPLATES.map((qt) => (
-                    <button
-                      key={qt.label}
-                      onClick={() => handleQuickTemplate(qt.prompt)}
-                      className={`px-2 py-0.5 text-[11px] font-mono transition-all duration-150 border cursor-pointer ${
-                        instructions === qt.prompt
-                          ? "bg-foreground text-background border-foreground"
-                          : "bg-muted/20 text-muted-foreground border-border/30 hover:bg-foreground hover:text-background hover:border-foreground"
-                      }`}
-                    >
-                      {qt.label}
-                    </button>
-                  ))}
-                </div>
+                {quickTemplatesBlock}
               </div>
             )}
           </div>
@@ -298,24 +315,7 @@ export function CustomSummaryBuilder({
 
             {calendarOpen && (
               <div className="mt-2">
-                <label className="text-[10px] font-mono font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5 block">
-                  Quick Templates
-                </label>
-                <div className="flex flex-wrap gap-1">
-                  {QUICK_TEMPLATES.map((qt) => (
-                    <button
-                      key={qt.label}
-                      onClick={() => handleQuickTemplate(qt.prompt)}
-                      className={`px-2 py-0.5 text-[11px] font-mono transition-all duration-150 border cursor-pointer ${
-                        instructions === qt.prompt
-                          ? "bg-foreground text-background border-foreground"
-                          : "bg-muted/20 text-muted-foreground border-border/30 hover:bg-foreground hover:text-background hover:border-foreground"
-                      }`}
-                    >
-                      {qt.label}
-                    </button>
-                  ))}
-                </div>
+                {quickTemplatesBlock}
               </div>
             )}
           </div>
@@ -346,7 +346,7 @@ export function CustomSummaryBuilder({
                 size="sm"
                 variant="outline"
                 onClick={handleUpdate}
-                disabled={!hasValidTime}
+                disabled={!hasValidTime || !hasChanges}
                 className="h-8 text-[11px]"
               >
                 <Save className="w-3 h-3 mr-1" />
