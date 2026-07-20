@@ -392,7 +392,9 @@ export function ChatHistoryView({
         <div className="h-5 w-5 flex items-center justify-center relative">
           {/* Chat icon (or Timer for pipe sessions) — hidden on hover (unless selected via selection mode) */}
           {React.createElement(
-            conv.kind === "pipe-run" || conv.kind === "pipe-watch" ? Timer : MessageSquare,
+            conv.pinned ? Pin
+              : conv.kind === "pipe-run" || conv.kind === "pipe-watch" ? Timer
+              : MessageSquare,
             {
               className: cn(
                 "h-4 w-4 absolute inset-0 m-auto transition-opacity duration-75",
