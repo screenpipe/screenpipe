@@ -15,7 +15,7 @@ import {
   type CustomTemplate,
 } from "@/lib/summary-templates";
 import { Calendar } from "@/components/ui/calendar";
-import { format } from "date-fns";
+import { format, parse } from "date-fns";
 import { type DateRange } from "react-day-picker";
 
 const TIME_RANGES = [
@@ -69,7 +69,21 @@ export function CustomSummaryBuilder({
   );
   const [templateTitle, setTemplateTitle] = useState("");
   const [showSave, setShowSave] = useState(false);
-  const [dateRange, setDateRange] = useState<DateRange | undefined>();
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(() => {
+    if (!editingTemplate?.timeRange) return undefined;
+    if (TIME_RANGES.some((r) => r.value === editingTemplate.timeRange)) return undefined;
+    const tr = editingTemplate.timeRange;
+    const fmt = "MMMM d, yyyy";
+    try {
+      if (tr.includes(" to ")) {
+        const [fromStr, toStr] = tr.split(" to ");
+        return { from: parse(fromStr, fmt, new Date()), to: parse(toStr, fmt, new Date()) };
+      }
+      return { from: parse(tr, fmt, new Date()) };
+    } catch {
+      return { from: new Date() };
+    }
+  });
   const [calendarOpen, setCalendarOpen] = useState(false);
 
   const getTimeLabel = () => {
