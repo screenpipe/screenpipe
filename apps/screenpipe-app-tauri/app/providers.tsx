@@ -70,9 +70,12 @@ export const Providers = forwardRef<
       // plus pollute prod analytics with test traffic.
       const isE2E = process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true";
       if (isDebug || isE2E) return;
-      // Read the cached analytics preference to sync PostHog opt-in/out
-      // after init. undefined = first boot → allow capturing (default true).
+      // Read the cached analytics preference synchronously from localStorage
+      // BEFORE touching PostHog. undefined = first boot → allow capturing
+      // (default true). false = user opted out → skip init entirely so no
+      // session cookie, feature-flag fetch, or network request is fired.
       const cachedEnabled = readCachedAnalyticsEnabled();
+      if (cachedEnabled === false) return;
       // Bootstrap with the stable per-install id (mirrors settings.analyticsId,
       // cached by the identify() effect in use-settings) so EVERY event — incl.
       // ones fired by overlay windows like the floating search bar before the
@@ -90,12 +93,6 @@ export const Providers = forwardRef<
           ? { bootstrap: { distinctID: cachedAnalyticsId, isIdentifiedID: true } }
           : {}),
       });
-      // sync opt-in/out with cached preference on every boot
-      if (cachedEnabled === false) {
-        posthog.opt_out_capturing();
-      } else {
-        posthog.opt_in_capturing();
-      }
     }
   }, []);
 
