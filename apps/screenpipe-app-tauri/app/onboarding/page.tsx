@@ -282,7 +282,7 @@ export default function OnboardingPage() {
       <div className="w-full bg-background p-3" data-tauri-drag-region />
 
       {/* Content */}
-      <div className="flex-1 flex items-center justify-center p-6 overflow-auto">
+      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
         <div
           className={`w-full max-w-lg mx-auto transition-opacity duration-300 ${
             isVisible ? "opacity-100" : "opacity-0"
