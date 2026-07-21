@@ -661,7 +661,7 @@ class ShortcutReminderController: NSObject {
     static let shared = ShortcutReminderController()
 
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<AnyView>?
+    private var hostingView: DraggableHostingView<AnyView>?
     private var trackingView: ReminderTrackingView?
 
     private var overlayShortcut = "⌘⌃S"
@@ -990,6 +990,15 @@ class ShortcutReminderController: NSObject {
     }
 
     private func sendAction(_ action: String) {
+        // A press that starts on a SwiftUI Button and turns into a window
+        // drag still delivers a belated action here: performDrag() moves the
+        // window under the cursor 1:1, so from the Button's own (window-
+        // relative) frame the release never left its bounds, and it fires
+        // its action once the drag's internal loop hands the event back —
+        // regardless of the local monitor already having called
+        // performDrag() for that press. Drop the action when this press was
+        // actually a drag rather than trying to out-race that internal loop.
+        if hostingView?.draggingThisPress == true { return }
         guard let cb = gShortcutCallback else { return }
         action.withCString { cb($0) }
     }
@@ -1051,6 +1060,14 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
     private var dragMonitor: Any?
     private var dragStartLocation: NSPoint = .zero
 
+    // Set once this press's movement has crossed the drag threshold below,
+    // and read by ShortcutReminderController.sendAction() to drop a belated
+    // Button action for the same press (see the comment there for why
+    // performDrag() swallowing the triggering event isn't enough on its
+    // own). Reset at the start of every new press so it never leaks into an
+    // unrelated later click.
+    private(set) var draggingThisPress = false
+
     deinit {
         if let m = dragMonitor {
             NSEvent.removeMonitor(m)
@@ -1059,6 +1076,8 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
+
+        draggingThisPress = false
 
         guard let window = window else { return }
 
@@ -1088,6 +1107,7 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
                         NSEvent.removeMonitor(m)
                         self.dragMonitor = nil
                     }
+                    self.draggingThisPress = true
                     window.performDrag(with: event)
                     return nil
                 }

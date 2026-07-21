@@ -194,6 +194,7 @@ export default function ShortcutReminderPage() {
   const handleRestartRecording = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (consumeDrag()) return;
     // Optimistic — Rust pushes the authoritative "fixing" immediately after.
     setHealthState("fixing");
     try {
@@ -206,6 +207,7 @@ export default function ShortcutReminderPage() {
   const handleDismissIncident = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (consumeDrag()) return;
     try {
       await commands.overlayDismissIncident();
     } catch (err) {
@@ -213,15 +215,49 @@ export default function ShortcutReminderPage() {
     }
   }, []);
 
-  // Use Tauri's native startDragging for window movement
-  const handleMouseDown = useCallback(async (e: React.MouseEvent) => {
-    if (e.button === 0) {
-      try {
-        await getCurrentWindow().startDragging();
-      } catch {
+  // Use Tauri's native startDragging for window movement — but only once the
+  // press has actually moved past a small threshold. startDragging() hands
+  // off to the OS drag loop; a press-release with negligible movement still
+  // fires a normal DOM click on release, so without this threshold any press
+  // that starts on/near an action button (timeline, chat, restart, ...) opens
+  // that button's target the instant the user tries to drag the overlay.
+  // Mirrors the 4pt threshold already used by the native macOS overlay
+  // (DraggableHostingView in shortcut_reminder.swift).
+  const dragStateRef = useRef<{ startX: number; startY: number; dragging: boolean } | null>(null);
+  const DRAG_THRESHOLD_PX = 4;
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const state = { startX: e.clientX, startY: e.clientY, dragging: false };
+    dragStateRef.current = state;
+
+    const handleWindowMouseMove = (moveEvent: MouseEvent) => {
+      if (state.dragging) return;
+      const dx = moveEvent.clientX - state.startX;
+      const dy = moveEvent.clientY - state.startY;
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+      state.dragging = true;
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+      getCurrentWindow().startDragging().catch(() => {
         // Ignore drag errors
-      }
-    }
+      });
+    };
+    const handleWindowMouseUp = () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+  }, []);
+
+  // Every action button's onClick calls this first. Returns true (and clears
+  // the drag state) if the mousedown that led to this click turned into a
+  // drag, so the caller can bail instead of e.g. opening the timeline.
+  const consumeDrag = useCallback(() => {
+    const wasDragging = dragStateRef.current?.dragging ?? false;
+    dragStateRef.current = null;
+    return wasDragging;
   }, []);
 
   // Handle close button - hide overlay permanently
@@ -229,7 +265,8 @@ export default function ShortcutReminderPage() {
     // Prevent any event bubbling that might trigger drag
     e.preventDefault();
     e.stopPropagation();
-    
+    if (consumeDrag()) return;
+
     try {
       const store = await getStore();
       const settings = await store.get<Record<string, unknown>>("settings") || {};
@@ -271,7 +308,7 @@ export default function ShortcutReminderPage() {
         style={{ background: "transparent" }}
       >
         <div
-          onMouseDown={handleMouseDown}
+          onMouseDownCapture={handleMouseDown}
           className="select-none w-full h-full border border-red-500/40 flex flex-col"
           style={{ background: "rgba(0, 0, 0, 0.88)", cursor: "grab" }}
         >
@@ -332,7 +369,7 @@ export default function ShortcutReminderPage() {
         style={{ background: "transparent" }}
       >
         <div
-          onMouseDown={handleMouseDown}
+          onMouseDownCapture={handleMouseDown}
           className="select-none w-full h-full border border-white/25 flex items-center justify-center"
           style={{
             background: "rgba(0, 0, 0, 0.88)",
@@ -362,7 +399,7 @@ export default function ShortcutReminderPage() {
         style={{ background: "transparent" }}
       >
         <div
-          onMouseDown={handleMouseDown}
+          onMouseDownCapture={handleMouseDown}
           className="select-none w-full h-full border border-green-500/40 flex items-center justify-center"
           style={{
             background: "rgba(0, 0, 0, 0.88)",
@@ -391,7 +428,7 @@ export default function ShortcutReminderPage() {
       style={{ background: "transparent" }}
     >
       <div
-        onMouseDown={handleMouseDown}
+        onMouseDownCapture={handleMouseDown}
         className="select-none w-full h-full"
         style={{ cursor: "grab" }}
       >
@@ -408,6 +445,7 @@ export default function ShortcutReminderPage() {
           <button
             onClick={(e) => {
               e.stopPropagation();
+              if (consumeDrag()) return;
               commands.showWindow("Main");
               posthog.capture("shortcut_reminder_timeline_clicked");
             }}
@@ -430,6 +468,7 @@ export default function ShortcutReminderPage() {
           <button
             onClick={(e) => {
               e.stopPropagation();
+              if (consumeDrag()) return;
               commands.showWindow("Chat");
               posthog.capture("shortcut_reminder_chat_clicked");
             }}
@@ -451,6 +490,7 @@ export default function ShortcutReminderPage() {
           <button
             onClick={(e) => {
               e.stopPropagation();
+              if (consumeDrag()) return;
               commands.showWindow({ Search: { query: null } });
               posthog.capture("shortcut_reminder_search_clicked");
             }}
@@ -493,6 +533,7 @@ export default function ShortcutReminderPage() {
             <button
               onClick={(e) => {
                 e.stopPropagation();
+                if (consumeDrag()) return;
                 commands.showNotificationInbox();
                 posthog.capture("shortcut_reminder_inbox_clicked");
               }}
