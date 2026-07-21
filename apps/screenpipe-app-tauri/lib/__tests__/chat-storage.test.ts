@@ -297,6 +297,28 @@ describe("chat-storage bounded history", () => {
     expect(meta?.lastContentAt).toBe(200);
   });
 
+  it("re-throws and reports when the disk write fails (forbidden path, #5306)", async () => {
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    vi.mocked(writeTextFile).mockRejectedValueOnce(
+      new Error("forbidden path: D:\\Users\\Evan\\.screenpipe\\chats")
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        saveConversationFile({
+          id: "save-fail",
+          title: "save-fail",
+          messages: [],
+          createdAt: 100,
+          updatedAt: 100,
+        })
+      ).rejects.toThrow("forbidden path");
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it("leaves lastViewedAt undefined for legacy files that predate unread persistence", () => {
     const meta = conversationMetaFromJson({
       id: "legacy",

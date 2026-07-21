@@ -103,7 +103,39 @@ function conversationFilename(id: string): string {
   return `${id.replace(/[<>:"/\\|?*]/g, "_")}.json`;
 }
 
+// One-time user-visible alert when persisting chat history fails. Saves
+// failed silently for weeks when a relocated data dir fell outside the
+// webview fs scope (#5306) — the only trace was a console-level unhandled
+// rejection. Surface the first failure so data loss is never silent again.
+let saveFailureNotified = false;
+async function notifySaveFailure(e: unknown): Promise<void> {
+  console.error("[chat-storage] failed to persist conversation:", e);
+  if (saveFailureNotified) return;
+  saveFailureNotified = true;
+  try {
+    const { toast } = await import("@/components/ui/use-toast");
+    toast({
+      title: "failed to save chat history",
+      description: String(e),
+      variant: "destructive",
+    });
+  } catch {
+    // non-UI context (tests/SSR); the console.error above still fires
+  }
+}
+
 export async function saveConversationFile(
+  conv: ChatConversation
+): Promise<void> {
+  try {
+    await saveConversationFileInner(conv);
+  } catch (e) {
+    await notifySaveFailure(e);
+    throw e;
+  }
+}
+
+async function saveConversationFileInner(
   conv: ChatConversation
 ): Promise<void> {
   const dir = await ensureChatsDir();
