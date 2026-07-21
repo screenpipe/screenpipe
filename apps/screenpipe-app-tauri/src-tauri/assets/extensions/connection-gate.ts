@@ -104,6 +104,8 @@ async function findMcpProviderServer(
 }
 
 async function enrichConnection(connection: ConnectionItem, signal?: AbortSignal): Promise<ConnectionItem> {
+  const composio = await composioEnrichment(connection.id, signal);
+  if (composio) return { ...connection, ...composio };
   const server = await findMcpProviderServer(connection.id, signal);
   if (!server) return connection;
   return {
@@ -111,6 +113,51 @@ async function enrichConnection(connection: ConnectionItem, signal?: AbortSignal
     connected: true,
     mcp: true,
     mcp_server_id: server.id,
+  };
+}
+
+// Gmail and Zoom connect through Composio's managed auth: the desktop app
+// registers one shared MCP server whose URL points at screenpipe.com's
+// passthrough. That server only exists after a successful connect, so its
+// presence IS the connected signal. Gmail has no /connections entry at all
+// (it is a frontend-only tile), so without this the gate tells the model
+// Gmail doesn't exist even though the tools are one sp_mcp_call away.
+const COMPOSIO_TOOLKIT_IDS = new Set(["gmail", "zoom"]);
+const COMPOSIO_URL_RE = /^https:\/\/(www\.)?(screenpipe\.com|screenpi\.pe)\/api\/composio\/mcp\/?$/;
+
+async function findComposioServer(signal?: AbortSignal): Promise<McpServerItem | null> {
+  const servers = await fetchMcpServers(signal).catch(() => []);
+  return (
+    servers.find(
+      (item) => item.enabled !== false && COMPOSIO_URL_RE.test(normalizeUrl(item.url || ""))
+    ) ?? null
+  );
+}
+
+async function composioEnrichment(
+  connectionId: string,
+  signal?: AbortSignal
+): Promise<Partial<ConnectionItem> | null> {
+  if (!COMPOSIO_TOOLKIT_IDS.has(connectionId)) return null;
+  const server = await findComposioServer(signal);
+  if (!server) return null;
+  return {
+    connected: true,
+    mcp: true,
+    mcp_server_id: server.id,
+  };
+}
+
+function composioSyntheticConnection(id: string, serverId: string): ConnectionItem {
+  const name = id === "gmail" ? "Gmail" : "Zoom";
+  return {
+    id,
+    name,
+    connected: true,
+    mcp: true,
+    mcp_server_id: serverId,
+    category: id === "gmail" ? "Communication" : "Meetings",
+    description: `${name} via Composio managed auth. Discover tools with sp_mcp_list_tools (server_id "${serverId}"), then call them with sp_mcp_call — e.g. GMAIL_* / ZOOM_* tools through COMPOSIO_SEARCH_TOOLS and COMPOSIO_MULTI_EXECUTE_TOOL.`,
   };
 }
 
@@ -179,6 +226,17 @@ export default function (pi: ExtensionAPI) {
         const enrichedConnections = await Promise.all(
           connections.map((connection) => enrichConnection(connection, signal))
         );
+        // Gmail (and Zoom, if its legacy integration ever goes away) exists
+        // only as a Composio-backed frontend tile — synthesize entries so the
+        // model learns they are reachable through the Composio MCP server.
+        const composioServer = await findComposioServer(signal);
+        if (composioServer) {
+          for (const id of COMPOSIO_TOOLKIT_IDS) {
+            if (!enrichedConnections.some((connection) => connection.id === id)) {
+              enrichedConnections.push(composioSyntheticConnection(id, composioServer.id));
+            }
+          }
+        }
         const visible = enrichedConnections
           .filter((connection) => connection.id !== "owned-default")
           .map((connection) => connectionPayload(connection, connection.id));
@@ -239,9 +297,16 @@ export default function (pi: ExtensionAPI) {
       try {
         const connections = await fetchConnections(signal).catch(() => []);
         const rawConnection = connections.find((item) => item.id === connectionId);
-        const connection = rawConnection
+        let connection = rawConnection
           ? await enrichConnection(rawConnection, signal)
           : undefined;
+        // Gmail has no /connections entry — resolve it via the Composio server.
+        if (!connection && COMPOSIO_TOOLKIT_IDS.has(connectionId)) {
+          const composioServer = await findComposioServer(signal);
+          if (composioServer) {
+            connection = composioSyntheticConnection(connectionId, composioServer.id);
+          }
+        }
         name = connectionLabel(connection, connectionId);
         if (connection?.connected === true) {
           const payload = connectionPayload(connection, connectionId);
