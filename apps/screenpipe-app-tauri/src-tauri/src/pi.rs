@@ -1884,6 +1884,11 @@ pub async fn pi_start_inner(
     cmd.current_dir(&project_dir).args([
         "--mode",
         "rpc",
+        // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
+        // rpc mode can never answer — without --approve, mcp-bridge and
+        // connection-gate silently don't load. The project dir is created and
+        // populated exclusively by screenpipe, so it is trusted by definition.
+        "--approve",
         "--provider",
         &pi_provider,
         "--model",
@@ -4332,10 +4337,12 @@ error: InstallFailed extracting tarball"#;
         } else {
             Command::new(&pi_path)
         };
-        cmd.args(["--mode", "rpc", "--provider", provider, "--model", model])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args([
+            "--mode", "rpc", "--approve", "--provider", provider, "--model", model,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
         cmd.spawn().ok()
     }
 
