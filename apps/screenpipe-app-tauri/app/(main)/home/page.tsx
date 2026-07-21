@@ -65,6 +65,11 @@ import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
 import FirstRunGuide from "@/components/onboarding/first-run-guide";
+import {
+  consumeFirstRunGuidePending,
+  setFirstRunGuidePending,
+  shouldShowFirstRunGuide,
+} from "@/lib/first-run-guide";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
@@ -124,6 +129,9 @@ function HomeContent() {
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
   const { isTranslucent } = useSidebarContext();
   const [e2eSeedFlags, setE2eSeedFlags] = useState<string[] | null>(null);
+  // Consume the handoff on first display so closing/reloading the window can
+  // never resurrect the guide. This window retains the value for its lifetime.
+  const [firstRunGuidePending] = useState(consumeFirstRunGuidePending);
 
   useEffect(() => {
     let mounted = true;
@@ -145,12 +153,14 @@ function HomeContent() {
   // `onboarding` E2E seed represents an app that has already completed every
   // first-run surface; showing this click-blocking guide breaks otherwise
   // unrelated regression specs that start from the seeded home screen.
-  const showFirstRunGuide =
-    isSettingsLoaded &&
-    e2eSeedFlags !== null &&
-    !e2eSeedFlags.includes("onboarding") &&
-    !settings.firstRunGuideDone;
+  const showFirstRunGuide = shouldShowFirstRunGuide({
+    isSettingsLoaded,
+    e2eSeedFlags,
+    firstRunGuideDone: settings.firstRunGuideDone,
+    firstRunGuidePending,
+  });
   const markFirstRunGuideDone = useCallback(() => {
+    setFirstRunGuidePending(false);
     void updateSettings({ firstRunGuideDone: true });
   }, [updateSettings]);
 

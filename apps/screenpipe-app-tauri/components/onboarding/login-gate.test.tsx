@@ -5,12 +5,8 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Regression: the onboarding login step used to advance on token alone, then
-// (#3846) started requiring an active entitlement to advance — with no escape
-// hatch, so a member who signed in without a resolved plan (wrong email, grant
-// lag) was stranded on "✓ signed in" forever. The fix: still advance when
-// entitled, but re-verify once and offer recovery (re-check / switch account)
-// when not, instead of dead-ending.
+// The free plan requires an account, not a paid entitlement. Any authenticated
+// user must advance exactly once after sign-in.
 
 const mocks = vi.hoisted(() => ({
   settings: { user: null as any },
@@ -45,7 +41,8 @@ vi.mock("framer-motion", () => ({
         () =>
         ({ children, ...rest }: any) => {
           // strip framer-only props that React would warn about
-          const { whileTap, initial, animate, transition, exit, ...domProps } = rest;
+          const { whileTap, initial, animate, transition, exit, ...domProps } =
+            rest;
           return <div {...domProps}>{children}</div>;
         },
     },
@@ -73,46 +70,27 @@ describe("onboarding login gate", () => {
     mocks.hasAppEntitlement.mockReturnValue(true);
     const next = vi.fn();
     render(<OnboardingLogin handleNextSlide={next} />);
-    expect(screen.getByText(/signed in as maribel@bungalow.com/i)).toBeInTheDocument();
-    await waitFor(() => expect(next).toHaveBeenCalledTimes(1), { timeout: 1500 });
+    expect(
+      screen.getByText(/signed in as maribel@bungalow.com/i),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(next).toHaveBeenCalledTimes(1), {
+      timeout: 1500,
+    });
   });
 
-  it("does NOT dead-end when signed in but not entitled — re-verifies once and shows recovery", async () => {
+  it("advances when signed in on the free plan", async () => {
     mocks.settings = { user: { token: "t2", email: "personal@gmail.com" } };
     mocks.hasAppEntitlement.mockReturnValue(false);
     const next = vi.fn();
     render(<OnboardingLogin handleNextSlide={next} />);
 
-    // auto re-verify against the server exactly once (verify=true)
-    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalledWith("t2", true));
-    expect(mocks.loadUser).toHaveBeenCalledTimes(1);
-
-    // recovery UI, not a dead-end, and it never advances
-    expect(screen.getByText(/no active plan on this account/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /re-check/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /use a different account/i })).toBeInTheDocument();
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it("re-check button re-verifies entitlement on demand", async () => {
-    mocks.settings = { user: { token: "t3", email: "x@y.com" } };
-    mocks.hasAppEntitlement.mockReturnValue(false);
-    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
-    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalledTimes(1)); // auto re-verify
-    fireEvent.click(screen.getByRole("button", { name: /re-check/i }));
-    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalledTimes(2));
-    expect(mocks.loadUser).toHaveBeenLastCalledWith("t3", true);
-  });
-
-  it("'use a different account' clears the auth token so they can re-login", async () => {
-    mocks.settings = { user: { token: "t4", id: "u4", email: "x@y.com", cloud_subscribed: true } };
-    mocks.hasAppEntitlement.mockReturnValue(false);
-    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /use a different account/i }));
-    expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
-    const arg = mocks.updateSettings.mock.calls[0][0];
-    expect(arg.user.token).toBeNull();
-    expect(arg.user.id).toBeNull();
+    expect(
+      screen.getByText(/signed in as personal@gmail.com/i),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(next).toHaveBeenCalledTimes(1), {
+      timeout: 1500,
+    });
+    expect(mocks.loadUser).not.toHaveBeenCalled();
   });
 
   it("shows the sign-in button when not signed in", () => {

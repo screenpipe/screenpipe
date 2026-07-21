@@ -232,6 +232,10 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
                 "maxTokens": 32000,
+                // Pi sends its stable agent session ID as x-session-affinity.
+                // The hosted gateway uses that plus the user-message ordinal to
+                // count one visible turn once across a multi-call tool loop.
+                "compat": {"sendSessionAffinityHeaders": true},
             })
         })
         .collect()
@@ -241,7 +245,7 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
 /// Only auto — if the gateway is down, nothing works anyway.
 fn fallback_cloud_models() -> serde_json::Value {
     json!([
-        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000},
+        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000, "compat": {"sendSessionAffinityHeaders": true}},
     ])
 }
 
@@ -3834,6 +3838,18 @@ mod tests {
             .filter_map(|model| model.get("id").and_then(|id| id.as_str()))
             .collect();
         assert_eq!(ids, vec!["auto", "gpt-5.6-luna"]);
+        assert!(models.iter().all(|model| {
+            model
+                .pointer("/compat/sendSessionAffinityHeaders")
+                .and_then(|value| value.as_bool())
+                == Some(true)
+        }));
+
+        let fallback = fallback_cloud_models();
+        assert_eq!(
+            fallback.pointer("/0/compat/sendSessionAffinityHeaders"),
+            Some(&json!(true))
+        );
     }
 
     #[test]

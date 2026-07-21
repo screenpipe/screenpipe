@@ -10,11 +10,14 @@
 
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
 static HIDDEN_SECTIONS: Lazy<RwLock<HashSet<String>>> = Lazy::new(|| RwLock::new(HashSet::new()));
-static DEPLOYMENT_APP_UI_HIDDEN: Lazy<bool> =
-    Lazy::new(|| env_hides_app_ui() || enterprise_json_hides_app_ui());
+static SERVER_POLICY_RECEIVED: AtomicBool = AtomicBool::new(false);
+static IMMUTABLE_DEPLOYMENT_APP_UI_HIDDEN: Lazy<bool> =
+    Lazy::new(|| env_hides_app_ui() || bundled_enterprise_config_hides_app_ui());
+static PERSISTED_APP_UI_HIDDEN: Lazy<bool> = Lazy::new(user_enterprise_config_hides_app_ui);
 
 /// Per-stream sync policy. Defaults to all-true so an unconfigured device
 /// behaves exactly like before this feature shipped. The frontend pulls the
@@ -142,50 +145,68 @@ fn user_enterprise_config_path() -> std::path::PathBuf {
     screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json")
 }
 
-fn enterprise_json_hides_app_ui() -> bool {
-    let paths = [
-        bundled_enterprise_config_path(),
-        Some(user_enterprise_config_path()),
-    ];
+fn enterprise_config_hides_app_ui(path: &std::path::Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
 
-    for path in paths.into_iter().flatten() {
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
-            continue;
-        };
-
-        let hide_app = json
-            .get("hide_app")
+    let hide_app = json
+        .get("hide_app")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        || json
+            .get("hide_app_ui")
             .and_then(|value| value.as_bool())
-            .unwrap_or(false)
-            || json
-                .get("hide_app_ui")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
-
-        let ui_mode = json
-            .get("ui_mode")
-            .and_then(|value| value.as_str())
-            .map(|mode| {
-                matches!(
-                    mode.trim().to_ascii_lowercase().as_str(),
-                    "hidden" | "background" | "managed_background"
-                )
-            })
             .unwrap_or(false);
 
-        if hide_app || ui_mode {
-            tracing::info!(
-                "enterprise: app UI hidden by deployment config at {}",
-                path.display()
-            );
-            return true;
-        }
+    let ui_mode = json
+        .get("ui_mode")
+        .and_then(|value| value.as_str())
+        .map(|mode| {
+            matches!(
+                mode.trim().to_ascii_lowercase().as_str(),
+                "hidden" | "background" | "managed_background"
+            )
+        })
+        .unwrap_or(false);
+
+    if hide_app || ui_mode {
+        tracing::info!(
+            "enterprise: app UI hidden by deployment config at {}",
+            path.display()
+        );
+        return true;
     }
 
     false
+}
+
+fn bundled_enterprise_config_hides_app_ui() -> bool {
+    bundled_enterprise_config_path()
+        .as_deref()
+        .map(enterprise_config_hides_app_ui)
+        .unwrap_or(false)
+}
+
+fn user_enterprise_config_hides_app_ui() -> bool {
+    enterprise_config_hides_app_ui(&user_enterprise_config_path())
+}
+
+fn hidden_sections_hide_app_ui(hidden_sections: &HashSet<String>) -> bool {
+    APP_UI_HIDDEN_SECTIONS
+        .iter()
+        .any(|section| hidden_sections.contains(*section))
+}
+
+fn resolve_app_ui_hidden(
+    immutable_deployment_hidden: bool,
+    server_policy_hidden: Option<bool>,
+    persisted_hidden: bool,
+) -> bool {
+    immutable_deployment_hidden || server_policy_hidden.unwrap_or(persisted_hidden)
 }
 
 /// Called by the frontend after fetching the enterprise policy.
@@ -195,6 +216,10 @@ pub fn set_enterprise_policy(hidden_sections: Vec<String>) {
     if let Ok(mut guard) = HIDDEN_SECTIONS.write() {
         *guard = hidden_sections.into_iter().collect();
         tracing::info!("enterprise: policy updated, hidden sections: {:?}", *guard);
+        // Once the server has answered, its current policy supersedes the
+        // user-writable hide_app snapshot used only to avoid startup UI flash.
+        // Environment and bundled deployment overrides remain authoritative.
+        SERVER_POLICY_RECEIVED.store(true, Ordering::SeqCst);
     }
 }
 
@@ -266,18 +291,18 @@ pub fn is_tray_item_hidden(section_id: &str) -> bool {
 /// This intentionally does not hide permission recovery: macOS may still need
 /// to show the raw system permission flow even for a managed background pilot.
 pub fn is_app_ui_hidden() -> bool {
-    if *DEPLOYMENT_APP_UI_HIDDEN {
-        return true;
-    }
+    let server_policy_hidden = SERVER_POLICY_RECEIVED.load(Ordering::SeqCst).then(|| {
+        HIDDEN_SECTIONS
+            .read()
+            .map(|guard| hidden_sections_hide_app_ui(&guard))
+            .unwrap_or(false)
+    });
 
-    HIDDEN_SECTIONS
-        .read()
-        .map(|guard| {
-            APP_UI_HIDDEN_SECTIONS
-                .iter()
-                .any(|section| guard.contains(*section))
-        })
-        .unwrap_or(false)
+    resolve_app_ui_hidden(
+        *IMMUTABLE_DEPLOYMENT_APP_UI_HIDDEN,
+        server_policy_hidden,
+        *PERSISTED_APP_UI_HIDDEN,
+    )
 }
 
 /// Serializes any test that mutates `SYNC_STREAMS`. Cargo runs tests in
@@ -308,9 +333,21 @@ mod tests {
 
     #[test]
     fn hidden_sections_can_hide_app_ui() {
-        set_enterprise_policy(vec!["app_ui".to_string()]);
-        assert!(is_app_ui_hidden());
-        set_enterprise_policy(vec![]);
+        let hidden = HashSet::from(["app_ui".to_string()]);
+        assert!(hidden_sections_hide_app_ui(&hidden));
+        assert!(!hidden_sections_hide_app_ui(&HashSet::new()));
+    }
+
+    #[test]
+    fn fresh_server_policy_supersedes_persisted_hidden_snapshot() {
+        assert!(resolve_app_ui_hidden(false, None, true));
+        assert!(!resolve_app_ui_hidden(false, Some(false), true));
+        assert!(resolve_app_ui_hidden(false, Some(true), false));
+    }
+
+    #[test]
+    fn immutable_deployment_override_remains_authoritative() {
+        assert!(resolve_app_ui_hidden(true, Some(false), false));
     }
 
     #[test]

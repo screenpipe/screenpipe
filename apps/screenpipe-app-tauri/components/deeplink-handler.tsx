@@ -17,6 +17,7 @@ import {
   openScreenpipeViewerLink,
   screenpipeViewerPathFromHref,
 } from "@/components/markdown";
+import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
 const activeDeepLinks = new Set<string>();
@@ -32,7 +33,7 @@ function beginDeepLink(url: string): boolean {
 
   const seenAt = recentDeepLinks.get(url);
   if (activeDeepLinks.has(url) || (seenAt && now - seenAt <= DEEPLINK_RECENT_TTL_MS)) {
-    console.log("skipping duplicate deep link:", url);
+    console.log("skipping duplicate deep link:", describeDeepLinkForLog(url));
     return false;
   }
 
@@ -301,7 +302,10 @@ export function DeeplinkHandler() {
 
     const setupDeepLink = async () => {
       const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
-        console.log("received deep link urls:", urls);
+        console.log(
+          "received deep link urls:",
+          urls.map(describeDeepLinkForLog),
+        );
         for (const url of urls) {
           if (!beginDeepLink(url)) continue;
           try {
@@ -324,7 +328,10 @@ export function DeeplinkHandler() {
       // Listen for deep-link URLs forwarded from single-instance handoff
       // (emitted by the /focus endpoint or the single-instance plugin callback)
       listen<string>("deep-link-received", async (event) => {
-        console.log("received deep-link-received event:", event.payload);
+        console.log(
+          "received deep-link-received event:",
+          describeDeepLinkForLog(event.payload),
+        );
         if (!beginDeepLink(event.payload)) return;
         try {
           await processDeepLinkUrl(event.payload);

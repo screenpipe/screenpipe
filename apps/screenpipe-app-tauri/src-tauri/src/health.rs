@@ -639,7 +639,7 @@ fn respawn_engine_if_crashed(
         entitled: crate::store::SettingsStore::get(app)
             .ok()
             .flatten()
-            .map(|s| s.app_entitled_or_dev())
+            .map(|s| crate::recording::recording_access_allowed(&s))
             .unwrap_or(false),
         ever_connected,
         past_startup_grace: start_elapsed > STARTUP_GRACE_PERIOD,

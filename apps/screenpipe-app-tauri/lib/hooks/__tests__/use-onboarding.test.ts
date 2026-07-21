@@ -80,6 +80,9 @@ describe("useOnboarding measurement", () => {
       customized: false,
     });
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(true);
+    expect(
+      localStorage.getItem("screenpipe:first-run-guide-pending"),
+    ).toBe("true");
     expect(mocks.emit).toHaveBeenCalledWith("sidebar-pipes-collapsed-changed", {
       collapsed: false,
     });
@@ -100,6 +103,9 @@ describe("useOnboarding measurement", () => {
 
     expect(mocks.capture).not.toHaveBeenCalled();
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(false);
+    expect(
+      localStorage.getItem("screenpipe:first-run-guide-pending"),
+    ).toBeNull();
     expect(localStorage.getItem("screenpipe:pipes-collapsed")).toBe("true");
     expect(mocks.emit).toHaveBeenLastCalledWith(
       "sidebar-pipes-collapsed-changed",

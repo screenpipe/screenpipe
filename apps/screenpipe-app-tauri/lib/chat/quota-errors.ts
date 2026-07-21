@@ -7,6 +7,12 @@
 
 export function buildDailyLimitMessage(errorStr: string): string {
   try {
+    if (errorStr.includes("free_chat_limit_exceeded")) {
+      return "You've used today's 2 free hosted AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
+    }
+    if (errorStr.includes("free_chat_turn_request_limit_exceeded")) {
+      return "This free message reached its 8-step agent limit. Upgrade for longer agent runs, or switch your AI preset to your own provider.";
+    }
     const isCostLimit = errorStr.includes("daily_cost_limit_exceeded");
     const isRateLimit = errorStr.includes("rate limit") || errorStr.includes("Rate limit");
 
@@ -39,6 +45,8 @@ export function buildDailyLimitMessage(errorStr: string): string {
 export function classifyQuotaError(errorStr: string): "daily" | "rate" | "none" {
   const normalized = errorStr.toLowerCase();
   const isDailyLimit =
+    normalized.includes("free_chat_limit_exceeded") ||
+    normalized.includes("free_chat_turn_request_limit_exceeded") ||
     normalized.includes("credits_exhausted") ||
     normalized.includes("daily_limit_exceeded") ||
     normalized.includes("daily_cost_limit_exceeded");

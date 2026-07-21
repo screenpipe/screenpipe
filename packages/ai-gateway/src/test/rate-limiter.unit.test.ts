@@ -45,6 +45,7 @@ function makeEnv(over: Record<string, unknown> = {}): Env {
 const auth = (tier: UserTier, deviceId = 'dev-1'): AuthResult => ({
 	isValid: true,
 	tier,
+	accountPlan: tier === 'subscribed' ? 'business' : tier === 'logged_in' ? 'free' : 'unknown',
 	deviceId,
 });
 

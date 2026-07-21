@@ -43,6 +43,7 @@ import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { ReferralCard } from "./referral-card";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import posthog from "posthog-js";
+import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
 import { screenpipeWebUrl } from "@/lib/web-url";
 
 const ACCOUNT_URL = screenpipeWebUrl("/account", "https://screenpipe.com");
@@ -118,11 +119,17 @@ export function AccountSection() {
 
     const setupDeepLink = async () => {
       const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
-        console.log("received deep link urls:", urls);
+        console.log(
+          "received deep link urls:",
+          urls.map(describeDeepLinkForLog),
+        );
         for (const url of urls) {
           // eg stripe / dev flow
           if (url.includes("stripe-connect")) {
-            console.log("stripe connect url:", url);
+            console.log(
+              "received stripe connect deep link:",
+              describeDeepLinkForLog(url),
+            );
             if (url.includes("/return")) {
               if (settings.user) {
                 updateSettings({

@@ -88,6 +88,7 @@ commits that broke this area: `0752ea59`, `7562ec62`, `2a2bd9b5`, `f2f7f770`, `5
 - [ ] **Recording toggle in tray** — Verify that the tray menu has a single toggle to start/stop recording (replacing separate items). (`cdc1d0fd9`)
 - [ ] **Headless webview teardown** — Enable Headless, close Home, and verify every app webview process exits while recording, scheduled pipes, and the existing tray icon remain active. Global shortcuts must do nothing while dormant; opening screenpipe from the tray must recreate Home and restore shortcuts.
 - [ ] **Headless record-only mode** — Enable Headless → Record only, close Home, and verify recording and the tray remain active while scheduled pipe occurrences are consumed as no-ops. Open screenpipe from the tray and verify pipes wait for their next future schedule without a catch-up burst.
+- [ ] **Enterprise hidden-UI policy reversal** — With enterprise hidden UI active, turn the server policy off while the app is running. Home should reopen on the next policy refresh, the dock/full tray and global shortcuts should return, and `~/.screenpipe/enterprise.json` should persist `hide_app: false`. If the user separately enabled Headless, the app should remain dormant.
 
 ### 3. monitor plug/unplug
 

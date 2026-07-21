@@ -39,6 +39,7 @@ import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { ImapCard } from "./imap-card";
+import { ComposioCard } from "./composio-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { RemoteAgentCard } from "./remote-agent-card";
@@ -511,6 +512,15 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
         />
       </svg>
     ),
+    gmail: (
+      <svg viewBox="0 0 256 193" className="w-5 h-5" preserveAspectRatio="xMidYMid meet" aria-hidden>
+        <path fill="#4285F4" d="M58.182 192.05V93.14L27.507 65.077 0 49.504v125.091c0 9.658 7.825 17.455 17.455 17.455h40.727Z"/>
+        <path fill="#34A853" d="M197.818 192.05h40.727c9.659 0 17.455-7.826 17.455-17.455V49.505l-31.156 17.837-27.026 25.798v98.91Z"/>
+        <path fill="#EA4335" d="m58.182 93.14-4.174-38.647 4.174-36.989L128 69.868l69.818-52.364 4.669 34.992-4.669 40.644L128 145.504z"/>
+        <path fill="#FBBC04" d="M197.818 17.504V93.14L256 49.504V26.231c0-21.585-24.64-33.89-41.89-20.945l-16.292 12.218Z"/>
+        <path fill="#C5221F" d="m0 49.504 26.759 20.07L58.182 93.14V17.504L41.89 5.286C24.61-7.66 0 4.646 0 26.231v23.273Z"/>
+      </svg>
+    ),
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
@@ -748,6 +758,7 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   granola: "Show notes from my recent meetings",
   imap: "Summarize my recent emails",
   zoom: "Summarize my recent Zoom calls",
+  gmail: "Summarize my recent emails",
   krisp: "Search my meeting transcripts for action items",
   excalidraw: "What's on my recent Excalidraw boards?",
   whatsapp: "What were the latest messages in my WhatsApp?",
@@ -3718,6 +3729,21 @@ export function ConnectionsSection({
   const [excalidrawConnected, setExcalidrawConnected] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
   const [piExtensionCount, setPiExtensionCount] = useState(0);
+  // Gmail/Zoom via Composio (managed auth through screenpipe.com; see composio-card.tsx)
+  const { settings: composioSettings } = useSettings();
+  const [composioConnected, setComposioConnected] = useState({ gmail: false, zoom: false });
+  const composioToken = composioSettings.user?.token;
+  useEffect(() => {
+    if (!composioToken) return;
+    fetch("https://screenpipe.com/api/composio/status", {
+      headers: { Authorization: `Bearer ${composioToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (s) setComposioConnected({ gmail: !!s.gmail?.connected, zoom: !!s.zoom?.connected });
+      })
+      .catch(() => {});
+  }, [composioToken]);
 
   const loadSkillsCount = useCallback(() => {
     commands
@@ -3895,6 +3921,7 @@ export function ConnectionsSection({
       ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: appleCalendarConnected }] : []),
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
+      { id: "gmail", name: "Gmail", icon: "gmail", connected: composioConnected.gmail },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
       { id: "remote-agent", name: "Remote agent", icon: "remote-agent", connected: false },
       { id: "whatsapp", name: "WhatsApp", icon: "whatsapp", connected: false, detected: detectedConnectionIds.has("whatsapp") },
@@ -3956,6 +3983,9 @@ export function ConnectionsSection({
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     const googleDocsTile = hardcoded.find(h => h.id === "google-docs");
     if (googleDocsTile) googleDocsTile.connected = googleDocsConnected;
+    // Zoom's dot lights for the Composio connection OR a legacy Zoom OAuth connection.
+    const zoomTile = apiTiles.find(t => t.id === "zoom");
+    if (zoomTile) zoomTile.connected = zoomTile.connected || composioConnected.zoom;
     // Custom MCP tile shows the dot when any user-registered MCP server is enabled.
     const customMcpTile = hardcoded.find(h => h.id === "custom-mcp");
     if (customMcpTile) {
@@ -3968,7 +3998,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, grokInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, mcpProviderConnected, excalidrawConnected, importedSkillsCount, piExtensionCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, grokInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, mcpProviderConnected, excalidrawConnected, importedSkillsCount, piExtensionCount, detectedConnectionIds, composioConnected]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -4105,6 +4135,32 @@ export function ConnectionsSection({
       />;
       case "google-docs": return <GoogleDocsCard />;
       case "imap": return <ImapCard onChanged={fetchIntegrations} />;
+      case "gmail": return <ComposioCard toolkit="gmail" onChanged={setComposioConnected} />;
+      case "zoom": return (
+        <div className="space-y-3">
+          <ComposioCard toolkit="zoom" onChanged={setComposioConnected} />
+          {/* The legacy Zoom OAuth app was rejected in marketplace review, so its
+              authorize page is dead for new connections. Surface the old panel
+              only for users who still HAVE a legacy connection (to manage or
+              disconnect it) — never as a connect path. */}
+          {selectedIntegration?.is_oauth && selectedIntegration.connected && (
+            <details>
+              <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                advanced: manage the legacy zoom connection
+              </summary>
+              <div className="pt-2">
+                <OAuthPanel
+                  integrationId="zoom"
+                  integrationName="Zoom"
+                  supportsOAuthInstances={!!selectedIntegration.supports_oauth_instances}
+                  onConnected={() => refreshIntegrationConnection("zoom", true)}
+                  onDisconnected={() => refreshIntegrationConnection("zoom", false)}
+                />
+              </div>
+            </details>
+          )}
+        </div>
+      );
       case "ics-calendar": return <IcsCalendarCard />;
       case "remote-agent": return <RemoteAgentCard />;
       case "whatsapp": return <WhatsAppPanel />;
@@ -4395,6 +4451,11 @@ export function ConnectionsSection({
                       <span className="px-2 py-0.5 text-xs font-medium border border-border text-muted-foreground rounded-full inline-flex items-center gap-1">
                         <CalendarIcon className="h-2.5 w-2.5" />
                         macOS
+                      </span>
+                    )}
+                    {(selectedTile.id === "gmail" || selectedTile.id === "zoom") && (
+                      <span className="px-2 py-0.5 text-[10px] font-mono border border-border text-muted-foreground inline-flex items-center">
+                        via composio
                       </span>
                     )}
                   </div>

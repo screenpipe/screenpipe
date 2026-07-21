@@ -8,7 +8,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
 import posthog from "posthog-js";
-import { hasAppEntitlement, isDevBillingBypassEnabled } from "@/lib/app-entitlement";
+import { isDevBillingBypassEnabled } from "@/lib/app-entitlement";
 
 interface OnboardingLoginProps {
   handleNextSlide: () => void;
@@ -230,18 +230,15 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
   handleNextSlide,
   suppressAutoAdvance = false,
 }) => {
-  const { settings, loadUser, updateSettings } = useSettings();
+  const { settings } = useSettings();
   const hasAdvanced = useRef(false);
-  const reverifiedRef = useRef(false);
   const [showSkip, setShowSkip] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
-  const [rechecking, setRechecking] = useState(false);
   const bgRef = useRef<HTMLCanvasElement>(null);
   const btnRef = useRef<HTMLCanvasElement>(null);
   const canSkipLogin = isDevBillingBypassEnabled();
 
   const isLoggedIn = !!settings.user?.token;
-  const entitled = canSkipLogin || hasAppEntitlement(settings.user);
 
   useBackgroundCanvas(bgRef, 500, 480);
   useButtonCanvas(btnRef, 200, 52, isHovered);
@@ -255,60 +252,18 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
     if (
       !suppressAutoAdvance &&
       settings.user?.token &&
-      entitled &&
       !hasAdvanced.current
     ) {
       hasAdvanced.current = true;
       posthog.capture("onboarding_login_completed");
       setTimeout(() => handleNextSlide(), 500);
     }
-  }, [entitled, settings.user, settings.user?.token, handleNextSlide, suppressAutoAdvance]);
-
-  // Signed in but not entitled is usually entitlement propagation lag (a brand-new
-  // enterprise member, or a just-completed checkout) where store.bin still has the
-  // pre-grant snapshot. Re-verify ONCE against the server (verify=true also consults
-  // Stripe + the enterprise grant) so the gate un-sticks itself without the user
-  // doing anything. Real "wrong account / no plan" cases fall through to the recovery
-  // UI below instead of a dead-end "✓ signed in" screen.
-  useEffect(() => {
-    const token = settings.user?.token;
-    if (token && !entitled && !canSkipLogin && !reverifiedRef.current) {
-      reverifiedRef.current = true;
-      loadUser(token, true).catch((e) => console.warn("entitlement re-verify failed:", e));
-    }
-  }, [settings.user?.token, entitled, canSkipLogin, loadUser]);
-
-  const recheckEntitlement = useCallback(async () => {
-    const token = settings.user?.token;
-    if (!token || rechecking) return;
-    setRechecking(true);
-    posthog.capture("onboarding_login_entitlement_recheck");
-    try {
-      await loadUser(token, true);
-    } catch (e) {
-      console.warn("entitlement recheck failed:", e);
-    }
-    setRechecking(false);
-  }, [settings.user?.token, rechecking, loadUser]);
-
-  const useDifferentAccount = useCallback(() => {
-    posthog.capture("onboarding_login_switch_account");
-    reverifiedRef.current = false;
-    // Clear the auth-bearing fields so we drop back to the "sign in" button and the
-    // member can re-authenticate with their work email (the one on the license).
-    updateSettings({
-      user: {
-        ...settings.user,
-        id: null,
-        token: null,
-        clerk_id: null,
-        cloud_subscribed: null,
-        app_entitled: null,
-        subscription_plan: null,
-        entitlement: null,
-      },
-    });
-  }, [settings.user, updateSettings]);
+  }, [
+    handleNextSlide,
+    settings.user,
+    settings.user?.token,
+    suppressAutoAdvance,
+  ]);
 
   const handleLogin = useCallback(() => {
     posthog.capture("onboarding_login_clicked");
@@ -359,7 +314,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
           ai finally knows what you&apos;re doing
         </motion.p>
 
-        {isLoggedIn && entitled ? (
+        {isLoggedIn ? (
           <motion.div
             className="flex flex-col items-center gap-3"
             initial={{ opacity: 0, scale: 0.95 }}
@@ -368,39 +323,6 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             <span className="font-mono text-xs text-foreground/80">
               ✓ signed in as {settings.user?.email || "user"}
             </span>
-          </motion.div>
-        ) : isLoggedIn ? (
-          // Signed in but no active plan on this account. Don't dead-end — tell
-          // them which account they're on and give a way out (re-check after the
-          // grant lands, or switch to the work email that's on the team license).
-          <motion.div
-            className="flex flex-col items-center gap-4 max-w-[360px] text-center"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-          >
-            <span className="font-mono text-xs text-foreground/80">
-              signed in as {settings.user?.email || "user"}
-            </span>
-            <p className="font-mono text-[11px] leading-relaxed text-muted-foreground/70">
-              no active plan on this account. if your team invited you, sign in
-              with your <span className="text-foreground/80">work email</span> —
-              or ask your admin to add you, then re-check.
-            </p>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={recheckEntitlement}
-                disabled={rechecking}
-                className="font-mono text-xs tracking-wide uppercase border border-foreground/70 px-4 py-2 hover:bg-foreground hover:text-background transition-colors disabled:opacity-50"
-              >
-                {rechecking ? "checking…" : "re-check"}
-              </button>
-              <button
-                onClick={useDifferentAccount}
-                className="font-mono text-xs text-muted-foreground/70 hover:text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors"
-              >
-                use a different account
-              </button>
-            </div>
           </motion.div>
         ) : (
           <>
@@ -444,7 +366,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             >
               {suppressAutoAdvance
                 ? "sign in with your enterprise account"
-                : "sign in to activate your plan"}
+                : "sign in to start free"}
             </motion.p>
           </>
         )}

@@ -18,6 +18,8 @@ import {
 
 describe("classifyQuotaError", () => {
   it("classifies daily-limit signals as 'daily'", () => {
+    expect(classifyQuotaError("free_chat_limit_exceeded")).toBe("daily");
+    expect(classifyQuotaError("free_chat_turn_request_limit_exceeded")).toBe("daily");
     expect(classifyQuotaError("credits_exhausted")).toBe("daily");
     expect(classifyQuotaError("daily_limit_exceeded")).toBe("daily");
     expect(classifyQuotaError("daily_cost_limit_exceeded")).toBe("daily");
@@ -44,6 +46,20 @@ describe("classifyQuotaError", () => {
 });
 
 describe("buildDailyLimitMessage", () => {
+  it("shows the daily free message wall without immediate retry copy", () => {
+    const message = buildDailyLimitMessage("free_chat_limit_exceeded");
+    expect(message).toContain("2 free hosted AI messages");
+    expect(message).toContain("tomorrow");
+    expect(message).toContain("Claude");
+    expect(message).toContain("Codex");
+  });
+
+  it("shows the per-message tool-loop boundary", () => {
+    expect(buildDailyLimitMessage("free_chat_turn_request_limit_exceeded")).toContain(
+      "8-step agent limit",
+    );
+  });
+
   it("returns the rate-limited copy when the string mentions a rate limit", () => {
     expect(buildDailyLimitMessage("rate limit hit")).toContain("temporarily rate-limited");
     expect(buildDailyLimitMessage("Rate limit hit")).toContain("temporarily rate-limited");

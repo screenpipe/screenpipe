@@ -10,6 +10,10 @@ import {
   PIPES_SIDEBAR_COLLAPSED_KEY,
   setPipesSidebarCollapsed,
 } from "@/lib/sidebar-pipes";
+import {
+  isFirstRunGuidePending,
+  setFirstRunGuidePending,
+} from "@/lib/first-run-guide";
 
 export type OnboardingCompletionContext = {
   method: "pipes_installed" | "pipe_step_skipped" | "hidden_enterprise";
@@ -58,6 +62,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
 
   completeOnboarding: async (context) => {
     let previousPipesCollapsed: string | null = null;
+    const firstRunGuideWasPending = isFirstRunGuidePending();
     try {
       set({ isLoading: true, error: null });
       try {
@@ -69,6 +74,10 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       // the expanded state first. A newly-created Home reads the preference;
       // an existing Home receives the event.
       await setPipesSidebarCollapsed(false);
+      // This explicit handoff is the eligibility gate for the guide. Existing
+      // onboarded installs never receive it, even though their settings are
+      // hydrated with firstRunGuideDone=false for backwards compatibility.
+      setFirstRunGuidePending(true);
       const result = await commands.completeOnboarding();
       
       if (result.status === "ok") {
@@ -90,6 +99,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
         throw new Error(result.error);
       }
     } catch (error) {
+      setFirstRunGuidePending(firstRunGuideWasPending);
       const wasCollapsed = previousPipesCollapsed == null
         ? true
         : previousPipesCollapsed === "true";

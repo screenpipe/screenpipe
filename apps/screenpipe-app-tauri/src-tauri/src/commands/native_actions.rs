@@ -508,10 +508,7 @@ fn meeting_page_with_id(deeplink_url: &str) -> String {
 
 fn emit_meeting_note_route_with_retries(app: &tauri::AppHandle, deeplink_url: &str) {
     let Some((meeting_id, transcript)) = parse_meeting_deeplink(deeplink_url) else {
-        warn!(
-            "invalid meeting deeplink from notification: {}",
-            deeplink_url
-        );
+        warn!("invalid meeting deeplink from notification");
         return;
     };
 

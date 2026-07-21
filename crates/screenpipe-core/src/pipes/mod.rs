@@ -31,7 +31,7 @@ use chrono::{
 };
 use cron::Schedule as CronSchedule;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -44,6 +44,42 @@ const PIPE_LOG_ACTIVE_KEEP_PER_PIPE: usize = 200;
 const PIPE_LOG_ARCHIVE_AFTER_DAYS: i64 = 14;
 const PIPE_LOG_ARCHIVE_DIR: &str = "archive";
 const PIPE_EXECUTION_KEEP_PER_PIPE: i32 = 500;
+/// Stable prefix returned when an install would exceed the configured pipe cap.
+pub const PIPE_LIMIT_ERROR_CODE: &str = "free_pipe_limit_reached";
+const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
+    (
+        "automate-my-work",
+        include_str!("../../assets/pipes/automate-my-work/pipe.md"),
+    ),
+    (
+        "missed-todos",
+        include_str!("../../assets/pipes/missed-todos/pipe.md"),
+    ),
+    (
+        "day-recap",
+        include_str!("../../assets/pipes/day-recap/pipe.md"),
+    ),
+    (
+        "standup-update",
+        include_str!("../../assets/pipes/standup-update/pipe.md"),
+    ),
+    (
+        "ai-habits",
+        include_str!("../../assets/pipes/ai-habits/pipe.md"),
+    ),
+    (
+        "time-breakdown",
+        include_str!("../../assets/pipes/time-breakdown/pipe.md"),
+    ),
+    (
+        "video-export",
+        include_str!("../../assets/pipes/video-export/pipe.md"),
+    ),
+    (
+        "meeting-summary",
+        include_str!("../../assets/pipes/meeting-summary/pipe.md"),
+    ),
+];
 /// Max event-triggered pipe runs allowed to execute concurrently.
 ///
 /// Scheduled runs are already serialized (one at a time). Event-triggered runs
@@ -1999,6 +2035,14 @@ fn cleanup_pipe_token(
     }
 }
 
+type LoadedPipe = (PipeConfig, String, String);
+
+struct PipeDiskScan {
+    selected: HashMap<String, LoadedPipe>,
+    all_names: HashSet<String>,
+    suppressed: Vec<String>,
+}
+
 pub struct PipeManager {
     /// `~/.screenpipe/pipes/`
     pipes_dir: PathBuf,
@@ -2036,6 +2080,9 @@ pub struct PipeManager {
     store: Option<Arc<dyn PipeStore>>,
     /// API port for prompt rendering (default 3030).
     api_port: u16,
+    /// Optional cap on installed user pipes. Only the exact templates bundled
+    /// with the app are exempt. `None` keeps the historical unlimited behavior.
+    max_non_template_pipes: Option<usize>,
     /// Timestamp of last reload_pipes() disk scan, for debouncing.
     last_reload: Arc<Mutex<Instant>>,
     /// Optional token registry for server-side permission enforcement.
@@ -2086,6 +2133,7 @@ impl PipeManager {
             connection_check: None,
             store,
             api_port,
+            max_non_template_pipes: None,
             last_reload: Arc::new(Mutex::new(
                 Instant::now()
                     .checked_sub(std::time::Duration::from_secs(10))
@@ -2116,6 +2164,14 @@ impl PipeManager {
     /// Returns the pipes directory (e.g. `~/.screenpipe/pipes/`).
     pub fn pipes_dir(&self) -> &Path {
         &self.pipes_dir
+    }
+
+    /// Limit how many non-bundled pipes may be installed and loaded.
+    ///
+    /// Setting it never deletes pipe files. Over-limit pipes are kept on disk
+    /// but omitted from the runtime until the limit is raised or a slot opens.
+    pub fn set_max_non_template_pipes(&mut self, limit: Option<usize>) {
+        self.max_non_template_pipes = limit;
     }
 
     /// Set extra context that gets appended to every pipe prompt.
@@ -2244,56 +2300,117 @@ impl PipeManager {
         }
     }
 
+    fn is_bundled_builtin_pipe(name: &str, content: &str) -> bool {
+        BUNDLED_BUILTIN_PIPES
+            .iter()
+            .any(|(builtin_name, builtin_content)| {
+                name == *builtin_name && content == *builtin_content
+            })
+    }
+
+    /// Read and parse all pipe files, applying the product cap only to the
+    /// in-memory selection. Directory sorting makes the retained pair stable
+    /// across restarts; no over-limit file is changed or removed.
+    fn scan_pipes_from_disk(&self) -> std::io::Result<PipeDiskScan> {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&self.pipes_dir)?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir() && path.join("pipe.md").exists())
+            .collect();
+        paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+        let local_overrides = load_local_overrides(&self.pipes_dir);
+        let mut selected = HashMap::new();
+        let mut all_names = HashSet::new();
+        let mut suppressed = Vec::new();
+        let mut selected_user_pipes = 0usize;
+
+        for path in paths {
+            let dir_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            all_names.insert(dir_name.clone());
+
+            let content = match std::fs::read_to_string(path.join("pipe.md")) {
+                Ok(content) => content,
+                Err(e) => {
+                    warn!("pipe '{}': failed to read pipe.md: {}", dir_name, e);
+                    continue;
+                }
+            };
+            let (mut config, body) = match parse_frontmatter(&content) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    warn!("pipe '{}': failed to parse pipe.md: {}", dir_name, e);
+                    continue;
+                }
+            };
+
+            let is_builtin = Self::is_bundled_builtin_pipe(&dir_name, &content);
+            if !is_builtin {
+                if self
+                    .max_non_template_pipes
+                    .is_some_and(|limit| selected_user_pipes >= limit)
+                {
+                    suppressed.push(dir_name);
+                    continue;
+                }
+                selected_user_pipes += 1;
+            }
+
+            config.name = dir_name.clone();
+            if let Some(&enabled) = local_overrides.get(&dir_name) {
+                config.enabled = enabled;
+            }
+            selected.insert(dir_name, (config, body, content));
+        }
+
+        Ok(PipeDiskScan {
+            selected,
+            all_names,
+            suppressed,
+        })
+    }
+
+    async fn stop_suppressed_pipes(&self, names: &[String]) {
+        for name in names {
+            if let Err(e) = self.stop_pipe(name).await {
+                warn!("failed to stop over-limit pipe '{}': {}", name, e);
+            }
+        }
+    }
+
     /// Scan `pipes_dir` for `*/pipe.md` and load configs.
     pub async fn load_pipes(&self) -> Result<()> {
-        let mut pipes = self.pipes.lock().await;
-        pipes.clear();
-
-        let entries = match std::fs::read_dir(&self.pipes_dir) {
-            Ok(e) => e,
+        let PipeDiskScan {
+            selected,
+            suppressed,
+            ..
+        } = match self.scan_pipes_from_disk() {
+            Ok(scan) => scan,
             Err(e) => {
                 warn!("could not read pipes dir {:?}: {}", self.pipes_dir, e);
                 return Ok(());
             }
         };
 
-        // Load device-local enabled overrides (never synced)
-        let local_overrides = load_local_overrides(&self.pipes_dir);
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let pipe_md = path.join("pipe.md");
-            if !pipe_md.exists() {
-                continue;
-            }
-            let dir_name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            match std::fs::read_to_string(&pipe_md) {
-                Ok(content) => match parse_frontmatter(&content) {
-                    Ok((mut config, body)) => {
-                        config.name = dir_name.clone();
-                        // Apply device-local enabled override if present
-                        if let Some(&enabled) = local_overrides.get(&dir_name) {
-                            config.enabled = enabled;
-                        }
-                        info!("loaded pipe: {}", dir_name);
-                        pipes.insert(dir_name, (config, body, content));
-                    }
-                    Err(e) => {
-                        warn!("pipe '{}': failed to parse pipe.md: {}", dir_name, e);
-                    }
-                },
-                Err(e) => warn!("pipe '{}': failed to read pipe.md: {}", dir_name, e),
-            }
+        let loaded_count = selected.len();
+        {
+            let mut pipes = self.pipes.lock().await;
+            pipes.clear();
+            pipes.extend(selected);
         }
+        self.stop_suppressed_pipes(&suppressed).await;
 
-        info!("loaded {} pipes from {:?}", pipes.len(), self.pipes_dir);
+        info!("loaded {} pipes from {:?}", loaded_count, self.pipes_dir);
+        if !suppressed.is_empty() {
+            info!(
+                "kept {} over-limit pipe(s) on disk but unloaded from runtime",
+                suppressed.len()
+            );
+        }
         Ok(())
     }
 
@@ -2309,71 +2426,54 @@ impl PipeManager {
             }
         }
 
-        let mut pipes = self.pipes.lock().await;
-
-        let entries = match std::fs::read_dir(&self.pipes_dir) {
-            Ok(e) => e,
+        let PipeDiskScan {
+            selected,
+            all_names,
+            suppressed,
+        } = match self.scan_pipes_from_disk() {
+            Ok(scan) => scan,
             Err(e) => {
                 warn!("could not read pipes dir {:?}: {}", self.pipes_dir, e);
                 return Ok(());
             }
         };
 
-        let mut found_on_disk = std::collections::HashSet::new();
+        let selected_names: HashSet<String> = selected.keys().cloned().collect();
+        let suppressed_names: HashSet<String> = suppressed.iter().cloned().collect();
+        let running_names: HashSet<String> = self.running.lock().await.keys().cloned().collect();
 
-        // Load device-local enabled overrides (never synced)
-        let local_overrides = load_local_overrides(&self.pipes_dir);
+        {
+            let mut pipes = self.pipes.lock().await;
+            for (name, pipe) in selected {
+                if !pipes.contains_key(&name) {
+                    info!("discovered new pipe: {}", name);
+                }
+                pipes.insert(name, pipe);
+            }
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let pipe_md = path.join("pipe.md");
-            if !pipe_md.exists() {
-                continue;
-            }
-            let dir_name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            found_on_disk.insert(dir_name.clone());
-
-            match std::fs::read_to_string(&pipe_md) {
-                Ok(content) => match parse_frontmatter(&content) {
-                    Ok((mut config, body)) => {
-                        config.name = dir_name.clone();
-                        // Apply device-local enabled override if present
-                        if let Some(&enabled) = local_overrides.get(&dir_name) {
-                            config.enabled = enabled;
-                        }
-                        if !pipes.contains_key(&dir_name) {
-                            info!("discovered new pipe: {}", dir_name);
-                        }
-                        pipes.insert(dir_name, (config, body, content));
-                    }
-                    Err(e) => {
-                        debug!("failed to parse {:?}: {}", pipe_md, e);
-                    }
-                },
-                Err(e) => debug!("failed to read {:?}: {}", pipe_md, e),
-            }
+            // Missing directories keep their old config only while a process
+            // is winding down. Over-limit pipes are always hidden immediately,
+            // even when their process needs a moment to honor the stop request.
+            pipes.retain(|name, _| {
+                if selected_names.contains(name) {
+                    return true;
+                }
+                if suppressed_names.contains(name) {
+                    info!("pipe over runtime limit, unloading: {}", name);
+                    return false;
+                }
+                if !all_names.contains(name) && running_names.contains(name) {
+                    return true;
+                }
+                if !all_names.contains(name) {
+                    info!("pipe directory removed, unloading: {}", name);
+                    return false;
+                }
+                true
+            });
         }
 
-        // Remove pipes whose directories no longer exist on disk
-        // (but only if they're not currently running)
-        let running = self.running.lock().await;
-        pipes.retain(|name, _| {
-            if found_on_disk.contains(name) {
-                return true;
-            }
-            if running.contains_key(name) {
-                return true; // keep running pipes even if dir was removed
-            }
-            info!("pipe directory removed, unloading: {}", name);
-            false
-        });
+        self.stop_suppressed_pipes(&suppressed).await;
 
         // Update debounce timestamp
         *self.last_reload.lock().await = Instant::now();
@@ -3981,6 +4081,59 @@ impl PipeManager {
         Ok(())
     }
 
+    fn installed_user_pipe_count(&self) -> usize {
+        let Ok(entries) = std::fs::read_dir(&self.pipes_dir) else {
+            return 0;
+        };
+
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_dir() {
+                    return None;
+                }
+                let name = path.file_name()?.to_string_lossy().to_string();
+                let content = std::fs::read_to_string(path.join("pipe.md")).ok()?;
+                parse_frontmatter(&content).ok()?;
+                Some((name, content))
+            })
+            .filter(|(name, content)| !Self::is_bundled_builtin_pipe(name, content))
+            .count()
+    }
+
+    fn ensure_pipe_install_allowed(
+        &self,
+        name: &str,
+        candidate_content: Option<&str>,
+    ) -> Result<()> {
+        let Some(limit) = self.max_non_template_pipes else {
+            return Ok(());
+        };
+
+        // Only the exact name + content shipped in the binary is exempt. A
+        // user-authored pipe cannot bypass the cap with `template: true`.
+        if candidate_content.is_some_and(|content| Self::is_bundled_builtin_pipe(name, content)) {
+            return Ok(());
+        }
+
+        // Updating or reinstalling an existing pipe is always safe, including
+        // for accounts that already had more pipes before the cap applied.
+        if self.pipes_dir.join(name).join("pipe.md").exists() {
+            return Ok(());
+        }
+
+        if self.installed_user_pipe_count() >= limit {
+            return Err(anyhow!(
+                "{}: free plan includes up to {} installed pipes; delete one or upgrade",
+                PIPE_LIMIT_ERROR_CODE,
+                limit
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Install a pipe from a local path or URL.
     pub async fn install_pipe(&self, source: &str) -> Result<String> {
         let source_path = Path::new(source);
@@ -4015,6 +4168,8 @@ impl PipeManager {
                 let dest_canonical = dest_file
                     .canonicalize()
                     .unwrap_or_else(|_| dest_file.clone());
+                let candidate_content = std::fs::read_to_string(source_path).ok();
+                self.ensure_pipe_install_allowed(&name, candidate_content.as_deref())?;
 
                 // Skip copy if source and destination are the same file — copying
                 // a file onto itself can truncate it to 0 bytes on some platforms.
@@ -4036,6 +4191,8 @@ impl PipeManager {
                     .to_string();
                 let dest_dir = self.pipes_dir.join(&name);
                 let dest_canonical = dest_dir.canonicalize().unwrap_or_else(|_| dest_dir.clone());
+                let candidate_content = std::fs::read_to_string(source_path.join("pipe.md")).ok();
+                self.ensure_pipe_install_allowed(&name, candidate_content.as_deref())?;
 
                 // Skip copy if source and destination are the same directory —
                 // copying a directory onto itself can clobber file contents.
@@ -4057,9 +4214,6 @@ impl PipeManager {
         }
         if source.starts_with("https://") {
             let name = url_to_pipe_name(source);
-            let dest_dir = self.pipes_dir.join(&name);
-            std::fs::create_dir_all(&dest_dir)?;
-
             let response = reqwest::get(source).await?;
             if !response.status().is_success() {
                 return Err(anyhow!(
@@ -4068,6 +4222,10 @@ impl PipeManager {
                 ));
             }
             let content = response.text().await?;
+            self.ensure_pipe_install_allowed(&name, Some(&content))?;
+
+            let dest_dir = self.pipes_dir.join(&name);
+            std::fs::create_dir_all(&dest_dir)?;
             atomic_write(&dest_dir.join("pipe.md"), &content)?;
             self.load_pipes().await?;
             let _ = remove_tombstone(&self.pipes_dir, &name);
@@ -4100,11 +4258,11 @@ impl PipeManager {
 
         // Derive name from slug
         let name = slug.to_string();
-        let dest_dir = self.pipes_dir.join(&name);
-        std::fs::create_dir_all(&dest_dir)?;
-
         // Re-serialize with tracking fields included
         let content = serialize_pipe(&config, &body)?;
+        self.ensure_pipe_install_allowed(&name, Some(&content))?;
+        let dest_dir = self.pipes_dir.join(&name);
+        std::fs::create_dir_all(&dest_dir)?;
         atomic_write(&dest_dir.join("pipe.md"), &content)?;
 
         self.load_pipes().await?;
@@ -5420,44 +5578,9 @@ impl PipeManager {
     pub fn install_builtin_pipes(&self) -> Result<()> {
         // Manual pipes are bundled as templates. Scheduled pipes (idea-tracker,
         // obsidian-sync) are available from the pipe store instead.
-        let builtins = vec![
-            (
-                "automate-my-work",
-                include_str!("../../assets/pipes/automate-my-work/pipe.md"),
-            ),
-            (
-                "missed-todos",
-                include_str!("../../assets/pipes/missed-todos/pipe.md"),
-            ),
-            (
-                "day-recap",
-                include_str!("../../assets/pipes/day-recap/pipe.md"),
-            ),
-            (
-                "standup-update",
-                include_str!("../../assets/pipes/standup-update/pipe.md"),
-            ),
-            (
-                "ai-habits",
-                include_str!("../../assets/pipes/ai-habits/pipe.md"),
-            ),
-            (
-                "time-breakdown",
-                include_str!("../../assets/pipes/time-breakdown/pipe.md"),
-            ),
-            (
-                "video-export",
-                include_str!("../../assets/pipes/video-export/pipe.md"),
-            ),
-            (
-                "meeting-summary",
-                include_str!("../../assets/pipes/meeting-summary/pipe.md"),
-            ),
-        ];
-
         let tombstones = read_tombstones(&self.pipes_dir);
 
-        for (name, content) in builtins {
+        for &(name, content) in BUNDLED_BUILTIN_PIPES {
             let dir = self.pipes_dir.join(name);
             let pipe_md = dir.join("pipe.md");
             if !pipe_md.exists() {
@@ -6692,6 +6815,196 @@ mod tests {
             std::env::temp_dir().join(format!("screenpipe-test-pipes-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         PipeManager::new(dir, HashMap::new(), None, 0)
+    }
+
+    fn pipe_source(template: bool, body: &str) -> String {
+        format!(
+            "---\nschedule: manual\nenabled: true\ntemplate: {}\n---\n\n{}\n",
+            template, body
+        )
+    }
+
+    fn write_pipe_source(dir: &Path, name: &str, template: bool) -> PathBuf {
+        let path = dir.join(format!("{}.md", name));
+        std::fs::write(&path, pipe_source(template, name)).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn install_limit_counts_user_templates_but_exempts_bundled_builtins() {
+        let installed = tempfile::tempdir().unwrap();
+        let sources = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+        manager.set_max_non_template_pipes(Some(2));
+        manager.install_builtin_pipes().unwrap();
+        manager.load_pipes().await.unwrap();
+        assert_eq!(
+            manager.list_pipes().await.len(),
+            BUNDLED_BUILTIN_PIPES.len()
+        );
+
+        // `template: true` is public frontmatter and must not be a quota bypass.
+        let first = write_pipe_source(sources.path(), "first", true);
+        let second = write_pipe_source(sources.path(), "second", false);
+        let third = write_pipe_source(sources.path(), "third", false);
+
+        manager.install_pipe(first.to_str().unwrap()).await.unwrap();
+        manager
+            .install_pipe(second.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.list_pipes().await.len(),
+            BUNDLED_BUILTIN_PIPES.len() + 2
+        );
+
+        let error = manager
+            .install_pipe(third.to_str().unwrap())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with(PIPE_LIMIT_ERROR_CODE));
+        assert!(error.contains("up to 2 installed pipes"));
+        assert!(!pipes_dir.join("third/pipe.md").exists());
+
+        // Replacing an existing pipe is not a new acquisition and stays valid
+        // at the cap.
+        std::fs::write(&first, pipe_source(true, "updated first")).unwrap();
+        manager.install_pipe(first.to_str().unwrap()).await.unwrap();
+        assert!(std::fs::read_to_string(pipes_dir.join("first/pipe.md"))
+            .unwrap()
+            .contains("updated first"));
+    }
+
+    #[tokio::test]
+    async fn store_install_limit_allows_delete_then_replacement() {
+        let installed = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+        manager.set_max_non_template_pipes(Some(2));
+
+        manager
+            .install_pipe_from_store(&pipe_source(false, "first"), "first", 1)
+            .await
+            .unwrap();
+        manager
+            .install_pipe_from_store(&pipe_source(false, "second"), "second", 1)
+            .await
+            .unwrap();
+
+        // Store updates use the same slug and remain allowed at the cap.
+        manager
+            .install_pipe_from_store(&pipe_source(false, "first v2"), "first", 2)
+            .await
+            .unwrap();
+
+        let error = manager
+            .install_pipe_from_store(&pipe_source(false, "third"), "third", 1)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with(PIPE_LIMIT_ERROR_CODE));
+
+        manager.delete_pipe("first").await.unwrap();
+        manager
+            .install_pipe_from_store(&pipe_source(false, "third"), "third", 1)
+            .await
+            .unwrap();
+        assert!(pipes_dir.join("third/pipe.md").exists());
+    }
+
+    #[tokio::test]
+    async fn applying_limit_is_non_destructive_and_default_remains_unlimited() {
+        let installed = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+        for name in ["first", "second", "third"] {
+            manager
+                .install_pipe_from_store(&pipe_source(false, name), name, 1)
+                .await
+                .unwrap();
+        }
+        assert_eq!(manager.list_pipes().await.len(), 3);
+
+        manager.set_max_non_template_pipes(Some(2));
+        manager.load_pipes().await.unwrap();
+        let mut loaded: Vec<String> = manager
+            .list_pipes()
+            .await
+            .into_iter()
+            .map(|pipe| pipe.config.name)
+            .collect();
+        loaded.sort();
+        assert_eq!(loaded, vec!["first", "second"]);
+        assert!(pipes_dir.join("first/pipe.md").exists());
+        assert!(pipes_dir.join("second/pipe.md").exists());
+        assert!(pipes_dir.join("third/pipe.md").exists());
+
+        // Every existing name remains replaceable after a downgrade, while a
+        // fourth distinct pipe is rejected.
+        manager
+            .install_pipe_from_store(&pipe_source(false, "third v2"), "third", 2)
+            .await
+            .unwrap();
+        let error = manager
+            .install_pipe_from_store(&pipe_source(false, "fourth"), "fourth", 1)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with(PIPE_LIMIT_ERROR_CODE));
+
+        manager.set_max_non_template_pipes(None);
+        manager.load_pipes().await.unwrap();
+        assert_eq!(manager.list_pipes().await.len(), 3);
+        assert!(std::fs::read_to_string(pipes_dir.join("third/pipe.md"))
+            .unwrap()
+            .contains("third v2"));
+    }
+
+    #[tokio::test]
+    async fn reload_unloads_and_stops_over_limit_pipe_without_deleting_it() {
+        let installed = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+        for name in ["first", "second", "third"] {
+            manager
+                .install_pipe_from_store(&pipe_source(false, name), name, 1)
+                .await
+                .unwrap();
+        }
+
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let handle = ExecutionHandle::new(shared_pid.clone());
+        let stop_requested = handle.stop_requested.clone();
+        manager
+            .running
+            .lock()
+            .await
+            .insert("third".to_string(), handle);
+
+        manager.set_max_non_template_pipes(Some(2));
+        manager.reload_pipes().await.unwrap();
+
+        let mut loaded: Vec<String> = manager
+            .list_pipes()
+            .await
+            .into_iter()
+            .map(|pipe| pipe.config.name)
+            .collect();
+        loaded.sort();
+        assert_eq!(loaded, vec!["first", "second"]);
+        assert!(stop_requested.load(Ordering::SeqCst));
+        assert_eq!(shared_pid.load(Ordering::SeqCst), STOP_REQUESTED_PID);
+        assert!(pipes_dir.join("third/pipe.md").exists());
     }
 
     #[test]

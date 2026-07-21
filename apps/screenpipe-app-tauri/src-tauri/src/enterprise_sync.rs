@@ -30,6 +30,7 @@ mod imp {
     };
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
     use std::fmt::Write as _;
     use std::sync::Arc;
     use tauri::Manager;
@@ -553,6 +554,128 @@ mod imp {
             .or_else(crate::commands::get_enterprise_license_key)
     }
 
+    const DEFAULT_POLICY_URL: &str = "https://screenpipe.com/api/enterprise/policy";
+    const HIDDEN_UI_POLICY_POLL_INTERVAL: std::time::Duration =
+        std::time::Duration::from_secs(5 * 60);
+
+    #[derive(Deserialize)]
+    struct HiddenUiPolicyResponse {
+        #[serde(rename = "hiddenSections", default)]
+        hidden_sections: Vec<String>,
+        #[serde(rename = "lockedSettings", default)]
+        locked_settings: HashMap<String, serde_json::Value>,
+    }
+
+    impl HiddenUiPolicyResponse {
+        fn all_hidden_sections(mut self) -> Vec<String> {
+            // Match the frontend policy normalization: locked setting keys also
+            // hide their corresponding settings surface. `referral` is always
+            // hidden in enterprise builds but is irrelevant to UI dormancy.
+            self.hidden_sections.extend(self.locked_settings.into_keys());
+            self.hidden_sections.sort();
+            self.hidden_sections.dedup();
+            self.hidden_sections
+        }
+    }
+
+    enum EnterprisePolicyCredential {
+        LicenseKey(String),
+        AccountToken(String),
+    }
+
+    fn current_policy_credential() -> Option<EnterprisePolicyCredential> {
+        license_key_from_env_or_config()
+            .map(EnterprisePolicyCredential::LicenseKey)
+            .or_else(|| {
+                crate::commands::get_cloud_token().map(EnterprisePolicyCredential::AccountToken)
+            })
+    }
+
+    async fn fetch_hidden_ui_policy(
+        http: &reqwest::Client,
+        policy_url: &str,
+        device_id: &str,
+        credential: EnterprisePolicyCredential,
+    ) -> Result<Vec<String>, String> {
+        let request = http.get(policy_url).header("X-Device-Id", device_id);
+        let request = match credential {
+            EnterprisePolicyCredential::LicenseKey(key) => request.header("X-License-Key", key),
+            EnterprisePolicyCredential::AccountToken(token) => request.bearer_auth(token),
+        };
+        let response = request.send().await.map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("HTTP {}", response.status()));
+        }
+        response
+            .json::<HiddenUiPolicyResponse>()
+            .await
+            .map(HiddenUiPolicyResponse::all_hidden_sections)
+            .map_err(|error| error.to_string())
+    }
+
+    /// The normal enterprise policy poll lives in the Home webview. Hidden UI
+    /// mode destroys that webview, so a tiny native watcher must remain alive
+    /// to observe the one policy change that can bring the UI back. Once Home
+    /// is restored, its full policy fetch applies managed settings and pipes.
+    fn spawn_hidden_ui_policy_watcher(app: &tauri::AppHandle) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let policy_url = std::env::var("SCREENPIPE_ENTERPRISE_POLICY_URL")
+                .ok()
+                .filter(|url| !url.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_POLICY_URL.to_string());
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("enterprise policy HTTP client builds");
+
+            // Let startup finish before the first control-plane request. This
+            // still recovers a persisted hidden app far sooner than the normal
+            // five-minute frontend polling cadence.
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            loop {
+                if crate::enterprise_policy::is_app_ui_hidden() {
+                    match current_policy_credential() {
+                        Some(credential) => {
+                            let device_id = settings_device_id(&app)
+                                .unwrap_or_else(|| "unknown".to_string());
+                            match fetch_hidden_ui_policy(
+                                &http,
+                                &policy_url,
+                                &device_id,
+                                credential,
+                            )
+                            .await
+                            {
+                                Ok(hidden_sections) => {
+                                    crate::enterprise_policy::set_enterprise_policy(
+                                        hidden_sections,
+                                    );
+                                    if !crate::commands::apply_enterprise_ui_visibility(
+                                        app.clone(),
+                                    ) {
+                                        info!(
+                                            "enterprise: native policy watcher restored visible UI"
+                                        );
+                                    }
+                                }
+                                Err(error) => warn!(
+                                    "enterprise: hidden-UI policy refresh failed: {error}"
+                                ),
+                            }
+                        }
+                        None => warn!(
+                            "enterprise: hidden UI is active but no policy credential is available"
+                        ),
+                    }
+                }
+
+                tokio::time::sleep(HIDDEN_UI_POLICY_POLL_INTERVAL).await;
+            }
+        });
+    }
+
     fn enterprise_license_hash(license_key: &str) -> Option<String> {
         let trimmed = license_key.trim();
         if trimmed.is_empty() {
@@ -618,6 +741,11 @@ mod imp {
     /// pointing at a real ingest.
     pub fn spawn(app: &tauri::AppHandle) -> Option<tokio::sync::watch::Sender<bool>> {
         use tauri::Manager;
+
+        // This watcher is independent of telemetry upload configuration. An
+        // account-authenticated enterprise build may have no license key, but
+        // it still needs to recover when the server turns hidden UI off.
+        spawn_hidden_ui_policy_watcher(app);
 
         let app_data_dir = app.path().app_data_dir().ok()?;
         // Use the same device id the heartbeat reports under (settings `deviceId`)
@@ -758,7 +886,9 @@ mod imp {
     mod device_id_tests {
         use super::{
             choose_device_id, enterprise_license_hash, exact_frame_url, image_uploads_allowed,
+            HiddenUiPolicyResponse,
         };
+        use std::collections::HashMap;
 
         #[test]
         fn settings_id_wins_so_sync_matches_heartbeat() {
@@ -811,6 +941,22 @@ mod imp {
             assert_eq!(
                 exact_frame_url("http://localhost:3030", 42),
                 "http://localhost:3030/frames/42?fallback=false"
+            );
+        }
+
+        #[test]
+        fn hidden_ui_policy_matches_frontend_section_normalization() {
+            let response = HiddenUiPolicyResponse {
+                hidden_sections: vec!["app_ui".to_string(), "app_ui".to_string()],
+                locked_settings: HashMap::from([(
+                    "recording".to_string(),
+                    serde_json::Value::Bool(true),
+                )]),
+            };
+
+            assert_eq!(
+                response.all_hidden_sections(),
+                vec!["app_ui".to_string(), "recording".to_string()]
             );
         }
     }
