@@ -12,7 +12,7 @@ export const searchIndex: SettingsField[] = [
   // doesn't contain the field.
   { label: "Sign in to Screenpipe", keywords: ["login", "log in", "sign in"] },
   { label: "Logout", keywords: ["signout", "sign out", "log out"] },
-  { label: "Screenpipe Pro", keywords: ["subscription", "billing", "plan", "pro", "upgrade", "manage"] },
+  { label: "Screenpipe Business", keywords: ["subscription", "billing", "plan", "pro", "business", "upgrade", "manage"] },
   { label: "pipe sync across devices", keywords: ["pipe sync", "sync"] },
   { label: "memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
   { label: "connection sync across devices", keywords: ["connection sync", "sync", "slack", "notion"] },

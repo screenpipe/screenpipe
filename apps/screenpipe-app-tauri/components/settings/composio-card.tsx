@@ -25,16 +25,73 @@ const MCP_SERVER_ID = "composio";
 const POLL_MS = 2000;
 const MAX_POLLS = 60; // 2 minutes
 
-export type ComposioToolkit = "gmail" | "zoom";
+export const COMPOSIO_TOOLKITS = [
+  "gmail",
+  "zoom",
+  "googledrive",
+  "googledocs",
+  "googlesheets",
+] as const;
+export type ComposioToolkit = (typeof COMPOSIO_TOOLKITS)[number];
+export type ComposioStatusMap = Record<ComposioToolkit, boolean>;
 
-const TOOLKIT_LABEL: Record<ComposioToolkit, string> = {
-  gmail: "Gmail",
-  zoom: "Zoom",
+interface ToolkitMeta {
+  label: string;
+  provider: string;
+  /** value line above the CTA */
+  value: string;
+  /** subject phrase for the YOUR DATA fact row, e.g. "emails are" */
+  data: string;
+  /** what the AI can now do, shown in the connected state */
+  connectedNoun: string;
+}
+
+const TOOLKIT_META: Record<ComposioToolkit, ToolkitMeta> = {
+  gmail: {
+    label: "Gmail",
+    provider: "Google",
+    value: "let your AI read and search your Gmail inbox.",
+    data: "emails are",
+    connectedNoun: "recent emails",
+  },
+  zoom: {
+    label: "Zoom",
+    provider: "Zoom",
+    value: "let your AI see your Zoom meetings, recordings, and transcripts.",
+    data: "meeting data is",
+    connectedNoun: "meetings, recordings and transcripts",
+  },
+  googledrive: {
+    label: "Google Drive",
+    provider: "Google",
+    value: "let your AI search, read, and organize files across your Google Drive.",
+    data: "files are",
+    connectedNoun: "Drive files",
+  },
+  googledocs: {
+    label: "Google Docs",
+    provider: "Google",
+    value: "let your AI read, create, and edit your Google Docs.",
+    data: "documents are",
+    connectedNoun: "documents",
+  },
+  googlesheets: {
+    label: "Google Sheets",
+    provider: "Google",
+    value: "let your AI read, create, and edit your Google Sheets.",
+    data: "spreadsheets are",
+    connectedNoun: "spreadsheets",
+  },
 };
 
-interface ComposioStatus {
-  gmail: { connected: boolean; status: string | null };
-  zoom: { connected: boolean; status: string | null };
+type ComposioStatus = Partial<
+  Record<ComposioToolkit, { connected: boolean; status: string | null }>
+>;
+
+function statusToMap(status: ComposioStatus): ComposioStatusMap {
+  return Object.fromEntries(
+    COMPOSIO_TOOLKITS.map((t) => [t, status[t]?.connected === true])
+  ) as ComposioStatusMap;
 }
 
 async function fetchComposioStatus(token: string): Promise<ComposioStatus | null> {
@@ -50,12 +107,12 @@ async function fetchComposioStatus(token: string): Promise<ComposioStatus | null
 }
 
 // Register (or refresh) the shared Composio MCP server entry so the agent
-// can reach gmail/zoom tools through the existing mcp-bridge. One entry
-// serves both toolkits; the Authorization header carries the user's token
-// and the org Composio key never reaches this device.
+// can reach the connected toolkits through the existing mcp-bridge. One
+// entry serves every toolkit; the Authorization header carries the user's
+// token and the org Composio key never reaches this device.
 async function registerComposioMcpServer(token: string): Promise<void> {
   const body = {
-    name: "Composio (Gmail + Zoom)",
+    name: "Composio",
     url: `${COMPOSIO_API}/mcp`,
     headers: [{ name: "Authorization", value: `Bearer ${token}` }],
     enabled: true,
@@ -78,30 +135,37 @@ async function removeComposioMcpServer(): Promise<void> {
 
 export function ComposioCard({
   toolkit,
+  initialConnected,
   onChanged,
 }: {
   toolkit: ComposioToolkit;
-  onChanged?: (status: { gmail: boolean; zoom: boolean }) => void;
+  /** Last known connected state from the connections section's status fetch.
+   *  When provided the card renders immediately and reconciles in the
+   *  background instead of blocking on its own round trip. */
+  initialConnected?: boolean;
+  onChanged?: (status: ComposioStatusMap) => void;
 }) {
   const { settings } = useSettings();
   const token = settings.user?.token;
-  const label = TOOLKIT_LABEL[toolkit];
+  const { label, provider } = TOOLKIT_META[toolkit];
 
-  const [loaded, setLoaded] = useState(false);
-  const [connected, setConnected] = useState(false);
+  const [loaded, setLoaded] = useState(initialConnected !== undefined);
+  const [connected, setConnected] = useState(initialConnected ?? false);
   const [otherConnected, setOtherConnected] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollCount = useRef(0);
+  const lastStatusRef = useRef<ComposioStatusMap | null>(null);
 
   const applyStatus = useCallback(
     (status: ComposioStatus) => {
-      const mine = status[toolkit].connected;
-      const other = status[toolkit === "gmail" ? "zoom" : "gmail"].connected;
+      const map = statusToMap(status);
+      lastStatusRef.current = map;
+      const mine = map[toolkit];
       setConnected(mine);
-      setOtherConnected(other);
-      onChanged?.({ gmail: status.gmail.connected, zoom: status.zoom.connected });
+      setOtherConnected(COMPOSIO_TOOLKITS.some((t) => t !== toolkit && map[t]));
+      onChanged?.(map);
       return mine;
     },
     [toolkit, onChanged]
@@ -193,11 +257,14 @@ export function ComposioCard({
       });
       if (!res.ok) throw new Error("disconnect failed");
       setConnected(false);
-      onChanged?.({
-        gmail: toolkit === "gmail" ? false : otherConnected,
-        zoom: toolkit === "zoom" ? false : otherConnected,
-      });
-      // Keep the shared MCP entry while the other toolkit is still connected.
+      const map = {
+        ...(lastStatusRef.current ??
+          (Object.fromEntries(COMPOSIO_TOOLKITS.map((t) => [t, false])) as ComposioStatusMap)),
+        [toolkit]: false,
+      } as ComposioStatusMap;
+      lastStatusRef.current = map;
+      onChanged?.(map);
+      // Keep the shared MCP entry while any other toolkit is still connected.
       if (!otherConnected) await removeComposioMcpServer();
       notifyConnectionsUpdated();
     } catch (e: any) {
@@ -211,16 +278,11 @@ export function ComposioCard({
   // neutral "via composio" chip (rendered by connections-section); the body
   // sells the feature and keeps the honest data-path detail one click away.
   const valueLine = (
-    <p className="text-xs text-foreground/90">
-      {toolkit === "gmail"
-        ? "let your AI read and search your Gmail inbox."
-        : "let your AI see your Zoom meetings, recordings, and transcripts."}
-    </p>
+    <p className="text-xs text-foreground/90">{TOOLKIT_META[toolkit].value}</p>
   );
 
   // Treatment 1 (design round 4): the expanded state is a labeled fact grid
   // that uses the full panel width instead of a narrow text column.
-  const provider = toolkit === "gmail" ? "Google" : "Zoom";
   const factRows: Array<[string, React.ReactNode]> = [
     [
       "sign-in",
@@ -233,7 +295,7 @@ export function ComposioCard({
     [
       "your data",
       <>
-        {toolkit === "gmail" ? "emails are" : "meeting data is"} processed through
+        {TOOLKIT_META[toolkit].data} processed through
         Composio&apos;s cloud (
         <b className="font-medium text-foreground/80">SOC 2 certified, encrypted</b>), not
         stored by screenpipe.
@@ -312,7 +374,7 @@ export function ComposioCard({
           <p className="text-xs">
             <Check className="h-3 w-3 inline mr-1" />
             {label} connected — your AI can now read your{" "}
-            {toolkit === "gmail" ? "recent emails" : "meetings, recordings and transcripts"}.
+            {TOOLKIT_META[toolkit].connectedNoun}.
           </p>
           {error && <p className="text-xs text-destructive">{error}</p>}
           <Button
@@ -331,7 +393,7 @@ export function ComposioCard({
           {waiting && (
             <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
               <Loader2 className="h-3 w-3 animate-spin" />
-              finish signing in with {toolkit === "gmail" ? "Google" : "Zoom"} in your browser —
+              finish signing in with {provider} in your browser —
               this connects automatically
             </p>
           )}

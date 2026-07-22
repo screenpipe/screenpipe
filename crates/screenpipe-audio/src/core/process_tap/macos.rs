@@ -709,8 +709,11 @@ fn build_inclusion_capture(
 /// delegated to `build_capture_from_desc`, shared with the experimental
 /// per-process path.
 ///
-/// The user-configured exclusion list is always augmented with Screenpipe's
-/// own CoreAudio process object, so we never recapture our own playback.
+/// Never put Screenpipe's own CoreAudio process object in the exclusion list.
+/// On macOS 26, an owner-excluding global tap can leave Zoom retrying its mic
+/// acquisition every ~14 seconds without ever opening output. The bad state
+/// remains latched in that Zoom process until Zoom is relaunched. Excluding
+/// other processes is safe, so user-configured exclusions remain intact.
 fn build_capture(
     tx: broadcast::Sender<Vec<f32>>,
     is_disconnected: Arc<AtomicBool>,
@@ -726,19 +729,18 @@ fn build_capture(
 
     let snapshot = exclusions::snapshot();
     let self_process_id = current_process_audio_object_id();
-    let exclusion_ids =
-        merge_exclusion_audio_object_ids(snapshot.audio_object_ids.clone(), self_process_id);
+    let exclusion_ids = filter_self_from_exclusion_audio_object_ids(
+        snapshot.audio_object_ids.clone(),
+        self_process_id,
+    );
     let excluded_array = exclusions::build_object_id_array(&exclusion_ids);
     if !snapshot.bundle_ids.is_empty() {
         info!(
-            "Process Tap: excluding {} bundle ID(s), resolved to {} AudioObjectID(s), self_excluded={}: {:?}",
+            "Process Tap: excluding {} bundle ID(s), resolved to {} safe AudioObjectID(s): {:?}",
             snapshot.bundle_ids.len(),
-            snapshot.audio_object_ids.len(),
-            self_process_id.is_some(),
+            exclusion_ids.len(),
             snapshot.bundle_ids
         );
-    } else if self_process_id.is_some() {
-        debug!("Process Tap: excluding Screenpipe's own audio process");
     }
     let tap_desc = ca::TapDesc::with_stereo_global_tap_excluding_processes(&excluded_array);
 
@@ -870,12 +872,12 @@ fn current_process_audio_object_id() -> Option<u32> {
     (id != 0).then_some(id)
 }
 
-fn merge_exclusion_audio_object_ids(
+fn filter_self_from_exclusion_audio_object_ids(
     mut configured: Vec<u32>,
     self_process_id: Option<u32>,
 ) -> Vec<u32> {
     if let Some(id) = self_process_id {
-        configured.push(id);
+        configured.retain(|candidate| *candidate != id);
     }
     configured.sort_unstable();
     configured.dedup();
@@ -1475,23 +1477,23 @@ mod tests {
     }
 
     #[test]
-    fn merge_exclusion_audio_object_ids_adds_self_and_dedupes() {
+    fn exclusion_audio_object_ids_remove_self_and_dedupe() {
         assert_eq!(
-            merge_exclusion_audio_object_ids(vec![42, 7, 42], Some(7)),
-            vec![7, 42]
+            filter_self_from_exclusion_audio_object_ids(vec![42, 7, 42], Some(7)),
+            vec![42]
         );
     }
 
     #[test]
-    fn merge_exclusion_audio_object_ids_preserves_configured_when_self_unavailable() {
+    fn exclusion_audio_object_ids_preserve_configured_when_self_unavailable() {
         assert_eq!(
-            merge_exclusion_audio_object_ids(vec![3, 1, 3], None),
+            filter_self_from_exclusion_audio_object_ids(vec![3, 1, 3], None),
             vec![1, 3]
         );
     }
 
     #[test]
-    fn coreaudio_tap_description_excludes_current_process() {
+    fn coreaudio_tap_description_does_not_exclude_current_process() {
         if !is_process_tap_available() {
             eprintln!("skipping: CoreAudio Process Tap is unavailable on this macOS version");
             return;
@@ -1501,7 +1503,10 @@ mod tests {
             panic!("current process did not translate to a CoreAudio process object");
         };
 
-        let exclusion_ids = merge_exclusion_audio_object_ids(Vec::new(), Some(self_process_id));
+        let exclusion_ids = filter_self_from_exclusion_audio_object_ids(
+            vec![self_process_id],
+            Some(self_process_id),
+        );
         let excluded_array = exclusions::build_object_id_array(&exclusion_ids);
         let tap_desc = ca::TapDesc::with_stereo_global_tap_excluding_processes(&excluded_array);
 
@@ -1513,8 +1518,8 @@ mod tests {
             tap_desc
                 .processes()
                 .iter()
-                .any(|n| n.as_u32() == self_process_id),
-            "pre-create tap description must include current process AudioObjectID {self_process_id}"
+                .all(|n| n.as_u32() != self_process_id),
+            "pre-create tap description must not include current process AudioObjectID {self_process_id}"
         );
 
         let tap = tap_desc
@@ -1536,8 +1541,8 @@ mod tests {
             created_desc
                 .processes()
                 .iter()
-                .any(|n| n.as_u32() == self_process_id),
-            "created CoreAudio tap description must contain current process AudioObjectID {self_process_id}"
+                .all(|n| n.as_u32() != self_process_id),
+            "created CoreAudio tap description must not contain current process AudioObjectID {self_process_id}"
         );
     }
 
