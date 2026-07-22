@@ -7,11 +7,17 @@ import type { SessionRecord } from "@/lib/stores/chat-store";
 type SidebarPipeSchedule = {
   schedule?: string | null;
   schedule_config?: unknown | null;
+  trigger?: { events?: unknown[]; custom?: unknown[]; sources?: unknown[] } | null;
 };
 
-/** The sidebar Pipes section is for recurring automations, not manual templates. */
+/** The sidebar Pipes section is for automated pipes (scheduled or triggered), not manual templates. */
 export function pipeHasSidebarSchedule(config: SidebarPipeSchedule): boolean {
+  const isTriggered =
+    !!(config.trigger?.events?.length) ||
+    !!(config.trigger?.custom?.length) ||
+    !!(config.trigger?.sources?.length);
   return (
+    isTriggered ||
     config.schedule_config != null ||
     (typeof config.schedule === "string" &&
       config.schedule.length > 0 &&
