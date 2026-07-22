@@ -1417,6 +1417,8 @@ impl ShowRewindWindow {
                     use tauri::window::Color;
                     use tauri::TitleBarStyle;
                     builder
+                        .visible(false)
+                        .focused(false)
                         .title_bar_style(TitleBarStyle::Overlay)
                         .hidden_title(true)
                         .background_color(Color(0, 0, 0, 1))
@@ -1424,6 +1426,12 @@ impl ShowRewindWindow {
                             effects: vec![tauri::window::Effect::Menu],
                             state: Some(tauri::window::EffectState::Active),
                             ..Default::default()
+                        })
+                        .on_page_load(|win, payload| {
+                            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                                win.show().ok();
+                                win.set_focus().ok();
+                            }
                         })
                 };
                 let window = super::finalize_webview_window(builder.build()?);

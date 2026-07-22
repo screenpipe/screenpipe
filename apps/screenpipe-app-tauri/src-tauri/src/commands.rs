@@ -2126,18 +2126,18 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
         app_handle.manage(updated_store);
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
-
     // Hidden UI applies to the main app, but incomplete onboarding remains
     // visible long enough to finish permissions. Once onboarding completes,
     // close that sole exemption without trying to open Home.
     if crate::enterprise_policy::is_app_ui_hidden() {
         info!("enterprise: onboarding completed; keeping main UI hidden");
+        close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
         return Ok(());
     }
 
     show_window(app_handle.clone(), ShowRewindWindow::Home { page: None }).await?;
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
 
     Ok(())
 }
