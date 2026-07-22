@@ -489,6 +489,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
   }, [loadedPipeRuns, loadingPipeRuns]);
 
+  // Live session ids from the store — used to discard stale loadedPipeRuns
+  // entries after a pipe run is deleted.
+  const storeSessionIds = useChatStore((s) => s.sessions);
+
   const pipeItems = useMemo(() => {
     const sessionsByPipe = new Map<string, SessionRecord[]>();
     for (const session of pipes) {
@@ -503,8 +507,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
     return orderedNames.map((name) => {
       // Keep a newly-started watch/run visible after history was loaded, while
-      // deduping the same saved row returned by both sources.
-      const merged = [...(sessionsByPipe.get(name) ?? []), ...(loadedPipeRuns[name] ?? [])];
+      // deduping the same saved row returned by both sources. Filter out
+      // sessions that were deleted (dropped from the store) but still linger
+      // in the loadedPipeRuns cache.
+      const cached = (loadedPipeRuns[name] ?? []).filter((s) => s.id in storeSessionIds);
+      const merged = [...(sessionsByPipe.get(name) ?? []), ...cached];
       const seen = new Set<string>();
       const sessions = merged.filter((session) => {
         if (seen.has(session.id)) return false;
@@ -518,7 +525,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         sessions,
       };
     });
-  }, [pipeInventory, pipes, loadedPipeRuns]);
+  }, [pipeInventory, pipes, loadedPipeRuns, storeSessionIds]);
 
   const pipeExecutionCounts = useMemo(
     () => Object.fromEntries(
