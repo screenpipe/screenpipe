@@ -443,9 +443,9 @@ struct ShortcutReminderView: View {
     }
 
     // MARK: - Collapsed pill
-    // Three zones, so the only thing that expands on hover is the middle
-    // (equalizer + screen matrix). The app icon opens the timeline; the
-    // phone toggles the meeting. Both stay put under the cursor.
+    // Hovering anywhere on the panel area expands to the full bar (driven
+    // by ReminderTrackingView's .activeAlways NSTrackingArea). The app icon
+    // opens the timeline; the bell opens the notification inbox.
     private var collapsedView: some View {
         HStack(spacing: 0) {
             CollapsedAppIconButton(
