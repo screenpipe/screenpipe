@@ -663,7 +663,7 @@ class ShortcutReminderController: NSObject {
     static let shared = ShortcutReminderController()
 
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<AnyView>?
+    private var hostingView: DraggableHostingView<AnyView>?
     private var trackingView: ReminderTrackingView?
 
     private var overlayShortcut = "⌘⌃S"
@@ -987,6 +987,10 @@ class ShortcutReminderController: NSObject {
             hosting.rootView = AnyView(view)
         } else {
             let hosting = DraggableHostingView(rootView: AnyView(view))
+            hosting.onDragStarted = { [weak self] in
+                self?.metrics.isHovering = false
+                self?.metrics.forceExpanded = false
+            }
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]
             contentView.addSubview(hosting)
@@ -1051,18 +1055,23 @@ private class ReminderTrackingView: NSView {
 
 // MARK: - Draggable hosting view
 // NSHostingView swallows mouseDown so isMovableByWindowBackground can't work.
-// Forwarding mouseDown/mouseUp to super synchronously (the obvious approach)
-// does not fire SwiftUI buttons — their gesture recognizers need events to
-// arrive through the real run loop. Instead we let mouseDown flow normally
-// and install an NSEvent local monitor for the press's lifetime: if the
-// mouse moves past a small threshold before mouseUp, we hand the event to
-// performDrag and swallow it (so the icon's Button never sees mouseUp);
-// otherwise events propagate untouched and clicks fire as usual.
+// Let super.mouseDown run first so SwiftUI gets the press while the mouse is
+// still down (required for Button gesture recognizers). Then install a local
+// event monitor: if the mouse moves past 4px before mouseUp, collapse the
+// pill and hand off to performDrag (swallowing the event so the button never
+// sees mouseUp and its action never fires). If mouseUp arrives first, let it
+// through — SwiftUI completes the tap normally.
 
 @available(macOS 13.0, *)
 private class DraggableHostingView<Content: View>: NSHostingView<Content> {
+    /// Called when a drag begins — lets the controller collapse the pill.
+    var onDragStarted: (() -> Void)?
+
     private var dragMonitor: Any?
     private var dragStartLocation: NSPoint = .zero
+    /// Set when a drag fires — the next mouseUp must be swallowed so
+    /// SwiftUI's button doesn't see it and fire its action.
+    private var swallowNextMouseUp = false
 
     deinit {
         if let m = dragMonitor {
@@ -1071,16 +1080,18 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Let SwiftUI handle the press while the mouse is still down —
+        // Button gesture recognizers need this to fire on mouseUp.
         super.mouseDown(with: event)
 
         guard let window = window else { return }
 
-        // Replace any stale monitor from a prior press that didn't see mouseUp.
         if let m = dragMonitor {
             NSEvent.removeMonitor(m)
             dragMonitor = nil
         }
 
+        swallowNextMouseUp = false
         dragStartLocation = event.locationInWindow
         let dragThreshold: CGFloat = 4.0
 
@@ -1092,15 +1103,24 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
                     NSEvent.removeMonitor(m)
                     self.dragMonitor = nil
                 }
+                if self.swallowNextMouseUp {
+                    // Drag just ended — swallow so SwiftUI's button
+                    // doesn't see mouseUp and fire its action.
+                    self.swallowNextMouseUp = false
+                    return nil
+                }
+                // Normal click — let the event reach SwiftUI.
                 return event
             case .leftMouseDragged:
                 let dx = event.locationInWindow.x - self.dragStartLocation.x
                 let dy = event.locationInWindow.y - self.dragStartLocation.y
                 if hypot(dx, dy) > dragThreshold {
-                    if let m = self.dragMonitor {
-                        NSEvent.removeMonitor(m)
-                        self.dragMonitor = nil
-                    }
+                    // Drag — collapse pill, move window.
+                    self.onDragStarted?()
+                    // performDrag runs its own tracking loop and returns
+                    // after the user releases the mouse. The monitor stays
+                    // alive to catch and swallow the final mouseUp.
+                    self.swallowNextMouseUp = true
                     window.performDrag(with: event)
                     return nil
                 }
