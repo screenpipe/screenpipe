@@ -352,6 +352,18 @@ export function pathFromUrl(url: string): string {
   }
 }
 
+function evenlySpacedItems<T>(items: readonly T[], limit: number): T[] {
+  if (items.length === 0 || limit <= 0) return [];
+  if (items.length <= limit) return [...items];
+  if (limit === 1) return [items[0]];
+
+  const lastIndex = items.length - 1;
+  return Array.from({ length: limit }, (_, index) => {
+    const sourceIndex = Math.round((index * lastIndex) / (limit - 1));
+    return items[sourceIndex];
+  });
+}
+
 // ─── Prompt builder ──────────────────────────────────────────────────────
 
 interface SummarizeInput {
@@ -443,7 +455,10 @@ export function buildEnrichedSummarizePrompt({
       !transcript?.length &&
       a.audio_summary.top_transcriptions.length > 0
     ) {
-      const lines = a.audio_summary.top_transcriptions.slice(0, 8).map((t) => {
+      const chronological = [...a.audio_summary.top_transcriptions].sort(
+        (left, right) => timestampMs(left.timestamp) - timestampMs(right.timestamp),
+      );
+      const lines = evenlySpacedItems(chronological, 8).map((t) => {
         const ts = formatTimeShort(t.timestamp);
         const txt = t.transcription.replace(/\s+/g, " ").trim().slice(0, 240);
         const sp = t.speaker && t.speaker !== "unknown" ? `[${t.speaker}] ` : "";

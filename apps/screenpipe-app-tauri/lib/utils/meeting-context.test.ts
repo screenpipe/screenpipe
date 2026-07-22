@@ -53,6 +53,57 @@ describe("meeting-context image notes", () => {
   });
 });
 
+describe("meeting-context transcript fallback", () => {
+  it("samples both early and late fragments when only eight fit", () => {
+    const meeting: MeetingRecord = {
+      id: 42,
+      meeting_start: "2026-06-04T15:00:00.000Z",
+      meeting_end: "2026-06-04T15:30:00.000Z",
+      meeting_app: "zoom",
+      title: "Design review",
+      attendees: null,
+      note: null,
+      detection_source: "manual",
+      created_at: "2026-06-04T15:00:00.000Z",
+    };
+    const topTranscriptions = Array.from({ length: 20 }, (_, index) => ({
+      transcription: `fragment-${String(index).padStart(2, "0")}`,
+      speaker: "Alice",
+      device: "mic",
+      timestamp: new Date(Date.UTC(2026, 5, 4, 15, index)).toISOString(),
+    }));
+    const context: MeetingContext = {
+      activity: {
+        apps: [],
+        windows: [],
+        audio_summary: {
+          segment_count: topTranscriptions.length,
+          speakers: [],
+          top_transcriptions: topTranscriptions,
+        },
+        total_frames: 0,
+        time_range: {
+          start: meeting.meeting_start,
+          end: meeting.meeting_end,
+        },
+      },
+      clipboardCount: 0,
+      ok: true,
+    };
+
+    const prompt = buildEnrichedSummarizePrompt({
+      meeting,
+      context,
+      transcript: [],
+    });
+    const sampledFragments = prompt.match(/fragment-\d{2}/g) ?? [];
+
+    expect(sampledFragments).toHaveLength(8);
+    expect(sampledFragments[0]).toBe("fragment-00");
+    expect(sampledFragments[sampledFragments.length - 1]).toBe("fragment-19");
+  });
+});
+
 function chunk(overrides: Partial<MeetingAudioChunk>): MeetingAudioChunk {
   return {
     audioChunkId: 1,

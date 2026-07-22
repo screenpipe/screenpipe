@@ -35,7 +35,6 @@ use screenpipe_db::DatabaseManager;
 /// `total_active_minutes` so the three definitions never drift apart.
 const IDLE_CAP_SECS: i64 = 300;
 const MAX_TOP_TRANSCRIPTIONS: u32 = 20;
-const MAX_AUDIO_SEGMENTS_PER_BUCKET: u32 = 2;
 
 // ---------- query ----------
 
@@ -956,13 +955,12 @@ fn evenly_spaced_indices(len: usize, limit: usize) -> Vec<usize> {
 }
 
 /// Select useful audio from evenly sized wall-clock buckets across the
-/// requested interval. Ranking by bucket before rank gives every occupied part
-/// of the range one slot before a period gets a second, and the per-bucket cap
-/// prevents any dense meeting from consuming the context on its own.
+/// requested interval. Rows are selected in rank rounds across occupied
+/// buckets, so the whole range is represented before later ranks backfill any
+/// unused capacity. The selected rows are returned chronologically.
 fn balanced_audio_query(start: &str, end: &str, extra_filter: &str, limit: u32) -> String {
     let limit = limit.max(1);
     let last_bucket = limit - 1;
-    let per_bucket = MAX_AUDIO_SEGMENTS_PER_BUCKET;
 
     format!(
         "WITH bucketed AS ( \
@@ -987,12 +985,15 @@ fn balanced_audio_query(start: &str, end: &str, extra_filter: &str, limit: u32) 
                ORDER BY LENGTH(transcription) DESC, timestamp DESC \
              ) AS bucket_rank \
            FROM bucketed \
+         ), selected AS ( \
+           SELECT transcription, speaker, device, timestamp \
+           FROM ranked \
+           ORDER BY bucket_rank ASC, time_bucket ASC, timestamp ASC \
+           LIMIT {limit} \
          ) \
          SELECT transcription, speaker, device, timestamp \
-         FROM ranked \
-         WHERE bucket_rank <= {per_bucket} \
-         ORDER BY bucket_rank ASC, time_bucket ASC, timestamp ASC \
-         LIMIT {limit}"
+         FROM selected \
+         ORDER BY timestamp ASC"
     )
 }
 
@@ -1960,6 +1961,11 @@ mod db_tests {
         let start = "2026-06-01 00:00:00";
         let end = "2026-06-08 00:00:00";
         let core = collect_summary_core(&db, &query(None), start, end).await;
+        assert_eq!(
+            core.audio_summary.top_transcriptions.len(),
+            MAX_TOP_TRANSCRIPTIONS as usize,
+            "unused slots should be backfilled after every occupied period is represented"
+        );
         let top_days = core
             .audio_summary
             .top_transcriptions
@@ -1975,19 +1981,17 @@ mod db_tests {
             top_days.contains("2026-06-07"),
             "top transcriptions should still include recent audio: {top_days:?}"
         );
-        assert!(
-            top_days.len() >= 6,
-            "weekly audio should cover the range, got days {top_days:?}"
+        assert_eq!(
+            top_days.len(),
+            7,
+            "weekly audio should cover the full range, got days {top_days:?}"
         );
-        let final_minute_count = core
-            .audio_summary
-            .top_transcriptions
-            .iter()
-            .filter(|segment| segment.timestamp.starts_with("2026-06-07 23:59"))
-            .count();
         assert!(
-            final_minute_count <= MAX_AUDIO_SEGMENTS_PER_BUCKET as usize,
-            "one recent minute consumed the audio context: {final_minute_count} rows"
+            core.audio_summary
+                .top_transcriptions
+                .windows(2)
+                .all(|pair| pair[0].timestamp <= pair[1].timestamp),
+            "selected transcriptions should be returned chronologically"
         );
 
         let mut snippet_query = query(None);
@@ -2013,6 +2017,48 @@ mod db_tests {
             audio_days.len() >= 5,
             "audio snippets should span the week, got days {audio_days:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn audio_context_backfills_capacity_from_one_dense_period() {
+        let (db, _d) = fresh_db().await;
+        db.execute_raw_sql("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
+            .await
+            .unwrap();
+        db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
+            .await
+            .unwrap();
+
+        for second in 0..24 {
+            db.execute_raw_sql(&format!(
+                "INSERT INTO audio_transcriptions \
+                 (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
+                 VALUES (1, {second}, '2026-06-07 23:59:{second:02}', \
+                 'dense meeting transcript {second:02} with enough detail for summary context', \
+                 'mic', 1)"
+            ))
+            .await
+            .unwrap();
+        }
+
+        let core = collect_summary_core(
+            &db,
+            &query(None),
+            "2026-06-01 00:00:00",
+            "2026-06-08 00:00:00",
+        )
+        .await;
+
+        assert_eq!(
+            core.audio_summary.top_transcriptions.len(),
+            MAX_TOP_TRANSCRIPTIONS as usize,
+            "a single occupied bucket should backfill all available slots"
+        );
+        assert!(core
+            .audio_summary
+            .top_transcriptions
+            .iter()
+            .all(|segment| segment.timestamp.starts_with("2026-06-07 23:59")));
     }
 
     #[tokio::test]
