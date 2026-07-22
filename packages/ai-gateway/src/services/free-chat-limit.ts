@@ -9,9 +9,7 @@ export const FREE_CHAT_MESSAGE_LIMIT = 2;
 export const FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE = 8;
 export const FREE_CHAT_MAX_OUTPUT_TOKENS = 4096;
 export const FREE_CHAT_MAX_REQUEST_BYTES = 8 * 1024 * 1024;
-export const FREE_CHAT_MAX_MESSAGES = 96;
 export const FREE_CHAT_MAX_MESSAGE_BYTES = 6 * 1024 * 1024;
-export const FREE_CHAT_MAX_TEXT_BYTES = 64 * 1024;
 export const FREE_CHAT_MAX_IMAGES = 4;
 export const FREE_CHAT_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 export const FREE_CHAT_MAX_TOOLS = 48;
@@ -22,7 +20,7 @@ export const FREE_CHAT_MAX_IN_FLIGHT = 1;
 export const FREE_CHAT_IN_FLIGHT_LEASE_SECONDS = 10 * 60;
 
 // This is a conservative reservation for both entries in the dedicated
-// preview waterfall at the maximum text/tool/output limits above. Reserving
+// preview waterfall at the maximum request/tool/output limits above. Reserving
 // before inference makes concurrent requests unable to race a post-hoc spend
 // check. Keep this in sync with FREE_PREVIEW_WATERFALL in handlers/chat.ts.
 export const FREE_CHAT_COST_RESERVATION_MICRO_USD = 150_000;
@@ -212,14 +210,7 @@ export function validateFreeChatRequestBodyLimits(
 	if (!Array.isArray(body.messages)) {
 		return { status: 400, code: 'invalid_free_chat_messages', message: 'Free hosted chat requires a messages array.' };
 	}
-	if (body.messages.length > FREE_CHAT_MAX_MESSAGES) {
-		return requestTooLarge(
-			'free_chat_too_many_messages',
-			`Free hosted chat supports at most ${FREE_CHAT_MAX_MESSAGES} messages per request.`,
-		);
-	}
 
-	let textBytes = 0;
 	let imageCount = 0;
 	for (const message of body.messages) {
 		if (!message || typeof message !== 'object') {
@@ -252,11 +243,8 @@ export function validateFreeChatRequestBodyLimits(
 			);
 		}
 
-		const { content, ...messageMetadata } = message;
-		textBytes += jsonByteLength(messageMetadata);
-		if (typeof content === 'string') {
-			textBytes += byteLength(content);
-		} else if (Array.isArray(content)) {
+		const { content } = message;
+		if (Array.isArray(content)) {
 			for (const part of content) {
 				if (!part || typeof part !== 'object') {
 					return {
@@ -280,21 +268,11 @@ export function validateFreeChatRequestBodyLimits(
 							`Each free hosted chat image is limited to ${FREE_CHAT_MAX_IMAGE_BYTES} encoded bytes.`,
 						);
 					}
-				} else {
-					textBytes += jsonByteLength(part);
 				}
 			}
-		} else if (content !== null && content !== undefined) {
-			textBytes += jsonByteLength(content);
 		}
 	}
 
-	if (textBytes > FREE_CHAT_MAX_TEXT_BYTES) {
-		return requestTooLarge(
-			'free_chat_text_too_large',
-			`Free hosted chat text and tool results are limited to ${FREE_CHAT_MAX_TEXT_BYTES} bytes per request.`,
-		);
-	}
 	if (imageCount > FREE_CHAT_MAX_IMAGES) {
 		return requestTooLarge(
 			'free_chat_too_many_images',

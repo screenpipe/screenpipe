@@ -11,13 +11,11 @@ import {
 	FREE_CHAT_MESSAGE_LIMIT,
 	FREE_CHAT_MAX_IMAGE_BYTES,
 	FREE_CHAT_MAX_IMAGES,
-	FREE_CHAT_MAX_MESSAGES,
 	FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE,
 	FREE_CHAT_MAX_OUTPUT_TOKENS,
 	FREE_CHAT_MAX_REQUEST_BYTES,
 	FREE_CHAT_MAX_RESPONSE_FORMAT_BYTES,
 	FREE_CHAT_MAX_STRUCTURE_DEPTH,
-	FREE_CHAT_MAX_TEXT_BYTES,
 	FREE_CHAT_MAX_TOOLS,
 	FREE_CHAT_MAX_TOOLS_BYTES,
 	acquireFreeChatLease,
@@ -478,18 +476,18 @@ describe('validateFreeChatRequestLimits', () => {
 		expect(error?.code).toBe('free_chat_request_too_large');
 	});
 
-	it('caps message count and aggregate text/tool-result bytes', () => {
-		const tooMany = validateFreeChatRequestLimits(
-			bodyWith(Array.from({ length: FREE_CHAT_MAX_MESSAGES + 1 }, () => ({ role: 'user', content: 'x' }))),
-			preview,
-		);
-		expect(tooMany?.code).toBe('free_chat_too_many_messages');
+	it('does not impose a Free-plan aggregate-text or message-count ceiling', () => {
+		const body = bodyWith([
+			...Array.from({ length: 128 }, () => ({ role: 'user', content: 'continue' })),
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+			},
+			{ role: 'tool', content: 'x'.repeat(5 * 1024 * 1024), tool_call_id: 'call_1' },
+		]);
 
-		const tooMuchText = validateFreeChatRequestLimits(
-			bodyWith([{ role: 'user', content: 'x'.repeat(FREE_CHAT_MAX_TEXT_BYTES + 1) }]),
-			preview,
-		);
-		expect(tooMuchText?.code).toBe('free_chat_text_too_large');
+		expect(validateFreeChatRequestLimits(body, preview)).toBeNull();
 	});
 
 	it('caps encoded image size and image count independently', () => {
@@ -524,16 +522,16 @@ describe('validateFreeChatRequestLimits', () => {
 		expect(alternateSource?.code).toBe('free_chat_image_too_large');
 	});
 
-	it('does not let mixed image fields disguise text from the text-byte cap', () => {
-		const disguisedText = validateFreeChatRequestLimits(bodyWith([{
+	it('treats mixed text fields as context rather than image payloads', () => {
+		const mixedText = validateFreeChatRequestLimits(bodyWith([{
 			role: 'user',
 			content: [{
 				type: 'text',
-				text: 'x'.repeat(FREE_CHAT_MAX_TEXT_BYTES + 1),
+				text: 'x'.repeat(1024 * 1024),
 				image_url: { url: 'data:image/png;base64,YQ==' },
 			} as any],
 		}]), preview);
-		expect(disguisedText?.code).toBe('free_chat_text_too_large');
+		expect(mixedText).toBeNull();
 	});
 
 	it('rejects non-image media disguised with an image content type', () => {
