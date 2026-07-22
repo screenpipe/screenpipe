@@ -72,13 +72,15 @@ async function compressImageFile(file: File): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 
-// Every await in sendLogs must be bounded — a single stalled request with no
-// timeout leaves `phase` stuck on "sending" forever with the button disabled
-// and no error (#5360). These budgets are the ceiling per step, not the norm.
-const TIMEOUT_API_MS = 30_000; // screenpipe.com JSON endpoints
+// Every await in sendLogs must be bounded: one stalled call with no timeout
+// leaves `phase` stuck on "sending" forever (#5360).
+const TIMEOUT_API_MS = 30_000; // JSON endpoints and IPC listings
 const TIMEOUT_UPLOAD_MS = 60_000; // log text / screenshot PUTs
-const TIMEOUT_VIDEO_MS = 300_000; // video uploads (covers Rust's 3 retries)
-const TIMEOUT_REDACT_MS = 60_000; // Rust redaction self-bounds at 45s
+const TIMEOUT_VIDEO_MS = 300_000; // must cover the Rust retry budget (280s)
+const TIMEOUT_REDACT_MS = 60_000; // must exceed Rust's 45s enclave budget
+// Backstop above the sum of all per-step budgets, so a step added later
+// without its own deadline still can't strand the dialog.
+const TIMEOUT_SEND_TOTAL_MS = 720_000;
 
 function timeoutError(label: string): Error {
   return new Error(`${label} timed out — check your connection and try again`);
@@ -103,8 +105,8 @@ async function fetchWithTimeout(
   }
 }
 
-// For Tauri command awaits — the IPC promise itself can hang even when the
-// Rust side is internally bounded, so race it against a deadline.
+// For Tauri command awaits — the IPC promise can hang even when the Rust
+// side is internally bounded.
 export function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -511,21 +513,26 @@ export const ShareLogsButton = ({
   const sendLogs = async () => {
     setPhase("sending");
     setUploadPct(null);
-    try {
+    const send = async () => {
       // Log files are best-effort. If none are found (fresh install, or an
       // unreadable/misconfigured data dir — common on Windows), we still send
       // the feedback text, screenshot, settings and console logs, which are
       // valuable on their own. Bailing here silently was the original bug:
       // clicking the button did nothing, with no toast and no spinner.
-      const logFiles = await getLogFiles();
+      // Same policy for a hung listing: proceed without log files rather
+      // than fail the whole report.
+      const logFiles = await withTimeout(
+        getLogFiles(),
+        TIMEOUT_API_MS,
+        "log listing",
+      ).catch(() => [] as Awaited<ReturnType<typeof getLogFiles>>);
 
       const BASE_URL = "https://screenpipe.com";
       const identifier = settings.user?.id || machineId;
       const type = settings.user?.id ? "user" : "machine";
 
-      // Tail-read in Rust: a runaway log (exactly the "recording needs help"
-      // scenario people report from) can be hundreds of MB, and pulling it
-      // whole across IPC just to slice 100KB froze the dialog on "sending...".
+      // Tail-read in Rust: a runaway log can be hundreds of MB, and pulling
+      // it whole across IPC just to slice 100KB froze the dialog (#5360).
       const MAX_LOG_SIZE = 100 * 1024;
       const logContents = await Promise.all(
         logFiles.slice(0, 5).map(async (file) => {
@@ -585,7 +592,11 @@ export const ShareLogsButton = ({
       let chatSection = "";
       if (includeChatHistory) {
         try {
-          const conversations = await loadAllConversations();
+          const conversations = await withTimeout(
+            loadAllConversations(),
+            TIMEOUT_API_MS,
+            "chat history",
+          );
           const MAX_CHAT_SIZE = 200 * 1024;
           const recentConvs = conversations.slice(0, 5);
           let chatData = "";
@@ -770,6 +781,9 @@ export const ShareLogsButton = ({
         setPhase("idle");
         if (onComplete) onComplete();
       }, 1500);
+    };
+    try {
+      await withTimeout(send(), TIMEOUT_SEND_TOTAL_MS, "sending feedback");
     } catch (err) {
       console.error("log sharing failed:", err);
       setPhase("idle");

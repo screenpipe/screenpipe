@@ -624,6 +624,31 @@ describe("ShareLogsButton attachments", () => {
     );
   });
 
+  it("still sends the report when the log-file listing never settles", async () => {
+    vi.useFakeTimers();
+    stubServer({ videoPath: "logs/machine/m1/t_video.mp4" });
+    // A stalled filesystem/IPC call: the Tauri command never resolves.
+    commandsMock.getLogFiles.mockReturnValue(new Promise(() => {}));
+    render(<ShareLogsButton />);
+
+    fireEvent.click(sendButton());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // still waiting on the hung listing
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    // 30s: listing times out, and the send proceeds without log files
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "feedback sent" }),
+    );
+    vi.useRealTimers();
+  });
+
   it("recovers from a hung request instead of sticking on sending forever (#5360)", async () => {
     vi.useFakeTimers();
     // A stalled connection: fetch never settles, but honors abort like the

@@ -29,12 +29,9 @@ pub async fn read_log_tail(path: String, max_bytes: u32) -> Result<String, Strin
         .map_err(|e| e.to_string())
 }
 
-/// Read at most the last `max_bytes` of a file.
-///
-/// The webview previously read whole log files with `readTextFile` and
-/// truncated in JS — a runaway log (e.g. a recorder stuck in an error loop)
-/// meant shipping hundreds of MB over IPC before the 100KB cut, which showed
-/// up as the report dialog hanging on "sending..." (#5360).
+/// Read at most the last `max_bytes` of a file. Replaces reading whole log
+/// files into the webview, where a runaway multi-hundred-MB log froze the
+/// report dialog on "sending..." (#5360).
 pub(crate) async fn read_tail(path: &Path, max_bytes: u64) -> anyhow::Result<String> {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
