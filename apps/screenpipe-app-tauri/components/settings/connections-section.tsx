@@ -4126,7 +4126,7 @@ export function ConnectionsSection({
       />;
       case "google-docs": return (
         <div className="space-y-3">
-          <ComposioCard toolkit="googledocs" onChanged={setComposioConnected} />
+          <ComposioCard toolkit="googledocs" initialConnected={composioConnected.googledocs} onChanged={setComposioConnected} />
           {/* The native Docs connector (documents + drive.file scopes) still
               works and keeps tokens local — keep it manageable for users who
               connected before Composio became the primary path. */}
@@ -4142,12 +4142,12 @@ export function ConnectionsSection({
           )}
         </div>
       );
-      case "google-drive": return <ComposioCard toolkit="googledrive" onChanged={setComposioConnected} />;
-      case "google-sheets": return <ComposioCard toolkit="googlesheets" onChanged={setComposioConnected} />;
-      case "gmail": return <ComposioCard toolkit="gmail" onChanged={setComposioConnected} />;
+      case "google-drive": return <ComposioCard toolkit="googledrive" initialConnected={composioConnected.googledrive} onChanged={setComposioConnected} />;
+      case "google-sheets": return <ComposioCard toolkit="googlesheets" initialConnected={composioConnected.googlesheets} onChanged={setComposioConnected} />;
+      case "gmail": return <ComposioCard toolkit="gmail" initialConnected={composioConnected.gmail} onChanged={setComposioConnected} />;
       case "zoom": return (
         <div className="space-y-3">
-          <ComposioCard toolkit="zoom" onChanged={setComposioConnected} />
+          <ComposioCard toolkit="zoom" initialConnected={composioConnected.zoom} onChanged={setComposioConnected} />
           {/* The legacy Zoom OAuth app was rejected in marketplace review, so its
               authorize page is dead for new connections. Surface the old panel
               only for users who still HAVE a legacy connection (to manage or

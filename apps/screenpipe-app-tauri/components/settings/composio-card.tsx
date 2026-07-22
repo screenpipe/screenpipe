@@ -135,17 +135,22 @@ async function removeComposioMcpServer(): Promise<void> {
 
 export function ComposioCard({
   toolkit,
+  initialConnected,
   onChanged,
 }: {
   toolkit: ComposioToolkit;
+  /** Last known connected state from the connections section's status fetch.
+   *  When provided the card renders immediately and reconciles in the
+   *  background instead of blocking on its own round trip. */
+  initialConnected?: boolean;
   onChanged?: (status: ComposioStatusMap) => void;
 }) {
   const { settings } = useSettings();
   const token = settings.user?.token;
   const { label, provider } = TOOLKIT_META[toolkit];
 
-  const [loaded, setLoaded] = useState(false);
-  const [connected, setConnected] = useState(false);
+  const [loaded, setLoaded] = useState(initialConnected !== undefined);
+  const [connected, setConnected] = useState(initialConnected ?? false);
   const [otherConnected, setOtherConnected] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
