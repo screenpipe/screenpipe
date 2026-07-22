@@ -124,7 +124,17 @@ pub async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool
         }
     };
 
-    let client = reqwest::Client::new();
+    // The default client has no timeout — a stalled connection hangs this
+    // command forever, which the UI surfaces as a permanently stuck
+    // "sending..." state (#5360). Bound each attempt so the retry loop below
+    // can actually advance. 3 attempts x 90s + backoff stays inside the
+    // webview's 5-minute deadline for this command, so all retries get to run
+    // before the UI gives up.
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|e| e.to_string())?;
     let max_retries = 3;
     let mut attempt = 0;
     let mut last_error = String::new();
