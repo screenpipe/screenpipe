@@ -64,6 +64,14 @@ final class OverlayMetrics: ObservableObject {
     @Published var healthState: String = "normal"
     /// Boot-phase label shown while fixing ("updating database", ...).
     @Published var healthDetail: String = ""
+    /// True when the cursor is inside the panel area — drives expand/collapse
+    /// since SwiftUI's .onHover tracking areas use .activeInActiveApp which
+    /// does not fire when the app is not frontmost (the overlay stays visible
+    /// via hidesOnDeactivate = false). The ReminderTrackingView owns this via
+    /// its .activeAlways NSTrackingArea.
+    @Published var isHovering: Bool = false
+    /// Set by click in failure state to expand the restart UI.
+    @Published var forceExpanded: Bool = false
 }
 
 // MARK: - Font helper (same as notification panel)
@@ -266,7 +274,13 @@ struct ShortcutReminderView: View {
     @ObservedObject var metrics: OverlayMetrics
     let scale: CGFloat
     let onAction: (String) -> Void
-    @Binding var isExpanded: Bool
+
+    /// Derived from metrics — replaces the former @Binding which relied on
+    /// SwiftUI's .onHover (broken in non-activating panels when the app is
+    /// not frontmost because tracking areas use .activeInActiveApp).
+    private var isExpanded: Bool {
+        metrics.isHovering || metrics.forceExpanded
+    }
 
     // Scaled helpers
     private func s(_ v: CGFloat) -> CGFloat { v * scale }
@@ -280,14 +294,8 @@ struct ShortcutReminderView: View {
             } else if metrics.healthState == "recovered" {
                 recoveredView
             } else if isExpanded {
-                // Once expanded, collapse only when the mouse leaves the
-                // entire expanded bar (so hovering individual buttons inside
-                // doesn't bounce us back).
                 expandedView
                     .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
-                    .onHover { hovering in
-                        if !hovering { isExpanded = false }
-                    }
             } else {
                 collapsedView
                     .transition(.opacity.combined(with: .scale(scale: 1.2, anchor: .trailing)))
@@ -320,7 +328,7 @@ struct ShortcutReminderView: View {
                     metrics.healthState = "fixing"
                     onAction("restart_recording")
                 } else {
-                    isExpanded = true
+                    metrics.forceExpanded = true
                 }
             }) {
                 HStack(spacing: 0) {
@@ -394,9 +402,6 @@ struct ShortcutReminderView: View {
         .background(Capsule().fill(Color.black.opacity(0.85)))
         .overlay(Capsule().stroke(Color.red.opacity(0.4), lineWidth: 0.5))
         .contentShape(Rectangle())
-        .onHover { hovering in
-            isExpanded = hovering
-        }
     }
 
     private var fixingView: some View {
@@ -459,9 +464,6 @@ struct ShortcutReminderView: View {
             .padding(.horizontal, s(3))
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
-            .onHover { hovering in
-                if hovering { isExpanded = true }
-            }
 
             CollapsedBellButton(
                 unread: metrics.inboxUnread,
@@ -668,7 +670,6 @@ class ShortcutReminderController: NSObject {
     private var chatShortcut = "⌘⌃L"
     private var searchShortcut = "⌘⌃K"
     private var metrics = OverlayMetrics()
-    @Published var isExpanded = false
     private var wsTask: URLSessionWebSocketTask?
     private var wsRetryTimer: Timer?
     private var meetingWsTask: URLSessionWebSocketTask?
@@ -709,6 +710,8 @@ class ShortcutReminderController: NSObject {
     func hide() {
         DispatchQueue.main.async { [self] in
             isVisible = false
+            metrics.isHovering = false
+            metrics.forceExpanded = false
             AnimationTick.shared.setVisible(false, hasActiveSignal: false)
             disconnectWebSocket()
             disconnectMeetingEventsWebSocket()
@@ -876,9 +879,9 @@ class ShortcutReminderController: NSObject {
             }
             guard self.metrics.healthState != state else { return }
             self.metrics.healthState = state
-            // Health states replace the hover-expand UI; don't leave the
-            // normal bar stuck expanded when the state clears.
-            self.isExpanded = false
+            // Health states replace the hover-expand UI; reset the
+            // click-to-expand flag so it doesn't stay stuck expanded.
+            self.metrics.forceExpanded = false
         }
     }
 
@@ -938,6 +941,13 @@ class ShortcutReminderController: NSObject {
 
         let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h)))
         tracking.autoresizingMask = [.width, .height]
+        tracking.onHoverChanged = { [weak self] hovering in
+            guard let self = self else { return }
+            self.metrics.isHovering = hovering
+            if !hovering {
+                self.metrics.forceExpanded = false
+            }
+        }
         p.contentView = tracking
         self.trackingView = tracking
 
@@ -962,7 +972,6 @@ class ShortcutReminderController: NSObject {
 
     private func updateContent() {
         guard let panel = panel else { return }
-        let controller = self
         let view = ShortcutReminderView(
             overlayShortcut: overlayShortcut,
             chatShortcut: chatShortcut,
@@ -971,11 +980,7 @@ class ShortcutReminderController: NSObject {
             scale: gOverlayScale,
             onAction: { [weak self] action in
                 self?.sendAction(action)
-            },
-            isExpanded: Binding(
-                get: { controller.isExpanded },
-                set: { controller.isExpanded = $0 }
-            )
+            }
         )
         let contentView = panel.contentView!
         if let hosting = hostingView {
@@ -1006,6 +1011,12 @@ class ShortcutReminderController: NSObject {
 
 @available(macOS 13.0, *)
 private class ReminderTrackingView: NSView {
+    /// Fired when the cursor enters/exits the panel area. Drives the
+    /// expand/collapse state in lieu of SwiftUI's .onHover which doesn't
+    /// fire for non-activating panels when the app is in the background
+    /// (its tracking areas use .activeInActiveApp, not .activeAlways).
+    var onHoverChanged: ((Bool) -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         return true
     }
@@ -1024,6 +1035,7 @@ private class ReminderTrackingView: NSView {
     override func mouseEntered(with event: NSEvent) {
         window?.disableCursorRects()
         NSCursor.pointingHand.set()
+        onHoverChanged?(true)
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -1033,6 +1045,7 @@ private class ReminderTrackingView: NSView {
     override func mouseExited(with event: NSEvent) {
         window?.enableCursorRects()
         NSCursor.arrow.set()
+        onHoverChanged?(false)
     }
 }
 
