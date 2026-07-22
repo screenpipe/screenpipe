@@ -510,7 +510,12 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       // deduping the same saved row returned by both sources. Filter out
       // sessions that were deleted (dropped from the store) but still linger
       // in the loadedPipeRuns cache.
-      const cached = (loadedPipeRuns[name] ?? []).filter((s) => s.id in storeSessionIds);
+      const cached = (loadedPipeRuns[name] ?? []).filter((s) => {
+        const live = storeSessionIds[s.id];
+        // Drop deleted, pinned, or archived sessions from the cache —
+        // they either no longer exist or belong to a different section.
+        return live && !live.pinned && !live.hidden;
+      });
       const merged = [...(sessionsByPipe.get(name) ?? []), ...cached];
       const seen = new Set<string>();
       const sessions = merged.filter((session) => {
