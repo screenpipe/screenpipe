@@ -88,6 +88,8 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
 
   // Documents — docs, spreadsheets, wikis & whiteboards
   "google-docs": "Documents",
+  "google-drive": "Documents",
+  "google-sheets": "Documents",
   confluence: "Documents",
   excalidraw: "Documents",
 
@@ -164,6 +166,8 @@ export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
   "google-calendar": "Search Google Calendar events with AI",
   "google-docs": "Read and search your Google Docs",
   gmail: "Read your Gmail inbox (via composio.dev managed auth)",
+  "google-drive": "Search and read your Google Drive files (via composio.dev managed auth)",
+  "google-sheets": "Read, create, and edit Google Sheets (via composio.dev managed auth)",
   "outlook-email": "Read and send your Outlook email",
   "ics-calendar": "Subscribe to any ICS calendar feed",
   "remote-agent": "Run a 24/7 agent (OpenClaw, Hermes, Claude, Codex) on your VPS, wired to screenpipe",

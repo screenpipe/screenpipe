@@ -104,8 +104,10 @@ async function findMcpProviderServer(
 }
 
 async function enrichConnection(connection: ConnectionItem, signal?: AbortSignal): Promise<ConnectionItem> {
-  const composio = await composioEnrichment(connection.id, signal);
-  if (composio) return { ...connection, ...composio };
+  if (!shouldSkipComposioEnrichment(connection)) {
+    const composio = await composioEnrichment(connection.id, signal);
+    if (composio) return { ...connection, ...composio };
+  }
   const server = await findMcpProviderServer(connection.id, signal);
   if (!server) return connection;
   return {
@@ -122,7 +124,20 @@ async function enrichConnection(connection: ConnectionItem, signal?: AbortSignal
 // presence IS the connected signal. Gmail has no /connections entry at all
 // (it is a frontend-only tile), so without this the gate tells the model
 // Gmail doesn't exist even though the tools are one sp_mcp_call away.
-const COMPOSIO_TOOLKIT_IDS = new Set(["gmail", "zoom"]);
+// Connection id → display metadata for every Composio-backed connection.
+// Ids match the app's tile/connection ids (kebab-case), not Composio's
+// toolkit slugs — the agent only needs the MCP server id to act.
+const COMPOSIO_CONNECTIONS: Record<
+  string,
+  { name: string; category: string }
+> = {
+  gmail: { name: "Gmail", category: "Communication" },
+  zoom: { name: "Zoom", category: "Meetings" },
+  "google-drive": { name: "Google Drive", category: "Documents" },
+  "google-docs": { name: "Google Docs", category: "Documents" },
+  "google-sheets": { name: "Google Sheets", category: "Documents" },
+};
+const COMPOSIO_TOOLKIT_IDS = new Set(Object.keys(COMPOSIO_CONNECTIONS));
 const COMPOSIO_URL_RE = /^https:\/\/(www\.)?(screenpipe\.com|screenpi\.pe)\/api\/composio\/mcp\/?$/;
 
 async function findComposioServer(signal?: AbortSignal): Promise<McpServerItem | null> {
@@ -148,16 +163,24 @@ async function composioEnrichment(
   };
 }
 
+// Native connections that overlap a Composio toolkit (google-docs). When the
+// native one is already connected, keep its proxy path authoritative and
+// don't rewrite it to MCP — the user may never have connected the Composio
+// variant, and the native proxy is free and local.
+function shouldSkipComposioEnrichment(connection: ConnectionItem): boolean {
+  return connection.connected === true && !connection.mcp;
+}
+
 function composioSyntheticConnection(id: string, serverId: string): ConnectionItem {
-  const name = id === "gmail" ? "Gmail" : "Zoom";
+  const meta = COMPOSIO_CONNECTIONS[id] ?? { name: id, category: "Productivity" };
   return {
     id,
-    name,
+    name: meta.name,
     connected: true,
     mcp: true,
     mcp_server_id: serverId,
-    category: id === "gmail" ? "Communication" : "Meetings",
-    description: `${name} via Composio managed auth. Discover tools with sp_mcp_list_tools (server_id "${serverId}"), then call them with sp_mcp_call — e.g. GMAIL_* / ZOOM_* tools through COMPOSIO_SEARCH_TOOLS and COMPOSIO_MULTI_EXECUTE_TOOL.`,
+    category: meta.category,
+    description: `${meta.name} via Composio managed auth. Discover tools with sp_mcp_list_tools (server_id "${serverId}"), then call them with sp_mcp_call — e.g. GMAIL_* / GOOGLEDRIVE_* / GOOGLEDOCS_* / GOOGLESHEETS_* / ZOOM_* tools through COMPOSIO_SEARCH_TOOLS and COMPOSIO_MULTI_EXECUTE_TOOL.`,
   };
 }
 
