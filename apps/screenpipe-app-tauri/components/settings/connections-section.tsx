@@ -522,23 +522,8 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     ),
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
-    "google-drive": (
-      <svg viewBox="0 0 87.3 78" className="w-5 h-5" aria-hidden>
-        <path fill="#0066DA" d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z"/>
-        <path fill="#00AC47" d="M43.65 25 29.9 1.2c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0-1.2 4.5h27.5z"/>
-        <path fill="#EA4335" d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75L86.1 57.5c.8-1.4 1.2-2.95 1.2-4.5H59.798l5.852 11.5z"/>
-        <path fill="#00832D" d="M43.65 25 57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z"/>
-        <path fill="#2684FC" d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z"/>
-        <path fill="#FFBA00" d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25 59.8 53h27.45c0-1.55-.4-3.1-1.2-4.5z"/>
-      </svg>
-    ),
-    "google-sheets": (
-      <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden>
-        <path fill="#0F9D58" d="M14.727 0H4.91C3.855 0 3 .855 3 1.91v20.18C3 23.145 3.855 24 4.91 24h14.18c1.055 0 1.91-.855 1.91-1.91V6.273L14.727 0z"/>
-        <path fill="#87CEAC" d="M14.727 0v4.364c0 1.054.855 1.909 1.909 1.909H21L14.727 0z"/>
-        <path fill="#FFF" d="M7.5 10.5h9V18h-9v-7.5zm1.5 1.5v1.125h2.625V12H9zm4.125 0v1.125H15.5V12h-2.375zM9 14.25v1.125h2.625V14.25H9zm4.125 0v1.125H15.5V14.25h-2.375zM9 16.5v.75h2.625v-.75H9zm4.125 0v.75H15.5v-.75h-2.375z"/>
-      </svg>
-    ),
+    "google-drive": <img src="/images/google-drive.svg" alt="Google Drive" className="w-5 h-5" />,
+    "google-sheets": <img src="/images/google-sheets.svg" alt="Google Sheets" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     "remote-agent": <img src="/openclaw-icon.svg" alt="Remote agent" className="w-5 h-5" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
