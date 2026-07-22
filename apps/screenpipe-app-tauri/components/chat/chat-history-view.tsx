@@ -317,8 +317,7 @@ export function ChatHistoryView({
     [patchSidebarSession, visibleById]
   );
 
-  // Group names for the "Move to group" submenu: manual groups plus the
-  // auto pipe-groups visible in the sidebar. Insertion order preserved.
+  // Group names for the "Move to group" submenu: manual groups only.
   const existingGroups = useMemo(
     () => listMoveTargetGroups(conversations),
     [conversations],
@@ -534,6 +533,7 @@ export function ChatHistoryView({
                   <Pin className="h-3 w-3 text-muted-foreground" />
                   {conv.pinned ? "Unpin" : "Pin"}
                 </DropdownMenuItem>
+                {conv.kind !== "pipe-run" && conv.kind !== "pipe-watch" && (
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30">
                     <FolderOpen className="h-3 w-3 text-muted-foreground" />
@@ -586,6 +586,7 @@ export function ChatHistoryView({
                     </div>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
+                )}
                 {!conv.hidden ? (
                   <DropdownMenuItem
                     className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"

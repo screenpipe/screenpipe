@@ -677,13 +677,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     } catch { /* ignore */ }
   }, [groupedSections]);
 
-  // Group names offered in the "Move to group" submenu, derived from all
-  // visible non-hidden sessions (pinned + recents): manual groups plus the
-  // auto pipe-groups the user actually sees in the sidebar. Moving a chat
-  // into a pipe-group's name folds it into that same group.
+  // Group names offered in the "Move to group" submenu: manual sidebar
+  // groups only (no auto pipe-groups).
   const existingGroups = useMemo(
-    () => listMoveTargetGroups([...pinned, ...recents, ...pipes]),
-    [pinned, recents, pipes],
+    () => listMoveTargetGroups([...pinned, ...recents]),
+    [pinned, recents],
   );
 
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
@@ -1737,9 +1735,6 @@ function PipeGroupRow({
               onDeleteRequest={onDeleteRequest}
               onTogglePin={onTogglePin}
               onRenameRequest={onRenameRequest}
-              onMoveToGroup={onMoveToGroup}
-              onNewGroupRequest={onNewGroupRequest}
-              existingGroups={existingGroups}
               insideGroup
               openConversationMenuId={openConversationMenuId}
               setOpenConversationMenuId={setOpenConversationMenuId}

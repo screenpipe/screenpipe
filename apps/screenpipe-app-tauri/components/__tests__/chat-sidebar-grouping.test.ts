@@ -411,14 +411,14 @@ describe("buildSidebarRecentsSections", () => {
 // ── listMoveTargetGroups ─────────────────────────────────────────────
 
 describe("listMoveTargetGroups", () => {
-  it("lists manual groups before recurring pipe groups", () => {
+  it("lists only manual groups, not auto pipe groups", () => {
     const result = listMoveTargetGroups([
       s("a", "chat", undefined, "work"),
       s("p1", "daily #1", "daily"),
       s("p2", "daily #2", "daily"),
       s("u", "ungrouped chat"),
     ]);
-    expect(result).toEqual(["work", "daily"]);
+    expect(result).toEqual(["work"]);
   });
 
   it("omits pipe names that appear only once", () => {
