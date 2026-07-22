@@ -1425,6 +1425,12 @@ impl PiExecutor {
         // as a single string, and the long prompt text can break arg parsing
         // if flags come after it.
         cmd.arg("--mode").arg("json");
+        // pi 0.80 gates project-dir resources (.pi/extensions — mcp-bridge,
+        // connection-gate, …) behind a project-trust prompt that can never be
+        // answered in non-interactive mode, so without this flag every project
+        // extension is silently skipped. The working dir is created and
+        // populated exclusively by screenpipe, so it is trusted by definition.
+        cmd.arg("--approve");
         if continue_session {
             cmd.arg("--continue");
         } else {

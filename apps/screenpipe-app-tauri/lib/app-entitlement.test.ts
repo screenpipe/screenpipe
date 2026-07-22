@@ -37,34 +37,6 @@ function user(overrides: Record<string, any>) {
   } as any;
 }
 
-function signupTrialUser(expiresAtMs: number) {
-  const hardExpiry = new Date(expiresAtMs).toISOString();
-  return user({
-    id: "user_signup_trial",
-    cloud_subscribed: true,
-    app_entitled: true,
-    subscription_plan: "pro",
-    entitlement: {
-      active: true,
-      plan: "pro",
-      source: "signup_trial",
-      status: "trialing",
-      checked_at: new Date(NOW.getTime() - 60_000).toISOString(),
-      current_period_end: hardExpiry,
-      expires_at: hardExpiry,
-      grace_until: null,
-      features: {
-        app: true,
-        local_recording: true,
-        cloud: true,
-        integrations: true,
-        team: false,
-        enterprise: false,
-      },
-    },
-  });
-}
-
 describe("app entitlement", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -92,55 +64,6 @@ describe("app entitlement", () => {
         }),
       ),
     ).toBe(true);
-  });
-
-  it("treats a fresh pro signup trial as Business until its hard expiry", () => {
-    const expiresAtMs = NOW.getTime() + 60 * 60 * 1000;
-    const trial = signupTrialUser(expiresAtMs);
-
-    expect(getLocalPlanPolicy(trial)).toBe("verified-paid");
-    expect(hasAppEntitlement(trial)).toBe(true);
-    expect(hasCloudEntitlement(trial)).toBe(true);
-    expect(hasConsumerAppSubscription(trial)).toBe(true);
-    expect(planDisplayName(trial.subscription_plan)).toBe("Business");
-    expect(getPaidPlanPolicyDeadlineMs(trial, NOW.getTime())).toBe(expiresAtMs);
-  });
-
-  it("downgrades a signup trial to Free exactly at ends_at", () => {
-    const expiresAtMs = NOW.getTime() + 60 * 60 * 1000;
-    const trial = signupTrialUser(expiresAtMs);
-
-    vi.setSystemTime(expiresAtMs - 1);
-    expect(getLocalPlanPolicy(trial)).toBe("verified-paid");
-
-    vi.setSystemTime(expiresAtMs);
-    expect(getLocalPlanPolicy(trial)).toBe("verified-free");
-    expect(hasAppEntitlement(trial)).toBe(false);
-    expect(hasCloudEntitlement(trial)).toBe(false);
-    expect(hasConsumerAppSubscription(trial)).toBe(false);
-    expect(isAuthenticatedFreeUser(trial)).toBe(true);
-    expect(needsAppEntitlementRefresh(trial)).toBe(true);
-    expect(getPaidPlanPolicyDeadlineMs(trial, expiresAtMs)).toBeNull();
-
-    vi.setSystemTime(expiresAtMs + 1);
-    expect(getLocalPlanPolicy(trial)).toBe("verified-free");
-  });
-
-  it("fails malformed signup trials closed and never lets grace extend them", () => {
-    const expiresAtMs = NOW.getTime() + 60 * 60 * 1000;
-    const missingExpiry = signupTrialUser(expiresAtMs);
-    delete missingExpiry.entitlement.expires_at;
-    const malformedPeriodEnd = signupTrialUser(expiresAtMs);
-    malformedPeriodEnd.entitlement.current_period_end = "not-a-date";
-    const graceCannotExtend = signupTrialUser(expiresAtMs);
-    graceCannotExtend.entitlement.expires_at = new Date(NOW.getTime() - 1).toISOString();
-    graceCannotExtend.entitlement.grace_until = new Date(
-      NOW.getTime() + 24 * 60 * 60 * 1000,
-    ).toISOString();
-
-    expect(getLocalPlanPolicy(missingExpiry)).toBe("unknown");
-    expect(getLocalPlanPolicy(malformedPeriodEnd)).toBe("unknown");
-    expect(getLocalPlanPolicy(graceCannotExtend)).toBe("verified-free");
   });
 
   it("blocks stale cached app access", () => {

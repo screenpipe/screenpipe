@@ -73,13 +73,13 @@ describe("buildDailyLimitMessage", () => {
   });
 
   it("tailors copy by tier", () => {
-    expect(buildDailyLimitMessage('{"tier":"subscribed"}')).toContain("daily limit");
+    expect(buildDailyLimitMessage('{"tier":"subscribed"}')).toContain("daily model limit");
     expect(buildDailyLimitMessage('{"tier":"logged_in"}')).toContain("upgrade to Business");
     expect(buildDailyLimitMessage('{"tier":"anonymous"}')).toContain("Sign in for more");
   });
 
   it("falls back to a generic message for unknown shapes", () => {
-    expect(buildDailyLimitMessage("???")).toContain("free queries");
+    expect(buildDailyLimitMessage("???")).toContain("included model queries");
   });
 });
 

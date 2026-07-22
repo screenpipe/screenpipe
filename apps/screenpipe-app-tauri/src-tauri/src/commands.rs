@@ -41,10 +41,7 @@ fn log_webview_build_failure(label: &str, url_hint: &str, err: &(impl std::fmt::
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{
-        app_login_url, fallback_local_api_config, is_login_callback_scheme,
-        scan_chat_entries_by_mtime,
-    };
+    use super::{fallback_local_api_config, is_login_callback_scheme, scan_chat_entries_by_mtime};
 
     #[test]
     fn chat_entries_missing_dir_is_empty() {
@@ -79,18 +76,6 @@ mod tests {
     #[test]
     fn login_callback_accepts_website_fallback_scheme() {
         assert!(is_login_callback_scheme("screenpipe"));
-    }
-
-    #[test]
-    fn app_login_url_marks_source_and_preserves_return_scheme() {
-        assert_eq!(
-            app_login_url(None),
-            "https://screenpipe.com/login?source=app"
-        );
-        assert_eq!(
-            app_login_url(Some("screenpipe-enterprise")),
-            "https://screenpipe.com/login?source=app&return_scheme=screenpipe-enterprise"
-        );
     }
 
     // Regression for b7dc02415: `get_local_api_config` returned {key: null}
@@ -1550,14 +1535,7 @@ pub async fn get_disk_usage(
     }
 }
 
-const LOGIN_URL: &str = "https://screenpipe.com/login?source=app";
-
-fn app_login_url(return_scheme: Option<&str>) -> String {
-    match return_scheme {
-        Some(return_scheme) => format!("{LOGIN_URL}&return_scheme={return_scheme}"),
-        None => LOGIN_URL.to_string(),
-    }
-}
+const LOGIN_URL: &str = "https://screenpipe.com/login";
 
 /// The custom URL scheme this build registers for deep links. The enterprise
 /// build uses a distinct scheme so it does not collide with the consumer app's
@@ -1598,7 +1576,7 @@ pub async fn open_login_window(
         // with another installed build here (#3890) and stays correct until
         // the website honours `return_scheme`.
         let callback_url = match crate::auth_session::start_session(
-            app_login_url(None),
+            LOGIN_URL.to_string(),
             "screenpipe".to_string(),
             fresh_session,
         )
@@ -1647,7 +1625,7 @@ pub async fn open_login_window(
         let app_for_nav = app_handle.clone();
         let label_for_nav = label.clone();
 
-        let login_url = app_login_url(Some(deep_link_scheme()));
+        let login_url = format!("{}?return_scheme={}", LOGIN_URL, deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label.clone(),

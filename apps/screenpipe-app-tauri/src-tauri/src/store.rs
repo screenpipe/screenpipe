@@ -1161,25 +1161,21 @@ fn parse_entitlement_time(
         .map(|value| value.with_timezone(&chrono::Utc))
 }
 
-fn entitlement_checked_recently_at(
-    entitlement: &serde_json::Value,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
+fn entitlement_checked_recently(entitlement: &serde_json::Value) -> bool {
     let Some(checked_at) = parse_entitlement_time(entitlement.get("checked_at")) else {
         return false;
     };
 
+    let now = chrono::Utc::now();
     checked_at <= now + chrono::Duration::minutes(APP_ENTITLEMENT_CLOCK_SKEW_MINUTES)
         && now.signed_duration_since(checked_at)
             <= chrono::Duration::hours(APP_ENTITLEMENT_MAX_STALE_HOURS)
 }
 
-fn entitlement_was_verified_at(
-    entitlement: &serde_json::Value,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
+fn entitlement_was_verified(entitlement: &serde_json::Value) -> bool {
     parse_entitlement_time(entitlement.get("checked_at")).is_some_and(|checked_at| {
-        checked_at <= now + chrono::Duration::minutes(APP_ENTITLEMENT_CLOCK_SKEW_MINUTES)
+        checked_at
+            <= chrono::Utc::now() + chrono::Duration::minutes(APP_ENTITLEMENT_CLOCK_SKEW_MINUTES)
     })
 }
 
@@ -1190,39 +1186,10 @@ fn entitlement_active(entitlement: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-fn entitlement_has_future_grace_at(
-    entitlement: &serde_json::Value,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
+fn entitlement_has_future_grace(entitlement: &serde_json::Value) -> bool {
     parse_entitlement_time(entitlement.get("grace_until"))
-        .map(|grace_until| grace_until > now)
+        .map(|grace_until| grace_until > chrono::Utc::now())
         .unwrap_or(false)
-}
-
-fn entitlement_is_signup_trial(entitlement: &serde_json::Value) -> bool {
-    entitlement
-        .get("source")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|source| source.trim().eq_ignore_ascii_case("signup_trial"))
-}
-
-fn signup_trial_hard_expiry(
-    entitlement: &serde_json::Value,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    if !entitlement_is_signup_trial(entitlement) {
-        return None;
-    }
-    let expires_at = parse_entitlement_time(entitlement.get("expires_at"))?;
-    let current_period_end = parse_entitlement_time(entitlement.get("current_period_end"))?;
-    Some(std::cmp::min(expires_at, current_period_end))
-}
-
-fn signup_trial_active_at(
-    entitlement: &serde_json::Value,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    signup_trial_hard_expiry(entitlement)
-        .is_some_and(|hard_expiry| now < hard_expiry && entitlement_active(entitlement))
 }
 
 fn entitlement_is_lifetime(entitlement: &serde_json::Value) -> bool {
@@ -1662,34 +1629,9 @@ impl SettingsStore {
         config
     }
 
-    fn has_verified_free_plan_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
-        if !self.has_account_identity() {
-            return false;
-        }
-
-        if let Some(entitlement) = self
-            .user
-            .entitlement
-            .as_ref()
-            .filter(|entitlement| entitlement_is_signup_trial(entitlement))
-        {
-            let account_plan_is_pro = self
-                .user
-                .subscription_plan
-                .as_deref()
-                .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("pro"));
-            let entitlement_plan_is_pro = entitlement
-                .get("plan")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("pro"));
-            return account_plan_is_pro
-                && entitlement_plan_is_pro
-                && entitlement_was_verified_at(entitlement, now)
-                && signup_trial_hard_expiry(entitlement)
-                    .is_some_and(|hard_expiry| now >= hard_expiry);
-        }
-
-        if self.user.cloud_subscribed == Some(true)
+    fn has_verified_free_plan(&self) -> bool {
+        if !self.has_account_identity()
+            || self.user.cloud_subscribed == Some(true)
             || !self
                 .user
                 .subscription_plan
@@ -1706,11 +1648,11 @@ impl SettingsStore {
                 .is_some_and(|source| {
                     matches!(
                         source.to_ascii_lowercase().as_str(),
-                        "manual" | "enterprise" | "lifetime" | "signup_trial" | "dev"
+                        "manual" | "enterprise" | "lifetime" | "dev"
                     )
                 });
             !source_is_paid_override
-                && !entitlement_has_future_grace_at(entitlement, now)
+                && !entitlement_has_future_grace(entitlement)
                 && entitlement
                 .get("plan")
                 .and_then(serde_json::Value::as_str)
@@ -1718,11 +1660,11 @@ impl SettingsStore {
                 // Once a successful account refresh marks this install free,
                 // keep the local policy while offline. A later paid refresh
                 // clears it; merely waiting 72 hours must not unlock limits.
-                && entitlement_was_verified_at(entitlement, now)
+                && entitlement_was_verified(entitlement)
         })
     }
 
-    fn has_verified_paid_plan_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+    fn has_verified_paid_plan(&self) -> bool {
         if !self.has_account_identity() {
             return false;
         }
@@ -1746,7 +1688,7 @@ impl SettingsStore {
         let Some(entitlement) = self.user.entitlement.as_ref() else {
             return false;
         };
-        if !entitlement_was_verified_at(entitlement, now) {
+        if !entitlement_was_verified(entitlement) {
             return false;
         }
         let Some(entitlement_plan) = entitlement
@@ -1774,32 +1716,22 @@ impl SettingsStore {
             return false;
         }
 
-        if entitlement_is_signup_trial(entitlement) {
-            return entitlement_checked_recently_at(entitlement, now)
-                && signup_trial_active_at(entitlement, now);
-        }
-
         entitlement_is_lifetime(entitlement)
-            || entitlement_has_future_grace_at(entitlement, now)
-            || (entitlement_checked_recently_at(entitlement, now)
-                && entitlement_active(entitlement))
+            || entitlement_has_future_grace(entitlement)
+            || (entitlement_checked_recently(entitlement) && entitlement_active(entitlement))
     }
 
     /// Local paid-only behavior is unlocked only by internally consistent,
     /// server-verified plan evidence. Missing, conflicting, stale-paid, and
     /// future-dated evidence remains explicitly unknown.
-    fn local_plan_policy_at(&self, now: chrono::DateTime<chrono::Utc>) -> LocalPlanPolicy {
-        if self.has_verified_paid_plan_at(now) {
+    pub(crate) fn local_plan_policy(&self) -> LocalPlanPolicy {
+        if self.has_verified_paid_plan() {
             LocalPlanPolicy::VerifiedPaid
-        } else if self.has_verified_free_plan_at(now) {
+        } else if self.has_verified_free_plan() {
             LocalPlanPolicy::VerifiedFree
         } else {
             LocalPlanPolicy::Unknown
         }
-    }
-
-    pub(crate) fn local_plan_policy(&self) -> LocalPlanPolicy {
-        self.local_plan_policy_at(chrono::Utc::now())
     }
 
     pub(crate) fn has_free_plan_policy(&self) -> bool {
@@ -1828,7 +1760,7 @@ impl SettingsStore {
     }
 
     fn has_current_app_entitlement(&self) -> bool {
-        self.has_verified_paid_plan_at(chrono::Utc::now())
+        self.has_verified_paid_plan()
     }
 
     /// Consumer binaries must not record behind an org's mandatory-enterprise-
@@ -2310,78 +2242,6 @@ mod tests {
         }));
 
         assert!(store.has_current_app_entitlement());
-    }
-
-    #[test]
-    fn signup_trial_is_paid_only_before_its_hard_expiry() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-06-05T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let ends_at = now + chrono::Duration::hours(1);
-        let mut store = SettingsStore::default();
-        store.user.id = Some("user_signup_trial".to_string());
-        store.user.token = Some("token".to_string());
-        store.user.cloud_subscribed = Some(true);
-        store.user.app_entitled = Some(true);
-        store.user.subscription_plan = Some("pro".to_string());
-        store.user.entitlement = Some(json!({
-            "active": true,
-            "plan": "pro",
-            "source": "signup_trial",
-            "status": "trialing",
-            "checked_at": (now - chrono::Duration::minutes(1)).to_rfc3339(),
-            "current_period_end": ends_at.to_rfc3339(),
-            "expires_at": ends_at.to_rfc3339(),
-            "grace_until": null,
-            "features": {
-                "app": true,
-                "local_recording": true,
-                "cloud": true,
-                "integrations": true,
-                "team": false,
-                "enterprise": false
-            }
-        }));
-
-        assert_eq!(
-            store.local_plan_policy_at(now),
-            LocalPlanPolicy::VerifiedPaid
-        );
-        assert_eq!(
-            store.local_plan_policy_at(ends_at - chrono::Duration::nanoseconds(1)),
-            LocalPlanPolicy::VerifiedPaid
-        );
-        assert_eq!(
-            store.local_plan_policy_at(ends_at),
-            LocalPlanPolicy::VerifiedFree
-        );
-        assert_eq!(
-            store.local_plan_policy_at(ends_at + chrono::Duration::seconds(1)),
-            LocalPlanPolicy::VerifiedFree
-        );
-    }
-
-    #[test]
-    fn signup_trial_missing_or_malformed_hard_expiry_fails_closed() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-06-05T12:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let mut store = SettingsStore::default();
-        store.user.id = Some("user_signup_trial".to_string());
-        store.user.app_entitled = Some(true);
-        store.user.subscription_plan = Some("pro".to_string());
-        store.user.entitlement = Some(json!({
-            "active": true,
-            "plan": "pro",
-            "source": "signup_trial",
-            "checked_at": now.to_rfc3339(),
-            "current_period_end": (now + chrono::Duration::days(7)).to_rfc3339(),
-            "expires_at": "not-a-date",
-            "grace_until": (now + chrono::Duration::days(30)).to_rfc3339(),
-            "features": { "app": true }
-        }));
-
-        assert_eq!(store.local_plan_policy_at(now), LocalPlanPolicy::Unknown);
     }
 
     #[test]

@@ -86,6 +86,18 @@ const body = (messages: Message[], extra: Partial<RequestBody> = {}): RequestBod
 	...extra,
 });
 
+describe('Sonnet 5 request compatibility', () => {
+	it('omits temperature because Sonnet 5 rejects non-default sampling params', async () => {
+		const { provider, calls } = makeProvider();
+		await provider.createCompletion(body(
+			[{ role: 'user', content: 'hi' }],
+			{ model: 'claude-sonnet-5', temperature: 0.2 },
+		));
+		expect(calls[0].model).toBe('claude-sonnet-5');
+		expect(calls[0].temperature).toBeUndefined();
+	});
+});
+
 describe('system prompt cache breakpoints', () => {
 	it('marks a short system prompt (no size gate — old 4096-char gate removed)', async () => {
 		const { provider, calls } = makeProvider();

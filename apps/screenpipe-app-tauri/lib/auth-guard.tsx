@@ -20,10 +20,6 @@ const FOCUS_REVERIFY_COOLDOWN_MS = 30 * 1000;
 
 let lastToastTime = 0;
 
-export function appLoginUrl() {
-  return screenpipeWebUrl("/login?source=app", "https://screenpipe.com");
-}
-
 // Decide whether a window-focus / visibility change should trigger an eager
 // entitlement re-verify. Exported for unit testing. We skip while the window is
 // hidden (a `visibilitychange` to hidden shouldn't fetch) and debounce against
@@ -42,7 +38,7 @@ export function shouldReverifyOnFocus(
 
 function openLogin() {
   // dynamic import to avoid SSR/test crashes from tauri plugins
-  const loginUrl = appLoginUrl();
+  const loginUrl = screenpipeWebUrl("/login", "https://screenpipe.com");
   import("@tauri-apps/plugin-shell").then(({ open }) => {
     open(loginUrl);
   }).catch(() => {
@@ -114,7 +110,7 @@ export function isScreenpipeApi(url: string): boolean {
   );
 }
 
-// The subset of screenpipe cloud hosts whose 401/403 genuinely means the login
+// The subset of screenpipe cloud hosts whose 401 genuinely means the login
 // SESSION died — the website auth surface (screenpipe.com/api/user and the
 // OAuth/session endpoints). This is what the fetch interceptor keys its
 // sign-out on.
@@ -149,7 +145,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         source: context?.source ?? "verify_token",
         status: context?.status ?? null,
       });
-      // A verified 401/403 is not a hydration failure. Clear the entire account
+      // A verified 401 is not a hydration failure. Clear the entire account
       // so the persisted id cannot masquerade as an indefinitely pending token.
       await updateSettings({ user: null as any });
       try {
@@ -176,13 +172,14 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       await loadUser(token);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
-      // loadUser throws "failed to verify token: 401 ..." / "403 ..." for
-      // auth failures; treat those as session expiry. Anything else
+      // loadUser throws "failed to verify token: 401 ..." when the session is
+      // invalid. A 403 means the session is valid but lacks permission, so it
+      // must never clear the account. Anything else
       // (network blip, 5xx) is silent — retry on the next interval.
-      if (msg.includes(" 401 ") || msg.includes(" 403 ")) {
+      if (msg.includes(" 401 ")) {
         await handleSessionExpired({
           source: "verify_token",
-          status: msg.includes(" 403 ") ? 403 : 401,
+          status: 401,
         });
       }
     }
@@ -248,7 +245,7 @@ export function installAuthInterceptor(
           ? input.href
           : input.url;
 
-    if (isScreenpipeAuthApi(url) && (res.status === 401 || res.status === 403)) {
+    if (isScreenpipeAuthApi(url) && res.status === 401) {
       const token = getToken();
       if (token) {
         console.warn("auth-interceptor: 401 from", url);

@@ -502,16 +502,12 @@ const AISection = ({
     const m = model.toLowerCase();
     // Claude models
     if (m.includes("opus")) return 64000;
+    if (m.includes("sonnet-5")) return 128000;
     if (m.includes("sonnet-4") || m.includes("sonnet-3.7")) return 64000;
-    if (m.includes("haiku")) return 8192;
     // OpenAI models
     if (m.includes("gpt-5")) return 128000;
     if (m.includes("o3") || m.includes("o4") || m.includes("o1")) return 100000;
     if (m.includes("gpt-4.1")) return 32768;
-    if (m.includes("gpt-oss")) return 8192;
-    // Google models
-    if (m.includes("gemini-3") || m.includes("gemini-2.5-pro")) return 65536;
-    if (m.includes("gemini")) return 8192;
     // Qwen
     if (m.includes("qwen")) return 8192;
     // Mistral
@@ -584,7 +580,7 @@ const AISection = ({
         break;
       case "anthropic":
         newUrl = "https://api.anthropic.com";
-        newModel = "claude-sonnet-4-6";
+        newModel = "claude-sonnet-5";
         break;
       case "screenpipe-cloud":
         newUrl = ""; // Pi uses RPC mode, not HTTP
@@ -1014,27 +1010,27 @@ const AISection = ({
             if (anthropicResp.ok) {
               const anthropicData = await anthropicResp.json();
               setModels(
-                (anthropicData.data || []).map((m: any) => ({
-                  id: m.id,
-                  name: m.display_name || m.id,
-                  provider: "anthropic",
-                }))
+                (anthropicData.data || [])
+                  .filter((m: any) => !/haiku|sonnet-4|3-5-sonnet|3-7-sonnet/i.test(m.id))
+                  .map((m: any) => ({
+                    id: m.id,
+                    name: m.display_name || m.id,
+                    provider: "anthropic",
+                  }))
               );
             } else {
               // Fallback to hardcoded models
               setModels([
                 { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
                 { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-                { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5", provider: "anthropic" },
-                { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
+                { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
               ]);
             }
           } catch {
             setModels([
               { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
               { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-              { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5", provider: "anthropic" },
-              { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
+              { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
             ]);
           }
           break;
@@ -1124,15 +1120,12 @@ const AISection = ({
           }
           setModels([
             { id: "auto", name: "Auto (recommended)", provider: "screenpipe" },
-            { id: "claude-haiku-4-5", name: "Haiku 4.5 (fast)", provider: "screenpipe" },
-            { id: "claude-sonnet-4-5", name: "Sonnet 4.5 (balanced)", provider: "screenpipe" },
+            { id: "gpt-5.6-luna", name: "GPT-5.6 Luna (fast)", provider: "screenpipe" },
+            { id: "gpt-5.6-terra", name: "GPT-5.6 Terra (balanced)", provider: "screenpipe" },
+            { id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "screenpipe" },
+            { id: "claude-sonnet-5", name: "Sonnet 5 (high intelligence)", provider: "screenpipe" },
             { id: "claude-opus-4-8", name: "Opus 4.8 (powerful, pro)", provider: "screenpipe" },
             { id: "claude-fable-5", name: "Fable 5 (most capable, pro)", provider: "screenpipe" },
-            { id: "gemini-3-flash", name: "Gemini 3 Flash (fast)", provider: "screenpipe" },
-            { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite (cheapest)", provider: "screenpipe" },
-            { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro (balanced)", provider: "screenpipe" },
-            { id: "qwen/qwen3.5-flash-02-23", name: "Qwen3.5 Flash (cheapest, 1M ctx)", provider: "screenpipe" },
-            { id: "meta-llama/llama-4-scout", name: "Llama 4 Scout", provider: "screenpipe" },
           ]);
           break;
         }
@@ -1693,7 +1686,7 @@ const AISection = ({
               { label: "8k", value: 8192, hint: "haiku / qwen" },
               { label: "32k", value: 32768, hint: "gpt-4.1" },
               { label: "64k", value: 64000, hint: "opus / sonnet" },
-              { label: "65k", value: 65536, hint: "gemini 3 pro" },
+              { label: "65k", value: 65536, hint: "long responses" },
               { label: "100k", value: 100000, hint: "o3 / o4" },
               { label: "128k", value: 128000, hint: "gpt-5" },
             ].map((preset) => (

@@ -408,48 +408,6 @@ describe("AppEntitlementGate", () => {
     }
   });
 
-  it("recomputes a signup trial as Free at its exact hard-expiry boundary", async () => {
-    vi.useFakeTimers();
-    try {
-      const now = new Date("2026-06-05T12:00:00.000Z");
-      const expiresAt = new Date(now.getTime() + 1_000).toISOString();
-      vi.setSystemTime(now);
-      mocks.state.user = baseUser({
-        id: "signup-trial-expiring",
-        cloud_subscribed: true,
-        app_entitled: true,
-        subscription_plan: "pro",
-        entitlement: {
-          active: true,
-          plan: "pro",
-          source: "signup_trial",
-          status: "trialing",
-          checked_at: now.toISOString(),
-          current_period_end: expiresAt,
-          expires_at: expiresAt,
-          grace_until: null,
-          features: { app: true, cloud: true, integrations: true },
-        },
-      });
-      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
-      expect(screen.getByTestId("protected-app")).toBeInTheDocument();
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1_000);
-      });
-
-      expect(screen.getByTestId("protected-app")).toBeInTheDocument();
-      expect(
-        screen.queryByRole("heading", { name: /refresh access/i }),
-      ).not.toBeInTheDocument();
-      expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
-      expect(mocks.setCloudToken).toHaveBeenCalledWith("tok");
-      expect(mocks.loadUser).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("rechecks and gates paid evidence after a backwards clock jump", async () => {
     vi.useFakeTimers();
     try {

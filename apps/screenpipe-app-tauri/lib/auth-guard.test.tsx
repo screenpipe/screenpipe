@@ -33,13 +33,10 @@ vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
 
 vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
 vi.mock("@/components/ui/toast", () => ({ ToastAction: () => null }));
-vi.mock("@/lib/web-url", () => ({
-  screenpipeWebUrl: (path: string) => `https://screenpipe.com${path}`,
-}));
+vi.mock("@/lib/web-url", () => ({ screenpipeWebUrl: () => "https://screenpipe.com/login" }));
 
 import {
   AuthGuard,
-  appLoginUrl,
   installAuthInterceptor,
   isScreenpipeApi,
   isScreenpipeAuthApi,
@@ -47,12 +44,6 @@ import {
 } from "./auth-guard";
 
 const LOGGED_IN = { token: "tok-123", cloud_subscribed: false };
-
-describe("appLoginUrl", () => {
-  it("marks direct web login as app initiated", () => {
-    expect(appLoginUrl()).toBe("https://screenpipe.com/login?source=app");
-  });
-});
 
 function renderGuard() {
   return render(
@@ -250,17 +241,16 @@ describe("AuthGuard session-expiry handling", () => {
     );
   });
 
-  it("clears the full account when a focus re-verify returns 403", async () => {
+  it("keeps the session when a focus re-verify returns 403", async () => {
     mocks.loadUser.mockRejectedValueOnce(
       new Error("failed to verify token: 403 Forbidden")
     );
     renderGuard();
     fireEvent(window, new Event("focus"));
 
-    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalled());
-    const arg = mocks.updateSettings.mock.calls[0][0];
-    expect(arg.user).toBeNull();
-    expect(mocks.setCloudToken).toHaveBeenCalledWith(null);
+    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalled());
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.setCloudToken).not.toHaveBeenCalled();
   });
 
   it("keeps the session on a transient network / 5xx error", async () => {
@@ -269,7 +259,7 @@ describe("AuthGuard session-expiry handling", () => {
     fireEvent(window, new Event("focus"));
 
     await waitFor(() => expect(mocks.loadUser).toHaveBeenCalled());
-    // a network blip must NOT clear the session — only 401/403 do
+    // a network blip must NOT clear the session — only a verified 401 does
     expect(mocks.updateSettings).not.toHaveBeenCalled();
     expect(mocks.setCloudToken).not.toHaveBeenCalled();
   });
@@ -314,6 +304,13 @@ describe("installAuthInterceptor sign-out scoping", () => {
       "session_expired",
       expect.objectContaining({ source: "fetch_interceptor", status: 401 }),
     );
+  });
+
+  it("does NOT sign out on a 403 from the website auth surface", async () => {
+    originalFetch.mockResolvedValue({ status: 403 });
+    await (window as any).fetch("https://screenpipe.com/api/composio/authorize");
+    expect(clearSession).not.toHaveBeenCalled();
+    expect(mocks.capture).not.toHaveBeenCalled();
   });
 
   it("ignores a 200 from the auth surface", async () => {

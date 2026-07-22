@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, RotateCw, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare, Inbox } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, RotateCw, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare, Inbox } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -2244,8 +2244,6 @@ function OAuthPanel({
   onConnected?: () => void;
   onDisconnected?: () => void;
 }) {
-  const { settings } = useSettings();
-  const isPro = !!settings.user?.cloud_subscribed;
   const [status, setStatus] = useState<"idle" | "loading">("idle");
   const [accounts, setAccounts] = useState<OAuthAccount[]>([]);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
@@ -2413,7 +2411,7 @@ function OAuthPanel({
           })}
         </div>
       )}
-      {isSubdomainProvider && (isPro || connected) && (
+      {isSubdomainProvider && (
         <div className="space-y-1">
           <label className="text-[11px] text-muted-foreground">Zendesk subdomain</label>
           <div className="flex items-center gap-1">
@@ -2428,7 +2426,7 @@ function OAuthPanel({
           </div>
         </div>
       )}
-      {scopeVariants && (isPro || connected) && status !== "loading" && (
+      {scopeVariants && status !== "loading" && (
         <div className="space-y-1.5">
           <p className="text-[11px] text-muted-foreground">Access level</p>
           {scopeVariants.map((v) => (
@@ -2449,19 +2447,7 @@ function OAuthPanel({
         </div>
       )}
       <div className="flex flex-wrap gap-2">
-        {!isPro && !connected ? (
-          <div className="flex flex-col gap-1.5">
-            <Button disabled size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap opacity-60">
-              <Lock className="h-3 w-3" />pro required
-            </Button>
-            <button
-              onClick={() => openUrl("https://screenpipe.com/onboarding")}
-              className="text-[10px] text-muted-foreground hover:text-foreground underline"
-            >
-              upgrade to pro to connect
-            </button>
-          </div>
-        ) : status === "loading" ? (
+        {status === "loading" ? (
           <div className="flex gap-2 items-center">
             <Button disabled size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
               <Loader2 className="h-3 w-3 animate-spin" />connecting...

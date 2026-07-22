@@ -157,6 +157,43 @@ describe("PiExtensionsCard", () => {
     );
   });
 
+  it("installs a recently published package directly from its compact card", async () => {
+    commandMocks.piInstallExtensionPackage.mockResolvedValueOnce({
+      status: "ok",
+      data: packageList("npm:pi-subagents", "npm:@example/pi-recent-tool"),
+    });
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        total: 1,
+        objects: [
+          {
+            package: {
+              name: "@example/pi-recent-tool",
+              description: "A newly published Pi package.",
+              date: new Date().toISOString(),
+              keywords: ["pi-package"],
+              links: {
+                npm: "https://www.npmjs.com/package/@example/pi-recent-tool",
+              },
+            },
+          },
+        ],
+      }),
+    } as Response);
+    render(<PiExtensionsCard />);
+
+    expect(await screen.findByText("Recently published")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add Recent Tool" }));
+
+    await waitFor(() =>
+      expect(commandMocks.piInstallExtensionPackage).toHaveBeenCalledWith(
+        "npm:@example/pi-recent-tool",
+      ),
+    );
+    expect(await screen.findByRole("button", { name: "Remove Recent Tool" })).toBeInTheDocument();
+  });
+
   it("locks other extension toggles while a package change is in flight", async () => {
     let resolveInstall: (value: {
       status: "ok";

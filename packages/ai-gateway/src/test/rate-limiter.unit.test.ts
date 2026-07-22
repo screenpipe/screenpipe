@@ -66,23 +66,18 @@ async function fire(
 }
 
 describe('isFreeModel — weight-0 models classified as free', () => {
-	it('treats Vertex MaaS + fast models + auto as free', () => {
-		for (const m of [
-			'auto',
-			'glm-5',
-			'glm-4.7',
-			'kimi-k2.5',
-			'gemini-3-flash',
-			'gemini-3.5-flash',
-			'gemini-2.5-flash',
-			'qwen/qwen3.5-flash',
-		]) {
-			expect(isFreeModel(m)).toBe(true);
-		}
+	it('treats only Auto as the hosted weight-0 entry', () => {
+		expect(isFreeModel('auto')).toBe(true);
 	});
 
 	it('treats priced models as NOT free', () => {
-		for (const m of ['gpt-5.5', 'gpt-5.5-pro', 'claude-opus-4-7', 'claude-sonnet-4-5', 'gemini-3-pro', 'claude-fable-5']) {
+		for (const m of ['gpt-5.5', 'gpt-5.6-luna', 'claude-opus-4-7', 'claude-sonnet-5', 'claude-fable-5']) {
+			expect(isFreeModel(m)).toBe(false);
+		}
+	});
+
+	it('does not classify removed model IDs as free before alias normalization', () => {
+		for (const m of ['glm-5', 'gemini-3-flash', 'qwen/qwen3.5-flash']) {
 			expect(isFreeModel(m)).toBe(false);
 		}
 	});

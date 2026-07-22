@@ -35,6 +35,7 @@ import {
 	type FreeChatLease,
 	type FreeChatLimitError,
 } from './services/free-chat-limit';
+import { resolveModelAlias } from './providers';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
 export { RateLimiter };
@@ -244,6 +245,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					message: 'Request body must include a non-empty "model" string.',
 				})));
 			}
+			// Retired hosted IDs remain valid compatibility inputs, but all policy,
+			// metering, and cost logic must see the current model that will be served.
+			body.model = resolveModelAlias(body.model);
 			// Paid users bypass this gate. Authenticated free users receive two
 			// account-wide logical messages; Pi's tool-loop calls for one visible
 			// message share a stable session-affinity key and are bounded separately.
@@ -605,7 +609,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 			// Check model from body (clone request so proxy can still read it)
 			const clonedRequest = request.clone();
-			let parsedModel = 'claude-haiku-4-5-20251001';
+			let parsedModel = 'claude-sonnet-4-5@20250929';
 			let parsedStream = false;
 			try {
 				const body = (await clonedRequest.json()) as { model?: string; stream?: boolean };
@@ -719,7 +723,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 
 			// Extract model/stream before proxy consumes the body
-			let ocModel = 'claude-haiku-4-5-20251001';
+			let ocModel = 'claude-sonnet-5';
 			let ocStream = false;
 			try {
 				const clonedReq = request.clone();
@@ -957,7 +961,7 @@ curl -X POST $HOST/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "X-Device-Id: test-device-123" \
 -d '{
-"model": "claude-haiku-4-5-20251001",
+"model": "auto",
 "messages": [
 	{
 	"role": "user",

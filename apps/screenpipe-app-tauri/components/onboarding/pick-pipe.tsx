@@ -14,7 +14,6 @@ import React, {
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader, Check } from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
-import { scheduleFirstRunNotification } from "@/lib/notifications";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 
@@ -263,9 +262,6 @@ export default function PickPipe() {
           customized,
         });
       } catch {}
-      try {
-        scheduleFirstRunNotification();
-      } catch {}
 
       try {
         await localFetch("/notify", {
@@ -303,9 +299,6 @@ export default function PickPipe() {
 
     try {
       await completeOnboarding({ method: "pipe_step_skipped" });
-    } catch {}
-    try {
-      scheduleFirstRunNotification();
     } catch {}
 
     isCompletingRef.current = false;

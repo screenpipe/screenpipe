@@ -67,8 +67,8 @@ export interface WifConfig {
 export function buildWifConfig(env: Env): WifConfig | undefined {
 	if ((env.VERTEX_AUTH_MODE || 'sakey') !== 'wif') return undefined;
 	if (!env.WIF_SIGNING_KEY) return undefined;
-	// screenpipe-prod is the WIF target (NOT VERTEX_PROJECT_ID, which stays = mediar
-	// for the sakey fallback). Baked-in default so cutover is a single flag flip.
+	// screenpipe-prod is the only supported WIF target. Keep the project bound to
+	// the auth mode so no historical-project value can leak into Vertex calls.
 	const projectId = env.WIF_PROJECT_ID || 'calm-cab-490121-p6';
 	return {
 		signingKey: env.WIF_SIGNING_KEY,
@@ -696,11 +696,11 @@ export class VertexAIProvider implements AIProvider {
 	}
 
 	/**
-	 * List available models - haiku-4.5 and opus-4.5
+	 * List the models this compatibility route deliberately exposes.
 	 */
 	async listModels(): Promise<{ id: string; name: string; provider: string }[]> {
 		const models = [
-			{ id: 'claude-haiku-4-5@20251001', name: 'Claude Haiku 4.5', provider: 'vertex' },
+			{ id: 'claude-sonnet-4-5@20250929', name: 'Claude Sonnet 4.5', provider: 'vertex' },
 			{ id: 'claude-opus-4-5@20251101', name: 'Claude Opus 4.5', provider: 'vertex' },
 		];
 		return models;
@@ -892,7 +892,7 @@ export async function proxyToVertex(
 		console.log('proxyToVertex: got access token');
 
 		// Map model to Vertex format
-		const model = body.model || 'claude-haiku-4-5@20251001';
+		const model = body.model || VERTEX_SONNET;
 		const vertexModel = mapModelToVertex(model);
 		console.log('proxyToVertex: mapped model', model, '->', vertexModel);
 		const method = isStreaming ? 'streamRawPredict' : 'rawPredict';
@@ -954,22 +954,32 @@ export async function proxyToVertex(
 	}
 }
 
-// Model aliases - map requested models to what's available in the GCP project
-// Available: claude-haiku-4-5@20251001, claude-opus-4-5@20251101
+// Model aliases - map saved/legacy requests to the best cost/intelligence model
+// currently documented for the Screenpipe GCP Vertex route. Sonnet 5 is not yet
+// documented on Vertex, so this compatibility endpoint uses Sonnet 4.5 while
+// the main hosted chat route uses Sonnet 5 through Anthropic directly.
+const VERTEX_SONNET = 'claude-sonnet-4-5@20250929';
 const MODEL_ALIASES: Record<string, string> = {
-	// Haiku 4.5 aliases (default model)
-	'claude-haiku-4-5': 'claude-haiku-4-5@20251001',
-	'claude-haiku-4': 'claude-haiku-4-5@20251001',
-	'claude-haiku': 'claude-haiku-4-5@20251001',
-	'claude-3-haiku-20240307': 'claude-haiku-4-5@20251001',
+	// Retired Haiku aliases upgrade to Sonnet rather than silently serving Haiku.
+	'claude-haiku-4-5@20251001': VERTEX_SONNET,
+	'claude-haiku-4-5': VERTEX_SONNET,
+	'claude-haiku-4': VERTEX_SONNET,
+	'claude-haiku': VERTEX_SONNET,
+	'claude-3-haiku-20240307': VERTEX_SONNET,
+	'claude-3-5-haiku@20241022': VERTEX_SONNET,
+	'claude-3-5-haiku-20241022': VERTEX_SONNET,
 	// Opus 4.5 - only exact name (no short aliases to prevent accidental expensive calls)
+	'claude-opus-4-5@20251101': 'claude-opus-4-5@20251101',
 	'claude-opus-4-5': 'claude-opus-4-5@20251101',
-	// Sonnet -> Haiku (sonnet not available on Vertex, fallback to haiku)
-	'claude-sonnet-4-5@20250929': 'claude-haiku-4-5@20251001',
-	'claude-sonnet-4-5': 'claude-haiku-4-5@20251001',
-	'claude-sonnet-4@20250514': 'claude-haiku-4-5@20251001',
-	'claude-sonnet-4': 'claude-haiku-4-5@20251001',
-	'claude-sonnet': 'claude-haiku-4-5@20251001',
+	'claude-sonnet-5': VERTEX_SONNET,
+	'claude-sonnet-4-5@20250929': VERTEX_SONNET,
+	'claude-sonnet-4-5': VERTEX_SONNET,
+	'claude-sonnet-4@20250514': VERTEX_SONNET,
+	'claude-sonnet-4': VERTEX_SONNET,
+	'claude-sonnet': VERTEX_SONNET,
+	'claude-3-5-sonnet@20241022': VERTEX_SONNET,
+	'claude-3-5-sonnet-v2@20241022': VERTEX_SONNET,
+	'claude-3-7-sonnet@20250219': VERTEX_SONNET,
 };
 
 // Convert model ID format and apply aliases
@@ -993,12 +1003,15 @@ export function mapModelToVertex(model: string): string {
 		if (MODEL_ALIASES[converted]) {
 			return MODEL_ALIASES[converted];
 		}
+		if (converted.toLowerCase().includes('claude')) {
+			return VERTEX_SONNET;
+		}
 		return converted;
 	}
 
-	// Default fallback to haiku for any claude request
+	// Keep unknown Claude IDs working without falling back to low-IQ Haiku.
 	if (model.toLowerCase().includes('claude')) {
-		return 'claude-haiku-4-5@20251001';
+		return VERTEX_SONNET;
 	}
 
 	return model;

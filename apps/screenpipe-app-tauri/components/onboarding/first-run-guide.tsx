@@ -31,6 +31,8 @@ interface FirstRunGuideProps {
 }
 
 const PROMPT = "create a pipe that tracks what i do every hour";
+const SKIP_BUTTON_CLASS =
+  "mt-3 w-full border border-foreground/40 py-2 font-mono text-[11px] uppercase tracking-widest text-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2";
 
 type Phase = "ask" | "streaming" | "automate" | "run-pipe" | "dismissed";
 
@@ -291,7 +293,7 @@ export default function FirstRunGuide({
                 </p>
                 <button
                   onClick={skip}
-                  className="mt-3 font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase"
+                  className={SKIP_BUTTON_CLASS}
                 >
                   skip intro
                 </button>
@@ -341,7 +343,7 @@ export default function FirstRunGuide({
               </button>
               <button
                 onClick={skip}
-                className="mt-3 w-full text-center font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase"
+                className={SKIP_BUTTON_CLASS}
               >
                 skip intro
               </button>
@@ -422,7 +424,7 @@ export default function FirstRunGuide({
           </button>
           <button
             onClick={skip}
-            className="mt-3 w-full text-center font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase"
+            className={SKIP_BUTTON_CLASS}
           >
             skip intro
           </button>

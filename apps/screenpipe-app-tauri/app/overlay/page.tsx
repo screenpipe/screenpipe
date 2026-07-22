@@ -10,10 +10,6 @@ import React, { useEffect, useState, useRef, useCallback, ErrorInfo } from "reac
 import NotificationHandler from "@/components/notification-handler";
 import { useToast } from "@/components/ui/use-toast";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
-import {
-  cancelFirstRunNotification,
-  checkFirstRunNotification,
-} from "@/lib/notifications";
 import { ChangelogDialog } from "@/components/changelog-dialog";
 import { localFetch } from "@/lib/api";
 
@@ -143,12 +139,6 @@ export default function OverlayPage() {
   useEffect(() => {
     const { loadOnboardingStatus } = useOnboarding.getState();
     loadOnboardingStatus();
-  }, []);
-
-  // Check if first-run notification should fire
-  useEffect(() => {
-    void checkFirstRunNotification();
-    return cancelFirstRunNotification;
   }, []);
 
   useEffect(() => {

@@ -51,12 +51,13 @@ describe('/v1/chat/completions free-plan route policy', () => {
 	function request(
 		headers: Record<string, string> = {},
 		path = '/v1/chat/completions',
+		model = 'auto',
 	): Request {
 		return new Request(`https://gateway.test${path}`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json', ...headers },
 			body: JSON.stringify({
-				model: 'auto',
+				model,
 				messages: [{ role: 'user', content: 'hello' }],
 			}),
 		});
@@ -268,6 +269,41 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(503);
 		const body = await response.json() as { error: string };
 		expect(body.error).toContain('tinfoil proxy not configured');
+	});
+
+	it('normalizes a removed model before gating and reaches the fallback provider', async () => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
+			if (url === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: 'user_standard',
+						cloud_subscribed: false,
+						app_entitled: true,
+						subscription_plan: 'standard',
+						entitlement: { active: true, plan: 'standard', features: { app: true } },
+					},
+				}), { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const response = await handleRequest(
+			request(
+				{ Authorization: 'Bearer eyJ.standard.paid' },
+				'/v1/chat/completions',
+				'gemini-3-flash',
+			),
+			env,
+			ctx,
+		);
+
+		// A stale Gemini ID would be tier-rejected with 403 if aliasing happened
+		// after gating. Reaching provider configuration proves it was normalized to
+		// the allowed Luna fallback first.
+		expect(response.status).toBe(503);
+		expect(await response.text()).not.toContain('model_not_allowed');
 	});
 
 	it('fails closed before alternate hosted inference when plan truth is missing', async () => {

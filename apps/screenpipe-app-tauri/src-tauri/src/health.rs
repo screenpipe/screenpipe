@@ -336,18 +336,76 @@ fn set_recording_info(status: RecordingStatus, devices: Vec<DeviceInfo>) {
     info.devices = devices;
 }
 
-/// Minimal audio pipeline info for stall detection (subset of server's full struct)
-#[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)]
-struct AudioPipelineInfo {
+/// Vision progress counters used to distinguish a real capture failure from
+/// expected no-write cycles (content dedup on a static screen).
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+struct VisionPipelineInfo {
     #[serde(default)]
-    uptime_secs: f64,
+    frames_db_written: u64,
     #[serde(default)]
-    chunks_sent: u64,
+    frames_dropped_timeout: u64,
     #[serde(default)]
-    transcription_paused: Option<bool>,
+    frames_dropped_error: u64,
     #[serde(default)]
-    meeting_detected: Option<bool>,
+    dedup_skips: u64,
+    #[serde(default)]
+    frames_corrupt_black: u64,
+    #[serde(default)]
+    frames_corrupt_green: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct VisionProgressTracker {
+    previous: Option<VisionPipelineInfo>,
+    unrecovered_failure: bool,
+}
+
+impl VisionProgressTracker {
+    /// Observe one cumulative metrics sample and report whether a capture
+    /// failure has occurred without any later successful/dedup cycle.
+    fn observe(&mut self, current: Option<&VisionPipelineInfo>) -> bool {
+        let Some(current) = current.copied() else {
+            self.previous = None;
+            self.unrecovered_failure = false;
+            return false;
+        };
+
+        let Some(previous) = self.previous.replace(current) else {
+            // The first sample is a baseline. Historical counters must never
+            // become a fresh incident when the app starts polling mid-session.
+            return self.unrecovered_failure;
+        };
+
+        let counters_reset = current.frames_db_written < previous.frames_db_written
+            || current.frames_dropped_timeout < previous.frames_dropped_timeout
+            || current.frames_dropped_error < previous.frames_dropped_error
+            || current.dedup_skips < previous.dedup_skips
+            || current.frames_corrupt_black < previous.frames_corrupt_black
+            || current.frames_corrupt_green < previous.frames_corrupt_green;
+        if counters_reset {
+            // New engine generation after a restart. Re-baseline rather than
+            // comparing unrelated counter epochs.
+            self.unrecovered_failure = false;
+            return false;
+        }
+
+        let successful_cycle = current.frames_db_written > previous.frames_db_written
+            || current.dedup_skips > previous.dedup_skips;
+        let failed_cycle = current.frames_dropped_timeout > previous.frames_dropped_timeout
+            || current.frames_dropped_error > previous.frames_dropped_error
+            || current.frames_corrupt_green > previous.frames_corrupt_green;
+
+        if successful_cycle {
+            self.unrecovered_failure = false;
+        }
+        // Failure wins when different monitors report success and failure in
+        // the same aggregate tick. A later successful cycle clears the latch.
+        if failed_cycle {
+            self.unrecovered_failure = true;
+        }
+
+        self.unrecovered_failure
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -377,15 +435,29 @@ struct HealthCheckResponse {
     /// Monitor names from the server
     #[serde(default)]
     monitors: Option<Vec<String>>,
-    /// Audio pipeline metrics for stall detection
+    /// Vision pipeline counters for capture-failure confirmation.
     #[serde(default)]
-    audio_pipeline: Option<AudioPipelineInfo>,
-    /// Vision capture alive but DB writes stopped (pool exhaustion)
+    pipeline: Option<VisionPipelineInfo>,
+    /// Legacy vision no-write heuristic. This can also be true while a static
+    /// screen is being deduplicated, so it requires corroborating failure
+    /// progress before it can drive user-visible recording health.
     #[serde(default)]
     vision_db_write_stalled: bool,
-    /// Audio devices active but DB writes stopped (pool exhaustion)
+    /// Transcription reconciliation is not making progress. Raw audio has
+    /// already been persisted; this must never mean "recording is broken".
     #[serde(default)]
     audio_db_write_stalled: bool,
+    /// The shared SQLite write queue has observed a failed write path.
+    #[serde(default)]
+    write_queue_degraded: bool,
+    /// Current consecutive fatal write batches. The queue declares itself
+    /// degraded after three; older engines omit this and deserialize to zero.
+    #[serde(default)]
+    write_queue_consecutive_fatal: u64,
+    /// Current consecutive batches that exhausted the SQLite contention retry
+    /// budget. One isolated failed batch must not flash the recording overlay.
+    #[serde(default)]
+    write_queue_consecutive_contention: u64,
     /// DRM streaming content detected — capture should be fully stopped
     #[serde(default)]
     drm_content_paused: bool,
@@ -395,6 +467,135 @@ struct HealthCheckResponse {
     /// stale start flag render a stuck "Starting…".
     #[serde(default)]
     schedule_paused: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct CaptureFailureSignals {
+    audio: bool,
+    vision: bool,
+    persistence: bool,
+}
+
+fn capture_failure_signals(
+    health: &HealthCheckResponse,
+    vision_progress: &mut VisionProgressTracker,
+) -> CaptureFailureSignals {
+    let audio = matches!(
+        health.audio_status.as_deref(),
+        Some("stale")
+            | Some("not_started")
+            | Some("active_no_data")
+            | Some("permission_denied")
+            | Some("capture_stalled")
+            | Some("error")
+    );
+    let vision_status_failed = matches!(
+        health.frame_status.as_deref(),
+        Some("stale")
+            | Some("not_started")
+            | Some("permission_denied")
+            | Some("capture_stalled")
+            | Some("error")
+    );
+    let unrecovered_vision_failure = vision_progress.observe(health.pipeline.as_ref());
+
+    CaptureFailureSignals {
+        audio,
+        vision: vision_status_failed
+            || (health.vision_db_write_stalled && unrecovered_vision_failure),
+        persistence: health.write_queue_degraded
+            && (health.write_queue_consecutive_fatal >= WRITE_QUEUE_FAILURE_THRESHOLD
+                || health.write_queue_consecutive_contention >= WRITE_QUEUE_FAILURE_THRESHOLD),
+    }
+}
+
+/// Recovery requires positive proof that both enabled raw-capture paths are
+/// healthy. A merely parseable `/health` response is not enough: the endpoint's
+/// timeout fallback reports `unknown`, and a first stale tick has not yet
+/// reached the user-visible failure debounce.
+fn health_confirms_recording(health: &HealthCheckResponse) -> bool {
+    let vision_healthy = matches!(health.frame_status.as_deref(), Some("ok") | Some("disabled"));
+    let audio_healthy = matches!(
+        health.audio_status.as_deref(),
+        Some("ok") | Some("disabled") | Some("no_input_device")
+    );
+
+    vision_healthy && audio_healthy && !health.write_queue_degraded
+}
+
+/// Advance one debounced capture-failure counter. On a healthy tick, return the
+/// length of the run that just recovered so callers can log it exactly once.
+fn advance_stall_counter(counter: &mut u32, failed: bool) -> Option<u32> {
+    if failed {
+        *counter = counter.saturating_add(1);
+        None
+    } else {
+        let recovered_after = (*counter > 0).then_some(*counter);
+        *counter = 0;
+        recovered_after
+    }
+}
+
+fn stall_confirmed(counter: u32) -> bool {
+    counter >= CAPTURE_STALL_THRESHOLD
+}
+
+fn should_track_capture_stalls(
+    status: RecordingStatus,
+    elapsed_since_start: Duration,
+    in_restart_grace: bool,
+) -> bool {
+    status == RecordingStatus::Recording
+        && elapsed_since_start > NOTIFICATION_COOLDOWN
+        && !in_restart_grace
+}
+
+fn should_notify_capture_stall(counter: u32, enabled: bool, cooldown_ok: bool) -> bool {
+    enabled && cooldown_ok && counter == CAPTURE_STALL_THRESHOLD
+}
+
+fn notification_cooldown_ok(last_notification: Option<Instant>, now: Instant) -> bool {
+    last_notification
+        .map(|last| now.saturating_duration_since(last) >= NOTIFICATION_COOLDOWN)
+        .unwrap_or(true)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OverlayTickDecision {
+    broken: bool,
+    healthy: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn overlay_tick_decision(
+    status: RecordingStatus,
+    health_response_received: bool,
+    health_confirms_recording: bool,
+    capture_intended: bool,
+    start_in_progress: bool,
+    ever_connected: bool,
+    recently_woke: bool,
+    intentionally_paused: bool,
+    failures: CaptureFailureSignals,
+    simulated_break: bool,
+) -> OverlayTickDecision {
+    let engine_down = capture_intended
+        && !start_in_progress
+        && !recently_woke
+        && (status == RecordingStatus::Error
+            || (status == RecordingStatus::Stopped && ever_connected));
+    let confirmed_failure = failures.audio || failures.vision || failures.persistence;
+    let failure_suppressed = start_in_progress || recently_woke || intentionally_paused;
+    let broken = simulated_break || (!failure_suppressed && (engine_down || confirmed_failure));
+    let healthy = !intentionally_paused
+        && !recently_woke
+        && health_response_received
+        && health_confirms_recording
+        && status == RecordingStatus::Recording
+        && !confirmed_failure
+        && !simulated_break;
+
+    OverlayTickDecision { broken, healthy }
 }
 
 /// Decide recording status based on health check result and time since startup.
@@ -861,6 +1062,11 @@ fn parse_devices_from_health(health_result: &Result<HealthCheckResponse>) -> Vec
 /// At 1-second polling, 90 = 90 seconds of sustained failure.
 const CAPTURE_STALL_THRESHOLD: u32 = 90;
 
+/// A single failed shared-queue batch is data loss, but not proof that ongoing
+/// recording is broken. Match the queue's three-batch fatal threshold and use
+/// the same threshold for repeated lock-contention failures.
+const WRITE_QUEUE_FAILURE_THRESHOLD: u64 = 3;
+
 /// Suppress re-notification for this long after showing one.
 const NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(300); // 5 minutes
 
@@ -879,12 +1085,13 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     // Capture stall detection state
     let mut consecutive_audio_stall: u32 = 0;
     let mut consecutive_vision_stall: u32 = 0;
+    let mut vision_progress = VisionProgressTracker::default();
     let mut last_audio_notification: Option<Instant> = None;
     let mut last_vision_notification: Option<Instant> = None;
     let mut wake_reset_done = false;
     // Grace period after ANY restart (manual, notification-triggered, or
-    // settings-triggered): suppress stall detection for 120s, giving the
-    // new pipeline time to load models and produce its first DB write.
+    // settings-triggered): suppress stall detection for five minutes, giving
+    // the new pipeline time to load models and produce its first DB write.
     let mut last_restart_triggered: Option<Instant> = None;
     let mut last_port_conflict_notified: Option<Instant> = None;
     // Track last known spawn epoch to detect user-initiated restarts
@@ -1274,67 +1481,50 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             let in_restart_grace = last_restart_triggered
                 .map(|t| t.elapsed() < NOTIFICATION_COOLDOWN)
                 .unwrap_or(false);
-            if status == RecordingStatus::Recording
-                && start_time.elapsed() > NOTIFICATION_COOLDOWN
-                && !in_restart_grace
-            {
+            let failure_signals = match &health_result {
+                Ok(health) => capture_failure_signals(health, &mut vision_progress),
+                Err(_) => {
+                    vision_progress.observe(None);
+                    CaptureFailureSignals::default()
+                }
+            };
+            let capture_health_confirmed = match &health_result {
+                Ok(health) => health_confirms_recording(health),
+                Err(_) => false,
+            };
+            if should_track_capture_stalls(status, start_time.elapsed(), in_restart_grace) {
                 if let Ok(ref health) = health_result {
-                    let audio_bad = matches!(
-                        health.audio_status.as_deref(),
-                        Some("stale") | Some("not_started")
-                    );
-                    let vision_bad = matches!(
-                        health.frame_status.as_deref(),
-                        Some("stale") | Some("not_started")
-                    );
-
-                    // Skip stall detection if transcription is intentionally paused or in a meeting
-                    let audio_excused = health
-                        .audio_pipeline
-                        .as_ref()
-                        .map(|ap| {
-                            ap.transcription_paused.unwrap_or(false)
-                                || ap.meeting_detected.unwrap_or(false)
-                        })
-                        .unwrap_or(false);
-
-                    // Audio stall tracking:
-                    // - audio_bad (capture stale/not_started): always counts
-                    // - audio_db_write_stalled: only counts as a stall signal.
-                    //   Change #1 (engine side) ensures this flag only fires after
-                    //   at least one successful DB write, so silent environments
-                    //   (last_db_write_ts == 0) won't trigger false positives.
-                    let audio_db_stalled = health.audio_db_write_stalled;
-                    if (audio_bad || audio_db_stalled) && !audio_excused {
-                        consecutive_audio_stall = consecutive_audio_stall.saturating_add(1);
-                    } else {
-                        if consecutive_audio_stall >= CAPTURE_STALL_THRESHOLD {
+                    // Only raw capture health drives the recording overlay.
+                    // `audio_db_write_stalled` is a transcription-reconciliation
+                    // signal: the audio files are already safe on disk, so a
+                    // post-meeting catch-up must not claim recording stopped.
+                    if let Some(recovered_after) =
+                        advance_stall_counter(&mut consecutive_audio_stall, failure_signals.audio)
+                    {
+                        if stall_confirmed(recovered_after) {
                             info!(
                                 "audio capture recovered after {} stale checks",
-                                consecutive_audio_stall
+                                recovered_after
                             );
                         }
-                        consecutive_audio_stall = 0;
                     }
 
-                    // Vision stall tracking — also trigger on DB write stalls
-                    // (capture loop alive but pool exhaustion blocking writes).
-                    // A DRM pause stops all vision monitors on purpose, which
-                    // reads as frame_status "stale" — excuse it like audio
-                    // excuses meetings, or every long Netflix session becomes
-                    // a fake incident.
+                    // Vision no-write heuristics need failure-counter
+                    // corroboration: a healthy static screen also produces no
+                    // new unique frame while dedup keeps capture alive.
+                    // A DRM pause remains an intentional stop, never a stall.
                     let vision_excused = health.drm_content_paused;
                     let vision_db_stalled = health.vision_db_write_stalled;
-                    if (vision_bad || vision_db_stalled) && !vision_excused {
-                        consecutive_vision_stall = consecutive_vision_stall.saturating_add(1);
-                    } else {
-                        if consecutive_vision_stall >= CAPTURE_STALL_THRESHOLD {
+                    if let Some(recovered_after) = advance_stall_counter(
+                        &mut consecutive_vision_stall,
+                        failure_signals.vision && !vision_excused,
+                    ) {
+                        if stall_confirmed(recovered_after) {
                             info!(
                                 "vision capture recovered after {} stale checks",
-                                consecutive_vision_stall
+                                recovered_after
                             );
                         }
-                        consecutive_vision_stall = 0;
                     }
 
                     // After wake from sleep, reset stall counters and notification
@@ -1361,40 +1551,39 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         .unwrap_or(false);
                     let now_instant = Instant::now();
 
-                    if consecutive_audio_stall == CAPTURE_STALL_THRESHOLD && notifications_enabled {
-                        let cooldown_ok = last_audio_notification
-                            .map(|t| now_instant.duration_since(t) >= NOTIFICATION_COOLDOWN)
-                            .unwrap_or(true);
-                        if cooldown_ok {
-                            warn!(
-                                "audio capture stalled for {}s, showing restart notification",
-                                CAPTURE_STALL_THRESHOLD
-                            );
-                            last_audio_notification = Some(now_instant);
-                            last_restart_triggered = Some(now_instant);
-                            let _ = show_capture_stall_notification(&app, "audio").await;
-                        }
+                    let audio_cooldown_ok =
+                        notification_cooldown_ok(last_audio_notification, now_instant);
+                    if should_notify_capture_stall(
+                        consecutive_audio_stall,
+                        notifications_enabled,
+                        audio_cooldown_ok,
+                    ) {
+                        warn!(
+                            "audio capture stalled for {}s, showing restart notification",
+                            CAPTURE_STALL_THRESHOLD
+                        );
+                        last_audio_notification = Some(now_instant);
+                        let _ = show_capture_stall_notification(&app, "audio").await;
                     }
 
-                    if consecutive_vision_stall == CAPTURE_STALL_THRESHOLD && notifications_enabled
-                    {
-                        let cooldown_ok = last_vision_notification
-                            .map(|t| now_instant.duration_since(t) >= NOTIFICATION_COOLDOWN)
-                            .unwrap_or(true);
-                        if cooldown_ok {
-                            let reason = if vision_db_stalled {
-                                "db write stall"
-                            } else {
-                                "capture stall"
-                            };
-                            warn!(
-                                "vision {} for {}s, showing restart notification",
-                                reason, CAPTURE_STALL_THRESHOLD
-                            );
-                            last_vision_notification = Some(now_instant);
-                            last_restart_triggered = Some(now_instant);
-                            let _ = show_capture_stall_notification(&app, "screen").await;
-                        }
+                    let vision_cooldown_ok =
+                        notification_cooldown_ok(last_vision_notification, now_instant);
+                    if should_notify_capture_stall(
+                        consecutive_vision_stall,
+                        notifications_enabled,
+                        vision_cooldown_ok,
+                    ) {
+                        let reason = if vision_db_stalled {
+                            "db write stall"
+                        } else {
+                            "capture stall"
+                        };
+                        warn!(
+                            "vision {} for {}s, showing restart notification",
+                            reason, CAPTURE_STALL_THRESHOLD
+                        );
+                        last_vision_notification = Some(now_instant);
+                        let _ = show_capture_stall_notification(&app, "screen").await;
                     }
                 }
             } else {
@@ -1416,23 +1605,33 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             // the server was ever up. RecordingStatus::Error (a spawn that
             // definitively failed: TCC denied, port conflict) alerts even on
             // first boot.
-            let stall_active = consecutive_audio_stall >= CAPTURE_STALL_THRESHOLD
-                || consecutive_vision_stall >= CAPTURE_STALL_THRESHOLD;
-            let engine_down = capture_intended
-                && !start_in_progress
-                && !screenpipe_engine::sleep_monitor::recently_woke_from_sleep()
-                && (status == RecordingStatus::Error
-                    || (status == RecordingStatus::Stopped && ever_connected));
             let sim_break = crate::overlay_health::simulated_break_active();
-            let overlay_broken = engine_down || stall_active || sim_break;
+            let recently_woke = screenpipe_engine::sleep_monitor::recently_woke_from_sleep();
+            let intentionally_paused = !capture_intended
+                || schedule_paused
+                || matches!(&health_result, Ok(health) if health.drm_content_paused)
+                || screenpipe_config::should_pause_audio_for_lock()
+                || crate::engine_events::is_power_capture_paused();
+            let decision = overlay_tick_decision(
+                status,
+                health_result.is_ok(),
+                capture_health_confirmed,
+                capture_intended,
+                start_in_progress,
+                ever_connected,
+                recently_woke,
+                intentionally_paused,
+                CaptureFailureSignals {
+                    audio: stall_confirmed(consecutive_audio_stall),
+                    vision: stall_confirmed(consecutive_vision_stall),
+                    persistence: failure_signals.persistence,
+                },
+                sim_break,
+            );
             // Recovery needs a real successful health response this tick:
             // decide_status holds "Recording" through up to 30 failed checks
             // (anti-flicker), which must not read as "recovered" mid-restart.
-            let overlay_healthy = health_result.is_ok()
-                && status == RecordingStatus::Recording
-                && !stall_active
-                && !sim_break;
-            crate::overlay_health::on_tick(&app, overlay_broken, overlay_healthy).await;
+            crate::overlay_health::on_tick(&app, decision.broken, decision.healthy).await;
         }
     });
 
@@ -1553,9 +1752,12 @@ mod tests {
             verbose_instructions: None,
             device_status_details: None,
             monitors: None,
-            audio_pipeline: None,
+            pipeline: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
+            write_queue_degraded: false,
+            write_queue_consecutive_fatal: 0,
+            write_queue_consecutive_contention: 0,
             drm_content_paused: false,
             schedule_paused: false,
         })
@@ -1575,9 +1777,12 @@ mod tests {
             verbose_instructions: None,
             device_status_details: None,
             monitors: None,
-            audio_pipeline: None,
+            pipeline: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
+            write_queue_degraded: false,
+            write_queue_consecutive_fatal: 0,
+            write_queue_consecutive_contention: 0,
             drm_content_paused: false,
             schedule_paused: false,
         })
@@ -1585,6 +1790,683 @@ mod tests {
 
     fn make_connection_error() -> Result<HealthCheckResponse> {
         Err(anyhow::anyhow!("connection refused"))
+    }
+
+    fn healthy_health() -> HealthCheckResponse {
+        make_healthy_response().expect("healthy fixture")
+    }
+
+    #[test]
+    fn health_json_keeps_new_overlay_fields_backward_compatible() {
+        let legacy: HealthCheckResponse = serde_json::from_value(serde_json::json!({
+            "status": "healthy",
+            "frame_status": "ok",
+            "audio_status": "ok"
+        }))
+        .expect("older health payload should still deserialize");
+        assert_eq!(legacy.write_queue_consecutive_fatal, 0);
+        assert_eq!(legacy.write_queue_consecutive_contention, 0);
+        assert!(health_confirms_recording(&legacy));
+
+        let current: HealthCheckResponse = serde_json::from_value(serde_json::json!({
+            "status": "degraded",
+            "frame_status": "ok",
+            "audio_status": "ok",
+            "write_queue_degraded": true,
+            "write_queue_consecutive_fatal": 3,
+            "write_queue_consecutive_contention": 2,
+            "pipeline": {
+                "frames_db_written": 10,
+                "frames_dropped_timeout": 1,
+                "frames_dropped_error": 2,
+                "dedup_skips": 20,
+                "frames_corrupt_black": 3,
+                "frames_corrupt_green": 4
+            }
+        }))
+        .expect("current health payload should deserialize");
+        assert_eq!(current.write_queue_consecutive_fatal, 3);
+        assert_eq!(current.write_queue_consecutive_contention, 2);
+        assert_eq!(
+            current.pipeline,
+            Some(VisionPipelineInfo {
+                frames_db_written: 10,
+                frames_dropped_timeout: 1,
+                frames_dropped_error: 2,
+                dedup_skips: 20,
+                frames_corrupt_black: 3,
+                frames_corrupt_green: 4,
+            })
+        );
+        assert!(!health_confirms_recording(&current));
+    }
+
+    #[test]
+    fn stall_counter_has_exact_threshold_recovery_and_saturation_semantics() {
+        let mut counter = 0;
+        for expected in 1..CAPTURE_STALL_THRESHOLD {
+            assert_eq!(advance_stall_counter(&mut counter, true), None);
+            assert_eq!(counter, expected);
+            assert!(!stall_confirmed(counter));
+        }
+
+        assert_eq!(advance_stall_counter(&mut counter, true), None);
+        assert_eq!(counter, CAPTURE_STALL_THRESHOLD);
+        assert!(stall_confirmed(counter));
+        assert_eq!(advance_stall_counter(&mut counter, true), None);
+        assert_eq!(counter, CAPTURE_STALL_THRESHOLD + 1);
+        assert!(stall_confirmed(counter));
+        assert_eq!(
+            advance_stall_counter(&mut counter, false),
+            Some(CAPTURE_STALL_THRESHOLD + 1)
+        );
+        assert_eq!(counter, 0);
+        assert_eq!(advance_stall_counter(&mut counter, false), None);
+
+        counter = u32::MAX;
+        assert_eq!(advance_stall_counter(&mut counter, true), None);
+        assert_eq!(counter, u32::MAX, "a long outage must saturate, not wrap");
+    }
+
+    #[test]
+    fn stall_tracking_startup_and_restart_grace_boundaries_are_exact() {
+        for status in [
+            RecordingStatus::Starting,
+            RecordingStatus::Paused,
+            RecordingStatus::ScheduledPause,
+            RecordingStatus::Stopped,
+            RecordingStatus::Error,
+        ] {
+            assert!(!should_track_capture_stalls(
+                status,
+                NOTIFICATION_COOLDOWN + Duration::from_secs(1),
+                false,
+            ));
+        }
+
+        assert!(!should_track_capture_stalls(
+            RecordingStatus::Recording,
+            NOTIFICATION_COOLDOWN - Duration::from_millis(1),
+            false,
+        ));
+        assert!(!should_track_capture_stalls(
+            RecordingStatus::Recording,
+            NOTIFICATION_COOLDOWN,
+            false,
+        ));
+        assert!(should_track_capture_stalls(
+            RecordingStatus::Recording,
+            NOTIFICATION_COOLDOWN + Duration::from_millis(1),
+            false,
+        ));
+        assert!(!should_track_capture_stalls(
+            RecordingStatus::Recording,
+            NOTIFICATION_COOLDOWN + Duration::from_secs(1),
+            true,
+        ));
+    }
+
+    #[test]
+    fn notification_fires_once_at_threshold_and_respects_exact_cooldown_boundary() {
+        for counter in [
+            0,
+            CAPTURE_STALL_THRESHOLD - 1,
+            CAPTURE_STALL_THRESHOLD + 1,
+            u32::MAX,
+        ] {
+            for enabled in [false, true] {
+                for cooldown_ok in [false, true] {
+                    assert!(!should_notify_capture_stall(
+                        counter,
+                        enabled,
+                        cooldown_ok,
+                    ));
+                }
+            }
+        }
+        assert!(!should_notify_capture_stall(
+            CAPTURE_STALL_THRESHOLD,
+            false,
+            true,
+        ));
+        assert!(!should_notify_capture_stall(
+            CAPTURE_STALL_THRESHOLD,
+            true,
+            false,
+        ));
+        assert!(should_notify_capture_stall(
+            CAPTURE_STALL_THRESHOLD,
+            true,
+            true,
+        ));
+
+        let now = Instant::now();
+        assert!(notification_cooldown_ok(None, now));
+        assert!(!notification_cooldown_ok(
+            Some(now - NOTIFICATION_COOLDOWN + Duration::from_millis(1)),
+            now,
+        ));
+        assert!(notification_cooldown_ok(
+            Some(now - NOTIFICATION_COOLDOWN),
+            now,
+        ));
+        assert!(notification_cooldown_ok(
+            Some(now - NOTIFICATION_COOLDOWN - Duration::from_millis(1)),
+            now,
+        ));
+        assert!(
+            !notification_cooldown_ok(Some(now + Duration::from_secs(1)), now),
+            "a clock anomaly must fail closed instead of panicking or re-notifying"
+        );
+    }
+
+    #[test]
+    fn intermittent_failures_never_accumulate_into_a_false_incident() {
+        let mut counter = 0;
+        for _ in 0..CAPTURE_STALL_THRESHOLD * 4 {
+            advance_stall_counter(&mut counter, true);
+            assert_eq!(counter, 1);
+            assert!(!stall_confirmed(counter));
+            assert_eq!(advance_stall_counter(&mut counter, false), Some(1));
+            assert_eq!(counter, 0);
+        }
+    }
+
+    #[test]
+    fn temporal_overlay_boundary_is_quiet_at_89_broken_at_90_then_recovers() {
+        let mut counter = 0;
+        for _ in 0..CAPTURE_STALL_THRESHOLD - 1 {
+            advance_stall_counter(&mut counter, true);
+        }
+        let before_threshold = overlay_tick_decision(
+            RecordingStatus::Recording,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            CaptureFailureSignals {
+                audio: stall_confirmed(counter),
+                ..CaptureFailureSignals::default()
+            },
+            false,
+        );
+        assert_eq!(
+            before_threshold,
+            OverlayTickDecision {
+                broken: false,
+                healthy: false,
+            },
+            "a stale raw status blocks green recovery but stays quiet before debounce"
+        );
+
+        advance_stall_counter(&mut counter, true);
+        let at_threshold = overlay_tick_decision(
+            RecordingStatus::Recording,
+            true,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            CaptureFailureSignals {
+                audio: stall_confirmed(counter),
+                ..CaptureFailureSignals::default()
+            },
+            false,
+        );
+        assert!(at_threshold.broken);
+        assert!(!at_threshold.healthy);
+
+        assert_eq!(
+            advance_stall_counter(&mut counter, false),
+            Some(CAPTURE_STALL_THRESHOLD)
+        );
+        let recovered = overlay_tick_decision(
+            RecordingStatus::Recording,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false,
+            CaptureFailureSignals::default(),
+            false,
+        );
+        assert_eq!(
+            recovered,
+            OverlayTickDecision {
+                broken: false,
+                healthy: true,
+            }
+        );
+    }
+
+    fn vision_sample(
+        frames_db_written: u64,
+        dedup_skips: u64,
+        frames_dropped_timeout: u64,
+        frames_dropped_error: u64,
+    ) -> VisionPipelineInfo {
+        VisionPipelineInfo {
+            frames_db_written,
+            frames_dropped_timeout,
+            frames_dropped_error,
+            dedup_skips,
+            frames_corrupt_black: 0,
+            frames_corrupt_green: 0,
+        }
+    }
+
+    // ==================== recording-overlay signal tests ====================
+
+    #[test]
+    fn transcription_backlog_is_not_a_recording_failure() {
+        let mut health = healthy_health();
+        health.frame_status = Some("ok".to_string());
+        health.audio_status = Some("ok".to_string());
+        health.audio_db_write_stalled = true;
+
+        let signals =
+            capture_failure_signals(&health, &mut VisionProgressTracker::default());
+
+        assert_eq!(signals, CaptureFailureSignals::default());
+    }
+
+    #[test]
+    fn static_screen_dedup_does_not_confirm_a_vision_failure() {
+        let mut tracker = VisionProgressTracker::default();
+        let mut health = healthy_health();
+        health.frame_status = Some("ok".to_string());
+        health.audio_status = Some("ok".to_string());
+        health.vision_db_write_stalled = true;
+        health.pipeline = Some(vision_sample(10, 20, 0, 0));
+        assert!(!capture_failure_signals(&health, &mut tracker).vision);
+
+        health.pipeline = Some(vision_sample(10, 21, 0, 0));
+        assert!(
+            !capture_failure_signals(&health, &mut tracker).vision,
+            "a dedup-skipped static frame proves the capture loop is healthy"
+        );
+    }
+
+    #[test]
+    fn dropped_vision_frame_confirms_stall_until_later_success() {
+        let mut tracker = VisionProgressTracker::default();
+        let mut health = healthy_health();
+        health.frame_status = Some("ok".to_string());
+        health.audio_status = Some("ok".to_string());
+        health.vision_db_write_stalled = true;
+        health.pipeline = Some(vision_sample(10, 20, 0, 0));
+        assert!(!capture_failure_signals(&health, &mut tracker).vision);
+
+        health.pipeline = Some(vision_sample(10, 20, 0, 1));
+        assert!(capture_failure_signals(&health, &mut tracker).vision);
+
+        // The error latch survives quiet/backoff ticks; otherwise a capture
+        // loop that sleeps between repeated permission failures never reaches
+        // the 90-second confirmation threshold.
+        assert!(capture_failure_signals(&health, &mut tracker).vision);
+
+        health.pipeline = Some(vision_sample(11, 20, 0, 1));
+        assert!(
+            !capture_failure_signals(&health, &mut tracker).vision,
+            "a later persisted frame is recovery proof"
+        );
+    }
+
+    #[test]
+    fn corrupt_vision_frames_never_masquerade_as_recovery() {
+        let mut tracker = VisionProgressTracker::default();
+        let mut health = healthy_health();
+        health.frame_status = Some("ok".to_string());
+        health.audio_status = Some("ok".to_string());
+        health.vision_db_write_stalled = true;
+        health.pipeline = Some(vision_sample(10, 20, 0, 0));
+        assert!(!capture_failure_signals(&health, &mut tracker).vision);
+
+        let mut green = vision_sample(10, 20, 0, 0);
+        green.frames_corrupt_green = 1;
+        health.pipeline = Some(green);
+        assert!(
+            capture_failure_signals(&health, &mut tracker).vision,
+            "green decode garbage is capture failure evidence, not recovery"
+        );
+
+        let mut black = green;
+        black.frames_corrupt_black = 1;
+        health.pipeline = Some(black);
+        assert!(
+            capture_failure_signals(&health, &mut tracker).vision,
+            "black/excluded frames are neutral and must not clear an existing failure"
+        );
+
+        black.dedup_skips += 1;
+        health.pipeline = Some(black);
+        assert!(
+            !capture_failure_signals(&health, &mut tracker).vision,
+            "a later valid dedup cycle proves the capture loop recovered"
+        );
+    }
+
+    #[test]
+    fn vision_counter_reset_rebaselines_after_engine_restart() {
+        let mut tracker = VisionProgressTracker::default();
+        let mut health = healthy_health();
+        health.frame_status = Some("ok".to_string());
+        health.audio_status = Some("ok".to_string());
+        health.vision_db_write_stalled = true;
+        health.pipeline = Some(vision_sample(50, 100, 2, 3));
+        assert!(!capture_failure_signals(&health, &mut tracker).vision);
+
+        health.pipeline = Some(vision_sample(0, 0, 0, 0));
+        assert!(!capture_failure_signals(&health, &mut tracker).vision);
+    }
+
+    #[test]
+    fn explicit_audio_capture_failures_are_detected() {
+        for status in [
+            "stale",
+            "not_started",
+            "active_no_data",
+            "permission_denied",
+            "capture_stalled",
+            "error",
+        ] {
+            let mut health = healthy_health();
+            health.audio_status = Some(status.to_string());
+            assert!(
+                capture_failure_signals(&health, &mut VisionProgressTracker::default()).audio,
+                "{status} must be treated as a capture failure"
+            );
+        }
+
+        for status in ["ok", "disabled", "no_input_device"] {
+            let mut health = healthy_health();
+            health.audio_status = Some(status.to_string());
+            assert!(
+                !capture_failure_signals(&health, &mut VisionProgressTracker::default()).audio,
+                "{status} must not be treated as a capture failure"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_vision_capture_failures_are_detected() {
+        for status in [
+            "stale",
+            "not_started",
+            "permission_denied",
+            "capture_stalled",
+            "error",
+        ] {
+            let mut health = healthy_health();
+            health.frame_status = Some(status.to_string());
+            assert!(
+                capture_failure_signals(&health, &mut VisionProgressTracker::default()).vision,
+                "{status} must be treated as a capture failure"
+            );
+        }
+
+        for status in ["ok", "disabled"] {
+            let mut health = healthy_health();
+            health.frame_status = Some(status.to_string());
+            assert!(
+                !capture_failure_signals(&health, &mut VisionProgressTracker::default()).vision,
+                "{status} must not be treated as a capture failure"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_write_queue_failure_is_user_visible_without_flashing_on_one_batch() {
+        let mut health = healthy_health();
+        health.write_queue_degraded = true;
+        health.write_queue_consecutive_contention = 1;
+        assert!(
+            !capture_failure_signals(&health, &mut VisionProgressTracker::default()).persistence,
+            "one failed shared-queue batch is not proof ongoing recording is broken"
+        );
+
+        health.write_queue_consecutive_contention = WRITE_QUEUE_FAILURE_THRESHOLD;
+        assert!(
+            capture_failure_signals(&health, &mut VisionProgressTracker::default()).persistence
+        );
+
+        health.write_queue_consecutive_contention = 0;
+        health.write_queue_consecutive_fatal = WRITE_QUEUE_FAILURE_THRESHOLD;
+        assert!(
+            capture_failure_signals(&health, &mut VisionProgressTracker::default()).persistence
+        );
+    }
+
+    #[test]
+    fn only_explicit_good_capture_statuses_confirm_recovery() {
+        for frame_status in ["ok", "disabled"] {
+            for audio_status in ["ok", "disabled", "no_input_device"] {
+                let mut health = healthy_health();
+                health.frame_status = Some(frame_status.to_string());
+                health.audio_status = Some(audio_status.to_string());
+                assert!(health_confirms_recording(&health));
+            }
+        }
+
+        for (frame_status, audio_status) in [
+            ("unknown", "ok"),
+            ("stale", "ok"),
+            ("ok", "unknown"),
+            ("ok", "active_no_data"),
+        ] {
+            let mut health = healthy_health();
+            health.frame_status = Some(frame_status.to_string());
+            health.audio_status = Some(audio_status.to_string());
+            assert!(
+                !health_confirms_recording(&health),
+                "frame={frame_status}, audio={audio_status} must not produce a green recovery"
+            );
+        }
+
+        let mut degraded = healthy_health();
+        degraded.frame_status = Some("ok".to_string());
+        degraded.audio_status = Some("ok".to_string());
+        degraded.write_queue_degraded = true;
+        assert!(!health_confirms_recording(&degraded));
+    }
+
+    #[test]
+    fn overlay_only_recovers_during_real_healthy_recording() {
+        let healthy = overlay_tick_decision(
+            RecordingStatus::Recording,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false,
+            CaptureFailureSignals::default(),
+            false,
+        );
+        assert!(!healthy.broken);
+        assert!(healthy.healthy);
+
+        let paused = overlay_tick_decision(
+            RecordingStatus::Recording,
+            true,
+            true,
+            false,
+            false,
+            true,
+            false,
+            true,
+            CaptureFailureSignals {
+                vision: true,
+                ..CaptureFailureSignals::default()
+            },
+            false,
+        );
+        assert!(!paused.broken);
+        assert!(
+            !paused.healthy,
+            "DRM, schedule, lock, power, and user pauses must stand down quietly"
+        );
+    }
+
+    #[test]
+    fn overlay_preserves_real_failure_and_transient_guards() {
+        let failures = CaptureFailureSignals {
+            vision: true,
+            ..CaptureFailureSignals::default()
+        };
+        let broken = overlay_tick_decision(
+            RecordingStatus::Recording,
+            true,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false,
+            failures,
+            false,
+        );
+        assert!(broken.broken);
+        assert!(!broken.healthy);
+
+        for (start_in_progress, recently_woke) in [(true, false), (false, true)] {
+            let guarded = overlay_tick_decision(
+                RecordingStatus::Recording,
+                true,
+                true,
+                true,
+                start_in_progress,
+                true,
+                recently_woke,
+                false,
+                failures,
+                false,
+            );
+            assert!(!guarded.broken);
+            assert!(!guarded.healthy);
+        }
+
+        let engine_down = overlay_tick_decision(
+            RecordingStatus::Stopped,
+            false,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            CaptureFailureSignals::default(),
+            false,
+        );
+        assert!(engine_down.broken);
+
+        let simulated = overlay_tick_decision(
+            RecordingStatus::Paused,
+            true,
+            true,
+            false,
+            false,
+            true,
+            false,
+            true,
+            CaptureFailureSignals::default(),
+            true,
+        );
+        assert!(simulated.broken, "debug simulation must remain testable");
+    }
+
+    #[test]
+    fn overlay_decision_exhaustively_checks_12288_state_combinations() {
+        let statuses = [
+            RecordingStatus::Starting,
+            RecordingStatus::Recording,
+            RecordingStatus::Paused,
+            RecordingStatus::ScheduledPause,
+            RecordingStatus::Stopped,
+            RecordingStatus::Error,
+        ];
+        let mut checked = 0usize;
+
+        // Eleven independent booleans x six recording states. This covers
+        // 12,288 combinations of response quality, capture intent, lifecycle
+        // guards, three failure classes, and the QA simulation path.
+        for status in statuses {
+            for bits in 0u16..(1 << 11) {
+                let health_response_received = bits & (1 << 0) != 0;
+                let health_confirmed = bits & (1 << 1) != 0;
+                let capture_intended = bits & (1 << 2) != 0;
+                let start_in_progress = bits & (1 << 3) != 0;
+                let ever_connected = bits & (1 << 4) != 0;
+                let recently_woke = bits & (1 << 5) != 0;
+                let external_pause = bits & (1 << 6) != 0;
+                let intentionally_paused = !capture_intended || external_pause;
+                let failures = CaptureFailureSignals {
+                    audio: bits & (1 << 7) != 0,
+                    vision: bits & (1 << 8) != 0,
+                    persistence: bits & (1 << 9) != 0,
+                };
+                let simulated_break = bits & (1 << 10) != 0;
+
+                let decision = overlay_tick_decision(
+                    status,
+                    health_response_received,
+                    health_confirmed,
+                    capture_intended,
+                    start_in_progress,
+                    ever_connected,
+                    recently_woke,
+                    intentionally_paused,
+                    failures,
+                    simulated_break,
+                );
+
+                let failure_suppressed =
+                    start_in_progress || recently_woke || intentionally_paused;
+                let confirmed_failure = failures.audio || failures.vision || failures.persistence;
+                let engine_down = capture_intended
+                    && !start_in_progress
+                    && !recently_woke
+                    && (status == RecordingStatus::Error
+                        || (status == RecordingStatus::Stopped && ever_connected));
+                let expected = OverlayTickDecision {
+                    broken: simulated_break
+                        || (!failure_suppressed && (engine_down || confirmed_failure)),
+                    healthy: !intentionally_paused
+                        && !recently_woke
+                        && health_response_received
+                        && health_confirmed
+                        && status == RecordingStatus::Recording
+                        && !confirmed_failure
+                        && !simulated_break,
+                };
+
+                assert_eq!(decision, expected, "status={status:?}, bits={bits:011b}");
+                assert!(
+                    !(decision.broken && decision.healthy),
+                    "failure and recovery must be mutually exclusive"
+                );
+                if simulated_break {
+                    assert!(decision.broken && !decision.healthy);
+                }
+                if !simulated_break && failure_suppressed {
+                    assert!(!decision.broken);
+                }
+                if !health_response_received || !health_confirmed {
+                    assert!(!decision.healthy);
+                }
+                checked += 1;
+            }
+        }
+
+        assert_eq!(checked, 12_288);
     }
 
     // Helper: call decide_status with thresholds exceeded (no debouncing active)

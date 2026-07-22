@@ -8,7 +8,6 @@ import PickPipe from "./pick-pipe";
 
 const mocks = vi.hoisted(() => ({
   completeOnboarding: vi.fn().mockResolvedValue(undefined),
-  scheduleFirstRunNotification: vi.fn(),
   localFetch: vi.fn(),
   capture: vi.fn(),
   oauthStatus: vi.fn().mockResolvedValue({
@@ -21,10 +20,6 @@ vi.mock("@/lib/hooks/use-onboarding", () => ({
   useOnboarding: () => ({
     completeOnboarding: mocks.completeOnboarding,
   }),
-}));
-
-vi.mock("@/lib/notifications", () => ({
-  scheduleFirstRunNotification: mocks.scheduleFirstRunNotification,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -115,7 +110,6 @@ describe("PickPipe", () => {
     expect(mocks.completeOnboarding).toHaveBeenCalledWith({
       method: "pipe_step_skipped",
     });
-    expect(mocks.scheduleFirstRunNotification).toHaveBeenCalledTimes(1);
   });
 
   it("does not install a pipe on skip even when defaults are still selected", async () => {
@@ -135,7 +129,6 @@ describe("PickPipe", () => {
     expect(mocks.completeOnboarding).toHaveBeenCalledWith({
       method: "pipe_step_skipped",
     });
-    expect(mocks.scheduleFirstRunNotification).toHaveBeenCalledTimes(1);
   });
 
   it("enables only the pipes the user keeps selected", async () => {
@@ -182,7 +175,6 @@ describe("PickPipe", () => {
       pipeCount: 1,
       customized: true,
     });
-    expect(mocks.scheduleFirstRunNotification).toHaveBeenCalledTimes(1);
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_path_selected",
       expect.objectContaining({
@@ -222,7 +214,6 @@ describe("PickPipe", () => {
     });
 
     expect(mocks.completeOnboarding).not.toHaveBeenCalled();
-    expect(mocks.scheduleFirstRunNotification).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_pipe_install_failed",
       expect.objectContaining({

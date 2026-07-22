@@ -193,33 +193,22 @@ export function AppEntitlementGate({
       }
 
       const remaining = paidPolicyDeadlineMs - nowMs;
-      // Signup trials end at their exact boundary, while ordinary freshness
-      // remains valid through its boundary. Re-render at zero for the trial;
-      // if policy is still valid, one final 1ms tick handles freshness.
-      if (remaining > 0) {
+      // Freshness is valid through the exact boundary. Minute-sized slices
+      // detect wall-clock changes and also avoid overflowing long JS timers.
+      if (remaining >= 0) {
         timeout = setTimeout(
           schedule,
-          Math.min(remaining, POLICY_CLOCK_CHECK_INTERVAL_MS),
+          Math.min(remaining + 1, POLICY_CLOCK_CHECK_INTERVAL_MS),
         );
         return;
       }
       setPaidPolicyExpiryTick((value) => value + 1);
-      // The Rust manager owns the live pipe cap and free-retention flag. A
-      // clock-only transition does not write settings, so explicitly ask the
-      // existing token/policy command to re-read the cached entitlement and
-      // apply its new local classification without a network request.
-      if (user?.token) {
-        void commands.setCloudToken(user.token).catch((error) => {
-          console.warn("failed to apply local plan deadline:", error);
-        });
-      }
-      if (remaining === 0) timeout = setTimeout(schedule, 1);
     };
     schedule();
     return () => {
       if (timeout !== undefined) clearTimeout(timeout);
     };
-  }, [devBypass, paidPolicyDeadlineMs, user?.token]);
+  }, [devBypass, paidPolicyDeadlineMs]);
 
   // Retry secret-store hydration only during a bounded window. The window may
   // delay a consumer login prompt for already verified policy, but it never

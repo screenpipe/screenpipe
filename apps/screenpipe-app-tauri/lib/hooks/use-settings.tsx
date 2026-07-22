@@ -1098,6 +1098,29 @@ function createSettingsStore() {
 			}
 		}
 
+		// Migration: retired hosted Claude presets keep working on the current
+		// model lanes. Cloud presets use Luna; direct Anthropic BYOK presets use
+		// Sonnet 5 because that endpoint cannot route to an OpenAI model.
+		if (Array.isArray(settings.aiPresets)) {
+			let migratedRetiredClaude = false;
+			settings.aiPresets = settings.aiPresets.map((p: any) => {
+				const model = typeof p?.model === "string" ? p.model : "";
+				if (!/claude-(?:3-(?:5-|7-)?(?:haiku|sonnet)|haiku|sonnet-4)/i.test(model)) {
+					return p;
+				}
+				if (p?.provider === "screenpipe-cloud") {
+					migratedRetiredClaude = true;
+					return { ...p, model: "gpt-5.6-luna" };
+				}
+				if (p?.provider === "anthropic") {
+					migratedRetiredClaude = true;
+					return { ...p, model: "claude-sonnet-5" };
+				}
+				return p;
+			});
+			if (migratedRetiredClaude) needsUpdate = true;
+		}
+
 		// Migration: backfill disabledShortcuts for installs that predate the
 		// field. Several call sites assume it's always an array (`.includes(...)`)
 		// and crash with "Cannot read properties of undefined" when it's missing.

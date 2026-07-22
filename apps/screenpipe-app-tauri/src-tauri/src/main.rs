@@ -1163,6 +1163,33 @@ async fn main() {
             // sidecar inherits this env).
             std::env::set_var("SCREENPIPE_DATA_DIR", &data_dir);
 
+            // The fs-plugin scope in capabilities/main.json only whitelists
+            // static locations ($HOME/.screenpipe, $APPDATA, …). A custom
+            // data dir (e.g. another drive on Windows) matches none of them,
+            // so every webview fs call into it failed with "forbidden path":
+            // chat history was never persisted, pipe-run records and the
+            // feedback log collector broke the same way (#5306). Extend the
+            // fs scope and the asset-protocol scope (media previews) at
+            // runtime to cover the resolved dir. No-op redundant grant when
+            // the dir is the default ~/.screenpipe.
+            {
+                use tauri_plugin_fs::FsExt;
+                if let Err(e) = app.fs_scope().allow_directory(&data_dir, true) {
+                    warn!(
+                        "failed to allow data dir {} in fs scope: {}",
+                        data_dir.display(),
+                        e
+                    );
+                }
+                if let Err(e) = app.asset_protocol_scope().allow_directory(&data_dir, true) {
+                    warn!(
+                        "failed to allow data dir {} in asset protocol scope: {}",
+                        data_dir.display(),
+                        e
+                    );
+                }
+            }
+
             // Enterprise builds can identify org/device health in Sentry and
             // PostHog without sending the raw license key. No-op on consumer
             // builds; explicit MDM/support env vars still win when provided.

@@ -11,6 +11,10 @@ icon: "newspaper"
 
 ## week of july 20, 2026
 
+### updates
+
+- **hosted AI catalog cleaned up and modernized** — the hosted chat gateway and desktop model picker no longer list retired options (Google Open MaaS, Gemini 3, selectable Gemma 4, GPT‑OSS/OpenRouter‑era choices, Claude Haiku, and older Sonnet families). Saved presets that pointed at any of those IDs are now transparently upgraded: hosted Claude legacy IDs move to GPT‑5.6 Luna, and direct Anthropic BYOK legacy IDs move to Claude Sonnet 5. Paid Auto and outage fallback now flow through Luna → Sonnet 5 → GPT‑5.4 mini (the free preview stays bounded to Luna → GPT‑5.4 mini). Existing chats and pipes keep working — you'll just be routed to a current model instead of a decommissioned one. See [connections](/connections).
+
 ### bug fixes
 
 - **free hosted chat accepts one verbose tool** — the free hosted chat gateway previously rejected requests containing a single tool with a long description or a large parameter schema. The size cap now applies to the combined byte size of all tool definitions in a request instead of each tool individually, so one verbose tool goes through as long as the aggregate stays under the limit. Pi and pipes that ship a rich schema for a single tool no longer see spurious `free_chat_tools_too_large` errors. See [pipes](/pipes).

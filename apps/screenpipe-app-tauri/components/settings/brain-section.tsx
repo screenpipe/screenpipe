@@ -78,6 +78,7 @@ import {
   type MemoryCardDisplay,
 } from "@/lib/utils/memory-display";
 import { useChatStore } from "@/lib/stores/chat-store";
+import posthog from "posthog-js";
 
 interface MemoryRecord {
   id: number;
@@ -128,6 +129,35 @@ function formatBytes(n: number): string {
 function artifactKindLabel(kind: string | null | undefined): string {
   if (!kind) return "file";
   return kind.replace(/[-_]+/g, " ");
+}
+
+type ArtifactOpenSurface = "card" | "card_action" | "detail";
+type DeleteMode = "single" | "batch";
+
+// Brain content is private by design. Analytics must stay limited to coarse
+// enums, booleans, and counts — never text, tags, sources, ids, or file paths.
+const ANALYTICS_ARTIFACT_KINDS = new Set([
+  "audio",
+  "csv",
+  "html",
+  "image",
+  "json",
+  "markdown",
+  "pdf",
+  "text",
+  "video",
+]);
+
+function analyticsArtifactKind(kind: string | null | undefined): string {
+  const normalized = kind?.trim().toLowerCase() ?? "";
+  return ANALYTICS_ARTIFACT_KINDS.has(normalized) ? normalized : "other";
+}
+
+function memoryAnalyticsProperties(memory: MemoryRecord) {
+  return {
+    has_frame: memory.frame_id != null,
+    tag_count: memory.tags.length,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +335,7 @@ type SortDir = "desc" | "asc";
 export function BrainSection() {
   const { toast } = useToast();
   const chatSessions = useChatStore((state) => state.sessions);
+  const initialTypeFilterRef = useRef<TypeFilter>(brainViewState.typeFilter);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -337,6 +368,12 @@ export function BrainSection() {
   const [selectedItem, setSelectedItem] = useState<SelectedBrainItem | null>(null);
   const [artifactContents, setArtifactContents] = useState<Map<string, string>>(new Map());
 
+  useEffect(() => {
+    posthog.capture("brain_viewed", {
+      tab: initialTypeFilterRef.current,
+    });
+  }, []);
+
   const loadArtifactContent = async (key: string, path: string) => {
     if (!artifactContents.has(key)) {
       try {
@@ -356,7 +393,18 @@ export function BrainSection() {
   );
 
   const openArtifactOrigin = useCallback(
-    (target: ArtifactOpenTarget, filePreviewPath: string) => {
+    (
+      artifact: UnifiedArtifact,
+      target: ArtifactOpenTarget,
+      filePreviewPath: string,
+      surface: ArtifactOpenSurface,
+    ) => {
+      posthog.capture("brain_artifact_opened", {
+        artifact_kind: analyticsArtifactKind(artifact.kind),
+        open_mode: target.mode,
+        registered: artifact.registered,
+        surface,
+      });
       if (target.mode === "artifact-only") {
         void commands.openViewerWindow(filePreviewPath);
         return;
@@ -366,6 +414,30 @@ export function BrainSection() {
         targetWindow: "home",
         filePreviewPath,
       });
+    },
+    [],
+  );
+
+  const openArtifactViewer = useCallback(
+    (artifact: UnifiedArtifact, surface: ArtifactOpenSurface) => {
+      posthog.capture("brain_artifact_opened", {
+        artifact_kind: analyticsArtifactKind(artifact.kind),
+        open_mode: "viewer",
+        registered: artifact.registered,
+        surface,
+      });
+      void commands.openViewerWindow(artifact.path);
+    },
+    [],
+  );
+
+  const openMemory = useCallback(
+    (memory: MemoryRecord, key: string) => {
+      posthog.capture("brain_memory_opened", {
+        ...memoryAnalyticsProperties(memory),
+        surface: "list",
+      });
+      setSelectedItem({ kind: "memory", key });
     },
     [],
   );
@@ -422,6 +494,7 @@ export function BrainSection() {
   const switchTypeFilter = useCallback(
     (nextTypeFilter: TypeFilter) => {
       if (nextTypeFilter === typeFilter) return;
+      posthog.capture("brain_tab_selected", { tab: nextTypeFilter });
       saveCurrentListPosition();
       brainViewState.typeFilter = nextTypeFilter;
       setTypeFilter(nextTypeFilter);
@@ -622,6 +695,10 @@ export function BrainSection() {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      posthog.capture("brain_memory_deleted", {
+        mode: "single",
+        count: 1,
+      });
       toast({ title: "memory deleted" });
       setMemories((prev) => prev.filter((m) => m.id !== id));
       setSelectedItem((prev) =>
@@ -678,6 +755,11 @@ export function BrainSection() {
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      posthog.capture("brain_memory_updated", {
+        content_changed: contentChanged,
+        tags_changed: tagsChanged,
+        tag_count: editTags.length,
+      });
       setMemories((prev) =>
         prev.map((m) =>
           m.id === id
@@ -745,6 +827,9 @@ export function BrainSection() {
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      posthog.capture("brain_memory_created", {
+        tag_count: newTags.length,
+      });
       toast({ title: "memory created" });
       closeAddMemoryDialog();
       fetchPage(0, false);
@@ -985,9 +1070,14 @@ export function BrainSection() {
   }, [unifiedItems]);
 
   const handleDeleteArtifact = useCallback(
-    async (a: UnifiedArtifact) => {
+    async (a: UnifiedArtifact, mode: DeleteMode = "single") => {
       if (!a.registered || a.id == null) return;
       await deleteRegistered(a.id);
+      posthog.capture("brain_artifact_deleted", {
+        artifact_kind: analyticsArtifactKind(a.kind),
+        mode,
+        count: 1,
+      });
       const key = artifactItemKey(a);
       setSelectedItem((prev) =>
         prev?.kind === "artifact" && prev.key === key ? null : prev,
@@ -1028,9 +1118,12 @@ export function BrainSection() {
       const memIds = memKeys.map((k) => Number(k.slice(4)));
       const memIdSet = new Set(memIds);
       await Promise.all(
-        memIds.map((id) =>
-          localFetch(`/memories/${id}`, { method: "DELETE" })
-        )
+        memIds.map(async (id) => {
+          const res = await localFetch(`/memories/${id}`, {
+            method: "DELETE",
+          });
+          if (!res.ok) throw new Error(`DELETE memory ${id}: HTTP ${res.status}`);
+        }),
       );
       setMemories((prev) => prev.filter((m) => !memIdSet.has(m.id)));
       setSelectedItem((prev) => {
@@ -1040,6 +1133,12 @@ export function BrainSection() {
         return prev;
       });
       setTotal((prev) => prev - memIds.length);
+      if (memIds.length > 0) {
+        posthog.capture("brain_memory_deleted", {
+          mode: "batch",
+          count: memIds.length,
+        });
+      }
 
       // delete output-type artifacts (registered ones only — fs artifacts
       // belong to their pipe and have no delete)
@@ -1047,7 +1146,7 @@ export function BrainSection() {
         if (!key.startsWith("output:")) continue;
         const outputId = Number(key.slice(7));
         const match = artifacts.find((a) => a.registered && a.id === outputId);
-        if (match) await handleDeleteArtifact(match);
+        if (match) await handleDeleteArtifact(match, "batch");
       }
 
       const deletedCount = memIds.length + artKeys.filter((k) => k.startsWith("output:")).length;
@@ -1640,7 +1739,7 @@ export function BrainSection() {
                       toggleSelected(artKey);
                       return;
                     }
-                    openArtifactOrigin(target, artPath);
+                    openArtifactOrigin(artItem, target, artPath, "card");
                   }}
                   role="button"
                   tabIndex={0}
@@ -1651,7 +1750,7 @@ export function BrainSection() {
                       toggleSelected(artKey);
                       return;
                     }
-                    openArtifactOrigin(target, artPath);
+                    openArtifactOrigin(artItem, target, artPath, "card");
                   }}
                 >
                   {/* floating action buttons — top right with blurred backdrop */}
@@ -1662,7 +1761,7 @@ export function BrainSection() {
                       className="h-7 w-7"
                       onClick={(e) => {
                         e.stopPropagation();
-                        void commands.openViewerWindow(artPath);
+                        openArtifactViewer(artItem, "card_action");
                       }}
                       title="open viewer"
                     >
@@ -1682,7 +1781,14 @@ export function BrainSection() {
                       <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
                         {target.mode !== "artifact-only" && (
                           <DropdownMenuItem
-                            onClick={() => openArtifactOrigin(target, artPath)}
+                            onClick={() =>
+                              openArtifactOrigin(
+                                artItem,
+                                target,
+                                artPath,
+                                "card_action",
+                              )
+                            }
                           >
                             <MessageSquare className="mr-2 h-3.5 w-3.5" />
                             {target.mode === "pipe-run" ? "open pipe run" : "open chat"}
@@ -1833,7 +1939,7 @@ export function BrainSection() {
                 } ${
                   isChecked ? "bg-muted/40" : ""
                 }`}
-                onClick={() => setSelectedItem({ kind: "memory", key: memKey })}
+                onClick={() => openMemory(memory, memKey)}
               >
                 <Checkbox
                   data-testid={`brain-checkbox-memory-${memory.id}`}
@@ -1881,7 +1987,7 @@ export function BrainSection() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSelectedItem({ kind: "memory", key: memKey });
+                        openMemory(memory, memKey);
                       }}
                       className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                     >
@@ -2124,7 +2230,14 @@ export function BrainSection() {
                             size="sm"
                             variant="outline"
                             className="h-7 text-[10px] px-2"
-                            onClick={() => openArtifactOrigin(target, artifact.path)}
+                            onClick={() =>
+                              openArtifactOrigin(
+                                artifact,
+                                target,
+                                artifact.path,
+                                "detail",
+                              )
+                            }
                           >
                             {target.mode === "pipe-run" ? "open run" : "open chat"}
                           </Button>
@@ -2133,7 +2246,7 @@ export function BrainSection() {
                           size="sm"
                           variant="outline"
                           className="h-7 text-[10px] px-2"
-                          onClick={() => void commands.openViewerWindow(artifact.path)}
+                          onClick={() => openArtifactViewer(artifact, "detail")}
                         >
                           open
                         </Button>
