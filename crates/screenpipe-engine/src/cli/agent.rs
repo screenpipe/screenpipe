@@ -269,8 +269,13 @@ fn setup_all_detected(api_url: &str) -> Result<()> {
 
     let mut failures = Vec::new();
     for agent in &pending {
-        if let Err(error) = setup(agent.target, api_url) {
-            failures.push(format!("{}: {error:#}", agent.name));
+        match setup(agent.target, api_url) {
+            Ok(()) if is_agent_setup_in(agent.target, &home) => {}
+            Ok(()) => failures.push(format!(
+                "{}: setup finished without a complete MCP + skills installation",
+                agent.name
+            )),
+            Err(error) => failures.push(format!("{}: {error:#}", agent.name)),
         }
     }
     if failures.is_empty() {
@@ -662,9 +667,28 @@ fn remove_mcp_toml(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Remove only the exact `mcp_servers:` block `merge_mcp_yaml` writes (a sole
-/// `screenpipe:` child referencing screenpipe-mcp). Anything hand-authored is
-/// left untouched with manual instructions — we never string-slice foreign YAML.
+fn yaml_indent(line: &str) -> usize {
+    line.chars()
+        .take_while(|character| *character == ' ')
+        .count()
+}
+
+fn yaml_top_level_block_end(lines: &[String], start: usize) -> usize {
+    let mut end = start + 1;
+    while end < lines.len() {
+        let line = &lines[end];
+        if line.trim().is_empty() || yaml_indent(line) > 0 {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+/// Remove only the exact `screenpipe:` child `merge_mcp_yaml` writes. Other
+/// MCP servers and unrelated YAML remain byte-for-byte equivalent apart from
+/// harmless blank-line normalization.
 fn remove_mcp_yaml(path: &Path) -> Result<()> {
     let existing = match read_config_text(path)? {
         Some(s) => s,
@@ -681,44 +705,54 @@ fn remove_mcp_yaml(path: &Path) -> Result<()> {
         println!("  · no screenpipe mcp entry in {}", path.display());
         return Ok(());
     }
-    let lines: Vec<&str> = existing.lines().collect();
-    let Some(start) = lines.iter().position(|l| l.trim_end() == "mcp_servers:") else {
+    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
+    let Some(block_start) = lines.iter().position(|line| line == "mcp_servers:") else {
         println!(
             "  • {} references screenpipe outside an mcp_servers block — remove it manually",
             path.display()
         );
         return Ok(());
     };
-    let mut end = start + 1;
-    let mut children: Vec<String> = Vec::new();
-    while end < lines.len()
-        && (lines[end].trim().is_empty()
-            || lines[end].starts_with(' ')
-            || lines[end].starts_with('\t'))
-    {
-        if let Some(name) = lines[end]
-            .strip_prefix("  ")
-            .filter(|l| !l.starts_with(' '))
-            .and_then(|l| l.split(':').next())
-        {
-            children.push(name.to_string());
-        }
-        end += 1;
-    }
-    let block = lines[start..end].join("\n");
-    if children != ["screenpipe"] || !block.contains("screenpipe-mcp") {
+    let block_end = yaml_top_level_block_end(&lines, block_start);
+    let Some(server_start) = (block_start + 1..block_end)
+        .find(|index| yaml_indent(&lines[*index]) == 2 && lines[*index].trim() == "screenpipe:")
+    else {
         println!(
-            "  • {} has a customized mcp_servers block — delete the screenpipe entry manually",
+            "  • {} has a customized screenpipe MCP entry — remove it manually",
+            path.display()
+        );
+        return Ok(());
+    };
+    let mut server_end = server_start + 1;
+    while server_end < block_end {
+        let line = &lines[server_end];
+        if line.trim().is_empty() || yaml_indent(line) > 2 {
+            server_end += 1;
+        } else {
+            break;
+        }
+    }
+    if !lines[server_start..server_end]
+        .join("\n")
+        .contains("screenpipe-mcp")
+    {
+        println!(
+            "  • {} has a customized screenpipe MCP entry — remove it manually",
             path.display()
         );
         return Ok(());
     }
-    let next: Vec<&str> = lines[..start]
+
+    lines.drain(server_start..server_end);
+    let new_block_end = yaml_top_level_block_end(&lines, block_start);
+    let has_other_children = lines[block_start + 1..new_block_end]
         .iter()
-        .chain(lines[end..].iter())
-        .copied()
-        .collect();
-    let mut next = next.join("\n");
+        .any(|line| yaml_indent(line) == 2 && !line.trim_start().starts_with('#'));
+    if !has_other_children {
+        lines.drain(block_start..new_block_end);
+    }
+
+    let mut next = lines.join("\n");
     while next.contains("\n\n\n") {
         next = next.replace("\n\n\n", "\n\n");
     }
@@ -765,9 +799,9 @@ fn merge_mcp_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
 }
 
 /// Add the `screenpipe` server to a YAML MCP config (Hermes). We don't pull a
-/// YAML parser, so we string-merge conservatively: write fresh / append a new
-/// `mcp_servers:` block, but if one already exists we print the snippet rather
-/// than risk corrupting hand-edited YAML.
+/// YAML parser because rewriting the document would discard comments. Instead,
+/// merge only into an ordinary top-level `mcp_servers:` mapping and preserve
+/// every existing line. Inline or otherwise unusual mappings stay manual.
 fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -797,13 +831,25 @@ fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
         );
         return Ok(());
     }
-    if existing.lines().any(|l| l.starts_with("mcp_servers:")) {
-        println!(
-            "  • {} already has an mcp_servers block — add this under it manually:\n{server}",
-            path.display()
-        );
+    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
+    if let Some(start) = lines.iter().position(|line| line == "mcp_servers:") {
+        let end = yaml_top_level_block_end(&lines, start);
+        lines.splice(end..end, server.lines().map(str::to_owned));
+        replace_config(path, &(lines.join("\n") + "\n"))?;
+        println!("  ✓ mcp   {}", path.display());
         return Ok(());
     }
+
+    if existing
+        .lines()
+        .any(|line| !line.trim_start().starts_with('#') && line.contains("mcp_servers:"))
+    {
+        anyhow::bail!(
+            "{} has a non-standard mcp_servers mapping; add this manually:\n{server}",
+            path.display()
+        );
+    }
+
     let mut out = existing;
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
@@ -1137,6 +1183,36 @@ mod tests {
         remove_mcp_yaml(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), seeded);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_merge_and_remove_mcp_yaml_preserves_existing_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        let seeded = "model: test\nmcp_servers:\n  existing:\n    command: existing-server\nnotifications: true\n";
+        std::fs::write(&path, seeded).unwrap();
+
+        merge_mcp_yaml(&path, true, "http://box:3030").unwrap();
+        let merged = std::fs::read_to_string(&path).unwrap();
+        assert!(merged.contains("  existing:\n    command: existing-server"));
+        assert!(merged.contains("  screenpipe:\n    command: npx"));
+        assert!(merged.contains("SCREENPIPE_API_URL: http://box:3030"));
+        assert!(merged.contains("notifications: true"));
+
+        remove_mcp_yaml(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seeded);
+    }
+
+    #[test]
+    fn test_merge_mcp_yaml_rejects_non_standard_mapping_without_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        let seeded = "model: test\nmcp_servers: { existing: { command: x } }\n";
+        std::fs::write(&path, seeded).unwrap();
+
+        let error = merge_mcp_yaml(&path, false, "http://localhost:3030").unwrap_err();
+        assert!(error.to_string().contains("non-standard mcp_servers"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seeded);
     }
 
     #[test]
