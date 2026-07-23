@@ -76,6 +76,8 @@ use named instances when you have more than one account for the same service:
 | `hubspot:prod` and `hubspot:sandbox` | separate CRM portals |
 | `posthog:screenpipe` and `posthog:bench` | separate analytics projects |
 
+Composio-managed integrations (Gmail, Zoom, Google Drive/Docs/Sheets) also support multiple accounts: use **connect another account** on the integration card and give each account a label (for example `work`, `personal`). Up to 5 accounts per integration. The AI uses the most recently connected account by default and targets a specific one when you name it ("check my work gmail").
+
 ## test queries
 
 after connecting, run a tiny request before relying on a pipe:

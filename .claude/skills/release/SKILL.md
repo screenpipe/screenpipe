@@ -51,9 +51,23 @@ echo "=== MCP ===" && grep '"version"' packages/screenpipe-mcp/package.json | he
 
 ### 2. Bump Version
 
-Edit `apps/screenpipe-app-tauri/src-tauri/Cargo.toml` and bump the `version = "X.Y.Z"` line at the top of `[package]`.
+- **App:** edit `apps/screenpipe-app-tauri/src-tauri/Cargo.toml` and bump the `version = "X.Y.Z"` line at the top of `[package]`.
+- **CLI:** edit root `Cargo.toml` and bump `version` under `[workspace.package]`.
 
-### 3. Commit & Push (Triggers Release)
+### 3. Regenerate ALL Cargo.lock files (MANDATORY after any bump)
+
+```bash
+./scripts/regenerate-locks.sh
+```
+
+The repo has several independent cargo workspaces (root, app, SDK, SDK examples),
+each with a tracked Cargo.lock recording the shared crates' versions. Bumping only
+Cargo.toml leaves the other locks stale and breaks `cargo test --locked` on main
+(happened with the v0.4.29 CLI bump — sdk.yml went red until the locks were fixed).
+Commit the regenerated locks together with the bump. `style.yml` runs
+`./scripts/regenerate-locks.sh --check` on every push and fails if any lock is stale.
+
+### 4. Commit & Push (Triggers Release)
 ```bash
 git add -A && git commit -m "Bump app to vX.Y.Z" && git pull --rebase && git push
 ```
@@ -62,7 +76,7 @@ Pushing a commit whose message starts with `Bump app` or `release-app` to `main`
 
 **Do NOT also run `gh workflow run release-app.yml`** — it fires a second `workflow_dispatch` run on the same SHA, doubling the build. The push handles it.
 
-### 4. Monitor Build Status
+### 5. Monitor Build Status
 ```bash
 # Get latest run ID
 gh run list --workflow=release-app.yml --limit=1
@@ -71,12 +85,12 @@ gh run list --workflow=release-app.yml --limit=1
 gh run view <RUN_ID> --json status,conclusion,jobs --jq '{status: .status, conclusion: .conclusion, jobs: [.jobs[] | {name: (.name | split(",")[0]), status: .status, conclusion: .conclusion}]}'
 ```
 
-### 5. Test the Draft Release
+### 6. Test the Draft Release
 - Download from https://screenpi.pe (requires purchase token)
 - Test on macOS and Windows
 - Verify updater artifacts exist (.tar.gz, .sig files)
 
-### 6. Publish Release
+### 7. Publish Release
 After testing, publish via the Cloudflare R2 / backend dashboard, OR commit with magic words:
 ```bash
 git commit --allow-empty -m "release-app-publish" && git push
@@ -85,11 +99,14 @@ git commit --allow-empty -m "release-app-publish" && git push
 ## Quick Release (App Only)
 
 ```bash
-# 1. Bump version in apps/apps/screenpipe-app-tauri/src-tauri/Cargo.toml
-# 2. Commit and push — the "Bump app" prefix triggers release-app.yml automatically
+# 1. Bump version in apps/screenpipe-app-tauri/src-tauri/Cargo.toml
+# 2. Regenerate every tracked Cargo.lock (skipping this breaks `cargo test --locked` in CI)
+./scripts/regenerate-locks.sh
+
+# 3. Commit and push — the "Bump app" prefix triggers release-app.yml automatically
 git add -A && git commit -m "Bump app to vX.Y.Z" && git push
 
-# 3. Monitor
+# 4. Monitor
 sleep 5 && gh run list --workflow=release-app.yml --limit=1
 ```
 
@@ -109,6 +126,12 @@ Build <RUN_ID>:
 ### Build Failed
 ```bash
 gh run view <RUN_ID> --log-failed 2>&1 | tail -100
+```
+
+### CI red: "cannot update the lock file ... because --locked was passed"
+A version bump was pushed without regenerating every tracked Cargo.lock.
+```bash
+./scripts/regenerate-locks.sh && git add -A && git commit -m "fix: regenerate stale Cargo.lock files"
 ```
 
 ### Cancel Running Build

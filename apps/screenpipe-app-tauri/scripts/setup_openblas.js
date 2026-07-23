@@ -46,6 +46,11 @@ export async function setupOpenBlas({ cwd, winArch }) {
 			) {
 				return false
 			}
+			// ARM64 exe imports the PE internal name "openblas.dll" — the
+			// installer bundles bin/*.dll, so both names must be present.
+			if (winArch === 'arm64' && !(await fs.exists(path.join(directory, 'bin', 'openblas.dll')))) {
+				return false
+			}
 			const configHeader = await fs
 				.readFile(path.join(directory, 'include', 'openblas_config.h'), 'utf8')
 				.catch(() => '')
@@ -87,11 +92,22 @@ async function flattenOpenBlas(openblasPath, winArch) {
 			}
 			await fs.rmdir(includeOpenblas)
 		}
-		// Rename openblas.dll → libopenblas.dll (expected by runtime loader)
+		// The woa64 package ships the DLL as openblas.dll on disk, but its PE
+		// internal name is also "openblas.dll" — the exe's import table resolves
+		// that name at runtime. Build tooling expects libopenblas.dll (matching
+		// x64). Keep BOTH names in bin/ so the installer bundle glob
+		// (tauri.windows.conf.json "openblas\\bin\\*.dll") ships both: renaming
+		// away openblas.dll caused installed ARM64 apps to crash at launch with
+		// "openblas.dll was not found". Copies in whichever direction is missing
+		// so previously-cached extractions (only libopenblas.dll) self-heal.
 		const openblasDll = path.join(openblasPath, 'bin', 'openblas.dll')
 		const libOpenblasDll = path.join(openblasPath, 'bin', 'libopenblas.dll')
-		if (await fs.exists(openblasDll)) {
-			await fs.rename(openblasDll, libOpenblasDll)
+		const hasOpenblasDll = await fs.exists(openblasDll)
+		const hasLibOpenblasDll = await fs.exists(libOpenblasDll)
+		if (hasOpenblasDll && !hasLibOpenblasDll) {
+			await fs.copyFile(openblasDll, libOpenblasDll)
+		} else if (hasLibOpenblasDll && !hasOpenblasDll) {
+			await fs.copyFile(libOpenblasDll, openblasDll)
 		}
 		// Rename openblas.lib → libopenblas.lib (MSVC import library for linking)
 		const openblasLib = path.join(openblasPath, 'lib', 'openblas.lib')
