@@ -147,6 +147,29 @@ fn vision_capture_silent(
     went_silent || never_produced
 }
 
+/// Pure step function for the anomalous-empty-enumeration counter — how many
+/// consecutive passes SCK returned zero displays while CG topology said
+/// capture should be possible. Clock- and FFI-free for unit testing.
+///
+/// - `Some(non-empty)` usable set → active displays exist yet SCK sees none:
+///   genuinely anomalous, count it.
+/// - `Some(empty)` → sleep/clamshell explains the empty list: benign, reset
+///   (the episode is over; a later anomaly must re-earn the threshold).
+/// - `None` → CG topology unreadable = unknown; callers MUST NOT infer a
+///   degraded topology from it (same discipline as the audio SCK watchdog's
+///   `usable_display_ids`), so hold the count — neither escalate toward the
+///   threshold nor erase progress on a transient CG error.
+fn next_anomalous_empty_count(
+    current: u32,
+    usable: Option<&std::collections::BTreeSet<u32>>,
+) -> u32 {
+    match usable {
+        Some(set) if !set.is_empty() => current.saturating_add(1),
+        Some(_) => 0,
+        None => current,
+    }
+}
+
 /// Start the monitor watcher that polls for monitor changes.
 /// When `audio_manager` is provided, SCK-based (output) audio devices are also
 /// stopped/restarted alongside vision during DRM pause/resume.
@@ -236,14 +259,18 @@ pub async fn start_monitor_watcher(
         let mut known_monitors: HashMap<u32, String> = HashMap::new();
         // Track permission state to avoid log spam
         let mut permission_denied_logged = false;
-        // Consecutive NoMonitorsFound results. On macOS a machine always has
-        // at least the built-in display, so a *persistent* empty enumeration
-        // means the screen-recording grant is dead even though the TCC
-        // preflight still says granted (macOS 15+/26 periodic re-approval
-        // lapse, or an update invalidating the grant). SCK reports that state
-        // as an empty list, not a permission error — without this escalation
-        // the watcher retried silently forever while capturing nothing.
-        let mut consecutive_no_monitors: u32 = 0;
+        // Consecutive passes where SCK enumerated zero displays WHILE
+        // CoreGraphics reported at least one usable (active, non-clamshell)
+        // display. An empty SCK list on its own is NOT evidence of a
+        // permission problem — display sleep and clamshell both produce it
+        // legitimately (empirically verified on macOS 26.4: granted + display
+        // asleep → SCShareableContent OK with 0 displays; see PR #5393
+        // review). But CG topology is readable without the screen-recording
+        // grant, so "CG sees active displays, SCK persistently sees none" is
+        // the anomalous state — the silent capture-loss shape that ran for
+        // whole days in the wild while the stale TCC preflight kept reporting
+        // granted. Only that combination escalates.
+        let mut consecutive_anomalous_empty: u32 = 0;
         const NO_MONITORS_PERMISSION_THRESHOLD: u32 = 3;
         // Track whether we stopped monitors due to DRM
         let mut drm_stopped = false;
@@ -516,7 +543,7 @@ pub async fn start_monitor_watcher(
             // Get currently connected monitors with detailed error info
             let current_monitors = match list_monitors_detailed().await {
                 Ok(monitors) => {
-                    consecutive_no_monitors = 0;
+                    consecutive_anomalous_empty = 0;
                     if permission_denied_logged {
                         info!("Screen recording permission granted! Starting vision capture.");
                         permission_denied_logged = false;
@@ -525,7 +552,7 @@ pub async fn start_monitor_watcher(
                     monitors
                 }
                 Err(MonitorListError::PermissionDenied) => {
-                    consecutive_no_monitors = 0;
+                    consecutive_anomalous_empty = 0;
                     if !permission_denied_logged {
                         warn!("Screen recording permission denied. Vision capture is disabled. Grant access in System Settings > Privacy & Security > Screen Recording");
                         permission_denied_logged = true;
@@ -544,22 +571,29 @@ pub async fn start_monitor_watcher(
                     continue;
                 }
                 Err(MonitorListError::NoMonitorsFound) => {
-                    consecutive_no_monitors = consecutive_no_monitors.saturating_add(1);
-                    // macOS always has at least the built-in display, so a
-                    // persistent empty enumeration IS a permission loss — the
-                    // stale-TCC state where SCK returns an empty list while
-                    // the preflight still reports granted. Elsewhere (headless
-                    // Linux, RDP on Windows) zero monitors can be legitimate,
-                    // so only macOS escalates.
-                    if cfg!(target_os = "macos")
-                        && consecutive_no_monitors >= NO_MONITORS_PERMISSION_THRESHOLD
-                    {
+                    // Classify the empty list via CG topology (readable
+                    // without the screen-recording grant) before treating it
+                    // as suspicious. Sleep/clamshell → benign; CG read error
+                    // → unknown, never escalate; active displays present →
+                    // count toward the anomalous-empty escalation. Non-macOS
+                    // never escalates (headless Linux / Windows RDP can
+                    // legitimately have zero monitors).
+                    let usable = if cfg!(target_os = "macos") {
+                        screenpipe_core::display_topology::usable_display_ids()
+                    } else {
+                        None
+                    };
+                    consecutive_anomalous_empty =
+                        next_anomalous_empty_count(consecutive_anomalous_empty, usable.as_ref());
+                    if consecutive_anomalous_empty >= NO_MONITORS_PERMISSION_THRESHOLD {
                         if !permission_denied_logged {
                             warn!(
-                                "No displays enumerated {} times in a row — screen recording \
-                                 permission is likely revoked or awaiting re-approval. Grant \
-                                 access in System Settings > Privacy & Security > Screen Recording",
-                                consecutive_no_monitors
+                                "SCK enumerated no displays {} times in a row while CoreGraphics \
+                                 reports {} active display(s) — screen recording permission is \
+                                 likely revoked or awaiting re-approval. Grant access in System \
+                                 Settings > Privacy & Security > Screen Recording",
+                                consecutive_anomalous_empty,
+                                usable.as_ref().map(|s| s.len()).unwrap_or(0)
                             );
                             permission_denied_logged = true;
                         }
@@ -568,7 +602,8 @@ pub async fn start_monitor_watcher(
                         permission_monitor::report_screen_enumeration(
                             false,
                             Some(
-                                "list_monitors returned no displays (stale screen-recording grant)",
+                                "SCK enumerated no displays while CG reports active displays \
+                                 (stale screen-recording grant)",
                             ),
                         );
                         // Same back-off as the explicit PermissionDenied path.
@@ -580,7 +615,7 @@ pub async fn start_monitor_watcher(
                     continue;
                 }
                 Err(e) => {
-                    consecutive_no_monitors = 0;
+                    consecutive_anomalous_empty = 0;
                     warn!("Failed to list monitors: {}", e);
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
@@ -765,6 +800,29 @@ mod tests {
 
     // Fixed "now" so deltas are exact and the tests never depend on wall clock.
     const NOW: u64 = 2_000_000_000;
+
+    #[test]
+    fn anomalous_empty_counter_only_advances_with_active_displays() {
+        use std::collections::BTreeSet;
+        let active: BTreeSet<u32> = [1u32].into_iter().collect();
+        let none_active: BTreeSet<u32> = BTreeSet::new();
+
+        // Active displays + empty SCK list: counts toward the threshold —
+        // the state that ran silent for whole days in the wild.
+        assert_eq!(next_anomalous_empty_count(0, Some(&active)), 1);
+        assert_eq!(next_anomalous_empty_count(2, Some(&active)), 3);
+
+        // Display sleep / clamshell (no usable displays) explains the empty
+        // list: benign, resets the episode. This is the false positive the
+        // review's macOS 26.4 probe demonstrated (granted + display asleep →
+        // SCShareableContent OK with 0 displays) — it must NEVER escalate.
+        assert_eq!(next_anomalous_empty_count(2, Some(&none_active)), 0);
+
+        // CG topology unreadable = unknown: hold, never treat as degraded.
+        assert_eq!(next_anomalous_empty_count(2, None), 2);
+        // Non-macOS always passes None → counter can never leave 0.
+        assert_eq!(next_anomalous_empty_count(0, None), 0);
+    }
 
     #[test]
     fn healthy_recent_write_is_not_wedged() {

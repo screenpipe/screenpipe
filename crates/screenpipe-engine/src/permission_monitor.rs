@@ -296,6 +296,17 @@ fn granted(status: PermissionStatus) -> bool {
 /// True while an enumeration-reported screen-recording loss is active —
 /// the poll must not report ScreenRecording from the (stale) preflight.
 fn screen_poll_suppressed() -> bool {
+    screen_enumeration_denied()
+}
+
+/// True while capture-side enumeration says screen recording is broken and no
+/// successful enumeration has been seen since. Public so app-side permission
+/// checks (`do_permissions_check`, the recovery window's poll) can honor the
+/// enumeration verdict instead of trusting `CGPreflightScreenCaptureAccess`
+/// alone — in the lapsed-grant state the preflight keeps answering granted,
+/// which previously made the recovery window treat the loss as instantly
+/// restored, close, restart capture, and return to the same silent failure.
+pub fn screen_enumeration_denied() -> bool {
     let state = STATE.lock().unwrap_or_else(|e| e.into_inner());
     state.screen_enum_denied
 }
