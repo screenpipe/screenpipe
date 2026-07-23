@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Check, ExternalLink, Loader2, Plus, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, LogOut, Pencil, Plus, X } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useInterval } from "@/lib/hooks/use-interval";
@@ -89,6 +89,8 @@ const MAX_ACCOUNTS = 5; // mirrors MAX_ACCOUNTS_PER_TOOLKIT on the server
 export interface ComposioAccount {
   id: string;
   alias: string | null;
+  /** Connected email resolved server-side; null while unknown. */
+  email?: string | null;
   created_at?: string | null;
 }
 
@@ -172,6 +174,8 @@ export function ComposioCard({
   const [busy, setBusy] = useState(false);
   const [addingAccount, setAddingAccount] = useState(false);
   const [aliasInput, setAliasInput] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameInput, setRenameInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const pollCount = useRef(0);
   // Account count when the pending authorize started; polling succeeds once
@@ -271,6 +275,39 @@ export function ComposioCard({
         ? "couldn't reach screenpipe.com — check your internet connection and try again"
         : e?.message || "could not start the connection";
       setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Relabel an account (same interaction as speakers rename). The pencil
+  // edits the alias, never the email; saving empty clears the label and the
+  // row falls back to showing the email.
+  const rename = async (accountId: string) => {
+    if (!token) return;
+    const alias = renameInput.trim();
+    const current = accounts.find((a) => a.id === accountId)?.alias ?? "";
+    if (alias === current) {
+      setRenamingId(null);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${COMPOSIO_API}/rename`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ toolkit, account_id: accountId, alias }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "rename failed");
+      setAccounts(accounts.map((a) => (a.id === accountId ? { ...a, alias: alias || null } : a)));
+      setRenamingId(null);
+    } catch (e: any) {
+      setError(e?.message || "rename failed");
     } finally {
       setBusy(false);
     }
@@ -411,27 +448,108 @@ export function ComposioCard({
         <div className="space-y-2">
           <p className="text-xs">
             <Check className="h-3 w-3 inline mr-1" />
-            {label} connected
-            {accounts.length > 1 ? ` (${accounts.length} accounts)` : ""} — your AI can
-            now read your {TOOLKIT_META[toolkit].connectedNoun}.
+            {label} connected — your AI can now read your{" "}
+            {TOOLKIT_META[toolkit].connectedNoun}.
           </p>
-          {accounts.length > 1 && (
-            <div className="border border-border divide-y divide-border">
-              {accounts.map((account, i) => (
-                <div key={account.id} className="flex items-center justify-between px-3 py-1.5">
-                  <span className="text-[11px] text-muted-foreground truncate">
-                    {account.alias || `account ${i + 1}`}
-                  </span>
-                  <button
-                    onClick={() => disconnect(account.id)}
-                    disabled={busy}
-                    title="remove this account"
-                    className="text-muted-foreground/70 hover:text-destructive cursor-pointer disabled:opacity-50"
+          {/* Named-instance rows — same pattern as OAuthPanel's multi-account
+              list (rounded muted rows, name left, quiet actions right). The
+              row leads with the alias when set, else the connected email;
+              the hover pencil edits the alias only (like speakers rename). */}
+          {supportsMulti && accounts.length > 0 && (
+            <div className="space-y-2">
+              {accounts.map((account, i) => {
+                const identity = account.alias || account.email || `account ${i + 1}`;
+                const editing = renamingId === account.id;
+                return (
+                  <div
+                    key={account.id}
+                    className="group flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs"
                   >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+                    {editing ? (
+                      <span className="flex items-baseline gap-2 min-w-0 flex-1">
+                        <input
+                          value={renameInput}
+                          onChange={(e) => setRenameInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !busy) rename(account.id);
+                            if (e.key === "Escape") setRenamingId(null);
+                          }}
+                          maxLength={64}
+                          placeholder="label — e.g. work"
+                          autoFocus
+                          className="h-6 w-36 rounded px-1.5 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
+                        />
+                        {account.email && (
+                          <span className="text-[10px] text-muted-foreground/70 truncate">
+                            {account.email}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="flex items-baseline gap-2 min-w-0">
+                        <span className="truncate">{identity}</span>
+                        {account.alias && account.email && (
+                          <span className="text-[10px] text-muted-foreground/70 truncate">
+                            {account.email}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    <span className="flex items-center gap-0.5 shrink-0">
+                      {editing ? (
+                        <>
+                          <Button
+                            onClick={() => rename(account.id)}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="save label"
+                            className="h-6 px-2 text-muted-foreground hover:text-foreground"
+                          >
+                            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                          </Button>
+                          <Button
+                            onClick={() => setRenamingId(null)}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="cancel"
+                            className="h-6 px-2 text-muted-foreground"
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            onClick={() => {
+                              setRenamingId(account.id);
+                              setRenameInput(account.alias ?? "");
+                            }}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="edit label"
+                            className="h-6 px-2 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            onClick={() => disconnect(account.id)}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="disconnect this account"
+                            className="h-6 px-2 text-muted-foreground hover:text-destructive"
+                          >
+                            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
+                          </Button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
           {waiting && (
@@ -442,44 +560,47 @@ export function ComposioCard({
             </p>
           )}
           {error && <p className="text-xs text-destructive">{error}</p>}
-          {supportsMulti && !waiting && accounts.length < MAX_ACCOUNTS && (
-            addingAccount ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  value={aliasInput}
-                  onChange={(e) => setAliasInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !busy) connect(aliasInput);
-                    if (e.key === "Escape") setAddingAccount(false);
-                  }}
-                  maxLength={64}
-                  placeholder="label — e.g. work, personal"
-                  autoFocus
-                  className="h-7 w-52 px-2 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
-                />
-                <Button
-                  onClick={() => connect(aliasInput)}
-                  disabled={busy}
-                  size="sm"
-                  className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
-                >
-                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
-                  connect
-                </Button>
-                <Button
-                  onClick={() => {
-                    setAddingAccount(false);
-                    setAliasInput("");
-                  }}
-                  disabled={busy}
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs normal-case font-sans tracking-normal"
-                >
-                  cancel
-                </Button>
-              </div>
-            ) : (
+          {/* "add another account" swaps in place for the label field, like
+              the Zendesk subdomain flow in OAuthPanel. */}
+          {supportsMulti && !waiting && accounts.length < MAX_ACCOUNTS && addingAccount && (
+            <div className="flex items-center gap-1.5">
+              <input
+                value={aliasInput}
+                onChange={(e) => setAliasInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !busy) connect(aliasInput);
+                  if (e.key === "Escape") setAddingAccount(false);
+                }}
+                maxLength={64}
+                placeholder="label — e.g. work, personal"
+                autoFocus
+                className="h-7 w-52 rounded-md px-2 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
+              />
+              <Button
+                onClick={() => connect(aliasInput)}
+                disabled={busy}
+                size="sm"
+                className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+              >
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
+                connect
+              </Button>
+              <Button
+                onClick={() => {
+                  setAddingAccount(false);
+                  setAliasInput("");
+                }}
+                disabled={busy}
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs normal-case font-sans tracking-normal"
+              >
+                cancel
+              </Button>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {supportsMulti && !waiting && !addingAccount && accounts.length < MAX_ACCOUNTS && (
               <Button
                 onClick={() => setAddingAccount(true)}
                 disabled={busy}
@@ -487,20 +608,20 @@ export function ComposioCard({
                 size="sm"
                 className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
               >
-                <Plus className="h-3 w-3" />connect another account
+                <Plus className="h-3 w-3" />add another account
               </Button>
-            )
-          )}
-          <Button
-            onClick={() => disconnect()}
-            disabled={busy}
-            variant="ghost"
-            size="sm"
-            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive"
-          >
-            <X className="h-3 w-3" />
-            {accounts.length > 1 ? "disconnect all" : "disconnect"}
-          </Button>
+            )}
+            <Button
+              onClick={() => disconnect()}
+              disabled={busy}
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive"
+            >
+              <X className="h-3 w-3" />
+              {accounts.length > 1 ? "disconnect all" : "disconnect"}
+            </Button>
+          </div>
           {privacyNote}
         </div>
       ) : (
