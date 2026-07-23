@@ -33,6 +33,7 @@ import {
 } from "@/lib/app-entitlement";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { useSourceBuildStatus } from "@/lib/hooks/use-is-source-build";
 import { commands } from "@/lib/utils/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -137,6 +138,8 @@ export function AppEntitlementGate({
     submitLicenseKey,
     policy: managedPolicy,
   } = useManagedPolicy();
+  const { isSourceBuild, resolved: isSourceBuildResolved } =
+    useSourceBuildStatus();
   // When the org policy requires account sign-in, the license key can't
   // authenticate — don't offer it. Best-effort: known from the last fetched
   // or cached policy, and always known right after a key was refused.
@@ -270,15 +273,16 @@ export function AppEntitlementGate({
     !hasConsumerSubscription &&
     enterpriseAccount?.requires_enterprise_app === true;
   const shouldGateForEntitlement = shouldGateForUnknownConsumerPolicy;
-  const shouldGate = isOnboardingRoute
-    ? false
-    : !isManagedDeploymentResolved
-      ? true
-      : isManagedDeployment
-        ? !isManagedAuthenticated
-        : shouldGateForEnterpriseApp ||
-          shouldGateForConsumerLogin ||
-          shouldGateForUnknownConsumerPolicy;
+  const shouldGate =
+    isOnboardingRoute || isSourceBuild
+      ? false
+      : !isManagedDeploymentResolved || !isSourceBuildResolved
+        ? true
+        : isManagedDeployment
+          ? !isManagedAuthenticated
+          : shouldGateForEnterpriseApp ||
+            shouldGateForConsumerLogin ||
+            shouldGateForUnknownConsumerPolicy;
   const enterpriseAuthenticationPending =
     isManagedDeployment && authenticationState === "checking";
   const email = user?.email || "this account";
@@ -392,7 +396,13 @@ export function AppEntitlementGate({
     // "checking access" shell, but that transient state must never stop the
     // recorder. Otherwise opening the overlay can tear down the local API just
     // before the consumer/enterprise result arrives.
-    if (!isSettingsLoaded || !isManagedDeploymentResolved) return;
+    if (
+      !isSettingsLoaded ||
+      !isManagedDeploymentResolved ||
+      !isSourceBuildResolved
+    ) {
+      return;
+    }
     if (!shouldGate) {
       stoppedForGateRef.current = false;
       return;
@@ -416,6 +426,7 @@ export function AppEntitlementGate({
     enterpriseAuthenticationPending,
     isManagedDeployment,
     isManagedDeploymentResolved,
+    isSourceBuildResolved,
     isSettingsLoaded,
     shouldGate,
   ]);
@@ -689,7 +700,7 @@ export function AppEntitlementGate({
     return <>{children}</>;
   }
 
-  if (!isManagedDeploymentResolved) {
+  if (!isManagedDeploymentResolved || !isSourceBuildResolved) {
     return (
       <EntitlementShell
         title="checking access"

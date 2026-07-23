@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
     authenticationError: null as string | null,
     isManagedAuthenticated: false,
   },
+  sourceStatus: {
+    isSourceBuild: false,
+    resolved: true,
+    error: false,
+  },
   selectAuthenticationMethod: vi.fn(),
   submitLicenseKey: vi.fn(async () => ({ ok: true })),
   setOnboardingStep: vi.fn(async () => undefined),
@@ -46,6 +51,9 @@ vi.mock("@/lib/hooks/use-managed-policy", () => ({
     selectAuthenticationMethod: mocks.selectAuthenticationMethod,
     submitLicenseKey: mocks.submitLicenseKey,
   }),
+}));
+vi.mock("@/lib/hooks/use-is-source-build", () => ({
+  useSourceBuildStatus: () => mocks.sourceStatus,
 }));
 vi.mock("@/components/onboarding/login-gate", () => ({
   default: () => <div>regular sign in</div>,
@@ -104,6 +112,11 @@ describe("enterprise onboarding authentication", () => {
       authenticationError: null,
       isManagedAuthenticated: false,
     };
+    mocks.sourceStatus = {
+      isSourceBuild: false,
+      resolved: true,
+      error: false,
+    };
     onboardingData.currentStep = "login";
     onboardingData.isCompleted = false;
     mocks.applyEnterpriseUiVisibility.mockResolvedValue(false);
@@ -115,6 +128,23 @@ describe("enterprise onboarding authentication", () => {
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /use enterprise key/i }));
     expect(mocks.selectAuthenticationMethod).toHaveBeenCalledWith("license_key");
+  });
+
+  it("skips account login for source builds", async () => {
+    mocks.enterprisePolicy = {
+      isManagedDeployment: false,
+      isManagedDeploymentResolved: false,
+      authenticationState: "checking",
+      authenticationError: null,
+      isManagedAuthenticated: false,
+    };
+    mocks.sourceStatus.isSourceBuild = true;
+
+    render(<OnboardingPage />);
+
+    await waitFor(() =>
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+    );
   });
 
   it("renders Enterprise Key entry on the onboarding login step", () => {

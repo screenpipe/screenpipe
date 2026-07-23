@@ -8,7 +8,7 @@ mod native_actions;
 use crate::{
     native_notification, native_shortcut_reminder,
     store::{OnboardingStore, SettingsStore},
-    updates::is_enterprise_build,
+    updates::{is_enterprise_build, is_source_build},
     window::{RewindWindowId, ShowRewindWindow},
 };
 use tauri::{Emitter, Manager};
@@ -118,6 +118,12 @@ mod tests {
 #[specta::specta]
 pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
     is_enterprise_build(&app_handle)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn is_source_build_cmd(app_handle: tauri::AppHandle) -> bool {
+    is_source_build(&app_handle)
 }
 
 /// Return the macOS bundle identifier of the running app

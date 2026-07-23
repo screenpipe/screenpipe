@@ -78,6 +78,7 @@ fn configured_local_api_port(app: &tauri::AppHandle) -> u16 {
 }
 
 fn recording_access_policy(
+    is_source_build: bool,
     is_enterprise_build: bool,
     dev_bypass: bool,
     has_verified_local_plan: bool,
@@ -85,6 +86,9 @@ fn recording_access_policy(
     consumer_requires_enterprise_app: bool,
 ) -> bool {
     if dev_bypass {
+        return true;
+    }
+    if is_source_build {
         return true;
     }
     if !is_enterprise_build && consumer_requires_enterprise_app {
@@ -96,11 +100,12 @@ fn recording_access_policy(
     has_verified_local_plan
 }
 
-/// Consumer builds allow signed-in accounts to record on the free plan.
-/// Enterprise builds keep their native entitlement guard, and consumer builds
-/// still reject accounts that are required to use an enterprise binary.
+/// Source builds can record locally without an account. Official consumer
+/// builds allow verified free accounts, while enterprise builds keep their
+/// native entitlement guard.
 pub(crate) fn recording_access_allowed(store: &SettingsStore) -> bool {
     recording_access_policy(
+        crate::updates::source_build_enabled(),
         cfg!(feature = "enterprise-build"),
         cfg!(debug_assertions),
         store.local_plan_policy() != LocalPlanPolicy::Unknown,
@@ -1430,28 +1435,47 @@ mod recording_access_tests {
 
     #[test]
     fn verified_free_consumer_can_record_without_a_paid_entitlement() {
-        assert!(recording_access_policy(false, false, true, false, false));
+        assert!(recording_access_policy(
+            false, false, false, true, false, false
+        ));
+    }
+
+    #[test]
+    fn source_build_can_record_without_an_account() {
+        assert!(recording_access_policy(
+            true, false, false, false, false, false
+        ));
     }
 
     #[test]
     fn consumer_with_unknown_plan_cannot_record() {
-        assert!(!recording_access_policy(false, false, false, false, false));
+        assert!(!recording_access_policy(
+            false, false, false, false, false, false
+        ));
     }
 
     #[test]
     fn signed_out_consumer_cannot_start_recording() {
-        assert!(!recording_access_policy(false, false, false, false, false));
+        assert!(!recording_access_policy(
+            false, false, false, false, false, false
+        ));
     }
 
     #[test]
     fn enterprise_build_still_requires_entitlement() {
-        assert!(!recording_access_policy(true, false, true, false, false));
-        assert!(recording_access_policy(true, false, true, true, false));
+        assert!(!recording_access_policy(
+            false, true, false, true, false, false
+        ));
+        assert!(recording_access_policy(
+            false, true, false, true, true, false
+        ));
     }
 
     #[test]
     fn mandatory_enterprise_org_cannot_record_from_consumer_binary() {
-        assert!(!recording_access_policy(false, false, true, true, true));
+        assert!(!recording_access_policy(
+            false, false, false, true, true, true
+        ));
     }
 }
 

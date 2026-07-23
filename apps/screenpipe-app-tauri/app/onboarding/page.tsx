@@ -13,6 +13,7 @@ import ConnectApps from "@/components/onboarding/connect-apps";
 import PickPipe from "@/components/onboarding/pick-pipe";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { useSourceBuildStatus } from "@/lib/hooks/use-is-source-build";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
@@ -125,6 +126,8 @@ export default function OnboardingPage() {
     submitLicenseKey,
     policy: managedPolicy,
   } = useManagedPolicy();
+  const { isSourceBuild, resolved: isSourceBuildResolved } =
+    useSourceBuildStatus();
 
   // Restore saved step on mount
   useEffect(() => {
@@ -250,20 +253,24 @@ export default function OnboardingPage() {
     isManagedDeployment,
   ]);
 
-  // Enterprise authentication owns the onboarding login step. Existing saved
-  // keys and accepted workspace accounts advance silently once verified.
+  // Source builds do not need an account. Enterprise authentication owns the
+  // same step and advances once its credentials have been verified.
   useEffect(() => {
     if (
       currentSlide === "login" &&
-      isManagedDeploymentResolved &&
-      isManagedDeployment &&
-      isManagedAuthenticated &&
+      isSourceBuildResolved &&
+      (isSourceBuild ||
+        (isManagedDeploymentResolved &&
+          isManagedDeployment &&
+          isManagedAuthenticated)) &&
       !isTransitioning
     ) {
       void handleNextSlide();
     }
   }, [
     currentSlide,
+    isSourceBuild,
+    isSourceBuildResolved,
     isManagedDeployment,
     isManagedDeploymentResolved,
     isManagedAuthenticated,
@@ -271,7 +278,11 @@ export default function OnboardingPage() {
     handleNextSlide,
   ]);
 
-  if (isLoading || !isManagedDeploymentResolved) {
+  if (
+    isLoading ||
+    !isSourceBuildResolved ||
+    (!isSourceBuild && !isManagedDeploymentResolved)
+  ) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="w-6 h-6 border border-foreground border-t-transparent rounded-full animate-spin" />

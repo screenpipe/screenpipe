@@ -37,6 +37,11 @@ const mocks = vi.hoisted(() => ({
     authenticationError: null as string | null,
     isManagedAuthenticated: true,
   },
+  source: {
+    isSourceBuild: false,
+    resolved: true,
+    error: false,
+  },
   selectAuthenticationMethod: vi.fn(),
   submitLicenseKey: vi.fn(async () => ({ ok: true })),
 }));
@@ -71,6 +76,10 @@ vi.mock("@/lib/hooks/use-managed-policy", () => ({
     selectAuthenticationMethod: mocks.selectAuthenticationMethod,
     submitLicenseKey: mocks.submitLicenseKey,
   }),
+}));
+
+vi.mock("@/lib/hooks/use-is-source-build", () => ({
+  useSourceBuildStatus: () => mocks.source,
 }));
 
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
@@ -134,6 +143,11 @@ describe("AppEntitlementGate", () => {
       authenticationError: null,
       isManagedAuthenticated: true,
     };
+    mocks.source = {
+      isSourceBuild: false,
+      resolved: true,
+      error: false,
+    };
   });
 
   afterEach(() => {
@@ -156,6 +170,18 @@ describe("AppEntitlementGate", () => {
 
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(screen.queryByText(/enterprise access/i)).not.toBeInTheDocument();
+  });
+
+  it("does not require an account in a source build", async () => {
+    mocks.source.isSourceBuild = true;
+    mocks.enterprise.isManagedDeploymentResolved = false;
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+    expect(screen.queryByText(/sign in required/i)).not.toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
   });
 
   it("waits for build detection before stopping a gated session", async () => {
