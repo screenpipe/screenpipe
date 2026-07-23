@@ -83,14 +83,14 @@ export const NOTIFICATION_GROUPS: NotificationGroup[] = [
 export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
   {
     id: "captureStalls",
-    label: "Capture stalls",
+    label: "Recording health alerts",
     description:
-      "Alert when audio or screen capture stops — may send false positives",
+      "Show “recording needs help” and notify when capture stops — may send false positives",
     group: "recording",
-    default: true,
+    default: false,
     experimental: true,
     mirrorsShowRestartNotifications: true,
-    keywords: ["recording stopped", "capture health", "stall", "frozen"],
+    keywords: ["recording needs help", "recording stopped", "capture health", "stall", "frozen"],
   },
   {
     id: "meetingLiveNotes",

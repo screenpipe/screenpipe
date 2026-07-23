@@ -60,7 +60,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { AIPreset, commands } from "@/lib/utils/tauri";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import {
   DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
   filterPresetsForEnterprisePolicy,
@@ -191,7 +191,7 @@ export function AIProviderConfig({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [idError, setIdError] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
-  const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
+  const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const [piAvailable, setPiAvailable] = useState(false);
   const { piModels, isLoading: loadingPiModels } = usePiModels();
@@ -208,17 +208,17 @@ export function AIProviderConfig({
         console.error("Failed to check pi:", e);
       }
     };
-    if (isEnterprise) {
+    if (isManagedDeployment) {
       setPiAvailable(aiPresetPolicy.allow_screenpipe_cloud);
       return;
     }
-    if (!isEnterprise) {
+    if (!isManagedDeployment) {
       checkPi();
     }
     // Re-check periodically in case background install finishes
-    const interval = isEnterprise ? null : setInterval(checkPi, 5000);
+    const interval = isManagedDeployment ? null : setInterval(checkPi, 5000);
     return () => { if (interval) clearInterval(interval); };
-  }, [isEnterprise, aiPresetPolicy.allow_screenpipe_cloud]);
+  }, [isManagedDeployment, aiPresetPolicy.allow_screenpipe_cloud]);
   const [formData, setFormData] = useState<AIPreset>({
     provider: defaultPreset?.provider || "openai",
     apiKey: defaultPreset?.apiKey || "",
@@ -1052,9 +1052,9 @@ export const AIPresetsSelector = ({
     AIPreset | undefined
   >();
   const isControlled = onControlledSelect !== undefined;
-  const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
+  const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
-  const canManageEmployeePresets = !isEnterprise || aiPresetPolicy.allow_employee_custom_presets;
+  const canManageEmployeePresets = !isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets;
 
   const showUpsell = useModelUpsellGating();
   const { piModels } = usePiModels();
@@ -1062,8 +1062,8 @@ export const AIPresetsSelector = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {
     const presets = (settings?.aiPresets || []) as AIPreset[];
-    return isEnterprise ? filterPresetsForEnterprisePolicy(presets, aiPresetPolicy) : presets;
-  }, [settings?.aiPresets, isEnterprise, aiPresetPolicy]);
+    return isManagedDeployment ? filterPresetsForEnterprisePolicy(presets, aiPresetPolicy) : presets;
+  }, [settings?.aiPresets, isManagedDeployment, aiPresetPolicy]);
 
   const selectedPreset = useMemo(() => {
     if (isControlled) return controlledPresetId ?? undefined;
@@ -1305,7 +1305,7 @@ export const AIPresetsSelector = ({
   const handleSetDefaultPreset = (preset: AIPreset) => {
     if (!settings?.aiPresets) return;
     if (preset.defaultPreset) return;
-    if (isEnterprise && aiPresetPolicy.lock_default_preset) {
+    if (isManagedDeployment && aiPresetPolicy.lock_default_preset) {
       toast.error("Default preset is locked", {
         description: "Your admin controls the default AI preset",
       });

@@ -12,7 +12,12 @@
 //! it wires a co-located agent to the local engine on `http://localhost:3030`.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use colored::Colorize;
+use std::{
+    collections::BTreeSet,
+    io::{self, IsTerminal, Write},
+    path::{Path, PathBuf},
+};
 
 // Canonical skill sources — single source of truth lives in screenpipe-core
 // (the same files the pi-agent and the desktop app ship). Embedded at compile
@@ -24,11 +29,19 @@ const CLI_SKILL_MD: &str =
 
 #[derive(clap::Subcommand, Debug)]
 pub enum AgentCommand {
-    /// Install the screenpipe skill + register the MCP server into an agent.
+    /// Install the screenpipe skills + MCP server into one agent or every
+    /// supported AI tool detected on this computer.
     Setup {
-        /// Which agent to wire up.
-        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf"])]
-        target: String,
+        /// Which agent to wire up. Omit when using --all.
+        #[arg(
+            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf"],
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
+        target: Option<String>,
+        /// Wire every supported AI tool detected on this computer.
+        #[arg(long, default_value_t = false)]
+        all: bool,
         /// screenpipe REST API base URL the skill + MCP should target.
         /// Default `http://localhost:3030` (agent co-located with the engine).
         /// Set this when the agent runs elsewhere — e.g. a VPS holding a synced
@@ -48,16 +61,263 @@ pub enum AgentCommand {
 
 pub async fn handle_agent_command(cmd: &AgentCommand) -> Result<()> {
     match cmd {
-        AgentCommand::Setup { target, api_url } => setup(target, api_url),
+        AgentCommand::Setup {
+            target,
+            all,
+            api_url,
+        } => {
+            if *all {
+                setup_all_detected(api_url)
+            } else {
+                setup(
+                    target
+                        .as_deref()
+                        .context("choose an agent target or pass --all")?,
+                    api_url,
+                )
+            }
+        }
         AgentCommand::Remove { target } => remove(target),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DetectedAgent {
+    target: &'static str,
+    name: &'static str,
+}
+
+const AGENT_SETUP_PROMPT_STATE: &str = "agent-setup-prompted-v1";
+
+/// Offer the desktop onboarding's "connect all your AI tools" flow when the
+/// standalone CLI starts recording. This is deliberately synchronous: the
+/// prompt is a one-time startup choice, and setup must finish before agents
+/// can safely read the configs we write.
+///
+/// Non-interactive launches (services, pipes, redirected stdin), the desktop
+/// app, and users who disabled reminders never see the prompt.
+pub fn maybe_prompt_connect_detected(data_dir: &Path) {
+    if std::env::var("SCREENPIPE_NO_REMINDERS").is_ok()
+        || std::env::var("SCREENPIPE_NO_AGENT_SETUP_PROMPT").is_ok()
+        || !io::stdin().is_terminal()
+        || !io::stderr().is_terminal()
+    {
+        return;
+    }
+
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let needing_setup = agents_needing_setup_in(&home);
+    if needing_setup.is_empty() {
+        return;
+    }
+
+    // A decline is remembered per detected target, so normal recording starts
+    // never nag. Installing a new supported AI tool creates one fresh prompt.
+    let prompted = read_prompted_targets(data_dir);
+    if needing_setup
+        .iter()
+        .all(|agent| prompted.contains(agent.target))
+    {
+        return;
+    }
+
+    let names = needing_setup
+        .iter()
+        .map(|agent| agent.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!();
+    eprintln!(
+        "  {} found {}",
+        "connect your AI:".cyan().bold(),
+        names.as_str().green().bold()
+    );
+    eprintln!(
+        "  add screenpipe MCP + supported skills to every detected tool? existing settings are preserved."
+    );
+    eprint!("  {} ", "[Y/n]".cyan().bold());
+    let _ = io::stderr().flush();
+
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer).is_err() {
+        return;
+    }
+    let accepted = matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "" | "y" | "yes"
+    );
+
+    // Mark every currently unconfigured target as prompted whether the user
+    // accepts or declines. Failed installs remain available via the explicit
+    // command without blocking every future recording start.
+    if let Err(error) = write_prompted_targets(data_dir, &needing_setup) {
+        eprintln!("  note: could not remember this choice: {error}");
+    }
+
+    if accepted {
+        eprintln!();
+        if let Err(error) = setup_all_detected("http://localhost:3030") {
+            eprintln!(
+                "\n  {} {error}",
+                "some tools were not connected:".yellow().bold()
+            );
+            eprintln!(
+                "  retry with {}",
+                "screenpipe agent setup --all".green().bold()
+            );
+        }
+    } else {
+        eprintln!(
+            "  not now — run {} whenever you're ready.\n",
+            "screenpipe agent setup --all".green().bold()
+        );
+    }
+}
+
+fn detected_agents_in(home: &Path) -> Vec<DetectedAgent> {
+    let mut detected = Vec::new();
+
+    if let Ok(config) = claude_desktop_config(home) {
+        if config.parent().is_some_and(Path::exists) {
+            detected.push(DetectedAgent {
+                target: "claude-desktop",
+                name: "Claude Desktop",
+            });
+        }
+    }
+    // The desktop connect flow creates ~/.claude/skills even for people who
+    // only use Claude Desktop. Claude Code itself owns ~/.claude.json, so use
+    // that as the detection signal and avoid manufacturing a second app.
+    if home.join(".claude.json").exists() {
+        detected.push(DetectedAgent {
+            target: "claude-code",
+            name: "Claude Code",
+        });
+    }
+    for (target, name, relative_dir) in [
+        ("codex", "Codex", ".codex"),
+        ("cursor", "Cursor", ".cursor"),
+        ("openclaw", "OpenClaw", ".openclaw"),
+        ("hermes", "Hermes", ".hermes"),
+        ("windsurf", "Windsurf / Devin Desktop", ".codeium/windsurf"),
+    ] {
+        if home.join(relative_dir).exists() {
+            detected.push(DetectedAgent { target, name });
+        }
+    }
+    detected
+}
+
+fn agents_needing_setup_in(home: &Path) -> Vec<DetectedAgent> {
+    detected_agents_in(home)
+        .into_iter()
+        .filter(|agent| !is_agent_setup_in(agent.target, home))
+        .collect()
+}
+
+fn is_agent_setup_in(target: &str, home: &Path) -> bool {
+    let Ok(layout) = layout_in(target, home) else {
+        return false;
+    };
+    let skills_ready = layout.skills_dir.as_ref().is_none_or(|skills_dir| {
+        ["screenpipe-api", "screenpipe-cli"]
+            .iter()
+            .all(|name| skills_dir.join(name).join("SKILL.md").is_file())
+    });
+    skills_ready && has_screenpipe_mcp(&layout)
+}
+
+fn has_screenpipe_mcp(layout: &AgentLayout) -> bool {
+    let Ok(Some(existing)) = read_config_text(&layout.mcp_path) else {
+        return false;
+    };
+    match layout.mcp_format {
+        McpFormat::Json => serde_json::from_str::<serde_json::Value>(&existing)
+            .ok()
+            .and_then(|root| root.get("mcpServers")?.get("screenpipe").cloned())
+            .is_some_and(|entry| !entry.is_null()),
+        McpFormat::Toml => existing.lines().any(|line| {
+            line.trim() == "[mcp_servers.screenpipe]"
+                || line.trim() == "[mcp_servers.\"screenpipe\"]"
+        }),
+        McpFormat::Yaml => existing.lines().any(|line| {
+            let line = line.trim_start();
+            !line.starts_with('#')
+                && (line.starts_with("screenpipe:") || line.contains("screenpipe-mcp"))
+        }),
+    }
+}
+
+fn setup_all_detected(api_url: &str) -> Result<()> {
+    let home = dirs::home_dir().context("could not resolve home dir")?;
+    let detected = detected_agents_in(&home);
+    if detected.is_empty() {
+        println!("no supported AI tools detected on this computer");
+        return Ok(());
+    }
+
+    let pending = detected
+        .into_iter()
+        .filter(|agent| !is_agent_setup_in(agent.target, &home))
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        println!("all detected AI tools are already connected to screenpipe");
+        return Ok(());
+    }
+
+    let mut failures = Vec::new();
+    for agent in &pending {
+        match setup(agent.target, api_url) {
+            Ok(()) if is_agent_setup_in(agent.target, &home) => {}
+            Ok(()) => failures.push(format!(
+                "{}: setup finished without a complete MCP + skills installation",
+                agent.name
+            )),
+            Err(error) => failures.push(format!("{}: {error:#}", agent.name)),
+        }
+    }
+    if failures.is_empty() {
+        println!(
+            "\nconnected screenpipe to {} detected AI tool(s)",
+            pending.len()
+        );
+        Ok(())
+    } else {
+        anyhow::bail!(failures.join("; "))
+    }
+}
+
+fn prompt_state_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(AGENT_SETUP_PROMPT_STATE)
+}
+
+fn read_prompted_targets(data_dir: &Path) -> BTreeSet<String> {
+    std::fs::read_to_string(prompt_state_path(data_dir))
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn write_prompted_targets(data_dir: &Path, agents: &[DetectedAgent]) -> Result<()> {
+    std::fs::create_dir_all(data_dir).with_context(|| format!("create {}", data_dir.display()))?;
+    let mut targets = read_prompted_targets(data_dir);
+    targets.extend(agents.iter().map(|agent| agent.target.to_owned()));
+    let body = targets.into_iter().collect::<Vec<_>>().join("\n") + "\n";
+    let path = prompt_state_path(data_dir);
+    std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
 }
 
 /// Where a given agent keeps its skills + MCP config. Paths mirror the in-app
 /// OpenClaw/Hermes cards exactly so CLI and GUI setups agree.
 struct AgentLayout {
     name: &'static str,
-    /// `None` for MCP-only agents (Claude Desktop, Codex, Cursor, Windsurf).
+    /// `None` for MCP-only agents (Claude Desktop and Windsurf).
     skills_dir: Option<PathBuf>,
     mcp_path: PathBuf,
     mcp_format: McpFormat,
@@ -72,6 +332,10 @@ enum McpFormat {
 
 fn layout(target: &str) -> Result<AgentLayout> {
     let h = dirs::home_dir().context("could not resolve home dir")?;
+    layout_in(target, &h)
+}
+
+fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
     Ok(match target {
         // OpenClaw's real layout (verified against a live install + docs):
         // root is ~/.openclaw, skills under ~/.openclaw/skills, MCP servers
@@ -234,7 +498,8 @@ fn setup(target: &str, api_url: &str) -> Result<()> {
     println!("wiring screenpipe → {} (api: {})", l.name, api_url);
 
     let installed_skills = install_skills(target, api_url)?;
-    if installed_skills.is_empty() {
+    let has_skills = !installed_skills.is_empty();
+    if !has_skills {
         println!("  · {} is MCP-only (no skills dir)", l.name);
     } else {
         for path in installed_skills {
@@ -249,8 +514,9 @@ fn setup(target: &str, api_url: &str) -> Result<()> {
     }
 
     println!(
-        "\ndone — restart {} so it loads the skill + mcp, then ask it:\n  \"what was i doing yesterday afternoon?\"",
-        l.name
+        "\ndone — restart {} so it loads the screenpipe {}, then ask it:\n  \"what was i doing yesterday afternoon?\"",
+        l.name,
+        if has_skills { "skills + MCP" } else { "MCP" }
     );
     if remote {
         println!(
@@ -401,9 +667,28 @@ fn remove_mcp_toml(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Remove only the exact `mcp_servers:` block `merge_mcp_yaml` writes (a sole
-/// `screenpipe:` child referencing screenpipe-mcp). Anything hand-authored is
-/// left untouched with manual instructions — we never string-slice foreign YAML.
+fn yaml_indent(line: &str) -> usize {
+    line.chars()
+        .take_while(|character| *character == ' ')
+        .count()
+}
+
+fn yaml_top_level_block_end(lines: &[String], start: usize) -> usize {
+    let mut end = start + 1;
+    while end < lines.len() {
+        let line = &lines[end];
+        if line.trim().is_empty() || yaml_indent(line) > 0 {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+/// Remove only the exact `screenpipe:` child `merge_mcp_yaml` writes. Other
+/// MCP servers and unrelated YAML remain byte-for-byte equivalent apart from
+/// harmless blank-line normalization.
 fn remove_mcp_yaml(path: &Path) -> Result<()> {
     let existing = match read_config_text(path)? {
         Some(s) => s,
@@ -420,44 +705,54 @@ fn remove_mcp_yaml(path: &Path) -> Result<()> {
         println!("  · no screenpipe mcp entry in {}", path.display());
         return Ok(());
     }
-    let lines: Vec<&str> = existing.lines().collect();
-    let Some(start) = lines.iter().position(|l| l.trim_end() == "mcp_servers:") else {
+    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
+    let Some(block_start) = lines.iter().position(|line| line == "mcp_servers:") else {
         println!(
             "  • {} references screenpipe outside an mcp_servers block — remove it manually",
             path.display()
         );
         return Ok(());
     };
-    let mut end = start + 1;
-    let mut children: Vec<String> = Vec::new();
-    while end < lines.len()
-        && (lines[end].trim().is_empty()
-            || lines[end].starts_with(' ')
-            || lines[end].starts_with('\t'))
-    {
-        if let Some(name) = lines[end]
-            .strip_prefix("  ")
-            .filter(|l| !l.starts_with(' '))
-            .and_then(|l| l.split(':').next())
-        {
-            children.push(name.to_string());
-        }
-        end += 1;
-    }
-    let block = lines[start..end].join("\n");
-    if children != ["screenpipe"] || !block.contains("screenpipe-mcp") {
+    let block_end = yaml_top_level_block_end(&lines, block_start);
+    let Some(server_start) = (block_start + 1..block_end)
+        .find(|index| yaml_indent(&lines[*index]) == 2 && lines[*index].trim() == "screenpipe:")
+    else {
         println!(
-            "  • {} has a customized mcp_servers block — delete the screenpipe entry manually",
+            "  • {} has a customized screenpipe MCP entry — remove it manually",
+            path.display()
+        );
+        return Ok(());
+    };
+    let mut server_end = server_start + 1;
+    while server_end < block_end {
+        let line = &lines[server_end];
+        if line.trim().is_empty() || yaml_indent(line) > 2 {
+            server_end += 1;
+        } else {
+            break;
+        }
+    }
+    if !lines[server_start..server_end]
+        .join("\n")
+        .contains("screenpipe-mcp")
+    {
+        println!(
+            "  • {} has a customized screenpipe MCP entry — remove it manually",
             path.display()
         );
         return Ok(());
     }
-    let next: Vec<&str> = lines[..start]
+
+    lines.drain(server_start..server_end);
+    let new_block_end = yaml_top_level_block_end(&lines, block_start);
+    let has_other_children = lines[block_start + 1..new_block_end]
         .iter()
-        .chain(lines[end..].iter())
-        .copied()
-        .collect();
-    let mut next = next.join("\n");
+        .any(|line| yaml_indent(line) == 2 && !line.trim_start().starts_with('#'));
+    if !has_other_children {
+        lines.drain(block_start..new_block_end);
+    }
+
+    let mut next = lines.join("\n");
     while next.contains("\n\n\n") {
         next = next.replace("\n\n\n", "\n\n");
     }
@@ -504,9 +799,9 @@ fn merge_mcp_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
 }
 
 /// Add the `screenpipe` server to a YAML MCP config (Hermes). We don't pull a
-/// YAML parser, so we string-merge conservatively: write fresh / append a new
-/// `mcp_servers:` block, but if one already exists we print the snippet rather
-/// than risk corrupting hand-edited YAML.
+/// YAML parser because rewriting the document would discard comments. Instead,
+/// merge only into an ordinary top-level `mcp_servers:` mapping and preserve
+/// every existing line. Inline or otherwise unusual mappings stay manual.
 fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -536,13 +831,25 @@ fn merge_mcp_yaml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
         );
         return Ok(());
     }
-    if existing.lines().any(|l| l.starts_with("mcp_servers:")) {
-        println!(
-            "  • {} already has an mcp_servers block — add this under it manually:\n{server}",
-            path.display()
-        );
+    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
+    if let Some(start) = lines.iter().position(|line| line == "mcp_servers:") {
+        let end = yaml_top_level_block_end(&lines, start);
+        lines.splice(end..end, server.lines().map(str::to_owned));
+        replace_config(path, &(lines.join("\n") + "\n"))?;
+        println!("  ✓ mcp   {}", path.display());
         return Ok(());
     }
+
+    if existing
+        .lines()
+        .any(|line| !line.trim_start().starts_with('#') && line.contains("mcp_servers:"))
+    {
+        anyhow::bail!(
+            "{} has a non-standard mcp_servers mapping; add this manually:\n{server}",
+            path.display()
+        );
+    }
+
     let mut out = existing;
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
@@ -608,6 +915,14 @@ mod tests {
         let md = "use http://localhost:3030/search";
         let out = md.replace("localhost:3030", host_port("http://10.0.0.5:3030"));
         assert_eq!(out, "use http://10.0.0.5:3030/search");
+    }
+
+    #[test]
+    fn test_api_skill_routes_learning_to_user_owned_skills() {
+        assert!(!API_SKILL_MD.contains("improve the most relevant existing skill"));
+        assert!(API_SKILL_MD.contains("Store that learning in a separate user-owned skill"));
+        assert!(API_SKILL_MD.contains("Never modify this `screenpipe-api` skill"));
+        assert!(API_SKILL_MD.contains("bundled, vendor-installed, or externally managed skill"));
     }
 
     #[test]
@@ -871,6 +1186,36 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_and_remove_mcp_yaml_preserves_existing_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        let seeded = "model: test\nmcp_servers:\n  existing:\n    command: existing-server\nnotifications: true\n";
+        std::fs::write(&path, seeded).unwrap();
+
+        merge_mcp_yaml(&path, true, "http://box:3030").unwrap();
+        let merged = std::fs::read_to_string(&path).unwrap();
+        assert!(merged.contains("  existing:\n    command: existing-server"));
+        assert!(merged.contains("  screenpipe:\n    command: npx"));
+        assert!(merged.contains("SCREENPIPE_API_URL: http://box:3030"));
+        assert!(merged.contains("notifications: true"));
+
+        remove_mcp_yaml(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seeded);
+    }
+
+    #[test]
+    fn test_merge_mcp_yaml_rejects_non_standard_mapping_without_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        let seeded = "model: test\nmcp_servers: { existing: { command: x } }\n";
+        std::fs::write(&path, seeded).unwrap();
+
+        let error = merge_mcp_yaml(&path, false, "http://localhost:3030").unwrap_err();
+        assert!(error.to_string().contains("non-standard mcp_servers"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seeded);
+    }
+
+    #[test]
     fn test_remove_mcp_yaml_leaves_foreign_block() {
         let dir = std::env::temp_dir().join(format!("sp-agent-rmyaml2-{}", std::process::id()));
         let path = dir.join("config.yaml");
@@ -906,5 +1251,143 @@ mod tests {
         let s2 = std::fs::read_to_string(&path).unwrap();
         assert_eq!(s2.matches("[mcp_servers.screenpipe]").count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_detect_agents_from_the_same_config_directories_as_desktop() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        for relative in [
+            ".codex",
+            ".cursor",
+            ".openclaw",
+            ".hermes",
+            ".codeium/windsurf",
+        ] {
+            std::fs::create_dir_all(home.join(relative)).unwrap();
+        }
+        std::fs::write(home.join(".claude.json"), "{}\n").unwrap();
+        #[cfg(target_os = "macos")]
+        std::fs::create_dir_all(home.join("Library/Application Support/Claude")).unwrap();
+
+        let targets = detected_agents_in(home)
+            .into_iter()
+            .map(|agent| agent.target)
+            .collect::<Vec<_>>();
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            targets,
+            vec![
+                "claude-desktop",
+                "claude-code",
+                "codex",
+                "cursor",
+                "openclaw",
+                "hermes",
+                "windsurf"
+            ]
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            targets,
+            vec![
+                "claude-code",
+                "codex",
+                "cursor",
+                "openclaw",
+                "hermes",
+                "windsurf"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_claude_skills_directory_alone_does_not_invent_claude_code() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills/screenpipe-api")).unwrap();
+
+        assert!(detected_agents_in(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn test_agent_is_connected_only_with_mcp_and_required_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex/config.toml"),
+            "[mcp_servers.screenpipe]\ncommand = \"npx\"\n",
+        )
+        .unwrap();
+
+        assert!(!is_agent_setup_in("codex", home));
+        write_skill(
+            &home.join(".codex/skills"),
+            "screenpipe-api",
+            "api",
+            "http://localhost:3030",
+        )
+        .unwrap();
+        write_skill(
+            &home.join(".codex/skills"),
+            "screenpipe-cli",
+            "cli",
+            "http://localhost:3030",
+        )
+        .unwrap();
+        assert!(is_agent_setup_in("codex", home));
+    }
+
+    #[test]
+    fn test_prompt_state_remembers_targets_without_dropping_previous_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        write_prompted_targets(
+            dir.path(),
+            &[DetectedAgent {
+                target: "codex",
+                name: "Codex",
+            }],
+        )
+        .unwrap();
+        write_prompted_targets(
+            dir.path(),
+            &[DetectedAgent {
+                target: "cursor",
+                name: "Cursor",
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_prompted_targets(dir.path()),
+            BTreeSet::from(["codex".to_string(), "cursor".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_setup_all_cli_flag_is_explicit_and_conflicts_with_target() {
+        use clap::Parser;
+
+        let cli =
+            crate::cli::Cli::try_parse_from(["screenpipe", "agent", "setup", "--all"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            crate::cli::Command::Agent {
+                subcommand: AgentCommand::Setup {
+                    target: None,
+                    all: true,
+                    ..
+                }
+            }
+        ));
+        assert!(crate::cli::Cli::try_parse_from(["screenpipe", "agent", "setup"]).is_err());
+        assert!(crate::cli::Cli::try_parse_from([
+            "screenpipe",
+            "agent",
+            "setup",
+            "codex",
+            "--all"
+        ])
+        .is_err());
     }
 }

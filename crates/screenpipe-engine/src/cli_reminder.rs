@@ -114,18 +114,15 @@ fn print_desktop_app_tip() {
 fn print_mcp_tip() {
     eprintln!();
     eprintln!(
-        "  {} wire screenpipe into claude with one command:",
+        "  {} connect screenpipe to every AI tool detected on this computer:",
         "tip:".cyan().bold(),
     );
     eprintln!(
         "       {}",
-        "claude mcp add screenpipe -- npx -y screenpipe-mcp"
-            .green()
-            .bold(),
+        "npx screenpipe@latest agent setup --all".green().bold(),
     );
     eprintln!(
-        "       then ask claude to {} from your screen activity",
-        "build a pipe that tracks who you are, your todos, and how you spend your time".italic(),
+        "       adds MCP + supported skills to Claude, Codex, Cursor, OpenClaw, Hermes, and Windsurf/Devin",
     );
     eprintln!();
 }

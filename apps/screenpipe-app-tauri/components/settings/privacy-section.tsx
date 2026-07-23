@@ -17,7 +17,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Telemetry" },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import {
   Eye,
   EyeOff,
@@ -50,7 +50,6 @@ import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { RemoteSupportLogsCard } from "./remote-support-logs-card";
-import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
@@ -483,18 +482,17 @@ function RedactionWherePreview({
 
 export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
-  const isEnterprise = useIsEnterpriseBuild();
   // Input Monitoring is a macOS-only TCC permission; the grant card only
   // renders there (alongside the keyboard/click capture toggles it gates).
   const isMacOS = typeof window !== "undefined" && platform() === "macos";
   const { toast } = useToast();
   // when the admin forces the PII backend (local/cloud) we lock the radios so
   // the employee can't override it (the value itself is applied to settings by
-  // useEnterprisePolicy.applyPiiPolicy on every policy poll).
-  const { getManagedValue } = useEnterprisePolicy();
+  // The managed policy runtime reapplies PII policy on every policy poll.
+  const { getManagedValue, isManagedDeployment } = useManagedPolicy();
   const managedPiiBackend = getManagedValue("piiBackend");
   // Same idea for input capture: the admin can force keyboard/click rows on
-  // or off org-wide (applied by useEnterprisePolicy.applyInputCapturePolicy).
+  // or off org-wide (applied by the managed policy runtime).
   // These settings are inverted ("disable…"), so ManagedSwitch — which assumes
   // checked == managed value — doesn't fit; lock the switches manually.
   const managedKeyboardCapture = getManagedValue("disableKeyboardCapture");
@@ -1189,7 +1187,7 @@ export function PrivacySection() {
         </Card>
         </LockedSetting>
 
-        {isEnterprise && <AdminTeamTokenCard />}
+        {isManagedDeployment && <AdminTeamTokenCard />}
 
         {/* LAN access — off by default. Toggling on force-enables api_auth
             (the backend mirrors this guard in RecordingConfig::from_settings

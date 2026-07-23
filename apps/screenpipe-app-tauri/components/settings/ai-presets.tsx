@@ -96,7 +96,7 @@ import { Badge } from "../ui/badge";
 import { toast } from "../ui/use-toast";
 import { Card, CardContent } from "../ui/card";
 import { AIProviderType } from "@/lib/hooks/use-settings";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useTeam } from "@/lib/hooks/use-team";
 import {
   AlertDialog,
@@ -265,10 +265,10 @@ const AISection = ({
   piAvailable?: boolean;
 }) => {
   const { settings, updateSettings } = useSettings();
-  const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
+  const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const employeePresetsAllowed =
-    !isEnterprise || aiPresetPolicy.allow_employee_custom_presets || (preset ? isEnterpriseManagedPreset(preset) : false);
+    !isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets || (preset ? isEnterpriseManagedPreset(preset) : false);
   // Daily quota snapshot — drives the "N left today" chip on weighted
   // models. Null on BYOK providers; we render nothing in that case.
   const usage = useUsageStatus();
@@ -296,10 +296,10 @@ const AISection = ({
   // Filter presets the same way the UI does so hidden presets don't block creation
   const visiblePresets = useMemo(
     () =>
-      !isEnterprise
+      !isManagedDeployment
         ? settings.aiPresets
         : filterPresetsForEnterprisePolicy(settings.aiPresets, aiPresetPolicy),
-    [settings.aiPresets, isEnterprise, aiPresetPolicy]
+    [settings.aiPresets, isManagedDeployment, aiPresetPolicy]
   );
 
   // Optimized validation with debouncing
@@ -1250,7 +1250,7 @@ const AISection = ({
             onClick={() => handleAiProviderChange("native-ollama")}
           />
 
-          {piAvailable && (!isEnterprise || aiPresetPolicy.allow_screenpipe_cloud) && (
+          {piAvailable && (!isManagedDeployment || aiPresetPolicy.allow_screenpipe_cloud) && (
             <AIProviderCard
               type="screenpipe-cloud"
               title="Screenpipe Cloud"
@@ -2031,16 +2031,16 @@ export const AIPresets = () => {
     null
   );
   const [isDuplicating, setIsDuplicating] = useState(false);
-  const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
+  const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const visiblePresets = useMemo(
     () =>
-      !isEnterprise
+      !isManagedDeployment
         ? settings.aiPresets
         : filterPresetsForEnterprisePolicy(settings.aiPresets, aiPresetPolicy),
-    [settings.aiPresets, isEnterprise, aiPresetPolicy]
+    [settings.aiPresets, isManagedDeployment, aiPresetPolicy]
   );
-  const canManageEmployeePresets = !isEnterprise || aiPresetPolicy.allow_employee_custom_presets;
+  const canManageEmployeePresets = !isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets;
   const [piAvailable, setPiAvailable] = useState(false);
   const [chatgptTokenValid, setChatgptTokenValid] = useState<boolean | null>(null);
   const team = useTeam();
@@ -2085,17 +2085,17 @@ export const AIPresets = () => {
         setPiAvailable(true);
       }
     };
-    if (isEnterprise) {
+    if (isManagedDeployment) {
       setPiAvailable(aiPresetPolicy.allow_screenpipe_cloud);
       return;
     }
-    if (!isEnterprise) {
+    if (!isManagedDeployment) {
       checkPi();
     }
     // Re-check periodically in case background install finishes
-    const interval = isEnterprise ? null : setInterval(checkPi, 5000);
+    const interval = isManagedDeployment ? null : setInterval(checkPi, 5000);
     return () => { if (interval) clearInterval(interval); };
-  }, [isEnterprise, aiPresetPolicy.allow_screenpipe_cloud]);
+  }, [isManagedDeployment, aiPresetPolicy.allow_screenpipe_cloud]);
 
   useEffect(() => {
   const hasChatGptPreset = settings.aiPresets?.some(
@@ -2135,7 +2135,7 @@ useEffect(() => {
       // Prevent deletion of screenpipe-cloud preset for Pro subscribers
       const presetToRemove = settings.aiPresets.find((preset) => preset.id === id);
       if (
-        isEnterprise &&
+        isManagedDeployment &&
         ((presetToRemove && isEnterpriseManagedPreset(presetToRemove)) || !aiPresetPolicy.allow_employee_custom_presets)
       ) {
         toast({
@@ -2210,7 +2210,7 @@ useEffect(() => {
   const setDefaultPreset = async (id: string) => {
     setIsLoading(true);
     try {
-      if (isEnterprise && aiPresetPolicy.lock_default_preset) {
+      if (isManagedDeployment && aiPresetPolicy.lock_default_preset) {
         toast({
           title: "Default preset is locked",
           description: "Your admin controls the default AI preset",
@@ -2261,7 +2261,7 @@ useEffect(() => {
     const presetToDuplicate = settings.aiPresets.find((p) => p.id === id);
     if (!presetToDuplicate) return;
     if (
-      isEnterprise &&
+      isManagedDeployment &&
       (isEnterpriseManagedPreset(presetToDuplicate) || !aiPresetPolicy.allow_employee_custom_presets)
     ) {
       toast({
@@ -2356,7 +2356,7 @@ useEffect(() => {
               const cloudPresetCount = (settings.aiPresets || []).filter((p) => p.provider === "screenpipe-cloud").length;
               return visiblePresets.map((preset) => {
                 const readOnly =
-                  isEnterprise &&
+                  isManagedDeployment &&
                   (!aiPresetPolicy.allow_employee_custom_presets || isEnterpriseManagedPreset(preset));
                 const isLastCloudPreset =
                   preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed && cloudPresetCount <= 1;
@@ -2379,7 +2379,7 @@ useEffect(() => {
                     isLoading={isLoading}
                     isTeamAdmin={isTeamAdmin}
                     readOnly={readOnly}
-                    defaultLocked={isEnterprise && aiPresetPolicy.lock_default_preset}
+                    defaultLocked={isManagedDeployment && aiPresetPolicy.lock_default_preset}
                   />
                 );
               });

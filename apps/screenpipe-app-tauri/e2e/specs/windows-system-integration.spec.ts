@@ -438,26 +438,41 @@ $uniqueNames = @($names | Sort-Object -Unique)
     if (!isWindows || !api) this.skip();
 
     const started = Date.now();
-    const requests = [
-      ...Array.from({ length: 12 }, async () => ({
-        kind: "health" as const,
-        response: await fetchJson(apiUrl(api!, "/health")),
-      })),
-      ...Array.from({ length: 8 }, (_, i) =>
-        fetchJson(
-          apiUrl(api!, `/search?limit=1&q=windows-load-${i}`),
-          authHeaders(api!.key),
-        ).then((response) => ({ kind: "search" as const, response })),
+    const runSearches = async () => {
+      const results = [];
+      // Uncached searches share the SQLite read pool. Windows CI uses a pool
+      // size whose route admission budget is one, so keep this group serial
+      // while health and vision requests continue exercising the API in parallel.
+      for (let i = 0; i < 8; i += 1) {
+        results.push({
+          kind: "search" as const,
+          response: await fetchJson(
+            apiUrl(api!, `/search?limit=1&q=windows-load-${i}`),
+            authHeaders(api!.key),
+          ),
+        });
+      }
+      return results;
+    };
+    const [healthResults, searchResults, visionResults] = await Promise.all([
+      Promise.all(
+        Array.from({ length: 12 }, async () => ({
+          kind: "health" as const,
+          response: await fetchJson(apiUrl(api!, "/health")),
+        })),
       ),
-      ...Array.from({ length: 4 }, async () => ({
-        kind: "vision" as const,
-        response: await fetchJson(
-          apiUrl(api!, "/vision/status"),
-          authHeaders(api!.key),
-        ),
-      })),
-    ];
-    const results = await Promise.all(requests);
+      runSearches(),
+      Promise.all(
+        Array.from({ length: 4 }, async () => ({
+          kind: "vision" as const,
+          response: await fetchJson(
+            apiUrl(api!, "/vision/status"),
+            authHeaders(api!.key),
+          ),
+        })),
+      ),
+    ]);
+    const results = [...healthResults, ...searchResults, ...visionResults];
     const elapsed = Date.now() - started;
 
     expect(elapsed).toBeLessThan(t(30_000));

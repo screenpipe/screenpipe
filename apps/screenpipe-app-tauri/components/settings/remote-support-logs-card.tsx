@@ -7,7 +7,7 @@ import { useState } from "react";
 import { FileText } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 
@@ -71,16 +71,23 @@ export function RemoteSupportLogsCard() {
   const { settings, updateSettings } = useSettings();
   const [remoteStatus, setRemoteStatus] =
     useState<RemoteSupportStatus>("checking");
-  const enterprise = useEnterpriseBuildStatus();
-  const isEnterprise = enterprise.resolved && enterprise.isEnterprise;
+  const {
+    isManagedDeployment,
+    isManagedDeploymentResolved,
+    managedDeploymentResolutionError,
+  } = useManagedPolicy();
   const currentUserId = settings.user?.id?.trim() || null;
   const hasAccountConsent =
     settings.remoteLogCollectionEnabled === true &&
     currentUserId !== null &&
     settings.remoteLogCollectionUserId === currentUserId;
-  const enabled = enterprise.resolved && (isEnterprise || hasAccountConsent);
+  const enabled =
+    isManagedDeploymentResolved &&
+    (isManagedDeployment || hasAccountConsent);
   const requiresSignIn =
-    enterprise.resolved && !isEnterprise && currentUserId === null;
+    isManagedDeploymentResolved &&
+    !isManagedDeployment &&
+    currentUserId === null;
 
   useTauriEvent<{ state: RemoteSupportStatus }>(
     "remote-support-log-status",
@@ -88,7 +95,7 @@ export function RemoteSupportLogsCard() {
   );
 
   const handleChange = (checked: boolean) => {
-    if (!enterprise.resolved) return;
+    if (!isManagedDeploymentResolved) return;
     if (checked && !currentUserId) return;
     setRemoteStatus(checked ? "syncing" : "disabled");
     void updateSettings(
@@ -108,7 +115,7 @@ export function RemoteSupportLogsCard() {
   };
 
   const consumerStatus =
-    !isEnterprise && hasAccountConsent
+    !isManagedDeployment && hasAccountConsent
       ? describeConsumerStatus(remoteStatus)
       : null;
 
@@ -127,18 +134,18 @@ export function RemoteSupportLogsCard() {
                   <h3 className="text-sm font-medium text-foreground">
                     Remote support logs
                   </h3>
-                  {isEnterprise && (
+                  {isManagedDeployment && (
                     <span className="border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
                       Managed by your organization
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
-                  {!enterprise.resolved
-                    ? enterprise.error
+                  {!isManagedDeploymentResolved
+                    ? managedDeploymentResolutionError
                       ? "Could not verify whether this device is managed. Remote log controls stay locked and will retry automatically."
                       : "Checking whether remote log collection is managed by your organization..."
-                    : isEnterprise
+                    : isManagedDeployment
                       ? "Your organization can request diagnostic logs from this managed device. Nothing is uploaded unless an administrator sends a request. Logs are filtered locally for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. They go to your organization's configured support service, which controls retention. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included."
                       : `Allow screenpipe support to request recent diagnostic logs from this device. Before upload, logs are filtered locally on this device for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included. Nothing is uploaded unless support sends a short-lived request. You can turn this off at any time; previously shared diagnostics are deleted after 30 days.${requiresSignIn ? " Sign in to enable this." : ""}`}
                 </p>
@@ -154,7 +161,11 @@ export function RemoteSupportLogsCard() {
               aria-label="Allow remote support logs"
               data-testid="remote-log-collection-toggle"
               checked={enabled}
-              disabled={!enterprise.resolved || isEnterprise || requiresSignIn}
+              disabled={
+                !isManagedDeploymentResolved ||
+                isManagedDeployment ||
+                requiresSignIn
+              }
               onCheckedChange={handleChange}
               className="ml-4 mt-0.5"
             />

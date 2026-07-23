@@ -728,6 +728,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableKeyboardCapture: true,
 			disableClickCapture: false,
 			keepComputerAwake: false,
+			showRestartNotifications: false,
 			experimentalCoreaudioSystemAudio: false,
 			experimentalMeetingPiggyback: false,
 			alwaysRecordBluetoothMic: false,

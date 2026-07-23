@@ -8,6 +8,7 @@ import { PostHogProvider } from "posthog-js/react";
 import { useEffect, useState, Suspense } from "react";
 import { ChangelogDialogProvider } from "@/lib/hooks/use-changelog-dialog";
 import { SettingsProvider } from "@/lib/hooks/use-settings";
+import { ManagedPolicyProvider } from "@/lib/hooks/use-managed-policy";
 import { ThemeProvider } from "@/components/theme-provider";
 import { PermissionMonitorProvider } from "@/lib/hooks/use-permission-monitor";
 import { AuthGuard } from "@/lib/auth-guard";
@@ -101,29 +102,34 @@ export const Providers = forwardRef<
 
   return (
     <Suspense>
-    <NuqsAdapter>
-      <QueryClientProvider client={queryClient}>
-      <SettingsProvider>
-        <AuthGuard>
-          <ThemeProvider defaultTheme="system" storageKey="screenpipe-ui-theme">
-            <ChangelogDialogProvider>
-              <PermissionMonitorProvider>
-                <UpdateListenerMount />
-                <PostHogProvider client={posthog}>
-                  {mounted ? (
-                    <>
-                      {!isOverlay && <DeeplinkHandler />}
-                      <AppEntitlementGate>{children}</AppEntitlementGate>
-                    </>
-                  ) : null}
-                </PostHogProvider>
-              </PermissionMonitorProvider>
-            </ChangelogDialogProvider>
-          </ThemeProvider>
-        </AuthGuard>
-      </SettingsProvider>
-      </QueryClientProvider>
-    </NuqsAdapter>
+      <NuqsAdapter>
+        <QueryClientProvider client={queryClient}>
+          <SettingsProvider>
+            <ManagedPolicyProvider>
+              <AuthGuard>
+                <ThemeProvider
+                  defaultTheme="system"
+                  storageKey="screenpipe-ui-theme"
+                >
+                  <ChangelogDialogProvider>
+                    <PermissionMonitorProvider>
+                      <UpdateListenerMount />
+                      <PostHogProvider client={posthog}>
+                        {mounted ? (
+                          <>
+                            {!isOverlay && <DeeplinkHandler />}
+                            <AppEntitlementGate>{children}</AppEntitlementGate>
+                          </>
+                        ) : null}
+                      </PostHogProvider>
+                    </PermissionMonitorProvider>
+                  </ChangelogDialogProvider>
+                </ThemeProvider>
+              </AuthGuard>
+            </ManagedPolicyProvider>
+          </SettingsProvider>
+        </QueryClientProvider>
+      </NuqsAdapter>
     </Suspense>
   );
 });

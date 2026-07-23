@@ -5,7 +5,7 @@
 "use client";
 
 import { ReactNode, ComponentProps } from "react";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { Switch } from "@/components/ui/switch";
 
 /**
@@ -19,7 +19,7 @@ export function LockedSetting({
   settingKey: string;
   children: ReactNode;
 }) {
-  const { isSettingLocked } = useEnterprisePolicy();
+  const { isSettingLocked } = useManagedPolicy();
   if (isSettingLocked(settingKey)) return null;
   return <>{children}</>;
 }
@@ -40,7 +40,7 @@ export function ManagedSwitch({
   disabled,
   ...rest
 }: { settingKey: string } & ComponentProps<typeof Switch>) {
-  const { getManagedValue } = useEnterprisePolicy();
+  const { getManagedValue } = useManagedPolicy();
   const managed = getManagedValue(settingKey);
 
   if (managed !== undefined) {

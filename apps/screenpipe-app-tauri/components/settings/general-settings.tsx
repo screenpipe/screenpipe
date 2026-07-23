@@ -34,7 +34,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Headless", keywords: ["low resource", "tray only", "memory", "webview"] },
   { label: "Record only", keywords: ["headless", "pipes", "scheduler", "automation"] },
 ];
-import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import {
   DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
@@ -43,7 +43,7 @@ import {
 } from "@/lib/enterprise/app-update-policy";
 
 export default function GeneralSettings() {
-  const isEnterprise = useIsEnterpriseBuild();
+  const { isManagedDeployment } = useManagedPolicy();
   const { settings, updateSettings } = useSettings();
   const { toast } = useToast();
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
@@ -198,8 +198,8 @@ export default function GeneralSettings() {
     const platform = await getDesktopPlatform();
     if (platform) params.set("platform", platform);
 
-    const path = isEnterprise ? "/enterprise" : "/account/versions";
-    if (isEnterprise) params.set("tab", "builds");
+    const path = isManagedDeployment ? "/enterprise" : "/account/versions";
+    if (isManagedDeployment) params.set("tab", "builds");
     const url = `https://screenpipe.com${path}?${params.toString()}`;
 
     try {
@@ -247,7 +247,7 @@ export default function GeneralSettings() {
         </Card>
         </LockedSetting>
 
-        {!isEnterprise && (
+        {!isManagedDeployment && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">
@@ -271,7 +271,7 @@ export default function GeneralSettings() {
           </Card>
         )}
 
-        {!isEnterprise && (
+        {!isManagedDeployment && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">
@@ -298,7 +298,7 @@ export default function GeneralSettings() {
           </Card>
         )}
 
-        {isEnterprise && (
+        {isManagedDeployment && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between gap-4">
@@ -445,7 +445,7 @@ export default function GeneralSettings() {
                     Version{currentVersion ? ` ${currentVersion}` : ""}
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    {isEnterprise
+                    {isManagedDeployment
                       ? "Open builds managed by your organization"
                       : "Open recent stable versions on screenpipe.com"}
                   </p>

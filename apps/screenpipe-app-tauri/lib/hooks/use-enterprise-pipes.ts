@@ -19,6 +19,7 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { localFetch } from "@/lib/api";
+import { commands } from "@/lib/utils/tauri";
 
 export interface ManagedPipe {
   name: string;
@@ -27,6 +28,9 @@ export interface ManagedPipe {
   schedule: string;
   model: string | null;
   provider: string | null;
+  /** Organization-controlled AI preset id. When present, no model/provider
+   * fallback is allowed if the preset is unavailable. */
+  preset?: string | null;
   timeout: number;
   enabled: boolean;
   version: number;
@@ -39,19 +43,41 @@ export interface PipeStatus {
   pipe_version: number;
   last_execution_at: string | null;
   last_execution_status: string | null;
-  last_error: string | null;
+  last_error_code: string | null;
 }
 
 const MARKER_PREFIX = "# enterprise-managed:v";
 
-function buildPipeMd(pipe: ManagedPipe): string {
+async function enterprisePipesDir(): Promise<string> {
+  try {
+    const result = await commands.getActiveDataDir();
+    if (result.status === "ok") {
+      return await join(result.data, "pipes");
+    }
+    console.warn(
+      "[enterprise-pipes] failed to resolve active data dir, using ~/.screenpipe:",
+      result.error,
+    );
+  } catch (error) {
+    console.warn(
+      "[enterprise-pipes] active data dir command unavailable, using ~/.screenpipe:",
+      error,
+    );
+  }
+
+  return await join(await homeDir(), ".screenpipe", "pipes");
+}
+
+export function buildEnterpriseManagedPipeMd(pipe: ManagedPipe): string {
   const frontmatter = [
     "---",
-    `schedule: ${pipe.schedule}`,
+    `schedule: ${JSON.stringify(pipe.schedule)}`,
     `enabled: ${pipe.enabled}`,
   ];
-  if (pipe.model) frontmatter.push(`model: ${pipe.model}`);
-  if (pipe.provider) frontmatter.push(`provider: ${pipe.provider}`);
+  if (pipe.preset) frontmatter.push(`preset: [${JSON.stringify(pipe.preset)}]`);
+  frontmatter.push("enterprise_managed: true");
+  if (!pipe.preset && pipe.model) frontmatter.push(`model: ${JSON.stringify(pipe.model)}`);
+  if (!pipe.preset && pipe.provider) frontmatter.push(`provider: ${JSON.stringify(pipe.provider)}`);
   frontmatter.push(`timeout: ${pipe.timeout}`);
   frontmatter.push("---");
   frontmatter.push("");
@@ -62,7 +88,7 @@ function buildPipeMd(pipe: ManagedPipe): string {
   return frontmatter.join("\n");
 }
 
-function parseVersion(content: string): number | null {
+export function parseEnterpriseManagedVersion(content: string): number | null {
   const match = content.match(/# enterprise-managed:v(\d+)/);
   return match ? parseInt(match[1], 10) : null;
 }
@@ -84,8 +110,7 @@ export async function syncManagedPipes(
   const pipesToSync = managedPipes || [];
 
   try {
-    const home = await homeDir();
-    const pipesDir = await join(home, ".screenpipe", "pipes");
+    const pipesDir = await enterprisePipesDir();
 
     for (const pipe of pipesToSync) {
       try {
@@ -95,21 +120,13 @@ export async function syncManagedPipes(
         // Check if pipe already exists and is up to date
         if (await exists(pipeMdPath)) {
           const content = await readTextFile(pipeMdPath);
-          const localVersion = parseVersion(content);
+          const localVersion = parseEnterpriseManagedVersion(content);
+          const expected = buildEnterpriseManagedPipeMd(pipe);
 
-          if (localVersion !== null && localVersion >= pipe.version) {
-            // Already up to date — skip write but ensure enabled state matches
-            const isLocalEnabled = /^enabled: true$/m.test(content);
-            if (isLocalEnabled !== pipe.enabled) {
-              const updated = content.replace(
-                /^enabled: (true|false)$/m,
-                `enabled: ${pipe.enabled}`
-              );
-              await writeTextFile(pipeMdPath, updated);
-              console.log(
-                `[enterprise-pipes] ${pipe.name}: toggled enabled=${pipe.enabled}`
-              );
-            }
+          // Compare the complete managed definition, not just its version.
+          // This restores local edits and propagates a changed locked default
+          // preset even when the pipe row itself did not get a version bump.
+          if (localVersion !== null && content === expected) {
             continue;
           }
         }
@@ -120,7 +137,7 @@ export async function syncManagedPipes(
         }
 
         // Write pipe.md
-        await writeTextFile(pipeMdPath, buildPipeMd(pipe));
+        await writeTextFile(pipeMdPath, buildEnterpriseManagedPipeMd(pipe));
         console.log(
           `[enterprise-pipes] ${pipe.name}: synced v${pipe.version}`
         );
@@ -162,7 +179,7 @@ async function disableUnlistedManagedPipes(
       if (!(await exists(pipeMdPath))) continue;
 
       const content = await readTextFile(pipeMdPath);
-      if (parseVersion(content) === null) continue; // not enterprise-managed
+      if (parseEnterpriseManagedVersion(content) === null) continue; // not enterprise-managed
       if (!/^enabled: true$/m.test(content)) continue; // already off
 
       const updated = content.replace(
@@ -187,8 +204,7 @@ export async function gatherPipeStatuses(): Promise<PipeStatus[]> {
   const statuses: PipeStatus[] = [];
 
   try {
-    const home = await homeDir();
-    const pipesDir = await join(home, ".screenpipe", "pipes");
+    const pipesDir = await enterprisePipesDir();
 
     // Fetch all pipe statuses from local API
     const res = await localFetch("/pipes", {
@@ -209,7 +225,7 @@ export async function gatherPipeStatuses(): Promise<PipeStatus[]> {
         if (!(await exists(pipeMdPath))) continue;
 
         const content = await readTextFile(pipeMdPath);
-        const version = parseVersion(content);
+        const version = parseEnterpriseManagedVersion(content);
         if (version === null) continue; // not enterprise-managed
 
         statuses.push({
@@ -223,7 +239,7 @@ export async function gatherPipeStatuses(): Promise<PipeStatus[]> {
             : p.last_success === false
             ? "error"
             : null,
-          last_error: p.last_error || null,
+          last_error_code: pipeErrorCode(p.last_error),
         });
       } catch {
         // skip pipes we can't read
@@ -234,4 +250,23 @@ export async function gatherPipeStatuses(): Promise<PipeStatus[]> {
   }
 
   return statuses;
+}
+
+/** Convert execution failures into coarse operational codes. Raw provider
+ * messages can contain prompt/customer content and must not leave the device. */
+export function pipeErrorCode(error: unknown): string | null {
+  if (typeof error !== "string" || !error.trim()) return null;
+  const value = error.toLowerCase();
+  if (value.includes("preset") && (value.includes("not found") || value.includes("unavailable"))) {
+    return "ai_preset_unavailable";
+  }
+  if (value.includes("timeout") || value.includes("timed out")) return "execution_timeout";
+  if (value.includes("401") || value.includes("unauthorized") || value.includes("api key")) {
+    return "ai_authentication_failed";
+  }
+  if (value.includes("429") || value.includes("rate limit")) return "ai_rate_limited";
+  if (value.includes("network") || value.includes("connect") || value.includes("dns")) {
+    return "ai_provider_unreachable";
+  }
+  return "execution_failed";
 }

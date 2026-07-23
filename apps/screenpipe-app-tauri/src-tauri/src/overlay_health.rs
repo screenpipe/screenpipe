@@ -122,6 +122,32 @@ fn dismiss_state(inner: &mut Inner) -> bool {
     was_auto_revealed
 }
 
+/// Return the overlay to its normal shortcut state while recording-health
+/// alerts are disabled. If this feature revealed an otherwise-hidden overlay,
+/// the caller must hide it again; a user-enabled shortcut overlay stays open.
+fn disable_alert_state(inner: &mut Inner) -> TickEffect {
+    let was_active = inner.state != OverlayHealthState::Normal;
+    let was_auto_revealed = inner.auto_revealed;
+
+    inner.state = OverlayHealthState::Normal;
+    inner.dismissed = false;
+    inner.auto_revealed = false;
+    inner.fixing_since = None;
+    inner.fixing_seen_down = false;
+    inner.recovered_at = None;
+    inner.healthy_ticks = 0;
+    inner.not_broken_ticks = 0;
+    inner.last_detail.clear();
+
+    if was_auto_revealed {
+        TickEffect::PushAndUnreveal(OverlayHealthState::Normal)
+    } else if was_active {
+        TickEffect::Push(OverlayHealthState::Normal, None)
+    } else {
+        TickEffect::None
+    }
+}
+
 /// Pure overlay state transition. All Tauri/Swift side effects stay in
 /// `on_tick`; keeping the reducer independent lets tests drive long temporal
 /// sequences with an injected clock and boot phase.
@@ -328,17 +354,32 @@ fn track(app: &tauri::AppHandle, event: &'static str) {
 ///             signal that confirms a recovery.
 /// The two are not complements: during a restart both are false.
 pub async fn on_tick(app: &tauri::AppHandle, broken: bool, healthy: bool) {
+    // This detector still produces false positives, so all visible effects are
+    // opt-in through Settings > Notifications > Recording health alerts.
+    // Read the persisted flag each tick so toggling it off clears an active
+    // incident without restarting the app.
+    let alerts_enabled = crate::store::SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|s| s.show_restart_notifications)
+        .unwrap_or(false);
+
     let effect = {
         let mut inner = match INNER.lock() {
             Ok(i) => i,
             Err(_) => return,
         };
-        let boot_detail = if inner.state == OverlayHealthState::Fixing && !healthy {
-            boot_phase_detail()
+
+        if !alerts_enabled {
+            disable_alert_state(&mut inner)
         } else {
-            ""
-        };
-        transition_tick(&mut inner, broken, healthy, Instant::now(), boot_detail)
+            let boot_detail = if inner.state == OverlayHealthState::Fixing && !healthy {
+                boot_phase_detail()
+            } else {
+                ""
+            };
+            transition_tick(&mut inner, broken, healthy, Instant::now(), boot_detail)
+        }
     };
 
     match effect {
@@ -538,6 +579,45 @@ mod tests {
         );
         assert_eq!(inner.state, OverlayHealthState::Normal);
         assert!(!inner.auto_revealed);
+    }
+
+    #[test]
+    fn disabled_alerts_suppress_new_incidents() {
+        let mut inner = test_inner(OverlayHealthState::Normal);
+
+        assert_eq!(disable_alert_state(&mut inner), TickEffect::None);
+        assert_eq!(inner.state, OverlayHealthState::Normal);
+        assert!(!inner.dismissed);
+    }
+
+    #[test]
+    fn disabling_alerts_clears_incident_and_rehides_auto_revealed_overlay() {
+        let mut inner = test_inner(OverlayHealthState::Failure);
+        inner.auto_revealed = true;
+        inner.fixing_since = Some(Instant::now());
+        inner.healthy_ticks = 1;
+        inner.last_detail = "starting audio".to_string();
+
+        assert_eq!(
+            disable_alert_state(&mut inner),
+            TickEffect::PushAndUnreveal(OverlayHealthState::Normal)
+        );
+        assert_eq!(inner.state, OverlayHealthState::Normal);
+        assert!(!inner.auto_revealed);
+        assert!(inner.fixing_since.is_none());
+        assert_eq!(inner.healthy_ticks, 0);
+        assert!(inner.last_detail.is_empty());
+    }
+
+    #[test]
+    fn disabling_alerts_preserves_user_enabled_shortcut_overlay() {
+        let mut inner = test_inner(OverlayHealthState::Failure);
+
+        assert_eq!(
+            disable_alert_state(&mut inner),
+            TickEffect::Push(OverlayHealthState::Normal, None)
+        );
+        assert_eq!(inner.state, OverlayHealthState::Normal);
     }
 
     #[test]
