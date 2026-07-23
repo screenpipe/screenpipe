@@ -100,7 +100,31 @@ const canRun = !seedFlags.includes("onboarding");
       expect(existsSync(filepath)).toBe(true);
     });
 
+    it("keeps onboarding visible until Home explicitly finishes the handoff", async () => {
+      await invokeOrThrow("complete_onboarding");
+
+      await waitForWindowHandle("home", t(15_000));
+      let handles = await browser.getWindowHandles();
+      expect(handles).toContain("onboarding");
+
+      await browser.switchToWindow("home");
+      await waitForWindowUrl("/home", undefined, t(20_000));
+      const homeSection = await $('[data-testid="home-page"]');
+      await homeSection.waitForExist({ timeout: t(20_000) });
+      await waitForWindowClosed("onboarding", t(10_000));
+
+      handles = await browser.getWindowHandles();
+      expect(handles).toContain("home");
+
+      const filepath = await saveScreenshot("onboarding-home-ready-handoff");
+      expect(existsSync(filepath)).toBe(true);
+    });
+
     it("destroys a closed onboarding webview without completing onboarding", async () => {
+      await invokeOrThrow("reset_onboarding");
+      await showWindow("Onboarding");
+      await waitForWindowHandle("onboarding", t(10_000));
+
       await showWindow({ Home: { page: "home" } });
       await waitForWindowHandle("home", t(10_000));
       await browser.switchToWindow("home");

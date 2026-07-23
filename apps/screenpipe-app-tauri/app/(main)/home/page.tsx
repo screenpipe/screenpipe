@@ -70,6 +70,7 @@ import {
   setFirstRunGuidePending,
   shouldShowFirstRunGuide,
 } from "@/lib/first-run-guide";
+import { clearOnboardingHomeHandoffPending } from "@/lib/onboarding-handoff";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
@@ -147,6 +148,24 @@ function HomeContent() {
       });
     return () => {
       mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        await document.fonts?.ready;
+        if (cancelled) return;
+        const result = await commands.finishOnboardingHomeHandoff();
+        if (result.status === "ok") clearOnboardingHomeHandoffPending();
+        else console.error("failed to finish onboarding handoff:", result.error);
+      } catch (error) {
+        console.error("failed to finish onboarding handoff:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
     };
   }, []);
 

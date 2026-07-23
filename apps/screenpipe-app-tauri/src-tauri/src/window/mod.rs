@@ -18,7 +18,10 @@ mod util;
 
 pub use gesture::init_magnify_handler;
 pub use panel::main_label_for_mode;
-pub use show::{RewindWindowId, ShowRewindWindow};
+pub use show::{
+    begin_onboarding_home_handoff, cancel_onboarding_home_handoff, consume_onboarding_home_handoff,
+    RewindWindowId, ShowRewindWindow,
+};
 pub use util::with_autorelease_pool;
 
 /// Finalize a newly created webview window with cross-cutting resilience hooks.

@@ -12,6 +12,7 @@ import EngineStartup from "@/components/onboarding/engine-startup";
 import ConnectApps from "@/components/onboarding/connect-apps";
 import PickPipe from "@/components/onboarding/pick-pipe";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
+import { isOnboardingHomeHandoffPending } from "@/lib/onboarding-handoff";
 import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -175,6 +176,7 @@ export default function OnboardingPage() {
         window.close();
         return;
       }
+      if (isOnboardingHomeHandoffPending()) return;
       commands
         .showWindow({ Home: { page: null } })
         .then(() => window.close())

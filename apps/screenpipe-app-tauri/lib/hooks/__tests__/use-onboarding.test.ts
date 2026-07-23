@@ -83,6 +83,9 @@ describe("useOnboarding measurement", () => {
     expect(
       localStorage.getItem("screenpipe:first-run-guide-pending"),
     ).toBe("true");
+    expect(localStorage.getItem("screenpipe:onboarding-home-handoff")).toBe(
+      "1",
+    );
     expect(mocks.emit).toHaveBeenCalledWith("sidebar-pipes-collapsed-changed", {
       collapsed: false,
     });
@@ -105,6 +108,9 @@ describe("useOnboarding measurement", () => {
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(false);
     expect(
       localStorage.getItem("screenpipe:first-run-guide-pending"),
+    ).toBeNull();
+    expect(
+      localStorage.getItem("screenpipe:onboarding-home-handoff"),
     ).toBeNull();
     expect(localStorage.getItem("screenpipe:pipes-collapsed")).toBe("true");
     expect(mocks.emit).toHaveBeenLastCalledWith(

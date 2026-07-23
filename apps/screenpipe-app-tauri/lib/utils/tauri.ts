@@ -528,6 +528,14 @@ async fetchSkillsRegistry() : Promise<Result<RegistrySkill[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async finishOnboardingHomeHandoff() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("finish_onboarding_home_handoff") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Force-regenerate suggestions immediately, bypassing the scheduler's
  * CPU/power guards. Returns the fresh suggestions and updates the cache.
@@ -1492,7 +1500,7 @@ async piRequestState(sessionId: string) : Promise<Result<null, string>> {
 },
 /**
  * Hot-swap Pi's active model without killing the subprocess. Preserves the
- * full conversation state in-place — the user can switch Luna ↔ Sonnet ↔ Opus
+ * full conversation state in-place — the user can switch haiku ↔ sonnet ↔ opus
  * mid-session and the new model sees the real threaded history, not a
  * glued-transcript workaround.
  *
@@ -2071,7 +2079,7 @@ async setCloudMediaAnalysisSkill(enabled: boolean) : Promise<Result<null, string
  * `Server.cloud_token` and `PiExecutor.user_token` captured at engine
  * boot would be permanent for the lifetime of the sidecar process —
  * users who signed in AFTER the engine started would stay on the
- * gateway's anonymous tier (allowed_models = Auto/Luna only) on
+ * gateway's anonymous tier (allowed_models = haiku/gemini only) on
  * every pipe run, surfacing as `403 "model_not_allowed"` for any
  * Sonnet/Opus preset even with an active Pro subscription. Logout +
  * log-in from the webview alone does NOT restart the sidecar, which

@@ -14,6 +14,10 @@ import {
   isFirstRunGuidePending,
   setFirstRunGuidePending,
 } from "@/lib/first-run-guide";
+import {
+  clearOnboardingHomeHandoffPending,
+  markOnboardingHomeHandoffPending,
+} from "@/lib/onboarding-handoff";
 
 export type OnboardingCompletionContext = {
   method: "pipes_installed" | "pipe_step_skipped" | "hidden_enterprise";
@@ -78,6 +82,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       // onboarded installs never receive it, even though their settings are
       // hydrated with firstRunGuideDone=false for backwards compatibility.
       setFirstRunGuidePending(true);
+      if (context.method !== "hidden_enterprise") {
+        markOnboardingHomeHandoffPending();
+      }
       const result = await commands.completeOnboarding();
       
       if (result.status === "ok") {
@@ -99,6 +106,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
         throw new Error(result.error);
       }
     } catch (error) {
+      clearOnboardingHomeHandoffPending();
       setFirstRunGuidePending(firstRunGuideWasPending);
       const wasCollapsed = previousPipesCollapsed == null
         ? true

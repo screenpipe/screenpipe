@@ -2135,11 +2135,31 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
         return Ok(());
     }
 
-    show_window(app_handle.clone(), ShowRewindWindow::Home { page: None }).await?;
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
+    crate::window::begin_onboarding_home_handoff();
+    if let Err(error) = show_window(app_handle.clone(), ShowRewindWindow::Home { page: None }).await
+    {
+        crate::window::cancel_onboarding_home_handoff();
+        return Err(error);
+    }
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn finish_onboarding_home_handoff(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if !crate::window::consume_onboarding_home_handoff() {
+        return Ok(());
+    }
+
+    let home = app_handle
+        .get_webview_window(RewindWindowId::Home.label())
+        .ok_or_else(|| "home window missing during onboarding handoff".to_string())?;
+    home.show().map_err(|e| e.to_string())?;
+    if let Err(error) = home.set_focus() {
+        warn!("failed to focus Home after onboarding handoff: {error}");
+    }
+    close_window(app_handle, ShowRewindWindow::Onboarding).await
 }
 
 #[tauri::command]
