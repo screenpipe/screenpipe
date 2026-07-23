@@ -236,6 +236,15 @@ pub async fn start_monitor_watcher(
         let mut known_monitors: HashMap<u32, String> = HashMap::new();
         // Track permission state to avoid log spam
         let mut permission_denied_logged = false;
+        // Consecutive NoMonitorsFound results. On macOS a machine always has
+        // at least the built-in display, so a *persistent* empty enumeration
+        // means the screen-recording grant is dead even though the TCC
+        // preflight still says granted (macOS 15+/26 periodic re-approval
+        // lapse, or an update invalidating the grant). SCK reports that state
+        // as an empty list, not a permission error — without this escalation
+        // the watcher retried silently forever while capturing nothing.
+        let mut consecutive_no_monitors: u32 = 0;
+        const NO_MONITORS_PERMISSION_THRESHOLD: u32 = 3;
         // Track whether we stopped monitors due to DRM
         let mut drm_stopped = false;
         // Track whether we stopped recording due to work-hours schedule
@@ -276,8 +285,7 @@ pub async fn start_monitor_watcher(
             Err(MonitorListError::PermissionDenied) => {
                 warn!("Screen recording permission denied. Vision capture is disabled. Grant access in System Settings > Privacy & Security > Screen Recording");
                 permission_denied_logged = true;
-                permission_monitor::report_state(
-                    PermissionKind::ScreenRecording,
+                permission_monitor::report_screen_enumeration(
                     false,
                     Some("list_monitors PermissionDenied (startup)"),
                 );
@@ -508,37 +516,71 @@ pub async fn start_monitor_watcher(
             // Get currently connected monitors with detailed error info
             let current_monitors = match list_monitors_detailed().await {
                 Ok(monitors) => {
+                    consecutive_no_monitors = 0;
                     if permission_denied_logged {
                         info!("Screen recording permission granted! Starting vision capture.");
                         permission_denied_logged = false;
-                        permission_monitor::report_state(
-                            PermissionKind::ScreenRecording,
-                            true,
-                            None,
-                        );
+                        permission_monitor::report_screen_enumeration(true, None);
                     }
                     monitors
                 }
                 Err(MonitorListError::PermissionDenied) => {
+                    consecutive_no_monitors = 0;
                     if !permission_denied_logged {
                         warn!("Screen recording permission denied. Vision capture is disabled. Grant access in System Settings > Privacy & Security > Screen Recording");
                         permission_denied_logged = true;
-                        permission_monitor::report_state(
-                            PermissionKind::ScreenRecording,
-                            false,
-                            Some("list_monitors PermissionDenied (runtime)"),
-                        );
                     }
+                    // Report every denied pass, not once per episode: a report
+                    // landing inside the post-wake grace window is swallowed by
+                    // design, so a once-only report could lose the episode
+                    // entirely. report_state dedups transitions, so repeats
+                    // after the first delivered one are no-ops.
+                    permission_monitor::report_screen_enumeration(
+                        false,
+                        Some("list_monitors PermissionDenied (runtime)"),
+                    );
                     // Back off to 30s when permission is denied instead of 2s
                     tokio::time::sleep(Duration::from_secs(30)).await;
                     continue;
                 }
                 Err(MonitorListError::NoMonitorsFound) => {
+                    consecutive_no_monitors = consecutive_no_monitors.saturating_add(1);
+                    // macOS always has at least the built-in display, so a
+                    // persistent empty enumeration IS a permission loss — the
+                    // stale-TCC state where SCK returns an empty list while
+                    // the preflight still reports granted. Elsewhere (headless
+                    // Linux, RDP on Windows) zero monitors can be legitimate,
+                    // so only macOS escalates.
+                    if cfg!(target_os = "macos")
+                        && consecutive_no_monitors >= NO_MONITORS_PERMISSION_THRESHOLD
+                    {
+                        if !permission_denied_logged {
+                            warn!(
+                                "No displays enumerated {} times in a row — screen recording \
+                                 permission is likely revoked or awaiting re-approval. Grant \
+                                 access in System Settings > Privacy & Security > Screen Recording",
+                                consecutive_no_monitors
+                            );
+                            permission_denied_logged = true;
+                        }
+                        // Every pass, not once per episode — see the
+                        // PermissionDenied arm (wake-grace swallow).
+                        permission_monitor::report_screen_enumeration(
+                            false,
+                            Some(
+                                "list_monitors returned no displays (stale screen-recording grant)",
+                            ),
+                        );
+                        // Same back-off as the explicit PermissionDenied path.
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        continue;
+                    }
                     debug!("No monitors found, will retry");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
                 Err(e) => {
+                    consecutive_no_monitors = 0;
                     warn!("Failed to list monitors: {}", e);
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;

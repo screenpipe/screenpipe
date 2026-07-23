@@ -317,6 +317,22 @@ impl VisionManager {
             // Roll status back so the next .start() attempt isn't blocked by the
             // idempotency guard above.
             *self.status.write().await = VisionManagerStatus::Stopped;
+            // Zero *enumerated* displays is not an allowlist problem — on
+            // macOS it means the screen-recording grant is dead (SCK returns
+            // an empty list in the stale-TCC state) while a non-empty
+            // enumeration with zero matches points at stale monitor_ids.
+            // The old message blamed monitor_ids for both, which misdirected
+            // debugging of day-long capture gaps.
+            if total_monitors == 0 {
+                warn!(
+                    "VisionManager: no displays enumerated — screen recording \
+                     permission likely revoked or awaiting re-approval"
+                );
+                return Err(anyhow::anyhow!(
+                    "no displays enumerated (screen recording permission likely \
+                     revoked; 0 enumerated, 0 started)"
+                ));
+            }
             warn!(
                 "VisionManager: no monitors matched the allowed list \
                  ({} enumerated, 0 started) — stale monitor_ids?",

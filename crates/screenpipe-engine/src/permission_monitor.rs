@@ -84,6 +84,14 @@ struct State {
     /// Tracked separately from TCC because loss semantics differ (soft notify,
     /// not blocking modal).
     keychain: LastKnown,
+    /// Set when vision enumeration proves screen capture is broken while the
+    /// TCC preflight still (stale-ly) reports granted — the macOS 15+/26
+    /// "needs periodic re-approval" state, where SCK returns an empty display
+    /// list but `CGPreflightScreenCaptureAccess` keeps saying yes. While set,
+    /// the poll's ScreenRecording report is suppressed so it can't flap the
+    /// state back to granted every 5s; only a successful enumeration
+    /// ([`report_screen_enumeration`] with `working = true`) restores.
+    screen_enum_denied: bool,
     wake_grace_until: Option<Instant>,
     started: bool,
 }
@@ -98,6 +106,7 @@ static STATE: Lazy<Mutex<State>> = Lazy::new(|| {
         mic: LastKnown::new(true),
         accessibility: LastKnown::new(true),
         keychain: LastKnown::new(true),
+        screen_enum_denied: false,
         wake_grace_until: None,
         started: false,
     })
@@ -203,6 +212,25 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
     let _ = send_event(evt.event_name(), evt);
 }
 
+/// Called by the vision monitor watcher with the outcome of display
+/// enumeration — the ground truth for screen-recording permission.
+///
+/// Enumeration outranks the preflight poll: in the macOS "stale grant"
+/// state (periodic re-approval lapsed, or TCC invalidated by an update),
+/// `CGPreflightScreenCaptureAccess` keeps reporting granted while SCK
+/// returns zero displays, so the poll alone never notices the loss — the
+/// engine sat "healthy" for whole days capturing nothing. While an
+/// enumeration-reported loss is active, the poll's ScreenRecording report
+/// is suppressed so it can't flap the state back to granted; a successful
+/// enumeration lifts the suppression and restores.
+pub fn report_screen_enumeration(working: bool, reason: Option<&str>) {
+    {
+        let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+        state.screen_enum_denied = !working;
+    }
+    report_state(PermissionKind::ScreenRecording, working, reason);
+}
+
 /// Notify the monitor that the system just woke from sleep. Suppresses
 /// emissions for [`WAKE_GRACE`] to avoid spurious events while TCC
 /// re-registers.
@@ -233,11 +261,16 @@ async fn run() {
     loop {
         ticker.tick().await;
         let perms = check_permissions();
-        report_state(
-            PermissionKind::ScreenRecording,
-            granted(perms.screen_recording),
-            Some("poll"),
-        );
+        // While vision enumeration says screen capture is broken, the
+        // preflight's answer for ScreenRecording is known-stale (see
+        // `report_screen_enumeration`) — don't let it flap us back.
+        if !screen_poll_suppressed() {
+            report_state(
+                PermissionKind::ScreenRecording,
+                granted(perms.screen_recording),
+                Some("poll"),
+            );
+        }
         report_state(
             PermissionKind::Microphone,
             granted(perms.microphone),
@@ -258,6 +291,13 @@ async fn run() {
 
 fn granted(status: PermissionStatus) -> bool {
     status.is_granted()
+}
+
+/// True while an enumeration-reported screen-recording loss is active —
+/// the poll must not report ScreenRecording from the (stale) preflight.
+fn screen_poll_suppressed() -> bool {
+    let state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    state.screen_enum_denied
 }
 
 /// Read-only probe of the OS keychain. Returns `true` if the encryption key
@@ -287,5 +327,44 @@ fn keychain_accessible() -> bool {
         KeyResult::Unavailable => true,
         // AccessDenied = had access, now don't. This is the only real loss.
         KeyResult::AccessDenied => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Single test (global STATE) covering the enumeration-override lifecycle:
+    /// an enumeration-reported loss must suppress the poll's ScreenRecording
+    /// report (the preflight is stale in exactly this state — it kept saying
+    /// "granted" for days while SCK enumerated zero displays), and a
+    /// successful enumeration must lift the suppression.
+    #[tokio::test]
+    async fn enumeration_loss_suppresses_poll_until_enumeration_recovers() {
+        assert!(
+            !screen_poll_suppressed(),
+            "no suppression before any report"
+        );
+
+        report_screen_enumeration(false, Some("test: zero displays enumerated"));
+        assert!(
+            screen_poll_suppressed(),
+            "poll must be suppressed while enumeration reports the grant dead"
+        );
+
+        // A poll-driven report must not clear the suppression (run() skips the
+        // report entirely, but even a direct report_state must leave the
+        // enumeration override in place).
+        report_state(PermissionKind::ScreenRecording, true, Some("poll"));
+        assert!(
+            screen_poll_suppressed(),
+            "plain report_state must not lift the enumeration override"
+        );
+
+        report_screen_enumeration(true, None);
+        assert!(
+            !screen_poll_suppressed(),
+            "successful enumeration lifts the suppression"
+        );
     }
 }
