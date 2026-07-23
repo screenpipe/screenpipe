@@ -35,7 +35,10 @@ const config = {
 	ffmpegRealname: 'ffmpeg',
 	windows: {
 		ffmpegName: 'ffmpeg-8.0.1-full_build-shared',
-		ffmpegUrl: 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-full_build-shared.7z',
+		ffmpegUrls: [
+			'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-full_build-shared.7z',
+			'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip',
+		],
 		// Windows ARM64 (aarch64-pc-windows-msvc) — tordona/ffmpeg-win-arm64
 		// Resolved dynamically at build time via GitHub API (daily autobuilds change filenames)
 		ffmpegArm64GithubRepo: 'tordona/ffmpeg-win-arm64',
@@ -816,15 +819,33 @@ async function moveDirectoryContents(source, destination) {
 }
 
 async function validateWindowsFfmpeg(directory) {
+	const binDirectory = path.join(directory, 'bin')
 	if (
-		!(await fs.exists(path.join(directory, 'bin', 'ffmpeg.exe'))) ||
-		!(await fs.exists(path.join(directory, 'bin', 'ffprobe.exe')))
+		!(await fs.exists(path.join(binDirectory, 'ffmpeg.exe'))) ||
+		!(await fs.exists(path.join(binDirectory, 'ffprobe.exe')))
 	) {
 		return false
 	}
 	if (winArch === 'arm64') return true
-	const readme = await fs.readFile(path.join(directory, 'README.txt'), 'utf8').catch(() => '')
-	return readme.includes('Version: 8.0.1-')
+	const binEntries = await fs.readdir(binDirectory).catch(() => [])
+	return binEntries.some((name) => /^avutil-\d+\.dll$/i.test(name))
+}
+
+async function extractWindowsFfmpegArchive(sevenZ, url, directory, extractDirectory) {
+	const archive = path.join(directory, path.basename(new URL(url).pathname))
+	await fs.rm(extractDirectory, { recursive: true, force: true })
+	await fs.mkdir(extractDirectory, { recursive: true })
+	try {
+		await downloadFile(url, archive, { retries: 3, timeoutMs: 900000 })
+		await $`${sevenZ} x ${archive} -o${extractDirectory} -y`
+		const entries = await fs.readdir(extractDirectory, { withFileTypes: true })
+		const extractedDirectory = entries.find((entry) => entry.isDirectory() && entry.name.startsWith('ffmpeg-'))
+		if (!extractedDirectory) throw new Error(`ffmpeg archive did not contain an ffmpeg directory: ${url}`)
+		await moveDirectoryContents(path.join(extractDirectory, extractedDirectory.name), directory)
+	} finally {
+		await fs.rm(archive, { force: true })
+		await fs.rm(extractDirectory, { recursive: true, force: true })
+	}
 }
 
 async function setupWindowsFfmpeg(sevenZ) {
@@ -832,7 +853,7 @@ async function setupWindowsFfmpeg(sevenZ) {
 	const cacheKey =
 		winArch === 'arm64'
 			? 'ffmpeg-windows-arm64-latest'
-			: `ffmpeg-windows-x64-${config.windows.ffmpegName}`
+			: `ffmpeg-windows-x64-${config.windows.ffmpegName}-fallback-v1`
 
 	await ensureCachedDirectory({
 		cacheKey,
@@ -874,11 +895,15 @@ async function setupWindowsFfmpeg(sevenZ) {
 					directory,
 				)
 			} else {
-				const archive = path.join(directory, `${config.windows.ffmpegName}.7z`)
-				await downloadFile(config.windows.ffmpegUrl, archive, { retries: 10, timeoutMs: 900000 })
-				await $`${sevenZ} x ${archive} -o${extractDirectory} -y`
-				await fs.rm(archive, { force: true })
-				await moveDirectoryContents(path.join(extractDirectory, config.windows.ffmpegName), directory)
+				for (const [index, url] of config.windows.ffmpegUrls.entries()) {
+					try {
+						await extractWindowsFfmpegArchive(sevenZ, url, directory, extractDirectory)
+						break
+					} catch (error) {
+						if (index === config.windows.ffmpegUrls.length - 1) throw error
+						console.warn(`ffmpeg download failed, trying fallback: ${error.message}`)
+					}
+				}
 			}
 
 			await fs.rm(extractDirectory, { recursive: true, force: true })
