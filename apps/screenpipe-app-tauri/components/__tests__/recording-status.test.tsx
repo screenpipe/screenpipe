@@ -51,6 +51,109 @@ async function simulateToggleAll(
   return "noop";
 }
 
+/**
+ * Mirrors the visibleDevices display logic from recording-status.tsx.
+ * When allCaptureDisabled is true, devices are hidden from the UI.
+ */
+function computeDisplayState(
+  devices: RecordingDevice[],
+  allCaptureDisabled: boolean,
+) {
+  const visibleDevices = allCaptureDisabled ? [] : devices;
+  const pausedCount = visibleDevices.filter((d) => !d.active).length;
+  const allActive = visibleDevices.length > 0 && pausedCount === 0;
+  const canPauseRecording = visibleDevices.some((d) => d.active);
+  const allPaused = visibleDevices.length > 0 && !canPauseRecording;
+
+  const summary =
+    visibleDevices.length === 0
+      ? "not recording"
+      : pausedCount === 0
+        ? "recording"
+        : `${pausedCount} device${pausedCount > 1 ? "s" : ""} paused`;
+
+  return { visibleDevices, summary, allActive, allPaused, canPauseRecording };
+}
+
+describe("RecordingStatus — allCaptureDisabled display logic", () => {
+  it("shows 'not recording' with no visible devices when all capture disabled", () => {
+    const devices = makeDevices();
+    const state = computeDisplayState(devices, true);
+
+    expect(state.summary).toBe("not recording");
+    expect(state.visibleDevices).toHaveLength(0);
+    expect(state.allActive).toBe(false);
+    expect(state.allPaused).toBe(false);
+    expect(state.canPauseRecording).toBe(false);
+  });
+
+  it("shows 'recording' with all devices when capture is enabled", () => {
+    const devices = makeDevices();
+    const state = computeDisplayState(devices, false);
+
+    expect(state.summary).toBe("recording");
+    expect(state.visibleDevices).toHaveLength(3);
+    expect(state.allActive).toBe(true);
+    expect(state.canPauseRecording).toBe(true);
+  });
+
+  it("shows paused count when some devices inactive and capture enabled", () => {
+    const devices = makeDevices([
+      { active: true },
+      { active: false },
+      { active: false },
+    ]);
+    const state = computeDisplayState(devices, false);
+
+    expect(state.summary).toBe("2 devices paused");
+    expect(state.allPaused).toBe(false);
+    expect(state.canPauseRecording).toBe(true);
+  });
+
+  it("ignores active devices when all capture disabled", () => {
+    const devices = makeDevices([
+      { active: true },
+      { active: true },
+      { active: true },
+    ]);
+    const state = computeDisplayState(devices, true);
+
+    expect(state.summary).toBe("not recording");
+    expect(state.visibleDevices).toHaveLength(0);
+  });
+
+  it("shows 'not recording' when no devices and capture enabled", () => {
+    const state = computeDisplayState([], false);
+
+    expect(state.summary).toBe("not recording");
+    expect(state.visibleDevices).toHaveLength(0);
+  });
+
+  it("shows singular 'paused' for one device", () => {
+    const devices = makeDevices([
+      { active: true },
+      { active: true },
+      { active: false },
+    ]);
+    const state = computeDisplayState(devices, false);
+
+    expect(state.summary).toBe("1 device paused");
+  });
+
+  it("shows allPaused when all devices inactive and capture enabled", () => {
+    const devices = makeDevices([
+      { active: false },
+      { active: false },
+      { active: false },
+    ]);
+    const state = computeDisplayState(devices, false);
+
+    expect(state.summary).toBe("3 devices paused");
+    expect(state.allPaused).toBe(true);
+    expect(state.canPauseRecording).toBe(false);
+  });
+});
+
 describe("RecordingStatus — toggleAllRecording logic", () => {
   it("calls onResumeRecording when globally paused (capture session torn down)", async () => {
     const devices = makeDevices([
