@@ -570,8 +570,11 @@ function HomeContent() {
         }
       }
 
+      // When globally paused the device APIs may return empty (session torn
+      // down). Preserve the last known device list so the user can still see
+      // what was recording and hit "resume".
       const effective = capturePaused
-        ? devices.map((d) => ({ ...d, active: false }))
+        ? (devices.length > 0 ? devices : recordingDevices).map((d) => ({ ...d, active: false }))
         : devices;
 
       const snapshot = JSON.stringify(effective);
@@ -1057,6 +1060,8 @@ function HomeContent() {
               isGloballyPaused={isCapturePaused}
               isTranslucent={isTranslucent}
               floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
+              allCaptureDisabled={!!(settings.disableAudio && settings.disableVision)}
+              onOpenRecordingSettings={() => router.push("/settings?section=recording")}
             />
           </div>
 
