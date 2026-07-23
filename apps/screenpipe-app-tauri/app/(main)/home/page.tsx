@@ -572,9 +572,23 @@ function HomeContent() {
 
       // When globally paused the device APIs may return empty (session torn
       // down). Preserve the last known device list so the user can still see
-      // what was recording and hit "resume".
+      // what was recording and hit "resume". Use the functional updater to
+      // avoid a stale-closure over recordingDevices.
+      if (capturePaused && devices.length === 0) {
+        setRecordingDevices((prev) => {
+          const updated = prev.map((d) => ({ ...d, active: false }));
+          const snap = JSON.stringify(updated);
+          if (snap !== recordingDevicesSnapshotRef.current) {
+            recordingDevicesSnapshotRef.current = snap;
+            return updated;
+          }
+          return prev;
+        });
+        return;
+      }
+
       const effective = capturePaused
-        ? (devices.length > 0 ? devices : recordingDevices).map((d) => ({ ...d, active: false }))
+        ? devices.map((d) => ({ ...d, active: false }))
         : devices;
 
       const snapshot = JSON.stringify(effective);

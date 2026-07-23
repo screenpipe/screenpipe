@@ -889,7 +889,7 @@ fn create_dynamic_menu(
     let all_capture_disabled = data.all_capture_disabled;
     let effective_status = get_effective_recording_status();
     let status_text = match effective_status {
-        _ if all_capture_disabled && effective_status == RecordingStatus::Recording => "○ Stopped",
+        RecordingStatus::Recording if all_capture_disabled => "○ Stopped",
         RecordingStatus::Starting => "○ Starting…",
         RecordingStatus::Recording => "● Recording",
         RecordingStatus::Paused => "◐ Paused",

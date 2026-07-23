@@ -88,12 +88,15 @@ export function RecordingStatus({
   const [open, setOpen] = React.useState(false);
   const [pauseLoading, setPauseLoading] = React.useState(false);
 
-  const pausedCount = devices.filter((d) => !d.active).length;
-  const allActive = devices.length > 0 && pausedCount === 0;
-  const canPauseRecording = devices.some((d) => d.active);
+  // When all capture is disabled in settings, treat the device list as empty
+  // even if the sidecar still reports devices — nothing is actually recording.
+  const visibleDevices = allCaptureDisabled ? [] : devices;
+  const pausedCount = visibleDevices.filter((d) => !d.active).length;
+  const allActive = visibleDevices.length > 0 && pausedCount === 0;
+  const canPauseRecording = visibleDevices.some((d) => d.active);
 
   const summary =
-    devices.length === 0
+    visibleDevices.length === 0
       ? "not recording"
       : pausedCount === 0
         ? "recording"
@@ -143,7 +146,7 @@ export function RecordingStatus({
     }
   };
 
-  const allPaused = devices.length > 0 && !canPauseRecording;
+  const allPaused = visibleDevices.length > 0 && !canPauseRecording;
 
   const toggleAllRecording = async () => {
     if (pauseLoading) return;
@@ -215,7 +218,7 @@ export function RecordingStatus({
                     : allActive
                       ? "bg-foreground"
                       : "border border-foreground bg-transparent",
-                  devices.length === 0 && "opacity-40",
+                  visibleDevices.length === 0 && "opacity-40",
                   meetingActive && "animate-pulse"
                 )}
               />
@@ -257,22 +260,28 @@ export function RecordingStatus({
           </div>
         )}
         <div className="py-1">
-          {allCaptureDisabled && devices.length === 0 && (
+          {visibleDevices.length === 0 && (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">
-              no devices enabled{" "}
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenRecordingSettings?.();
-                  setOpen(false);
-                }}
-                className="underline text-foreground hover:opacity-70 transition-opacity"
-              >
-                open settings
-              </button>
+              {allCaptureDisabled ? (
+                <>
+                  no devices enabled{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenRecordingSettings?.();
+                      setOpen(false);
+                    }}
+                    className="underline text-foreground hover:opacity-70 transition-opacity"
+                  >
+                    open settings
+                  </button>
+                </>
+              ) : (
+                "no capture devices reported"
+              )}
             </div>
           )}
-          {devices.map((device) => {
+          {visibleDevices.map((device) => {
             const Icon = device.active
               ? KIND_ICONS[device.kind].active
               : KIND_ICONS[device.kind].paused;
