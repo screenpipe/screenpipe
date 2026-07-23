@@ -446,18 +446,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       });
       setPipeInventory(inventory);
       setPipeInventoryAuthoritative(true);
-      // Pre-seed cache for pipes with zero runs so expanding them
-      // shows "no saved runs" instantly instead of flashing a skeleton.
-      setLoadedPipeRuns((prev) => {
-        let next = prev;
-        for (const pipe of inventory) {
-          if (pipe.executionCount === 0 && !prev[pipe.name]) {
-            if (next === prev) next = { ...prev };
-            next[pipe.name] = [];
-          }
-        }
-        return next;
-      });
     } catch {
       // Keep recent in-memory pipe groups available if the engine is still
       // starting or an older build does not expose the inventory endpoint.
