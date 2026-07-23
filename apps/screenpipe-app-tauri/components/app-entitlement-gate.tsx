@@ -32,7 +32,7 @@ import {
   TOKEN_HYDRATION_GRACE_MS,
 } from "@/lib/app-entitlement";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { commands } from "@/lib/utils/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -128,14 +128,19 @@ export function AppEntitlementGate({
   const { settings, updateSettings, loadUser, isSettingsLoaded } =
     useSettings();
   const {
-    isEnterprise,
-    isEnterpriseBuildResolved,
+    isManagedDeployment,
+    isManagedDeploymentResolved,
     authenticationState,
     authenticationError,
-    isEnterpriseAuthenticated,
+    isManagedAuthenticated,
     selectAuthenticationMethod,
     submitLicenseKey,
-  } = useEnterprisePolicy();
+    policy: managedPolicy,
+  } = useManagedPolicy();
+  // When the org policy requires account sign-in, the license key can't
+  // authenticate — don't offer it. Best-effort: known from the last fetched
+  // or cached policy, and always known right after a key was refused.
+  const licenseKeyAllowed = !managedPolicy?.requireAccountLogin;
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState("");
@@ -250,32 +255,32 @@ export function AppEntitlementGate({
   // remains in store.bin. Keep retrying locally, but gate unknown evidence
   // immediately so restarting the webview cannot reset an access grace period.
   const shouldGateForEnterpriseLogin =
-    isEnterprise && authenticationState === "account";
+    isManagedDeployment && authenticationState === "account";
   const shouldGateForConsumerLogin =
-    !devBypass && !isEnterprise && !user?.token && !tokenPending;
+    !devBypass && !isManagedDeployment && !user?.token && !tokenPending;
   const shouldGateForUnknownConsumerPolicy =
     !devBypass &&
-    !isEnterprise &&
+    !isManagedDeployment &&
     Boolean(user) &&
     localPlanPolicy === "unknown";
   const shouldGateForEnterpriseApp =
     !devBypass &&
-    !isEnterprise &&
+    !isManagedDeployment &&
     Boolean(user?.token) &&
     !hasConsumerSubscription &&
     enterpriseAccount?.requires_enterprise_app === true;
   const shouldGateForEntitlement = shouldGateForUnknownConsumerPolicy;
   const shouldGate = isOnboardingRoute
     ? false
-    : !isEnterpriseBuildResolved
+    : !isManagedDeploymentResolved
       ? true
-      : isEnterprise
-        ? !isEnterpriseAuthenticated
+      : isManagedDeployment
+        ? !isManagedAuthenticated
         : shouldGateForEnterpriseApp ||
           shouldGateForConsumerLogin ||
           shouldGateForUnknownConsumerPolicy;
   const enterpriseAuthenticationPending =
-    isEnterprise && authenticationState === "checking";
+    isManagedDeployment && authenticationState === "checking";
   const email = user?.email || "this account";
   const enterpriseOrgName = enterpriseAccount?.org_name || "your workspace";
   const planLabel = useMemo(
@@ -329,7 +334,7 @@ export function AppEntitlementGate({
       plan: user?.subscription_plan ?? null,
       app_entitled: user?.app_entitled ?? null,
       // Diagnostics for the enterprise post-update loop (SCR-132).
-      enterprise: isEnterprise,
+      enterprise: isManagedDeployment,
       token_pending: tokenPending,
       gate_path: shouldGateForEnterpriseLogin
         ? "enterprise_login"
@@ -344,7 +349,7 @@ export function AppEntitlementGate({
     shouldGateForConsumerLogin,
     shouldGateForUnknownConsumerPolicy,
     shouldGateForEnterpriseApp,
-    isEnterprise,
+    isManagedDeployment,
     enterpriseAuthenticationPending,
     tokenPending,
     user?.app_entitled,
@@ -387,7 +392,7 @@ export function AppEntitlementGate({
     // "checking access" shell, but that transient state must never stop the
     // recorder. Otherwise opening the overlay can tear down the local API just
     // before the consumer/enterprise result arrives.
-    if (!isSettingsLoaded || !isEnterpriseBuildResolved) return;
+    if (!isSettingsLoaded || !isManagedDeploymentResolved) return;
     if (!shouldGate) {
       stoppedForGateRef.current = false;
       return;
@@ -409,8 +414,8 @@ export function AppEntitlementGate({
     });
   }, [
     enterpriseAuthenticationPending,
-    isEnterprise,
-    isEnterpriseBuildResolved,
+    isManagedDeployment,
+    isManagedDeploymentResolved,
     isSettingsLoaded,
     shouldGate,
   ]);
@@ -596,13 +601,13 @@ export function AppEntitlementGate({
   // stop capture. If the user then authenticates successfully, resume even
   // though their paid entitlement was already true before the gate appeared.
   useEffect(() => {
-    if (!isSettingsLoaded || !isEnterprise) {
+    if (!isSettingsLoaded || !isManagedDeployment) {
       prevEnterpriseAuthenticatedRef.current = null;
       return;
     }
     const previouslyAuthenticated = prevEnterpriseAuthenticatedRef.current;
-    prevEnterpriseAuthenticatedRef.current = isEnterpriseAuthenticated;
-    if (previouslyAuthenticated !== false || !isEnterpriseAuthenticated) return;
+    prevEnterpriseAuthenticatedRef.current = isManagedAuthenticated;
+    if (previouslyAuthenticated !== false || !isManagedAuthenticated) return;
     if (!recorderStoppedByGateRef.current) return;
     posthog.capture("enterprise_auth_recording_restored", {
       authentication_state: authenticationState,
@@ -610,8 +615,8 @@ export function AppEntitlementGate({
     resumeRecordingAfterGate(true);
   }, [
     authenticationState,
-    isEnterprise,
-    isEnterpriseAuthenticated,
+    isManagedDeployment,
+    isManagedAuthenticated,
     isSettingsLoaded,
     resumeRecordingAfterGate,
   ]);
@@ -684,7 +689,7 @@ export function AppEntitlementGate({
     return <>{children}</>;
   }
 
-  if (!isEnterpriseBuildResolved) {
+  if (!isManagedDeploymentResolved) {
     return (
       <EntitlementShell
         title="checking access"
@@ -695,7 +700,7 @@ export function AppEntitlementGate({
     );
   }
 
-  if (isEnterprise && authenticationState === "checking") {
+  if (isManagedDeployment && authenticationState === "checking") {
     return (
       <EntitlementShell
         title="checking enterprise access"
@@ -706,7 +711,7 @@ export function AppEntitlementGate({
     );
   }
 
-  if (isEnterprise && authenticationState === "choice") {
+  if (isManagedDeployment && authenticationState === "choice") {
     return (
       <EntitlementShell
         title="enterprise access"
@@ -723,21 +728,23 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             sign in with enterprise account
           </Button>
-          <Button
-            onClick={() => selectAuthenticationMethod("license_key")}
-            variant="outline"
-            className="w-full gap-2"
-          >
-            <KeyRound className="h-4 w-4" />
-            use enterprise key
-          </Button>
+          {licenseKeyAllowed && (
+            <Button
+              onClick={() => selectAuthenticationMethod("license_key")}
+              variant="outline"
+              className="w-full gap-2"
+            >
+              <KeyRound className="h-4 w-4" />
+              use enterprise key
+            </Button>
+          )}
         </div>
         {devLoginBlock}
       </EntitlementShell>
     );
   }
 
-  if (isEnterprise && authenticationState === "license_key") {
+  if (isManagedDeployment && authenticationState === "license_key") {
     return (
       <EntitlementShell
         title="enterprise key"
@@ -755,7 +762,7 @@ export function AppEntitlementGate({
     );
   }
 
-  if (isEnterprise && shouldGateForEnterpriseLogin) {
+  if (isManagedDeployment && shouldGateForEnterpriseLogin) {
     const signedIn = Boolean(user?.token);
     return (
       <EntitlementShell
@@ -773,14 +780,16 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             {signedIn ? "use different account" : "sign in"}
           </Button>
-          <Button
-            onClick={() => selectAuthenticationMethod("license_key")}
-            variant="outline"
-            className="w-full gap-2"
-          >
-            <KeyRound className="h-4 w-4" />
-            use enterprise key
-          </Button>
+          {licenseKeyAllowed && (
+            <Button
+              onClick={() => selectAuthenticationMethod("license_key")}
+              variant="outline"
+              className="w-full gap-2"
+            >
+              <KeyRound className="h-4 w-4" />
+              use enterprise key
+            </Button>
+          )}
         </div>
         {devLoginBlock}
       </EntitlementShell>

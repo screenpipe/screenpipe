@@ -45,6 +45,12 @@
       "layers": ["settings"]
     },
     {
+      "id": "settings-ai",
+      "label": "AI presets and preferences UX",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["settings"]
+    },
+    {
       "id": "settings-privacy-api-auth",
       "label": "Privacy API auth settings UX",
       "platforms": ["windows", "macos", "linux"],
@@ -572,11 +578,11 @@
       "spec": "settings-sections.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "real-ui-e2e", "storage-privacy"],
-      "features": ["settings-recording", "settings-privacy-api-auth", "storage-retention", "audio-device-health"],
+      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "audio-device-health"],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, storage, privacy, and rapid switching crash guard."
+      "notes": "Settings sections, AI preset/preferences split and toggle flows, storage, privacy, and rapid switching crash guard."
     },
     {
       "spec": "meeting-apps-picker.spec.ts",

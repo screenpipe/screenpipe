@@ -2759,7 +2759,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <SelectGroup>
                       <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
                       <SelectItem value="screenpipe-cloud" disabled={!hasCloudTranscriptionAccess}>
-                        Screenpipe Cloud {!hasCloudTranscriptionAccess && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
+                        Screenpipe Cloud {!hasCloudTranscriptionAccess && "(Business)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
                       </SelectItem>
                       <SelectItem value="deepgram">Deepgram</SelectItem>
                     </SelectGroup>

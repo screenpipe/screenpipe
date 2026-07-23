@@ -18,11 +18,11 @@ import {
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
 describe("pipeHasSidebarSchedule", () => {
-  test("excludes manual pipes from the recurring sidebar section", () => {
+  it("excludes manual pipes from the recurring sidebar section", () => {
     expect(pipeHasSidebarSchedule({ schedule: "manual" })).toBe(false);
   });
 
-  test("includes legacy and structured schedules", () => {
+  it("includes legacy and structured schedules", () => {
     expect(pipeHasSidebarSchedule({ schedule: "every 30m" })).toBe(true);
     expect(
       pipeHasSidebarSchedule({
@@ -31,10 +31,28 @@ describe("pipeHasSidebarSchedule", () => {
       }),
     ).toBe(true);
   });
+
+  it("includes triggered pipes even when schedule is manual", () => {
+    expect(
+      pipeHasSidebarSchedule({
+        schedule: "manual",
+        trigger: { events: ["meeting_ended"] },
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes pipes with empty trigger arrays", () => {
+    expect(
+      pipeHasSidebarSchedule({
+        schedule: "manual",
+        trigger: { events: [], custom: [], sources: [] },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("visibleSidebarPipeNames", () => {
-  test("does not restore a known manual pipe from its run history", () => {
+  it("does not restore a known manual pipe from its run history", () => {
     expect(
       visibleSidebarPipeNames(
         [
@@ -393,14 +411,14 @@ describe("buildSidebarRecentsSections", () => {
 // ── listMoveTargetGroups ─────────────────────────────────────────────
 
 describe("listMoveTargetGroups", () => {
-  it("lists manual groups before recurring pipe groups", () => {
+  it("lists only manual groups, not auto pipe groups", () => {
     const result = listMoveTargetGroups([
       s("a", "chat", undefined, "work"),
       s("p1", "daily #1", "daily"),
       s("p2", "daily #2", "daily"),
       s("u", "ungrouped chat"),
     ]);
-    expect(result).toEqual(["work", "daily"]);
+    expect(result).toEqual(["work"]);
   });
 
   it("omits pipe names that appear only once", () => {

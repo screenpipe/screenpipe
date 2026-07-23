@@ -31,11 +31,11 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn().mockResolvedValue(undefined),
   state: { isSettingsLoaded: true, user: null as any },
   enterprise: {
-    isEnterprise: false,
-    isEnterpriseBuildResolved: true,
+    isManagedDeployment: false,
+    isManagedDeploymentResolved: true,
     authenticationState: "authenticated",
     authenticationError: null as string | null,
-    isEnterpriseAuthenticated: true,
+    isManagedAuthenticated: true,
   },
   selectAuthenticationMethod: vi.fn(),
   submitLicenseKey: vi.fn(async () => ({ ok: true })),
@@ -61,13 +61,13 @@ vi.mock("@/lib/utils/tauri", () => ({
   },
 }));
 
-vi.mock("@/lib/hooks/use-enterprise-policy", () => ({
-  useEnterprisePolicy: () => ({
-    isEnterprise: mocks.enterprise.isEnterprise,
-    isEnterpriseBuildResolved: mocks.enterprise.isEnterpriseBuildResolved,
+vi.mock("@/lib/hooks/use-managed-policy", () => ({
+  useManagedPolicy: () => ({
+    isManagedDeployment: mocks.enterprise.isManagedDeployment,
+    isManagedDeploymentResolved: mocks.enterprise.isManagedDeploymentResolved,
     authenticationState: mocks.enterprise.authenticationState,
     authenticationError: mocks.enterprise.authenticationError,
-    isEnterpriseAuthenticated: mocks.enterprise.isEnterpriseAuthenticated,
+    isManagedAuthenticated: mocks.enterprise.isManagedAuthenticated,
     selectAuthenticationMethod: mocks.selectAuthenticationMethod,
     submitLicenseKey: mocks.submitLicenseKey,
   }),
@@ -128,11 +128,11 @@ describe("AppEntitlementGate", () => {
     mocks.state = { isSettingsLoaded: true, user: null };
     mocks.windowLabel = "main";
     mocks.enterprise = {
-      isEnterprise: false,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: false,
+      isManagedDeploymentResolved: true,
       authenticationState: "authenticated",
       authenticationError: null,
-      isEnterpriseAuthenticated: true,
+      isManagedAuthenticated: true,
     };
   });
 
@@ -145,11 +145,11 @@ describe("AppEntitlementGate", () => {
   it("leaves enterprise authentication on the onboarding login step", () => {
     window.history.replaceState({}, "", "/onboarding");
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "choice",
       authenticationError: null,
-      isEnterpriseAuthenticated: false,
+      isManagedAuthenticated: false,
     };
 
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
@@ -159,7 +159,7 @@ describe("AppEntitlementGate", () => {
   });
 
   it("waits for build detection before stopping a gated session", async () => {
-    mocks.enterprise.isEnterpriseBuildResolved = false;
+    mocks.enterprise.isManagedDeploymentResolved = false;
 
     const { rerender } = render(
       <AppEntitlementGate>{protectedApp}</AppEntitlementGate>,
@@ -171,7 +171,7 @@ describe("AppEntitlementGate", () => {
 
     // The session is still gated after resolution. The effect must now stop
     // recording, proving the resolution flag is both a guard and a dependency.
-    mocks.enterprise.isEnterpriseBuildResolved = true;
+    mocks.enterprise.isManagedDeploymentResolved = true;
     rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
     await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
   });
@@ -189,11 +189,11 @@ describe("AppEntitlementGate", () => {
       },
     });
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "checking",
       authenticationError: null,
-      isEnterpriseAuthenticated: false,
+      isManagedAuthenticated: false,
     };
 
     const { rerender } = render(
@@ -209,7 +209,7 @@ describe("AppEntitlementGate", () => {
     );
 
     mocks.enterprise.authenticationState = "authenticated";
-    mocks.enterprise.isEnterpriseAuthenticated = true;
+    mocks.enterprise.isManagedAuthenticated = true;
     rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
@@ -221,11 +221,11 @@ describe("AppEntitlementGate", () => {
   it("never lets a secondary enterprise webview stop the shared recorder", async () => {
     mocks.windowLabel = "search";
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "account",
       authenticationError: null,
-      isEnterpriseAuthenticated: false,
+      isManagedAuthenticated: false,
     };
 
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
@@ -237,11 +237,11 @@ describe("AppEntitlementGate", () => {
 
   it("resumes recording when a real enterprise gate authenticates", async () => {
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "account",
       authenticationError: null,
-      isEnterpriseAuthenticated: false,
+      isManagedAuthenticated: false,
     };
 
     const { rerender } = render(
@@ -250,7 +250,7 @@ describe("AppEntitlementGate", () => {
     await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(1));
 
     mocks.enterprise.authenticationState = "authenticated";
-    mocks.enterprise.isEnterpriseAuthenticated = true;
+    mocks.enterprise.isManagedAuthenticated = true;
     rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
     await waitFor(() => expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null));
@@ -274,11 +274,11 @@ describe("AppEntitlementGate", () => {
 
   it("offers account and enterprise-key routes in the fallback gate", () => {
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "choice",
       authenticationError: null,
-      isEnterpriseAuthenticated: false,
+      isManagedAuthenticated: false,
     };
 
     render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
@@ -296,11 +296,11 @@ describe("AppEntitlementGate", () => {
   it("keeps the selected account route gated until the account is accepted", async () => {
     vi.stubEnv("TAURI_ENV_DEBUG", "true");
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "account",
       authenticationError: null,
-      isEnterpriseAuthenticated: false,
+      isManagedAuthenticated: false,
     };
     mocks.state.user = null;
 
@@ -317,11 +317,11 @@ describe("AppEntitlementGate", () => {
   it("does not force enterprise sign-in after key authentication", () => {
     vi.stubEnv("TAURI_ENV_DEBUG", "true");
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "authenticated",
       authenticationError: null,
-      isEnterpriseAuthenticated: true,
+      isManagedAuthenticated: true,
     };
     mocks.state.user = null;
 
@@ -646,11 +646,11 @@ describe("AppEntitlementGate", () => {
     fakeTimersNoDate();
     try {
       mocks.enterprise = {
-        isEnterprise: true,
-        isEnterpriseBuildResolved: true,
+        isManagedDeployment: true,
+        isManagedDeploymentResolved: true,
         authenticationState: "account",
         authenticationError: null,
-        isEnterpriseAuthenticated: false,
+        isManagedAuthenticated: false,
       };
       mocks.state.user = null; // no token → enterprise-login gate, not entitlement
       render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
@@ -663,11 +663,11 @@ describe("AppEntitlementGate", () => {
 
   it("uses enterprise authentication instead of consumer subscription gating", () => {
     mocks.enterprise = {
-      isEnterprise: true,
-      isEnterpriseBuildResolved: true,
+      isManagedDeployment: true,
+      isManagedDeploymentResolved: true,
       authenticationState: "authenticated",
       authenticationError: null,
-      isEnterpriseAuthenticated: true,
+      isManagedAuthenticated: true,
     };
     mocks.state.user = baseUser();
 
@@ -681,11 +681,11 @@ describe("AppEntitlementGate", () => {
     fakeTimersNoDate();
     try {
       mocks.enterprise = {
-        isEnterprise: true,
-        isEnterpriseBuildResolved: true,
+        isManagedDeployment: true,
+        isManagedDeploymentResolved: true,
         authenticationState: "authenticated",
         authenticationError: null,
-        isEnterpriseAuthenticated: true,
+        isManagedAuthenticated: true,
       };
       mocks.state.user = baseUser();
       render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
@@ -795,7 +795,7 @@ describe("AppEntitlementGate", () => {
   });
 
   it("does not show the consumer-app warning inside the enterprise build", () => {
-    mocks.enterprise.isEnterprise = true;
+    mocks.enterprise.isManagedDeployment = true;
     mocks.state.user = baseUser({
       app_entitled: true,
       cloud_subscribed: true,

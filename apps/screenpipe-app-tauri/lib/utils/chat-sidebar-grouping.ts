@@ -7,11 +7,17 @@ import type { SessionRecord } from "@/lib/stores/chat-store";
 type SidebarPipeSchedule = {
   schedule?: string | null;
   schedule_config?: unknown | null;
+  trigger?: { events?: unknown[]; custom?: unknown[]; sources?: unknown[] } | null;
 };
 
-/** The sidebar Pipes section is for recurring automations, not manual templates. */
+/** The sidebar Pipes section is for automated pipes (scheduled or triggered), not manual templates. */
 export function pipeHasSidebarSchedule(config: SidebarPipeSchedule): boolean {
+  const isTriggered =
+    !!(config.trigger?.events?.length) ||
+    !!(config.trigger?.custom?.length) ||
+    !!(config.trigger?.sources?.length);
   return (
+    isTriggered ||
     config.schedule_config != null ||
     (typeof config.schedule === "string" &&
       config.schedule.length > 0 &&
@@ -177,9 +183,8 @@ function recurringPipeDisplayNames(
 
 /**
  * Group names to offer in the "Move to group" submenu: manual sidebar
- * groups first (insertion order, original casing), then auto pipe-groups
- * (the groups the user actually sees in the sidebar). Deduped
- * case-insensitively so a manual group shadowing a pipe name appears once.
+ * groups only (insertion order, original casing). Auto pipe-groups are
+ * excluded — pipe sessions are managed automatically, not by the user.
  */
 export function listMoveTargetGroups(
   sessions: ReadonlyArray<GroupableSession>,
@@ -193,11 +198,6 @@ export function listMoveTargetGroups(
     if (seen.has(lower)) continue;
     seen.add(lower);
     out.push(g);
-  }
-  for (const [lower, display] of recurringPipeDisplayNames(sessions)) {
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    out.push(display);
   }
   return out;
 }

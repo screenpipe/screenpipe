@@ -71,6 +71,12 @@ fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     Ok(store.to_recording_config(data_dir))
 }
 
+fn configured_local_api_port(app: &tauri::AppHandle) -> u16 {
+    build_config(app)
+        .map(|config| config.port)
+        .unwrap_or(DEFAULT_LOCAL_API_PORT)
+}
+
 fn recording_access_policy(
     is_enterprise_build: bool,
     dev_bypass: bool,
@@ -770,11 +776,7 @@ async fn spawn_screenpipe_inner(
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(remaining + 1)).await;
             info!("Cooldown expired, checking if server needs restart");
-            let port = SettingsStore::get(&app_handle)
-                .ok()
-                .flatten()
-                .map(|s| s.recording.port)
-                .unwrap_or(3030);
+            let port = configured_local_api_port(&app_handle);
             if let Ok(resp) = reqwest::Client::new()
                 .get(format!("http://localhost:{}/health", port))
                 .timeout(std::time::Duration::from_secs(2))
@@ -809,7 +811,10 @@ async fn spawn_screenpipe_inner(
         state.is_starting_capture.store(false, Ordering::SeqCst);
         return Err(err);
     }
-    let port = store.recording.port;
+    // `to_recording_config` applies SCREENPIPE_PORT for isolated dev/E2E
+    // instances. Lifecycle health checks and orphan cleanup must use that
+    // same effective port or a restart can kill an unrelated app on :3030.
+    let port = configured_local_api_port(&app);
     let health_url = format!("http://localhost:{}/health", port);
 
     // --- Race prevention ---

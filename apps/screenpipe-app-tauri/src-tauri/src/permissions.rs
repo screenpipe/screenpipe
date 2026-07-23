@@ -401,12 +401,27 @@ pub fn check_screen_recording_permission() -> OSPermissionStatus {
     }
 }
 
-/// Check only accessibility permission
-/// Use this for polling to check if user has granted accessibility permission
+/// Check only accessibility permission (silent, side-effect free).
+/// Use this for passive polling before the user has chosen to grant — it never
+/// enrolls the app in the Accessibility list or surfaces the system prompt.
+/// It will not see a grant made *after* the process started (AXIsProcessTrusted
+/// caches stale-denied); once the user actively requests the permission, switch
+/// to `check_accessibility_permission_live_cmd` to catch that transition.
 #[tauri::command(async)]
 #[specta::specta]
 pub fn check_accessibility_permission_cmd() -> OSPermissionStatus {
     core_to_os_status(screenpipe_core::permissions::check_accessibility())
+}
+
+/// Live accessibility check for polling *after* the user has actively started
+/// the grant flow. Probes tccd via an active event tap so a grant made while
+/// the app is running is seen without a relaunch. The probe enrolls the app in
+/// the Accessibility list (and can surface the system prompt), which is
+/// expected once the user is being asked — do NOT use it for passive polling.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn check_accessibility_permission_live_cmd() -> OSPermissionStatus {
+    core_to_os_status(screenpipe_core::permissions::check_accessibility_live())
 }
 
 /// Check Input Monitoring permission (macOS only).

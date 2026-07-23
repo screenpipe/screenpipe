@@ -47,6 +47,11 @@ interface RecordingStatusProps {
   isTranslucent?: boolean;
   /** buttons float over full-bleed video (timeline, sidebar collapsed) */
   floatingOverMedia?: boolean;
+  /** true when both audio and vision are disabled in settings — hides
+   * recording controls since nothing can record. */
+  allCaptureDisabled?: boolean;
+  /** navigate to recording settings */
+  onOpenRecordingSettings?: () => void;
 }
 
 const KIND_ICONS: Record<
@@ -77,16 +82,21 @@ export function RecordingStatus({
   isGloballyPaused,
   isTranslucent,
   floatingOverMedia,
+  allCaptureDisabled,
+  onOpenRecordingSettings,
 }: RecordingStatusProps) {
   const [open, setOpen] = React.useState(false);
   const [pauseLoading, setPauseLoading] = React.useState(false);
 
-  const pausedCount = devices.filter((d) => !d.active).length;
-  const allActive = devices.length > 0 && pausedCount === 0;
-  const canPauseRecording = devices.some((d) => d.active);
+  // When all capture is disabled in settings, treat the device list as empty
+  // even if the sidecar still reports devices — nothing is actually recording.
+  const visibleDevices = allCaptureDisabled ? [] : devices;
+  const pausedCount = visibleDevices.filter((d) => !d.active).length;
+  const allActive = visibleDevices.length > 0 && pausedCount === 0;
+  const canPauseRecording = visibleDevices.some((d) => d.active);
 
   const summary =
-    devices.length === 0
+    visibleDevices.length === 0
       ? "not recording"
       : pausedCount === 0
         ? "recording"
@@ -136,7 +146,7 @@ export function RecordingStatus({
     }
   };
 
-  const allPaused = devices.length > 0 && !canPauseRecording;
+  const allPaused = visibleDevices.length > 0 && !canPauseRecording;
 
   const toggleAllRecording = async () => {
     if (pauseLoading) return;
@@ -208,7 +218,7 @@ export function RecordingStatus({
                     : allActive
                       ? "bg-foreground"
                       : "border border-foreground bg-transparent",
-                  devices.length === 0 && "opacity-40",
+                  visibleDevices.length === 0 && "opacity-40",
                   meetingActive && "animate-pulse"
                 )}
               />
@@ -228,7 +238,7 @@ export function RecordingStatus({
         <div className="px-3 py-2 border-b border-border">
           <span className="text-xs font-medium text-foreground">{label}</span>
         </div>
-        {(onPauseRecording || onResumeRecording) && (
+        {(onPauseRecording || onResumeRecording) && !allCaptureDisabled && (
           <div className="px-3 py-2 border-b border-border">
             <button
               type="button"
@@ -250,12 +260,28 @@ export function RecordingStatus({
           </div>
         )}
         <div className="py-1">
-          {devices.length === 0 && (
+          {visibleDevices.length === 0 && (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">
-              no capture devices reported
+              {allCaptureDisabled ? (
+                <>
+                  no devices enabled{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenRecordingSettings?.();
+                      setOpen(false);
+                    }}
+                    className="underline text-foreground hover:opacity-70 transition-opacity"
+                  >
+                    open settings
+                  </button>
+                </>
+              ) : (
+                "no capture devices reported"
+              )}
             </div>
           )}
-          {devices.map((device) => {
+          {visibleDevices.map((device) => {
             const Icon = device.active
               ? KIND_ICONS[device.kind].active
               : KIND_ICONS[device.kind].paused;
@@ -307,27 +333,29 @@ export function RecordingStatus({
             );
           })}
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 border-t border-border">
-          <Phone
-            aria-hidden="true"
-            className={cn(
-              "h-3 w-3 shrink-0",
-              meetingActive ? "text-foreground" : "text-muted-foreground"
-            )}
-          />
-          <span className="flex-1 min-w-0 truncate text-[11px] text-foreground">
-            {meetingActive ? `meeting notes${meetingApp ? ` · ${meetingApp}` : ""}` : "meeting notes"}
-          </span>
-          <button
-            onClick={onToggleMeeting}
-            disabled={meetingLoading}
-            data-testid="recording-status-meeting-toggle"
-            title={meetingActive ? "stop the meeting note only" : "start meeting notes"}
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors shrink-0 disabled:opacity-50 whitespace-nowrap"
-          >
-            {meetingActive ? "stop notes" : "start notes"}
-          </button>
-        </div>
+        {(!allCaptureDisabled || meetingActive) && (
+          <div className="flex items-center gap-2 px-3 py-1.5 border-t border-border">
+            <Phone
+              aria-hidden="true"
+              className={cn(
+                "h-3 w-3 shrink-0",
+                meetingActive ? "text-foreground" : "text-muted-foreground"
+              )}
+            />
+            <span className="flex-1 min-w-0 truncate text-[11px] text-foreground">
+              {meetingActive ? `meeting notes${meetingApp ? ` · ${meetingApp}` : ""}` : "meeting notes"}
+            </span>
+            <button
+              onClick={onToggleMeeting}
+              disabled={meetingLoading}
+              data-testid="recording-status-meeting-toggle"
+              title={meetingActive ? "stop the meeting note only" : "start meeting notes"}
+              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors shrink-0 disabled:opacity-50 whitespace-nowrap"
+            >
+              {meetingActive ? "stop notes" : "start notes"}
+            </button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );

@@ -6,7 +6,11 @@
 import { useEffect } from "react";
 import { ArrowRight, Clock } from "lucide-react";
 import posthog from "posthog-js";
-import { planDisplayName } from "@/lib/app-entitlement";
+import {
+  hasBillingSubscriptionEntitlement,
+  planDisplayName,
+  type AppUser,
+} from "@/lib/app-entitlement";
 
 export type PlanExpiration = {
   expiresAt: Date;
@@ -30,20 +34,27 @@ export function getPlanExpiration(
   };
 }
 
+export function getUserPlanExpiration(
+  user: AppUser | null | undefined,
+  nowMs = Date.now(),
+): PlanExpiration | null {
+  if (hasBillingSubscriptionEntitlement(user)) return null;
+  return getPlanExpiration(user?.plan_expires_at, nowMs);
+}
+
 type PlanExpirationNoticeProps = {
-  expiresAt: string | null | undefined;
-  plan: string | null | undefined;
+  user: AppUser | null | undefined;
   onClick: () => void;
   variant?: "sidebar" | "account";
 };
 
 export function PlanExpirationNotice({
-  expiresAt,
-  plan,
+  user,
   onClick,
   variant = "sidebar",
 }: PlanExpirationNoticeProps) {
-  const expiration = getPlanExpiration(expiresAt);
+  const expiration = getUserPlanExpiration(user);
+  const plan = user?.subscription_plan;
   const planName = planDisplayName(plan);
   const daysRemaining = expiration?.daysRemaining ?? null;
   const expirationIso = expiration?.expiresAt.toISOString() ?? null;

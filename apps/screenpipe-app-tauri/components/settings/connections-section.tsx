@@ -38,7 +38,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
-import { ComposioCard } from "./composio-card";
+import { ComposioCard, COMPOSIO_TOOLKITS, type ComposioStatusMap } from "./composio-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { RemoteAgentCard } from "./remote-agent-card";
@@ -511,17 +511,11 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
         />
       </svg>
     ),
-    gmail: (
-      <svg viewBox="0 0 256 193" className="w-5 h-5" preserveAspectRatio="xMidYMid meet" aria-hidden>
-        <path fill="#4285F4" d="M58.182 192.05V93.14L27.507 65.077 0 49.504v125.091c0 9.658 7.825 17.455 17.455 17.455h40.727Z"/>
-        <path fill="#34A853" d="M197.818 192.05h40.727c9.659 0 17.455-7.826 17.455-17.455V49.505l-31.156 17.837-27.026 25.798v98.91Z"/>
-        <path fill="#EA4335" d="m58.182 93.14-4.174-38.647 4.174-36.989L128 69.868l69.818-52.364 4.669 34.992-4.669 40.644L128 145.504z"/>
-        <path fill="#FBBC04" d="M197.818 17.504V93.14L256 49.504V26.231c0-21.585-24.64-33.89-41.89-20.945l-16.292 12.218Z"/>
-        <path fill="#C5221F" d="m0 49.504 26.759 20.07L58.182 93.14V17.504L41.89 5.286C24.61-7.66 0 4.646 0 26.231v23.273Z"/>
-      </svg>
-    ),
+    gmail: <img src="/images/gmail.svg" alt="Gmail" className="w-5 h-5" />,
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
+    "google-drive": <img src="/images/google-drive.svg" alt="Google Drive" className="w-5 h-5" />,
+    "google-sheets": <img src="/images/google-sheets.svg" alt="Google Sheets" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     "remote-agent": <img src="/openclaw-icon.svg" alt="Remote agent" className="w-5 h-5" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
@@ -756,6 +750,8 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   granola: "Show notes from my recent meetings",
   zoom: "Summarize my recent Zoom calls",
   gmail: "Summarize my recent emails",
+  "google-drive": "Find my recent files in Google Drive",
+  "google-sheets": "What's in my latest spreadsheet?",
   krisp: "Search my meeting transcripts for action items",
   excalidraw: "What's on my recent Excalidraw boards?",
   whatsapp: "What were the latest messages in my WhatsApp?",
@@ -3712,9 +3708,13 @@ export function ConnectionsSection({
   const [excalidrawConnected, setExcalidrawConnected] = useState(false);
   const [importedSkillsCount, setImportedSkillsCount] = useState(0);
   const [piExtensionCount, setPiExtensionCount] = useState(0);
-  // Gmail/Zoom via Composio (managed auth through screenpipe.com; see composio-card.tsx)
+  // Composio-backed connections (managed auth through screenpipe.com; see
+  // composio-card.tsx): gmail, zoom, google drive/docs/sheets.
   const { settings: composioSettings } = useSettings();
-  const [composioConnected, setComposioConnected] = useState({ gmail: false, zoom: false });
+  const [composioConnected, setComposioConnected] = useState<ComposioStatusMap>(
+    () =>
+      Object.fromEntries(COMPOSIO_TOOLKITS.map((t) => [t, false])) as ComposioStatusMap
+  );
   const composioToken = composioSettings.user?.token;
   useEffect(() => {
     if (!composioToken) return;
@@ -3723,7 +3723,12 @@ export function ConnectionsSection({
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((s) => {
-        if (s) setComposioConnected({ gmail: !!s.gmail?.connected, zoom: !!s.zoom?.connected });
+        if (!s) return;
+        setComposioConnected(
+          Object.fromEntries(
+            COMPOSIO_TOOLKITS.map((t) => [t, !!s[t]?.connected])
+          ) as ComposioStatusMap
+        );
       })
       .catch(() => {});
   }, [composioToken]);
@@ -3905,6 +3910,8 @@ export function ConnectionsSection({
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
       { id: "gmail", name: "Gmail", icon: "gmail", connected: composioConnected.gmail },
+      { id: "google-drive", name: "Google Drive", icon: "google-drive", connected: composioConnected.googledrive },
+      { id: "google-sheets", name: "Google Sheets", icon: "google-sheets", connected: composioConnected.googlesheets },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
       { id: "remote-agent", name: "Remote agent", icon: "remote-agent", connected: false },
       { id: "whatsapp", name: "WhatsApp", icon: "whatsapp", connected: false, detected: detectedConnectionIds.has("whatsapp") },
@@ -3965,7 +3972,8 @@ export function ConnectionsSection({
     const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     const googleDocsTile = hardcoded.find(h => h.id === "google-docs");
-    if (googleDocsTile) googleDocsTile.connected = googleDocsConnected;
+    // Docs lights for the Composio connection OR the legacy native OAuth one.
+    if (googleDocsTile) googleDocsTile.connected = googleDocsConnected || composioConnected.googledocs;
     // Zoom's dot lights for the Composio connection OR a legacy Zoom OAuth connection.
     const zoomTile = apiTiles.find(t => t.id === "zoom");
     if (zoomTile) zoomTile.connected = zoomTile.connected || composioConnected.zoom;
@@ -4116,11 +4124,30 @@ export function ConnectionsSection({
         onConnected={() => setGoogleCalendarConnected(true)}
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
-      case "google-docs": return <GoogleDocsCard />;
-      case "gmail": return <ComposioCard toolkit="gmail" onChanged={setComposioConnected} />;
+      case "google-docs": return (
+        <div className="space-y-3">
+          <ComposioCard toolkit="googledocs" initialConnected={composioConnected.googledocs} onChanged={setComposioConnected} />
+          {/* The native Docs connector (documents + drive.file scopes) still
+              works and keeps tokens local — keep it manageable for users who
+              connected before Composio became the primary path. */}
+          {googleDocsConnected && (
+            <details>
+              <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                advanced: manage the legacy google docs connection
+              </summary>
+              <div className="pt-2">
+                <GoogleDocsCard />
+              </div>
+            </details>
+          )}
+        </div>
+      );
+      case "google-drive": return <ComposioCard toolkit="googledrive" initialConnected={composioConnected.googledrive} onChanged={setComposioConnected} />;
+      case "google-sheets": return <ComposioCard toolkit="googlesheets" initialConnected={composioConnected.googlesheets} onChanged={setComposioConnected} />;
+      case "gmail": return <ComposioCard toolkit="gmail" initialConnected={composioConnected.gmail} onChanged={setComposioConnected} />;
       case "zoom": return (
         <div className="space-y-3">
-          <ComposioCard toolkit="zoom" onChanged={setComposioConnected} />
+          <ComposioCard toolkit="zoom" initialConnected={composioConnected.zoom} onChanged={setComposioConnected} />
           {/* The legacy Zoom OAuth app was rejected in marketplace review, so its
               authorize page is dead for new connections. Surface the old panel
               only for users who still HAVE a legacy connection (to manage or
@@ -4435,7 +4462,7 @@ export function ConnectionsSection({
                         macOS
                       </span>
                     )}
-                    {(selectedTile.id === "gmail" || selectedTile.id === "zoom") && (
+                    {["gmail", "zoom", "google-drive", "google-docs", "google-sheets"].includes(selectedTile.id) && (
                       <span className="px-2 py-0.5 text-[10px] font-mono border border-border text-muted-foreground inline-flex items-center">
                         via composio
                       </span>

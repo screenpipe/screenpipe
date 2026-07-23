@@ -489,6 +489,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
   }, [loadedPipeRuns, loadingPipeRuns]);
 
+  // Live session ids from the store — used to discard stale loadedPipeRuns
+  // entries after a pipe run is deleted.
+  const storeSessionIds = useChatStore((s) => s.sessions);
+
   const pipeItems = useMemo(() => {
     const sessionsByPipe = new Map<string, SessionRecord[]>();
     for (const session of pipes) {
@@ -503,8 +507,16 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
     return orderedNames.map((name) => {
       // Keep a newly-started watch/run visible after history was loaded, while
-      // deduping the same saved row returned by both sources.
-      const merged = [...(sessionsByPipe.get(name) ?? []), ...(loadedPipeRuns[name] ?? [])];
+      // deduping the same saved row returned by both sources. Filter out
+      // sessions that were deleted (dropped from the store) but still linger
+      // in the loadedPipeRuns cache.
+      const cached = (loadedPipeRuns[name] ?? []).filter((s) => {
+        const live = storeSessionIds[s.id];
+        // Drop deleted, pinned, or archived sessions from the cache —
+        // they either no longer exist or belong to a different section.
+        return live && !live.pinned && !live.hidden;
+      });
+      const merged = [...(sessionsByPipe.get(name) ?? []), ...cached];
       const seen = new Set<string>();
       const sessions = merged.filter((session) => {
         if (seen.has(session.id)) return false;
@@ -518,14 +530,14 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         sessions,
       };
     });
-  }, [pipeInventory, pipes, loadedPipeRuns]);
+  }, [pipeInventory, pipes, loadedPipeRuns, storeSessionIds]);
 
-  const pipeExecutionCounts = useMemo(
+  const pipeLastRuns = useMemo(
     () => Object.fromEntries(
       pipeInventory.flatMap((pipe) =>
-        pipe.executionCount == null ? [] : [[pipe.name, pipe.executionCount]],
+        pipe.lastRun == null ? [] : [[pipe.name, pipe.lastRun]],
       ),
-    ) as Record<string, number>,
+    ) as Record<string, string>,
     [pipeInventory],
   );
 
@@ -677,13 +689,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     } catch { /* ignore */ }
   }, [groupedSections]);
 
-  // Group names offered in the "Move to group" submenu, derived from all
-  // visible non-hidden sessions (pinned + recents): manual groups plus the
-  // auto pipe-groups the user actually sees in the sidebar. Moving a chat
-  // into a pipe-group's name folds it into that same group.
+  // Group names offered in the "Move to group" submenu: manual sidebar
+  // groups only (no auto pipe-groups).
   const existingGroups = useMemo(
-    () => listMoveTargetGroups([...pinned, ...recents, ...pipes]),
-    [pinned, recents, pipes],
+    () => listMoveTargetGroups([...pinned, ...recents]),
+    [pinned, recents],
   );
 
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
@@ -1015,9 +1025,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <PipeGroupRow
                       key={item.key}
                       item={item}
-                      executionCount={pipeExecutionCounts[item.title]}
-                      executionCountLoading={!pipeInventoryLoaded}
-                      runsLoading={loadingPipeRuns.has(item.title)}
+                      lastRun={pipeLastRuns[item.title]}
                       runsLoaded={loadedPipeRuns[item.title] != null}
                       expanded={expandedGroups.has(item.key)}
                       onToggleExpand={() => toggleGroupExpanded(item.key)}
@@ -1643,9 +1651,7 @@ function RecentsBody({
  */
 function PipeGroupRow({
   item,
-  executionCount,
-  executionCountLoading = false,
-  runsLoading = false,
+  lastRun,
   runsLoaded = false,
   expanded,
   onToggleExpand,
@@ -1664,9 +1670,7 @@ function PipeGroupRow({
   setOpenConversationMenuId,
 }: {
   item: Extract<SidebarItem, { kind: "group" }>;
-  executionCount?: number;
-  executionCountLoading?: boolean;
-  runsLoading?: boolean;
+  lastRun?: string;
   runsLoaded?: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
@@ -1684,6 +1688,8 @@ function PipeGroupRow({
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
+  const now = useMinuteTick(!!lastRun);
+  const lastRunAge = lastRun ? formatCompactAge(new Date(lastRun).getTime(), now) : null;
   return (
     <div data-testid={`pipe-group-${item.key}`}>
       <button
@@ -1696,32 +1702,27 @@ function PipeGroupRow({
         aria-expanded={expanded}
       >
         <span className="truncate flex-1 text-xs">{item.title}</span>
-        <span className="inline-flex items-center gap-1.5 shrink-0">
-          <span className="text-[10px] tabular-nums text-muted-foreground/60">
-            {executionCountLoading ? "…" : executionCount ?? item.sessions.length}
-          </span>
-          {expanded ? (
-            <ChevronDown
-              className="h-3 w-3 text-muted-foreground/60"
-              aria-hidden
-            />
-          ) : (
-            <ChevronRight
-              className="h-3 w-3 text-muted-foreground/60"
-              aria-hidden
-            />
+        <span className="relative inline-flex items-center justify-end shrink-0 w-6 h-4">
+          {lastRunAge && !expanded && (
+            <span className="absolute inset-0 flex items-center justify-end text-[10px] tabular-nums text-muted-foreground/60 opacity-100 group-hover/pipe:opacity-0 transition-opacity duration-150">
+              {lastRunAge}
+            </span>
           )}
+          <span className={cn(
+            "absolute inset-0 flex items-center justify-end transition-opacity duration-150",
+            expanded ? "opacity-100" : "opacity-0 group-hover/pipe:opacity-100"
+          )}>
+            {expanded ? (
+              <ChevronDown className="h-3 w-3 text-muted-foreground/60" aria-hidden />
+            ) : (
+              <ChevronRight className="h-3 w-3 text-muted-foreground/60" aria-hidden />
+            )}
+          </span>
         </span>
       </button>
       {expanded && (
         <div className="pl-3">
-          {runsLoading ? (
-            <div className="px-2 py-1.5 space-y-1.5" aria-busy="true">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-6 w-full rounded-md" />
-              ))}
-            </div>
-          ) : runsLoaded && item.sessions.length === 0 ? (
+          {runsLoaded && item.sessions.length === 0 ? (
             <div className="px-2 py-1.5 text-[11px] text-muted-foreground/60 italic">
               no saved runs
             </div>
@@ -1737,9 +1738,6 @@ function PipeGroupRow({
               onDeleteRequest={onDeleteRequest}
               onTogglePin={onTogglePin}
               onRenameRequest={onRenameRequest}
-              onMoveToGroup={onMoveToGroup}
-              onNewGroupRequest={onNewGroupRequest}
-              existingGroups={existingGroups}
               insideGroup
               openConversationMenuId={openConversationMenuId}
               setOpenConversationMenuId={setOpenConversationMenuId}

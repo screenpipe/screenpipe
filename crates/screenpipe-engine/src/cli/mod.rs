@@ -250,6 +250,13 @@ pub enum Command {
         subcommand: agent::AgentCommand,
     },
 
+    /// Connect screenpipe to every supported AI tool detected on this computer
+    Setup {
+        /// screenpipe REST API base URL the skills + MCP should target.
+        #[arg(long, default_value = "http://localhost:3030")]
+        api_url: String,
+    },
+
     /// Run screenpipe as a background service that starts at boot + stays up
     /// (systemd on Linux, launchd on macOS). For always-on boxes / VPS.
     Service {
@@ -2358,6 +2365,34 @@ mod tests {
         match cli.command {
             Command::Survey => {}
             _ => panic!("expected Survey command"),
+        }
+    }
+
+    #[test]
+    fn test_setup_command_parses_with_default_api_url() {
+        let cli = Cli::try_parse_from(["screenpipe", "setup"]).unwrap();
+        match cli.command {
+            Command::Setup { api_url } => {
+                assert_eq!(api_url, "http://localhost:3030");
+            }
+            _ => panic!("expected Setup command"),
+        }
+    }
+
+    #[test]
+    fn test_setup_command_accepts_remote_api_url() {
+        let cli = Cli::try_parse_from([
+            "screenpipe",
+            "setup",
+            "--api-url",
+            "https://screenpipe.example",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Setup { api_url } => {
+                assert_eq!(api_url, "https://screenpipe.example");
+            }
+            _ => panic!("expected Setup command"),
         }
     }
 

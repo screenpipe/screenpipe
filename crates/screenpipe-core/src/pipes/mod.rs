@@ -46,6 +46,12 @@ const PIPE_LOG_ARCHIVE_DIR: &str = "archive";
 const PIPE_EXECUTION_KEEP_PER_PIPE: i32 = 500;
 /// Stable prefix returned when an install would exceed the configured pipe cap.
 pub const PIPE_LIMIT_ERROR_CODE: &str = "free_pipe_limit_reached";
+const AUTOMATE_MY_WORK_LEGACY_PROMPT_HASHES: &[&str] = &[
+    // v2.5.52: always created and enabled exactly three hourly pipes.
+    "2d4dde284dafc774",
+    // v2.5.103: allowed zero-to-three pipes but kept the broken discovery flow.
+    "c2c3b9e35495fd5b",
+];
 const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
     (
         "automate-my-work",
@@ -546,6 +552,22 @@ fn is_default_model(s: &String) -> bool {
 }
 fn is_false(b: &bool) -> bool {
     !b
+}
+fn is_enterprise_managed(config: &PipeConfig) -> bool {
+    config
+        .config
+        .get("enterprise_managed")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+fn content_is_enterprise_managed(content: &str) -> bool {
+    parse_frontmatter(content)
+        .map(|(config, _)| is_enterprise_managed(&config))
+        .unwrap_or_else(|_| {
+            content
+                .lines()
+                .any(|line| line.trim() == "enterprise_managed: true")
+        })
 }
 /// Simple FNV-1a 64-bit hash, sufficient for change detection.
 fn simple_hash(content: &str) -> String {
@@ -2943,43 +2965,56 @@ impl PipeManager {
         write_pid_file(&self.pipes_dir, name, 0);
 
         // Resolve preset
-        let (run_model, run_provider, run_provider_url, run_api_key, preset_prompt) =
-            if let Some(preset_id) = config.preset.first() {
-                match resolve_preset(&self.pipes_dir, preset_id) {
-                    Some(resolved) => (
-                        resolved.model,
-                        resolved.provider,
-                        resolved.url,
-                        resolved.api_key,
-                        resolved.prompt,
-                    ),
-                    None => (
-                        config.model.clone(),
-                        config.provider.clone(),
-                        None,
-                        None,
-                        None,
-                    ),
+        let (run_model, run_provider, run_provider_url, run_api_key, preset_prompt) = if let Some(
+            preset_id,
+        ) =
+            config.preset.first()
+        {
+            match resolve_preset(&self.pipes_dir, preset_id) {
+                Some(resolved) => (
+                    resolved.model,
+                    resolved.provider,
+                    resolved.url,
+                    resolved.api_key,
+                    resolved.prompt,
+                ),
+                None if is_enterprise_managed(&config) => {
+                    remove_pid_file(&self.pipes_dir, name);
+                    let mut running = self.running.lock().await;
+                    running.remove(name);
+                    return Err(anyhow!(
+                            "pipe '{}': configured preset '{}' is unavailable; refusing to fall back to another AI provider",
+                            name,
+                            preset_id
+                        ));
                 }
-            } else {
-                // No preset — use user's default preset
-                match resolve_preset(&self.pipes_dir, "default") {
-                    Some(resolved) => (
-                        resolved.model,
-                        resolved.provider,
-                        resolved.url,
-                        resolved.api_key,
-                        resolved.prompt,
-                    ),
-                    None => (
-                        config.model.clone(),
-                        config.provider.clone(),
-                        None,
-                        None,
-                        None,
-                    ),
-                }
-            };
+                None => (
+                    config.model.clone(),
+                    config.provider.clone(),
+                    None,
+                    None,
+                    None,
+                ),
+            }
+        } else {
+            // No preset — use user's default preset
+            match resolve_preset(&self.pipes_dir, "default") {
+                Some(resolved) => (
+                    resolved.model,
+                    resolved.provider,
+                    resolved.url,
+                    resolved.api_key,
+                    resolved.prompt,
+                ),
+                None => (
+                    config.model.clone(),
+                    config.provider.clone(),
+                    None,
+                    None,
+                    None,
+                ),
+            }
+        };
 
         // Create DB execution row
         let exec_id = if let Some(ref store) = self.store {
@@ -3912,6 +3947,12 @@ impl PipeManager {
 
         let content = std::fs::read_to_string(&pipe_md)?;
         let (mut config, body) = parse_frontmatter(&content)?;
+        if is_enterprise_managed(&config) {
+            return Err(anyhow!(
+                "pipe '{}' is managed by your organization and cannot be enabled or disabled locally",
+                name
+            ));
+        }
         // Block enabling a stale one-off — would either silently no-op
         // (caught by the scheduler's stale guard) or fire a confusingly
         // old reminder. User must set a new `at <iso>` first.
@@ -3957,6 +3998,14 @@ impl PipeManager {
             return Err(anyhow!("pipe '{}' not found", name));
         }
 
+        let content = std::fs::read_to_string(&pipe_md)?;
+        if content_is_enterprise_managed(&content) {
+            return Err(anyhow!(
+                "pipe '{}' is managed by your organization and cannot be edited locally",
+                name
+            ));
+        }
+
         // If raw_content is provided, write the full file directly and re-parse
         if let Some(raw) = updates.get("raw_content").and_then(|v| v.as_str()) {
             // Validate it parses correctly
@@ -3974,7 +4023,6 @@ impl PipeManager {
             return Ok(());
         }
 
-        let content = std::fs::read_to_string(&pipe_md)?;
         let (mut config, body) = parse_frontmatter(&content)?;
         config.name = name.to_string(); // preserve directory name
 
@@ -4324,6 +4372,16 @@ impl PipeManager {
         let dir = self.pipes_dir.join(name);
         if !dir.exists() {
             return Err(self.pipe_not_found_error(name));
+        }
+
+        let pipe_md = dir.join("pipe.md");
+        if let Ok(content) = std::fs::read_to_string(&pipe_md) {
+            if content_is_enterprise_managed(&content) {
+                return Err(anyhow!(
+                    "pipe '{}' is managed by your organization and cannot be deleted locally",
+                    name
+                ));
+            }
         }
 
         // Stop if running
@@ -4896,6 +4954,68 @@ impl PipeManager {
                                     resolved.api_key,
                                     resolved.prompt,
                                 )
+                            }
+                            None if is_enterprise_managed(config) => {
+                                let message = format!(
+                                    "configured preset '{}' is unavailable; refusing to fall back to another AI provider",
+                                    preset_id
+                                );
+                                warn!("scheduler: pipe '{}': {}", name, message);
+                                let failed_at = Utc::now();
+                                if let Some(ref store) = store {
+                                    if let Ok(id) = store
+                                        .create_execution(
+                                            name,
+                                            if triggered_by_event {
+                                                "event"
+                                            } else {
+                                                "scheduled"
+                                            },
+                                            &config.model,
+                                            config.provider.as_deref(),
+                                        )
+                                        .await
+                                    {
+                                        let _ = store
+                                            .finish_execution(
+                                                id,
+                                                "failed",
+                                                "",
+                                                &message,
+                                                None,
+                                                Some("ai_preset_unavailable"),
+                                                Some(&message),
+                                                None,
+                                            )
+                                            .await;
+                                    }
+                                    let _ = store.upsert_scheduler_state(name, false).await;
+                                }
+                                {
+                                    let mut logs_guard = logs.lock().await;
+                                    let entry = logs_guard
+                                        .entry(name.clone())
+                                        .or_insert_with(VecDeque::new);
+                                    entry.push_front(PipeRunLog {
+                                        pipe_name: name.clone(),
+                                        started_at: failed_at,
+                                        finished_at: failed_at,
+                                        success: false,
+                                        stdout: String::new(),
+                                        stderr: message,
+                                    });
+                                    if entry.len() > PIPE_LOG_ACTIVE_KEEP_PER_PIPE {
+                                        entry.pop_back();
+                                    }
+                                }
+                                {
+                                    let mut qr = queued_or_running.lock().await;
+                                    qr.remove(name);
+                                }
+                                if let Some(ref cb) = on_run_complete {
+                                    cb(name, None, false, 0.0, Some("ai_preset_unavailable"));
+                                }
+                                continue;
                             }
                             None => (
                                 config.model.clone(),
@@ -5705,6 +5825,17 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
 /// caller can skip the disk write otherwise. Idempotent: running it on
 /// already-fixed content is a no-op.
 fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
+    if name == "automate-my-work" {
+        let replacement = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(builtin_name, content)| (*builtin_name == name).then_some(*content))?;
+        return replace_prompt_body_when_hash_matches(
+            original,
+            replacement,
+            AUTOMATE_MY_WORK_LEGACY_PROMPT_HASHES,
+        );
+    }
+
     // (old, new) fragment swaps per builtin pipe.
     let replacements: &[(&str, &str)] = match name {
         // the meeting-summary pipe shipped instructions to PATCH
@@ -5724,6 +5855,33 @@ fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
     }
 
     (updated != original).then_some(updated)
+}
+
+/// Replace only the instruction body of a known built-in prompt version.
+/// Frontmatter and the self-improving memory section stay untouched. Any user
+/// edit inside the instruction body changes the hash and opts out of migration.
+fn replace_prompt_body_when_hash_matches(
+    original: &str,
+    replacement: &str,
+    legacy_hashes: &[&str],
+) -> Option<String> {
+    let original_prompt_start = original.find("<role>")?;
+    let replacement_prompt_start = replacement.find("<role>")?;
+    let original_prompt = &original[original_prompt_start..];
+    let original_hash = simple_hash(original_prompt);
+    if !legacy_hashes.contains(&original_hash.as_str()) {
+        return None;
+    }
+
+    let prefix = original[..original_prompt_start].replace(
+        "description: \"Find genuinely new, low-risk automations tailored to your workflow\"",
+        "description: \"Find one repeated workflow and propose a testable automation\"",
+    );
+    Some(format!(
+        "{}{}",
+        prefix,
+        &replacement[replacement_prompt_start..]
+    ))
 }
 
 /// Atomic file write: write to a temp file in the same directory, then rename.
@@ -7117,6 +7275,60 @@ mod tests {
     }
 
     #[test]
+    fn migrate_builtin_pipe_replaces_only_a_known_prompt_body() {
+        let stale = concat!(
+            "---\nschedule: manual\n",
+            "description: \"Find genuinely new, low-risk automations tailored to your workflow\"\n",
+            "---\n\n# memory\n- user lesson\n\n",
+            "<role>\nlegacy automation instructions\n</role>\n",
+        );
+        let replacement = concat!(
+            "---\nschedule: manual\n---\n\n",
+            "<role>\nnew evidence-first instructions\n</role>\n",
+        );
+        let prompt_start = stale.find("<role>").unwrap();
+        let legacy_hash = simple_hash(&stale[prompt_start..]);
+
+        let fixed =
+            replace_prompt_body_when_hash_matches(stale, replacement, &[legacy_hash.as_str()])
+                .expect("known legacy prompt should migrate");
+
+        assert!(fixed.contains("# memory\n- user lesson"));
+        assert!(fixed.contains(
+            "description: \"Find one repeated workflow and propose a testable automation\""
+        ));
+        assert!(fixed.contains("new evidence-first instructions"));
+        assert!(!fixed.contains("legacy automation instructions"));
+        assert!(replace_prompt_body_when_hash_matches(
+            &fixed,
+            replacement,
+            &[legacy_hash.as_str()],
+        )
+        .is_none());
+
+        let customized = stale.replace(
+            "legacy automation instructions",
+            "legacy automation instructions with my customization",
+        );
+        assert!(replace_prompt_body_when_hash_matches(
+            &customized,
+            replacement,
+            &[legacy_hash.as_str()],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn current_automate_my_work_builtin_does_not_migrate_again() {
+        let current = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(name, content)| (*name == "automate-my-work").then_some(*content))
+            .unwrap();
+
+        assert!(migrate_builtin_pipe_text("automate-my-work", current).is_none());
+    }
+
+    #[test]
     fn pipe_completed_helpers_match_exact_pipe_event() {
         assert!(is_pipe_completed_event("pipe_completed:daily-summary"));
         assert_eq!(
@@ -7677,6 +7889,51 @@ mod tests {
         let (config, body) = parse_frontmatter(content).unwrap();
         assert_eq!(config.preset, vec!["primary", "fallback"]);
         assert_eq!(body, "Body");
+    }
+
+    #[test]
+    fn test_parse_frontmatter_marks_enterprise_managed_pipe() {
+        let content = "---\nschedule: every 1h\nenabled: true\npreset: [\"org-ai\"]\nenterprise_managed: true\n---\n\nBody";
+        let (config, _) = parse_frontmatter(content).unwrap();
+        assert!(is_enterprise_managed(&config));
+        assert_eq!(config.preset, vec!["org-ai"]);
+    }
+
+    #[tokio::test]
+    async fn enterprise_managed_pipe_rejects_local_mutations() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let pipe_dir = pipes_dir.join("managed-review");
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(
+            pipe_dir.join("pipe.md"),
+            "---\nschedule: every 1h\nenabled: true\npreset: [\"org-ai\"]\nenterprise_managed: true\n---\n\nReview work",
+        )
+        .unwrap();
+
+        let manager = PipeManager::new(pipes_dir, HashMap::new(), None, 0);
+        assert!(manager
+            .enable_pipe("managed-review", false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed by your organization"));
+        assert!(manager
+            .update_config(
+                "managed-review",
+                HashMap::from([("schedule".to_string(), serde_json::json!("daily"))]),
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed by your organization"));
+        assert!(manager
+            .delete_pipe("managed-review")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed by your organization"));
+        assert!(pipe_dir.exists());
     }
 
     #[test]

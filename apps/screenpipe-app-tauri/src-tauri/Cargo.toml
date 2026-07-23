@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.129"
+version = "2.5.133"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -41,6 +41,8 @@ tauri-utils = { version = "=2.9.2", features = [] }
 tauri-plugin-fs = "=2.4.5"
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-updater = "=2.10.0"
+# staged-update signature re-verification (same crate/version the updater plugin uses)
+minisign-verify = "0.2"
 tauri-plugin-dialog = "=2.6.0"
 tauri-plugin-os = "=2.3.2"
 tauri-plugin-process = "=2.3.1"
@@ -48,7 +50,7 @@ tauri-plugin-autostart = "=2.5.1"
 tauri-plugin-shell = "=2.3.5"
 tauri-plugin-store = "=2.4.2"
 tauri-plugin-http = "=2.5.7"
-tauri-plugin-permission-flow = { git = "https://github.com/EzraEllette/permission-flow", rev = "1a114ff3e9526d815b98201cd2ba35e91f2b4bd3", package = "tauri-plugin-permission-flow" }
+tauri-plugin-permission-flow = { git = "https://github.com/EzraEllette/permission-flow", rev = "d0a4b78a0599b926bfc59e7e272b742aa07fcebb", package = "tauri-plugin-permission-flow" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -301,6 +303,8 @@ serial_test = "3"
 # MockRuntime for store.rs recovery tests that must exercise the real
 # tauri-plugin-store registry (state + resources table).
 tauri = { version = "=2.11.2", features = ["test"] }
+# staged_update tests: sign fake update archives with a throwaway key
+minisign = "0.7"
 
 
 [package.metadata.cargo-machete]

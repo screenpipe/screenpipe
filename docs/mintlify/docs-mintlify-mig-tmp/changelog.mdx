@@ -13,6 +13,7 @@ icon: "newspaper"
 
 ### updates
 
+- **CLI auto-connects every detected AI tool on startup** — when the screenpipe CLI starts, it now scans for every supported AI coding tool installed on your machine (Claude Code, Cursor, Cline, Continue, Copilot CLI, Gemini CLI, opencode, and more) and wires them up to screenpipe over MCP in one shot, instead of asking you to connect each one by hand. Existing custom MCP servers you've already configured (including Hermes) are preserved untouched, so previously wired-up tools keep their settings. See [MCP server](/mcp-server) and [connections](/connections).
 - **hosted AI catalog cleaned up and modernized** — the hosted chat gateway and desktop model picker no longer list retired options (Google Open MaaS, Gemini 3, selectable Gemma 4, GPT‑OSS/OpenRouter‑era choices, Claude Haiku, and older Sonnet families). Saved presets that pointed at any of those IDs are now transparently upgraded: hosted Claude legacy IDs move to GPT‑5.6 Luna, and direct Anthropic BYOK legacy IDs move to Claude Sonnet 5. Paid Auto and outage fallback now flow through Luna → Sonnet 5 → GPT‑5.4 mini (the free preview stays bounded to Luna → GPT‑5.4 mini). Existing chats and pipes keep working — you'll just be routed to a current model instead of a decommissioned one. See [connections](/connections).
 
 ### bug fixes

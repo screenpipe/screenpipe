@@ -64,6 +64,14 @@ final class OverlayMetrics: ObservableObject {
     @Published var healthState: String = "normal"
     /// Boot-phase label shown while fixing ("updating database", ...).
     @Published var healthDetail: String = ""
+    /// True when the cursor is inside the panel area — drives expand/collapse
+    /// since SwiftUI's .onHover tracking areas use .activeInActiveApp which
+    /// does not fire when the app is not frontmost (the overlay stays visible
+    /// via hidesOnDeactivate = false). The ReminderTrackingView owns this via
+    /// its .activeAlways NSTrackingArea.
+    @Published var isHovering: Bool = false
+    /// Set by click in failure state to expand the restart UI.
+    @Published var forceExpanded: Bool = false
 }
 
 // MARK: - Font helper (same as notification panel)
@@ -266,7 +274,13 @@ struct ShortcutReminderView: View {
     @ObservedObject var metrics: OverlayMetrics
     let scale: CGFloat
     let onAction: (String) -> Void
-    @Binding var isExpanded: Bool
+
+    /// Derived from metrics — replaces the former @Binding which relied on
+    /// SwiftUI's .onHover (broken in non-activating panels when the app is
+    /// not frontmost because tracking areas use .activeInActiveApp).
+    private var isExpanded: Bool {
+        metrics.isHovering || metrics.forceExpanded
+    }
 
     // Scaled helpers
     private func s(_ v: CGFloat) -> CGFloat { v * scale }
@@ -280,14 +294,8 @@ struct ShortcutReminderView: View {
             } else if metrics.healthState == "recovered" {
                 recoveredView
             } else if isExpanded {
-                // Once expanded, collapse only when the mouse leaves the
-                // entire expanded bar (so hovering individual buttons inside
-                // doesn't bounce us back).
                 expandedView
                     .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
-                    .onHover { hovering in
-                        if !hovering { isExpanded = false }
-                    }
             } else {
                 collapsedView
                     .transition(.opacity.combined(with: .scale(scale: 1.2, anchor: .trailing)))
@@ -320,7 +328,7 @@ struct ShortcutReminderView: View {
                     metrics.healthState = "fixing"
                     onAction("restart_recording")
                 } else {
-                    isExpanded = true
+                    metrics.forceExpanded = true
                 }
             }) {
                 HStack(spacing: 0) {
@@ -394,9 +402,6 @@ struct ShortcutReminderView: View {
         .background(Capsule().fill(Color.black.opacity(0.85)))
         .overlay(Capsule().stroke(Color.red.opacity(0.4), lineWidth: 0.5))
         .contentShape(Rectangle())
-        .onHover { hovering in
-            isExpanded = hovering
-        }
     }
 
     private var fixingView: some View {
@@ -438,9 +443,9 @@ struct ShortcutReminderView: View {
     }
 
     // MARK: - Collapsed pill
-    // Three zones, so the only thing that expands on hover is the middle
-    // (equalizer + screen matrix). The app icon opens the timeline; the
-    // phone toggles the meeting. Both stay put under the cursor.
+    // Hovering anywhere on the panel area expands to the full bar (driven
+    // by ReminderTrackingView's .activeAlways NSTrackingArea). The app icon
+    // opens the timeline; the bell opens the notification inbox.
     private var collapsedView: some View {
         HStack(spacing: 0) {
             CollapsedAppIconButton(
@@ -459,9 +464,6 @@ struct ShortcutReminderView: View {
             .padding(.horizontal, s(3))
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
-            .onHover { hovering in
-                if hovering { isExpanded = true }
-            }
 
             CollapsedBellButton(
                 unread: metrics.inboxUnread,
@@ -661,14 +663,13 @@ class ShortcutReminderController: NSObject {
     static let shared = ShortcutReminderController()
 
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<AnyView>?
+    private var hostingView: DraggableHostingView<AnyView>?
     private var trackingView: ReminderTrackingView?
 
     private var overlayShortcut = "⌘⌃S"
     private var chatShortcut = "⌘⌃L"
     private var searchShortcut = "⌘⌃K"
     private var metrics = OverlayMetrics()
-    @Published var isExpanded = false
     private var wsTask: URLSessionWebSocketTask?
     private var wsRetryTimer: Timer?
     private var meetingWsTask: URLSessionWebSocketTask?
@@ -709,6 +710,8 @@ class ShortcutReminderController: NSObject {
     func hide() {
         DispatchQueue.main.async { [self] in
             isVisible = false
+            metrics.isHovering = false
+            metrics.forceExpanded = false
             AnimationTick.shared.setVisible(false, hasActiveSignal: false)
             disconnectWebSocket()
             disconnectMeetingEventsWebSocket()
@@ -876,9 +879,9 @@ class ShortcutReminderController: NSObject {
             }
             guard self.metrics.healthState != state else { return }
             self.metrics.healthState = state
-            // Health states replace the hover-expand UI; don't leave the
-            // normal bar stuck expanded when the state clears.
-            self.isExpanded = false
+            // Health states replace the hover-expand UI; reset the
+            // click-to-expand flag so it doesn't stay stuck expanded.
+            self.metrics.forceExpanded = false
         }
     }
 
@@ -938,6 +941,13 @@ class ShortcutReminderController: NSObject {
 
         let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h)))
         tracking.autoresizingMask = [.width, .height]
+        tracking.onHoverChanged = { [weak self] hovering in
+            guard let self = self else { return }
+            self.metrics.isHovering = hovering
+            if !hovering {
+                self.metrics.forceExpanded = false
+            }
+        }
         p.contentView = tracking
         self.trackingView = tracking
 
@@ -962,7 +972,6 @@ class ShortcutReminderController: NSObject {
 
     private func updateContent() {
         guard let panel = panel else { return }
-        let controller = self
         let view = ShortcutReminderView(
             overlayShortcut: overlayShortcut,
             chatShortcut: chatShortcut,
@@ -971,17 +980,17 @@ class ShortcutReminderController: NSObject {
             scale: gOverlayScale,
             onAction: { [weak self] action in
                 self?.sendAction(action)
-            },
-            isExpanded: Binding(
-                get: { controller.isExpanded },
-                set: { controller.isExpanded = $0 }
-            )
+            }
         )
         let contentView = panel.contentView!
         if let hosting = hostingView {
             hosting.rootView = AnyView(view)
         } else {
             let hosting = DraggableHostingView(rootView: AnyView(view))
+            hosting.onDragStarted = { [weak self] in
+                self?.metrics.isHovering = false
+                self?.metrics.forceExpanded = false
+            }
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]
             contentView.addSubview(hosting)
@@ -1006,6 +1015,12 @@ class ShortcutReminderController: NSObject {
 
 @available(macOS 13.0, *)
 private class ReminderTrackingView: NSView {
+    /// Fired when the cursor enters/exits the panel area. Drives the
+    /// expand/collapse state in lieu of SwiftUI's .onHover which doesn't
+    /// fire for non-activating panels when the app is in the background
+    /// (its tracking areas use .activeInActiveApp, not .activeAlways).
+    var onHoverChanged: ((Bool) -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         return true
     }
@@ -1024,6 +1039,7 @@ private class ReminderTrackingView: NSView {
     override func mouseEntered(with event: NSEvent) {
         window?.disableCursorRects()
         NSCursor.pointingHand.set()
+        onHoverChanged?(true)
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -1033,23 +1049,29 @@ private class ReminderTrackingView: NSView {
     override func mouseExited(with event: NSEvent) {
         window?.enableCursorRects()
         NSCursor.arrow.set()
+        onHoverChanged?(false)
     }
 }
 
 // MARK: - Draggable hosting view
 // NSHostingView swallows mouseDown so isMovableByWindowBackground can't work.
-// Forwarding mouseDown/mouseUp to super synchronously (the obvious approach)
-// does not fire SwiftUI buttons — their gesture recognizers need events to
-// arrive through the real run loop. Instead we let mouseDown flow normally
-// and install an NSEvent local monitor for the press's lifetime: if the
-// mouse moves past a small threshold before mouseUp, we hand the event to
-// performDrag and swallow it (so the icon's Button never sees mouseUp);
-// otherwise events propagate untouched and clicks fire as usual.
+// Let super.mouseDown run first so SwiftUI gets the press while the mouse is
+// still down (required for Button gesture recognizers). Then install a local
+// event monitor: if the mouse moves past 4px before mouseUp, collapse the
+// pill and hand off to performDrag (swallowing the event so the button never
+// sees mouseUp and its action never fires). If mouseUp arrives first, let it
+// through — SwiftUI completes the tap normally.
 
 @available(macOS 13.0, *)
 private class DraggableHostingView<Content: View>: NSHostingView<Content> {
+    /// Called when a drag begins — lets the controller collapse the pill.
+    var onDragStarted: (() -> Void)?
+
     private var dragMonitor: Any?
     private var dragStartLocation: NSPoint = .zero
+    /// Set when a drag fires — the next mouseUp must be swallowed so
+    /// SwiftUI's button doesn't see it and fire its action.
+    private var swallowNextMouseUp = false
 
     deinit {
         if let m = dragMonitor {
@@ -1058,16 +1080,18 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Let SwiftUI handle the press while the mouse is still down —
+        // Button gesture recognizers need this to fire on mouseUp.
         super.mouseDown(with: event)
 
         guard let window = window else { return }
 
-        // Replace any stale monitor from a prior press that didn't see mouseUp.
         if let m = dragMonitor {
             NSEvent.removeMonitor(m)
             dragMonitor = nil
         }
 
+        swallowNextMouseUp = false
         dragStartLocation = event.locationInWindow
         let dragThreshold: CGFloat = 4.0
 
@@ -1079,15 +1103,24 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
                     NSEvent.removeMonitor(m)
                     self.dragMonitor = nil
                 }
+                if self.swallowNextMouseUp {
+                    // Drag just ended — swallow so SwiftUI's button
+                    // doesn't see mouseUp and fire its action.
+                    self.swallowNextMouseUp = false
+                    return nil
+                }
+                // Normal click — let the event reach SwiftUI.
                 return event
             case .leftMouseDragged:
                 let dx = event.locationInWindow.x - self.dragStartLocation.x
                 let dy = event.locationInWindow.y - self.dragStartLocation.y
                 if hypot(dx, dy) > dragThreshold {
-                    if let m = self.dragMonitor {
-                        NSEvent.removeMonitor(m)
-                        self.dragMonitor = nil
-                    }
+                    // Drag — collapse pill, move window.
+                    self.onDragStarted?()
+                    // performDrag runs its own tracking loop and returns
+                    // after the user releases the mouse. The monitor stays
+                    // alive to catch and swallow the final mouseUp.
+                    self.swallowNextMouseUp = true
                     window.performDrag(with: event)
                     return nil
                 }

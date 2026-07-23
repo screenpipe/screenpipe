@@ -107,6 +107,23 @@ fn get_mime_type(path: &str) -> String {
     }
 }
 
+/// Wall-clock budget for the whole retry loop. The webview abandons this
+/// command after 5 minutes; stopping earlier lets the last attempt report a
+/// real error instead of the UI racing us.
+const UPLOAD_OVERALL_BUDGET: Duration = Duration::from_secs(280);
+
+/// Slowest acceptable upload rate (~1 Mbps); below this the connection is
+/// treated as stalled, not slow.
+const MIN_UPLOAD_BYTES_PER_SEC: u64 = 125_000;
+
+/// Per-attempt deadline: sized to the file so a slow-but-progressing upload
+/// isn't killed by a flat timeout, floored at 60s, capped by what's left of
+/// the overall budget — the first attempt may use most of it.
+fn attempt_timeout(file_len: u64, remaining: Duration) -> Duration {
+    let size_aware = Duration::from_secs((file_len / MIN_UPLOAD_BYTES_PER_SEC).max(60));
+    size_aware.min(remaining)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, String> {
@@ -124,13 +141,25 @@ pub async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool
         }
     };
 
-    let client = reqwest::Client::new();
+    // The default client has no timeout, so a stalled connection hung this
+    // command forever — the stuck "sending..." state in #5360. Requests get
+    // a size-aware deadline per attempt via `attempt_timeout`.
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
     let max_retries = 3;
     let mut attempt = 0;
     let mut last_error = String::new();
+    let started = std::time::Instant::now();
 
     while attempt < max_retries {
         attempt += 1;
+        let remaining = UPLOAD_OVERALL_BUDGET.saturating_sub(started.elapsed());
+        if remaining < Duration::from_secs(5) {
+            last_error = format!("upload budget exhausted ({last_error})");
+            break;
+        }
         debug!("Upload attempt {} of {}", attempt, max_retries);
 
         match client
@@ -139,6 +168,7 @@ pub async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool
             // without it videos land as application/octet-stream.
             .header("Content-Type", get_mime_type(file_path))
             .body(file_contents.clone())
+            .timeout(attempt_timeout(file_contents.len() as u64, remaining))
             .send()
             .await
         {
@@ -177,9 +207,35 @@ pub async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool
 
 #[cfg(test)]
 mod tests {
-    use super::{get_media_file, get_mime_type, upload_file_to_s3};
+    use super::{attempt_timeout, get_media_file, get_mime_type, upload_file_to_s3};
+    use std::time::Duration;
     use wiremock::matchers::{body_bytes, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn attempt_timeout_floors_small_files_at_60s() {
+        let remaining = Duration::from_secs(280);
+        assert_eq!(attempt_timeout(1024, remaining), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn attempt_timeout_scales_with_file_size() {
+        // 25MB at the 125KB/s floor rate needs 200s — a flat 90s timeout
+        // would have killed this legitimate upload on every attempt.
+        let remaining = Duration::from_secs(280);
+        assert_eq!(
+            attempt_timeout(25_000_000, remaining),
+            Duration::from_secs(200)
+        );
+    }
+
+    #[test]
+    fn attempt_timeout_never_exceeds_remaining_budget() {
+        // A 50MB file wants 400s; the first attempt gets everything left of
+        // the overall budget instead.
+        let remaining = Duration::from_secs(280);
+        assert_eq!(attempt_timeout(50_000_000, remaining), remaining);
+    }
 
     #[test]
     fn maps_media_mime_types_and_preserves_fallbacks() {

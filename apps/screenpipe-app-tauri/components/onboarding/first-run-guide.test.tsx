@@ -77,6 +77,43 @@ describe("first-run guide", () => {
     expect(onDone).toHaveBeenCalledOnce();
     expect(mocks.capture).toHaveBeenCalledWith("firstrun_guide_skipped", {
       phase: "ask",
+      method: "skip_button",
+    });
+  });
+
+  it("dismisses the guide when Escape is pressed", () => {
+    const onDone = vi.fn();
+    render(
+      <FirstRunGuide
+        onDone={onDone}
+        onGoToAutomations={vi.fn()}
+      />,
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(mocks.capture).toHaveBeenCalledWith("firstrun_guide_skipped", {
+      phase: "ask",
+      method: "escape",
+    });
+  });
+
+  it("dismisses the guide when clicking away on the scrim", () => {
+    const onDone = vi.fn();
+    render(
+      <FirstRunGuide
+        onDone={onDone}
+        onGoToAutomations={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("firstrun-scrim"));
+
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(mocks.capture).toHaveBeenCalledWith("firstrun_guide_skipped", {
+      phase: "ask",
+      method: "click_away",
     });
   });
 });

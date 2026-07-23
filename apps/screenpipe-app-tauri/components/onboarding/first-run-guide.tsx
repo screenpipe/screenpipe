@@ -153,11 +153,32 @@ export default function FirstRunGuide({
     };
   }, []);
 
-  const skip = useCallback(() => {
-    posthog.capture("firstrun_guide_skipped", { phase: phaseRef.current });
-    setPhase("dismissed");
-    onDone();
-  }, [onDone]);
+  const dismiss = useCallback(
+    (method: "skip_button" | "escape" | "click_away") => {
+      posthog.capture("firstrun_guide_skipped", {
+        phase: phaseRef.current,
+        method,
+      });
+      setPhase("dismissed");
+      onDone();
+    },
+    [onDone],
+  );
+
+  const skip = useCallback(() => dismiss("skip_button"), [dismiss]);
+
+  // Escape dismisses the guide from any phase. Capture phase so the chat
+  // composer (or anything else with its own Escape handling) can't swallow it.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || phaseRef.current === "dismissed") return;
+      e.preventDefault();
+      e.stopPropagation();
+      dismiss("escape");
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [dismiss]);
 
   const goToPipes = useCallback(() => {
     posthog.capture("firstrun_explore_clicked");
@@ -216,8 +237,8 @@ export default function FirstRunGuide({
   if (phase === "dismissed") return null;
 
   // Full-screen scrim blocks all clicks. Only the elements lifted above it
-  // (z-42) stay interactive — everything else is locked until the user
-  // completes or skips the guide.
+  // (z-42) stay interactive. Clicking the scrim itself or pressing Escape
+  // dismisses the guide — it must never trap the user.
   //
   // ASK phase:       textarea + send button lifted above scrim
   // STREAMING phase: message area lifted (user reads the response), form dimmed
@@ -257,10 +278,19 @@ export default function FirstRunGuide({
           z-index: 42;
         }
       `}} />
-      <div className="fixed inset-0 z-40 bg-background/55" />
+      {/* Clicking anywhere outside the lifted elements dismisses the guide. */}
+      <div
+        data-testid="firstrun-scrim"
+        className="fixed inset-0 z-40 bg-background/55"
+        onClick={() => dismiss("click_away")}
+      />
     </>
   ) : (
-    <div className="fixed inset-0 z-40 bg-background/70" />
+    <div
+      data-testid="firstrun-scrim"
+      className="fixed inset-0 z-40 bg-background/70"
+      onClick={() => dismiss("click_away")}
+    />
   );
 
   return (

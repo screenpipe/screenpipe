@@ -314,6 +314,10 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::agent::handle_agent_command(subcommand).await?;
             return Ok(());
         }
+        Command::Setup { ref api_url } => {
+            screenpipe_engine::cli::agent::setup_all_detected(api_url)?;
+            return Ok(());
+        }
         Command::Service { ref subcommand } => {
             screenpipe_engine::cli::service::handle_service_command(subcommand).await?;
             return Ok(());
@@ -434,6 +438,11 @@ async fn main() -> anyhow::Result<()> {
 
     let local_data_dir = get_base_dir(&record_args.data_dir)?;
     let local_data_dir_clone = local_data_dir.clone();
+
+    // One-time, TTY-only equivalent of the desktop onboarding's "connect all
+    // your AI tools" card. It detects local agents and reuses `agent setup`,
+    // so CLI and app installs share the same MCP + skills layout.
+    screenpipe_engine::cli::agent::maybe_prompt_connect_detected(&local_data_dir);
 
     // Build unified RecordingConfig from shared app settings plus explicit CLI args.
     let mut config = record_args

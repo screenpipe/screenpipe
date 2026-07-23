@@ -265,7 +265,10 @@ export function CloudMediaAnalysisPreview() {
   // never synchronizes (same trick as the meeting "listening" bars).
   const bars = [0.5, 0.9, 0.35, 0.8, 0.55, 1, 0.45];
   return (
-    <div className="mt-2.5 rounded-md border border-border bg-muted/40 px-2.5 py-2.5">
+    <div
+      className="mt-2.5 rounded-md border border-border bg-muted/40 px-2.5 py-2.5"
+      data-testid="cloud-media-analysis-preview"
+    >
       <div className="grid grid-cols-[auto_auto_1fr] items-center gap-x-1 gap-y-2.5">
         {/* lane 1 — audio → transcript */}
         <span className="flex items-center">

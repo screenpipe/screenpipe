@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   checkMicrophonePermission: vi.fn(async () => "denied"),
   checkAccessibilityPermissionCmd: vi.fn(async () => "denied"),
+  checkAccessibilityPermissionLiveCmd: vi.fn(async () => "denied"),
   checkScreenRecordingPermission: vi.fn(async () => "denied"),
   getBrowsersAutomationStatus: vi.fn(
     async (): Promise<{ name: string; status: string; running: boolean }[]> =>
@@ -28,6 +29,8 @@ vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     checkMicrophonePermission: mocks.checkMicrophonePermission,
     checkAccessibilityPermissionCmd: mocks.checkAccessibilityPermissionCmd,
+    checkAccessibilityPermissionLiveCmd:
+      mocks.checkAccessibilityPermissionLiveCmd,
     checkScreenRecordingPermission: mocks.checkScreenRecordingPermission,
     getBrowsersAutomationStatus: mocks.getBrowsersAutomationStatus,
     requestPermission: mocks.requestPermission,
@@ -65,6 +68,7 @@ describe("onboarding permission wheel", () => {
     vi.clearAllMocks();
     mocks.checkMicrophonePermission.mockResolvedValue("denied");
     mocks.checkAccessibilityPermissionCmd.mockResolvedValue("denied");
+    mocks.checkAccessibilityPermissionLiveCmd.mockResolvedValue("denied");
     mocks.checkScreenRecordingPermission.mockResolvedValue("denied");
     mocks.getBrowsersAutomationStatus.mockResolvedValue([]);
   });
@@ -150,6 +154,26 @@ describe("onboarding permission wheel", () => {
       expect(mocks.requestPermissionWithFlow).toHaveBeenCalledWith(
         "accessibility"
       )
+    );
+  });
+
+  it("polls accessibility silently until requested, then live", async () => {
+    mocks.checkMicrophonePermission.mockResolvedValue("granted");
+
+    render(<PermissionsStep handleNextSlide={vi.fn()} />);
+
+    // Before the user asks for it, only the silent (non-prompting) check runs —
+    // the live tccd probe would enroll the app / surface the prompt on mount.
+    await waitFor(() => expect(accessibilityRow()).toBeEnabled());
+    expect(mocks.checkAccessibilityPermissionCmd).toHaveBeenCalled();
+    expect(mocks.checkAccessibilityPermissionLiveCmd).not.toHaveBeenCalled();
+
+    fireEvent.click(accessibilityRow());
+
+    // Once requested, the row switches to the live probe so a grant made in
+    // Settings is seen without an app relaunch.
+    await waitFor(() =>
+      expect(mocks.checkAccessibilityPermissionLiveCmd).toHaveBeenCalled()
     );
   });
 

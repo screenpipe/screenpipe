@@ -973,8 +973,9 @@ pub struct SettingsStore {
     #[serde(rename = "chatAlwaysOnTop", default = "default_true")]
     pub chat_always_on_top: bool,
 
-    /// Show restart notifications when audio/vision capture stalls.
-    /// Disabled by default for now until the stall detector is more reliable.
+    /// Show recording-health overlay alerts and restart notifications when
+    /// audio/vision capture stalls. Disabled by default for now until the
+    /// detector is more reliable.
     #[serde(rename = "showRestartNotifications", default)]
     pub show_restart_notifications: bool,
 
@@ -2118,6 +2119,24 @@ mod tests {
     #[test]
     fn auto_update_defaults_to_disabled() {
         assert!(!SettingsStore::default().auto_update);
+    }
+
+    #[test]
+    fn recording_health_alerts_default_to_disabled() {
+        assert!(!SettingsStore::default().show_restart_notifications);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert!(!missing.show_restart_notifications);
+
+        let opted_in: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "showRestartNotifications": true
+        }))
+        .unwrap();
+        assert!(opted_in.show_restart_notifications);
     }
 
     #[test]

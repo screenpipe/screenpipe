@@ -61,7 +61,7 @@ import {
   shouldActivateHomeSectionForChatLoadConversation,
 } from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
 import FirstRunGuide from "@/components/onboarding/first-run-guide";
@@ -134,7 +134,28 @@ function HomeContent() {
   const [e2eSeedFlags, setE2eSeedFlags] = useState<string[] | null>(null);
   // Consume the handoff on first display so closing/reloading the window can
   // never resurrect the guide. This window retains the value for its lifetime.
-  const [firstRunGuidePending] = useState(consumeFirstRunGuidePending);
+  // Consumed in an effect (not a useState initializer) because the read is
+  // side-effectful, and re-checked on the onboarding-completion event: Rust
+  // reuses an already-open Home window (show, not reload), so a Home created
+  // before onboarding finished would otherwise never see the handoff.
+  const [firstRunGuidePending, setFirstRunGuidePendingState] = useState(false);
+  useEffect(() => {
+    if (consumeFirstRunGuidePending()) setFirstRunGuidePendingState(true);
+    let unlisten: (() => void) | undefined;
+    let unmounted = false;
+    void listen("first-run-guide-pending", () => {
+      if (consumeFirstRunGuidePending()) setFirstRunGuidePendingState(true);
+    })
+      .then((fn) => {
+        if (unmounted) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      unmounted = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -186,7 +207,7 @@ function HomeContent() {
   }, [updateSettings]);
 
   const teamState = useTeam();
-  const { isSectionHidden, isSettingLocked } = useEnterprisePolicy();
+  const { isSectionHidden, isSettingLocked } = useManagedPolicy();
   const runningPipes = useRunningPipes();
   const runningPipeCount = runningPipes.length;
   const selectChatConversation = useCallback((id: string) => {
@@ -566,6 +587,23 @@ function HomeContent() {
           const suffix = kind === "input" ? "input" : "output";
           devices.push({ name, fullName: `${name} (${suffix})`, kind, active });
         }
+      }
+
+      // When globally paused the device APIs may return empty (session torn
+      // down). Preserve the last known device list so the user can still see
+      // what was recording and hit "resume". Use the functional updater to
+      // avoid a stale-closure over recordingDevices.
+      if (capturePaused && devices.length === 0) {
+        setRecordingDevices((prev) => {
+          const updated = prev.map((d) => ({ ...d, active: false }));
+          const snap = JSON.stringify(updated);
+          if (snap !== recordingDevicesSnapshotRef.current) {
+            recordingDevicesSnapshotRef.current = snap;
+            return updated;
+          }
+          return prev;
+        });
+        return;
       }
 
       const effective = capturePaused
@@ -1055,6 +1093,8 @@ function HomeContent() {
               isGloballyPaused={isCapturePaused}
               isTranslucent={isTranslucent}
               floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
+              allCaptureDisabled={!!(settings.disableAudio && settings.disableVision)}
+              onOpenRecordingSettings={() => router.push("/settings?section=recording")}
             />
           </div>
 
@@ -1139,8 +1179,7 @@ function HomeContent() {
               </div>
 
               <PlanExpirationNotice
-                expiresAt={(settings.user as AppUser | null)?.plan_expires_at}
-                plan={(settings.user as AppUser | null)?.subscription_plan}
+                user={settings.user as AppUser | null}
                 onClick={() => openSettings("account")}
               />
 

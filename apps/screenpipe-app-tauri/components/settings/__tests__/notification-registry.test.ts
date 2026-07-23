@@ -47,6 +47,12 @@ describe("notification registry", () => {
     }
   });
 
+  it("keeps experimental recording health alerts opt-in", () => {
+    expect(NOTIFICATION_CATEGORY_BY_ID.captureStalls.default).toBe(false);
+    expect(DEFAULT_NOTIFICATION_PREFS.captureStalls).toBe(false);
+    expect(categoryValuesForPreset("recommended").captureStalls).toBe(false);
+  });
+
   it("indexes categories by id", () => {
     for (const c of NOTIFICATION_CATEGORIES) {
       expect(NOTIFICATION_CATEGORY_BY_ID[c.id]).toBe(c);
