@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Check, ExternalLink, Loader2, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, Plus, X } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useInterval } from "@/lib/hooks/use-interval";
@@ -84,8 +84,21 @@ const TOOLKIT_META: Record<ComposioToolkit, ToolkitMeta> = {
   },
 };
 
+const MAX_ACCOUNTS = 5; // mirrors MAX_ACCOUNTS_PER_TOOLKIT on the server
+
+export interface ComposioAccount {
+  id: string;
+  alias: string | null;
+  created_at?: string | null;
+}
+
 type ComposioStatus = Partial<
-  Record<ComposioToolkit, { connected: boolean; status: string | null }>
+  Record<
+    ComposioToolkit,
+    // `accounts` is absent on servers deployed before multi-account (#5383);
+    // the card degrades to the single-account UI in that case.
+    { connected: boolean; status: string | null; accounts?: ComposioAccount[] }
+  >
 >;
 
 function statusToMap(status: ComposioStatus): ComposioStatusMap {
@@ -151,11 +164,20 @@ export function ComposioCard({
 
   const [loaded, setLoaded] = useState(initialConnected !== undefined);
   const [connected, setConnected] = useState(initialConnected ?? false);
+  const [accounts, setAccounts] = useState<ComposioAccount[]>([]);
+  // False until the server reports per-account data — old backends don't.
+  const [supportsMulti, setSupportsMulti] = useState(false);
   const [otherConnected, setOtherConnected] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [addingAccount, setAddingAccount] = useState(false);
+  const [aliasInput, setAliasInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const pollCount = useRef(0);
+  // Account count when the pending authorize started; polling succeeds once
+  // the count grows past it (a plain `connected` check would instantly
+  // "succeed" when adding a second account).
+  const pollBaseline = useRef(0);
   const lastStatusRef = useRef<ComposioStatusMap | null>(null);
 
   const applyStatus = useCallback(
@@ -164,9 +186,12 @@ export function ComposioCard({
       lastStatusRef.current = map;
       const mine = map[toolkit];
       setConnected(mine);
+      const mineAccounts = status[toolkit]?.accounts;
+      setSupportsMulti(mineAccounts !== undefined);
+      setAccounts(mineAccounts ?? []);
       setOtherConnected(COMPOSIO_TOOLKITS.some((t) => t !== toolkit && map[t]));
       onChanged?.(map);
-      return mine;
+      return { connected: mine, accountCount: mineAccounts?.length ?? (mine ? 1 : 0) };
     },
     [toolkit, onChanged]
   );
@@ -198,7 +223,8 @@ export function ComposioCard({
       }
       const status = await fetchComposioStatus(token);
       if (!status) return;
-      if (applyStatus(status)) {
+      const applied = applyStatus(status);
+      if (applied.connected && applied.accountCount > pollBaseline.current) {
         setWaiting(false);
         try {
           await registerComposioMcpServer(token);
@@ -211,18 +237,19 @@ export function ComposioCard({
     })();
   }, waiting ? POLL_MS : null);
 
-  const connect = async () => {
+  const connect = async (alias?: string) => {
     if (!token) return;
     setBusy(true);
     setError(null);
     try {
+      const trimmed = alias?.trim();
       const res = await fetch(`${COMPOSIO_API}/authorize`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ toolkit }),
+        body: JSON.stringify(trimmed ? { toolkit, alias: trimmed } : { toolkit }),
       });
       if (res.status === 404) {
         // Server half not deployed yet (or an old app against a rolled-back
@@ -234,7 +261,10 @@ export function ComposioCard({
         throw new Error(data.error || "could not start the connection");
       }
       pollCount.current = 0;
+      pollBaseline.current = accounts.length ? accounts.length : connected ? 1 : 0;
       setWaiting(true);
+      setAddingAccount(false);
+      setAliasInput("");
       await openUrl(data.redirect_url);
     } catch (e: any) {
       const msg = e?.message === "Load failed" || e?.name === "TypeError"
@@ -246,26 +276,34 @@ export function ComposioCard({
     }
   };
 
-  const disconnect = async () => {
+  // Without accountId every account for the toolkit is removed; with it only
+  // that account goes (multi-account, #5383).
+  const disconnect = async (accountId?: string) => {
     if (!token) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${COMPOSIO_API}/disconnect?toolkit=${toolkit}`, {
+      const query = accountId
+        ? `toolkit=${toolkit}&account_id=${encodeURIComponent(accountId)}`
+        : `toolkit=${toolkit}`;
+      const res = await fetch(`${COMPOSIO_API}/disconnect?${query}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("disconnect failed");
-      setConnected(false);
+      const remaining = accountId ? accounts.filter((a) => a.id !== accountId) : [];
+      setAccounts(remaining);
+      const stillConnected = remaining.length > 0;
+      setConnected(stillConnected);
       const map = {
         ...(lastStatusRef.current ??
           (Object.fromEntries(COMPOSIO_TOOLKITS.map((t) => [t, false])) as ComposioStatusMap)),
-        [toolkit]: false,
+        [toolkit]: stillConnected,
       } as ComposioStatusMap;
       lastStatusRef.current = map;
       onChanged?.(map);
-      // Keep the shared MCP entry while any other toolkit is still connected.
-      if (!otherConnected) await removeComposioMcpServer();
+      // Keep the shared MCP entry while any account or other toolkit remains.
+      if (!stillConnected && !otherConnected) await removeComposioMcpServer();
       notifyConnectionsUpdated();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
@@ -373,18 +411,95 @@ export function ComposioCard({
         <div className="space-y-2">
           <p className="text-xs">
             <Check className="h-3 w-3 inline mr-1" />
-            {label} connected — your AI can now read your{" "}
-            {TOOLKIT_META[toolkit].connectedNoun}.
+            {label} connected
+            {accounts.length > 1 ? ` (${accounts.length} accounts)` : ""} — your AI can
+            now read your {TOOLKIT_META[toolkit].connectedNoun}.
           </p>
+          {accounts.length > 1 && (
+            <div className="border border-border divide-y divide-border">
+              {accounts.map((account, i) => (
+                <div key={account.id} className="flex items-center justify-between px-3 py-1.5">
+                  <span className="text-[11px] text-muted-foreground truncate">
+                    {account.alias || `account ${i + 1}`}
+                  </span>
+                  <button
+                    onClick={() => disconnect(account.id)}
+                    disabled={busy}
+                    title="remove this account"
+                    className="text-muted-foreground/70 hover:text-destructive cursor-pointer disabled:opacity-50"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {waiting && (
+            <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              finish signing in with {provider} in your browser —
+              this connects automatically
+            </p>
+          )}
           {error && <p className="text-xs text-destructive">{error}</p>}
+          {supportsMulti && !waiting && accounts.length < MAX_ACCOUNTS && (
+            addingAccount ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={aliasInput}
+                  onChange={(e) => setAliasInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !busy) connect(aliasInput);
+                    if (e.key === "Escape") setAddingAccount(false);
+                  }}
+                  maxLength={64}
+                  placeholder="label — e.g. work, personal"
+                  autoFocus
+                  className="h-7 w-52 px-2 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
+                />
+                <Button
+                  onClick={() => connect(aliasInput)}
+                  disabled={busy}
+                  size="sm"
+                  className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+                >
+                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
+                  connect
+                </Button>
+                <Button
+                  onClick={() => {
+                    setAddingAccount(false);
+                    setAliasInput("");
+                  }}
+                  disabled={busy}
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs normal-case font-sans tracking-normal"
+                >
+                  cancel
+                </Button>
+              </div>
+            ) : (
+              <Button
+                onClick={() => setAddingAccount(true)}
+                disabled={busy}
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+              >
+                <Plus className="h-3 w-3" />connect another account
+              </Button>
+            )
+          )}
           <Button
-            onClick={disconnect}
+            onClick={() => disconnect()}
             disabled={busy}
             variant="ghost"
             size="sm"
             className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive"
           >
-            <X className="h-3 w-3" />disconnect
+            <X className="h-3 w-3" />
+            {accounts.length > 1 ? "disconnect all" : "disconnect"}
           </Button>
           {privacyNote}
         </div>
@@ -399,7 +514,7 @@ export function ComposioCard({
           )}
           {error && <p className="text-xs text-destructive">{error}</p>}
           <Button
-            onClick={connect}
+            onClick={() => connect()}
             disabled={busy || waiting}
             size="sm"
             className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
