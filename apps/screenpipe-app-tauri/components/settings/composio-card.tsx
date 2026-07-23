@@ -172,6 +172,10 @@ export function ComposioCard({
   const [otherConnected, setOtherConnected] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Which control kicked off the in-flight request — `busy` disables
+  // everything, but only the initiating control shows a spinner (a shared
+  // spinner made unrelated rows look like they were loading too).
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [addingAccount, setAddingAccount] = useState(false);
   const [aliasInput, setAliasInput] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -244,6 +248,7 @@ export function ComposioCard({
   const connect = async (alias?: string) => {
     if (!token) return;
     setBusy(true);
+    setPendingAction("connect");
     setError(null);
     try {
       const trimmed = alias?.trim();
@@ -277,6 +282,7 @@ export function ComposioCard({
       setError(msg);
     } finally {
       setBusy(false);
+      setPendingAction(null);
     }
   };
 
@@ -292,6 +298,7 @@ export function ComposioCard({
       return;
     }
     setBusy(true);
+    setPendingAction(`rename:${accountId}`);
     setError(null);
     try {
       const res = await fetch(`${COMPOSIO_API}/rename`, {
@@ -310,6 +317,7 @@ export function ComposioCard({
       setError(e?.message || "rename failed");
     } finally {
       setBusy(false);
+      setPendingAction(null);
     }
   };
 
@@ -318,6 +326,7 @@ export function ComposioCard({
   const disconnect = async (accountId?: string) => {
     if (!token) return;
     setBusy(true);
+    setPendingAction(accountId ? `disconnect:${accountId}` : "disconnect-all");
     setError(null);
     try {
       const query = accountId
@@ -346,6 +355,7 @@ export function ComposioCard({
       setError(e?.message || "disconnect failed");
     } finally {
       setBusy(false);
+      setPendingAction(null);
     }
   };
 
@@ -506,7 +516,11 @@ export function ComposioCard({
                             title="save label"
                             className="h-6 px-2 text-muted-foreground hover:text-foreground"
                           >
-                            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                            {pendingAction === `rename:${account.id}` ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Check className="h-3 w-3" />
+                            )}
                           </Button>
                           <Button
                             onClick={() => setRenamingId(null)}
@@ -542,7 +556,11 @@ export function ComposioCard({
                             title="disconnect this account"
                             className="h-6 px-2 text-muted-foreground hover:text-destructive"
                           >
-                            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
+                            {pendingAction === `disconnect:${account.id}` ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <LogOut className="h-3 w-3" />
+                            )}
                           </Button>
                         </>
                       )}
@@ -582,7 +600,11 @@ export function ComposioCard({
                 size="sm"
                 className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
               >
-                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
+                {pendingAction === "connect" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ExternalLink className="h-3 w-3" />
+                )}
                 connect
               </Button>
               <Button
@@ -618,7 +640,11 @@ export function ComposioCard({
               size="sm"
               className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive"
             >
-              <X className="h-3 w-3" />
+              {pendingAction === "disconnect-all" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <X className="h-3 w-3" />
+              )}
               {accounts.length > 1 ? "disconnect all" : "disconnect"}
             </Button>
           </div>
