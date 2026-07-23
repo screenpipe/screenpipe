@@ -1,0 +1,7 @@
+<!-- OpenCode brand mark. Source: the `Mark` component in opencode's own
+     monorepo (packages/ui/src/components/logo.tsx), flattened to static
+     fill colors for use as a plain <img>. -->
+<svg width="16" height="20" viewBox="0 0 16 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 16H4V8H12V16Z" fill="#6B6B6B"/>
+  <path d="M12 4H4V16H12V4ZM16 20H0V0H16V20Z" fill="#000000"/>
+</svg>

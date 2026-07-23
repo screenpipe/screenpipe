@@ -101,6 +101,18 @@ impl Destination {
         owns_target: false,
     };
 
+    /// OpenCode reads a global `AGENTS.md` from its config directory
+    /// (`$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`), same file
+    /// name and same "global home dir" shape as Codex — see
+    /// https://opencode.ai/docs/rules/.
+    pub const OPENCODE: Destination = Destination {
+        id: "opencode",
+        display_name: "OpenCode",
+        filename: "AGENTS.md",
+        sidecar_filename: None,
+        owns_target: false,
+    };
+
     /// Obsidian vault note. Unlike Claude Code / Codex — whose `CLAUDE.md` /
     /// `AGENTS.md` the user co-authors — this file is created and owned
     /// entirely by screenpipe, so it carries the full digest with no marker
@@ -133,7 +145,11 @@ impl Destination {
 // bad edit to the table fails to compile rather than misbehaving at runtime.
 const _: () =
     assert!(Destination::OBSIDIAN.owns_target && Destination::OBSIDIAN.sidecar_filename.is_none());
-const _: () = assert!(!Destination::CLAUDE_CODE.owns_target && !Destination::CODEX.owns_target);
+const _: () = assert!(
+    !Destination::CLAUDE_CODE.owns_target
+        && !Destination::CODEX.owns_target
+        && !Destination::OPENCODE.owns_target
+);
 
 /// Bound how big the rendered block can get. Above ~200 entries the
 /// signal dies under noise and we start eating Claude Code's context
@@ -445,6 +461,28 @@ mod tests {
     }
 
     #[test]
+    fn block_body_for_opencode_is_full_digest_inline() {
+        // OpenCode's global AGENTS.md has no `@import` equivalent either,
+        // same shape as Codex.
+        let entries = vec![entry(
+            "opencode inline content",
+            0.9,
+            "2026-01-01T00:00:00Z",
+        )];
+        let body = render_block_body(&entries, &Destination::OPENCODE);
+        assert!(
+            body.contains("opencode inline content"),
+            "opencode destination must inline the digest:\n{}",
+            body
+        );
+        assert!(
+            !body.contains('@'),
+            "opencode outer block must not contain @import directives:\n{}",
+            body
+        );
+    }
+
+    #[test]
     fn obsidian_destination_uses_expected_id_and_filename() {
         // (owns_target / no-sidecar invariants are enforced at compile time
         // via the `const _` assertions next to the destination table.)
@@ -495,6 +533,14 @@ mod tests {
             Some(home.join("screenpipe-memories.md"))
         );
         assert_eq!(Destination::CODEX.sidecar_path(home), None);
+        assert_eq!(Destination::OPENCODE.sidecar_path(home), None);
+    }
+
+    #[test]
+    fn opencode_destination_uses_expected_id_and_filename() {
+        assert_eq!(Destination::OPENCODE.id, "opencode");
+        assert_eq!(Destination::OPENCODE.filename, "AGENTS.md");
+        assert_eq!(Destination::OPENCODE.sidecar_filename, None);
     }
 
     #[test]

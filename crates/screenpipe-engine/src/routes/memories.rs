@@ -379,7 +379,8 @@ pub(crate) async fn delete_memory_handler(
 }
 
 /// Trigger an immediate sync of `memories` out to every enabled
-/// external destination (Claude Code's CLAUDE.md, Codex's AGENTS.md).
+/// external destination (Claude Code's CLAUDE.md, Codex's AGENTS.md,
+/// OpenCode's AGENTS.md).
 ///
 /// The background scheduler in `external_memory_sync` runs this every
 /// 5 minutes; this handler exists so the app's "sync now" button and
