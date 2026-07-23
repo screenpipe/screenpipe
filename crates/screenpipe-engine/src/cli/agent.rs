@@ -163,15 +163,12 @@ pub fn maybe_prompt_connect_detected(data_dir: &Path) {
                 "\n  {} {error}",
                 "some tools were not connected:".yellow().bold()
             );
-            eprintln!(
-                "  retry with {}",
-                "screenpipe agent setup --all".green().bold()
-            );
+            eprintln!("  retry with {}", "screenpipe setup".green().bold());
         }
     } else {
         eprintln!(
             "  not now — run {} whenever you're ready.\n",
-            "screenpipe agent setup --all".green().bold()
+            "screenpipe setup".green().bold()
         );
     }
 }
@@ -250,7 +247,7 @@ fn has_screenpipe_mcp(layout: &AgentLayout) -> bool {
     }
 }
 
-fn setup_all_detected(api_url: &str) -> Result<()> {
+pub fn setup_all_detected(api_url: &str) -> Result<()> {
     let home = dirs::home_dir().context("could not resolve home dir")?;
     let detected = detected_agents_in(&home);
     if detected.is_empty() {

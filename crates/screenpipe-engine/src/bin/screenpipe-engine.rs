@@ -314,6 +314,10 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::agent::handle_agent_command(subcommand).await?;
             return Ok(());
         }
+        Command::Setup { ref api_url } => {
+            screenpipe_engine::cli::agent::setup_all_detected(api_url)?;
+            return Ok(());
+        }
         Command::Service { ref subcommand } => {
             screenpipe_engine::cli::service::handle_service_command(subcommand).await?;
             return Ok(());
