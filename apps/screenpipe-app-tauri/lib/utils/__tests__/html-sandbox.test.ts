@@ -189,13 +189,6 @@ describe("wrapHtmlForSandbox", () => {
     expect(result).toContain("color:#111111");
   });
 
-  it("applies dark theme when specified", () => {
-    const result = wrapHtmlForSandbox("<p>hi</p>", { theme: "dark" });
-    expect(result).toContain('content="dark"');
-    expect(result).toContain("background:#1c1c1c");
-    expect(result).toContain("color:#e6e6e6");
-  });
-
   it("CSP appears before any user content", () => {
     const input = '<html><head><script>alert("xss")</script></head><body></body></html>';
     const result = wrapHtmlForSandbox(input);

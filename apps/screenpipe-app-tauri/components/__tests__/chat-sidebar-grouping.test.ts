@@ -9,11 +9,61 @@ import {
   sessionGroupTitle,
   buildGroupedRecents,
   buildSidebarRecentsSections,
+  pipeHasSidebarSchedule,
+  visibleSidebarPipeNames,
   listMoveTargetGroups,
   recurringPipeGroupKeys,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
 import type { SessionRecord } from "@/lib/stores/chat-store";
+
+describe("pipeHasSidebarSchedule", () => {
+  it("excludes manual pipes from the recurring sidebar section", () => {
+    expect(pipeHasSidebarSchedule({ schedule: "manual" })).toBe(false);
+  });
+
+  it("includes legacy and structured schedules", () => {
+    expect(pipeHasSidebarSchedule({ schedule: "every 30m" })).toBe(true);
+    expect(
+      pipeHasSidebarSchedule({
+        schedule: "manual",
+        schedule_config: { frequency: "days", interval: 1 },
+      }),
+    ).toBe(true);
+  });
+
+  it("includes triggered pipes even when schedule is manual", () => {
+    expect(
+      pipeHasSidebarSchedule({
+        schedule: "manual",
+        trigger: { events: ["meeting_ended"] },
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes pipes with empty trigger arrays", () => {
+    expect(
+      pipeHasSidebarSchedule({
+        schedule: "manual",
+        trigger: { events: [], custom: [], sources: [] },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("visibleSidebarPipeNames", () => {
+  it("does not restore a known manual pipe from its run history", () => {
+    expect(
+      visibleSidebarPipeNames(
+        [
+          { name: "manual-template", hasSchedule: false },
+          { name: "daily-recap", hasSchedule: true },
+        ],
+        ["manual-template", "daily-recap", "deleted-pipe"],
+      ),
+    ).toEqual(["daily-recap", "deleted-pipe"]);
+  });
+});
 
 function s(
   id: string,
@@ -361,14 +411,14 @@ describe("buildSidebarRecentsSections", () => {
 // ── listMoveTargetGroups ─────────────────────────────────────────────
 
 describe("listMoveTargetGroups", () => {
-  it("lists manual groups before recurring pipe groups", () => {
+  it("lists only manual groups, not auto pipe groups", () => {
     const result = listMoveTargetGroups([
       s("a", "chat", undefined, "work"),
       s("p1", "daily #1", "daily"),
       s("p2", "daily #2", "daily"),
       s("u", "ungrouped chat"),
     ]);
-    expect(result).toEqual(["work", "daily"]);
+    expect(result).toEqual(["work"]);
   });
 
   it("omits pipe names that appear only once", () => {

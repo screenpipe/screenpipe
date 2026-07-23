@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, CalendarDays, Plus, Zap } from "lucide-react";
+import { ArrowRight, CalendarDays, Pin, Zap } from "lucide-react";
 import posthog from "posthog-js";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
@@ -22,6 +22,7 @@ interface SummaryCardsProps {
   onSendMessage: (message: string, displayLabel?: string) => void;
   customTemplates: CustomTemplate[];
   onSaveCustomTemplate: (template: CustomTemplate) => void;
+  onUpdateCustomTemplate: (template: CustomTemplate) => void;
   onDeleteCustomTemplate: (id: string) => void;
   userName?: string;
   templatePipes?: TemplatePipe[];
@@ -41,6 +42,7 @@ export function SummaryCards({
   onSendMessage,
   customTemplates,
   onSaveCustomTemplate,
+  onUpdateCustomTemplate,
   onDeleteCustomTemplate,
   userName,
   templatePipes = [],
@@ -48,6 +50,7 @@ export function SummaryCards({
 }: SummaryCardsProps) {
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(null);
 
   // Curated home grid — kept deliberately small to reduce cognitive load.
   // Order matters. Definitions come from the app bundle (FALLBACK_TEMPLATES)
@@ -78,13 +81,16 @@ export function SummaryCards({
     onSendMessage(prompt, `${pipe.icon} ${pipe.title}`);
   };
 
+  // Opens the builder pre-filled for review/editing instead of running
+  // immediately — saved prompts often reference dates or context that
+  // changed since they were saved (#5239). Run lives inside the dialog.
   const handleCustomTemplateClick = (template: CustomTemplate) => {
     posthog.capture("home_card_clicked", {
       kind: "custom_template",
       template_id: template.id,
       template_title: template.title,
     });
-    onSendMessage(template.prompt, `\u{1F4CC} ${template.title}`);
+    setEditingTemplate(template);
   };
 
   // Connection suggestions are shown as an inline nudge bar, not grid cards.
@@ -151,15 +157,21 @@ export function SummaryCards({
       })()}
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
-      <div className="w-full max-w-xl mb-4 flex flex-wrap items-center gap-1 px-1">
-        <span className="text-[0.65em] text-muted-foreground/40 uppercase tracking-wider mr-1">more</span>
+      {/* One wrapping flow in the same 512px column as the cards: built-in
+          chips first, then the user's saved templates, then "+ custom". The
+          per-chip pin glyph is the sole user-created marker — it also cues the
+          behavior split (built-ins run immediately, templates open the edit
+          dialog). Labels and forced rows reviewed out in #5243. */}
+      {/* Chips carry flex-grow so each wrap line stretches flush to the card
+          column's edges (brick fill) instead of leaving a ragged right edge. */}
+      <div className="w-full max-w-lg mb-4 flex flex-wrap items-center gap-1">
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
         {featured.filter((p) => p.name === "time-breakdown" || p.name === "missed-todos").map((pipe) => (
           <button
             key={pipe.name}
             data-testid={`summary-card-${pipe.name}`}
             onClick={() => handleCardClick(pipe)}
-            className="px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+            className="grow px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
             {pipe.title}
           </button>
@@ -179,9 +191,23 @@ export function SummaryCards({
               const prompt = `Analyze my screen and audio recordings from today.\n\nUser instructions: ${qt.prompt}\n\nOnly report activities you can verify from the recordings. If uncertain, say so. Format with clear headings and bullet points.`;
               onSendMessage(prompt, `\u2728 ${qt.label} \u2014 Today`);
             }}
-            className="px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+            className="grow px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
             {qt.label}
+          </button>
+        ))}
+        {/* User's saved templates — chips slightly fainter than built-ins with
+            a pin glyph marking them as user-owned. Full text and management
+            (edit/delete) live in the edit dialog. */}
+        {customTemplates.map((ct) => (
+          <button
+            key={ct.id}
+            onClick={() => handleCustomTemplateClick(ct)}
+            title={ct.description || ct.timeRange}
+            className="grow inline-flex items-center justify-center gap-1 px-2 py-0.5 text-[11px] bg-muted/10 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground/80 transition-all duration-150 cursor-pointer max-w-[140px]"
+          >
+            <Pin className="w-3 h-3 shrink-0" strokeWidth={1.5} />
+            <span className="truncate">{ct.title}</span>
           </button>
         ))}
         <button
@@ -221,45 +247,6 @@ export function SummaryCards({
         </motion.div>
       )}
 
-      {/* User's custom saved templates */}
-      {customTemplates.length > 0 && (
-        <div className="w-full max-w-lg mb-2">
-          <div className="text-[0.65em] text-muted-foreground/60 uppercase tracking-wider font-medium mb-1 px-1">
-            your templates
-          </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            {customTemplates.map((ct) => (
-              <div
-                key={ct.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => handleCustomTemplateClick(ct)}
-                onKeyDown={(e) => e.key === "Enter" && handleCustomTemplateClick(ct)}
-                className="group text-left p-2 border border-border/30 bg-muted/10 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer relative"
-              >
-                <div className="text-sm mb-0.5">{"\u{1F4CC}"}</div>
-                <div className="text-xs font-medium group-hover:text-background mb-0.5 leading-tight">
-                  {ct.title}
-                </div>
-                <div className="text-xs text-muted-foreground group-hover:text-background/60 leading-tight line-clamp-1">
-                  {ct.description || ct.timeRange}
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteCustomTemplate(ct.id);
-                  }}
-                  className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-1 hover:bg-background/20 text-background transition-all"
-                  title="Delete template"
-                >
-                  <Plus className="w-3 h-3 rotate-45" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Custom Summary Builder modal */}
       {showBuilder && (
         <CustomSummaryBuilder
@@ -272,6 +259,32 @@ export function SummaryCards({
             });
             setShowBuilder(false);
             onSendMessage(prompt, `\u2728 Custom Summary \u2014 ${timeRange}`);
+          }}
+          onSaveTemplate={onSaveCustomTemplate}
+        />
+      )}
+
+      {/* Saved template review/edit modal \u2014 keyed so reopening a different
+          template remounts with fresh initial state */}
+      {editingTemplate && (
+        <CustomSummaryBuilder
+          key={editingTemplate.id}
+          open
+          onClose={() => setEditingTemplate(null)}
+          editingTemplate={editingTemplate}
+          onUpdateTemplate={onUpdateCustomTemplate}
+          onDeleteTemplate={() => {
+            onDeleteCustomTemplate(editingTemplate.id);
+            setEditingTemplate(null);
+          }}
+          onGenerate={(prompt) => {
+            posthog.capture("home_card_clicked", {
+              kind: "custom_template_run",
+              template_id: editingTemplate.id,
+              template_title: editingTemplate.title,
+            });
+            setEditingTemplate(null);
+            onSendMessage(prompt, `\u{1F4CC} ${editingTemplate.title}`);
           }}
           onSaveTemplate={onSaveCustomTemplate}
         />

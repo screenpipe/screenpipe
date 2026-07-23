@@ -117,7 +117,7 @@ describe('getModelCost — cache-aware pricing', () => {
 	it('keeps the unknown-token estimate path unchanged', () => {
 		// Both unknown → default 2000 in / 500 out estimate
 		const cost = getModelCost('claude-haiku-4-5', null, null);
-		expect(cost).toBeCloseTo((2000 / 1_000_000) * 0.8 + (500 / 1_000_000) * 4.0, 10);
+		expect(cost).toBeCloseTo((2000 / 1_000_000) * 1.0 + (500 / 1_000_000) * 5.0, 10);
 	});
 
 	it('keeps unknown-model fallback unchanged', () => {
@@ -125,11 +125,11 @@ describe('getModelCost — cache-aware pricing', () => {
 	});
 
 	it('fuzzy-matches dated model IDs to cache-aware pricing', () => {
-		// "claude-haiku-4-5-20251001" → claude-haiku-4-5 ($0.80/M in)
+		// "claude-haiku-4-5-20251001" → claude-haiku-4-5 ($1/M in)
 		const cost = getModelCost('claude-haiku-4-5-20251001', 100_000, 0, {
 			cache_read_tokens: 100_000,
 		});
-		expect(cost).toBeCloseTo((100_000 / 1_000_000) * 0.8 * 0.1, 10);
+		expect(cost).toBeCloseTo((100_000 / 1_000_000) * 1.0 * 0.1, 10);
 	});
 
 	it('does not change zero-cost or provider inference behavior', () => {

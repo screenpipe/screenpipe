@@ -13,14 +13,22 @@ import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
-import { installAuthInterceptor, stripSessionToken } from "../auth-guard";
-import { hasAppEntitlement, normalizeAppUser } from "@/lib/app-entitlement";
+import { installAuthInterceptor } from "../auth-guard";
+import {
+	getLocalPlanPolicy,
+	hasAppEntitlement,
+	normalizeAppUser,
+} from "@/lib/app-entitlement";
+import {
+	resolveFreePlanRetentionTransition,
+	type LocalRetentionPreference,
+} from "@/lib/free-plan-retention";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
 import type {
 	EnterpriseAppUpdatePolicy,
 	EnterpriseInstallMetadata,
-} from "@ee/lib/app-update-policy";
+} from "@/lib/enterprise/app-update-policy";
 import { type FontSize, applyFontSize } from "@/lib/utils/font-size";
 import {
 	applyManagedOverrides,
@@ -211,6 +219,9 @@ export interface ChatHistoryStore {
 
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
+	/** Internal marker/snapshot used to unwind the forced free-plan policy. */
+	_freePlanRetentionApplied?: boolean;
+	_preFreePlanRetention?: LocalRetentionPreference | null;
 	deviceId?: string;
 	/** Device-key values enforced by the current enterprise policy. */
 	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
@@ -284,10 +295,6 @@ export type Settings = SettingsStore & {
 	filterMusic?: boolean;
 	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 5000s, OpenAI 3000s, Whisper 600s) */
 	batchMaxDurationSecs?: number;
-	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */
-	pipeSuggestionsEnabled?: boolean;
-	/** Hours between pipe suggestion notifications (default: 24) */
-	pipeSuggestionFrequencyHours?: number;
 	/** User's power mode preference — persisted so it survives app restarts */
 	powerMode?: "auto" | "performance" | "battery_saver";
 	/** Show restart notifications when audio/vision capture stalls (default: false for now) */
@@ -367,7 +374,6 @@ export type Settings = SettingsStore & {
 		allowDuringPause?: string[];
 		captureStalls: boolean;
 		appUpdates: boolean;
-		pipeSuggestions: boolean;
 		pipeNotifications: boolean;
 		/** Toast when a monitor is plugged, unplugged, or switched (clamshell, dock). Default true. */
 		displayChanges?: boolean;
@@ -438,6 +444,10 @@ export type Settings = SettingsStore & {
 	 * visible. Read by reset_to_regular_and_refresh_tray in
 	 * src-tauri/src/window/panel.rs at startup and on window events. Default off. */
 	hideDockIcon?: boolean;
+	/** True once the in-app first-run guide (shown after onboarding on the Home
+	 * window) has been completed or skipped. Stored here so it persists in the
+	 * normal settings store with no bindings regen. Default off. */
+	firstRunGuideDone?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -547,6 +557,30 @@ export function makeDefaultPresets(isPro: boolean): AIPreset[] {
 const DEFAULT_CLOUD_PRESET: AIPreset = makeDefaultPresets(false)[0];
 
 const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
+
+async function configureLocalRetention(
+	policy: LocalRetentionPreference,
+): Promise<void> {
+	try {
+		const { localFetch } = await import("@/lib/api");
+		const response = await localFetch("/retention/configure", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				enabled: policy.enabled,
+				retention_days: policy.days,
+				mode: policy.mode,
+			}),
+		});
+		if (!response.ok) {
+			console.warn(`failed to configure local retention (${response.status})`);
+		}
+	} catch (error) {
+		// Persisted settings are still applied by the native startup path on the
+		// next launch. A temporarily unavailable local server must not fail login.
+		console.warn("failed to configure local retention", error);
+	}
+}
 
 // "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
 // OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
@@ -658,7 +692,8 @@ let DEFAULT_SETTINGS: Settings = {
 				credits_balance: null,
 				app_entitled: null,
 				subscription_plan: null,
-				entitlement: null
+				entitlement: null,
+				enterprise_account: null,
 			},
 			showScreenpipeShortcut: "Control+Super+S",
 			startRecordingShortcut: "Super+Alt+U",
@@ -680,6 +715,7 @@ let DEFAULT_SETTINGS: Settings = {
 			overlayMode: "fullscreen",
 			showOverlayInScreenRecording: false,
 			disableTimeline: false,
+			firstRunGuideDone: false,
 			videoQuality: "balanced",
 			transcriptionMode: "batch",
 			cloudArchiveEnabled: false,
@@ -692,6 +728,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableKeyboardCapture: true,
 			disableClickCapture: false,
 			keepComputerAwake: false,
+			showRestartNotifications: false,
 			experimentalCoreaudioSystemAudio: true,
 			experimentalMeetingPiggyback: false,
 			alwaysRecordBluetoothMic: false,
@@ -1079,6 +1116,29 @@ function createSettingsStore() {
 			}
 		}
 
+		// Migration: retired hosted Claude presets keep working on the current
+		// model lanes. Cloud presets use Luna; direct Anthropic BYOK presets use
+		// Sonnet 5 because that endpoint cannot route to an OpenAI model.
+		if (Array.isArray(settings.aiPresets)) {
+			let migratedRetiredClaude = false;
+			settings.aiPresets = settings.aiPresets.map((p: any) => {
+				const model = typeof p?.model === "string" ? p.model : "";
+				if (!/claude-(?:3-(?:5-|7-)?(?:haiku|sonnet)|haiku|sonnet-4)/i.test(model)) {
+					return p;
+				}
+				if (p?.provider === "screenpipe-cloud") {
+					migratedRetiredClaude = true;
+					return { ...p, model: "gpt-5.6-luna" };
+				}
+				if (p?.provider === "anthropic") {
+					migratedRetiredClaude = true;
+					return { ...p, model: "claude-sonnet-5" };
+				}
+				return p;
+			});
+			if (migratedRetiredClaude) needsUpdate = true;
+		}
+
 		// Migration: backfill disabledShortcuts for installs that predate the
 		// field. Several call sites assume it's always an array (`.includes(...)`)
 		// and crash with "Cannot read properties of undefined" when it's missing.
@@ -1267,16 +1327,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		installAuthInterceptor(
 			() => settingsRef.current.user?.token ?? undefined,
 			async () => {
-				// Strip only the token — keep the profile + entitlement evidence so
-				// the entitlement gate's transient-loss cushion can hold instead of
-				// resetting onboarding (SCR-132). Because the user stays non-null,
-				// the explicit-logout invalidation in updateSettings ("user" in
-				// updates && !updates.user) intentionally does NOT fire: an
-				// in-flight loadUser that still succeeds may legitimately restore
-				// the session after a transient 401.
-				await updateSettings({
-					user: stripSessionToken(settingsRef.current.user) as any,
-				});
+				// A response from the website auth surface definitively rejected the
+				// credential. Clear the account so it cannot be confused with a
+				// transient secret-store hydration miss.
+				await updateSettings({ user: null as any });
 				// Mirror the sign-out into the sidecar so the pi-agent and
 				// cloud_proxy.rs stop sending the now-revoked token on the
 				// next pipe run.
@@ -1445,11 +1499,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	}, [settings.fontSize]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
+		const clearsAccount = "user" in updates && !updates.user;
 		// Sign-out (user → null) must invalidate any loadUser() request that is
 		// currently in flight so the cleared session can't be resurrected when a
 		// slow refresh resolves afterwards. Bump synchronously — before the first
 		// await — so even the logout button's fire-and-forget call wins the race.
-		if ("user" in updates && !updates.user) {
+		if (clearsAccount) {
 			authGenerationRef.current += 1;
 			// Broadcast to the other windows. Each non-overlay window has its own
 			// SettingsProvider + DeeplinkHandler, so a login's deep-link fires a
@@ -1461,6 +1516,20 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		}
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
+		if (clearsAccount) {
+			// Signed-out state is Unknown. Apply the non-destructive feature cap and
+			// stop any cleanup loop left running by a previously verified account.
+			try {
+				await commands.setCloudToken(null);
+			} catch (error) {
+				console.warn("failed to clear cloud token after sign-out:", error);
+			}
+			await configureLocalRetention({
+				enabled: false,
+				days: 14,
+				mode: "media",
+			});
+		}
 
 		// Only update the port in the API module immediately — auth changes
 		// (apiAuth / apiKey) must NOT be applied until after the server restarts.
@@ -1508,37 +1577,90 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// signs out while this fetch is in flight, the generation changes and we
 		// abort the write below instead of resurrecting the cleared session.
 		const generation = authGenerationRef.current;
-		const startingToken = settingsRef.current.user?.token ?? null;
+		const requestStillCurrent = () => {
+			const currentToken = settingsRef.current.user?.token;
+			return (
+				authGenerationRef.current === generation &&
+				(!currentToken || currentToken === token)
+			);
+		};
+		const clearRejectedSession = async () => {
+			if (!requestStillCurrent()) return;
+			await updateSettings({ user: null as any });
+			try {
+				await commands.setCloudToken(null);
+			} catch (e) {
+				console.warn("failed to clear rejected cloud token:", e);
+			}
+		};
 		try {
-			const response = await fetch(screenpipeWebUrl("/api/user", "https://screenpipe.com"), {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
+			const response = await fetch(
+				screenpipeWebUrl("/api/user", "https://screenpipe.com"),
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+					},
+					// verify=true asks the server to consult Stripe directly (used by the
+					// entitlement gate right after purchase); normal polls omit it to keep
+					// the hot path off Stripe.
+					body: JSON.stringify({ token, ...(verify ? { verify: true } : {}) }),
 				},
-				// verify=true asks the server to consult Stripe directly (used by the
-				// entitlement gate right after purchase); normal polls omit it to keep
-				// the hot path off Stripe.
-				body: JSON.stringify({ token, ...(verify ? { verify: true } : {}) }),
-			});
+			);
 
 			if (!response.ok) {
 				const body = await response.text().catch(() => "<no body>");
-				throw new Error(`failed to verify token: ${response.status} ${response.statusText} - ${body}`);
+				if (response.status === 401 || response.status === 403) {
+					await clearRejectedSession();
+				}
+				throw new Error(
+					`failed to verify token: ${response.status} ${response.statusText} - ${body}`,
+				);
 			}
 
 			const data = await response.json();
-			const userData = normalizeAppUser(data.user, token) as User;
 
-			// The user signed out while this request was in flight — writing
-			// userData now would resurrect the cleared session (the "logout needs
-			// two clicks" bug). Abort silently; the sign-out already won.
-			if (
-				authGenerationRef.current !== generation ||
-				(startingToken !== null && settingsRef.current.user?.token !== token)
-			) {
-				console.log("loadUser: sign-out during fetch — not restoring session");
+			// The user signed out or switched accounts while this request was in
+			// flight. Ignore the stale response rather than resurrecting it.
+			if (!requestStillCurrent()) {
+				console.log("loadUser: auth changed during fetch — ignoring stale response");
 				return;
 			}
+
+			if (data?.success === false || !data?.user) {
+				// The auth surface answered successfully but explicitly rejected the
+				// session (or omitted its user). This is definitive, not a network
+				// hydration failure, so clear the complete account and bearer.
+				await clearRejectedSession();
+				throw new Error("account session was rejected by the server");
+			}
+
+			const userData = normalizeAppUser(data.user, token) as User;
+			const localPlanPolicy = getLocalPlanPolicy(userData as any);
+			if (localPlanPolicy === "unknown") {
+				// Preserve the authenticated identity so the user can retry, but
+				// replace any cached paid state with this unknown state immediately.
+				// setCloudToken then refreshes the native PipeManager's safe cap.
+				await updateSettings({ user: userData });
+				try {
+					await commands.setCloudToken(token);
+				} catch (e) {
+					console.warn("failed to apply unknown-plan restrictions:", e);
+				}
+				// A free-plan cleanup loop may already be running from the prior
+				// verified state. Pause it without overwriting the saved preference;
+				// unknown evidence can cap features, but it cannot authorize deletion.
+				await configureLocalRetention({
+					enabled: false,
+					days: 14,
+					mode: "media",
+				});
+				throw new Error(
+					"account response did not contain verified free or paid plan truth",
+				);
+			}
+			const isFreePlan = localPlanPolicy === "verified-free";
+			const isPaidPlan = localPlanPolicy === "verified-paid";
 
 			// if user was not logged in, send posthog event and bridge identity
 			if (!settings.user?.id) {
@@ -1558,7 +1680,29 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				}
 			}
 
-			await updateSettings({ user: userData });
+			const retentionTransition = resolveFreePlanRetentionTransition(
+				settingsRef.current,
+				isFreePlan,
+				isPaidPlan,
+			);
+			const retentionUpdates =
+				retentionTransition.kind === "enforce"
+					? {
+							_freePlanRetentionApplied: true,
+							_preFreePlanRetention: retentionTransition.previous,
+							localRetentionEnabled: retentionTransition.policy.enabled,
+							localRetentionDays: retentionTransition.policy.days,
+							localRetentionMode: retentionTransition.policy.mode,
+						}
+					: retentionTransition.kind === "restore"
+						? {
+								_freePlanRetentionApplied: false,
+								localRetentionEnabled: retentionTransition.policy.enabled,
+								localRetentionDays: retentionTransition.policy.days,
+								localRetentionMode: retentionTransition.policy.mode,
+							}
+						: {};
+			await updateSettings({ user: userData, ...retentionUpdates } as any);
 
 			// Push the fresh token into the running sidecar so the
 			// `Server.cloud_token` (used by /v1/chat/completions proxy) and
@@ -1571,6 +1715,22 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				await commands.setCloudToken(token);
 			} catch (e) {
 				console.warn("failed to push cloud token to sidecar:", e);
+			}
+
+			const verifiedRetentionPolicy =
+				retentionTransition.kind !== "none"
+					? retentionTransition.policy
+					: isPaidPlan
+						? {
+								enabled: settingsRef.current.localRetentionEnabled === true,
+								days: settingsRef.current.localRetentionDays ?? 14,
+								mode: settingsRef.current.localRetentionMode ?? "media",
+							}
+						: null;
+			if (verifiedRetentionPolicy) {
+				// setCloudToken updates native enforcement first. Then apply or resume
+				// the verified policy on the already-running retention task.
+				await configureLocalRetention(verifiedRetentionPolicy);
 			}
 		} catch (err) {
 			console.error("failed to load user:", err instanceof Error ? err.message : err);

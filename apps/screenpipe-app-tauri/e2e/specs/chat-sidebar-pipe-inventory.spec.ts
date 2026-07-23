@@ -176,7 +176,7 @@ describe("chat sidebar pipe inventory", function () {
     mkdirSync(CHATS_DIR, { recursive: true });
     writeFileSync(
       join(PIPE_DIR, "pipe.md"),
-      `---\nname: ${PIPE_NAME}\nenabled: false\n---\nfixture pipe\n`,
+      `---\nname: ${PIPE_NAME}\nschedule: every 1h\nenabled: false\n---\nfixture pipe\n`,
     );
 
     const base = Date.now() - 120_000;

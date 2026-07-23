@@ -78,8 +78,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const isOverlay = pathname === "/shortcut-reminder";
-  const isSearch = pathname === "/search";
+  const isOverlay =
+    pathname === "/shortcut-reminder" || pathname === "/notification-inbox";
+  // Transparent-body windows: floating search bar + the overlay inbox card.
+  const isSearch = pathname === "/search" || pathname === "/notification-inbox";
 
   useEffect(() => {
     if (typeof window === "undefined") return;

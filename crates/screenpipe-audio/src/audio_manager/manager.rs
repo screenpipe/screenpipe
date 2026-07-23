@@ -779,6 +779,15 @@ impl AudioManager {
             return Ok(());
         }
 
+        #[cfg(target_os = "macos")]
+        if screenpipe_config::should_pause_audio_for_lock() {
+            debug!(
+                "skipping start of audio device while screen is locked: {}",
+                device
+            );
+            return Ok(());
+        }
+
         // Don't restart devices that are paused due to DRM content detection.
         // The monitor watcher will call start_output_devices() when DRM clears.
         if self
@@ -840,6 +849,19 @@ impl AudioManager {
             }
         }
 
+        // The lock flag can change while CoreAudio is opening the stream. The
+        // pre-start guard above cannot close that race, and the device monitor
+        // cannot see this stream until its recording handle is registered.
+        #[cfg(target_os = "macos")]
+        if screenpipe_config::should_pause_audio_for_lock() {
+            self.stop_device_recording(device).await?;
+            debug!(
+                "stopped newly-opened audio device after screen locked during startup: {}",
+                device
+            );
+            return Ok(());
+        }
+
         if !self.recording_handles.contains_key(device) {
             if let Some(is_running) = self.device_manager.is_running_mut(device) {
                 is_running.store(true, Ordering::Relaxed);
@@ -872,6 +894,14 @@ impl AudioManager {
         if self.options.read().await.is_disabled {
             return Ok(());
         }
+        #[cfg(target_os = "macos")]
+        if screenpipe_config::should_pause_audio_for_lock() {
+            debug!(
+                "skipping start of meeting-session audio device while screen is locked: {}",
+                device
+            );
+            return Ok(());
+        }
         // Insert BEFORE starting: the audio-receiver drop-gate bypass must see
         // this device from the very first chunk. Rolled back on failure below.
         self.session_devices
@@ -896,6 +926,23 @@ impl AudioManager {
                 return Err(e);
             }
         }
+
+        // As above, close a stream that finished opening after the screen-lock
+        // gate was checked. Remove session bookkeeping before the generic stop.
+        #[cfg(target_os = "macos")]
+        if screenpipe_config::should_pause_audio_for_lock() {
+            self.session_devices
+                .write()
+                .unwrap()
+                .remove(&device.to_string());
+            self.stop_device_recording(device).await?;
+            debug!(
+                "stopped newly-opened meeting-session audio device after screen locked during startup: {}",
+                device
+            );
+            return Ok(());
+        }
+
         if !self.recording_handles.contains_key(device) {
             if let Some(is_running) = self.device_manager.is_running_mut(device) {
                 is_running.store(true, Ordering::Relaxed);

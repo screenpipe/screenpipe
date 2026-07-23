@@ -33,6 +33,7 @@ this works for all API key, webhook, and custom credential fields.
 | webhook URL | n8n, Make, Zapier, Pushover, ntfy, Resend | best for one-way notifications or workflow triggers |
 | local path | Obsidian, Logseq | keeps notes local |
 | custom/private CA | Bee | screenpipe includes the required trust configuration for the provider |
+| managed OAuth via Composio | Gmail, Zoom, Google Drive, Google Docs, Google Sheets | one-click sign-in managed by composio.dev (SOC 2), available on every plan. Sign-in and data access run through Composio's cloud, and the agent reaches these through the shared Composio MCP server (sp_mcp tools), not the connection proxy |
 
 ## credential storage
 
@@ -52,8 +53,8 @@ The app registry currently includes these connection IDs:
 
 | category | integrations |
 | --- | --- |
-| communication | Slack, Discord, Email (SMTP), Outlook, Telegram, WhatsApp, Microsoft Teams, Zoom |
-| productivity | Notion, Obsidian, Google Calendar, Google Docs, Microsoft 365, Logseq, Workflowy, Airtable, Confluence, Odoo, Mochi, Hermes |
+| communication | Slack, Discord, Email (SMTP), Gmail (via Composio), Outlook, Telegram, WhatsApp, Microsoft Teams, Zoom (via Composio) |
+| productivity | Notion, Obsidian, Google Calendar, Google Docs, Google Drive (via Composio), Google Sheets (via Composio), Microsoft 365, Logseq, Workflowy, Airtable, Confluence, Odoo, Mochi, Hermes |
 | project management | Linear, Jira, Asana, Monday.com, Trello, ClickUp, Todoist, Cal.com, Calendly |
 | CRM and support | HubSpot, Salesforce, Pipedrive, Intercom, Zendesk, Bitrix24 |
 | developer and ops | GitHub, Sentry, Vercel, Supabase, PostHog |

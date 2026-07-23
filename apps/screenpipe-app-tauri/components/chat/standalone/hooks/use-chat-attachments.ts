@@ -276,7 +276,11 @@ export function useChatAttachments({
         if (tryDispatch(item.getAsFile())) didDispatch = true;
       }
     }
-    if (files && files.length > 0) {
+    // Only fall back to clipboard.files if items didn't yield anything.
+    // On Windows, both items and files contain the same image but as
+    // different File object references, so the handled-Set dedup fails
+    // and the image gets added twice.
+    if (!didDispatch && files && files.length > 0) {
       for (let i = 0; i < files.length; i++) {
         if (tryDispatch(files[i])) didDispatch = true;
       }

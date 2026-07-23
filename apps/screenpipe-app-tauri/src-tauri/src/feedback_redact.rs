@@ -231,8 +231,11 @@ pub async fn redact_pii_for_feedback(
     let regex = REGEX.get_or_init(|| async { regex_pipeline() }).await;
 
     // PII-dense first (settings + chat live at the front of `text`) so the
-    // enclave budget is spent on them before the bulk logs.
+    // enclave budget is spent on them before the bulk logs. Run a complete
+    // deterministic pass before chunking so a credential cannot cross a chunk
+    // boundary or rely on the enclave model recognizing its context.
     let bundle = format!("{}{}", redact_settings_json(&settings_json), text);
+    let bundle = redact_one(regex, regex, &bundle).await;
 
     let chunks = chunk_by_lines(&bundle, CHUNK_BYTES);
     let total = chunks.len();
@@ -312,7 +315,8 @@ mod tests {
             "database postgres://operator:hunter2@db.internal/prod\n",
             "proxy https://service:password@example.com/private\n",
             "Authorization: Bearer abcdef1234567890\n",
-            "api_key=deadbeef password=hunter2"
+            "api_key=deadbeef password=hunter2\n",
+            "screenpipe://auth?api_key=eyJhbGciOiJIUzI1NiJ9.fake-signature&source=email"
         )
         .to_string();
         let redacted = redact_diagnostics_locally(raw).await.unwrap();
@@ -323,6 +327,7 @@ mod tests {
         assert!(!redacted.contains("abcdef1234567890"));
         assert!(!redacted.contains("deadbeef"));
         assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("eyJhbGciOiJIUzI1NiJ9.fake-signature"));
         assert!(redacted.contains("request 42"));
     }
 }

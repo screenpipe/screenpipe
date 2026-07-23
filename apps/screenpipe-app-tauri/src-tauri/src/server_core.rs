@@ -53,6 +53,8 @@ pub struct ServerCore {
     /// Local API auth key — exposed to the frontend via Tauri command so
     /// localFetch can inject it synchronously (no async store race).
     pub local_api_key: Option<String>,
+    /// Runtime free-plan retention guard shared with the local HTTP API.
+    pub enforce_free_plan_retention: Arc<std::sync::atomic::AtomicBool>,
     /// Shutdown signal for the redaction reconciliation workers. Fired
     /// from `shutdown()` so the workers exit before the tokio runtime
     /// tears down — otherwise their in-flight sqlx queries (which use
@@ -470,6 +472,11 @@ impl ServerCore {
         server.manual_meeting = Some(manual_meeting.clone());
         server.api_auth = config.api_auth;
         server.api_auth_key = config.api_auth_key.clone();
+        server.enforce_free_plan_retention.store(
+            config.enforce_free_plan_retention,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        let enforce_free_plan_retention = server.enforce_free_plan_retention.clone();
         // Cloud JWT for /v1/chat/completions proxy. config.user_id carries
         // the Clerk JWT (despite the name — see line 96 where the same value
         // is used as the cloud transcription bearer). Pi's bash deliberately
@@ -616,6 +623,7 @@ impl ServerCore {
         pipe_manager.set_scheduler_run_guard(Arc::new(|| {
             crate::headless::scheduled_pipe_skip_reason()
         }));
+        pipe_manager.set_max_non_template_pipes(config.max_non_template_pipes);
         let mcp_session_access =
             screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
         pipe_manager.set_mcp_session_access(mcp_session_access.clone());
@@ -1181,6 +1189,7 @@ impl ServerCore {
             data_path,
             port: config.port,
             local_api_key: config.api_auth_key.clone(),
+            enforce_free_plan_retention,
             redact_shutdown,
             oauth_refresher: oauth_refresher_handle,
             external_memory_sync: external_memory_sync_handle,

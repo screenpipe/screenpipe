@@ -137,40 +137,19 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'gpt-5.4': 3,
   'gpt-5-mini': 1,
   'gpt-5-nano': 1,
-  // Vertex MaaS — free for users (GCP credits), weight=0 so they don't eat daily quota
-  'glm-4.7': 0,
-  'glm-5': 0,
-  'kimi-k2.5': 0,
   // Opus 4.7 is ~3× cheaper per token than 4.5/4.6 ($5/$25 vs $15/$75 per 1M),
   // so it consumes proportionally less daily quota. Longest-prefix match in
   // getModelWeight ensures this override beats the generic 'claude-opus' entry.
   // Fable 5 is Opus-tier ($10/$50 per MTok, ~2x Opus 4.8). Weight it like premium Opus
   // so it eats daily quota proportionally. Explicit key: 'claude-fable-5' matches no
-  // 'claude-opus/sonnet/haiku' prefix, so without this it would default to weight 1.
+  // 'claude-opus/sonnet' prefix, so without this it would default to weight 1.
   'claude-fable-5': 10,
   'claude-opus-4-7': 5,
   'claude-opus': 15,
   'claude-sonnet': 3,
-  'claude-haiku': 1,
-  'gemini-3-pro': 3,
-  'gemini-3.1-pro': 3,
-  'gemini-2.5-pro': 3,
-  'gemini-3-flash': 0,
-  'gemini-3.1-flash-lite': 0,
-  'gemini-3.5-flash': 0,
-  'gemini-2.5-flash': 0,
   // (gpt-5.5 / gpt-5.4 / gpt-5.4-mini were duplicated here once — duplicate
   // object keys silently override the earlier entries. Keep each model
   // defined exactly once, in the OpenAI block above.)
-  // OpenRouter models
-  'qwen3.5-flash': 0,
-  'qwen3.5-397b': 3,
-  'llama-4-maverick': 1,
-  'llama-4-scout': 1,
-  'qwen3-coder:free': 0,
-  'qwen3-coder': 1,
-  'step-3.5-flash:free': 0,
-  'step-3.5-flash': 0,
 };
 
 export function getModelWeight(model?: string): number {
@@ -187,11 +166,8 @@ export function getModelWeight(model?: string): number {
 }
 
 /**
- * A "free" model is one with query_weight 0 — the Vertex MaaS models (glm-5,
- * kimi-k2.5), the fast Gemini/Qwen flashes, and `auto`. These cost no daily
- * quota and are what we tell users to switch to "to avoid limits". They get a
- * separate, much higher per-minute RPM bucket (`TierLimits.freeRpm`) so that
- * promise actually holds at the per-minute layer, not just the daily layer.
+ * A "free" model is one with query_weight 0. Auto is the only hosted entry in
+ * that bucket; the account-wide cash cap still bounds its real provider spend.
  */
 export function isFreeModel(model?: string): boolean {
   return getModelWeight(model) === 0;
@@ -204,51 +180,28 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
   anonymous: {
     dailyQueries: 25,
     rpm: 15,
-    // Free (weight-0) models get their own, much higher per-minute bucket so a
-    // user picking "the free model to avoid limits" actually avoids them. The
-    // low `rpm` above still guards paid models. Daily cost cap is the backstop.
+    // Auto (weight 0) gets a higher per-minute bucket; the separate daily cash
+    // cap remains the provider-spend backstop.
     freeRpm: 60,
     allowedModels: [
       'auto',
-      'claude-haiku-4-5',
-      'gemini-2.5-flash',
-      'gemini-3-flash',
-      'gemini-3.1-flash-lite',
-      'gemini-3.5-flash',
-      'glm-4.7',
-      'glm-5',
-      'kimi-k2.5',
-      'qwen/qwen3.5-flash',
-      'meta-llama/llama-4-scout',
+      'gpt-5.6-luna',
     ],
   },
   // logged_in = signed in but NOT on Business. NB: the gateway has no separate
   // "Basic" tier — Free and Basic both resolve here (recording is gated by
   // app_entitled elsewhere). This is the Free/Basic -> Business upgrade gate:
-  // the marquee models (Sonnet, Opus, GPT-5.x, Fable, *-pro, 397b) are
-  // Business-only, while everyone keeps `auto` + the free/fast models. Free
-  // models carry query_weight 0 so they never count against dailyQueries —
-  // the free experience stays effectively unlimited; dailyQueries caps only
-  // PAID-model messages and is tunable live via LIMIT_LOGGED_IN_DAILY (CF env,
-  // no redeploy).
+  // marquee models (Sonnet, Opus, premium GPT-5.x, Fable, *-pro) are
+  // Business-only, while everyone keeps Auto and Luna. Auto carries
+  // query_weight 0 so it does not consume daily query units; the cash cap and
+  // free-preview turn limit still bound hosted spend.
   logged_in: {
     dailyQueries: 30,
     rpm: 25,
     freeRpm: 120,
     allowedModels: [
       'auto',
-      'claude-haiku-4-5',
-      'gemini-2.5-flash',
-      'gemini-3-flash',
-      'gemini-3.1-flash-lite',
-      'gemini-3.5-flash',
-      'glm-4.7',
-      'glm-5',
-      'kimi-k2.5',
-      'qwen/qwen3.5-flash',
-      'meta-llama/llama-4-scout',
-      'meta-llama/llama-4-maverick',
-      'gemma4-31b',
+      'gpt-5.6-luna',
     ],
   },
   subscribed: {

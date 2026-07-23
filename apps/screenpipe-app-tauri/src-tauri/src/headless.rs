@@ -35,14 +35,13 @@ fn preserve_window_during_dormancy(label: &str, onboarding_completed: bool) -> b
 }
 
 /// Sync dormant/record-only state to an enterprise hidden-UI policy that flipped
-/// mid-session. The enterprise enforcement path hides (not destroys) windows, so
-/// this only flips the flags that gate pipe suppression and tray wake — without
-/// re-entering the NSPanel teardown. On un-hide, fall back to whatever the user's
-/// own headless settings dictate so a non-enterprise headless user isn't cleared.
-pub fn set_enterprise_hidden(app: &AppHandle, hidden: bool) {
+/// mid-session. On un-hide, fall back to the user's own headless preference and
+/// restore shortcuts when the enterprise policy was the reason UI was dormant.
+/// Returns true when the app transitioned back to an interactive UI state.
+pub fn set_enterprise_hidden(app: &AppHandle, hidden: bool) -> bool {
     if hidden {
         initialize(true, true);
-        return;
+        return false;
     }
 
     let (dormant, record_only) = crate::store::SettingsStore::get(app)
@@ -55,7 +54,13 @@ pub fn set_enterprise_hidden(app: &AppHandle, hidden: bool) {
             )
         })
         .unwrap_or((false, false));
-    initialize(dormant, record_only);
+    if dormant {
+        initialize(true, record_only);
+        return false;
+    }
+
+    RECORD_ONLY.store(false, Ordering::SeqCst);
+    wake_from_tray(app)
 }
 
 #[cfg(target_os = "macos")]
@@ -192,13 +197,13 @@ fn enter_on_main_thread(app: &AppHandle) {
 }
 
 /// Tray UI actions are the sole wake path while dormant.
-pub fn wake_from_tray(app: &AppHandle) {
+pub fn wake_from_tray(app: &AppHandle) -> bool {
     // Enterprise hidden-UI mode has no wake path; the UI stays dormant.
     if crate::enterprise_policy::is_app_ui_hidden() {
-        return;
+        return false;
     }
     if !UI_DORMANT.swap(false, Ordering::SeqCst) {
-        return;
+        return false;
     }
 
     #[cfg(target_os = "macos")]
@@ -213,6 +218,7 @@ pub fn wake_from_tray(app: &AppHandle) {
     });
 
     info!("headless: UI woken from tray");
+    true
 }
 
 #[cfg(test)]

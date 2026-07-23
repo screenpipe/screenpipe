@@ -176,9 +176,9 @@ bun run coverage:all
 bun run coverage:all:check
 ```
 
-This refreshes/checks `e2e/COVERAGE.md`, `../../coverage/CORE.md`, and the
+This refreshes/checks `e2e/COVERAGE.md`, `../../docs/coverage/CORE.md`, and the
 top-level `../../COVERAGE.md` summary. Core line/branch coverage is tracked
-separately via `cargo llvm-cov`; see `../../coverage/README.md`.
+separately via `cargo llvm-cov`; see `../../docs/coverage/README.md`.
 
 ### Troubleshooting on Windows
 

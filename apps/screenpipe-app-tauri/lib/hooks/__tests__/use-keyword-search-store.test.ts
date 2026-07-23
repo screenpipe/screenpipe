@@ -7,8 +7,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useKeywordSearchStore } from "../use-keyword-search-store";
 import { localFetch } from "@/lib/api";
 
+const mocks = vi.hoisted(() => ({
+	capture: vi.fn(),
+}));
+
 vi.mock("@/lib/api", () => ({
 	localFetch: vi.fn(),
+}));
+
+vi.mock("posthog-js", () => ({
+	default: {
+		capture: mocks.capture,
+	},
 }));
 
 function deferred<T>() {
@@ -31,6 +41,7 @@ function jsonResponse(body: unknown) {
 describe("useKeywordSearchStore search scheduling", () => {
 	beforeEach(() => {
 		vi.mocked(localFetch).mockReset();
+		mocks.capture.mockReset();
 		useKeywordSearchStore.getState().resetSearch();
 	});
 
@@ -56,7 +67,13 @@ describe("useKeywordSearchStore search scheduling", () => {
 
 		const searchPromise = useKeywordSearchStore
 			.getState()
-			.searchKeywords("screenpipe", { limit: 24, offset: 0 });
+			.searchKeywords("screenpipe", {
+				limit: 24,
+				offset: 0,
+				analytics_surface: "standalone",
+				analytics_search_id: "search-123",
+				analytics_session_id: "session-456",
+			});
 
 		expect(calls).toHaveLength(1);
 		expect(calls[0]).toContain("/search/keyword?");
@@ -87,6 +104,29 @@ describe("useKeywordSearchStore search scheduling", () => {
 		expect(calls[1]).toContain("/search?");
 		expect(calls[1]).toContain("content_type=input");
 		expect(useKeywordSearchStore.getState().isSearchingUiEvents).toBe(true);
+		expect(mocks.capture).toHaveBeenCalledWith(
+			"search_ui_query_started",
+			expect.objectContaining({
+				surface: "standalone",
+				search_id: "search-123",
+				search_session_id: "session-456",
+				query_length: 10,
+			}),
+		);
+		expect(mocks.capture).toHaveBeenCalledWith(
+			"search_ui_keyword_completed",
+			expect.objectContaining({
+				surface: "standalone",
+				search_id: "search-123",
+				search_session_id: "session-456",
+				query_length: 10,
+				screen_result_count: 1,
+				has_screen_results: true,
+			}),
+		);
+		for (const [, properties] of mocks.capture.mock.calls) {
+			expect(properties).not.toHaveProperty("query");
+		}
 
 		uiEventResponse.resolve(
 			jsonResponse({

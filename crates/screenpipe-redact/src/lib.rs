@@ -70,6 +70,7 @@
 
 #![warn(clippy::all)]
 
+mod a11y_context;
 pub mod adapters;
 pub mod image;
 pub mod ocr_json;

@@ -180,6 +180,38 @@
           "requireLiteralLeadingDot": false
         },
         {
+          "path": "$HOME/.claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.openclaw",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.openclaw/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.hermes",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.hermes/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.codeium",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.codeium/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
           "path": "$HOME/Library/Application Support/Claude",
           "requireLiteralLeadingDot": false
         },
@@ -254,7 +286,7 @@
           "args": [
             "-c",
             {
-              "validator": "\\S+"
+              "validator": "\\S[\\s\\S]*"
             }
           ],
           "sidecar": false

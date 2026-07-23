@@ -55,7 +55,10 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   // Anthropic Claude
   // Fable 5: most capable widely-released model (GA 2026-06-09), 1M ctx, $10/$50 per MTok.
   'claude-fable-5': { input: 10.00, output: 50.00, ...CLAUDE_CACHE },
-  'claude-haiku-4-5': { input: 0.80, output: 4.00, ...CLAUDE_CACHE },
+  // Sonnet 5 is $2/$10 introductory pricing through 2026-08-31, then $3/$15.
+  // Track at the durable standard rate so cost controls remain conservative.
+  'claude-sonnet-5': { input: 3.00, output: 15.00, ...CLAUDE_CACHE },
+  'claude-haiku-4-5': { input: 1.00, output: 5.00, ...CLAUDE_CACHE },
   'claude-sonnet-4-5': { input: 3.00, output: 15.00, ...CLAUDE_CACHE },
   'claude-opus-4-5': { input: 15.00, output: 75.00, ...CLAUDE_CACHE },
   'claude-sonnet-4-6': { input: 3.00, output: 15.00, ...CLAUDE_CACHE },
@@ -345,7 +348,7 @@ export function hasPricing(model: string | null | undefined): boolean {
 
 // Output $/Mtok at/above which a model is "frontier" — too expensive for an
 // unattended high-volume pipe. Catches opus (25-75), fable-5 (50), gpt-5.6 Sol (30), gpt-5.5 (30),
-// gpt-*-pro (180); leaves sonnet (15), gpt-5.4 (15), haiku/flash/glm through.
+// gpt-*-pro (180); leaves sonnet (15) and gpt-5.4 (15) through.
 const FRONTIER_OUTPUT_USD = 20;
 /** Frontier/premium models that shouldn't run on background/pipe traffic. */
 export function isFrontierModel(model: string | null | undefined): boolean {

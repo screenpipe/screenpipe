@@ -12,6 +12,8 @@ Use `bun x screenpipe@latest` to run CLI commands. No separate install needed.
 cd "$(mktemp -d)" && bun x screenpipe@latest <command>
 ```
 
+> **Sandboxed shells:** some agents (e.g. Codex) block all shell network access, so `bun x` cannot fetch the package and CLI calls to `localhost:3030` fail instantly. If that happens, use the screenpipe MCP tools instead of the CLI.
+
 ## Shell
 
 - **All platforms** → `bash` (on Windows, the bundled git-portable bash is used automatically)

@@ -226,3 +226,13 @@ Now go find a small issue and do it properly.
 ---
 
 > This started as one contributor's path from zero to a merged PR, written down so the next person doesn't bleed for the same lessons. If a step is wrong, stale, or could be kinder, change it. The best version of this guide is the one the next newcomer improves for the one after.
+
+
+### Other tips
+
+- Don't send SLOP: if doing UI work, try other great products (Notion, Granola, Wisprflow, ChatGPT, Claude) and see how they do things - take inspiration and make it fit in screenpipe brand style. Test your work, untested by human work has no value
+- Be creative: go beyond what other product do, take inspiration on great artists, painters, surprise use with amazing UIs
+- Can a 80 years old grand pa use the feature you shipped? If not, try harder
+- Measure performance, create evals, chaos engineer your code and cover all edge cases
+- Don't be afraid of sending slop, do it, send a PR and we'll see
+

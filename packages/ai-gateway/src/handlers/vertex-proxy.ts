@@ -1,8 +1,7 @@
 /**
- * Proxy Handler for Claude (Anthropic API) and Gemini (Vertex AI)
+ * Proxy handler for Claude (Anthropic API).
  *
  * Claude models are proxied directly to the Anthropic Messages API.
- * Gemini models remain on Vertex AI.
  *
  * The Agent SDK and OpenCode send Anthropic-format requests to:
  *   /v1/messages and /anthropic/v1/messages
@@ -15,7 +14,7 @@ import { addCorsHeaders } from '../utils/cors';
 
 /**
  * Handle proxy requests for the Agent SDK and OpenCode
- * Routes Claude models to Anthropic API, Gemini to Vertex AI
+ * Routes Claude models to the Anthropic API.
  */
 export async function handleVertexProxy(request: Request, env: Env): Promise<Response> {
 	// For /v1/messages, requests are always Anthropic-format (Claude models)
@@ -46,30 +45,22 @@ export async function handleVertexProxy(request: Request, env: Env): Promise<Res
 }
 
 /**
- * Handle model listing for /anthropic/v1/models
- * Combines dynamic Anthropic models with Gemini models
+ * Handle model listing for /anthropic/v1/models.
+ * Google models were removed from Screenpipe serving; this route now returns
+ * only models that the Anthropic-compatible proxy can actually serve.
  */
 export async function handleVertexModels(env: Env): Promise<Response> {
-	// Gemini models (still on Vertex)
-	const geminiModels = [
-		{ id: 'gemini-3.1-pro', object: 'model', created: 1747180800, owned_by: 'google' },
-		{ id: 'gemini-3-flash', object: 'model', created: 1747180800, owned_by: 'google' },
-		{ id: 'gemini-3.1-flash-lite', object: 'model', created: 1747180800, owned_by: 'google' },
-	];
-
 	// Claude models — fetch dynamically from Anthropic API
 	let claudeModels: { id: string; object: string; created: number; owned_by: string }[] = [];
 	if (env.ANTHROPIC_API_KEY) {
 		claudeModels = await listAnthropicModels(env.ANTHROPIC_API_KEY);
 	}
 
-	const allModels = [...claudeModels, ...geminiModels];
-
 	return addCorsHeaders(
 		new Response(
 			JSON.stringify({
 				object: 'list',
-				data: allModels,
+				data: claudeModels,
 			}),
 			{
 				headers: { 'Content-Type': 'application/json' },

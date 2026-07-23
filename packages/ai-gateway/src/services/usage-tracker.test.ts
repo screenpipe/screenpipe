@@ -17,7 +17,8 @@ describe('TIER_CONFIG', () => {
   it('should have correct limits for anonymous tier', () => {
     expect(TIER_CONFIG.anonymous.dailyQueries).toBe(25);
     expect(TIER_CONFIG.anonymous.rpm).toBeLessThanOrEqual(15);
-    expect(TIER_CONFIG.anonymous.allowedModels).toContain('claude-haiku-4-5');
+    expect(TIER_CONFIG.anonymous.allowedModels).toContain('gpt-5.6-luna');
+		expect(TIER_CONFIG.anonymous.allowedModels.some((model) => model.includes('haiku'))).toBe(false);
   });
 
   it('should have correct limits for logged_in tier', () => {
@@ -25,6 +26,7 @@ describe('TIER_CONFIG', () => {
     expect(TIER_CONFIG.logged_in.rpm).toBeGreaterThan(TIER_CONFIG.anonymous.rpm);
     // Free/Basic keep `auto` + free/fast models; marquee models are Business-only.
     expect(TIER_CONFIG.logged_in.allowedModels).toContain('auto');
+    expect(TIER_CONFIG.logged_in.allowedModels).toContain('gpt-5.6-luna');
     expect(TIER_CONFIG.logged_in.allowedModels).not.toContain('claude-sonnet-4-5');
     expect(TIER_CONFIG.logged_in.allowedModels).not.toContain('gemini-3.1-pro');
     expect(TIER_CONFIG.logged_in.allowedModels).not.toContain('qwen/qwen3.5-397b');
@@ -59,9 +61,9 @@ describe('isModelAllowed', () => {
     expect(isModelAllowed('', 'anonymous')).toBe(false);
   });
 
-  it('should allow haiku for anonymous users', () => {
-    expect(isModelAllowed('claude-haiku-4-5-20251001', 'anonymous')).toBe(true);
-    expect(isModelAllowed('claude-haiku-4-5', 'anonymous')).toBe(true);
+  it('should deny retired haiku IDs before top-level alias normalization', () => {
+    expect(isModelAllowed('claude-haiku-4-5-20251001', 'anonymous')).toBe(false);
+    expect(isModelAllowed('claude-haiku-4-5', 'anonymous')).toBe(false);
   });
 
   it('should deny sonnet for anonymous users', () => {
@@ -69,21 +71,23 @@ describe('isModelAllowed', () => {
   });
 
   it('should deny marquee models for logged_in users (Business-only)', () => {
-    // Sonnet, Opus, GPT-5.x, Fable, *-pro and 397b are the Free/Basic -> Business
-    // upgrade gate — only `subscribed` can pick them explicitly.
+    // Sonnet, Opus, premium GPT-5.x, and Fable are the Free/Basic -> Business
+    // upgrade gate. Luna is the explicit low-cost exception used by Auto.
     expect(isModelAllowed('claude-sonnet-4-5-20250929', 'logged_in')).toBe(false);
     expect(isModelAllowed('gemini-3.1-pro', 'logged_in')).toBe(false);
     expect(isModelAllowed('gemini-3-pro', 'logged_in')).toBe(false);
     expect(isModelAllowed('qwen/qwen3.5-397b', 'logged_in')).toBe(false);
     expect(isModelAllowed('claude-opus-4-6', 'logged_in')).toBe(false);
     expect(isModelAllowed('gpt-5.5', 'logged_in')).toBe(false);
+    expect(isModelAllowed('gpt-5.6-luna', 'logged_in')).toBe(true);
   });
 
-  it('should still allow auto + free/fast models for logged_in users', () => {
+	it('should allow only the current included models for logged_in users', () => {
     expect(isModelAllowed('auto', 'logged_in')).toBe(true);
-    expect(isModelAllowed('claude-haiku-4-5', 'logged_in')).toBe(true);
-    expect(isModelAllowed('gemini-3.5-flash', 'logged_in')).toBe(true);
-    expect(isModelAllowed('glm-5', 'logged_in')).toBe(true);
+    expect(isModelAllowed('claude-haiku-4-5', 'logged_in')).toBe(false);
+    expect(isModelAllowed('gpt-5.6-luna', 'logged_in')).toBe(true);
+    expect(isModelAllowed('gemini-3.5-flash', 'logged_in')).toBe(false);
+    expect(isModelAllowed('glm-5', 'logged_in')).toBe(false);
   });
 
   it('should allow any model for subscribed users', () => {
@@ -100,13 +104,13 @@ describe('isModelAllowed', () => {
   });
 
   it('should handle partial model name matches', () => {
-    expect(isModelAllowed('claude-haiku', 'anonymous')).toBe(true);
-    expect(isModelAllowed('haiku', 'anonymous')).toBe(true);
+    expect(isModelAllowed('gpt-5.6-luna-preview', 'anonymous')).toBe(true);
+    expect(isModelAllowed('haiku', 'anonymous')).toBe(false);
   });
 
   it('should be case-insensitive', () => {
-    expect(isModelAllowed('Claude-Haiku-4-5', 'anonymous')).toBe(true);
-    expect(isModelAllowed('CLAUDE-HAIKU-4-5', 'anonymous')).toBe(true);
+    expect(isModelAllowed('GPT-5.6-LUNA', 'anonymous')).toBe(true);
+    expect(isModelAllowed('CLAUDE-HAIKU-4-5', 'anonymous')).toBe(false);
   });
 
   it('should deny completely unrelated models for non-subscribed', () => {
@@ -114,10 +118,10 @@ describe('isModelAllowed', () => {
     expect(isModelAllowed('llama-3-70b', 'logged_in')).toBe(false);
   });
 
-  it('should allow gemini flash for anonymous', () => {
-    expect(isModelAllowed('gemini-3-flash', 'anonymous')).toBe(true);
-    expect(isModelAllowed('gemini-3.1-flash-lite', 'anonymous')).toBe(true);
-  });
+	it('should not allow removed Google models directly', () => {
+		expect(isModelAllowed('gemini-3-flash', 'anonymous')).toBe(false);
+		expect(isModelAllowed('gemini-3.1-flash-lite', 'anonymous')).toBe(false);
+	});
 
   it('should deny gemini pro for logged_in and anonymous (Business-only now)', () => {
     expect(isModelAllowed('gemini-3-pro', 'logged_in')).toBe(false);
@@ -155,7 +159,7 @@ describe('MODEL_GATING_ENABLED master kill-switch', () => {
   it('when ON, normal tier gating still applies', () => {
     const on = mockEnv({ MODEL_GATING_ENABLED: 'true' });
     expect(isModelAllowed('claude-opus-4-8', 'logged_in', on)).toBe(false);
-    expect(isModelAllowed('claude-haiku-4-5', 'logged_in', on)).toBe(true);
+    expect(isModelAllowed('claude-haiku-4-5', 'logged_in', on)).toBe(false);
     expect(isModelAllowed('claude-opus-4-8', 'subscribed', on)).toBe(true);
   });
 });
@@ -181,7 +185,7 @@ describe('resolveModelGate — background downgrades, interactive rejects (the A
   const on = mockEnv({ MODEL_GATING_ENABLED: 'true' });
 
   it('allows a model the tier can use (regardless of background)', () => {
-    expect(resolveModelGate('claude-haiku-4-5', 'logged_in', on, true)).toBe('allow');
+    expect(resolveModelGate('gpt-5.6-luna', 'logged_in', on, true)).toBe('allow');
     expect(resolveModelGate('auto', 'logged_in', on, true)).toBe('allow');
     expect(resolveModelGate('claude-opus-4-8', 'subscribed', on, false)).toBe('allow');
   });
@@ -417,7 +421,7 @@ describe('backward compatibility', () => {
 
 describe('cost control', () => {
   it('tier limits should be reasonable for cost control', () => {
-    // At ~$0.001 per query (Haiku), 25 queries = ~$0.025/user/day
+    // At ~$0.001 per query on the included lane, 25 queries = ~$0.025/user/day
     // 1000 DAU = $25/day = $750/month - acceptable for growth
     const anonymousCost = TIER_CONFIG.anonymous.dailyQueries * 0.001;
     expect(anonymousCost).toBeLessThan(0.05);

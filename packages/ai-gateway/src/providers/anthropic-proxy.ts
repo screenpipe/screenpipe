@@ -147,12 +147,34 @@ export async function proxyToAnthropic(
 			[key: string]: any;
 		};
 
-		// Normalize Vertex-style @YYYYMMDD model IDs to Anthropic-style -YYYYMMDD
-		// Old app versions send e.g. "claude-haiku-4-5@20251001" which Anthropic API won't accept
+		// Normalize Vertex-style @YYYYMMDD model IDs to Anthropic-style -YYYYMMDD.
 		if (body.model && body.model.includes('@')) {
 			const original = body.model;
 			body.model = body.model.replace('@', '-');
 			console.log('proxyToAnthropic: normalized model', original, '->', body.model);
+		}
+
+		// Saved presets from older apps must keep working without serving the
+		// retired Haiku/Sonnet 4 families. This Anthropic-compatible endpoint
+		// cannot route to Luna, so use the current Sonnet model instead.
+		if (body.model && (
+			body.model.startsWith('claude-haiku-') ||
+			body.model.startsWith('claude-3-haiku-') ||
+			body.model.startsWith('claude-3-5-haiku-') ||
+			body.model.startsWith('claude-sonnet-4-') ||
+			body.model.startsWith('claude-3-5-sonnet-') ||
+			body.model.startsWith('claude-3-7-sonnet-')
+		)) {
+			console.log('proxyToAnthropic: retired model', body.model, '-> claude-sonnet-5');
+			body.model = 'claude-sonnet-5';
+		}
+
+		// Sonnet 5 returns 400 when clients send non-default sampling params.
+		// Older Anthropic-compatible clients may still include them by default.
+		if (body.model === 'claude-sonnet-5') {
+			delete body.temperature;
+			delete body.top_p;
+			delete body.top_k;
 		}
 
 		console.log('proxyToAnthropic: model=', body.model, 'stream=', body.stream, 'messages count=', body.messages?.length);
@@ -283,12 +305,19 @@ export async function listAnthropicModels(
 			data: Array<{ id: string; display_name: string; created_at: string; type: string }>;
 		};
 
-		return data.data.map((model) => ({
-			id: model.id,
-			object: 'model',
-			created: Math.floor(new Date(model.created_at).getTime() / 1000),
-			owned_by: 'anthropic',
-		}));
+		return data.data
+			.filter((model) => !(
+				model.id.includes('haiku') ||
+				model.id.includes('sonnet-4') ||
+				model.id.includes('3-5-sonnet') ||
+				model.id.includes('3-7-sonnet')
+			))
+			.map((model) => ({
+				id: model.id,
+				object: 'model',
+				created: Math.floor(new Date(model.created_at).getTime() / 1000),
+				owned_by: 'anthropic',
+			}));
 	} catch (error) {
 		console.error('Error listing Anthropic models:', error);
 		return getFallbackModels();
@@ -300,11 +329,10 @@ export async function listAnthropicModels(
  */
 function getFallbackModels(): { id: string; object: string; created: number; owned_by: string }[] {
 	return [
+		{ id: 'claude-sonnet-5', object: 'model', created: 1782864000, owned_by: 'anthropic' },
 		{ id: 'claude-opus-4-8', object: 'model', created: 1738800000, owned_by: 'anthropic' },
 		{ id: 'claude-opus-4-7', object: 'model', created: 1738800000, owned_by: 'anthropic' },
 		{ id: 'claude-opus-4-6', object: 'model', created: 1738800000, owned_by: 'anthropic' },
-		{ id: 'claude-sonnet-4-5-20250929', object: 'model', created: 1727568000, owned_by: 'anthropic' },
-		{ id: 'claude-haiku-4-5-20251001', object: 'model', created: 1727740800, owned_by: 'anthropic' },
 		{ id: 'claude-opus-4-5-20251101', object: 'model', created: 1730419200, owned_by: 'anthropic' },
 	];
 }

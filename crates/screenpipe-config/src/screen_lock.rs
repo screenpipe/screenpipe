@@ -45,3 +45,41 @@ pub fn set_record_while_locked(enabled: bool) {
 pub fn should_pause_audio_for_lock() -> bool {
     screen_is_locked() && !record_while_locked()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static SCREEN_LOCK_TEST: Mutex<()> = Mutex::new(());
+
+    struct ResetScreenLockState;
+
+    impl Drop for ResetScreenLockState {
+        fn drop(&mut self) {
+            set_screen_locked(false);
+            set_record_while_locked(false);
+        }
+    }
+
+    #[test]
+    fn pause_policy_covers_lock_and_record_while_locked_combinations() {
+        let _guard = SCREEN_LOCK_TEST.lock().unwrap();
+        let _reset = ResetScreenLockState;
+
+        for (locked, record_locked, expected_pause) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            set_screen_locked(locked);
+            set_record_while_locked(record_locked);
+            assert_eq!(
+                should_pause_audio_for_lock(),
+                expected_pause,
+                "locked={locked}, record_while_locked={record_locked}"
+            );
+        }
+    }
+}

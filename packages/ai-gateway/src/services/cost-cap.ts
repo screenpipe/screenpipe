@@ -38,14 +38,13 @@ export async function enforceDailyCostCap(
 	if (dailyCost < maxCost + credits) return null;
 	const resetsAt = new Date();
 	resetsAt.setUTCHours(24, 0, 0, 0);
-	// The cap is account-wide and now covers every PRICED model, so the only
-	// models that still go through are the genuinely $0 Vertex MaaS ones — point
-	// users there, not at priced "flash"/haiku models that would 429 the same way.
+	// The cap is account-wide and every hosted model now has real provider cost.
+	// Do not suggest a removed or falsely "free" model as an escape hatch.
 	return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 		error: 'daily_cost_limit_exceeded',
-		message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Switch to a free model (glm-5, kimi-k2.5) or review Settings → Pipes for chatty schedules.`,
+		message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Review Settings → Pipes for chatty schedules, or use a local model or your own provider key.`,
 		resets_at: resetsAt.toISOString(),
 		tier,
-		free_models: ['glm-5', 'kimi-k2.5'],
+		free_models: [],
 	})));
 }

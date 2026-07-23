@@ -247,6 +247,26 @@ pub trait Integration: Send + Sync {
 /// client when the integration uses public CAs. Centralised here so the
 /// proxy handler and `test()` callers stay in sync.
 pub fn build_client_for(integ: &dyn Integration) -> reqwest::Client {
+    build_client_for_with_timeouts(
+        integ,
+        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(30),
+    )
+}
+
+pub fn build_default_client() -> reqwest::Client {
+    build_client_with_timeouts(
+        reqwest::Client::builder(),
+        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(30),
+    )
+}
+
+fn build_client_for_with_timeouts(
+    integ: &dyn Integration,
+    connect_timeout: std::time::Duration,
+    request_timeout: std::time::Duration,
+) -> reqwest::Client {
     let mut builder = reqwest::Client::builder();
     if let Some(pem) = integ.extra_root_pem() {
         match reqwest::Certificate::from_pem(pem.as_bytes()) {
@@ -258,10 +278,26 @@ pub fn build_client_for(integ: &dyn Integration) -> reqwest::Client {
             ),
         }
     }
-    builder.build().unwrap_or_else(|e| {
-        tracing::warn!("custom client build failed, using default: {}", e);
-        reqwest::Client::new()
-    })
+    build_client_with_timeouts(builder, connect_timeout, request_timeout)
+}
+
+fn build_client_with_timeouts(
+    builder: reqwest::ClientBuilder,
+    connect_timeout: std::time::Duration,
+    request_timeout: std::time::Duration,
+) -> reqwest::Client {
+    builder
+        .connect_timeout(connect_timeout)
+        .timeout(request_timeout)
+        .build()
+        .unwrap_or_else(|e| {
+            tracing::warn!("custom client build failed, using default: {}", e);
+            reqwest::Client::builder()
+                .connect_timeout(connect_timeout)
+                .timeout(request_timeout)
+                .build()
+                .expect("default reqwest client should build")
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +516,7 @@ impl ConnectionManager {
         Self {
             integrations: all_integrations(),
             screenpipe_dir,
-            client: reqwest::Client::new(),
+            client: build_default_client(),
             secret_store,
         }
     }
@@ -939,6 +975,8 @@ pub fn require_str<'a>(map: &'a Map<String, Value>, key: &str) -> Result<&'a str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn temp_screenpipe_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -974,6 +1012,31 @@ mod tests {
             ids.contains(&"openclaw"),
             "openclaw integration must be registered"
         );
+    }
+
+    #[tokio::test]
+    async fn integration_clients_bound_request_duration() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/slow"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(200)),
+            )
+            .mount(&server)
+            .await;
+        let client = build_client_for_with_timeouts(
+            &slack::Slack,
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(50),
+        );
+
+        let error = client
+            .get(format!("{}/slow", server.uri()))
+            .send()
+            .await
+            .unwrap_err();
+
+        assert!(error.is_timeout());
     }
 
     #[tokio::test]

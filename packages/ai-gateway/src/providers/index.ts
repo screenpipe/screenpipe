@@ -4,56 +4,98 @@
 
 import { OpenAIProvider } from './openai';
 import { AnthropicProvider } from './anthropic';
-import { VertexAIProvider, buildWifConfig } from './vertex';
-import { GeminiProvider } from './gemini';
-import { VertexMaasProvider, isVertexMaasModel } from './vertex-maas';
-import { TinfoilProvider, isTinfoilModel } from './tinfoil';
 import { ScreenpipeEnclaveProvider, isScreenpipeEnclaveModel } from './screenpipe-enclave';
 import { AIProvider } from './base';
 import { Env } from '../types';
-import { GOOGLE_POLICY_BLOCKED_MODEL_MESSAGE, isGooglePolicyBlockedModel } from '../utils/model-policy';
 
-// Remap legacy model IDs → canonical Vertex MaaS equivalents (GCP infra, no
-// China data risk). OpenRouter was retired 2026-06 — the qwen3.5 ids that used
-// to pin to OpenRouter snapshots now fall through to the glm-5 catch-all in
-// resolveModelAlias (they had no Vertex MaaS home of their own).
-const MODEL_REMAPS: Record<string, string> = {
-	'meta-llama/llama-4-scout': 'llama-4-scout',
-	'meta-llama/llama-4-maverick': 'llama-4-maverick',
-	'qwen/qwen3-coder:free': 'qwen3-coder',
-};
+// Retired/removed hosted model IDs stay accepted so saved presets and old pipes
+// do not fail. They are normalized before gating, metering, provider selection,
+// and cost attribution, so callers transparently receive a current model and we
+// never send another request to the old Google/OpenRouter/Tinfoil lanes.
+export const RETIRED_HOSTED_MODEL_FALLBACK = 'gpt-5.6-luna';
+
+const RETIRED_HOSTED_MODEL_IDS = new Set([
+	// Retired Anthropic shortcuts used by older presets and integrations.
+	'claude-haiku',
+	'claude-3-haiku',
+	'claude-3-5-haiku',
+	'claude-sonnet-4',
+	'claude-3-5-sonnet',
+	'claude-3-7-sonnet',
+	// Google Vertex Open MaaS names previously exposed by screenpipe.
+	'glm-4.7',
+	'glm-5',
+	'kimi-k2.5',
+	'llama-4-maverick',
+	'llama-4-scout',
+	'qwen3-coder',
+	'qwen3-next',
+	'qwen3-next-thinking',
+	// Full publisher IDs accepted by older integrations.
+	'zai-org/glm-4.7-maas',
+	'zai-org/glm-5-maas',
+	'moonshotai/kimi-k2-thinking-maas',
+	'meta/llama-4-maverick-17b-128e-instruct-maas',
+	'meta/llama-4-scout-17b-16e-instruct-maas',
+	'qwen/qwen3-coder-480b-a35b-instruct-maas',
+	'qwen/qwen3-next-80b-instruct-maas',
+	'qwen/qwen3-next-80b-thinking-maas',
+	// Removed selectable confidential text model. The internal gemma4-e4b
+	// media-analysis capability remains separate because Luna cannot take audio.
+	'gemma4-31b',
+	'gemma-4-31b',
+]);
 
 /**
- * Apply legacy → canonical model alias remap. Callers must use the returned
- * value for BOTH provider selection AND the upstream request body — earlier
- * we remapped only inside createProvider, so the body kept the legacy name
- * and Vertex MaaS rejected it ("Unknown Vertex MaaS model").
+ * Apply removed → current model alias remap. Callers must use the returned
+ * value for gating, metering, provider selection, and the upstream body.
  */
 export function resolveModelAlias(model: string): string {
-	const remapped = MODEL_REMAPS[model];
-	if (remapped) {
-		console.log(`[router] remapping ${model} → ${remapped}`);
-		return remapped;
-	}
-	// OpenRouter is retired (2026-06). Anything that used to route there — qwen/,
-	// mistralai/, stepfun/, step-3.5, :free (none on Vertex MaaS) — now serves on
-	// glm-5 (Vertex MaaS, GCP credits; removes the cash spend + the China-via-
-	// OpenRouter data-locality gap). qwen3-coder:free is remapped above first.
-	if (isRetiredOpenRouterModel(model)) {
-		console.log(`[router] OpenRouter retired; ${model} → glm-5`);
-		return 'glm-5';
+	const lower = model.toLowerCase();
+	if (isRetiredHostedModel(lower)) {
+		console.log(`[router] retired hosted model ${model} → ${RETIRED_HOSTED_MODEL_FALLBACK}`);
+		return RETIRED_HOSTED_MODEL_FALLBACK;
 	}
 	return model;
 }
 
-// Model-id patterns that used to route through OpenRouter (none are on Vertex MaaS).
-const RETIRED_OPENROUTER_PREFIXES = ['qwen/', 'mistralai/', 'stepfun/'];
-const RETIRED_OPENROUTER_SUBSTRINGS = ['step-3.5', ':free'];
+const RETIRED_HOSTED_MODEL_PREFIXES = [
+	'deepseek/',
+	'deepseek-',
+	'claude-3-haiku-',
+	'claude-3-5-haiku-',
+	'claude-3-5-sonnet-',
+	'claude-3-7-sonnet-',
+	'claude-haiku-',
+	'claude-sonnet-4-',
+	'codestral-',
+	'gemini-',
+	'gemma-',
+	'google/gemma-',
+	'glm-',
+	'gpt-oss-',
+	'kimi-',
+	'llama-3.3-',
+	'llama-4-',
+	'meta/llama-3.3-',
+	'meta/llama-',
+	'meta-llama/llama-3.3-',
+	'meta-llama/',
+	'minimax/',
+	'minimax-',
+	'mistralai/',
+	'mistral-',
+	'openai/gpt-oss-',
+	'qwen/',
+	'qwen3-',
+	'stepfun/',
+];
 
-function isRetiredOpenRouterModel(model: string): boolean {
-	const lower = model.toLowerCase();
-	return RETIRED_OPENROUTER_PREFIXES.some(p => lower.startsWith(p)) ||
-		RETIRED_OPENROUTER_SUBSTRINGS.some(m => lower.includes(m));
+function isRetiredHostedModel(lower: string): boolean {
+	return RETIRED_HOSTED_MODEL_IDS.has(lower) ||
+		RETIRED_HOSTED_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
+		lower.includes('step-3.5') ||
+		lower.endsWith(':free');
 }
 
 class ProviderConfigurationError extends Error {
@@ -61,14 +103,6 @@ class ProviderConfigurationError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = 'ProviderConfigurationError';
-	}
-}
-
-class ProviderPolicyError extends Error {
-	status = 400;
-	constructor(message: string) {
-		super(message);
-		this.name = 'ProviderPolicyError';
 	}
 }
 
@@ -95,11 +129,7 @@ export function createProvider(model: string, env: Env): AIProvider {
 		throw new Error('createProvider: a non-empty model string is required');
 	}
 	// Defensive: chat.ts resolves first, but voice/other callers may not — resolve
-	// here too so a retired-OpenRouter id can never fall through to the OpenAI default.
-	model = resolveModelAlias(model);
-	if (isGooglePolicyBlockedModel(model)) {
-		throw new ProviderPolicyError(GOOGLE_POLICY_BLOCKED_MODEL_MESSAGE);
-	}
+	// here too so a removed hosted id can never reach its former provider.
 	model = resolveModelAlias(model);
 
 	// Screenpipe event classifier — routes to self-hosted vLLM
@@ -109,31 +139,6 @@ export function createProvider(model: string, env: Env): AIProvider {
 	}
 	if (model.toLowerCase().includes('claude')) {
 		return new AnthropicProvider(requireSecret(env.ANTHROPIC_API_KEY, 'Anthropic API key not configured'));
-	}
-	if (model.toLowerCase().includes('gemini')) {
-		// Prefer Vertex AI for Gemini (shorter data retention, enterprise ToS)
-		if (env.VERTEX_SERVICE_ACCOUNT_JSON && env.VERTEX_PROJECT_ID) {
-			const wif = buildWifConfig(env);
-			return new GeminiProvider({
-				serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
-				projectId: wif?.projectId || env.VERTEX_PROJECT_ID,
-				region: 'us-central1',
-				wif,
-			});
-		}
-		// Fallback to API key if Vertex credentials unavailable
-		return new GeminiProvider(requireSecret(env.GEMINI_API_KEY, 'Gemini API key not configured'));
-	}
-	// Vertex AI MaaS — GLM-4.7, GLM-5, Kimi K2.5, Llama, Qwen (burns GCP credits, free for users)
-	if (isVertexMaasModel(model)) {
-		const serviceAccountJson = requireSecret(env.VERTEX_SERVICE_ACCOUNT_JSON, 'Vertex AI credentials not configured');
-		const projectId = requireSecret(env.VERTEX_PROJECT_ID, 'Vertex AI credentials not configured');
-		const wif = buildWifConfig(env);
-		return new VertexMaasProvider(serviceAccountJson, wif?.projectId || projectId, wif);
-	}
-	// Tinfoil — confidential inference in secure enclaves (TEE)
-	if (isTinfoilModel(model)) {
-		return new TinfoilProvider(requireSecret(env.TINFOIL_API_KEY, 'Tinfoil API key not configured'));
 	}
 	// Screenpipe enclave — our own Tinfoil-hosted CVM serving Gemma 4 E4B
 	// (audio + vision + chat) alongside the privacy-filter. Tinfoil tokens

@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.121"
+version = "2.5.132"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -48,7 +48,7 @@ tauri-plugin-autostart = "=2.5.1"
 tauri-plugin-shell = "=2.3.5"
 tauri-plugin-store = "=2.4.2"
 tauri-plugin-http = "=2.5.7"
-tauri-plugin-permission-flow = { git = "https://github.com/EzraEllette/permission-flow", rev = "1a114ff3e9526d815b98201cd2ba35e91f2b4bd3", package = "tauri-plugin-permission-flow" }
+tauri-plugin-permission-flow = { git = "https://github.com/EzraEllette/permission-flow", rev = "d0a4b78a0599b926bfc59e7e272b742aa07fcebb", package = "tauri-plugin-permission-flow" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -149,7 +149,7 @@ eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52
 screenpipe-redact = { path = "../../../crates/screenpipe-redact", features = ["onnx-coreml", "opf-text"] }
 image = "0.25.5"
 
-# Used only by the path-included `ee/desktop-rust/enterprise_sync.rs`. Gated
+# Used only by the path-included `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs`. Gated
 # behind enterprise-build via the `dep:thiserror` syntax in [features] so
 # cargo-machete (which doesn't follow `#[path = ...]` imports) doesn't flag
 # this as unused. Stays cross-platform — the EE sync compiles on Windows
@@ -157,7 +157,7 @@ image = "0.25.5"
 thiserror = { version = "1.0", optional = true }
 
 # Generic sync primitives (destination trait + ticketed pipeline + body
-# encryption). Used by `ee/desktop-rust/enterprise_upload.rs` for the
+# encryption). Used by `apps/screenpipe-app-tauri/src-tauri/src/enterprise/upload.rs` for the
 # direct-upload path. Gated behind enterprise-build for the same reason
 # as thiserror — `#[path = ...]` imports aren't followed by cargo-machete.
 screenpipe-sync = { path = "../../../crates/screenpipe-sync", optional = true }
@@ -266,7 +266,7 @@ official-build = []
 # tauri.enterprise
 # bundle identifier, and the periodic telemetry sync that pushes screen + audio
 # activity to the screenpipe enterprise ingest endpoint scoped by license key.
-# Source for the sync lives under `ee/desktop-rust/enterprise_sync.rs` (EE-licensed).
+# Source for the sync lives under `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs` (EE-licensed).
 # Consumer builds never compile this code.
 # Do NOT add official-build here — enterprise has its own policy-gated updater.
 enterprise-build = ["dep:thiserror", "dep:screenpipe-sync"]
@@ -293,7 +293,7 @@ jemalloc = ["tikv-jemallocator"]
 
 
 [dev-dependencies]
-# Used by ee/desktop-rust/enterprise_sync.rs tests (compiled in only when the
+# Used by apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs tests (compiled in only when the
 # enterprise-build feature is on).
 tempfile = "3"
 wiremock = "0.6"
@@ -307,7 +307,7 @@ tauri = { version = "=2.11.2", features = ["test"] }
 # screenpipe-redact: workspace dep added for async PII reconciliation (PR #3188);
 # wiring lands in a follow-up. Cargo compiles it for the workspace either way.
 # thiserror: gated behind `enterprise-build` via `dep:thiserror`; cargo-machete
-# can't follow `#[path = ...]` imports into ee/desktop-rust/enterprise_sync.rs.
+# can't follow `#[path = ...]` imports into apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs.
 # eventkit-rs: lib crate is imported as `eventkit` (calendar.rs, permissions.rs);
 # cargo-machete matches the package name `eventkit_rs` so it can't see the use.
 ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync", "eventkit-rs"]

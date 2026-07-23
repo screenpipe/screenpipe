@@ -14,7 +14,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { E2E_DATA_DIR, getAppPath, getAppPid, WEBDRIVER_PORT } from "../helpers/app-launcher.js";
-import { authHeaders, fetchJson, getLocalApiConfig, waitForLocalApi } from "../helpers/api-utils.js";
+import {
+  authHeaders,
+  fetchJson,
+  getLocalApiConfig,
+  isSearchBusyResponse,
+  waitForLocalApi,
+} from "../helpers/api-utils.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 import { closeWindow, showWindow, waitForWindowHandle, waitForWindowUrl } from "../helpers/tauri.js";
@@ -432,20 +438,52 @@ $uniqueNames = @($names | Sort-Object -Unique)
     if (!isWindows || !api) this.skip();
 
     const started = Date.now();
-    const requests = [
-      ...Array.from({ length: 12 }, () => fetchJson(apiUrl(api!, "/health"))),
-      ...Array.from({ length: 8 }, (_, i) =>
-        fetchJson(apiUrl(api!, `/search?limit=1&q=windows-load-${i}`), authHeaders(api!.key)),
+    const runSearches = async () => {
+      const results = [];
+      // Uncached searches share the SQLite read pool. Windows CI uses a pool
+      // size whose route admission budget is one, so keep this group serial
+      // while health and vision requests continue exercising the API in parallel.
+      for (let i = 0; i < 8; i += 1) {
+        results.push({
+          kind: "search" as const,
+          response: await fetchJson(
+            apiUrl(api!, `/search?limit=1&q=windows-load-${i}`),
+            authHeaders(api!.key),
+          ),
+        });
+      }
+      return results;
+    };
+    const [healthResults, searchResults, visionResults] = await Promise.all([
+      Promise.all(
+        Array.from({ length: 12 }, async () => ({
+          kind: "health" as const,
+          response: await fetchJson(apiUrl(api!, "/health")),
+        })),
       ),
-      ...Array.from({ length: 4 }, () =>
-        fetchJson(apiUrl(api!, "/vision/status"), authHeaders(api!.key)),
+      runSearches(),
+      Promise.all(
+        Array.from({ length: 4 }, async () => ({
+          kind: "vision" as const,
+          response: await fetchJson(
+            apiUrl(api!, "/vision/status"),
+            authHeaders(api!.key),
+          ),
+        })),
       ),
-    ];
-    const results = await Promise.all(requests);
+    ]);
+    const results = [...healthResults, ...searchResults, ...visionResults];
     const elapsed = Date.now() - started;
 
     expect(elapsed).toBeLessThan(t(30_000));
-    expect(results.filter((res) => res.status === 0 || res.status >= 500)).toHaveLength(0);
+    const unexpectedErrors = results.filter(
+      ({ kind, response }) =>
+        !response.ok && !(kind === "search" && isSearchBusyResponse(response)),
+    );
+    expect(unexpectedErrors).toHaveLength(0);
+    expect(
+      results.some(({ kind, response }) => kind === "search" && response.ok),
+    ).toBe(true);
     expect(await pageIsAlive()).toBe(true);
   });
 

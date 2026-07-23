@@ -44,8 +44,8 @@ pub fn finalize_webview_window(window: tauri::WebviewWindow) -> tauri::WebviewWi
 ///     (macOS Accessory), then rebuild the tray so its "open app" entries
 ///     disappear. Incomplete onboarding remains visible until permissions are
 ///     finished.
-///   * visible → restore the normal activation policy + full tray menu; windows
-///     reopen on demand via the tray/shortcut.
+///   * visible → restore the normal activation policy + full tray menu and
+///     reopen Home immediately, unless the user separately enabled Headless.
 ///
 /// Permission-recovery is intentionally never hidden — a managed background
 /// device may still need the macOS permission flow to surface.
@@ -77,8 +77,26 @@ pub fn enforce_enterprise_ui_visibility(app: &tauri::AppHandle) {
         tracing::info!("enterprise: hidden-UI policy enforced — headless teardown");
     } else {
         // Un-hide: restore dormant/record-only to the user's own headless prefs.
-        // Windows reopen on demand via the tray/shortcut.
-        crate::headless::set_enterprise_hidden(app, false);
+        // If enterprise policy was the only reason the UI was dormant, recreate
+        // Home immediately so the server-side change is visible without requiring
+        // the user to discover a newly restored tray item first.
+        if crate::headless::set_enterprise_hidden(app, false) {
+            let app_for_show = app.clone();
+            if let Err(error) = app.run_on_main_thread(move || {
+                match ( ShowRewindWindow::Home { page: None } ).show(&app_for_show) {
+                    Ok(_) => tracing::info!(
+                        "enterprise: hidden-UI policy disabled — Home window restored"
+                    ),
+                    Err(error) => tracing::warn!(
+                        "enterprise: failed to restore Home after hidden-UI policy disabled: {error}"
+                    ),
+                }
+            }) {
+                tracing::warn!(
+                    "enterprise: failed to schedule Home restore after hidden-UI policy disabled: {error}"
+                );
+            }
+        }
     }
 
     // Always re-apply the activation policy + tray so a policy change in EITHER

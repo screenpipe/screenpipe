@@ -96,7 +96,7 @@ import { Badge } from "../ui/badge";
 import { toast } from "../ui/use-toast";
 import { Card, CardContent } from "../ui/card";
 import { AIProviderType } from "@/lib/hooks/use-settings";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useTeam } from "@/lib/hooks/use-team";
 import {
   AlertDialog,
@@ -265,10 +265,10 @@ const AISection = ({
   piAvailable?: boolean;
 }) => {
   const { settings, updateSettings } = useSettings();
-  const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
+  const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const employeePresetsAllowed =
-    !isEnterprise || aiPresetPolicy.allow_employee_custom_presets || (preset ? isEnterpriseManagedPreset(preset) : false);
+    !isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets || (preset ? isEnterpriseManagedPreset(preset) : false);
   // Daily quota snapshot — drives the "N left today" chip on weighted
   // models. Null on BYOK providers; we render nothing in that case.
   const usage = useUsageStatus();
@@ -296,10 +296,10 @@ const AISection = ({
   // Filter presets the same way the UI does so hidden presets don't block creation
   const visiblePresets = useMemo(
     () =>
-      !isEnterprise
+      !isManagedDeployment
         ? settings.aiPresets
         : filterPresetsForEnterprisePolicy(settings.aiPresets, aiPresetPolicy),
-    [settings.aiPresets, isEnterprise, aiPresetPolicy]
+    [settings.aiPresets, isManagedDeployment, aiPresetPolicy]
   );
 
   // Optimized validation with debouncing
@@ -502,16 +502,12 @@ const AISection = ({
     const m = model.toLowerCase();
     // Claude models
     if (m.includes("opus")) return 64000;
+    if (m.includes("sonnet-5")) return 128000;
     if (m.includes("sonnet-4") || m.includes("sonnet-3.7")) return 64000;
-    if (m.includes("haiku")) return 8192;
     // OpenAI models
     if (m.includes("gpt-5")) return 128000;
     if (m.includes("o3") || m.includes("o4") || m.includes("o1")) return 100000;
     if (m.includes("gpt-4.1")) return 32768;
-    if (m.includes("gpt-oss")) return 8192;
-    // Google models
-    if (m.includes("gemini-3") || m.includes("gemini-2.5-pro")) return 65536;
-    if (m.includes("gemini")) return 8192;
     // Qwen
     if (m.includes("qwen")) return 8192;
     // Mistral
@@ -584,7 +580,7 @@ const AISection = ({
         break;
       case "anthropic":
         newUrl = "https://api.anthropic.com";
-        newModel = "claude-sonnet-4-6";
+        newModel = "claude-sonnet-5";
         break;
       case "screenpipe-cloud":
         newUrl = ""; // Pi uses RPC mode, not HTTP
@@ -1014,27 +1010,27 @@ const AISection = ({
             if (anthropicResp.ok) {
               const anthropicData = await anthropicResp.json();
               setModels(
-                (anthropicData.data || []).map((m: any) => ({
-                  id: m.id,
-                  name: m.display_name || m.id,
-                  provider: "anthropic",
-                }))
+                (anthropicData.data || [])
+                  .filter((m: any) => !/haiku|sonnet-4|3-5-sonnet|3-7-sonnet/i.test(m.id))
+                  .map((m: any) => ({
+                    id: m.id,
+                    name: m.display_name || m.id,
+                    provider: "anthropic",
+                  }))
               );
             } else {
               // Fallback to hardcoded models
               setModels([
                 { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
                 { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-                { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5", provider: "anthropic" },
-                { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
+                { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
               ]);
             }
           } catch {
             setModels([
               { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
               { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-              { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5", provider: "anthropic" },
-              { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
+              { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
             ]);
           }
           break;
@@ -1124,15 +1120,12 @@ const AISection = ({
           }
           setModels([
             { id: "auto", name: "Auto (recommended)", provider: "screenpipe" },
-            { id: "claude-haiku-4-5", name: "Haiku 4.5 (fast)", provider: "screenpipe" },
-            { id: "claude-sonnet-4-5", name: "Sonnet 4.5 (balanced)", provider: "screenpipe" },
-            { id: "claude-opus-4-8", name: "Opus 4.8 (powerful, pro)", provider: "screenpipe" },
-            { id: "claude-fable-5", name: "Fable 5 (most capable, pro)", provider: "screenpipe" },
-            { id: "gemini-3-flash", name: "Gemini 3 Flash (fast)", provider: "screenpipe" },
-            { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite (cheapest)", provider: "screenpipe" },
-            { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro (balanced)", provider: "screenpipe" },
-            { id: "qwen/qwen3.5-flash-02-23", name: "Qwen3.5 Flash (cheapest, 1M ctx)", provider: "screenpipe" },
-            { id: "meta-llama/llama-4-scout", name: "Llama 4 Scout", provider: "screenpipe" },
+            { id: "gpt-5.6-luna", name: "GPT-5.6 Luna (fast)", provider: "screenpipe" },
+            { id: "gpt-5.6-terra", name: "GPT-5.6 Terra (balanced)", provider: "screenpipe" },
+            { id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "screenpipe" },
+            { id: "claude-sonnet-5", name: "Sonnet 5 (high intelligence)", provider: "screenpipe" },
+            { id: "claude-opus-4-8", name: "Opus 4.8 (powerful, Business)", provider: "screenpipe" },
+            { id: "claude-fable-5", name: "Fable 5 (most capable, Business)", provider: "screenpipe" },
           ]);
           break;
         }
@@ -1257,7 +1250,7 @@ const AISection = ({
             onClick={() => handleAiProviderChange("native-ollama")}
           />
 
-          {piAvailable && (!isEnterprise || aiPresetPolicy.allow_screenpipe_cloud) && (
+          {piAvailable && (!isManagedDeployment || aiPresetPolicy.allow_screenpipe_cloud) && (
             <AIProviderCard
               type="screenpipe-cloud"
               title="Screenpipe Cloud"
@@ -1693,7 +1686,7 @@ const AISection = ({
               { label: "8k", value: 8192, hint: "haiku / qwen" },
               { label: "32k", value: 32768, hint: "gpt-4.1" },
               { label: "64k", value: 64000, hint: "opus / sonnet" },
-              { label: "65k", value: 65536, hint: "gemini 3 pro" },
+              { label: "65k", value: 65536, hint: "long responses" },
               { label: "100k", value: 100000, hint: "o3 / o4" },
               { label: "128k", value: 128000, hint: "gpt-5" },
             ].map((preset) => (
@@ -2038,16 +2031,16 @@ export const AIPresets = () => {
     null
   );
   const [isDuplicating, setIsDuplicating] = useState(false);
-  const { isEnterprise, policy: enterprisePolicy } = useEnterprisePolicy();
+  const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const visiblePresets = useMemo(
     () =>
-      !isEnterprise
+      !isManagedDeployment
         ? settings.aiPresets
         : filterPresetsForEnterprisePolicy(settings.aiPresets, aiPresetPolicy),
-    [settings.aiPresets, isEnterprise, aiPresetPolicy]
+    [settings.aiPresets, isManagedDeployment, aiPresetPolicy]
   );
-  const canManageEmployeePresets = !isEnterprise || aiPresetPolicy.allow_employee_custom_presets;
+  const canManageEmployeePresets = !isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets;
   const [piAvailable, setPiAvailable] = useState(false);
   const [chatgptTokenValid, setChatgptTokenValid] = useState<boolean | null>(null);
   const team = useTeam();
@@ -2092,17 +2085,17 @@ export const AIPresets = () => {
         setPiAvailable(true);
       }
     };
-    if (isEnterprise) {
+    if (isManagedDeployment) {
       setPiAvailable(aiPresetPolicy.allow_screenpipe_cloud);
       return;
     }
-    if (!isEnterprise) {
+    if (!isManagedDeployment) {
       checkPi();
     }
     // Re-check periodically in case background install finishes
-    const interval = isEnterprise ? null : setInterval(checkPi, 5000);
+    const interval = isManagedDeployment ? null : setInterval(checkPi, 5000);
     return () => { if (interval) clearInterval(interval); };
-  }, [isEnterprise, aiPresetPolicy.allow_screenpipe_cloud]);
+  }, [isManagedDeployment, aiPresetPolicy.allow_screenpipe_cloud]);
 
   useEffect(() => {
   const hasChatGptPreset = settings.aiPresets?.some(
@@ -2142,7 +2135,7 @@ useEffect(() => {
       // Prevent deletion of screenpipe-cloud preset for Pro subscribers
       const presetToRemove = settings.aiPresets.find((preset) => preset.id === id);
       if (
-        isEnterprise &&
+        isManagedDeployment &&
         ((presetToRemove && isEnterpriseManagedPreset(presetToRemove)) || !aiPresetPolicy.allow_employee_custom_presets)
       ) {
         toast({
@@ -2217,7 +2210,7 @@ useEffect(() => {
   const setDefaultPreset = async (id: string) => {
     setIsLoading(true);
     try {
-      if (isEnterprise && aiPresetPolicy.lock_default_preset) {
+      if (isManagedDeployment && aiPresetPolicy.lock_default_preset) {
         toast({
           title: "Default preset is locked",
           description: "Your admin controls the default AI preset",
@@ -2268,7 +2261,7 @@ useEffect(() => {
     const presetToDuplicate = settings.aiPresets.find((p) => p.id === id);
     if (!presetToDuplicate) return;
     if (
-      isEnterprise &&
+      isManagedDeployment &&
       (isEnterpriseManagedPreset(presetToDuplicate) || !aiPresetPolicy.allow_employee_custom_presets)
     ) {
       toast({
@@ -2363,7 +2356,7 @@ useEffect(() => {
               const cloudPresetCount = (settings.aiPresets || []).filter((p) => p.provider === "screenpipe-cloud").length;
               return visiblePresets.map((preset) => {
                 const readOnly =
-                  isEnterprise &&
+                  isManagedDeployment &&
                   (!aiPresetPolicy.allow_employee_custom_presets || isEnterpriseManagedPreset(preset));
                 const isLastCloudPreset =
                   preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed && cloudPresetCount <= 1;
@@ -2386,7 +2379,7 @@ useEffect(() => {
                     isLoading={isLoading}
                     isTeamAdmin={isTeamAdmin}
                     readOnly={readOnly}
-                    defaultLocked={isEnterprise && aiPresetPolicy.lock_default_preset}
+                    defaultLocked={isManagedDeployment && aiPresetPolicy.lock_default_preset}
                   />
                 );
               });

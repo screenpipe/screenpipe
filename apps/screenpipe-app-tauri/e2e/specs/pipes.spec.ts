@@ -304,7 +304,7 @@ describe.skip('Pipes: discover → install → play', function () {
     // fetch interceptor only catches `window.fetch` and the install path
     // uses `localFetch` (a wrapped client) — so Step 1 often DOES install
     // its target pipe (commonly digital-clone). Plus the onboarding
-    // bundle in v2.4.276+ pre-installs digital-clone/personal-crm for
+    // onboarding bundle pre-installs digital-clone/todo-list-assistant for
     // some users. Asking the local /pipes endpoint for the current
     // installed set is the authoritative way to avoid those.
     const slug: string | null = await browser.executeAsync((done: (v: string | null) => void) => {

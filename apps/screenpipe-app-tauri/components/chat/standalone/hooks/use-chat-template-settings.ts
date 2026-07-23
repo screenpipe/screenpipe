@@ -35,6 +35,14 @@ export function useChatTemplateSettings<TSettingsUpdate>({
     await updateSettings({ customSummaryTemplates: updated } as TSettingsUpdate);
   };
 
+  const updateCustomTemplate = async (template: CustomTemplate) => {
+    const updated = customTemplates.map((existing) =>
+      existing.id === template.id ? template : existing,
+    );
+    setCustomTemplates(updated);
+    await updateSettings({ customSummaryTemplates: updated } as TSettingsUpdate);
+  };
+
   const deleteCustomTemplate = async (id: string) => {
     const updated = customTemplates.filter((template) => template.id !== id);
     setCustomTemplates(updated);
@@ -44,6 +52,7 @@ export function useChatTemplateSettings<TSettingsUpdate>({
   return {
     customTemplates,
     saveCustomTemplate,
+    updateCustomTemplate,
     deleteCustomTemplate,
   };
 }

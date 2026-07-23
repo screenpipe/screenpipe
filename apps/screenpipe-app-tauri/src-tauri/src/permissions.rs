@@ -20,6 +20,33 @@ pub enum OSPermission {
     Calendar,
 }
 
+#[cfg(target_os = "macos")]
+const MACOS_OPEN_COMMAND: &str = "/usr/bin/open";
+
+#[cfg(target_os = "macos")]
+fn permission_settings_url(permission: &OSPermission) -> &'static str {
+    match permission {
+        OSPermission::ScreenRecording => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+        OSPermission::Microphone => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        OSPermission::Accessibility => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+        OSPermission::Automation => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        }
+        OSPermission::InputMonitoring => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        }
+        OSPermission::Calendar => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"
+        }
+    }
+}
+
 #[tauri::command(async)]
 #[specta::specta]
 #[allow(unused_variables)] // permission used on macOS
@@ -28,36 +55,12 @@ pub fn open_permission_settings(permission: OSPermission) {
     {
         use std::process::Command;
 
-        match permission {
-            OSPermission::ScreenRecording => Command::new("open")
-                .arg(
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-                )
-                .spawn()
-                .expect("Failed to open Screen Recording settings"),
-            OSPermission::Microphone => Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-                .spawn()
-                .expect("Failed to open Microphone settings"),
-            OSPermission::Accessibility => Command::new("open")
-                .arg(
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-                )
-                .spawn()
-                .expect("Failed to open Accessibility settings"),
-            OSPermission::Automation => Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
-                .spawn()
-                .expect("Failed to open Automation settings"),
-            OSPermission::InputMonitoring => Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
-                .spawn()
-                .expect("Failed to open Input Monitoring settings"),
-            OSPermission::Calendar => Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")
-                .spawn()
-                .expect("Failed to open Calendar settings"),
-        };
+        let settings_url = permission_settings_url(&permission);
+        if let Err(error) = Command::new(MACOS_OPEN_COMMAND).arg(settings_url).spawn() {
+            // Opening a settings pane is a recovery affordance. A missing or
+            // unavailable launcher must not crash onboarding or the app.
+            error!("failed to open macOS permission settings ({settings_url}): {error}");
+        }
     }
 }
 
@@ -398,12 +401,27 @@ pub fn check_screen_recording_permission() -> OSPermissionStatus {
     }
 }
 
-/// Check only accessibility permission
-/// Use this for polling to check if user has granted accessibility permission
+/// Check only accessibility permission (silent, side-effect free).
+/// Use this for passive polling before the user has chosen to grant — it never
+/// enrolls the app in the Accessibility list or surfaces the system prompt.
+/// It will not see a grant made *after* the process started (AXIsProcessTrusted
+/// caches stale-denied); once the user actively requests the permission, switch
+/// to `check_accessibility_permission_live_cmd` to catch that transition.
 #[tauri::command(async)]
 #[specta::specta]
 pub fn check_accessibility_permission_cmd() -> OSPermissionStatus {
     core_to_os_status(screenpipe_core::permissions::check_accessibility())
+}
+
+/// Live accessibility check for polling *after* the user has actively started
+/// the grant flow. Probes tccd via an active event tap so a grant made while
+/// the app is running is seen without a relaunch. The probe enrolls the app in
+/// the Accessibility list (and can surface the system prompt), which is
+/// expected once the user is being asked — do NOT use it for passive polling.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn check_accessibility_permission_live_cmd() -> OSPermissionStatus {
+    core_to_os_status(screenpipe_core::permissions::check_accessibility_live())
 }
 
 /// Check Input Monitoring permission (macOS only).
@@ -1282,6 +1300,34 @@ mod screen_recording_preflight_tests {
             screen_recording_preflight_status(false),
             OSPermissionStatus::Denied
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod permission_settings_tests {
+    use super::*;
+
+    #[test]
+    fn uses_the_absolute_macos_launcher_path() {
+        assert_eq!(MACOS_OPEN_COMMAND, "/usr/bin/open");
+    }
+
+    #[test]
+    fn maps_each_permission_to_its_system_settings_pane() {
+        let cases = [
+            (OSPermission::ScreenRecording, "Privacy_ScreenCapture"),
+            (OSPermission::Microphone, "Privacy_Microphone"),
+            (OSPermission::Accessibility, "Privacy_Accessibility"),
+            (OSPermission::Automation, "Privacy_Automation"),
+            (OSPermission::InputMonitoring, "Privacy_ListenEvent"),
+            (OSPermission::Calendar, "Privacy_Calendars"),
+        ];
+
+        for (permission, expected_pane) in cases {
+            let url = permission_settings_url(&permission);
+            assert!(url.starts_with("x-apple.systempreferences:"));
+            assert!(url.ends_with(expected_pane));
+        }
     }
 }
 

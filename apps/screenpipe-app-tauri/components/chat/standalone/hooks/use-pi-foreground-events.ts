@@ -383,7 +383,7 @@ export function usePiForegroundEvents({
             if (piMessageIdRef.current) {
               const msgId = piMessageIdRef.current;
               setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to a free model (auto, glm-5, gemini flash) to keep going." } : m)
+                prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             }
           } else {
@@ -423,7 +423,7 @@ export function usePiForegroundEvents({
               }
             } else if (fullError.includes("model_not_allowed")) {
               setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to a free model (auto, glm-5, gemini flash) to keep going." } : m)
+                prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
               const providerError = buildProviderErrorMessage(fullError, getActivePreset());
@@ -675,7 +675,7 @@ export function usePiForegroundEvents({
               } else if (quotaErrorType === "rate") {
                 content = buildRateLimitMessage(errStr);
               } else if (errStr.includes("model_not_allowed")) {
-                content = "This model requires an upgrade to Screenpipe Business. Switch to a free model (auto, glm-5, gemini flash) to keep going.";
+                content = "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going.";
               } else {
                 content = buildProviderErrorMessage(errStr, getActivePreset()) || errStr;
               }
@@ -858,7 +858,7 @@ export function usePiForegroundEvents({
               }
             } else if (errorStr.includes("model_not_allowed")) {
               setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to a free model (auto, glm-5, gemini flash) to keep going." } : m)
+                prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
               const providerError = buildProviderErrorMessage(errorStr, getActivePreset());

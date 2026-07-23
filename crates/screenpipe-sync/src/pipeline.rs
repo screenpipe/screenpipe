@@ -552,7 +552,7 @@ mod tests {
             .await
             .unwrap_err();
         // 409 is not 5xx and not auth — falls into the generic Network
-        // bucket. The caller (e.g. ee/) maps that to a recoverable error
+        // bucket. The caller (e.g. enterprise desktop sync) maps that to a recoverable error
         // class without advancing its cursor.
         assert!(matches!(err, SyncError::Network(_)));
     }

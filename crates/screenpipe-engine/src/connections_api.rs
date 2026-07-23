@@ -9,7 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Html;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use screenpipe_connect::connections::{bee, ConnectionManager};
+use screenpipe_connect::connections::{bee, build_default_client, ConnectionManager};
 use screenpipe_connect::oauth::{self as oauth_store, OAuthCallbackResult, PENDING_OAUTH};
 use screenpipe_connect::whatsapp::WhatsAppGateway;
 use screenpipe_secrets::SecretStore;
@@ -1027,7 +1027,7 @@ async fn ics_calendar_events(
         return (StatusCode::OK, Json(json!([])));
     }
 
-    let client = reqwest::Client::new();
+    let client = build_default_client();
     let events = screenpipe_connect::ics_calendar::fetch_ics_calendar_events(
         &client,
         &enabled,
@@ -1124,7 +1124,7 @@ async fn gcal_status(
     State(state): State<ConnectionsState>,
     Query(q): Query<GoogleCalendarInstanceQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let client = reqwest::Client::new();
+    let client = build_default_client();
     let instance = q.instance.as_deref();
 
     // With several accounts connected, the default-slot lookup is ambiguous
@@ -1182,7 +1182,7 @@ async fn gcal_events(
     State(state): State<ConnectionsState>,
     Query(params): Query<GoogleCalendarEventsQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let client = reqwest::Client::new();
+    let client = build_default_client();
     match gcal_events_inner(&client, params, &state.secret_store).await {
         Ok(events) => (StatusCode::OK, Json(json!(events))),
         Err(e) => gcal_events_error_response(&e),
@@ -1847,7 +1847,7 @@ async fn connection_proxy(
     // Before this fix the proxy would surface "no credentials found" and 401
     // for any connection with an expired token, even though the refresh was
     // a single round-trip away.
-    let http_client = reqwest::Client::new();
+    let http_client = build_default_client();
     let oauth_token = screenpipe_connect::oauth::get_valid_token_instance(
         state.secret_store.as_deref(),
         &http_client,
@@ -1964,7 +1964,7 @@ async fn connection_proxy(
                         id,
                         e
                     );
-                    reqwest::Client::new()
+                    build_default_client()
                 }),
             Err(e) => {
                 tracing::warn!(
@@ -1972,11 +1972,11 @@ async fn connection_proxy(
                     id,
                     e
                 );
-                reqwest::Client::new()
+                build_default_client()
             }
         }
     } else {
-        reqwest::Client::new()
+        build_default_client()
     };
     let mut req = client.request(
         reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
@@ -2213,7 +2213,7 @@ async fn slack_send(
         };
         payload.insert("channel".to_string(), Value::String(channel.clone()));
 
-        return match reqwest::Client::new()
+        return match build_default_client()
             .post("https://slack.com/api/chat.postMessage")
             .bearer_auth(user_token)
             .json(&payload)
@@ -2264,7 +2264,7 @@ async fn slack_send(
         }
     };
 
-    match reqwest::Client::new()
+    match build_default_client()
         .post(webhook_url)
         .json(&payload)
         .send()
@@ -2367,7 +2367,7 @@ async fn slack_search(
         Err(e) => return e,
     };
     let count = q.count.unwrap_or(20).to_string();
-    let resp = reqwest::Client::new()
+    let resp = build_default_client()
         .get("https://slack.com/api/search.messages")
         .bearer_auth(&token)
         .query(&[("query", q.q.as_str()), ("count", count.as_str())])
@@ -2390,7 +2390,7 @@ async fn slack_conversations(
         .types
         .unwrap_or_else(|| "public_channel,private_channel,im,mpim".to_string());
     let limit = q.limit.unwrap_or(200).to_string();
-    let resp = reqwest::Client::new()
+    let resp = build_default_client()
         .get("https://slack.com/api/conversations.list")
         .bearer_auth(&token)
         .query(&[("types", types.as_str()), ("limit", limit.as_str())])
@@ -2410,7 +2410,7 @@ async fn slack_history(
         Err(e) => return e,
     };
     let limit = q.limit.unwrap_or(50).to_string();
-    let resp = reqwest::Client::new()
+    let resp = build_default_client()
         .get("https://slack.com/api/conversations.history")
         .bearer_auth(&token)
         .query(&[("channel", q.channel.as_str()), ("limit", limit.as_str())])
@@ -3018,7 +3018,7 @@ async fn bee_pair_start() -> (StatusCode, Json<Value>) {
             )
         }
     };
-    let client = reqwest::Client::new();
+    let client = build_default_client();
     match bee::request_pairing(&client, &public_key_b64).await {
         Ok(bee::PairingOutcome::Pending {
             request_id,
@@ -3076,7 +3076,7 @@ async fn bee_pair_poll(
         }
     };
 
-    let client = reqwest::Client::new();
+    let client = build_default_client();
     match bee::request_pairing(&client, &public_key_b64).await {
         Ok(bee::PairingOutcome::Pending { .. }) => {
             (StatusCode::OK, Json(json!({ "status": "pending" })))

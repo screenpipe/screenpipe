@@ -100,8 +100,10 @@ async fn handle_focus(
     Json(payload): Json<FocusPayload>,
 ) -> Result<Json<ApiResponse>, (StatusCode, String)> {
     info!(
-        "Received focus request: args={:?}, deep_link={:?}, target={:?}",
-        payload.args, payload.deep_link_url, payload.target
+        "Received focus request: args_count={}, deep_link_present={}, target={:?}",
+        payload.args.len(),
+        payload.deep_link_url.is_some(),
+        payload.target
     );
 
     if payload.target.as_deref() == Some("browser_pairing") || payload.deep_link_url.is_none() {

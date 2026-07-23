@@ -106,10 +106,16 @@ import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { localFetch } from "@/lib/api";
 import {
+  PIPES_SIDEBAR_COLLAPSED_EVENT,
+  PIPES_SIDEBAR_COLLAPSED_KEY,
+} from "@/lib/sidebar-pipes";
+import {
   applySidebarRecentsCap,
   buildSidebarRecentsSections,
   listMoveTargetGroups,
   recurringPipeGroupKeys,
+  pipeHasSidebarSchedule,
+  visibleSidebarPipeNames,
   sessionGroupKey,
   type SidebarItem,
   type SidebarRecentsSection,
@@ -122,6 +128,7 @@ const PIPE_RUNS_PER_GROUP = 10;
 
 interface SidebarPipeInventoryItem {
   name: string;
+  hasSchedule: boolean;
   executionCount?: number;
   lastRun?: string | null;
 }
@@ -403,8 +410,12 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   );
 
   const [pipesCollapsed, setPipesCollapsed] = useCollapsedPref(
-    "screenpipe:pipes-collapsed",
+    PIPES_SIDEBAR_COLLAPSED_KEY,
     true
+  );
+  useTauriEvent<{ collapsed: boolean }>(
+    PIPES_SIDEBAR_COLLAPSED_EVENT,
+    (event) => setPipesCollapsed(event.payload.collapsed),
   );
   const [pipeInventory, setPipeInventory] = useState<SidebarPipeInventoryItem[]>([]);
   const [pipeInventoryLoaded, setPipeInventoryLoaded] = useState(false);
@@ -423,6 +434,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         if (typeof name !== "string") continue;
         inventory.push({
           name,
+          hasSchedule: pipeHasSidebarSchedule(pipe?.config ?? {}),
           executionCount:
             typeof pipe.execution_count === "number" ? pipe.execution_count : undefined,
           lastRun: typeof pipe.last_run === "string" ? pipe.last_run : null,
@@ -477,6 +489,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
   }, [loadedPipeRuns, loadingPipeRuns]);
 
+  // Live session ids from the store — used to discard stale loadedPipeRuns
+  // entries after a pipe run is deleted.
+  const storeSessionIds = useChatStore((s) => s.sessions);
+
   const pipeItems = useMemo(() => {
     const sessionsByPipe = new Map<string, SessionRecord[]>();
     for (const session of pipes) {
@@ -487,16 +503,20 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       else sessionsByPipe.set(name, [session]);
     }
 
-    const inventoryNames = new Set(pipeInventory.map((pipe) => pipe.name));
-    const orderedNames = [
-      ...pipeInventory.map((pipe) => pipe.name),
-      ...Array.from(sessionsByPipe.keys()).filter((name) => !inventoryNames.has(name)),
-    ];
+    const orderedNames = visibleSidebarPipeNames(pipeInventory, sessionsByPipe.keys());
 
     return orderedNames.map((name) => {
       // Keep a newly-started watch/run visible after history was loaded, while
-      // deduping the same saved row returned by both sources.
-      const merged = [...(sessionsByPipe.get(name) ?? []), ...(loadedPipeRuns[name] ?? [])];
+      // deduping the same saved row returned by both sources. Filter out
+      // sessions that were deleted (dropped from the store) but still linger
+      // in the loadedPipeRuns cache.
+      const cached = (loadedPipeRuns[name] ?? []).filter((s) => {
+        const live = storeSessionIds[s.id];
+        // Drop deleted, pinned, or archived sessions from the cache —
+        // they either no longer exist or belong to a different section.
+        return live && !live.pinned && !live.hidden;
+      });
+      const merged = [...(sessionsByPipe.get(name) ?? []), ...cached];
       const seen = new Set<string>();
       const sessions = merged.filter((session) => {
         if (seen.has(session.id)) return false;
@@ -510,7 +530,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         sessions,
       };
     });
-  }, [pipeInventory, pipes, loadedPipeRuns]);
+  }, [pipeInventory, pipes, loadedPipeRuns, storeSessionIds]);
 
   const pipeExecutionCounts = useMemo(
     () => Object.fromEntries(
@@ -669,13 +689,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     } catch { /* ignore */ }
   }, [groupedSections]);
 
-  // Group names offered in the "Move to group" submenu, derived from all
-  // visible non-hidden sessions (pinned + recents): manual groups plus the
-  // auto pipe-groups the user actually sees in the sidebar. Moving a chat
-  // into a pipe-group's name folds it into that same group.
+  // Group names offered in the "Move to group" submenu: manual sidebar
+  // groups only (no auto pipe-groups).
   const existingGroups = useMemo(
-    () => listMoveTargetGroups([...pinned, ...recents, ...pipes]),
-    [pinned, recents, pipes],
+    () => listMoveTargetGroups([...pinned, ...recents]),
+    [pinned, recents],
   );
 
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
@@ -1001,7 +1019,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   </div>
                 ) : pipeItems.length === 0 ? (
                   <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                    no pipes installed
+                    no scheduled pipes
                   </div>
                 ) : pipeItems.map((item) => (
                     <PipeGroupRow
@@ -1729,9 +1747,6 @@ function PipeGroupRow({
               onDeleteRequest={onDeleteRequest}
               onTogglePin={onTogglePin}
               onRenameRequest={onRenameRequest}
-              onMoveToGroup={onMoveToGroup}
-              onNewGroupRequest={onNewGroupRequest}
-              existingGroups={existingGroups}
               insideGroup
               openConversationMenuId={openConversationMenuId}
               setOpenConversationMenuId={setOpenConversationMenuId}

@@ -4,6 +4,40 @@
 
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
+type SidebarPipeSchedule = {
+  schedule?: string | null;
+  schedule_config?: unknown | null;
+  trigger?: { events?: unknown[]; custom?: unknown[]; sources?: unknown[] } | null;
+};
+
+/** The sidebar Pipes section is for automated pipes (scheduled or triggered), not manual templates. */
+export function pipeHasSidebarSchedule(config: SidebarPipeSchedule): boolean {
+  const isTriggered =
+    !!(config.trigger?.events?.length) ||
+    !!(config.trigger?.custom?.length) ||
+    !!(config.trigger?.sources?.length);
+  return (
+    isTriggered ||
+    config.schedule_config != null ||
+    (typeof config.schedule === "string" &&
+      config.schedule.length > 0 &&
+      config.schedule !== "manual")
+  );
+}
+
+export function visibleSidebarPipeNames(
+  inventory: Array<{ name: string; hasSchedule: boolean }>,
+  sessionPipeNames: Iterable<string>,
+): string[] {
+  const inventoryNames = new Set(inventory.map((pipe) => pipe.name));
+  return [
+    ...inventory.filter((pipe) => pipe.hasSchedule).map((pipe) => pipe.name),
+    // Preserve history for pipes that were deleted after they ran. Known
+    // manual pipes are intentionally absent from this recurring section.
+    ...Array.from(sessionPipeNames).filter((name) => !inventoryNames.has(name)),
+  ];
+}
+
 // ── Types ────────────────────────────────────────────────────────────
 
 export type SidebarItem =
@@ -149,9 +183,8 @@ function recurringPipeDisplayNames(
 
 /**
  * Group names to offer in the "Move to group" submenu: manual sidebar
- * groups first (insertion order, original casing), then auto pipe-groups
- * (the groups the user actually sees in the sidebar). Deduped
- * case-insensitively so a manual group shadowing a pipe name appears once.
+ * groups only (insertion order, original casing). Auto pipe-groups are
+ * excluded — pipe sessions are managed automatically, not by the user.
  */
 export function listMoveTargetGroups(
   sessions: ReadonlyArray<GroupableSession>,
@@ -165,11 +198,6 @@ export function listMoveTargetGroups(
     if (seen.has(lower)) continue;
     seen.add(lower);
     out.push(g);
-  }
-  for (const [lower, display] of recurringPipeDisplayNames(sessions)) {
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    out.push(display);
   }
   return out;
 }

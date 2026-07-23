@@ -75,7 +75,7 @@ import {
 import { getApiBaseUrl, localFetch } from "@/lib/api";
 import { parsePipeError } from "@/lib/pipe-errors";
 import { useTeam } from "@/lib/hooks/use-team";
-import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { CloudPipesTab } from "./cloud-pipes-tab";
 import {
   writeTextFile,
@@ -113,6 +113,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { useToast } from "@/components/ui/use-toast";
 import { useQueryState } from "nuqs";
+import { parseEnterpriseManagedVersion } from "@/lib/hooks/use-enterprise-pipes";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import { loadConversationFile, saveConversationFile } from "@/lib/chat-storage";
@@ -130,7 +131,7 @@ import { PostInstallConnectionsModal } from "@/components/post-install-connectio
 import posthog from "posthog-js";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
-import { Monitor, Wifi, WifiOff, ScanSearch } from "lucide-react";
+import { Monitor, Wifi, WifiOff, ScanSearch, Lock } from "lucide-react";
 import { requestPipeStop } from "@/lib/pipe-stop";
 
 const PIPE_EXECUTIONS_PAGE_LIMIT = 10;
@@ -355,6 +356,7 @@ interface PipeConfig {
   model: string;
   provider?: string;
   preset?: string | string[];
+  enterprise_managed?: boolean;
   history?: boolean;
   connections?: string[];
   trigger?: {
@@ -1057,8 +1059,8 @@ export function PipesSection() {
   const [publishPipeName, setPublishPipeName] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [pipeTypeFilter, setPipeTypeFilter] = useState<"automated" | "cloud">("automated");
-  // "cloud" (the org's cloud runner) is an enterprise-build-only surface
-  const isEnterpriseBuild = useIsEnterpriseBuild();
+  // "cloud" (the org's cloud runner) is a managed-deployment-only surface.
+  const { isManagedDeployment } = useManagedPolicy();
   // Favorites — per-machine preference persisted via /pipes/favorites.
   // `showOnly` toggles a filter that hides non-starred pipes.
   const pipeFavorites = usePipeFavorites();
@@ -1381,6 +1383,14 @@ export function PipesSection() {
   // teammate's share.
   const isReceivedTeamPipe = (pipe: PipeStatus) =>
     parseTeamVersion(pipe.raw_content) !== null;
+  const isEnterpriseManagedPipe = (pipe: PipeStatus) =>
+    parseEnterpriseManagedVersion(pipe.raw_content) !== null;
+  const isReadOnlyPipe = (pipe: PipeStatus) =>
+    isReceivedTeamPipe(pipe) || isEnterpriseManagedPipe(pipe);
+  const isEnterpriseManagedName = (name: string) => {
+    const pipe = pipes.find((candidate) => candidate.config.name === name);
+    return pipe ? isEnterpriseManagedPipe(pipe) : false;
+  };
   const isUnsharedLeftover = (pipe: PipeStatus) =>
     isReceivedTeamPipe(pipe) &&
     team.configsFetched &&
@@ -1753,6 +1763,13 @@ export function PipesSection() {
   };
 
   const togglePipe = async (name: string, enabled: boolean) => {
+    if (isEnterpriseManagedName(name)) {
+      toast({
+        title: "managed by your organization",
+        description: "an organization admin controls this pipe's schedule and enabled state",
+      });
+      return;
+    }
     posthog.capture("pipe_toggled", { pipe: name, enabled });
     // Optimistic update — flip the switch immediately
     setPipes((prev) =>
@@ -1866,6 +1883,7 @@ export function PipesSection() {
   };
 
   const deletePipe = async (name: string) => {
+    if (isEnterpriseManagedName(name)) return;
     posthog.capture("pipe_deleted", { pipe: name });
     await fetch(`${apiBase}/pipes/${name}`, { method: "DELETE" });
     setExpanded(null);
@@ -1879,6 +1897,7 @@ export function PipesSection() {
   };
 
   const toggleSelectPipe = (name: string) => {
+    if (isEnterpriseManagedName(name)) return;
     setSelectedPipes((prev) => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
@@ -1893,14 +1912,20 @@ export function PipesSection() {
   };
 
   const selectAllVisible = () => {
-    setSelectedPipes(new Set(filteredPipes.map((p) => p.config.name)));
+    setSelectedPipes(
+      new Set(
+        filteredPipes
+          .filter((pipe) => !isEnterpriseManagedPipe(pipe))
+          .map((pipe) => pipe.config.name),
+      ),
+    );
   };
 
   const bulkDeletePipes = async () => {
     setBulkDeleting(true);
     try {
       const results = await Promise.allSettled(
-        Array.from(selectedPipes).map((name) => {
+        Array.from(selectedPipes).filter((name) => !isEnterpriseManagedName(name)).map((name) => {
           posthog.capture("pipe_deleted", { pipe: name, bulk: true });
           return fetch(`${apiBase}/pipes/${name}`, { method: "DELETE" });
         })
@@ -1934,6 +1959,8 @@ export function PipesSection() {
   };
 
   const savePipeContent = useCallback(async (name: string, content: string) => {
+    const pipe = pipes.find((candidate) => candidate.config.name === name);
+    if (pipe && parseEnterpriseManagedVersion(pipe.raw_content) !== null) return;
     setSaveStatus((prev) => ({ ...prev, [name]: "saving" }));
     setSaveErrors((prev) => { const next = { ...prev }; delete next[name]; return next; });
     try {
@@ -1953,7 +1980,7 @@ export function PipesSection() {
       setSaveErrors((prev) => ({ ...prev, [name]: e?.message || "unknown error" }));
       setSaveStatus((prev) => ({ ...prev, [name]: "error" }));
     }
-  }, []);
+  }, [pipes]);
 
   const toggleNotifications = useCallback(async (pipeName: string, enabled: boolean) => {
     const pipe = pipes.find((p) => p.config.name === pipeName);
@@ -2077,13 +2104,17 @@ export function PipesSection() {
     );
   }
 
+  const selectablePipeCount = filteredPipes.filter(
+    (pipe) => parseEnterpriseManagedVersion(pipe.raw_content) === null,
+  ).length;
+
   return (
     <div className="space-y-4" data-testid="section-pipes">
       {/* Toolbar: swaps between search bar and selection bar */}
       {selectMode ? (
         <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-md bg-muted/50">
           <Checkbox
-            checked={filteredPipes.length > 0 && selectedPipes.size === filteredPipes.length ? true : selectedPipes.size > 0 ? "indeterminate" : false}
+            checked={selectablePipeCount > 0 && selectedPipes.size === selectablePipeCount ? true : selectedPipes.size > 0 ? "indeterminate" : false}
             onCheckedChange={(checked) => {
               if (checked) selectAllVisible();
               else setSelectedPipes(new Set());
@@ -2125,7 +2156,7 @@ export function PipesSection() {
               autoCorrect="off"
             />
           </div>
-          {isEnterpriseBuild && (
+          {isManagedDeployment && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
@@ -2324,9 +2355,10 @@ export function PipesSection() {
                   : lastExec?.status === "failed"
                     ? "error"
                     : "idle";
+            const enterpriseManaged = isEnterpriseManagedPipe(pipe);
 
             return (
-            <div key={pipe.config.name} className={cn("group border border-border hover:bg-accent/40 transition-colors", !pipe.config.enabled && "opacity-60")}>
+            <div key={pipe.config.name} data-pipe-row={pipe.config.name} className={cn("group border border-border hover:bg-accent/40 transition-colors", !pipe.config.enabled && "opacity-60")}>
               {/* Card top line — the whole row is the expand affordance:
                   click anywhere (except the star / badges) to open runs,
                   config and logs. Keyboard-operable via role=button. */}
@@ -2345,13 +2377,15 @@ export function PipesSection() {
                 className="flex items-center gap-2.5 px-4 pt-3 pb-1 cursor-pointer select-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 {/* In select mode, show a checkbox instead of the chevron */}
-                {selectMode ? (
+                {selectMode && !enterpriseManaged ? (
                   <Checkbox
                     checked={selectedPipes.has(pipe.config.name)}
                     onCheckedChange={() => toggleSelectPipe(pipe.config.name)}
                     onClick={(e) => e.stopPropagation()}
                     className="shrink-0 h-4 w-4"
                   />
+                ) : enterpriseManaged ? (
+                  <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
                 ) : expanded === pipe.config.name ? (
                   <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-colors" />
                 ) : (
@@ -2402,6 +2436,15 @@ export function PipesSection() {
                 </div>
 
                 {/* Team sharing badges */}
+                {enterpriseManaged && (
+                  <Badge
+                    variant="outline"
+                    className="h-5 shrink-0 gap-1 rounded-none text-[10px]"
+                    title={`organization managed v${parseEnterpriseManagedVersion(pipe.raw_content)} — configuration is enforced by your administrator`}
+                  >
+                    <Lock className="h-2.5 w-2.5" /> managed
+                  </Badge>
+                )}
                 {sharedByMe.has(pipe.config.name) && (
                   <Badge
                     variant="outline"
@@ -2581,7 +2624,7 @@ export function PipesSection() {
 
                 {/* optimize with ai — opens a chat that reads the pipe's prompt
                     + recent run logs and suggests improvements in plain english */}
-                {!isReceivedTeamPipe(pipe) && (
+                {!isReadOnlyPipe(pipe) && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -2603,7 +2646,7 @@ export function PipesSection() {
                 )}
 
                 {/* fork — create a NEW pipe based on this one and customize it */}
-                {!isReceivedTeamPipe(pipe) && (
+                {!isReadOnlyPipe(pipe) && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -2638,7 +2681,7 @@ export function PipesSection() {
                       {/* Team sharing — own pipes can be shared, updated,
                           unshared; received team pipes are read-only and can
                           be forked instead. */}
-                      {canShareToTeam && !isReceivedTeamPipe(pipe) && (
+                      {canShareToTeam && !isReadOnlyPipe(pipe) && (
                         sharedByMe.has(pipe.config.name) ? (
                           <>
                             {sharedContentDiffers(pipe) && (
@@ -2683,7 +2726,14 @@ export function PipesSection() {
                         </DropdownMenuItem>
                       )}
 
-                      {!isReceivedTeamPipe(pipe) && (
+                      {enterpriseManaged && (
+                        <DropdownMenuItem disabled>
+                          <Lock className="h-3.5 w-3.5 mr-2" />
+                          managed by organization
+                        </DropdownMenuItem>
+                      )}
+
+                      {!isReadOnlyPipe(pipe) && (
                         <DropdownMenuItem
                           disabled={sharingPublic === pipe.config.name}
                           onClick={() => sharePipePublic(pipe)}
@@ -2707,7 +2757,7 @@ export function PipesSection() {
                           check for updates
                         </DropdownMenuItem>
                       )}
-                      {!isReceivedTeamPipe(pipe) && (
+                      {!isReadOnlyPipe(pipe) && (
                         <DropdownMenuItem
                           onClick={() => setPublishPipeName(pipe.config.name)}
                         >
@@ -2715,8 +2765,8 @@ export function PipesSection() {
                           publish to store
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
+                      {!enterpriseManaged && <DropdownMenuSeparator />}
+                      {!enterpriseManaged && <DropdownMenuItem
                         onClick={() => {
                           if (selectedPipes.has(pipe.config.name)) {
                             toggleSelectPipe(pipe.config.name);
@@ -2732,10 +2782,10 @@ export function PipesSection() {
                       >
                         <CheckSquare className="h-3.5 w-3.5 mr-2" />
                         {selectedPipes.has(pipe.config.name) ? "deselect" : "select"}
-                      </DropdownMenuItem>
+                      </DropdownMenuItem>}
                       {/* Delete is hidden while a team share is active (the
                           sync would reinstall it) but allowed once unshared. */}
-                      {(!isReceivedTeamPipe(pipe) || isUnsharedLeftover(pipe)) && (
+                      {!enterpriseManaged && (!isReceivedTeamPipe(pipe) || isUnsharedLeftover(pipe)) && (
                         <DropdownMenuItem
                           className="text-destructive"
                           onClick={() => deletePipe(pipe.config.name)}
@@ -2755,7 +2805,9 @@ export function PipesSection() {
                 <div
                   className="ml-auto flex items-center"
                   title={
-                    hasMissingConnections && !pipe.config.enabled
+                    enterpriseManaged
+                      ? "managed by your organization"
+                      : hasMissingConnections && !pipe.config.enabled
                       ? "configure required connections before enabling auto-run"
                       : pipe.config.enabled
                         ? "auto-running on schedule — click to disable"
@@ -2764,7 +2816,7 @@ export function PipesSection() {
                 >
                   <Switch
                     checked={pipe.config.enabled}
-                    disabled={hasMissingConnections && !pipe.config.enabled}
+                    disabled={enterpriseManaged || (hasMissingConnections && !pipe.config.enabled)}
                     onCheckedChange={(checked) =>
                       togglePipe(pipe.config.name, checked)
                     }
@@ -2806,6 +2858,29 @@ export function PipesSection() {
 
                       {/* ═══ CONFIG TAB ═══ */}
                       <TabsContent value="config" className="mt-4 space-y-6">
+
+                        {enterpriseManaged ? (
+                          <div className="border border-border p-4">
+                            <div className="flex items-center gap-2">
+                              <Lock className="h-4 w-4" />
+                              <p className="text-sm font-medium">managed by your organization</p>
+                            </div>
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              schedule, prompt, AI preset, connections, and enabled state are restored from organization policy automatically.
+                            </p>
+                            <dl className="mt-4 grid gap-2 font-mono text-xs sm:grid-cols-2">
+                              <div>
+                                <dt className="text-muted-foreground">schedule</dt>
+                                <dd>{pipeScheduleLabel(pipe.config)}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-muted-foreground">AI preset</dt>
+                                <dd>{Array.isArray(pipe.config.preset) ? pipe.config.preset[0] : pipe.config.preset || "organization default"}</dd>
+                              </div>
+                            </dl>
+                          </div>
+                        ) : (
+                          <>
 
                         {/* Triggers — Notion-style picker (schedule, events + per-app connection sources) */}
                         <PipeTriggerPicker
@@ -2926,6 +3001,9 @@ export function PipesSection() {
                           pendingConfigSaves={pendingConfigSaves}
                           apiBase={apiBase}
                         />
+
+                          </>
+                        )}
 
                       </TabsContent>
 
@@ -3074,6 +3152,8 @@ export function PipesSection() {
 
                       {/* ═══ ADVANCED TAB ═══ */}
                       <TabsContent value="advanced" className="mt-3 space-y-3">
+                      {!enterpriseManaged && (
+                        <>
                       {/* Notification API permission */}
                       <div className="flex items-center justify-between gap-3 border px-3 py-2.5">
                         <div className="min-w-0">
@@ -3164,6 +3244,8 @@ export function PipesSection() {
                         }}
                       />
                     </div>
+                        </>
+                      )}
 
                       <div className="flex items-center gap-2">
                         <Label className="text-xs">pipe.md</Label>
@@ -3186,18 +3268,20 @@ export function PipesSection() {
                           <span className="text-[11px] text-muted-foreground">unsaved</span>
                         )}
                       </div>
-                      {isReceivedTeamPipe(pipe) && (
+                      {isReadOnlyPipe(pipe) && (
                         <p className="text-[11px] text-muted-foreground mt-1">
-                          shared by your team (read-only, updates automatically) — fork it to make an editable copy
+                          {isEnterpriseManagedPipe(pipe)
+                            ? "managed by your organization (read-only, restored automatically)"
+                            : "shared by your team (read-only, updates automatically) — fork it to make an editable copy"}
                         </p>
                       )}
                       <Textarea
                         value={promptDrafts[pipe.config.name] ?? pipe.raw_content}
                         onChange={(e) => handlePipeEdit(pipe.config.name, e.target.value)}
-                        readOnly={isReceivedTeamPipe(pipe)}
+                        readOnly={isReadOnlyPipe(pipe)}
                         className={cn(
                           "text-xs font-mono h-64 mt-1",
-                          isReceivedTeamPipe(pipe) && "opacity-70 cursor-not-allowed"
+                          isReadOnlyPipe(pipe) && "opacity-70 cursor-not-allowed"
                         )}
                         autoCorrect="off"
                         autoCapitalize="off"

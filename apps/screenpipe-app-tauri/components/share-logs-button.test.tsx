@@ -6,7 +6,7 @@ import React from "react";
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ShareLogsButton } from "./share-logs-button";
+import { ShareLogsButton, withTimeout } from "./share-logs-button";
 
 const {
   toastMock,
@@ -20,6 +20,7 @@ const {
   toastMock: vi.fn(),
   commandsMock: {
     getLogFiles: vi.fn(),
+    readLogTail: vi.fn(),
     redactPiiForFeedback: vi.fn(),
     uploadFileToS3: vi.fn(),
   },
@@ -197,6 +198,7 @@ describe("ShareLogsButton attachments", () => {
     fsMock.stat.mockResolvedValue({ size: 3 });
     loadAllConversationsMock.mockResolvedValue([]);
     commandsMock.getLogFiles.mockResolvedValue({ status: "ok", data: [] });
+    commandsMock.readLogTail.mockResolvedValue({ status: "ok", data: "" });
     commandsMock.redactPiiForFeedback.mockResolvedValue({
       status: "ok",
       data: "redacted",
@@ -212,6 +214,7 @@ describe("ShareLogsButton attachments", () => {
     vi.restoreAllMocks();
     toastMock.mockReset();
     commandsMock.getLogFiles.mockReset();
+    commandsMock.readLogTail.mockReset();
     commandsMock.redactPiiForFeedback.mockReset();
     commandsMock.uploadFileToS3.mockReset();
   });
@@ -597,5 +600,103 @@ describe("ShareLogsButton attachments", () => {
       ),
     );
     expect(sendButton()).toBeEnabled();
+  });
+
+  it("reads log tails via rust instead of pulling whole files into the webview", async () => {
+    stubServer({ videoPath: "logs/machine/m1/t_video.mp4" });
+    commandsMock.getLogFiles.mockResolvedValue({
+      status: "ok",
+      data: [{ name: "screenpipe.log", path: "/logs/screenpipe.log", modified_at: 1 }],
+    });
+    commandsMock.readLogTail.mockResolvedValue({ status: "ok", data: "tail" });
+    render(<ShareLogsButton />);
+
+    fireEvent.click(sendButton());
+
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "feedback sent" }),
+      ),
+    );
+    expect(commandsMock.readLogTail).toHaveBeenCalledWith(
+      "/logs/screenpipe.log",
+      100 * 1024,
+    );
+  });
+
+  it("still sends the report when the log-file listing never settles", async () => {
+    vi.useFakeTimers();
+    stubServer({ videoPath: "logs/machine/m1/t_video.mp4" });
+    // A stalled filesystem/IPC call: the Tauri command never resolves.
+    commandsMock.getLogFiles.mockReturnValue(new Promise(() => {}));
+    render(<ShareLogsButton />);
+
+    fireEvent.click(sendButton());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // still waiting on the hung listing
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    // 30s: listing times out, and the send proceeds without log files
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "feedback sent" }),
+    );
+    vi.useRealTimers();
+  });
+
+  it("recovers from a hung request instead of sticking on sending forever (#5360)", async () => {
+    vi.useFakeTimers();
+    // A stalled connection: fetch never settles, but honors abort like the
+    // real implementation does.
+    const hungFetch = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise((_, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", hungFetch);
+    render(<ShareLogsButton />);
+
+    fireEvent.click(sendButton());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // stuck mid-send: button shows the sending state and is disabled
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "sharing failed",
+        description: expect.stringContaining("timed out"),
+      }),
+    );
+    expect(sendButton()).toBeEnabled();
+    vi.useRealTimers();
+  });
+});
+
+describe("withTimeout", () => {
+  it("rejects with a readable error once the deadline passes", async () => {
+    vi.useFakeTimers();
+    const hung = withTimeout(new Promise(() => {}), 1_000, "test call");
+    const assertion = expect(hung).rejects.toThrow("test call timed out");
+    await vi.advanceTimersByTimeAsync(1_001);
+    await assertion;
+    vi.useRealTimers();
+  });
+
+  it("passes through the result when the promise settles in time", async () => {
+    await expect(withTimeout(Promise.resolve(7), 1_000, "x")).resolves.toBe(7);
   });
 });

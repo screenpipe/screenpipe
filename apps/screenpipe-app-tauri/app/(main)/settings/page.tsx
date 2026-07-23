@@ -75,7 +75,7 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
   ...accountSearchIndex.map((f) => ({ ...f, section: "account" })),
   ...referralSearchIndex.map((f) => ({ ...f, section: "referral" })),
 ];
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { toast } from "@/components/ui/use-toast";
@@ -208,7 +208,7 @@ function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromSection = searchParams.get("from");
-  const { isSectionHidden, isEnterprise } = useEnterprisePolicy();
+  const { isSectionHidden, isManagedDeployment } = useManagedPolicy();
   const { isTranslucent } = useSidebarContext();
 
   const [section, setSection] = useQueryState<SettingsSection>("section", {
@@ -277,7 +277,7 @@ function SettingsContent() {
         // org-managed; the desktop has nothing to manage. Admins use the
         // /enterprise dashboard on the web. On consumer builds we still
         // surface Team as a marketing entry point to /team.
-        ...(isEnterprise
+        ...(isManagedDeployment
           ? []
           : [{ id: "team" as const, label: "Team", icon: <Users className="h-4 w-4" /> }]),
         { id: "account" as const, label: "Account", icon: <User className="h-4 w-4" /> },

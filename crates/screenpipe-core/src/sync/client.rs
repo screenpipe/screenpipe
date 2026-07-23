@@ -298,7 +298,7 @@ impl SyncClient {
     /// `{supabaseUrl}/storage/v1/object/upload/sign/{bucket}/{path}?token={token}`
     pub async fn upload_to_s3(&self, upload_url: &str, data: &[u8]) -> SyncResult<()> {
         // Delegate to the shared `HttpPutDirect` so the retry / bytes-pool /
-        // cancellation logic is the same one ee/ uses. Wire format is
+        // cancellation logic is the same one enterprise desktop sync uses. Wire format is
         // preserved byte-for-byte — same method (PUT), same Content-Type
         // (`application/octet-stream`), same `x-upsert: true` header, same
         // body — the wire-compat test below is the regression guard.

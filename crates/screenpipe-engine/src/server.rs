@@ -80,7 +80,7 @@ use std::{
     num::NonZeroUsize,
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -133,6 +133,18 @@ pub type SearchCache = MokaCache<u64, Arc<SearchCacheEntry>>;
 const SEARCH_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const FRAME_THUMBNAIL_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const FRAME_THUMBNAIL_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const CORS_EXPOSED_HEADERS: [axum::http::HeaderName; 3] = [
+    axum::http::header::CONTENT_TYPE,
+    axum::http::header::CACHE_CONTROL,
+    axum::http::header::RETRY_AFTER,
+];
+/// Derive a conservative route-wide search budget from the configured read
+/// pool. A default `content_type=all` page can occupy roughly four SQLite
+/// connections while its legs execute, so reserve one connection for other
+/// readers and never let more than two cache misses fan out concurrently.
+fn search_query_concurrency(read_pool_max: u32) -> usize {
+    (read_pool_max.saturating_sub(1) / 4).clamp(1, 2) as usize
+}
 
 pub struct AppState {
     pub db: Arc<DatabaseManager>,
@@ -149,6 +161,9 @@ pub struct AppState {
     pub ws_connection_count: Arc<AtomicUsize>,
     /// LRU cache for search results (10x faster for repeated queries)
     pub search_cache: SearchCache,
+    /// Fail-fast admission for uncached `/search` requests. Cache hits bypass
+    /// this gate; misses return 503 when the pool-derived budget is occupied.
+    pub search_query_semaphore: Arc<tokio::sync::Semaphore>,
     /// Limits concurrent pipe DB queries to prevent pipes from starving recording.
     /// When all permits are taken, pipe requests get 503 instead of queueing.
     pub pipe_query_semaphore: Arc<tokio::sync::Semaphore>,
@@ -183,6 +198,9 @@ pub struct AppState {
     pub archive_state: crate::archive::ArchiveState,
     /// Local data retention state (auto-delete old data)
     pub retention_state: crate::retention::RetentionState,
+    /// Product policy shared with the desktop shell. When true, direct local
+    /// API calls are clamped to enabled/7 days/all.
+    pub enforce_free_plan_retention: Arc<AtomicBool>,
     /// Vault lock manager — encrypts data at rest when locked
     pub vault: screenpipe_vault::VaultManager,
     /// Active manually-started meeting id (set via POST /meetings/start, cleared via POST /meetings/stop)
@@ -283,6 +301,8 @@ pub struct SCServer {
     /// because LAN clients cannot reach those addresses and Windows may show a
     /// firewall prompt for an otherwise local-only CLI run.
     pub advertise_mdns: bool,
+    /// Shared runtime switch for the desktop free-plan retention policy.
+    pub enforce_free_plan_retention: Arc<AtomicBool>,
 }
 
 fn should_advertise_mdns(addr: SocketAddr) -> bool {
@@ -369,6 +389,7 @@ impl SCServer {
             vision_manager: Arc::new(ArcSwap::from_pointee(None)),
             timeline_disabled: false,
             advertise_mdns: should_advertise_mdns(addr),
+            enforce_free_plan_retention: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -669,6 +690,9 @@ impl SCServer {
                 .max_capacity(SEARCH_CACHE_MAX_BYTES)
                 .time_to_live(Duration::from_secs(30))
                 .build(),
+            search_query_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                search_query_concurrency(self.db.pool.options().get_max_connections()),
+            )),
             use_pii_removal: self.use_pii_removal,
             // Cloud search client (disabled by default, can be enabled via API)
             cloud_search: Arc::new(crate::cloud_search::CloudSearchClient::new()),
@@ -691,6 +715,7 @@ impl SCServer {
             hot_frame_cache,
             archive_state: crate::archive::ArchiveState::new(),
             retention_state: crate::retention::RetentionState::new(),
+            enforce_free_plan_retention: self.enforce_free_plan_retention.clone(),
             pipe_permissions: self.pipe_permissions.clone(),
             vault: screenpipe_vault::VaultManager::new(self.screenpipe_dir.clone()),
             manual_meeting: self
@@ -738,10 +763,7 @@ impl SCServer {
             }))
             .allow_methods(Any)
             .allow_headers(Any)
-            .expose_headers([
-                axum::http::header::CONTENT_TYPE,
-                axum::http::header::CACHE_CONTROL,
-            ]);
+            .expose_headers(CORS_EXPOSED_HEADERS);
         let server = Server::axum()
             .get("/search", search)
             .get("/audio/list", api_list_audio_devices)
@@ -1284,9 +1306,24 @@ impl SCServer {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_allowed_local_origin, is_api_auth_exempt_path, should_advertise_mdns};
-    use axum::http::HeaderValue;
+    use super::{
+        is_allowed_local_origin, is_api_auth_exempt_path, search_query_concurrency,
+        should_advertise_mdns, CORS_EXPOSED_HEADERS,
+    };
+    use axum::http::{header, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn search_admission_scales_conservatively_with_read_pool() {
+        assert_eq!(search_query_concurrency(5), 1);
+        assert_eq!(search_query_concurrency(12), 2);
+        assert_eq!(search_query_concurrency(27), 2);
+    }
+
+    #[test]
+    fn cors_exposes_retry_after_for_browser_backoff() {
+        assert!(CORS_EXPOSED_HEADERS.contains(&header::RETRY_AFTER));
+    }
 
     #[test]
     fn mdns_advertising_skips_loopback_binds() {
