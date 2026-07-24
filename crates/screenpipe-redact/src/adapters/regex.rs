@@ -1689,7 +1689,13 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 /// Single-text path — synchronous. Public for use inside the
 /// [`crate::pipeline::Pipeline`] without going through the async trait.
 pub fn redact_one(text: &str) -> RedactionOutput {
-    let lower = text.to_ascii_lowercase();
+    // Unicode-aware fold, not `to_ascii_lowercase`: this buffer feeds the
+    // keyword prefilter below, and ASCII folding leaves "NÚMERO" as
+    // "nÚmero", so an accented context keyword is never found and its
+    // detector never even becomes a candidate. Used solely for keyword
+    // presence — never for offsets, which come from the untouched input —
+    // so a fold that changes byte length is safe here.
+    let lower = text.to_lowercase();
 
     // No-context patterns that the small DFA flagged...
     let mut cand: Vec<usize> = ENGINE
@@ -1808,17 +1814,22 @@ fn whole_word_contains(hay: &str, needle: &str) -> bool {
 /// are checked. Only the two small windows are lowercased, so the hot
 /// path stays allocation-free for ordinary text. Gates weak-checksum
 /// numeric IDs (issue #2340).
+///
+/// Folded with the Unicode-aware `to_lowercase` for the same reason as
+/// the prefilter in [`redact_one`]: on-screen labels are commonly
+/// uppercase, and ASCII folding cannot match an accented keyword against
+/// one ("CÉDULA" folds to "cÉdula").
 fn has_context(text: &str, m_start: usize, m_end: usize, keys: &[&str]) -> bool {
     let mut bstart = m_start.saturating_sub(48);
     while bstart > 0 && !text.is_char_boundary(bstart) {
         bstart -= 1;
     }
-    let before = text[bstart..m_start].to_ascii_lowercase();
+    let before = text[bstart..m_start].to_lowercase();
     let mut aend = (m_end + 48).min(text.len());
     while aend < text.len() && !text.is_char_boundary(aend) {
         aend += 1;
     }
-    let after = text[m_end..aend].to_ascii_lowercase();
+    let after = text[m_end..aend].to_lowercase();
     keys.iter()
         .any(|k| whole_word_contains(&before, k) || whole_word_contains(&after, k))
 }
@@ -2181,6 +2192,27 @@ mod tests {
         ));
         // Wrong control letter → mod-23 rejects.
         assert!(!has_subtype(&run("DNI 12345678A verified"), "spain_dni"));
+    }
+
+    /// Accented context keywords have to survive an uppercase label, which
+    /// is how forms and back-office screens actually render them. Under
+    /// `to_ascii_lowercase` the accented letter came through untouched
+    /// ("CÉDULA" → "cÉdula"), so neither the accented nor the unaccented
+    /// spelling in the keyword list could match and the detector was never
+    /// even considered as a candidate.
+    #[test]
+    fn accented_context_keywords_survive_an_uppercase_label() {
+        // Both keyword lists here already shipped: ecuador_cedula carries
+        // ["cedula", "cédula", "registro civil"] and norway_fodselsnummer
+        // carries ["fødselsnummer", "fodselsnummer", "fnr"].
+        assert!(has_subtype(&run("CÉDULA 1712345675"), "ecuador_cedula"));
+        assert!(has_subtype(&run("cédula 1712345675"), "ecuador_cedula"));
+        assert!(has_subtype(
+            &run("FØDSELSNUMMER 01019000083"),
+            "norway_fodselsnummer"
+        ));
+        // The gate itself is unchanged: no label, no span.
+        assert!(!has_subtype(&run("pedido 1712345675"), "ecuador_cedula"));
     }
 
     #[test]
