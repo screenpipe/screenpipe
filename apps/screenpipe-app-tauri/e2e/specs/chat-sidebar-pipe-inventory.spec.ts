@@ -219,6 +219,9 @@ describe("chat sidebar pipe inventory", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    // A prior failed/retried spec may have materialized this execution. Start
+    // from the metadata-only path so opening the row must fetch full output.
+    rmSync(GENERATED_RUN_CHAT, { force: true });
     mkdirSync(PIPE_DIR, { recursive: true });
     mkdirSync(CHATS_DIR, { recursive: true });
     writeFileSync(
@@ -327,8 +330,10 @@ describe("chat sidebar pipe inventory", function () {
       },
     );
 
+    // Click the actual row control. Clicking the wrapper relies on its center
+    // hit-testing into this child, which is not consistent on WebKitGTK.
     const newestRun = await $(
-      `[data-testid="chat-row-pipe:${PIPE_NAME}:12"]`,
+      `[data-testid="chat-row-pipe:${PIPE_NAME}:12"] > button`,
     );
     await newestRun.click();
     await browser.waitUntil(

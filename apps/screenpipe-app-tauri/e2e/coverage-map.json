@@ -405,6 +405,16 @@
       "notes": "macOS-only within-chat context retention regression."
     },
     {
+      "spec": "first-run-guide.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["onboarding", "chat-ai", "real-ui-e2e"],
+      "features": ["onboarding", "chat", "first-run-guide"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Replayed first-run guide verifies the composer remains focused and clickable above its scrim, fails open when stacking defeats the lift, and remembers decline across reloads."
+    },
+    {
       "spec": "focus-server.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["local-api", "window-lifecycle", "tauri-command"],
