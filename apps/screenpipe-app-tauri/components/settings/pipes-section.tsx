@@ -2561,11 +2561,12 @@ export function PipesSection() {
                 </span>
               </div>
 
-              {/* Keep secondary actions out of the default scan path. They remain
-                  available on hover and keyboard focus, without an empty row. */}
+              {/* Keep secondary actions out of the default scan path. A short
+                  pointer-hover delay prevents rows from expanding while the
+                  cursor passes over the list; keyboard focus remains immediate. */}
               <div
                 data-testid="pipe-card-actions"
-                className="max-h-0 overflow-hidden opacity-0 pointer-events-none transition-[max-height,opacity] duration-150 group-hover:max-h-16 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:max-h-16 group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+                className="max-h-0 overflow-hidden opacity-0 pointer-events-none transition-[max-height,opacity] duration-150 delay-0 group-hover:max-h-16 group-hover:opacity-100 group-hover:pointer-events-auto group-hover:delay-200 group-focus-within:max-h-16 group-focus-within:opacity-100 group-focus-within:pointer-events-auto group-focus-within:delay-0"
               >
                 <div className="flex items-center gap-1 px-3 pb-2.5 pt-0.5">
                   {/* Run is the primary action: keep it first and visually larger
