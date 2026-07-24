@@ -190,7 +190,8 @@ mod tests {
 
         // All displays asleep → nothing is capture-ready, so an empty SCK
         // enumeration is fully explained and must never escalate.
-        let all_asleep = filter_capture_ready([(1u32, true, true, true), (2u32, false, true, true)]);
+        let all_asleep =
+            filter_capture_ready([(1u32, true, true, true), (2u32, false, true, true)]);
         assert!(all_asleep.is_empty());
     }
 }
