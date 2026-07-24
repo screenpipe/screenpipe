@@ -6,9 +6,7 @@
  * End-to-end proof for progressive disclosure of Pi tool activity.
  *
  * The deterministic cases use the same content-block shape produced by real
- * Pi tool_execution_start/end events. An opt-in live case sends a prompt to
- * the bundled Pi agent and verifies an actual Python tool call follows the
- * same presentation contract.
+ * Pi tool_execution_start/end events.
  */
 
 import { randomUUID } from "node:crypto";
@@ -18,7 +16,6 @@ import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 
 const RAW_PYTHON_MARKER = "RAW_PYTHON_SHOULD_NOT_BE_VISIBLE";
 const RAW_JAVASCRIPT_MARKER = "RAW_JAVASCRIPT_SHOULD_NOT_BE_VISIBLE";
-const RUN_LIVE_PI = process.env.SCREENPIPE_E2E_LIVE_PI === "1";
 
 type SeedAssistantPayload = {
   content?: string;
@@ -92,18 +89,6 @@ async function lastSummary() {
 
 async function visibleBodyText(): Promise<string> {
   return (await browser.execute(() => document.body.innerText)) as string;
-}
-
-async function sendMessageViaComposer(text: string): Promise<void> {
-  const composer = await $("form textarea");
-  await composer.waitForExist({ timeout: t(10_000) });
-  await composer.click();
-  await composer.setValue(text);
-  await browser.execute(() => {
-    const textarea = document.querySelector("form textarea") as HTMLTextAreaElement | null;
-    const form = textarea?.closest("form") as HTMLFormElement | null;
-    form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  });
 }
 
 describe("Chat tool activity progressive disclosure", function () {
@@ -304,76 +289,4 @@ describe("Chat tool activity progressive disclosure", function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  (RUN_LIVE_PI ? it : it.skip)(
-    "presents an actual Pi Python call without exposing its command",
-    async function () {
-      this.timeout(300_000);
-      const sessionId = randomUUID();
-      await browser.execute((sid: string) => {
-        const fn = (window as unknown as {
-          __e2eSeedUserMessage: (id: string, text: string) => void;
-        }).__e2eSeedUserMessage;
-        fn(sid, "Live Pi activity verification");
-      }, sessionId);
-      await waitForForegroundSession(sessionId);
-
-      await sendMessageViaComposer(
-        "Use Python through the bash tool to multiply 6 by 7, then answer with only the number.",
-      );
-
-      await browser.waitUntil(
-        async () => {
-          return (await browser.execute(() => {
-            const assistantMessages = Array.from(
-              document.querySelectorAll('[data-testid="chat-message-assistant"]'),
-            ) as HTMLElement[];
-            const visibleAssistants = assistantMessages.filter((element) => {
-              const style = window.getComputedStyle(element);
-              const rect = element.getBoundingClientRect();
-              return (
-                style.display !== "none" &&
-                style.visibility !== "hidden" &&
-                Number(style.opacity) > 0 &&
-                rect.width > 0 &&
-                rect.height > 0
-              );
-            });
-            const lastAssistant = visibleAssistants.at(-1);
-            return Boolean(
-              lastAssistant?.innerText.includes("42") &&
-                lastAssistant.querySelector('[data-testid="tool-activity-summary"]'),
-            );
-          })) as boolean;
-        },
-        {
-          timeout: t(240_000),
-          interval: 500,
-          timeoutMsg: "live Pi did not finish the Python tool call",
-        },
-      );
-
-      const liveAssistantText = (await browser.execute(() => {
-        const messages = (Array.from(
-          document.querySelectorAll('[data-testid="chat-message-assistant"]'),
-        ) as HTMLElement[]).filter((element) => {
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          return (
-            style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            Number(style.opacity) > 0 &&
-            rect.width > 0 &&
-            rect.height > 0
-          );
-        });
-        return messages.at(-1)?.innerText ?? "";
-      })) as string;
-      expect(liveAssistantText).toContain("42");
-      expect(liveAssistantText).not.toContain("python3 -");
-      expect(liveAssistantText).not.toContain("print(");
-
-      const filepath = await saveScreenshot("chat-tool-activity-live-pi");
-      expect(existsSync(filepath)).toBe(true);
-    },
-  );
 });

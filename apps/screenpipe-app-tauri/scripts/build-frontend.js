@@ -61,13 +61,7 @@ const SKIP_FILES = new Set(['.DS_Store', 'tsconfig.tsbuildinfo'])
 
 // Env vars that change the emitted bundle (see next.config.mjs). Fold them into
 // the hash so toggling one invalidates the cache.
-const INPUT_ENV = [
-	'SHIP_SOURCE_MAPS',
-	'NODE_ENV',
-	'TAURI_ENV_DEBUG',
-	'NEXT_PUBLIC_SCREENPIPE_E2E',
-	'NEXT_PUBLIC_SCREENPIPE_DEV_BILLING_BYPASS',
-]
+const INPUT_ENV = ['SHIP_SOURCE_MAPS', 'NODE_ENV']
 
 async function walk(dir, files) {
 	let entries

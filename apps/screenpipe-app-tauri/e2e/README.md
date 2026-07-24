@@ -9,7 +9,7 @@ From `apps/screenpipe-app-tauri`:
 **1. Build**
 
 ```bash
-NEXT_PUBLIC_SCREENPIPE_E2E=true bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
+bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
 ```
 
 - `--no-sign` — skip code signing (dev)
@@ -23,21 +23,6 @@ NEXT_PUBLIC_SCREENPIPE_E2E=true bun tauri build --no-sign --debug --verbose --no
 ```bash
 bun run test:e2e
 ```
-
-**Run the live Pi tool-activity check**
-
-```bash
-SCREENPIPE_E2E_LIVE_PI=1 \
-SCREENPIPE_E2E_CLOUD_TOKEN="$SCREENPIPE_TEST_CLOUD_TOKEN" \
-bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/chat-tool-activity.spec.ts
-```
-
-This optional case sends a real prompt to Pi, asks it to run Python, and checks
-that the chat shows the answer without exposing the command. Supply the test
-account JWT through a secret manager rather than shell history. The launcher
-copies it into the isolated E2E directory with owner-only permissions, omits it
-from the app and Pi process environments, and deletes the isolated directory
-when the app exits.
 
 **Run the macOS audio fallback spec**
 
@@ -94,7 +79,7 @@ cd apps/screenpipe-app-tauri
 bun install
 
 # 2. Build the debug binary with the WebDriver plugin enabled
-$env:NEXT_PUBLIC_SCREENPIPE_E2E="true"; bun tauri build --no-sign --debug --no-bundle -- --features e2e
+bun tauri build --no-sign --debug --no-bundle -- --features e2e
 
 # 3. Run all e2e specs
 bun run test:e2e
