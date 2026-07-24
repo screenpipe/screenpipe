@@ -17,7 +17,41 @@ use async_trait::async_trait;
 use futures::TryStreamExt;
 use screenpipe_secrets::SecretStore;
 use serde_json::{json, Map, Value};
+use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
+
+// Every network operation carries a hard deadline: these flows back
+// agent-callable local endpoints, so a slow or malicious IMAP server must
+// never pin a request or task until the OS gives up. Test builds use short
+// deadlines so the fake-server tests below run fast.
+const CONNECT_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(10)
+};
+const OP_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(30)
+};
+
+async fn bounded<T>(
+    what: &str,
+    deadline: Duration,
+    fut: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    match tokio::time::timeout(deadline, fut).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow!(
+            "IMAP {} timed out after {}s",
+            what,
+            deadline.as_secs()
+        )),
+    }
+}
 
 static DEF: IntegrationDef = IntegrationDef {
     id: "imap",
@@ -80,17 +114,66 @@ impl Integration for Imap {
         _secret_store: Option<&SecretStore>,
     ) -> Result<String> {
         let mut session = open_session(creds).await?;
-        let mailbox = session
-            .select("INBOX")
+        let result = examine_mailbox(&mut session, "INBOX")
             .await
-            .context("logged in, but selecting INBOX failed")?;
-        let count = mailbox.exists;
-        let _ = session.logout().await;
-        Ok(format!("inbox connected — {} messages", count))
+            .map(|mailbox| format!("inbox connected — {} messages", mailbox.exists));
+        quiet_logout(&mut session).await;
+        result
     }
 }
 
 type ImapSession = async_imap::Session<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
+
+/// Open a mailbox with EXAMINE — the protocol-enforced read-only variant of
+/// SELECT (RFC 3501 §6.3.2). This connector promises read-only access, so it
+/// must never hold a read-write session; BODY.PEEK alone only protects the
+/// individual fetches.
+async fn examine_mailbox<S>(
+    session: &mut async_imap::Session<S>,
+    mailbox: &str,
+) -> Result<async_imap::types::Mailbox>
+where
+    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    bounded("EXAMINE", OP_TIMEOUT, async {
+        session
+            .examine(mailbox)
+            .await
+            .with_context(|| format!("mailbox '{}' not found", mailbox))
+    })
+    .await
+}
+
+/// Best-effort LOGOUT with a deadline — never let cleanup hang a request.
+async fn quiet_logout<S>(session: &mut async_imap::Session<S>)
+where
+    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    let _ = bounded("logout", OP_TIMEOUT, async {
+        session.logout().await.map_err(anyhow::Error::from)
+    })
+    .await;
+}
+
+/// LOGIN with a deadline. Also bounds a server that accepts the connection
+/// but never sends its greeting — LOGIN waits on the greeting internally.
+async fn login_session<S>(
+    client: async_imap::Client<S>,
+    username: &str,
+    password: &str,
+    host: &str,
+) -> Result<async_imap::Session<S>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    bounded("login", OP_TIMEOUT, async {
+        client
+            .login(username, password)
+            .await
+            .map_err(|(e, _)| friendly_login_error(&e.to_string(), host))
+    })
+    .await
+}
 
 /// Connect over TLS (implicit, port 993 style) and LOGIN. Shared by `test()`
 /// and the engine's /connections/imap/* read routes.
@@ -105,9 +188,12 @@ pub async fn open_session(creds: &Map<String, Value>) -> Result<ImapSession> {
     // user copied along.
     let password = require_str(creds, "password")?.replace([' ', '-'], "");
 
-    let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
-        .await
-        .with_context(|| format!("could not reach {}:{}", host, port))?;
+    let tcp = bounded("connect", CONNECT_TIMEOUT, async {
+        tokio::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .with_context(|| format!("could not reach {}:{}", host, port))
+    })
+    .await?;
 
     let mut roots = tokio_rustls::rustls::RootCertStore::empty();
     for cert in rustls_native_certs::load_native_certs().certs {
@@ -123,17 +209,16 @@ pub async fn open_session(creds: &Map<String, Value>) -> Result<ImapSession> {
         .with_no_client_auth();
     let server_name = tokio_rustls::rustls::pki_types::ServerName::try_from(host.clone())
         .map_err(|_| anyhow!("invalid IMAP host name: {}", host))?;
-    let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
-        .connect(server_name, tcp)
-        .await
-        .with_context(|| format!("TLS handshake with {} failed", host))?;
+    let tls = bounded("TLS handshake", CONNECT_TIMEOUT, async {
+        tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(server_name, tcp)
+            .await
+            .with_context(|| format!("TLS handshake with {} failed", host))
+    })
+    .await?;
 
     let client = async_imap::Client::new(tls);
-    let session = client
-        .login(&username, &password)
-        .await
-        .map_err(|(e, _)| friendly_login_error(&e.to_string(), &host))?;
-    Ok(session)
+    login_session(client, &username, &password, &host).await
 }
 
 /// Turn Gmail's cryptic LOGIN failures into actionable messages.
@@ -168,18 +253,32 @@ pub async fn list_messages(
     query: Option<&str>,
 ) -> Result<Vec<Value>> {
     let mut session = open_session(creds).await?;
-    let selected = session
-        .select(mailbox)
-        .await
-        .with_context(|| format!("mailbox '{}' not found", mailbox))?;
+    let result = list_messages_in(&mut session, mailbox, limit, query).await;
+    quiet_logout(&mut session).await;
+    result
+}
+
+async fn list_messages_in<S>(
+    session: &mut async_imap::Session<S>,
+    mailbox: &str,
+    limit: usize,
+    query: Option<&str>,
+) -> Result<Vec<Value>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    let selected = examine_mailbox(session, mailbox).await?;
 
     let set = match query {
         Some(q) if !q.trim().is_empty() => {
             let escaped = q.replace('\\', "").replace('"', "");
-            let uids = session
-                .uid_search(format!("TEXT \"{}\"", escaped))
-                .await
-                .context("IMAP search failed")?;
+            let uids = bounded("search", OP_TIMEOUT, async {
+                session
+                    .uid_search(format!("TEXT \"{}\"", escaped))
+                    .await
+                    .context("IMAP search failed")
+            })
+            .await?;
             let mut uids: Vec<u32> = uids.into_iter().collect();
             uids.sort_unstable();
             let recent: Vec<String> = uids
@@ -189,7 +288,6 @@ pub async fn list_messages(
                 .map(|u| u.to_string())
                 .collect();
             if recent.is_empty() {
-                let _ = session.logout().await;
                 return Ok(vec![]);
             }
             (recent.join(","), true)
@@ -197,7 +295,6 @@ pub async fn list_messages(
         _ => {
             let total = selected.exists;
             if total == 0 {
-                let _ = session.logout().await;
                 return Ok(vec![]);
             }
             let from = total.saturating_sub(limit.saturating_sub(1) as u32).max(1);
@@ -207,22 +304,26 @@ pub async fn list_messages(
 
     // RFC822.HEADER is a PEEK — it never marks messages as read.
     let items = "(UID INTERNALDATE RFC822.HEADER)";
-    let fetches: Vec<_> = if set.1 {
-        session
-            .uid_fetch(&set.0, items)
-            .await
-            .context("IMAP fetch failed")?
-            .try_collect()
-            .await?
-    } else {
-        session
-            .fetch(&set.0, items)
-            .await
-            .context("IMAP fetch failed")?
-            .try_collect()
-            .await?
-    };
-    let _ = session.logout().await;
+    let fetches: Vec<_> = bounded("fetch", OP_TIMEOUT, async {
+        if set.1 {
+            session
+                .uid_fetch(&set.0, items)
+                .await
+                .context("IMAP fetch failed")?
+                .try_collect()
+                .await
+                .map_err(anyhow::Error::from)
+        } else {
+            session
+                .fetch(&set.0, items)
+                .await
+                .context("IMAP fetch failed")?
+                .try_collect()
+                .await
+                .map_err(anyhow::Error::from)
+        }
+    })
+    .await?;
 
     let mut out: Vec<Value> = fetches
         .iter()
@@ -246,17 +347,30 @@ pub async fn list_messages(
 /// the old Gmail connector: from/to/subject/date/snippet/body/id).
 pub async fn get_message(creds: &Map<String, Value>, mailbox: &str, uid: u32) -> Result<Value> {
     let mut session = open_session(creds).await?;
-    session
-        .select(mailbox)
-        .await
-        .with_context(|| format!("mailbox '{}' not found", mailbox))?;
-    let fetches: Vec<_> = session
-        .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
-        .await
-        .context("IMAP fetch failed")?
-        .try_collect()
-        .await?;
-    let _ = session.logout().await;
+    let result = get_message_in(&mut session, mailbox, uid).await;
+    quiet_logout(&mut session).await;
+    result
+}
+
+async fn get_message_in<S>(
+    session: &mut async_imap::Session<S>,
+    mailbox: &str,
+    uid: u32,
+) -> Result<Value>
+where
+    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send,
+{
+    examine_mailbox(session, mailbox).await?;
+    let fetches: Vec<_> = bounded("fetch", OP_TIMEOUT, async {
+        session
+            .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
+            .await
+            .context("IMAP fetch failed")?
+            .try_collect()
+            .await
+            .map_err(anyhow::Error::from)
+    })
+    .await?;
 
     let fetch = fetches
         .first()
@@ -284,14 +398,19 @@ pub async fn get_message(creds: &Map<String, Value>, mailbox: &str, uid: u32) ->
 /// List mailbox (folder) names.
 pub async fn list_mailboxes(creds: &Map<String, Value>) -> Result<Vec<String>> {
     let mut session = open_session(creds).await?;
-    let names: Vec<_> = session
-        .list(Some(""), Some("*"))
-        .await
-        .context("IMAP list failed")?
-        .try_collect()
-        .await?;
-    let _ = session.logout().await;
-    Ok(names.iter().map(|n| n.name().to_string()).collect())
+    let result = bounded("LIST", OP_TIMEOUT, async {
+        let names: Vec<_> = session
+            .list(Some(""), Some("*"))
+            .await
+            .context("IMAP list failed")?
+            .try_collect()
+            .await
+            .map_err(anyhow::Error::from)?;
+        Ok(names.iter().map(|n| n.name().to_string()).collect())
+    })
+    .await;
+    quiet_logout(&mut session).await;
+    result
 }
 
 /// Parse raw RFC822 headers into the flat list shape (no body available).
@@ -358,6 +477,155 @@ mod tests {
         assert_eq!(v["from"], "Ansh Grover <ansh@screenpi.pe>");
         assert_eq!(v["subject"], "hello world");
         assert!(v["date"].as_str().unwrap().starts_with("2026-07-17"));
+    }
+}
+
+// Network failure modes CI's happy path never exercises: a server that
+// accepts TCP but never speaks, a server that stalls mid-FETCH, and the
+// read-only (EXAMINE, not SELECT) guarantee. The fake server runs the real
+// session flows over plain TCP — async-imap sessions are generic over the
+// stream, only `open_session` adds TLS on top.
+#[cfg(test)]
+mod net_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// Minimal scriptable IMAP server. Records every command line received;
+    /// goes permanently silent when it sees `stall_on`.
+    async fn spawn_fake_server(stall_on: Option<&'static str>) -> (u16, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let log: Arc<Mutex<Vec<String>>> = Arc::default();
+        let seen = log.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (r, mut w) = stream.into_split();
+            w.write_all(b"* OK fake IMAP ready\r\n").await.unwrap();
+            let mut lines = BufReader::new(r).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                seen.lock().unwrap().push(line.clone());
+                let mut parts = line.splitn(2, ' ');
+                let tag = parts.next().unwrap_or("*").to_string();
+                let rest = parts.next().unwrap_or("").to_uppercase();
+                let cmd = rest.split_whitespace().next().unwrap_or("").to_string();
+                // UID FETCH / UID SEARCH arrive as "UID <sub>" — key on the verb.
+                let verb = if cmd == "UID" {
+                    rest.split_whitespace().nth(1).unwrap_or("").to_string()
+                } else {
+                    cmd
+                };
+                if stall_on == Some(verb.as_str()) {
+                    // Swallow the command and never answer — a stalled server.
+                    std::future::pending::<()>().await;
+                }
+                match verb.as_str() {
+                    "LOGIN" => {
+                        w.write_all(format!("{} OK LOGIN completed\r\n", tag).as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    "EXAMINE" | "SELECT" => {
+                        w.write_all(
+                            b"* 1 EXISTS\r\n* 0 RECENT\r\n* OK [UIDVALIDITY 1] UIDs valid\r\n",
+                        )
+                        .await
+                        .unwrap();
+                        w.write_all(format!("{} OK [READ-ONLY] done\r\n", tag).as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    "FETCH" => {
+                        w.write_all(b"* 1 FETCH (UID 1)\r\n").await.unwrap();
+                        w.write_all(format!("{} OK FETCH completed\r\n", tag).as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    "LOGOUT" => {
+                        w.write_all(b"* BYE\r\n").await.unwrap();
+                        w.write_all(format!("{} OK\r\n", tag).as_bytes()).await.unwrap();
+                        break;
+                    }
+                    _ => {
+                        w.write_all(format!("{} OK\r\n", tag).as_bytes()).await.unwrap();
+                    }
+                }
+            }
+        });
+        (port, log)
+    }
+
+    async fn fake_session(port: u16) -> async_imap::Session<TcpStream> {
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let client = async_imap::Client::new(tcp);
+        login_session(client, "user@example.com", "secret", "127.0.0.1")
+            .await
+            .expect("fake login must succeed")
+    }
+
+    #[tokio::test]
+    async fn connect_fails_fast_when_server_accepts_but_never_greets() {
+        // Accept the TCP connection, then stay silent forever.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _held = listener.accept().await;
+            std::future::pending::<()>().await;
+        });
+
+        let mut creds = Map::new();
+        creds.insert("imap_host".into(), json!("127.0.0.1"));
+        creds.insert("imap_port".into(), json!(port.to_string()));
+        creds.insert("username".into(), json!("user@example.com"));
+        creds.insert("password".into(), json!("secret"));
+
+        let started = Instant::now();
+        let err = open_session(&creds).await.expect_err("must not hang");
+        assert!(
+            err.to_string().contains("timed out"),
+            "expected a deadline error, got: {err}"
+        );
+        // Deadline, not the OS timeout: bounded well under a minute.
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn stalled_fetch_hits_the_deadline_instead_of_hanging() {
+        let (port, _log) = spawn_fake_server(Some("FETCH")).await;
+        let mut session = fake_session(port).await;
+
+        let started = Instant::now();
+        let err = list_messages_in(&mut session, "INBOX", 5, None)
+            .await
+            .expect_err("stalled FETCH must not hang");
+        assert!(
+            err.to_string().contains("timed out"),
+            "expected a deadline error, got: {err}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn mailbox_access_is_read_only() {
+        let (port, log) = spawn_fake_server(None).await;
+        let mut session = fake_session(port).await;
+
+        list_messages_in(&mut session, "INBOX", 5, None)
+            .await
+            .expect("list against fake server");
+        quiet_logout(&mut session).await;
+
+        let commands = log.lock().unwrap().join("\n").to_uppercase();
+        assert!(
+            commands.contains("EXAMINE"),
+            "mailbox must be opened read-only via EXAMINE; saw:\n{commands}"
+        );
+        assert!(
+            !commands.contains(" SELECT "),
+            "read-write SELECT must never be issued; saw:\n{commands}"
+        );
     }
 }
 
