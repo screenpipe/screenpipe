@@ -152,6 +152,15 @@ pub fn start() -> Option<JoinHandle<()>> {
 /// Skipped silently during the wake grace period to avoid spurious
 /// lost→restored flashes after sleep/wake.
 pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str>) {
+    report_state_inner(kind, now_granted, reason);
+}
+
+/// Body of [`report_state`], returning whether the transition was actually
+/// delivered (emitted). [`report_screen_enumeration`] needs that answer: it must
+/// not commit its sticky verdict on a pass that got swallowed by the wake grace
+/// or the loss cooldown, or the UI would read "denied" with no `permission_lost`
+/// event to explain it.
+fn report_state_inner(kind: PermissionKind, now_granted: bool, reason: Option<&str>) -> bool {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
 
     // Suppress emissions during wake grace period. A real transition will
@@ -162,7 +171,7 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
                 ?kind,
                 now_granted, "permission change suppressed (wake grace)"
             );
-            return;
+            return false;
         }
     }
 
@@ -173,9 +182,11 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
         PermissionKind::Keychain => &mut state.keychain,
     };
 
-    // Dedup: no transition, no emission.
+    // Dedup: no transition, no emission. The state already agrees with the
+    // caller, so this counts as delivered — a repeat report must not be read as
+    // "swallowed".
     if entry.granted == now_granted {
-        return;
+        return true;
     }
 
     // Cooldown applies only to back-to-back "lost" events (prevents flapping).
@@ -184,7 +195,7 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
         if let Some(t) = entry.last_lost_at {
             if t.elapsed() < EMIT_COOLDOWN {
                 debug!(?kind, "permission loss suppressed (cooldown)");
-                return;
+                return false;
             }
         }
     }
@@ -210,6 +221,7 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
         PermissionEvent::lost(kind, reason.map(str::to_owned))
     };
     let _ = send_event(evt.event_name(), evt);
+    true
 }
 
 /// Called by the vision monitor watcher with the outcome of display
@@ -223,12 +235,27 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
 /// enumeration-reported loss is active, the poll's ScreenRecording report
 /// is suppressed so it can't flap the state back to granted; a successful
 /// enumeration lifts the suppression and restores.
-pub fn report_screen_enumeration(working: bool, reason: Option<&str>) {
-    {
+///
+/// The sticky verdict is committed only when the report was actually delivered.
+/// A loss swallowed by the wake grace (or the loss cooldown) must NOT leave the
+/// flag set: the app reads it as "denied" while no `permission_lost` was emitted,
+/// so the recovery window never opens and the user sees a refused-to-start app
+/// with nothing explaining why. Callers re-report every pass, so the verdict
+/// lands on the first pass after the grace expires.
+///
+/// Returns whether the verdict was committed.
+pub fn report_screen_enumeration(working: bool, reason: Option<&str>) -> bool {
+    let delivered = report_state_inner(PermissionKind::ScreenRecording, working, reason);
+    if delivered {
         let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
         state.screen_enum_denied = !working;
+    } else {
+        debug!(
+            working,
+            "screen enumeration verdict not committed (report suppressed)"
+        );
     }
-    report_state(PermissionKind::ScreenRecording, working, reason);
+    delivered
 }
 
 /// Notify the monitor that the system just woke from sleep. Suppresses
@@ -376,6 +403,21 @@ mod tests {
         assert!(
             !screen_poll_suppressed(),
             "successful enumeration lifts the suppression"
+        );
+
+        // A loss whose report was SWALLOWED (here by the loss cooldown; the
+        // wake-grace window behaves the same) must not commit the verdict.
+        // Otherwise the app reads "denied" — refusing to start capture — while
+        // no permission_lost was emitted, so the recovery window never opens
+        // and nothing tells the user why. Callers re-report every pass, so the
+        // verdict lands on the first pass that actually delivers.
+        assert!(
+            !report_screen_enumeration(false, Some("test: within loss cooldown")),
+            "report inside the cooldown must report itself as undelivered"
+        );
+        assert!(
+            !screen_poll_suppressed(),
+            "a swallowed loss report must not commit the enumeration verdict"
         );
     }
 }

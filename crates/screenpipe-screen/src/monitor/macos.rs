@@ -356,17 +356,12 @@ impl SafeMonitor {
 /// SCK / xcap still enumerate the inactive built-in, so without this filter
 /// we'd attempt to capture a sleeping display every frame — wasted cycles
 /// and black frames in the timeline.
+///
+/// Delegates to the shared CG topology reader: the vision monitor watcher
+/// compares this SCK-side filter against that module's CG-side answer to detect
+/// a stale screen-recording grant, so the two must be one predicate, not two.
 fn is_clamshell_inactive_builtin(display_id: u32) -> bool {
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGDisplayIsBuiltin(display: u32) -> i32;
-        fn CGDisplayIsActive(display: u32) -> i32;
-        fn CGDisplayIsAsleep(display: u32) -> i32;
-    }
-    unsafe {
-        CGDisplayIsBuiltin(display_id) != 0
-            && (CGDisplayIsActive(display_id) == 0 || CGDisplayIsAsleep(display_id) != 0)
-    }
+    screenpipe_core::display_topology::is_clamshell_inactive_builtin(display_id)
 }
 
 async fn run_bounded_sck_enumeration<T, F>(

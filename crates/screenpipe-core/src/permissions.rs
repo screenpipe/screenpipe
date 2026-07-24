@@ -171,9 +171,14 @@ mod macos_screen_recording {
     /// invalidated by an app update) preflight keeps answering `true` while
     /// `SCShareableContent` fails — observed live in a user log where the
     /// recovery flow's preflight read "granted" one second after display
-    /// enumeration reported `PermissionDenied` at runtime. Callers that need
-    /// the real capture-side verdict must combine this with the engine's
-    /// enumeration state (`permission_monitor::screen_enumeration_denied`).
+    /// enumeration reported `PermissionDenied` at runtime.
+    ///
+    /// This crate cannot see the capture-side verdict (it sits below the engine),
+    /// so the combined answer lives one layer up and every UI-facing check goes
+    /// through it: the app's `permissions::screen_recording_status`, which folds
+    /// this value together with `permission_monitor::screen_enumeration_denied`.
+    /// Reach for that, not for this function, when the answer drives what the
+    /// user is told or whether capture is allowed to start.
     pub fn preflight() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
     }
