@@ -161,6 +161,30 @@ describe("pipe-watch-writer: content blocks", () => {
     expect(msg.contentBlocks[2].toolCall.isRunning).toBe(false);
     expect(msg.contentBlocks[3].text).toBe("wrap up");
   });
+
+  it("stops appending text after ask_user needs a user reply", () => {
+    seedPipeWatchSession();
+    __testing.inject(
+      env({ type: "tool_execution_start", toolCallId: "ask-1", toolName: "ask_user" }),
+    );
+    __testing.inject(
+      env({
+        type: "tool_execution_end",
+        toolCallId: "ask-1",
+        result: { content: [{ text: "requires interactive user input" }] },
+      }),
+    );
+    __testing.inject(env({ type: "text_delta", delta: "I picked one anyway." }));
+
+    const session = useChatStore.getState().sessions[SID]!;
+    const msg = session.messages![0] as any;
+    expect(msg.content).toBe("");
+    expect(msg.contentBlocks).toHaveLength(1);
+    expect(msg.contentBlocks[0].toolCall.result).toBe("requires interactive user input");
+    expect(session.isLoading).toBe(false);
+    expect(session.isStreaming).toBe(false);
+    expect(session.status).toBe("idle");
+  });
 });
 
 describe("pipe-watch-writer: agent_end takes precedence", () => {

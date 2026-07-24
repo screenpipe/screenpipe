@@ -37,6 +37,7 @@ import {
   type Unregister,
 } from "./bus";
 import type { AgentEventEnvelope, AgentInnerEvent } from "./types";
+import { hasPendingAskUserReply } from "@/lib/chat/tool-presentation";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 let mounted = false;
@@ -153,6 +154,7 @@ function apply(sid: string, payload: AgentInnerEvent): void {
     const msgId = ensureStreamingMessage(sid);
     if (!msgId) return;
     const cur = useChatStore.getState().sessions[sid]!;
+    if (hasPendingAskUserReply(cur.contentBlocks as unknown[] | undefined)) return;
     const blocks = [...((cur.contentBlocks as any[]) ?? [])];
     const last = blocks[blocks.length - 1];
     if (last && last.type === "text") {
@@ -282,11 +284,16 @@ function apply(sid: string, payload: AgentInnerEvent): void {
           }
         : b,
     );
-    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    const waitingForReply = hasPendingAskUserReply(blocks);
+    store.actions.setStreaming(sid, {
+      contentBlocks: blocks,
+      ...(waitingForReply ? { isStreaming: false, isLoading: false } : {}),
+    });
     store.actions.patchMessage(sid, cur.streamingMessageId, (m: any) => ({
       ...m,
       contentBlocks: blocks,
     }));
+    if (waitingForReply) store.actions.patch(sid, { status: "idle" });
     return;
   }
 
@@ -422,6 +429,7 @@ function appendUniqueNotificationMessages(messages: any[], notifications: any[])
  *  post-hoc views render the same shape. */
 function reconstructFromAgentEnd(agentMessages: any[], pipeName: string): any[] {
   const out: any[] = [];
+  let waitingForAskUserReply = false;
   for (let i = 0; i < agentMessages.length; i++) {
     const m = agentMessages[i];
     if (!m) continue;
@@ -432,10 +440,13 @@ function reconstructFromAgentEnd(agentMessages: any[], pipeName: string): any[] 
       // block on the most recent assistant message.
       const toolCallId = m.toolCallId || m.tool_call_id;
       attachToolResult(out, toolCallId, toolReturnResultText(text));
+      waitingForAskUserReply = hasPendingAskUserReply(out[out.length - 1]?.contentBlocks);
       continue;
     }
 
     if (m.role !== "assistant" && m.role !== "user") continue;
+    if (m.role === "assistant" && waitingForAskUserReply) continue;
+    if (m.role === "user") waitingForAskUserReply = false;
 
     const tools = extractToolCalls(m.content || [], i);
     const blocks: any[] = [];

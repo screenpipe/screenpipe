@@ -365,6 +365,55 @@ describe("pi-event-router: background content accumulation (the parallel-chat re
     expect(assistant.contentBlocks[1].toolCall.result).toBe("hi");
   });
 
+  it("does not append assistant text after ask_user needs a user reply", async () => {
+    seed("A", {
+      status: "streaming",
+      isLoading: true,
+      isStreaming: true,
+      streamingMessageId: "msg-1",
+      streamingText: "",
+      contentBlocks: [{
+        type: "tool",
+        toolCall: { id: "ask-1", toolName: "ask_user", args: {}, isRunning: true },
+      }],
+      messages: [{
+        id: "msg-1",
+        role: "assistant",
+        content: "",
+        contentBlocks: [{
+          type: "tool",
+          toolCall: { id: "ask-1", toolName: "ask_user", args: {}, isRunning: true },
+        }],
+        timestamp: 1_234,
+      }],
+      messageCount: 1,
+    });
+    useChatStore.setState({ currentId: "B" });
+
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_end",
+        toolCallId: "ask-1",
+        result: { content: [{ text: "requires interactive user input" }] },
+      } as any),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "I picked one anyway." },
+      }),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    const assistant = session.messages![0] as any;
+    expect(assistant.content).toBe("");
+    expect(assistant.contentBlocks).toHaveLength(1);
+    expect(assistant.contentBlocks[0].toolCall.result).toBe("requires interactive user input");
+    expect(session.isLoading).toBe(false);
+    expect(session.isStreaming).toBe(false);
+    expect(session.status).toBe("idle");
+  });
+
   it("keeps accumulating during the switch-back gap after currentId flips", async () => {
     // Regression for the "come back immediately and the queued turn vanishes"
     // repro. During the handoff window `loadConversation` has already flipped

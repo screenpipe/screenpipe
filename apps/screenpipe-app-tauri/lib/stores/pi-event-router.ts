@@ -71,6 +71,9 @@ import {
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import {
+  hasPendingAskUserReply,
+} from "@/lib/chat/tool-presentation";
+import {
   getPersistedViewedAt,
   useChatStore,
   isSessionForeground,
@@ -213,6 +216,12 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   if (existing?.kind !== "pipe-watch") {
     applyEventToSessionContent(sid, inner);
   }
+  const afterContent = useChatStore.getState().sessions[sid];
+  const effectiveStatus =
+    nextStatus === "streaming" &&
+    hasPendingAskUserReply(afterContent?.contentBlocks as unknown[] | undefined)
+      ? "idle"
+      : nextStatus;
 
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
@@ -251,13 +260,13 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   }
 
   const patch: Partial<SessionRecord> = { updatedAt: Date.now() };
-  if (nextStatus) patch.status = nextStatus;
+  if (effectiveStatus) patch.status = effectiveStatus;
   if (writePreview) patch.preview = snippet!;
   // Background assistant text should mark the session as having new
   // unseen content once the user has switched away.
   if (snippet && !isSessionForeground(store, sid)) patch.lastContentAt = Date.now();
-  if (nextStatus === "error" && err) patch.lastError = err;
-  if (nextStatus && nextStatus !== "error") patch.lastError = undefined;
+  if (effectiveStatus === "error" && err) patch.lastError = err;
+  if (effectiveStatus && effectiveStatus !== "error") patch.lastError = undefined;
 
   // Skip the store write entirely if nothing meaningful changed (avoids
   // re-renders for no-op events like the ones whose statusForEvent returns
@@ -575,6 +584,11 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     const delta = (payload.delta ?? inner?.delta) as string;
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;
+    if (hasPendingAskUserReply(cur.contentBlocks as unknown[] | undefined)) {
+      store.actions.setStreaming(sid, { isStreaming: false, isLoading: false });
+      store.actions.patch(sid, { status: "idle" });
+      return;
+    }
     const msgId = cur.streamingMessageId;
     const newText = (cur.streamingText ?? "") + delta;
     const blocks = [...((cur.contentBlocks as any[]) ?? [])];
@@ -647,11 +661,16 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
           }
         : b
     );
-    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    const waitingForReply = hasPendingAskUserReply(blocks);
+    store.actions.setStreaming(sid, {
+      contentBlocks: blocks,
+      ...(waitingForReply ? { isStreaming: false, isLoading: false } : {}),
+    });
     store.actions.patchMessage(sid, msgId, (m: any) => ({
       ...m,
       contentBlocks: blocks,
     }));
+    if (waitingForReply) store.actions.patch(sid, { status: "idle" });
     return;
   }
 

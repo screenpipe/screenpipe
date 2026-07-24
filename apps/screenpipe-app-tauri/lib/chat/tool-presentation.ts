@@ -456,6 +456,7 @@ export function sanitizeCommand(command: string): string {
 export interface PresentableToolCall {
   toolName: string;
   args?: Record<string, unknown>;
+  result?: string;
   isRunning?: boolean;
   isError?: boolean;
 }
@@ -472,6 +473,31 @@ const GENERIC_ACTIVITY: ToolActivityPresentation = {
 
 function activity(runningLabel: string, completedLabel: string): ToolActivityPresentation {
   return { runningLabel, completedLabel };
+}
+
+export function isAskUserToolName(toolName: string | undefined): boolean {
+  return (toolName ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase() === "askuser";
+}
+
+export function toolResultNeedsManualFollowup(result: string | undefined): boolean {
+  return Boolean(result && /requires interactive|needs user input|non[- ]interactive/i.test(result));
+}
+
+export function toolCallNeedsManualUserReply(toolCall: PresentableToolCall | undefined): boolean {
+  return Boolean(
+    toolCall &&
+    !toolCall.isError &&
+    isAskUserToolName(toolCall.toolName) &&
+    toolResultNeedsManualFollowup(toolCall.result),
+  );
+}
+
+export function hasPendingAskUserReply(blocks: unknown[] | undefined): boolean {
+  return Boolean(
+    blocks?.some((block: any) =>
+      block?.type === "tool" && toolCallNeedsManualUserReply(block.toolCall),
+    ),
+  );
 }
 
 function connectionActivity(
@@ -652,7 +678,7 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
   if (toolName.includes("web") && toolName.includes("search")) {
     return activity("Searching the web", "Searched the web");
   }
-  if (toolName === "ask_user") {
+  if (isAskUserToolName(toolName)) {
     return activity("Waiting for your input", "Asked for your input");
   }
 

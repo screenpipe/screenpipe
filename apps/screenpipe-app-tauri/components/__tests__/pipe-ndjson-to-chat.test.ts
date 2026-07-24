@@ -613,6 +613,42 @@ describe("parsePipeNdjsonToMessages", () => {
     // first asst ts = 1000, last ts seen = 4000
     expect(assistant.workDurationMs).toBe(3000);
   });
+
+  it("drops assistant text after ask_user asks for a manual reply in agent_end messages", () => {
+    const stdout = [
+      '{"type":"agent_end","messages":[' +
+        '{"role":"user","content":[{"type":"text","text":"install a browser package"}]}' +
+        ',{"role":"assistant","content":[{"type":"toolCall","id":"ask-1","name":"ask_user","arguments":{"prompt":"Which package?"}}]}' +
+        ',{"role":"toolResult","content":[{"type":"text","text":"requires interactive user input"}]}' +
+        ',{"role":"assistant","content":[{"type":"text","text":"I picked one anyway."}]}' +
+      ']}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    expect(msgs).toHaveLength(2);
+    const assistant = msgs[1];
+    expect(assistant.content).toBe("");
+    expect(assistant.contentBlocks).toHaveLength(1);
+    expect((assistant.contentBlocks![0] as any).toolCall.result).toBe("requires interactive user input");
+  });
+
+  it("drops streamed assistant text after ask_user asks for a manual reply", () => {
+    const stdout = [
+      '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"install a browser package"}]}}',
+      '{"type":"message_start","message":{"role":"assistant","content":[]}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":0,"toolName":"ask_user","partial":{}}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"ask-1","name":"ask_user","arguments":{"prompt":"Which package?"}},"partial":{}}}',
+      '{"type":"tool_execution_end","toolCallId":"ask-1","result":{"content":[{"type":"text","text":"requires interactive user input"}]}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"I picked one anyway.","partial":{}}}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    expect(msgs).toHaveLength(2);
+    const assistant = msgs[1];
+    expect(assistant.content).toBe("");
+    expect(assistant.contentBlocks).toHaveLength(1);
+    expect((assistant.contentBlocks![0] as any).toolCall.result).toBe("requires interactive user input");
+  });
 });
 
 // ─── pipeExecutionToConversation ──────────────────────────────────

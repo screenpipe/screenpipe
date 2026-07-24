@@ -4,6 +4,7 @@
 
 import type { ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cleanPipeStdout } from "@/components/settings/pipes-section";
+import { hasPendingAskUserReply } from "@/lib/chat/tool-presentation";
 
 /**
  * Extract text from a Pi message content array.
@@ -106,6 +107,7 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
     let pendingTools: any[] = [];
     let pendingFirstTs: number | null = null;
     let pendingLastTs: number | null = null;
+    let pendingWaitingForAskUserReply = false;
 
     const flushPendingAssistant = () => {
       if (pendingBlocks.length === 0) return;
@@ -128,6 +130,7 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
       pendingTools = [];
       pendingFirstTs = null;
       pendingLastTs = null;
+      pendingWaitingForAskUserReply = false;
     };
 
     for (let i = 0; i < agentEndMessages.length; i++) {
@@ -146,6 +149,7 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
               resultText.length > 2000
                 ? resultText.slice(0, 2000) + "\n... (truncated)"
                 : resultText;
+            pendingWaitingForAskUserReply = hasPendingAskUserReply(pendingBlocks);
           }
         }
         if (msgTs !== null) pendingLastTs = msgTs;
@@ -172,6 +176,7 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
       }
 
       if (role === "assistant") {
+        if (pendingWaitingForAskUserReply) continue;
         if (msgTs !== null) {
           if (pendingFirstTs === null) pendingFirstTs = msgTs;
           pendingLastTs = msgTs;
@@ -249,6 +254,7 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
   let inAssistantTurn = false;
   let workFirstTs: number | null = null;
   let workLastTs: number | null = null;
+  let waitingForAskUserReply = false;
 
   function commitPendingText() {
     const text = currentText.trim();
@@ -299,6 +305,7 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
     inAssistantTurn = false;
     workFirstTs = null;
     workLastTs = null;
+    waitingForAskUserReply = false;
   }
 
   for (const line of raw.split("\n")) {
@@ -351,7 +358,9 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
       const ae = evt.assistantMessageEvent;
       if (!ae) continue;
       inAssistantTurn = true;
-      if (ae.type === "text_delta" && ae.delta) currentText += ae.delta;
+      if (ae.type === "text_delta" && ae.delta) {
+        if (!waitingForAskUserReply) currentText += ae.delta;
+      }
       else if (ae.type === "thinking_delta" && ae.delta) {
         const lastBlock = currentBlocks[currentBlocks.length - 1];
         if (lastBlock?.type === "thinking") lastBlock.text += ae.delta;
@@ -419,6 +428,7 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
           const truncated = resultText.length > 2000 ? resultText.slice(0, 2000) + "\n... (truncated)" : resultText;
           const lastBlock = currentBlocks[currentBlocks.length - 1];
           if (lastBlock?.type === "tool" && lastBlock.toolCall && !lastBlock.toolCall.result) lastBlock.toolCall.result = truncated;
+          waitingForAskUserReply = hasPendingAskUserReply(currentBlocks);
         }
       }
       const evtTs = typeof evt.timestamp === "number" ? evt.timestamp : null;
@@ -435,8 +445,10 @@ export function parsePipeNdjsonToMessages(raw: string, pipeName?: string): ChatM
   flushAssistant();
 
   // Final fallback: use cleanPipeStdout
-  const hasAssistantText = messages.some((m) => m.role === "assistant" && m.content?.trim());
-  if (!hasAssistantText && raw.trim()) {
+  const hasAssistantContent = messages.some((m) =>
+    m.role === "assistant" && (m.content?.trim() || (m.contentBlocks?.length ?? 0) > 0),
+  );
+  if (!hasAssistantContent && raw.trim()) {
     const fallbackText = cleanPipeStdout(raw);
     if (fallbackText.trim()) {
       messages.push({ id: `pipe-msg-${messageCounter++}`, role: "assistant", content: fallbackText.trim(), timestamp: ts });

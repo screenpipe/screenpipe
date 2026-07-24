@@ -15,6 +15,7 @@ import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
 import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, parseRateLimitWaitSeconds, PI_MAX_RATE_LIMIT_RETRIES } from "@/lib/chat/quota-errors";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
+import { hasPendingAskUserReply } from "@/lib/chat/tool-presentation";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
 import {
@@ -255,6 +256,12 @@ export function usePiForegroundEvents({
           const evt = data.assistantMessageEvent;
           const delta = stringValue(evt.delta);
           if (evt.type === "text_delta" && delta) {
+            if (hasPendingAskUserReply(piContentBlocksRef.current)) {
+              setIsLoading(false);
+              setIsStreaming(false);
+              emitSessionActivity({ status: "idle" });
+              return;
+            }
             // First delta of a queued turn → create the placeholder lazily.
             if (!ensureAssistantPlaceholder()) return;
             piStreamingTextRef.current += delta;
@@ -329,6 +336,12 @@ export function usePiForegroundEvents({
             setMessages((prev) =>
               prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
             );
+            if (hasPendingAskUserReply(contentBlocks)) {
+              cancelStreamingMessageRender();
+              setIsLoading(false);
+              setIsStreaming(false);
+              emitSessionActivity({ status: "idle" });
+            }
           }
         } else if (data.type === "tool_execution_end") {
           if (piMessageIdRef.current) {
@@ -657,7 +670,7 @@ export function usePiForegroundEvents({
             let agentEndError: string | null = null;
             if (data.messages && Array.isArray(data.messages)) {
               agentEndError = firstAgentEndAssistantError(data.messages);
-              if (!content) {
+              if (!content && !hasPendingAskUserReply(piContentBlocksRef.current)) {
                 // Extract text from all assistant messages in the agent_end payload
                 content = textFromAssistantMessages(data.messages);
               }

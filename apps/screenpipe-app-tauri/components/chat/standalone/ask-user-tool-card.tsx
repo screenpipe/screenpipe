@@ -6,6 +6,10 @@
 import * as React from "react";
 import { Check, ChevronDown } from "lucide-react";
 import type { ToolCall } from "@/lib/chat/types";
+import {
+  isAskUserToolName,
+  toolResultNeedsManualFollowup,
+} from "@/lib/chat/tool-presentation";
 import { cn } from "@/lib/utils";
 
 export type AskUserOption = {
@@ -95,7 +99,7 @@ function normalizeQuestion(value: unknown, index: number): AskUserQuestion | nul
 }
 
 export function isAskUserToolCall(toolCall: Pick<ToolCall, "toolName">): boolean {
-  return toolCall.toolName.replace(/[^a-z0-9]/gi, "").toLowerCase() === "askuser";
+  return isAskUserToolName(toolCall.toolName);
 }
 
 export function parseAskUserToolCall(toolCall: Pick<ToolCall, "args">): ParsedAskUserToolCall | null {
@@ -159,10 +163,6 @@ export function formatAskUserDisplayLabel(parsed: ParsedAskUserToolCall, answers
     .find((labels) => labels.length > 0);
   const preview = firstAnswered?.join(", ");
   return preview ? `Answered Ask user: ${preview}` : "Answered Ask user";
-}
-
-function toolResultNeedsManualFollowup(result?: string): boolean {
-  return Boolean(result && /requires interactive|needs user input|non[- ]interactive/i.test(result));
 }
 
 export function AskUserToolCard({
