@@ -1,3 +1,5 @@
+[![mcpindex](https://mcpindex.ai/api/v1/badge/io-github-screenpipe-screenpipe-mcp)](https://mcpindex.ai/server/io-github-screenpipe-screenpipe-mcp)
+
 
 <img width="1500" height="500" alt="image" src="https://github.com/user-attachments/assets/058a44b8-fcad-4a37-92d8-830167dbd400" />
 
