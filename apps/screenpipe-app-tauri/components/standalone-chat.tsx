@@ -1343,7 +1343,7 @@ export function StandaloneChat({
       />
 
       <div className="flex-1 flex min-h-0" data-browser-panel-host>
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0" data-firstrun-target="messages">
       <ChatMainPane
         hideInlineHistory={hideInlineHistory}
         showHistory={showHistory}

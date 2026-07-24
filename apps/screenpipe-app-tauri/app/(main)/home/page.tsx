@@ -52,6 +52,7 @@ import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
 import { shouldAcceptTitleSource } from "@/lib/utils/chat-title";
@@ -138,12 +139,19 @@ function HomeContent() {
   // reuses an already-open Home window (show, not reload), so a Home created
   // before onboarding finished would otherwise never see the handoff.
   const [firstRunGuidePending, setFirstRunGuidePendingState] = useState(false);
+  // Event-driven arrivals (help → replay intro, onboarding completing on an
+  // already-open Home) are deliberate requests — they bypass the e2e seed
+  // suppression that only guards the boot-time auto-popup.
+  const [firstRunGuideExplicit, setFirstRunGuideExplicit] = useState(false);
   useEffect(() => {
     if (consumeFirstRunGuidePending()) setFirstRunGuidePendingState(true);
     let unlisten: (() => void) | undefined;
     let unmounted = false;
     void listen("first-run-guide-pending", () => {
-      if (consumeFirstRunGuidePending()) setFirstRunGuidePendingState(true);
+      if (consumeFirstRunGuidePending()) {
+        setFirstRunGuidePendingState(true);
+        setFirstRunGuideExplicit(true);
+      }
     })
       .then((fn) => {
         if (unmounted) fn();
@@ -176,11 +184,20 @@ function HomeContent() {
   // `onboarding` E2E seed represents an app that has already completed every
   // first-run surface; showing this click-blocking guide breaks otherwise
   // unrelated regression specs that start from the seeded home screen.
+  // Don't start the guide on top of a broken capture state — permission
+  // recovery and the first-run guide must never compete (#5407). The guide
+  // isn't lost: `firstRunGuidePending` is React state, so it appears once
+  // health recovers.
+  const { health, isServerDown } = useHealthCheck();
+  const captureUnhealthy =
+    isServerDown || health?.status === "unhealthy" || health?.status === "error";
   const showFirstRunGuide = shouldShowFirstRunGuide({
     isSettingsLoaded,
     e2eSeedFlags,
     firstRunGuideDone: settings.firstRunGuideDone,
     firstRunGuidePending,
+    captureUnhealthy,
+    explicitlyRequested: firstRunGuideExplicit,
   });
   const markFirstRunGuideDone = useCallback(() => {
     setFirstRunGuidePending(false);
