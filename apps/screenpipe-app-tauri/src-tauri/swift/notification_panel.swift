@@ -204,7 +204,10 @@ struct BrandIconTextButton: View {
                 Text(label)
                     .font(Brand.swiftUIMonoFont(size: 9, weight: .regular))
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
             .foregroundColor(isHovered ? .primary.opacity(0.75) : .primary.opacity(0.34))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
