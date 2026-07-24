@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use screenpipe_core::pipes::{PipeExecution, PipeStore, SchedulerState};
+use screenpipe_core::pipes::{PipeExecution, PipeExecutionActivity, PipeStore, SchedulerState};
 use screenpipe_db::DatabaseManager;
 use std::sync::Arc;
 
@@ -132,6 +132,48 @@ impl PipeStore for SqlitePipeStore {
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at, stdout, stderr, exit_code,
                           error_type, error_message, duration_ms, session_path
+                   FROM pipe_executions
+                   WHERE pipe_name = ?
+                   ORDER BY id DESC
+                   LIMIT ?"#,
+            )
+            .bind(pipe_name)
+            .bind(limit)
+            .fetch_all(&self.db.pool)
+            .await?
+        };
+
+        Ok(rows.into_iter().map(|r| r.into()).collect())
+    }
+
+    async fn get_execution_metadata(
+        &self,
+        pipe_name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>> {
+        let rows = if let Some(before_id) = before_id {
+            sqlx::query_as::<_, PipeExecutionRow>(
+                r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
+                          started_at, finished_at,
+                          '' AS stdout, '' AS stderr,
+                          exit_code, error_type, error_message, duration_ms, session_path
+                   FROM pipe_executions
+                   WHERE pipe_name = ? AND id < ?
+                   ORDER BY id DESC
+                   LIMIT ?"#,
+            )
+            .bind(pipe_name)
+            .bind(before_id)
+            .bind(limit)
+            .fetch_all(&self.db.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, PipeExecutionRow>(
+                r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
+                          started_at, finished_at,
+                          '' AS stdout, '' AS stderr,
+                          exit_code, error_type, error_message, duration_ms, session_path
                    FROM pipe_executions
                    WHERE pipe_name = ?
                    ORDER BY id DESC
@@ -328,6 +370,58 @@ impl PipeStore for SqlitePipeStore {
         .await?;
 
         Ok(rows.into_iter().collect())
+    }
+
+    async fn get_execution_activity(
+        &self,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecutionActivity>> {
+        #[derive(sqlx::FromRow)]
+        struct ActivityRow {
+            pipe_name: String,
+            execution_count: i64,
+            latest_execution_id: i64,
+            last_run_at: Option<String>,
+            status: String,
+        }
+
+        let rows = sqlx::query_as::<_, ActivityRow>(
+            r#"SELECT latest.pipe_name,
+                      latest.execution_count,
+                      latest.latest_execution_id,
+                      COALESCE(execution.finished_at, execution.started_at) AS last_run_at,
+                      execution.status
+               FROM (
+                   SELECT pipe_name,
+                          COUNT(*) AS execution_count,
+                          MAX(id) AS latest_execution_id
+                   FROM pipe_executions
+                   WHERE status NOT IN ('queued', 'running')
+                   GROUP BY pipe_name
+               ) AS latest
+               JOIN pipe_executions AS execution
+                 ON execution.id = latest.latest_execution_id
+               WHERE (? IS NULL OR latest.latest_execution_id < ?)
+               ORDER BY latest.latest_execution_id DESC
+               LIMIT ?"#,
+        )
+        .bind(before_id)
+        .bind(before_id)
+        .bind(limit)
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| PipeExecutionActivity {
+                pipe_name: row.pipe_name,
+                execution_count: row.execution_count,
+                latest_execution_id: row.latest_execution_id,
+                last_run_at: row.last_run_at,
+                status: row.status,
+            })
+            .collect())
     }
 }
 
@@ -1015,5 +1109,122 @@ mod tests {
         assert_eq!(counts.len(), 2);
         assert_eq!(counts["pipe-a"], 12);
         assert_eq!(counts["pipe-b"], 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_execution_activity_is_compact_ordered_and_cursor_paginated() {
+        let (store, _tmp) = setup_test_store().await;
+        for _ in 0..2 {
+            let id = store
+                .create_execution("older-pipe", "scheduled", "m", None)
+                .await
+                .unwrap();
+            store
+                .finish_execution(id, "completed", "", "", Some(0), None, None, None)
+                .await
+                .unwrap();
+        }
+        let newest_id = store
+            .create_execution("newer-pipe", "manual", "m", None)
+            .await
+            .unwrap();
+        store
+            .finish_execution(newest_id, "completed", "", "", Some(0), None, None, None)
+            .await
+            .unwrap();
+
+        let first_page = store.get_execution_activity(1, None).await.unwrap();
+        assert_eq!(first_page.len(), 1);
+        assert_eq!(first_page[0].pipe_name, "newer-pipe");
+        assert_eq!(first_page[0].execution_count, 1);
+        assert_eq!(first_page[0].latest_execution_id, newest_id);
+
+        let second_page = store
+            .get_execution_activity(1, Some(newest_id))
+            .await
+            .unwrap();
+        assert_eq!(second_page.len(), 1);
+        assert_eq!(second_page[0].pipe_name, "older-pipe");
+        assert_eq!(second_page[0].execution_count, 2);
+        assert!(second_page[0].latest_execution_id < newest_id);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_execution_activity_excludes_active_executions() {
+        let (store, _tmp) = setup_test_store().await;
+        let first_run = store
+            .create_execution("new-pipe", "manual", "m", None)
+            .await
+            .unwrap();
+        store.set_execution_running(first_run, None).await.unwrap();
+
+        let activity = store.get_execution_activity(20, None).await.unwrap();
+        assert!(activity.is_empty());
+
+        store
+            .finish_execution(first_run, "completed", "", "", Some(0), None, None, None)
+            .await
+            .unwrap();
+        let activity = store.get_execution_activity(20, None).await.unwrap();
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].pipe_name, "new-pipe");
+        assert_eq!(activity[0].execution_count, 1);
+        assert_eq!(activity[0].latest_execution_id, first_run);
+        let finished_execution = store
+            .get_executions("new-pipe", 1, None)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(activity[0].last_run_at, finished_execution.finished_at);
+
+        let second_run = store
+            .create_execution("new-pipe", "manual", "m", None)
+            .await
+            .unwrap();
+        store.set_execution_running(second_run, None).await.unwrap();
+        let activity = store.get_execution_activity(20, None).await.unwrap();
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].execution_count, 1);
+        assert_eq!(activity[0].latest_execution_id, first_run);
+        assert_eq!(activity[0].status, "completed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_execution_metadata_omits_output_blobs() {
+        let (store, _tmp) = setup_test_store().await;
+        let id = store
+            .create_execution("metadata-pipe", "scheduled", "m", None)
+            .await
+            .unwrap();
+        store
+            .finish_execution(
+                id,
+                "completed",
+                "large stdout",
+                "large stderr",
+                Some(0),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let metadata = store
+            .get_execution_metadata("metadata-pipe", 10, None)
+            .await
+            .unwrap();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].id, id);
+        assert_eq!(metadata[0].status, "completed");
+        assert!(metadata[0].stdout.is_empty());
+        assert!(metadata[0].stderr.is_empty());
+
+        let full = store
+            .get_executions("metadata-pipe", 10, None)
+            .await
+            .unwrap();
+        assert_eq!(full[0].stdout, "large stdout");
+        assert_eq!(full[0].stderr, "large stderr");
     }
 }

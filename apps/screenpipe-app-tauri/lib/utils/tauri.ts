@@ -166,11 +166,25 @@ async chatgptOauthStatus() : Promise<Result<ChatGptOAuthStatus, string>> {
 }
 },
 /**
- * Check only accessibility permission
- * Use this for polling to check if user has granted accessibility permission
+ * Check only accessibility permission (silent, side-effect free).
+ * Use this for passive polling before the user has chosen to grant — it never
+ * enrolls the app in the Accessibility list or surfaces the system prompt.
+ * It will not see a grant made *after* the process started (AXIsProcessTrusted
+ * caches stale-denied); once the user actively requests the permission, switch
+ * to `check_accessibility_permission_live_cmd` to catch that transition.
  */
 async checkAccessibilityPermissionCmd() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_accessibility_permission_cmd");
+},
+/**
+ * Live accessibility check for polling *after* the user has actively started
+ * the grant flow. Probes tccd via an active event tap so a grant made while
+ * the app is running is seen without a relaunch. The probe enrolls the app in
+ * the Accessibility list (and can surface the system prompt), which is
+ * expected once the user is being asked — do NOT use it for passive polling.
+ */
+async checkAccessibilityPermissionLiveCmd() : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("check_accessibility_permission_live_cmd");
 },
 /**
  * Check if Automation permission for Arc is already granted.
@@ -1613,6 +1627,14 @@ async readAppBundleMetadata(path: string) : Promise<Result<ExcludedApp, string>>
 async readAudioExclusions() : Promise<Result<ExcludedApp[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("read_audio_exclusions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async readLogTail(path: string, maxBytes: number) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_log_tail", { path, maxBytes }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -3386,8 +3408,9 @@ showOverlayInScreenRecording?: boolean;
  */
 chatAlwaysOnTop?: boolean;
 /**
- * Show restart notifications when audio/vision capture stalls.
- * Disabled by default for now until the stall detector is more reliable.
+ * Show recording-health overlay alerts and restart notifications when
+ * audio/vision capture stalls. Disabled by default for now until the
+ * detector is more reliable.
  */
 showRestartNotifications?: boolean;
 /**

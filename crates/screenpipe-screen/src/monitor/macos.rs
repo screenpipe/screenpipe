@@ -9,11 +9,26 @@ use anyhow::Result;
 use image::DynamicImage;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// macOS display capture is mediated by WindowServer/replayd. Serializing these
 /// calls avoids concurrent multi-monitor spikes while preserving capture order.
 static MACOS_CAPTURE_SEMAPHORE: Lazy<tokio::sync::Semaphore> =
     Lazy::new(|| tokio::sync::Semaphore::new(1));
+
+/// ScreenCaptureKit can stop delivering the `SCShareableContent` completion
+/// callback after a capture teardown or update. Serialize healthy calls, but
+/// reserve one worker for a fresh retry after the first Apple callback wedges.
+static SCK_MONITOR_ENUMERATION_SERIALIZER: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
+static SCK_MONITOR_ENUMERATION_WORKERS: Lazy<Arc<tokio::sync::Semaphore>> =
+    Lazy::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
+
+const MONITOR_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[cfg(debug_assertions)]
+static SCK_E2E_HANG_INJECTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Optional cap on captured width for the macOS SCK stream. The GPU
 /// downscales to fit before `replayd` delivers the framebuffer, so
@@ -51,6 +66,10 @@ pub mod macos_version {
     /// Check if we should use sck-rs (requires macOS 12.3+)
     pub fn use_sck_rs() -> bool {
         let (major, minor) = *MACOS_VERSION;
+        supports_sck_rs(major, minor)
+    }
+
+    pub(super) fn supports_sck_rs(major: u32, minor: u32) -> bool {
         major > 12 || (major == 12 && minor >= 3)
     }
 
@@ -350,67 +369,143 @@ fn is_clamshell_inactive_builtin(display_id: u32) -> bool {
     }
 }
 
+async fn run_bounded_sck_enumeration<T, F>(
+    serializer: &tokio::sync::Mutex<()>,
+    workers: Arc<tokio::sync::Semaphore>,
+    timeout: Duration,
+    enumerate: F,
+) -> std::result::Result<T, MonitorListError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> std::result::Result<T, MonitorListError> + Send + 'static,
+{
+    // Healthy enumeration stays single-file. After a timeout this guard is
+    // released, allowing one genuinely fresh SCK request to recover capture.
+    // The holder is itself bounded by `timeout` below, so waiting here cannot
+    // inherit the unbounded Apple callback. Avoid racing two equal 15-second
+    // timeouts, which could reject the queued recovery attempt at the instant
+    // the first holder releases this guard.
+    let _serial_guard = serializer.lock().await;
+
+    // A timed-out spawn_blocking task cannot be cancelled because the Apple
+    // callback is outside Rust's control. Two permits bound the damage while
+    // still leaving capacity for one fresh recovery attempt.
+    let permit = workers.try_acquire_owned().map_err(|e| match e {
+        tokio::sync::TryAcquireError::NoPermits => MonitorListError::Other(
+            "ScreenCaptureKit monitor enumeration retry budget exhausted; two Apple callbacks remain blocked, restart screenpipe to recover"
+                .to_string(),
+        ),
+        tokio::sync::TryAcquireError::Closed => MonitorListError::Other(
+            "ScreenCaptureKit monitor enumeration worker pool closed".to_string(),
+        ),
+    })?;
+
+    let task = tokio::task::spawn_blocking(move || {
+        // Keep the permit inside the blocking task. If the async caller times
+        // out, the OS call may still be running and must continue to consume
+        // one of the two bounded worker slots until it really returns.
+        let _permit = permit;
+        enumerate()
+    });
+
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => Err(MonitorListError::Other(format!(
+            "macOS monitor enumeration task failed: {e}"
+        ))),
+        Err(_) => {
+            let message = format!(
+                "macOS monitor enumeration timed out after {}s; ScreenCaptureKit/replayd did not reply",
+                timeout.as_secs()
+            );
+            tracing::warn!("{message}; allowing one bounded fresh retry");
+            Err(MonitorListError::Other(message))
+        }
+    }
+}
+
+fn enumerate_sck_monitors() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
+    #[cfg(debug_assertions)]
+    if std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|seeds| {
+            seeds
+                .split(',')
+                .any(|seed| seed.trim() == "sck-enumeration-hang-once")
+        })
+        && !SCK_E2E_HANG_INJECTED.swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        tracing::warn!("e2e: injecting one blocked ScreenCaptureKit monitor enumeration callback");
+        loop {
+            std::thread::park();
+        }
+    }
+
+    tracing::debug!("Using sck-rs for screen capture (macOS 12.3+)");
+    match SckMonitor::all() {
+        Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
+        Ok(monitors) => Ok(monitors
+            .into_iter()
+            .map(SafeMonitor::from_sck)
+            .filter(|m| !is_clamshell_inactive_builtin(m.id()))
+            .collect()),
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("permission") || err_str.contains("Screen recording") {
+                Err(MonitorListError::PermissionDenied)
+            } else if err_str.contains("No monitors") {
+                Err(MonitorListError::NoMonitorsFound)
+            } else {
+                Err(MonitorListError::Other(err_str))
+            }
+        }
+    }
+}
+
+fn enumerate_xcap_monitors() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
+    tracing::info!("Using xcap fallback for screen capture (macOS < 12.3)");
+    match XcapMonitor::all() {
+        Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
+        Ok(monitors) => Ok(monitors
+            .into_iter()
+            .map(SafeMonitor::from_xcap)
+            .filter(|m| !is_clamshell_inactive_builtin(m.id()))
+            .collect()),
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("permission") || err_str.contains("Screen recording") {
+                Err(MonitorListError::PermissionDenied)
+            } else {
+                Err(MonitorListError::Other(err_str))
+            }
+        }
+    }
+}
+
 /// List monitors with detailed error information (permission denied vs no monitors)
 pub async fn list_monitors_detailed() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
-    // Wrap the ObjC call paths in an autorelease pool — SckMonitor::all() and
-    // XcapMonitor::all() both allocate autoreleased NSObjects (display
-    // descriptors, NSStrings). Tokio blocking workers are long-lived and
-    // reused; without a per-call drain these accumulate forever.
+    // Wrap the ObjC call paths in an autorelease pool. Tokio blocking workers
+    // are long-lived; without a per-call drain these objects accumulate.
     // See monitor::tests::repro_list_monitors_autorelease_leak.
-    let result: std::result::Result<Vec<SafeMonitor>, MonitorListError> =
-        tokio::task::spawn_blocking(|| {
-            cidre::objc::ar_pool(|| {
-                if use_sck_rs() {
-                    tracing::debug!("Using sck-rs for screen capture (macOS 12.3+)");
-                    match SckMonitor::all() {
-                        Ok(monitors) if monitors.is_empty() => {
-                            Err(MonitorListError::NoMonitorsFound)
-                        }
-                        Ok(monitors) => Ok(monitors
-                            .into_iter()
-                            .map(SafeMonitor::from_sck)
-                            .filter(|m| !is_clamshell_inactive_builtin(m.id()))
-                            .collect()),
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("permission")
-                                || err_str.contains("Screen recording")
-                            {
-                                Err(MonitorListError::PermissionDenied)
-                            } else if err_str.contains("No monitors") {
-                                Err(MonitorListError::NoMonitorsFound)
-                            } else {
-                                Err(MonitorListError::Other(err_str))
-                            }
-                        }
-                    }
-                } else {
-                    tracing::info!("Using xcap fallback for screen capture (macOS < 12.3)");
-                    match XcapMonitor::all() {
-                        Ok(monitors) if monitors.is_empty() => {
-                            Err(MonitorListError::NoMonitorsFound)
-                        }
-                        Ok(monitors) => Ok(monitors
-                            .into_iter()
-                            .map(SafeMonitor::from_xcap)
-                            .filter(|m| !is_clamshell_inactive_builtin(m.id()))
-                            .collect()),
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("permission")
-                                || err_str.contains("Screen recording")
-                            {
-                                Err(MonitorListError::PermissionDenied)
-                            } else {
-                                Err(MonitorListError::Other(err_str))
-                            }
-                        }
-                    }
-                }
-            })
-        })
+    let result: std::result::Result<Vec<SafeMonitor>, MonitorListError> = if use_sck_rs() {
+        run_bounded_sck_enumeration(
+            &SCK_MONITOR_ENUMERATION_SERIALIZER,
+            SCK_MONITOR_ENUMERATION_WORKERS.clone(),
+            MONITOR_ENUMERATION_TIMEOUT,
+            || cidre::objc::ar_pool(enumerate_sck_monitors),
+        )
         .await
-        .unwrap_or(Err(MonitorListError::Other("Task panicked".to_string())));
+    } else {
+        // macOS < 12.3 never enters ScreenCaptureKit. Preserve the legacy xcap
+        // behavior exactly instead of applying an unneeded SCK timeout policy.
+        tokio::task::spawn_blocking(|| cidre::objc::ar_pool(enumerate_xcap_monitors))
+            .await
+            .unwrap_or_else(|e| {
+                Err(MonitorListError::Other(format!(
+                    "legacy macOS monitor enumeration task failed: {e}"
+                )))
+            })
+    };
 
     if let Ok(monitors) = &result {
         update_monitor_cache(monitors);
@@ -575,6 +670,126 @@ impl SafeMonitor {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn macos_version_boundary_keeps_pre_12_3_on_legacy_xcap() {
+        assert!(!macos_version::supports_sck_rs(11, 7));
+        assert!(!macos_version::supports_sck_rs(12, 2));
+        assert!(macos_version::supports_sck_rs(12, 3));
+        assert!(macos_version::supports_sck_rs(13, 0));
+    }
+
+    #[test]
+    #[ignore = "requires a real macOS display; explicit legacy-backend smoke"]
+    fn legacy_xcap_monitor_enumeration_smoke() {
+        match cidre::objc::ar_pool(enumerate_xcap_monitors) {
+            Ok(monitors) => assert!(!monitors.is_empty()),
+            Err(MonitorListError::PermissionDenied | MonitorListError::NoMonitorsFound) => {
+                eprintln!("legacy xcap smoke skipped: display access unavailable")
+            }
+            Err(e) => panic!("legacy xcap monitor enumeration failed: {e}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn monitor_enumeration_timeout_allows_one_bounded_retry() {
+        let serializer = tokio::sync::Mutex::new(());
+        let workers = Arc::new(tokio::sync::Semaphore::new(2));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let first = run_bounded_sck_enumeration(
+            &serializer,
+            workers.clone(),
+            Duration::from_millis(25),
+            move || {
+                release_rx.recv().expect("release first enumeration");
+                Ok(1u8)
+            },
+        )
+        .await;
+        assert!(matches!(
+            first,
+            Err(MonitorListError::Other(ref message))
+                if message.contains("ScreenCaptureKit/replayd did not reply")
+        ));
+
+        let second = run_bounded_sck_enumeration(
+            &serializer,
+            workers.clone(),
+            Duration::from_secs(1),
+            || Ok(2u8),
+        )
+        .await;
+        assert!(matches!(second, Ok(2)), "a fresh retry should recover");
+
+        release_tx.send(()).expect("unblock first enumeration");
+        let recovered =
+            run_bounded_sck_enumeration(&serializer, workers, Duration::from_secs(1), || Ok(3u8))
+                .await;
+        assert!(matches!(recovered, Ok(3)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn monitor_enumeration_never_exceeds_two_blocked_workers() {
+        let serializer = tokio::sync::Mutex::new(());
+        let workers = Arc::new(tokio::sync::Semaphore::new(2));
+        let (release_first_tx, release_first_rx) = std::sync::mpsc::channel();
+        let (release_second_tx, release_second_rx) = std::sync::mpsc::channel();
+
+        for release_rx in [release_first_rx, release_second_rx] {
+            let result = run_bounded_sck_enumeration(
+                &serializer,
+                workers.clone(),
+                Duration::from_millis(25),
+                move || {
+                    release_rx.recv().expect("release blocked enumeration");
+                    Ok(1u8)
+                },
+            )
+            .await;
+            assert!(matches!(
+                result,
+                Err(MonitorListError::Other(ref message))
+                    if message.contains("ScreenCaptureKit/replayd did not reply")
+            ));
+        }
+
+        let third_ran = Arc::new(AtomicBool::new(false));
+        let third_ran_in_task = third_ran.clone();
+        let third = run_bounded_sck_enumeration(
+            &serializer,
+            workers.clone(),
+            Duration::from_secs(1),
+            move || {
+                third_ran_in_task.store(true, Ordering::SeqCst);
+                Ok(3u8)
+            },
+        )
+        .await;
+        assert!(matches!(
+            third,
+            Err(MonitorListError::Other(ref message))
+                if message.contains("retry budget exhausted")
+        ));
+        assert!(!third_ran.load(Ordering::SeqCst));
+
+        release_first_tx.send(()).expect("release first worker");
+        release_second_tx.send(()).expect("release second worker");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while workers.available_permits() < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("blocked worker permits should be released");
+        let recovered =
+            run_bounded_sck_enumeration(&serializer, workers, Duration::from_secs(1), || Ok(4u8))
+                .await;
+        assert!(matches!(recovered, Ok(4)));
+    }
+
     /// Reproduction for the macOS memory leak reported 2026-04-22
     /// (user's screenpipe at 13.2 GB RSS after ~48 h).
     ///

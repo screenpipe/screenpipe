@@ -44,6 +44,9 @@ interface EnterprisePolicy {
   appUpdatePolicy: EnterpriseAppUpdatePolicy;
   managedPipes: ManagedPipe[];
   orgName: string;
+  /** Admin requires employees to sign in with their screenpipe account —
+   *  the enterprise license key alone must not authenticate this device. */
+  requireAccountLogin: boolean;
 }
 
 const EMPTY_POLICY: EnterprisePolicy = {
@@ -54,7 +57,11 @@ const EMPTY_POLICY: EnterprisePolicy = {
   appUpdatePolicy: DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
   managedPipes: [],
   orgName: "",
+  requireAccountLogin: false,
 };
+
+const ACCOUNT_LOGIN_REQUIRED_ERROR =
+  "your organization requires signing in with your screenpipe account";
 
 // Sections always hidden in enterprise builds (regardless of policy).
 // "account" is deliberately NOT here: authentication is handled by onboarding
@@ -123,6 +130,7 @@ function readE2ePolicyMock(licenseKey: string): E2ePolicyMockResult {
         appUpdatePolicy: DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
         managedPipes: [],
         orgName: "E2E Enterprise",
+        requireAccountLogin: false,
         ...policy,
       },
     };
@@ -476,6 +484,7 @@ function loadCachedPolicy(): EnterprisePolicy | null {
         appUpdatePolicy: normalizeEnterpriseAppUpdatePolicy(policy.appUpdatePolicy),
         managedPipes: Array.isArray(policy.managedPipes) ? policy.managedPipes : [],
         orgName: typeof policy.orgName === "string" ? policy.orgName : "",
+        requireAccountLogin: policy.requireAccountLogin === true,
       };
     }
   } catch {}
@@ -521,6 +530,13 @@ export function useEnterprisePolicyRuntime() {
     useState<EnterpriseAuthenticationState>("checking");
   const [authenticationError, setAuthenticationError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Refs for the polling handler: it must read the latest account token and
+  // re-enter authentication without recreating the interval on every render.
+  const accountTokenRef = useRef<string | null>(accountToken);
+  accountTokenRef.current = accountToken;
+  const authenticateCredentialRef = useRef<
+    ((credential: EnterpriseCredential) => Promise<boolean>) | null
+  >(null);
 
   const fetchPolicy = useCallback(async (
     credential: EnterpriseCredential,
@@ -622,6 +638,7 @@ export function useEnterprisePolicyRuntime() {
         appUpdatePolicy,
         managedPipes: data.managedPipes || [],
         orgName: data.orgName || "",
+        requireAccountLogin: data.requireAccountLogin === true,
       };
 
       console.log(
@@ -782,6 +799,27 @@ export function useEnterprisePolicyRuntime() {
       const result = await fetchPolicy(credential);
       if (result.ok) {
         setPolicy(result.policy);
+        // Remote settings update: the admin flipped the org from
+        // license-key-allowed to sign-in-required while this device is
+        // authenticated with the key. Drop the key session immediately —
+        // fall back to the signed-in screenpipe account when one exists,
+        // otherwise gate the app on account sign-in.
+        if (credential.type === "license_key" && result.policy.requireAccountLogin) {
+          console.warn(
+            "[enterprise] organization now requires account sign-in — ending license-key session"
+          );
+          stopPolling();
+          const token = accountTokenRef.current;
+          if (token && authenticateCredentialRef.current) {
+            const reauthenticated = await authenticateCredentialRef.current({
+              type: "account",
+              value: token,
+            });
+            if (reauthenticated) return;
+          }
+          setAuthenticationState("account");
+          setAuthenticationError(ACCOUNT_LOGIN_REQUIRED_ERROR);
+        }
       } else if (result.reason === "invalid_key") {
         console.warn("[enterprise] saved key is no longer valid, prompting for a new one");
         stopPolling();
@@ -807,6 +845,15 @@ export function useEnterprisePolicyRuntime() {
   ): Promise<boolean> => {
     const result = await fetchPolicy(credential);
     if (result.ok) {
+      // The key is valid as a device credential, but the org requires every
+      // employee to sign in with their screenpipe account. Device policy was
+      // already applied by fetchPolicy; only authentication is refused.
+      if (credential.type === "license_key" && result.policy.requireAccountLogin) {
+        setPolicy(result.policy);
+        setAuthenticationState("account");
+        setAuthenticationError(ACCOUNT_LOGIN_REQUIRED_ERROR);
+        return false;
+      }
       setAuthenticationError(null);
       setAuthenticationState("authenticated");
       setPolicy(result.policy);
@@ -834,6 +881,7 @@ export function useEnterprisePolicyRuntime() {
     setAuthenticationError("could not verify enterprise access - check your connection and try again");
     return false;
   }, [fetchPolicy, startPolling]);
+  authenticateCredentialRef.current = authenticateCredential;
 
   /**
    * Called from the license key prompt dialog. Validates the key against the
@@ -853,6 +901,15 @@ export function useEnterprisePolicyRuntime() {
             ? "enterprise key has expired - contact your admin"
             : "could not validate license - check your connection and try again",
       };
+    }
+
+    // Org policy forbids key-only activation: route the employee to account
+    // sign-in instead of saving the key.
+    if (result.policy.requireAccountLogin) {
+      setPolicy(result.policy);
+      setAuthenticationState("account");
+      setAuthenticationError(ACCOUNT_LOGIN_REQUIRED_ERROR);
+      return { ok: false, error: ACCOUNT_LOGIN_REQUIRED_ERROR };
     }
 
     const heartbeat = await withTimeout(

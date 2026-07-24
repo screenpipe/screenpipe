@@ -427,4 +427,101 @@ describe("enterprise policy runtime manual activation", () => {
     expect(result.current.isEnterpriseAuthenticated).toBe(true);
     expect(mocks.commands.saveEnterpriseLicenseKey).toHaveBeenCalledWith(KEY);
   });
+
+  it("refuses key activation when the org requires account sign-in", async () => {
+    mockEnterpriseApi({ policy: { requireAccountLogin: true } });
+    const { result } = await renderEnterprisePolicy();
+
+    let activation!: Awaited<ReturnType<typeof result.current.submitLicenseKey>>;
+    await act(async () => {
+      activation = await result.current.submitLicenseKey(KEY);
+    });
+
+    expect(activation).toEqual({
+      ok: false,
+      error: "your organization requires signing in with your screenpipe account",
+    });
+    expect(result.current.authenticationState).toBe("account");
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(mocks.commands.saveEnterpriseLicenseKey).not.toHaveBeenCalled();
+  });
+
+  it("does not authenticate a saved key when the org requires account sign-in", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    mockEnterpriseApi({ policy: { requireAccountLogin: true } });
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.authenticationState).toBe("account"));
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(result.current.authenticationError).toMatch(/requires signing in/i);
+    expect(result.current.policy.requireAccountLogin).toBe(true);
+  });
+
+  it("falls back to the signed-in account when the saved key is refused by policy", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    Object.assign(mocks.settings, { user: { token: "account-token" } });
+    mockEnterpriseApi({ policy: { requireAccountLogin: true } });
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.isEnterpriseAuthenticated).toBe(true));
+    const accountPolicyCall = mocks.tauriFetch.mock.calls.find(
+      ([url, init]) =>
+        String(url).includes("/api/enterprise/policy") &&
+        init?.headers?.Authorization === "Bearer account-token" &&
+        init?.headers?.["X-License-Key"] === undefined
+    );
+    expect(accountPolicyCall).toBeDefined();
+  });
+
+  it("signs out a key-authenticated device when the policy flips to require account sign-in", async () => {
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    mockEnterpriseApi({});
+
+    const { result } = await renderEnterprisePolicy();
+    await act(async () => {});
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+
+    // Admin flips the org to sign-in-required; the next 5-minute policy poll
+    // must end the license-key session immediately.
+    mockEnterpriseApi({ policy: { requireAccountLogin: true } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    });
+
+    expect(result.current.authenticationState).toBe("account");
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(result.current.authenticationError).toMatch(/requires signing in/i);
+  });
+
+  it("switches a key-authenticated device to its signed-in account when the policy flips", async () => {
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    Object.assign(mocks.settings, { user: { token: "account-token" } });
+    mockEnterpriseApi({});
+
+    const { result } = await renderEnterprisePolicy();
+    await act(async () => {});
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+
+    mockEnterpriseApi({ policy: { requireAccountLogin: true } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    });
+
+    // Seamlessly re-authenticated with the account credential instead of
+    // stranding the employee on the sign-in gate.
+    expect(result.current.authenticationState).toBe("authenticated");
+    const accountPolicyCall = [...mocks.tauriFetch.mock.calls]
+      .reverse()
+      .find(
+        ([url, init]) =>
+          String(url).includes("/api/enterprise/policy") &&
+          init?.headers?.Authorization === "Bearer account-token" &&
+          init?.headers?.["X-License-Key"] === undefined
+      );
+    expect(accountPolicyCall).toBeDefined();
+  });
 });

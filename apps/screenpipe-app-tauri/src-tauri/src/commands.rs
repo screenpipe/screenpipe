@@ -639,11 +639,12 @@ pub async fn set_cloud_token(
     if let Some((pipe_manager, enforce_free_plan_retention)) = server_handles {
         enforce_free_plan_retention.store(is_free_plan, std::sync::atomic::Ordering::SeqCst);
         let mut pipe_manager = pipe_manager.lock().await;
-        pipe_manager.set_max_non_template_pipes(restrict_paid_features.then_some(2));
-        pipe_manager
-            .load_pipes()
-            .await
-            .map_err(|e| format!("failed to reload pipes after plan change: {e}"))?;
+        if pipe_manager.set_max_non_template_pipes(restrict_paid_features.then_some(2)) {
+            pipe_manager
+                .load_pipes()
+                .await
+                .map_err(|e| format!("failed to reload pipes after plan change: {e}"))?;
+        }
     }
 
     // #3943: persist to the encrypted secret store (authoritative at-rest copy)

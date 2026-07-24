@@ -50,7 +50,7 @@ import posthog from "posthog-js";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import {
-  getPlanExpiration,
+  getUserPlanExpiration,
   PlanExpirationNotice,
 } from "@/components/plan-expiration-notice";
 
@@ -117,8 +117,8 @@ export function AccountSection() {
   const [connectionsSyncing, setConnectionsSyncing] = useState(false);
   const subscriptionPlan = settings.user?.subscription_plan ?? null;
   const hasNamedPlan = !!subscriptionPlan && subscriptionPlan !== "none";
-  const planExpiresAt = (settings.user as AppUser | null)?.plan_expires_at;
-  const hasExpiringProfilePlan = getPlanExpiration(planExpiresAt) !== null;
+  const appUser = settings.user as AppUser | null;
+  const hasExpiringProfilePlan = getUserPlanExpiration(appUser) !== null;
 
   useEffect(() => {
     if (!settings.user?.email) {
@@ -246,9 +246,17 @@ export function AccountSection() {
                   // (This poll runs token-authenticated, so the guard is
                   // belt-and-suspenders.)
                   if (settings.user?.token) {
-                    updateSettings({
-                      user: { ...settings.user, cloud_subscribed: true },
+                    await updateSettings({
+                      user: {
+                        ...settings.user,
+                        cloud_subscribed: true,
+                        plan_expires_at: null,
+                      } as AppUser,
                     });
+                    // Refresh the complete entitlement so its source changes
+                    // from manual (the profile trial grant) to subscription
+                    // in this session.
+                    await loadUser(settings.user.token, true);
                   }
                   toast({
                     title: "subscription activated",
@@ -375,8 +383,7 @@ export function AccountSection() {
           </div>
 
           <PlanExpirationNotice
-            expiresAt={planExpiresAt}
-            plan={subscriptionPlan}
+            user={appUser}
             onClick={() => openExternalUrl(BILLING_URL)}
             variant="account"
           />

@@ -4,38 +4,80 @@
 
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
-type SidebarPipeSchedule = {
-  schedule?: string | null;
-  schedule_config?: unknown | null;
-  trigger?: { events?: unknown[]; custom?: unknown[]; sources?: unknown[] } | null;
-};
-
-/** The sidebar Pipes section is for automated pipes (scheduled or triggered), not manual templates. */
-export function pipeHasSidebarSchedule(config: SidebarPipeSchedule): boolean {
-  const isTriggered =
-    !!(config.trigger?.events?.length) ||
-    !!(config.trigger?.custom?.length) ||
-    !!(config.trigger?.sources?.length);
-  return (
-    isTriggered ||
-    config.schedule_config != null ||
-    (typeof config.schedule === "string" &&
-      config.schedule.length > 0 &&
-      config.schedule !== "manual")
+export function latestSidebarPipeRunTimes(
+  inventory: Array<{ name: string; lastRun: string | null }>,
+  sessions: SessionRecord[],
+): Record<string, string> {
+  const latest = new Map<string, number>();
+  for (const pipe of inventory) {
+    if (!pipe.lastRun) continue;
+    const timestamp = new Date(pipe.lastRun).getTime();
+    if (Number.isFinite(timestamp)) latest.set(pipe.name, timestamp);
+  }
+  for (const session of sessions) {
+    const pipeName = session.pipeContext?.pipeName;
+    if (session.kind !== "pipe-run" || !pipeName) continue;
+    const current = latest.get(pipeName) ?? Number.NEGATIVE_INFINITY;
+    if (session.updatedAt > current) latest.set(pipeName, session.updatedAt);
+  }
+  return Object.fromEntries(
+    Array.from(latest, ([name, timestamp]) => [
+      name,
+      new Date(timestamp).toISOString(),
+    ]),
   );
 }
 
 export function visibleSidebarPipeNames(
-  inventory: Array<{ name: string; hasSchedule: boolean }>,
-  sessionPipeNames: Iterable<string>,
+  inventory: Array<{
+    name: string;
+    executionCount: number;
+    lastRun?: string | null;
+    latestExecutionId?: number;
+  }>,
+  sessions: SessionRecord[],
 ): string[] {
-  const inventoryNames = new Set(inventory.map((pipe) => pipe.name));
-  return [
-    ...inventory.filter((pipe) => pipe.hasSchedule).map((pipe) => pipe.name),
-    // Preserve history for pipes that were deleted after they ran. Known
-    // manual pipes are intentionally absent from this recurring section.
-    ...Array.from(sessionPipeNames).filter((name) => !inventoryNames.has(name)),
-  ];
+  const visible = new Map<
+    string,
+    { latestRun: number; latestExecutionId: number }
+  >();
+
+  for (const pipe of inventory) {
+    if (pipe.executionCount <= 0) continue;
+    const timestamp = pipe.lastRun ? new Date(pipe.lastRun).getTime() : 0;
+    visible.set(pipe.name, {
+      latestRun: Number.isFinite(timestamp) ? timestamp : 0,
+      latestExecutionId: pipe.latestExecutionId ?? 0,
+    });
+  }
+
+  // Preserve locally-known history if the activity endpoint is unavailable
+  // or has not paged/refreshed far enough to include the pipe yet. Only
+  // terminal pipe-run sessions count here; live pipe-watch sessions should not
+  // move a group to "now" until that execution actually becomes history.
+  for (const session of sessions) {
+    const name = session.pipeContext?.pipeName;
+    if (session.kind !== "pipe-run" || !name) continue;
+    const current = visible.get(name);
+    if (!current || session.updatedAt > current.latestRun) {
+      visible.set(name, {
+        latestRun: session.updatedAt,
+        latestExecutionId: current?.latestExecutionId ?? 0,
+      });
+    }
+  }
+
+  return Array.from(visible.entries())
+    .sort((a, b) => {
+      const [, left] = a;
+      const [, right] = b;
+      return (
+        right.latestRun - left.latestRun ||
+        right.latestExecutionId - left.latestExecutionId ||
+        a[0].localeCompare(b[0])
+      );
+    })
+    .map(([name]) => name);
 }
 
 // ── Types ────────────────────────────────────────────────────────────

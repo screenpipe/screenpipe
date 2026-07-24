@@ -154,6 +154,11 @@ export default function PermissionsStep({
   const statusesRef = useRef<Record<string, boolean>>({});
   const pollInFlightRef = useRef(false);
   const pollAgainRef = useRef(false);
+  // Accessibility is polled silently (AXIsProcessTrusted) until the user
+  // actively requests it. Only then do we switch to the live tccd probe,
+  // which enrolls the app in the Accessibility list / can surface the system
+  // prompt — acceptable once the user is granting, not on step mount.
+  const accessibilityRequestedRef = useRef(false);
 
   // Wheel order: the user is walked through these strictly in sequence.
   const permissions: PermissionDef[] = [
@@ -203,8 +208,16 @@ export default function PermissionsStep({
       icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
       title: "Read on-screen text",
       subtitle: "Lets Screenpipe understand app content without OCR",
-      check: () => commands.checkAccessibilityPermissionCmd(),
-      request: () => requestPermissionWithFlow("accessibility"),
+      // Silent poll until the user asks for it, then the live tccd probe so a
+      // grant made in Settings is seen without an app relaunch.
+      check: () =>
+        accessibilityRequestedRef.current
+          ? commands.checkAccessibilityPermissionLiveCmd()
+          : commands.checkAccessibilityPermissionCmd(),
+      request: () => {
+        accessibilityRequestedRef.current = true;
+        return requestPermissionWithFlow("accessibility");
+      },
       macOnly: true,
     },
     {

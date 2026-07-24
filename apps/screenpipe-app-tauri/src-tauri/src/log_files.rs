@@ -23,6 +23,43 @@ pub struct LogFile {
 
 #[tauri::command]
 #[specta::specta]
+pub async fn read_log_tail(path: String, max_bytes: u32) -> Result<String, String> {
+    read_tail(Path::new(&path), max_bytes as u64)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read at most the last `max_bytes` of a file. Replaces reading whole log
+/// files into the webview, where a runaway multi-hundred-MB log froze the
+/// report dialog on "sending..." (#5360).
+pub(crate) async fn read_tail(path: &Path, max_bytes: u64) -> anyhow::Result<String> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let len = file.metadata().await?.len();
+
+    let mut buf = Vec::with_capacity(len.min(max_bytes) as usize);
+    let truncated = len > max_bytes;
+    if truncated {
+        file.seek(std::io::SeekFrom::End(-(max_bytes as i64))).await?;
+    }
+    file.take(max_bytes).read_to_end(&mut buf).await?;
+
+    // Lossy: the seek may land mid-way through a multi-byte character.
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        Ok(format!(
+            "... [truncated, showing last {}KB] ...\n{}",
+            max_bytes / 1024,
+            text
+        ))
+    } else {
+        Ok(text)
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn get_log_files(app: AppHandle) -> Result<Vec<LogFile>, String> {
     let data_dir = get_screenpipe_data_dir(&app).map_err(|e| e.to_string())?;
     let screenpipe_data_dir = get_data_dir(&app).map_err(|e| e.to_string())?;
@@ -236,6 +273,39 @@ mod tests {
             names(&files),
             HashSet::from(["one.log".to_string(), "two.log".to_string()])
         );
+    }
+
+    #[tokio::test]
+    async fn read_tail_returns_small_file_whole() {
+        let dir = tempdir().unwrap();
+        let path = write_file(dir.path(), "small.log", "just a few lines").await;
+
+        let text = read_tail(&path, 100 * 1024).await.unwrap();
+
+        assert_eq!(text, "just a few lines");
+    }
+
+    #[tokio::test]
+    async fn read_tail_truncates_large_file_to_tail() {
+        let dir = tempdir().unwrap();
+        let contents = format!("{}END", "x".repeat(5000));
+        let path = write_file(dir.path(), "big.log", &contents).await;
+
+        let text = read_tail(&path, 1024).await.unwrap();
+
+        assert!(text.starts_with("... [truncated, showing last 1KB] ...\n"));
+        assert!(text.ends_with("END"));
+        // banner + exactly 1024 bytes of tail
+        let tail = text.split_once('\n').unwrap().1;
+        assert_eq!(tail.len(), 1024);
+    }
+
+    #[tokio::test]
+    async fn read_tail_missing_file_is_err() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("nope.log");
+
+        assert!(read_tail(&missing, 1024).await.is_err());
     }
 
     #[tokio::test]

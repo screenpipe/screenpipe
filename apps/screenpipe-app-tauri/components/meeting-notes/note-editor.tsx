@@ -12,6 +12,7 @@ import React, {
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
+import HardBreak from "@tiptap/extension-hard-break";
 import Image from "@tiptap/extension-image";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Markdown } from "tiptap-markdown";
@@ -90,6 +91,41 @@ const ResizableImage = Image.extend({
   },
 });
 
+/**
+ * Hard break with heading-safe markdown serialization.
+ * tiptap-markdown serializes hard breaks as `\` + newline, but a newline
+ * terminates an ATX heading line, so on the next load the trailing `\`
+ * re-parses as literal text ("Product:\") and corrupts further on every
+ * save/load round-trip. Headings can't represent backslash hard breaks in
+ * markdown, so emit an inline `<br>` there instead — the same escape hatch
+ * tiptap-markdown itself uses for hard breaks inside tables.
+ */
+const MarkdownHardBreak = HardBreak.extend({
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: any, node: any, parent: any, index: number) {
+          // Skip trailing hard breaks (nothing after them to separate),
+          // mirroring tiptap-markdown's own serializer.
+          for (let i = index + 1; i < parent.childCount; i++) {
+            if (parent.child(i).type !== node.type) {
+              state.write(
+                state.inTable || parent.type.name === "heading"
+                  ? "<br>"
+                  : "\\\n",
+              );
+              return;
+            }
+          }
+        },
+        parse: {
+          // handled by markdown-it
+        },
+      },
+    };
+  },
+});
+
 export interface NoteEditorProps {
   value: string;
   onChange: (markdown: string) => void;
@@ -159,6 +195,56 @@ export function createMeetingNotePlaceholderExtension(placeholder: string) {
     showOnlyWhenEditable: true,
     showOnlyCurrent: true,
   });
+}
+
+/**
+ * Full extension set for the meeting note editor. Exported so tests can
+ * round-trip markdown through the exact production configuration.
+ */
+export function createMeetingNoteEditorExtensions(placeholder: string) {
+  return [
+    StarterKit.configure({
+      heading: { levels: [1, 2, 3, 4] },
+      // Replaced by MarkdownHardBreak (heading-safe serialization, #5369).
+      hardBreak: false,
+      // StarterKit bundles Link in 3.x; keep its defaults but make pasted
+      // URLs auto-link and open in the system browser when clicked.
+      link: {
+        openOnClick: true,
+        autolink: true,
+        HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
+      },
+    }),
+    MarkdownHardBreak,
+    createMeetingNotePlaceholderExtension(placeholder),
+    ResizableImage.configure({
+      allowBase64: true,
+      inline: false,
+      HTMLAttributes: {
+        class: "meeting-note-image",
+      },
+      resize: {
+        enabled: true,
+        directions: ["bottom-right"],
+        minWidth: 64,
+        minHeight: 64,
+        alwaysPreserveAspectRatio: true,
+      },
+    }),
+    // GFM task lists ("- [ ]") — tiptap-markdown round-trips them, so the
+    // persisted markdown stays portable. Styled in globals.css.
+    TaskList,
+    TaskItem.configure({ nested: true }),
+    Markdown.configure({
+      html: true,
+      tightLists: true,
+      bulletListMarker: "-",
+      linkify: true,
+      breaks: false,
+      transformPastedText: true,
+      transformCopiedText: true,
+    }),
+  ];
 }
 
 /**
@@ -268,46 +354,7 @@ function NoteEditor(
 
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3, 4] },
-        // StarterKit bundles Link in 3.x; keep its defaults but make pasted
-        // URLs auto-link and open in the system browser when clicked.
-        link: {
-          openOnClick: true,
-          autolink: true,
-          HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
-        },
-      }),
-      createMeetingNotePlaceholderExtension(placeholder ?? ""),
-      ResizableImage.configure({
-        allowBase64: true,
-        inline: false,
-        HTMLAttributes: {
-          class: "meeting-note-image",
-        },
-        resize: {
-          enabled: true,
-          directions: ["bottom-right"],
-          minWidth: 64,
-          minHeight: 64,
-          alwaysPreserveAspectRatio: true,
-        },
-      }),
-      // GFM task lists ("- [ ]") — tiptap-markdown round-trips them, so the
-      // persisted markdown stays portable. Styled in globals.css.
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      Markdown.configure({
-        html: true,
-        tightLists: true,
-        bulletListMarker: "-",
-        linkify: true,
-        breaks: false,
-        transformPastedText: true,
-        transformCopiedText: true,
-      }),
-    ],
+    extensions: createMeetingNoteEditorExtensions(placeholder ?? ""),
     content: value,
     autofocus: autoFocus ? "end" : false,
     editorProps: {

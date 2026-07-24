@@ -442,6 +442,11 @@ pub struct UpdatesManager {
 
 impl UpdatesManager {
     pub fn new(app: &tauri::AppHandle, interval_minutes: u64) -> Result<Self, Error> {
+        // A staged file from a previous process can never be installed (the
+        // in-memory Update handle died with that process) — drop it.
+        #[cfg(target_os = "macos")]
+        crate::staged_update::clear_stage_dir(app);
+
         let update_menu_item = if is_enterprise_build(app) {
             None
         } else {
@@ -743,32 +748,42 @@ impl UpdatesManager {
                     let menu_item = self.update_menu_item.clone();
                     let mut downloaded: u64 = 0;
                     let mut last_pct: u8 = 0;
-                    let result = update
-                        .download_and_install(
-                            move |chunk_len, content_len| {
-                                downloaded += chunk_len as u64;
-                                let pct = content_len
-                                    .map(|total| ((downloaded as f64 / total as f64) * 100.0) as u8)
-                                    .unwrap_or(0);
-                                // Only emit every 5% to avoid flooding
-                                if pct >= last_pct + 5 || pct == 100 {
-                                    last_pct = pct;
-                                    let progress = serde_json::json!({
-                                        "version": update_version,
-                                        "downloaded": downloaded,
-                                        "total": content_len,
-                                        "percent": pct,
-                                    });
-                                    let _ = app_handle.emit("update-download-progress", progress);
-                                    info!("update download: {}%", pct);
-                                }
-                                if let Some(ref m) = menu_item {
-                                    let _ = m.set_text(&format!("Downloading update... {}%", pct));
-                                }
-                            },
-                            || {},
-                        )
-                        .await;
+                    let on_chunk = move |chunk_len: usize, content_len: Option<u64>| {
+                        downloaded += chunk_len as u64;
+                        let pct = content_len
+                            .map(|total| ((downloaded as f64 / total as f64) * 100.0) as u8)
+                            .unwrap_or(0);
+                        // Only emit every 5% to avoid flooding
+                        if pct >= last_pct + 5 || pct == 100 {
+                            last_pct = pct;
+                            let progress = serde_json::json!({
+                                "version": update_version,
+                                "downloaded": downloaded,
+                                "total": content_len,
+                                "percent": pct,
+                            });
+                            let _ = app_handle.emit("update-download-progress", progress);
+                            info!("update download: {}%", pct);
+                        }
+                        if let Some(ref m) = menu_item {
+                            let _ = m.set_text(&format!("Downloading update... {}%", pct));
+                        }
+                    };
+                    // macOS: never install in the background. install() renames
+                    // the running bundle into a temp dir, which breaks TCC
+                    // attribution for the live process (ScreenCaptureKit -3801)
+                    // until relaunch. Download + stage only; the install runs
+                    // on the exit path (see staged_update.rs).
+                    #[cfg(target_os = "macos")]
+                    let result = match update.download(on_chunk, || {}).await {
+                        Ok(bytes) => {
+                            crate::staged_update::stage(&self.app, update.clone(), &bytes)
+                                .map_err(tauri_plugin_updater::Error::Io)
+                        }
+                        Err(e) => Err(e),
+                    };
+                    #[cfg(not(target_os = "macos"))]
+                    let result = update.download_and_install(on_chunk, || {}).await;
 
                     match &result {
                         Ok(_) => break result,

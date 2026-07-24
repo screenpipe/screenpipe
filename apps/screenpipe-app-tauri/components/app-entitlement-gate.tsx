@@ -135,7 +135,12 @@ export function AppEntitlementGate({
     isManagedAuthenticated,
     selectAuthenticationMethod,
     submitLicenseKey,
+    policy: managedPolicy,
   } = useManagedPolicy();
+  // When the org policy requires account sign-in, the license key can't
+  // authenticate — don't offer it. Best-effort: known from the last fetched
+  // or cached policy, and always known right after a key was refused.
+  const licenseKeyAllowed = !managedPolicy?.requireAccountLogin;
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState("");
@@ -723,14 +728,16 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             sign in with enterprise account
           </Button>
-          <Button
-            onClick={() => selectAuthenticationMethod("license_key")}
-            variant="outline"
-            className="w-full gap-2"
-          >
-            <KeyRound className="h-4 w-4" />
-            use enterprise key
-          </Button>
+          {licenseKeyAllowed && (
+            <Button
+              onClick={() => selectAuthenticationMethod("license_key")}
+              variant="outline"
+              className="w-full gap-2"
+            >
+              <KeyRound className="h-4 w-4" />
+              use enterprise key
+            </Button>
+          )}
         </div>
         {devLoginBlock}
       </EntitlementShell>
@@ -773,14 +780,16 @@ export function AppEntitlementGate({
             <LogIn className="h-4 w-4" />
             {signedIn ? "use different account" : "sign in"}
           </Button>
-          <Button
-            onClick={() => selectAuthenticationMethod("license_key")}
-            variant="outline"
-            className="w-full gap-2"
-          >
-            <KeyRound className="h-4 w-4" />
-            use enterprise key
-          </Button>
+          {licenseKeyAllowed && (
+            <Button
+              onClick={() => selectAuthenticationMethod("license_key")}
+              variant="outline"
+              className="w-full gap-2"
+            >
+              <KeyRound className="h-4 w-4" />
+              use enterprise key
+            </Button>
+          )}
         </div>
         {devLoginBlock}
       </EntitlementShell>
