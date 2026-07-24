@@ -545,11 +545,15 @@ mod net_tests {
                     }
                     "LOGOUT" => {
                         w.write_all(b"* BYE\r\n").await.unwrap();
-                        w.write_all(format!("{} OK\r\n", tag).as_bytes()).await.unwrap();
+                        w.write_all(format!("{} OK\r\n", tag).as_bytes())
+                            .await
+                            .unwrap();
                         break;
                     }
                     _ => {
-                        w.write_all(format!("{} OK\r\n", tag).as_bytes()).await.unwrap();
+                        w.write_all(format!("{} OK\r\n", tag).as_bytes())
+                            .await
+                            .unwrap();
                     }
                 }
             }
