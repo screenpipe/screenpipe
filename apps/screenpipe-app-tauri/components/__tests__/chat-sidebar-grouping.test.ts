@@ -102,12 +102,55 @@ describe("visibleSidebarPipeNames", () => {
     expect(
       visibleSidebarPipeNames(
         [
-          { name: "never-ran", executionCount: 0 },
-          { name: "daily-recap", executionCount: 3 },
+          { name: "never-ran", executionCount: 0, lastRun: null },
+          {
+            name: "daily-recap",
+            executionCount: 3,
+            lastRun: "2026-07-24T08:00:00.000Z",
+          },
         ],
-        ["daily-recap", "deleted-pipe"],
+        [
+          {
+            ...s("deleted-pipe-run", "deleted-pipe #1", "deleted-pipe"),
+            kind: "pipe-run",
+            updatedAt: Date.parse("2026-07-24T07:00:00.000Z"),
+          },
+        ],
       ),
     ).toEqual(["daily-recap", "deleted-pipe"]);
+  });
+
+  it("sorts locally completed runs by latest terminal time", () => {
+    expect(
+      visibleSidebarPipeNames(
+        [
+          {
+            name: "older-pipe",
+            executionCount: 2,
+            latestExecutionId: 20,
+            lastRun: "2026-07-24T08:00:00.000Z",
+          },
+          {
+            name: "oldest-pipe",
+            executionCount: 1,
+            latestExecutionId: 10,
+            lastRun: "2026-07-24T07:00:00.000Z",
+          },
+        ],
+        [
+          {
+            ...s("new-pipe-run", "new-pipe #1", "new-pipe"),
+            kind: "pipe-run",
+            updatedAt: Date.parse("2026-07-24T09:00:00.000Z"),
+          },
+          {
+            ...s("running-pipe-watch", "running-pipe #1", "running-pipe"),
+            kind: "pipe-watch",
+            updatedAt: Date.parse("2026-07-24T10:00:00.000Z"),
+          },
+        ],
+      ),
+    ).toEqual(["new-pipe", "older-pipe", "oldest-pipe"]);
   });
 });
 

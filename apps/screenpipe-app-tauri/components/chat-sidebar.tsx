@@ -714,7 +714,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       else sessionsByPipe.set(name, [session]);
     }
 
-    const orderedNames = visibleSidebarPipeNames(pipeInventory, sessionsByPipe.keys());
+    const orderedNames = visibleSidebarPipeNames(pipeInventory, pipes);
 
     return orderedNames.map((name) => {
       // Keep a newly completed run visible before the activity inventory
