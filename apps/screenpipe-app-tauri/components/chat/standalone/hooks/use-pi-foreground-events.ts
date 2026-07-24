@@ -248,6 +248,20 @@ export function usePiForegroundEvents({
           cancelStreamingMessageRender();
         }
 
+        if (data.type === "manual_followup_ready") {
+          cancelStreamingMessageRender();
+          if (data.success === false) {
+            const errorStr = "Could not pause Pi for your reply";
+            piLastErrorRef.current = errorStr;
+            emitSessionActivity({ status: "error", lastError: errorStr });
+            return;
+          }
+          setIsLoading(false);
+          setIsStreaming(false);
+          emitSessionActivity({ status: "idle" });
+          return;
+        }
+
         if (
           data.type === "message_update" &&
           data.assistantMessageEvent &&
@@ -257,9 +271,6 @@ export function usePiForegroundEvents({
           const delta = stringValue(evt.delta);
           if (evt.type === "text_delta" && delta) {
             if (hasPendingAskUserReply(piContentBlocksRef.current)) {
-              setIsLoading(false);
-              setIsStreaming(false);
-              emitSessionActivity({ status: "idle" });
               return;
             }
             // First delta of a queued turn → create the placeholder lazily.
@@ -320,6 +331,7 @@ export function usePiForegroundEvents({
             }
           }
         } else if (data.type === "tool_execution_start") {
+          if (hasPendingAskUserReply(piContentBlocksRef.current)) return;
           if (!ensureAssistantPlaceholder()) return;
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
@@ -336,12 +348,6 @@ export function usePiForegroundEvents({
             setMessages((prev) =>
               prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
             );
-            if (hasPendingAskUserReply(contentBlocks)) {
-              cancelStreamingMessageRender();
-              setIsLoading(false);
-              setIsStreaming(false);
-              emitSessionActivity({ status: "idle" });
-            }
           }
         } else if (data.type === "tool_execution_end") {
           if (piMessageIdRef.current) {

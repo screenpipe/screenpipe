@@ -104,6 +104,56 @@ fn flush_pending_text_delta(
         }
     }
 }
+
+fn is_ask_user_tool_name(tool_name: Option<&str>) -> bool {
+    tool_name
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .eq_ignore_ascii_case("askuser")
+}
+
+fn tool_result_text(event: &Value) -> String {
+    event
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+fn result_needs_manual_followup(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    normalized.contains("requires interactive")
+        || normalized.contains("needs user input")
+        || normalized.contains("non-interactive")
+        || normalized.contains("noninteractive")
+}
+
+fn is_ask_user_manual_followup_event(event: &Value) -> bool {
+    event.get("type").and_then(|t| t.as_str()) == Some("tool_execution_end")
+        && event.get("isError").and_then(|v| v.as_bool()) != Some(true)
+        && is_ask_user_tool_name(event.get("toolName").and_then(|t| t.as_str()))
+        && result_needs_manual_followup(&tool_result_text(event))
+}
+
+fn starts_user_prompt(event: &Value) -> bool {
+    matches!(
+        event.get("type").and_then(|t| t.as_str()),
+        Some("message_start") | Some("message_end")
+    ) && event
+        .get("message")
+        .and_then(|m| m.get("role"))
+        .and_then(|r| r.as_str())
+        == Some("user")
+}
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Output, Stdio};
@@ -2150,8 +2200,9 @@ pub async fn pi_start_inner(
         pending_responses = Arc::new(std::sync::Mutex::new(HashMap::new()));
     }
 
-    // Grab queue_state for the stdout reader before dropping the lock
+    // Grab queue state/handle for the stdout reader before dropping the lock
     let queue_state_for_reader = pool.sessions.get(&sid).and_then(|m| m.queue_state.clone());
+    let queue_handle_for_reader = pool.sessions.get(&sid).and_then(|m| m.queue_handle.clone());
 
     // Spawn a watcher that mirrors queue-pending changes out as Tauri events.
     // The frontend uses these to render "queued" cards under the in-flight
@@ -2215,6 +2266,7 @@ pub async fn pi_start_inner(
         let mut line_count = 0u64;
         let mut ready_signalled = false;
         let mut pending_text_delta: Option<PendingAgentTextDelta> = None;
+        let mut manual_followup_pending = false;
         while let Some(line) = read_lines_lossy(&mut reader) {
             line_count += 1;
             let parsed = serde_json::from_str::<Value>(&line).ok();
@@ -2224,6 +2276,13 @@ pub async fn pi_start_inner(
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string())
             });
+            let manual_followup_event = parsed
+                .as_ref()
+                .is_some_and(is_ask_user_manual_followup_event);
+            if parsed.as_ref().is_some_and(starts_user_prompt) {
+                manual_followup_pending = false;
+            }
+            let suppress_after_manual_followup = manual_followup_pending && !manual_followup_event;
             debug!(
                 "Pi stdout #{} (pid {}, session {}): type={}",
                 line_count,
@@ -2255,6 +2314,8 @@ pub async fn pi_start_inner(
             // prompt was sent while the first was still running.
             if let Some(ref qs) = queue_state_for_reader {
                 match event_type.as_deref() {
+                    _ if suppress_after_manual_followup
+                        && event_type.as_deref() != Some("response") => {}
                     Some("agent_start") => {
                         // A prompt has begun streaming. Suppress the
                         // response→done fallback below so the prompt's
@@ -2324,7 +2385,9 @@ pub async fn pi_start_inner(
                                 qs.mark_tool_idle(&id);
                             }
                         }
-                        qs.signal_done_if_idle();
+                        if !manual_followup_event {
+                            qs.signal_done_if_idle();
+                        }
                     }
                     Some("response") => {
                         // Only meaningful for new_session/abort — those don't
@@ -2362,6 +2425,9 @@ pub async fn pi_start_inner(
                     }
 
                     if let Some(delta) = assistant_text_delta(&event).map(str::to_owned) {
+                        if suppress_after_manual_followup {
+                            continue;
+                        }
                         // Title sessions bypass batching — they produce ≤50 chars
                         // and must stream token-by-token for visible animation.
                         if sid_clone.starts_with(TITLE_SESSION_PREFIX) {
@@ -2398,8 +2464,41 @@ pub async fn pi_start_inner(
                         // (`apps/screenpipe-app-tauri/lib/events/bus.ts`).
                         // Stage 5 cleanup: legacy `pi_event` topic removed
                         // — every consumer now reads from `agent_event`.
-                        if let Err(e) = emit_agent_event(&app_handle, &sid_clone, event) {
-                            error!("Failed to emit agent_event: {}", e);
+                        if !suppress_after_manual_followup {
+                            if let Err(e) = emit_agent_event(&app_handle, &sid_clone, event) {
+                                error!("Failed to emit agent_event: {}", e);
+                            }
+                        }
+                        if manual_followup_event {
+                            manual_followup_pending = true;
+                            if let Some(queue) = queue_handle_for_reader.clone() {
+                                let app_for_abort = app_handle.clone();
+                                let sid_for_abort = sid_clone.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let aborted = queue.abort_active_only().await;
+                                    if let Err(e) = &aborted {
+                                        warn!("ask_user follow-up abort failed: {}", e);
+                                    }
+                                    let _ = emit_agent_event(
+                                        &app_for_abort,
+                                        &sid_for_abort,
+                                        json!({
+                                            "type": "manual_followup_ready",
+                                            "success": aborted.is_ok(),
+                                        }),
+                                    );
+                                });
+                            } else {
+                                warn!("ask_user follow-up needed but Pi queue handle was missing");
+                                let _ = emit_agent_event(
+                                    &app_handle,
+                                    &sid_clone,
+                                    json!({
+                                        "type": "manual_followup_ready",
+                                        "success": false,
+                                    }),
+                                );
+                            }
                         }
                     }
                 }
@@ -3998,6 +4097,30 @@ mod tests {
             super::event_tool_call_ids(&tool_end),
             vec!["tool-1".to_string()]
         );
+    }
+
+    #[test]
+    fn detects_ask_user_results_that_require_manual_followup() {
+        let event = json!({
+            "type": "tool_execution_end",
+            "toolCallId": "ask-1",
+            "toolName": "ask-user",
+            "result": {
+                "content": [{ "type": "text", "text": "requires interactive user input" }]
+            },
+            "isError": false
+        });
+
+        assert!(super::is_ask_user_manual_followup_event(&event));
+
+        let normal_result = json!({
+            "type": "tool_execution_end",
+            "toolCallId": "ask-1",
+            "toolName": "ask_user",
+            "result": { "content": [{ "type": "text", "text": "answer selected" }] },
+            "isError": false
+        });
+        assert!(!super::is_ask_user_manual_followup_event(&normal_result));
     }
 
     #[test]

@@ -118,6 +118,8 @@ export function statusForEvent(evt: PiInnerEvent): SessionStatus | null {
     case "thinking_end":
     case "tool_execution_end":
       return "streaming";
+    case "manual_followup_ready":
+      return evt.success === false ? "error" : "idle";
     case "agent_end":
     case "turn_end":
       // A turn may end with an error; surface that as a distinct state
@@ -216,12 +218,7 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   if (existing?.kind !== "pipe-watch") {
     applyEventToSessionContent(sid, inner);
   }
-  const afterContent = useChatStore.getState().sessions[sid];
-  const effectiveStatus =
-    nextStatus === "streaming" &&
-    hasPendingAskUserReply(afterContent?.contentBlocks as unknown[] | undefined)
-      ? "idle"
-      : nextStatus;
+  const effectiveStatus = nextStatus;
 
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
@@ -577,6 +574,11 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   // Per-token text delta — append to streamingText and to the in-flight
   // message's content + last text content-block.
   const inner = payload.assistantMessageEvent;
+  if (t === "manual_followup_ready") {
+    store.actions.setStreaming(sid, { isStreaming: false, isLoading: false });
+    return;
+  }
+
   const isTextDelta =
     (t === "text_delta" || (t === "message_update" && inner?.type === "text_delta")) &&
     typeof (payload.delta ?? inner?.delta) === "string";
@@ -585,8 +587,6 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;
     if (hasPendingAskUserReply(cur.contentBlocks as unknown[] | undefined)) {
-      store.actions.setStreaming(sid, { isStreaming: false, isLoading: false });
-      store.actions.patch(sid, { status: "idle" });
       return;
     }
     const msgId = cur.streamingMessageId;
@@ -617,6 +617,7 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   if (t === "tool_execution_start") {
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;
+    if (hasPendingAskUserReply(cur.contentBlocks as unknown[] | undefined)) return;
     const msgId = cur.streamingMessageId;
     const tool = {
       id: (payload as any).toolCallId || `${Date.now()}`,
@@ -661,16 +662,11 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
           }
         : b
     );
-    const waitingForReply = hasPendingAskUserReply(blocks);
-    store.actions.setStreaming(sid, {
-      contentBlocks: blocks,
-      ...(waitingForReply ? { isStreaming: false, isLoading: false } : {}),
-    });
+    store.actions.setStreaming(sid, { contentBlocks: blocks });
     store.actions.patchMessage(sid, msgId, (m: any) => ({
       ...m,
       contentBlocks: blocks,
     }));
-    if (waitingForReply) store.actions.patch(sid, { status: "idle" });
     return;
   }
 

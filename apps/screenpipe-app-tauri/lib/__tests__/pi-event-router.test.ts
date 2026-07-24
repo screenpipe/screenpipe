@@ -365,7 +365,7 @@ describe("pi-event-router: background content accumulation (the parallel-chat re
     expect(assistant.contentBlocks[1].toolCall.result).toBe("hi");
   });
 
-  it("does not append assistant text after ask_user needs a user reply", async () => {
+  it("does not retain later assistant work after ask_user needs a user reply", async () => {
     seed("A", {
       status: "streaming",
       isLoading: true,
@@ -403,6 +403,14 @@ describe("pi-event-router: background content accumulation (the parallel-chat re
         assistantMessageEvent: { type: "text_delta", delta: "I picked one anyway." },
       }),
     );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_start",
+        toolCallId: "late",
+        toolName: "bash",
+      } as any),
+    );
+    await handlePiEvent(piEvt("A", { type: "manual_followup_ready" }));
 
     const session = useChatStore.getState().sessions.A;
     const assistant = session.messages![0] as any;

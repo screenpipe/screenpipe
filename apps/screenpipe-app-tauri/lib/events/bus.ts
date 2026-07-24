@@ -44,6 +44,10 @@ import {
   type AgentSessionEvictedPayload,
 } from "./types";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
+import {
+  isAskUserToolName,
+  toolResultNeedsManualFollowup,
+} from "@/lib/chat/tool-presentation";
 
 export type EventHandler = (envelope: AgentEventEnvelope) => void | Promise<void>;
 export type TerminatedHandler = (payload: AgentTerminatedPayload) => void | Promise<void>;
@@ -84,6 +88,7 @@ const internals: BusInternals = {
 };
 
 const pendingTextDeltas = new Map<string, PendingTextDelta>();
+const manualFollowupBlockedSessions = new Set<string>();
 
 function isAssistantTextDelta(envelope: AgentEventEnvelope): boolean {
   return (
@@ -129,8 +134,48 @@ async function flushPendingTextDelta(sessionId: string): Promise<void> {
   await dispatchEventNow(withTextDelta(pending.envelope, pending.delta));
 }
 
+function discardPendingTextDelta(sessionId: string): void {
+  const pending = pendingTextDeltas.get(sessionId);
+  if (pending?.timer) clearTimeout(pending.timer);
+  pendingTextDeltas.delete(sessionId);
+}
+
+function toolResultText(envelope: AgentEventEnvelope): string {
+  return envelope.event.result?.content?.map((c) => c.text || "").join("\n") || "";
+}
+
+function startsUserPrompt(envelope: AgentEventEnvelope): boolean {
+  const type = envelope.event.type;
+  return (
+    (type === "message_start" || type === "message_end") &&
+    envelope.event.message?.role === "user"
+  );
+}
+
+function needsManualFollowup(envelope: AgentEventEnvelope): boolean {
+  return (
+    envelope.source === "pi" &&
+    envelope.event.type === "tool_execution_end" &&
+    envelope.event.isError !== true &&
+    isAskUserToolName(envelope.event.toolName) &&
+    toolResultNeedsManualFollowup(toolResultText(envelope))
+  );
+}
+
 async function dispatchEvent(envelope: AgentEventEnvelope): Promise<void> {
   if (!envelope?.sessionId || !envelope.event) return;
+  const sessionId = envelope.sessionId;
+  const manualFollowup = needsManualFollowup(envelope);
+
+  if (startsUserPrompt(envelope)) {
+    manualFollowupBlockedSessions.delete(sessionId);
+  } else if (
+    manualFollowupBlockedSessions.has(sessionId) &&
+    envelope.event.type !== "manual_followup_ready"
+  ) {
+    discardPendingTextDelta(sessionId);
+    return;
+  }
 
   if (isAssistantTextDelta(envelope)) {
     // Title sessions bypass batching — emit every token immediately
@@ -162,13 +207,16 @@ async function dispatchEvent(envelope: AgentEventEnvelope): Promise<void> {
 
   await flushPendingTextDelta(envelope.sessionId);
   await dispatchEventNow(envelope);
+  if (manualFollowup) manualFollowupBlockedSessions.add(sessionId);
 }
 
 async function dispatchTerminated(payload: AgentTerminatedPayload): Promise<void> {
+  manualFollowupBlockedSessions.delete(payload.sessionId);
   await Promise.all(Array.from(internals.terminated).map((h) => h(payload)));
 }
 
 async function dispatchEvicted(payload: AgentSessionEvictedPayload): Promise<void> {
+  manualFollowupBlockedSessions.delete(payload.sessionId);
   await Promise.all(Array.from(internals.evicted).map((h) => h(payload)));
 }
 
@@ -281,6 +329,7 @@ export const __testing = {
       if (pending.timer) clearTimeout(pending.timer);
     }
     pendingTextDeltas.clear();
+    manualFollowupBlockedSessions.clear();
   },
   dispatchEvent,
   dispatchTerminated,
