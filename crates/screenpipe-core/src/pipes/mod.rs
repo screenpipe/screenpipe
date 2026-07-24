@@ -1084,6 +1084,10 @@ pub struct PipeStatus {
     pub last_run: Option<DateTime<Utc>>,
     pub last_success: Option<bool>,
     pub is_running: bool,
+    /// True only when this pipe's name and contents exactly match a pipe
+    /// bundled with the app. Any user edit makes this false.
+    #[serde(default)]
+    pub is_bundled_builtin: bool,
     /// Raw prompt body (below front-matter).
     pub prompt_body: String,
     /// Full raw pipe.md content (frontmatter + body).
@@ -2553,6 +2557,7 @@ impl PipeManager {
                     let pipe_logs = logs.get(name);
                     let last_log = pipe_logs.and_then(|l| l.back());
                     let last_error = last_log.filter(|l| !l.success).map(|l| l.stderr.clone());
+                    let is_bundled_builtin = Self::is_bundled_builtin_pipe(name, raw);
                     let mut cfg = config.clone();
                     cfg.name = name.clone();
                     let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
@@ -2574,6 +2579,7 @@ impl PipeManager {
                         last_run: last_log.map(|l| l.finished_at),
                         last_success: last_log.map(|l| l.success),
                         is_running: running.contains_key(name),
+                        is_bundled_builtin,
                         prompt_body: body.clone(),
                         raw_content: raw.clone(),
                         last_error,
@@ -2727,6 +2733,7 @@ impl PipeManager {
                 let pipe_logs = logs.get(name);
                 let last_log = pipe_logs.and_then(|l| l.back());
                 let last_error = last_log.filter(|l| !l.success).map(|l| l.stderr.clone());
+                let is_bundled_builtin = Self::is_bundled_builtin_pipe(name, raw);
                 let mut cfg = config.clone();
                 cfg.name = name.to_string();
                 let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
@@ -2748,6 +2755,7 @@ impl PipeManager {
                     last_run: last_log.map(|l| l.finished_at),
                     last_success: last_log.map(|l| l.success),
                     is_running: running.contains_key(name),
+                    is_bundled_builtin,
                     prompt_body: body.clone(),
                     raw_content: raw.clone(),
                     last_error,
@@ -7110,6 +7118,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pipe_status_distinguishes_untouched_builtins_from_user_managed_pipes() {
+        let installed = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let manager = PipeManager::new(pipes_dir, HashMap::new(), None, 0);
+        manager.install_builtin_pipes().unwrap();
+        manager.load_pipes().await.unwrap();
+
+        let bundled_manual = manager.get_pipe("day-recap").await.unwrap();
+        assert_eq!(bundled_manual.config.schedule, "manual");
+        assert!(bundled_manual.is_bundled_builtin);
+
+        // `template: true` is public frontmatter. A pipe explicitly installed
+        // by the user must never be mistaken for an untouched app asset.
+        manager
+            .install_pipe_from_store(
+                &pipe_source(true, "user-installed template"),
+                "store-template",
+                1,
+            )
+            .await
+            .unwrap();
+        let installed_manual = manager.get_pipe("store-template").await.unwrap();
+        assert_eq!(installed_manual.config.schedule, "manual");
+        assert!(!installed_manual.is_bundled_builtin);
+
+        // Scheduling an untouched template adopts it, and removing that
+        // schedule later must not turn it back into a hidden bundled template.
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([(
+                    "schedule_config".to_string(),
+                    serde_json::json!({
+                        "frequency": "days",
+                        "interval": 1,
+                        "at_hour": 17,
+                        "at_minute": 0
+                    }),
+                )]),
+            )
+            .await
+            .unwrap();
+        let scheduled = manager.get_pipe("day-recap").await.unwrap();
+        assert!(scheduled.config.schedule_config.is_some());
+        assert!(!scheduled.is_bundled_builtin);
+
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([("schedule_config".to_string(), serde_json::Value::Null)]),
+            )
+            .await
+            .unwrap();
+        let between_triggers = manager.get_pipe("day-recap").await.unwrap();
+        assert_eq!(between_triggers.config.schedule, "manual");
+        assert!(!between_triggers.is_bundled_builtin);
+
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([(
+                    "trigger".to_string(),
+                    serde_json::json!({ "events": ["meeting_ended"] }),
+                )]),
+            )
+            .await
+            .unwrap();
+        let meeting_triggered = manager.get_pipe("day-recap").await.unwrap();
+        assert_eq!(
+            meeting_triggered.config.trigger.unwrap().events,
+            vec!["meeting_ended"]
+        );
+        assert!(!meeting_triggered.is_bundled_builtin);
+    }
+
+    #[tokio::test]
     async fn store_install_limit_allows_delete_then_replacement() {
         let installed = tempfile::tempdir().unwrap();
         let pipes_dir = installed.path().join("pipes");
@@ -9027,6 +9113,7 @@ mod tests {
             last_run: None,
             last_success: None,
             is_running: false,
+            is_bundled_builtin: false,
             prompt_body: String::new(),
             raw_content: String::new(),
             last_error: None,
@@ -9039,6 +9126,7 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"current_execution_id\":99"));
         assert!(json.contains("\"consecutive_failures\":5"));
+        assert!(json.contains("\"is_bundled_builtin\":false"));
     }
 
     // -- truncate_string ----------------------------------------------------
