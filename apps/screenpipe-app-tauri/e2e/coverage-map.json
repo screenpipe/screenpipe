@@ -266,7 +266,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
-      "notes": "A collapsed Pipes section avoids loading run history; expanding it lists the complete installed-pipe inventory, and expanding a pipe lazily loads only its newest 10 saved runs."
+      "notes": "A collapsed Pipes section loads nothing; expanding it lists a compact execution-backed activity page, expanding a pipe lazily loads its newest 10 executions, and older runs paginate on demand."
     },
     {
       "spec": "chat-parallel-jobs-duplicate.spec.ts",

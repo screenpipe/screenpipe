@@ -1130,6 +1130,20 @@ pub struct PipeExecution {
     pub session_path: Option<String>,
 }
 
+/// Compact activity row for sidebar/history inventory.
+///
+/// Unlike [`PipeStatus::last_run`], this timestamp always comes from an
+/// execution row. Scheduler watermarks (including skipped occurrences) do not
+/// participate, so consumers can safely treat each row as clickable history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipeExecutionActivity {
+    pub pipe_name: String,
+    pub execution_count: i64,
+    pub latest_execution_id: i64,
+    pub last_run_at: Option<String>,
+    pub status: String,
+}
+
 /// Persisted scheduler state for a single pipe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulerState {
@@ -1178,6 +1192,14 @@ pub trait PipeStore: Send + Sync {
         before_id: Option<i64>,
     ) -> Result<Vec<PipeExecution>>;
 
+    /// Get recent execution metadata without potentially large stdout/stderr.
+    async fn get_execution_metadata(
+        &self,
+        pipe_name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>>;
+
     /// Mark any 'running' executions as failed (orphan recovery on startup).
     /// Returns the number of rows updated.
     async fn mark_orphaned_running(&self) -> Result<u32>;
@@ -1211,6 +1233,13 @@ pub trait PipeStore: Send + Sync {
 
     /// Get the exact persisted execution count for every pipe.
     async fn get_all_execution_counts(&self) -> Result<HashMap<String, i64>>;
+
+    /// Get pipes with real execution history, newest execution first.
+    async fn get_execution_activity(
+        &self,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecutionActivity>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -2809,12 +2838,39 @@ impl PipeManager {
         }
     }
 
+    /// Get execution rows without loading stdout/stderr blobs.
+    pub async fn get_execution_metadata(
+        &self,
+        name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>> {
+        if let Some(ref store) = self.store {
+            store.get_execution_metadata(name, limit, before_id).await
+        } else {
+            Ok(vec![])
+        }
+    }
+
     /// Get exact persisted execution counts for all pipes in one grouped query.
     pub async fn get_all_execution_counts(&self) -> HashMap<String, i64> {
         if let Some(ref store) = self.store {
             store.get_all_execution_counts().await.unwrap_or_default()
         } else {
             HashMap::new()
+        }
+    }
+
+    /// Get compact, cursor-paginated pipe activity for history surfaces.
+    pub async fn get_execution_activity(
+        &self,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecutionActivity>> {
+        if let Some(ref store) = self.store {
+            store.get_execution_activity(limit, before_id).await
+        } else {
+            Ok(vec![])
         }
     }
 
