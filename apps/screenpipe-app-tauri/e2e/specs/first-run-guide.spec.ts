@@ -44,6 +44,12 @@ const COMPOSER_TA = '[data-firstrun-target="composer"] textarea';
 
 /** Navigate help → replay intro and wait for the step-0 invite card. */
 async function startGuideViaReplay(): Promise<void> {
+  // Start from a clean slate: a guide left standing by a previous (possibly
+  // failed) test still owns a click-blocking scrim, and the nav click below
+  // would land on it instead of the sidebar. Escape is a no-op otherwise.
+  await browser.keys(["Escape"]);
+  await browser.pause(500);
+
   const navHelp = await $('[data-testid="nav-help"]');
   await navHelp.waitForExist({ timeout: t(10000) });
   await navHelp.click();
@@ -105,10 +111,15 @@ describe("First-run guide (#5407)", function () {
       { timeout: t(10000), timeoutMsg: "tour prompt never prefilled" },
     );
 
-    const focused = await browser.execute((sel: string) => {
-      return document.activeElement === document.querySelector(sel);
-    }, COMPOSER_TA);
-    expect(focused).toBe(true);
+    // Focus lands ~150ms after the prefill — poll rather than assert
+    // instantly, or this races the guide's own focus timer.
+    await browser.waitUntil(
+      async () =>
+        await browser.execute((sel: string) => {
+          return document.activeElement === document.querySelector(sel);
+        }, COMPOSER_TA),
+      { timeout: t(5000), timeoutMsg: "composer never received focus" },
+    );
 
     // The core #5407 assertion: the scrim is up, yet the composer wins the
     // hit-test — visible AND interactive.
