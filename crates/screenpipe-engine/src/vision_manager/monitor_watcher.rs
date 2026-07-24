@@ -1241,6 +1241,13 @@ pub async fn start_monitor_watcher(
             //   -  5s when the callback failed to register (fall back to the
             //      previous behavior so hot-plug detection doesn't silently
             //      regress to once-a-minute)
+            // Also wake immediately on a DRM state transition — switching
+            // focus to/from a DRM app or browser tab doesn't reconfigure any
+            // display, so without this branch the DRM pause/resume actions
+            // above (vision stop and SCK audio stop — the calls that actually
+            // release ScreenCaptureKit) only run on the next backstop tick,
+            // up to 60s after DRM was detected — long enough for the video to
+            // stay blacked out well past what a user would consider "fixed".
             #[cfg(target_os = "macos")]
             {
                 let watchdog = vision_watchdog_config();
@@ -1250,8 +1257,10 @@ pub async fn start_monitor_watcher(
                     watchdog.monitor_backstop.min(Duration::from_secs(5))
                 };
                 let notify = crate::sleep_monitor::display_reconfig_notify();
+                let drm_notify = drm_detector::drm_state_notify();
                 tokio::select! {
                     _ = notify.notified() => {}
+                    _ = drm_notify.notified() => {}
                     _ = tokio::time::sleep(backstop) => {}
                 }
             }

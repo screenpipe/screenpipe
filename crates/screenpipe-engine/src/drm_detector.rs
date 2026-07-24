@@ -33,9 +33,42 @@ use tracing::{debug, info};
 /// Global flag — when `true`, all monitors skip screen capture.
 static DRM_CONTENT_PAUSED: AtomicBool = AtomicBool::new(false);
 
-/// Global reference to the UI recorder's stop flag.
-/// Set during startup so the DRM detector can stop the UI recorder
-/// (which holds native event taps that keep Screen Recording active).
+/// Fired every time `DRM_CONTENT_PAUSED` actually transitions (not on every
+/// call to `set_drm_paused` — only when the value changes). The monitor
+/// watcher's backstop loop otherwise only wakes on a display-reconfiguration
+/// event or a 60s timer (tuned for monitor hotplug detection) — neither of
+/// which fires when the user merely switches focus to a DRM app/tab. Without
+/// this notify, the full VisionManager/audio teardown can lag up to 60s
+/// behind the fast per-monitor `release_capture_stream()` reaction, leaving
+/// DRM content blacked out far longer than expected. Single-consumer
+/// (`notify_one`), matching `sleep_monitor`'s
+/// `DISPLAY_RECONFIG_NOTIFY`/`SCREEN_UNLOCK_NOTIFY`.
+static DRM_STATE_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Handle to the DRM state-change notify. Await `.notified()` on it to be
+/// woken immediately the next time DRM pause state actually flips, instead
+/// of waiting for the monitor watcher's normal polling cadence.
+pub fn drm_state_notify() -> &'static tokio::sync::Notify {
+    &DRM_STATE_NOTIFY
+}
+
+/// Global reference to the UI recorder's stop flag, registered during startup
+/// by the desktop app (`capture_session.rs` — the CLI never registers one, so
+/// [`stop_ui_recorder`] is a no-op there).
+///
+/// NOTE: this is deliberately **not** wired into the DRM pause path. An
+/// earlier version of this comment claimed the UI recorder "holds native
+/// event taps that keep Screen Recording active" — that is incorrect. The
+/// macOS UI recorder (`screenpipe-a11y`) uses a `LISTEN_ONLY` `CGEventTap`
+/// plus Accessibility/NSWorkspace/NSPasteboard; it never opens a
+/// ScreenCaptureKit session, and its tap gates on the *Input Monitoring* TCC
+/// permission (`cg::event::access::listen_preflight`), not Screen Recording.
+/// Stopping it therefore releases no SCK handle and cannot lift a DRM
+/// blackout, while permanently ending click/scroll/app-focus/clipboard
+/// capture for the rest of the session (the flag is write-once and the
+/// DRM-clear path has no way to restart it). The SCK release that actually
+/// matters happens in `VisionManager::stop` (`invalidate_streams`) and the
+/// per-monitor `release_capture_stream()` in `event_driven_capture`.
 static UI_RECORDER_STOP_FLAG: Lazy<Mutex<Option<Arc<AtomicBool>>>> = Lazy::new(|| Mutex::new(None));
 
 /// Register the UI recorder's stop flag so DRM detector can stop it.
@@ -60,13 +93,16 @@ pub fn drm_content_paused() -> bool {
     DRM_CONTENT_PAUSED.load(Ordering::SeqCst)
 }
 
-/// Set the DRM pause state. Logs transitions.
+/// Set the DRM pause state. Logs transitions and wakes the monitor watcher
+/// immediately on an actual transition (see `DRM_STATE_NOTIFY`).
 pub fn set_drm_paused(paused: bool) {
     let was_paused = DRM_CONTENT_PAUSED.swap(paused, Ordering::SeqCst);
     if paused && !was_paused {
         info!("DRM content detected — pausing screen capture");
+        DRM_STATE_NOTIFY.notify_one();
     } else if !paused && was_paused {
         info!("DRM content no longer focused — resuming screen capture");
+        DRM_STATE_NOTIFY.notify_one();
     }
 }
 
@@ -745,6 +781,69 @@ mod tests {
         assert!(drm_content_paused());
         set_drm_paused(false);
         assert!(!drm_content_paused());
+    }
+
+    /// `DRM_STATE_NOTIFY` is a single process-wide static, so a prior test's
+    /// `notify_one()` can leave an unconsumed permit sitting on it — the next
+    /// `.notified()` anywhere would then return immediately for a reason
+    /// that has nothing to do with the transition under test. Callers must
+    /// hold `DRM_FLAG_LOCK` (serializes against every other test that calls
+    /// `set_drm_paused`) and drain any stale permit before asserting.
+    async fn drain_stale_drm_notify() {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(1),
+            drm_state_notify().notified(),
+        )
+        .await;
+    }
+
+    /// Regression test for the ~60s delay observed live on crunchyroll.com:
+    /// DRM was detected and the fast per-monitor capture-stream release fired
+    /// within ~250ms, but the monitor watcher's full teardown (vision stop
+    /// and SCK audio stop — the calls that actually release ScreenCaptureKit)
+    /// only ran on its next backstop tick — up to 60s later, since switching
+    /// focus to a browser tab doesn't fire a display-reconfiguration event. Both
+    /// `set_drm_paused(true)` and `set_drm_paused(false)` must wake a pending
+    /// `drm_state_notify().notified()` immediately.
+    #[tokio::test]
+    async fn test_set_drm_paused_wakes_pending_notify_on_transition() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        drain_stale_drm_notify().await;
+
+        // Pause: false -> true must wake a waiter.
+        let notified = drm_state_notify().notified();
+        set_drm_paused(true);
+        tokio::time::timeout(std::time::Duration::from_secs(1), notified)
+            .await
+            .expect("set_drm_paused(true) must notify waiters on a false->true transition");
+
+        // Resume: true -> false must also wake a waiter.
+        let notified = drm_state_notify().notified();
+        set_drm_paused(false);
+        tokio::time::timeout(std::time::Duration::from_secs(1), notified)
+            .await
+            .expect("set_drm_paused(false) must notify waiters on a true->false transition");
+    }
+
+    /// Calling `set_drm_paused` with the value it's already set to must NOT
+    /// notify — otherwise the monitor watcher would wake on every capture
+    /// tick while DRM content stays focused, not just on the transition.
+    #[tokio::test]
+    async fn test_set_drm_paused_noop_call_does_not_notify() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
+        drain_stale_drm_notify().await;
+
+        let notified = drm_state_notify().notified();
+        set_drm_paused(true); // already true — must be a no-op, no notify
+        let woke = tokio::time::timeout(std::time::Duration::from_millis(200), notified).await;
+        assert!(
+            woke.is_err(),
+            "set_drm_paused(true) called when already true must not notify waiters"
+        );
+
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
     }
 
     #[test]
