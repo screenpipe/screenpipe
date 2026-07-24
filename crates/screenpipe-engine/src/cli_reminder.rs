@@ -117,10 +117,7 @@ fn print_mcp_tip() {
         "  {} connect screenpipe to every AI tool detected on this computer:",
         "tip:".cyan().bold(),
     );
-    eprintln!(
-        "       {}",
-        "npx screenpipe@latest agent setup --all".green().bold(),
-    );
+    eprintln!("       {}", "npx screenpipe@latest setup".green().bold());
     eprintln!(
         "       adds MCP + supported skills to Claude, Codex, Cursor, OpenClaw, Hermes, and Windsurf/Devin",
     );

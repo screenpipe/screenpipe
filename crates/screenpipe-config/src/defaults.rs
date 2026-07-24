@@ -168,7 +168,7 @@ impl Default for DbConfig {
 /// the *wrong* main-DB page (observed: a b-tree page written over page 1, the
 /// header). Setting it to `0` removes that under-load write path; ALL
 /// checkpointing is owned by the single serialized maintenance task
-/// (`start_wal_maintenance`), which also enforces a hard WAL-size ceiling so
+/// (`start_wal_maintenance`), which also enforces a hard WAL-growth ceiling so
 /// disabling auto-checkpoint cannot trade the corruption cliff for an
 /// unbounded-WAL cliff. Every pool still shares this one value (0), so the
 /// pool-parity invariant is preserved.

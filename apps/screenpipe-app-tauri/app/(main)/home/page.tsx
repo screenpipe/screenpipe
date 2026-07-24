@@ -570,6 +570,23 @@ function HomeContent() {
         }
       }
 
+      // When globally paused the device APIs may return empty (session torn
+      // down). Preserve the last known device list so the user can still see
+      // what was recording and hit "resume". Use the functional updater to
+      // avoid a stale-closure over recordingDevices.
+      if (capturePaused && devices.length === 0) {
+        setRecordingDevices((prev) => {
+          const updated = prev.map((d) => ({ ...d, active: false }));
+          const snap = JSON.stringify(updated);
+          if (snap !== recordingDevicesSnapshotRef.current) {
+            recordingDevicesSnapshotRef.current = snap;
+            return updated;
+          }
+          return prev;
+        });
+        return;
+      }
+
       const effective = capturePaused
         ? devices.map((d) => ({ ...d, active: false }))
         : devices;
@@ -1049,14 +1066,13 @@ function HomeContent() {
               devices={recordingDevices}
               onDevicesChange={setRecordingDevices}
               meetingActive={meetingState.active ?? false}
-              meetingApp={meetingState.meetingApp}
-              meetingLoading={meetingLoading}
-              onToggleMeeting={() => void toggleMeeting()}
               onPauseRecording={pauseRecording}
               onResumeRecording={resumeRecording}
               isGloballyPaused={isCapturePaused}
               isTranslucent={isTranslucent}
               floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
+              allCaptureDisabled={!!(settings.disableAudio && settings.disableVision)}
+              onOpenRecordingSettings={() => router.push("/settings?section=recording")}
             />
           </div>
 

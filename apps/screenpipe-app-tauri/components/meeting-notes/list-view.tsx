@@ -42,7 +42,6 @@ interface ListViewProps {
   comingUpStatus: ComingUpStatus;
   connectedCalendarSources: CalendarSource[];
   onOpenCalendarConnections: () => void;
-  onCalendarConnectionChange: () => void | Promise<void>;
   meetingActive: boolean;
   captureState?: LiveCaptureState;
   searchInput: string;
@@ -71,7 +70,6 @@ export function ListView({
   comingUpStatus,
   connectedCalendarSources,
   onOpenCalendarConnections,
-  onCalendarConnectionChange,
   meetingActive,
   captureState,
   searchInput,
@@ -151,7 +149,6 @@ export function ListView({
             status={comingUpStatus}
             connectedSources={connectedCalendarSources}
             onOpenCalendarConnections={onOpenCalendarConnections}
-            onCalendarConnectionChange={onCalendarConnectionChange}
             onStart={onStartFromEvent}
             meetingActive={meetingActive}
           />

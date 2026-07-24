@@ -33,6 +33,12 @@ const RECONCILIATION_LOOKBACK_HOURS: i64 = 24 * 7;
 const RECONCILIATION_FRESHNESS_DELAY_SECS: i64 = 10 * 60;
 const RECONCILIATION_CHUNKS_PER_SWEEP: i64 = 50;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReconciliationSweep {
+    pub processed_chunks: usize,
+    pub hit_candidate_limit: bool,
+}
+
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::metrics::AudioPipelineMetrics;
 use crate::segmentation::segmentation_manager::SegmentationManager;
@@ -166,7 +172,8 @@ fn replace_with_merged_audio(
 /// This gives Whisper 2-5 minutes of context instead of 30s, significantly
 /// improving transcription quality — the whole point of batch mode.
 ///
-/// Returns the number of chunks successfully transcribed.
+/// Returns both the number of chunks processed and whether the candidate query
+/// hit its cap, which tells the scheduler to keep draining without a 120s nap.
 #[allow(clippy::too_many_arguments)]
 pub async fn reconcile_untranscribed(
     db: &DatabaseManager,
@@ -177,7 +184,7 @@ pub async fn reconcile_untranscribed(
     data_dir: Option<&Path>,
     batch_max_duration_secs: Option<u64>,
     metrics: Option<Arc<AudioPipelineMetrics>>,
-) -> usize {
+) -> ReconciliationSweep {
     // Prevent concurrent reconciliation runs — two Whisper sessions = 200%+ CPU.
     // Acquired *before* the transcription-disabled check because orphaned-chunk
     // recovery (below) must run regardless of the engine, and still needs to be
@@ -187,7 +194,7 @@ pub async fn reconcile_untranscribed(
         .is_err()
     {
         debug!("reconciliation: skipping — another reconciliation is already running");
-        return 0;
+        return ReconciliationSweep::default();
     }
     // Ensure we always release the lock
     struct Guard;
@@ -211,7 +218,7 @@ pub async fn reconcile_untranscribed(
     // Transcription-specific reconciliation is skipped when transcription is
     // disabled — this also avoids the silent-audio deletion path nuking files.
     if *audio_engine == AudioTranscriptionEngine::Disabled {
-        return 0;
+        return ReconciliationSweep::default();
     }
 
     // Retry any previously failed transcriptions before processing new chunks
@@ -234,13 +241,14 @@ pub async fn reconcile_untranscribed(
                 "reconciliation: failed to query untranscribed chunks: {}",
                 e
             );
-            return 0;
+            return ReconciliationSweep::default();
         }
     };
 
     if chunks.is_empty() {
-        return 0;
+        return ReconciliationSweep::default();
     }
+    let hit_candidate_limit = chunks.len() >= RECONCILIATION_CHUNKS_PER_SWEEP as usize;
 
     debug!(
         "reconciliation: found {} old untranscribed audio chunks (older_than={})",
@@ -623,7 +631,10 @@ pub async fn reconcile_untranscribed(
         }
     }
 
-    success_count
+    ReconciliationSweep {
+        processed_chunks: success_count,
+        hit_candidate_limit,
+    }
 }
 
 /// Returns the path to the pending-transcriptions directory, creating it if needed.
@@ -2386,5 +2397,206 @@ mod tests {
 
         let updated = backfill_missing_speakers(&db, segmentation_manager, 24, 50).await;
         assert_eq!(updated, 0);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    fn cached_parakeet_mlx_model_available() -> bool {
+        const MODEL_REPO: &str = "mlx-community/parakeet-tdt-0.6b-v3";
+
+        let cache = hf_hub::Cache::default().repo(hf_hub::Repo::model(MODEL_REPO.to_string()));
+        cache.get("model.safetensors").is_some()
+            && cache.get("config.json").is_some()
+            && (cache.get("vocab.txt").is_some() || cache.get("tokenizer.model").is_some())
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    #[allow(deprecated)]
+    fn resident_size_bytes() -> u64 {
+        unsafe {
+            let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+            let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+            let result = libc::task_info(
+                libc::mach_task_self(),
+                libc::MACH_TASK_BASIC_INFO as libc::task_flavor_t,
+                (&mut info as *mut libc::mach_task_basic_info).cast::<libc::integer_t>(),
+                &mut count,
+            );
+            assert_eq!(result, 0, "task_info(MACH_TASK_BASIC_INFO) failed");
+            std::ptr::addr_of!(info.resident_size).read_unaligned()
+        }
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    fn mib(bytes: u64) -> f64 {
+        bytes as f64 / 1024.0 / 1024.0
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    fn write_float_wav(path: &Path, samples: &[f32], sample_rate: u32) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).expect("create repro wav");
+        for sample in samples {
+            writer
+                .write_sample(*sample)
+                .expect("write repro wav sample");
+        }
+        writer.finalize().expect("finalize repro wav");
+    }
+
+    /// Full-path memory regression for the production reconciliation function:
+    /// temporary SQLite DB, candidate query, ffmpeg decode, per-batch session,
+    /// Parakeet MLX transcription, ONNX speaker diarization, and persistence.
+    ///
+    /// `cargo test --release -p screenpipe-audio --features parakeet-mlx cached_parakeet_mlx_reconciliation_memory_plateaus -- --ignored --nocapture --test-threads=1`
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "real-model full reconciliation memory plateau regression"]
+    async fn cached_parakeet_mlx_reconciliation_memory_plateaus() {
+        const MODEL_REPO: &str = "mlx-community/parakeet-tdt-0.6b-v3";
+        const WARMUP_CALLS: usize = 4;
+        const CANDIDATES_PER_SWEEP: [usize; 4] = [50, 21, 21, 21];
+        const SWEEP_COUNT: usize = CANDIDATES_PER_SWEEP.len();
+        const MAX_POST_WARMUP_ENDPOINT_GROWTH_BYTES: u64 = 64 * 1024 * 1024;
+
+        if !cached_parakeet_mlx_model_available() {
+            eprintln!(
+                "skipping cached Parakeet MLX reconciliation repro: {MODEL_REPO} is not complete in the HF cache"
+            );
+            return;
+        }
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_data/accuracy1.wav");
+        let (audio, sample_rate) = read_audio_from_file(&fixture)
+            .unwrap_or_else(|error| panic!("failed to decode {}: {error}", fixture.display()));
+        let thirty_seconds = sample_rate as usize * 30;
+        assert!(audio.len() >= thirty_seconds);
+
+        let engine = TranscriptionEngine::new(
+            Arc::new(AudioTranscriptionEngine::ParakeetMlx),
+            None,
+            None,
+            vec![screenpipe_core::Language::English],
+            Vec::new(),
+        )
+        .await
+        .expect("failed to load cached Parakeet MLX model");
+
+        for call in 1..=WARMUP_CALLS {
+            let mut session = engine
+                .create_session()
+                .expect("failed to create Parakeet MLX warm-up session");
+            session
+                .transcribe(
+                    &audio[..thirty_seconds],
+                    sample_rate,
+                    "reconciliation-memory-warmup",
+                )
+                .await
+                .unwrap_or_else(|error| panic!("warm-up transcription {call} failed: {error}"));
+        }
+
+        let temp = tempfile::tempdir().expect("create reconciliation repro dir");
+        let db = temp_db(temp.path()).await;
+        let model_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("models")
+            .join("pyannote");
+        let embedding_model_path = model_dir.join("wespeaker_en_voxceleb_CAM++.onnx");
+        let segmentation_model_path = model_dir.join("segmentation-3.0.onnx");
+        let segmentation_manager = Arc::new(SegmentationManager {
+            embedding_manager: Arc::new(std::sync::Mutex::new(
+                crate::speaker::embedding_manager::EmbeddingManager::new(usize::MAX),
+            )),
+            embedding_extractor: tokio::sync::Mutex::new(Some(Arc::new(std::sync::Mutex::new(
+                crate::speaker::embedding::EmbeddingExtractor::new(&embedding_model_path)
+                    .expect("load cached speaker embedding model"),
+            )))),
+            embedding_model_path: tokio::sync::Mutex::new(Some(embedding_model_path)),
+            segmentation_model_path: tokio::sync::Mutex::new(Some(segmentation_model_path)),
+        });
+        let base_timestamp = Utc::now() - chrono::Duration::hours(6);
+        let mut sweep_endpoints = Vec::with_capacity(SWEEP_COUNT);
+        let mut next_index = 0usize;
+
+        for (sweep, candidate_count) in CANDIDATES_PER_SWEEP.into_iter().enumerate() {
+            for offset in 0..candidate_count {
+                let index = next_index;
+                next_index += 1;
+                let duration_step = offset % 21;
+                let sample_count =
+                    sample_rate as usize * 20 + duration_step * sample_rate as usize / 2;
+                let path = temp.path().join(format!(
+                    "Display (output)_2026-07-23_{sweep:02}-{offset:02}-00.wav"
+                ));
+                write_float_wav(&path, &audio[..sample_count], sample_rate);
+                let timestamp = base_timestamp + chrono::Duration::seconds(index as i64 * 65);
+                db.get_or_insert_audio_chunk(&path.to_string_lossy(), Some(timestamp))
+                    .await
+                    .expect("insert reconciliation candidate");
+            }
+
+            let candidates = db
+                .get_reconciliation_candidate_chunks(
+                    Utc::now() - chrono::Duration::days(7),
+                    Utc::now() - chrono::Duration::minutes(10),
+                    RECONCILIATION_CHUNKS_PER_SWEEP,
+                )
+                .await
+                .expect("query reconciliation candidates");
+            assert_eq!(candidates.len(), candidate_count);
+
+            let sweep_start = resident_size_bytes();
+            let result = reconcile_untranscribed(
+                &db,
+                &engine,
+                None,
+                Arc::new(AudioTranscriptionEngine::Parakeet),
+                Some(segmentation_manager.clone()),
+                Some(temp.path()),
+                None,
+                None,
+            )
+            .await;
+            let sweep_end = resident_size_bytes();
+            assert_eq!(result.processed_chunks, candidate_count);
+            assert_eq!(
+                result.hit_candidate_limit,
+                candidate_count == RECONCILIATION_CHUNKS_PER_SWEEP as usize
+            );
+            sweep_endpoints.push(sweep_end);
+            eprintln!(
+                "[mlx-reconciliation-memory] sweep={}/{SWEEP_COUNT} reconciled={}/{candidate_count} rss_start={:.1} MiB rss_end={:.1} MiB working_set_delta={:.1} MiB active_mlx={:.1} MiB",
+                sweep + 1,
+                result.processed_chunks,
+                mib(sweep_start),
+                mib(sweep_end),
+                mib(sweep_end.saturating_sub(sweep_start)),
+                crate::transcription::engine::mlx_active_memory_bytes_for_test() as f64
+                    / 1024.0
+                    / 1024.0,
+            );
+        }
+
+        // A sweep's start can be lower because macOS reclaims empty malloc pages
+        // between passes. Compare completed sweep endpoints instead: a leak keeps
+        // raising that high-water mark, while reusable working memory plateaus.
+        let warmup_endpoint = sweep_endpoints[0];
+        let post_warmup_peak = *sweep_endpoints[1..]
+            .iter()
+            .max()
+            .expect("at least one measured reconciliation sweep");
+        let endpoint_growth = post_warmup_peak.saturating_sub(warmup_endpoint);
+        assert!(
+            endpoint_growth <= MAX_POST_WARMUP_ENDPOINT_GROWTH_BYTES,
+            "Parakeet MLX reconciliation endpoints did not plateau: {SWEEP_COUNT} real backlog \
+             sweeps grew the post-warm-up high-water mark by \
+             {:.1} MiB (limit: {:.1} MiB)",
+            mib(endpoint_growth),
+            mib(MAX_POST_WARMUP_ENDPOINT_GROWTH_BYTES),
+        );
     }
 }

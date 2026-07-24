@@ -53,6 +53,8 @@ struct TrayMenuData {
     has_permission_issue: bool,
     app_ui_hidden: bool,
     disable_timeline: bool,
+    /// Both audio and vision are disabled in settings — nothing can record.
+    all_capture_disabled: bool,
 }
 
 /// Gather all data needed by `create_dynamic_menu` on the current (non-main)
@@ -115,6 +117,8 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
     let cloud_subscribed = settings.user.cloud_subscribed == Some(true);
     let subscription_plan = settings.user.subscription_plan.clone();
     let disable_timeline = settings.recording.disable_timeline;
+    let all_capture_disabled =
+        settings.recording.disable_audio && settings.recording.disable_vision;
 
     let app_ui_hidden = is_app_ui_hidden();
 
@@ -142,6 +146,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         has_permission_issue,
         app_ui_hidden,
         disable_timeline,
+        all_capture_disabled,
     }
 }
 
@@ -479,6 +484,7 @@ fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -
         cloud_subscribed: data.cloud_subscribed,
         subscription_plan: data.subscription_plan.clone(),
         hd: hd_menu_state(&hd),
+        all_capture_disabled: data.all_capture_disabled,
     }
 }
 
@@ -632,6 +638,8 @@ struct MenuState {
     /// The per-tick countdown is updated on the existing item instead of being
     /// part of this equality key, which avoids rebuilding the native menu.
     hd: HdMenuState,
+    /// Both audio and vision disabled in settings.
+    all_capture_disabled: bool,
 }
 
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
@@ -878,8 +886,10 @@ fn create_dynamic_menu(
     }
 
     // --- Recording status + devices ---
+    let all_capture_disabled = data.all_capture_disabled;
     let effective_status = get_effective_recording_status();
     let status_text = match effective_status {
+        RecordingStatus::Recording if all_capture_disabled => "○ Stopped",
         RecordingStatus::Starting => "○ Starting…",
         RecordingStatus::Recording => "● Recording",
         RecordingStatus::Paused => "◐ Paused",
@@ -889,8 +899,9 @@ fn create_dynamic_menu(
     };
     menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
-    if effective_status == RecordingStatus::Recording
-        || effective_status == RecordingStatus::Starting
+    if !all_capture_disabled
+        && (effective_status == RecordingStatus::Recording
+            || effective_status == RecordingStatus::Starting)
     {
         menu_builder = menu_builder.item(
             &MenuItemBuilder::with_id("privacy_info", "Your data stays local")
@@ -905,7 +916,7 @@ fn create_dynamic_menu(
             .build(app)?,
     );
 
-    {
+    if !all_capture_disabled {
         let info = get_recording_info();
 
         // Monitors: CheckMenuItem when the sidecar reports a numeric id (per-display
@@ -1063,17 +1074,22 @@ fn create_dynamic_menu(
     if !is_tray_item_hidden("tray_recording_controls") {
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
-        let is_recording = effective_status == RecordingStatus::Recording;
-        let label = match effective_status {
-            RecordingStatus::Recording => "Recording",
-            RecordingStatus::Paused => "Paused — click to resume",
-            RecordingStatus::ScheduledPause => "Outside work hours — paused by schedule",
-            RecordingStatus::Starting => "Starting…",
-            RecordingStatus::Error => "Error — click to retry",
-            _ => "Stopped — click to record",
+        let is_recording = effective_status == RecordingStatus::Recording && !all_capture_disabled;
+        let label = if all_capture_disabled {
+            "Stopped — no devices enabled"
+        } else {
+            match effective_status {
+                RecordingStatus::Recording => "Recording",
+                RecordingStatus::Paused => "Paused — click to resume",
+                RecordingStatus::ScheduledPause => "Outside work hours — paused by schedule",
+                RecordingStatus::Starting => "Starting…",
+                RecordingStatus::Error => "Error — click to retry",
+                _ => "Stopped — click to record",
+            }
         };
         let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)
             .checked(is_recording)
+            .enabled(!all_capture_disabled)
             .build(app)?;
         menu_builder = menu_builder.item(&toggle);
 
@@ -1094,6 +1110,7 @@ fn create_dynamic_menu(
         // No indefinite mode — every session has a natural end (meeting end
         // or timer expiry). Hits /capture/hd/{start,stop} so changes take
         // effect on the next capture tick.
+        // Hidden when no devices are enabled — nothing to record in HD.
         let hd = get_high_fps_status();
         if hd.active {
             let item = MenuItemBuilder::with_id("stop_hd_recording", hd_stop_menu_label(&hd))
@@ -1106,7 +1123,7 @@ fn create_dynamic_menu(
             menu_builder = menu_builder.item(
                 &MenuItemBuilder::with_id("extend_hd_30", "Extend HD by +30 min").build(app)?,
             );
-        } else {
+        } else if !all_capture_disabled {
             *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
             // Idle: offer timer-bound sessions only. The meeting-bound path
             // is reached via the meeting-start notification's "+ HD" action.
@@ -1117,6 +1134,8 @@ fn create_dynamic_menu(
                 .item(&MenuItemBuilder::with_id("hd_timer_120", "2 hours").build(app)?)
                 .build()?;
             menu_builder = menu_builder.item(&submenu);
+        } else {
+            *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
     }
 

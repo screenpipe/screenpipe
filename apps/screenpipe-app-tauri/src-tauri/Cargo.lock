@@ -2879,6 +2879,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-codecs"
+version = "1.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49fb0c6640b4507ebd99ff67677009e381ba5eee1d14df78de4a3d16eb123c39"
+
+[[package]]
 name = "ctor"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7295,6 +7301,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "minisign"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26541387415a1e829df5d532aad019fb11bc723e2b5bc99edefa4cf5bfad0de7"
+dependencies = [
+ "ct-codecs",
+ "getrandom 0.2.17",
+ "rpassword 7.5.4",
+ "scrypt 0.11.0",
+]
+
+[[package]]
 name = "minisign-verify"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9265,7 +9283,7 @@ dependencies = [
  "der 0.8.0",
  "pbkdf2 0.13.0",
  "rand_core 0.10.1",
- "scrypt",
+ "scrypt 0.12.0",
  "sha2 0.11.0",
  "spki 0.8.0-rc.4",
 ]
@@ -10399,6 +10417,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpassword"
+version = "7.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da316a15f47e3d053de9cb2c439650bd8fa4aaeb9365f2e5f27f492ff73c196"
+dependencies = [
+ "libc",
+ "rtoolbox",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10444,6 +10473,16 @@ checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rtoolbox"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50a0e551c1e27e1731aba276dbeaeac73f53c7cd34d1bda485d02bd1e0f36844"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10535,7 +10574,7 @@ dependencies = [
  "russh-cryptovec",
  "russh-util",
  "salsa20 0.11.0",
- "scrypt",
+ "scrypt 0.12.0",
  "sec1 0.8.1",
  "sha1 0.10.6",
  "sha1 0.11.0",
@@ -11020,7 +11059,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.132"
+version = "2.5.135"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11056,6 +11095,8 @@ dependencies = [
  "ini",
  "lazy_static",
  "log",
+ "minisign",
+ "minisign-verify",
  "muda",
  "nokhwa-bindings-macos",
  "notify",
@@ -11143,7 +11184,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11220,7 +11261,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11232,7 +11273,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -11278,7 +11319,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11329,7 +11370,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11356,7 +11397,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11385,7 +11426,7 @@ dependencies = [
  "port_check",
  "regex",
  "reqwest 0.13.3",
- "rpassword",
+ "rpassword 5.0.1",
  "screenpipe-a11y",
  "screenpipe-audio",
  "screenpipe-capture",
@@ -11423,7 +11464,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11439,7 +11480,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11475,7 +11516,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "serde",
  "sysinfo",
@@ -11495,7 +11536,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11550,7 +11591,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "libsqlite3-sys",
  "tokio",
@@ -11559,7 +11600,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11579,7 +11620,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.28"
+version = "0.4.29"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -11611,6 +11652,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "scrypt"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0516a385866c09368f0b5bcd1caff3366aace790fcd46e2bb032697bb172fd1f"
+dependencies = [
+ "pbkdf2 0.12.2",
+ "salsa20 0.10.2",
+ "sha2 0.10.9",
 ]
 
 [[package]]

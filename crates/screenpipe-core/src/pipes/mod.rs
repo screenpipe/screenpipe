@@ -2192,8 +2192,14 @@ impl PipeManager {
     ///
     /// Setting it never deletes pipe files. Over-limit pipes are kept on disk
     /// but omitted from the runtime until the limit is raised or a slot opens.
-    pub fn set_max_non_template_pipes(&mut self, limit: Option<usize>) {
+    /// Returns whether the effective limit changed, so live policy refreshes
+    /// can avoid rebuilding the full pipe catalog when nothing changed.
+    pub fn set_max_non_template_pipes(&mut self, limit: Option<usize>) -> bool {
+        if self.max_non_template_pipes == limit {
+            return false;
+        }
         self.max_non_template_pipes = limit;
+        true
     }
 
     /// Set extra context that gets appended to every pipe prompt.
@@ -6986,6 +6992,16 @@ mod tests {
         let path = dir.join(format!("{}.md", name));
         std::fs::write(&path, pipe_source(template, name)).unwrap();
         path
+    }
+
+    #[test]
+    fn unchanged_pipe_limit_does_not_require_catalog_reload() {
+        let mut manager = test_pipe_manager();
+
+        assert!(manager.set_max_non_template_pipes(Some(2)));
+        assert!(!manager.set_max_non_template_pipes(Some(2)));
+        assert!(manager.set_max_non_template_pipes(None));
+        assert!(!manager.set_max_non_template_pipes(None));
     }
 
     #[tokio::test]

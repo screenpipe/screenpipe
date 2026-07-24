@@ -11,6 +11,12 @@ icon: "newspaper"
 
 ## week of july 20, 2026
 
+### new features
+
+- **exclude apps from system-audio capture (macOS 14.4+)** — you can now keep specific apps out of screenpipe's system-audio recording. Open Settings → Recording → "Exclude apps from system audio," pick any `.app` with the Finder picker, and the app appears as a chip in the exclusion list with its icon. Apply & Restart wires the exclusions into the audio engine, and the underlying `~/.screenpipe/audio-exclusions.json` file hot-reloads so edits take effect without a manual restart. macOS will prompt once for the new `NSAudioCaptureUsageDescription` permission the first time an exclusion is applied. See [meeting transcription](/meeting-transcription) and [permissions](/permissions).
+- **bring your own MCP servers** — you can now register custom MCP servers in your screenpipe config and route them through the built-in AI agent alongside screenpipe's own MCP tools. Existing setups (including Hermes) are picked up automatically, so tools you've already wired up keep working without reconfiguration. See [MCP server](/mcp-server) and [connections](/connections).
+- **cleaner microphone capture with VoiceProcessingIO (Apple silicon)** — microphone recording can now opt into macOS VoiceProcessingIO for hardware-assisted echo cancellation and noise suppression on Apple silicon Macs, producing noticeably cleaner input for meetings and dictation. Off by default; enable it in audio settings when you want the extra processing. See [meeting transcription](/meeting-transcription).
+
 ### updates
 
 - **CLI auto-connects every detected AI tool on startup** — when the screenpipe CLI starts, it now scans for every supported AI coding tool installed on your machine (Claude Code, Cursor, Cline, Continue, Copilot CLI, Gemini CLI, opencode, and more) and wires them up to screenpipe over MCP in one shot, instead of asking you to connect each one by hand. Existing custom MCP servers you've already configured (including Hermes) are preserved untouched, so previously wired-up tools keep their settings. See [MCP server](/mcp-server) and [connections](/connections).
@@ -18,6 +24,8 @@ icon: "newspaper"
 
 ### bug fixes
 
+- **Electron apps get the full accessibility walk** — VS Code, Discord, Slack, and other Electron apps sometimes had their content indexing cut off partway through the accessibility tree, so screen text from those apps could be missing from search results. The depth counter now resets at `AXWebArea` boundaries, giving Electron apps the full walk budget and restoring complete text capture. See [search screen history](/search-screen-history).
+- **USB audio devices no longer drop into silence on macOS** — USB microphones and interfaces whose native sample rate did not match the system's could silently stop delivering audio mid-session on macOS. Sample-rate mismatches are now handled correctly, so USB capture keeps flowing throughout the recording. See [troubleshooting](/troubleshooting).
 - **free hosted chat accepts one verbose tool** — the free hosted chat gateway previously rejected requests containing a single tool with a long description or a large parameter schema. The size cap now applies to the combined byte size of all tool definitions in a request instead of each tool individually, so one verbose tool goes through as long as the aggregate stays under the limit. Pi and pipes that ship a rich schema for a single tool no longer see spurious `free_chat_tools_too_large` errors. See [pipes](/pipes).
 
 ## week of july 17, 2026

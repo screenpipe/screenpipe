@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Check, ExternalLink, Loader2, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, LogOut, Pencil, Plus, X } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useInterval } from "@/lib/hooks/use-interval";
@@ -84,8 +84,23 @@ const TOOLKIT_META: Record<ComposioToolkit, ToolkitMeta> = {
   },
 };
 
+const MAX_ACCOUNTS = 5; // mirrors MAX_ACCOUNTS_PER_TOOLKIT on the server
+
+export interface ComposioAccount {
+  id: string;
+  alias: string | null;
+  /** Connected email resolved server-side; null while unknown. */
+  email?: string | null;
+  created_at?: string | null;
+}
+
 type ComposioStatus = Partial<
-  Record<ComposioToolkit, { connected: boolean; status: string | null }>
+  Record<
+    ComposioToolkit,
+    // `accounts` is absent on servers deployed before multi-account (#5383);
+    // the card degrades to the single-account UI in that case.
+    { connected: boolean; status: string | null; accounts?: ComposioAccount[] }
+  >
 >;
 
 function statusToMap(status: ComposioStatus): ComposioStatusMap {
@@ -151,11 +166,26 @@ export function ComposioCard({
 
   const [loaded, setLoaded] = useState(initialConnected !== undefined);
   const [connected, setConnected] = useState(initialConnected ?? false);
+  const [accounts, setAccounts] = useState<ComposioAccount[]>([]);
+  // False until the server reports per-account data — old backends don't.
+  const [supportsMulti, setSupportsMulti] = useState(false);
   const [otherConnected, setOtherConnected] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Which control kicked off the in-flight request — `busy` disables
+  // everything, but only the initiating control shows a spinner (a shared
+  // spinner made unrelated rows look like they were loading too).
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [addingAccount, setAddingAccount] = useState(false);
+  const [aliasInput, setAliasInput] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameInput, setRenameInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const pollCount = useRef(0);
+  // Account count when the pending authorize started; polling succeeds once
+  // the count grows past it (a plain `connected` check would instantly
+  // "succeed" when adding a second account).
+  const pollBaseline = useRef(0);
   const lastStatusRef = useRef<ComposioStatusMap | null>(null);
 
   const applyStatus = useCallback(
@@ -164,9 +194,12 @@ export function ComposioCard({
       lastStatusRef.current = map;
       const mine = map[toolkit];
       setConnected(mine);
+      const mineAccounts = status[toolkit]?.accounts;
+      setSupportsMulti(mineAccounts !== undefined);
+      setAccounts(mineAccounts ?? []);
       setOtherConnected(COMPOSIO_TOOLKITS.some((t) => t !== toolkit && map[t]));
       onChanged?.(map);
-      return mine;
+      return { connected: mine, accountCount: mineAccounts?.length ?? (mine ? 1 : 0) };
     },
     [toolkit, onChanged]
   );
@@ -198,7 +231,8 @@ export function ComposioCard({
       }
       const status = await fetchComposioStatus(token);
       if (!status) return;
-      if (applyStatus(status)) {
+      const applied = applyStatus(status);
+      if (applied.connected && applied.accountCount > pollBaseline.current) {
         setWaiting(false);
         try {
           await registerComposioMcpServer(token);
@@ -211,18 +245,20 @@ export function ComposioCard({
     })();
   }, waiting ? POLL_MS : null);
 
-  const connect = async () => {
+  const connect = async (alias?: string) => {
     if (!token) return;
     setBusy(true);
+    setPendingAction("connect");
     setError(null);
     try {
+      const trimmed = alias?.trim();
       const res = await fetch(`${COMPOSIO_API}/authorize`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ toolkit }),
+        body: JSON.stringify(trimmed ? { toolkit, alias: trimmed } : { toolkit }),
       });
       if (res.status === 404) {
         // Server half not deployed yet (or an old app against a rolled-back
@@ -234,7 +270,10 @@ export function ComposioCard({
         throw new Error(data.error || "could not start the connection");
       }
       pollCount.current = 0;
+      pollBaseline.current = accounts.length ? accounts.length : connected ? 1 : 0;
       setWaiting(true);
+      setAddingAccount(false);
+      setAliasInput("");
       await openUrl(data.redirect_url);
     } catch (e: any) {
       const msg = e?.message === "Load failed" || e?.name === "TypeError"
@@ -243,34 +282,80 @@ export function ComposioCard({
       setError(msg);
     } finally {
       setBusy(false);
+      setPendingAction(null);
     }
   };
 
-  const disconnect = async () => {
+  // Relabel an account (same interaction as speakers rename). The pencil
+  // edits the alias, never the email; saving empty clears the label and the
+  // row falls back to showing the email.
+  const rename = async (accountId: string) => {
     if (!token) return;
+    const alias = renameInput.trim();
+    const current = accounts.find((a) => a.id === accountId)?.alias ?? "";
+    if (alias === current) {
+      setRenamingId(null);
+      return;
+    }
     setBusy(true);
+    setPendingAction(`rename:${accountId}`);
     setError(null);
     try {
-      const res = await fetch(`${COMPOSIO_API}/disconnect?toolkit=${toolkit}`, {
+      const res = await fetch(`${COMPOSIO_API}/rename`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ toolkit, account_id: accountId, alias }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "rename failed");
+      setAccounts(accounts.map((a) => (a.id === accountId ? { ...a, alias: alias || null } : a)));
+      setRenamingId(null);
+    } catch (e: any) {
+      setError(e?.message || "rename failed");
+    } finally {
+      setBusy(false);
+      setPendingAction(null);
+    }
+  };
+
+  // Without accountId every account for the toolkit is removed; with it only
+  // that account goes (multi-account, #5383).
+  const disconnect = async (accountId?: string) => {
+    if (!token) return;
+    setBusy(true);
+    setPendingAction(accountId ? `disconnect:${accountId}` : "disconnect-all");
+    setError(null);
+    try {
+      const query = accountId
+        ? `toolkit=${toolkit}&account_id=${encodeURIComponent(accountId)}`
+        : `toolkit=${toolkit}`;
+      const res = await fetch(`${COMPOSIO_API}/disconnect?${query}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("disconnect failed");
-      setConnected(false);
+      const remaining = accountId ? accounts.filter((a) => a.id !== accountId) : [];
+      setAccounts(remaining);
+      const stillConnected = remaining.length > 0;
+      setConnected(stillConnected);
       const map = {
         ...(lastStatusRef.current ??
           (Object.fromEntries(COMPOSIO_TOOLKITS.map((t) => [t, false])) as ComposioStatusMap)),
-        [toolkit]: false,
+        [toolkit]: stillConnected,
       } as ComposioStatusMap;
       lastStatusRef.current = map;
       onChanged?.(map);
-      // Keep the shared MCP entry while any other toolkit is still connected.
-      if (!otherConnected) await removeComposioMcpServer();
+      // Keep the shared MCP entry while any account or other toolkit remains.
+      if (!stillConnected && !otherConnected) await removeComposioMcpServer();
       notifyConnectionsUpdated();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
     } finally {
       setBusy(false);
+      setPendingAction(null);
     }
   };
 
@@ -376,16 +461,193 @@ export function ComposioCard({
             {label} connected — your AI can now read your{" "}
             {TOOLKIT_META[toolkit].connectedNoun}.
           </p>
+          {/* Named-instance rows — same pattern as OAuthPanel's multi-account
+              list (rounded muted rows, name left, quiet actions right). The
+              row leads with the alias when set, else the connected email;
+              the hover pencil edits the alias only (like speakers rename). */}
+          {supportsMulti && accounts.length > 0 && (
+            <div className="space-y-2">
+              {accounts.map((account, i) => {
+                const identity = account.alias || account.email || `account ${i + 1}`;
+                const editing = renamingId === account.id;
+                return (
+                  <div
+                    key={account.id}
+                    className="group flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs"
+                  >
+                    {editing ? (
+                      <span className="flex items-baseline gap-2 min-w-0 flex-1">
+                        <input
+                          value={renameInput}
+                          onChange={(e) => setRenameInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !busy) rename(account.id);
+                            if (e.key === "Escape") setRenamingId(null);
+                          }}
+                          maxLength={64}
+                          placeholder="label — e.g. work"
+                          autoFocus
+                          className="h-6 w-36 rounded px-1.5 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
+                        />
+                        {account.email && (
+                          <span className="text-[10px] text-muted-foreground/70 truncate">
+                            {account.email}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="flex items-baseline gap-2 min-w-0">
+                        <span className="truncate">{identity}</span>
+                        {account.alias && account.email && (
+                          <span className="text-[10px] text-muted-foreground/70 truncate">
+                            {account.email}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    <span className="flex items-center gap-0.5 shrink-0">
+                      {editing ? (
+                        <>
+                          <Button
+                            onClick={() => rename(account.id)}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="save label"
+                            className="h-6 px-2 text-muted-foreground hover:text-foreground"
+                          >
+                            {pendingAction === `rename:${account.id}` ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Check className="h-3 w-3" />
+                            )}
+                          </Button>
+                          <Button
+                            onClick={() => setRenamingId(null)}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="cancel"
+                            className="h-6 px-2 text-muted-foreground"
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            onClick={() => {
+                              setRenamingId(account.id);
+                              setRenameInput(account.alias ?? "");
+                            }}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="edit label"
+                            className="h-6 px-2 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            onClick={() => disconnect(account.id)}
+                            disabled={busy}
+                            variant="ghost"
+                            size="sm"
+                            title="disconnect this account"
+                            className="h-6 px-2 text-muted-foreground hover:text-destructive"
+                          >
+                            {pendingAction === `disconnect:${account.id}` ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <LogOut className="h-3 w-3" />
+                            )}
+                          </Button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {waiting && (
+            <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              finish signing in with {provider} in your browser —
+              this connects automatically
+            </p>
+          )}
           {error && <p className="text-xs text-destructive">{error}</p>}
-          <Button
-            onClick={disconnect}
-            disabled={busy}
-            variant="ghost"
-            size="sm"
-            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive"
-          >
-            <X className="h-3 w-3" />disconnect
-          </Button>
+          {/* "add another account" swaps in place for the label field, like
+              the Zendesk subdomain flow in OAuthPanel. */}
+          {supportsMulti && !waiting && accounts.length < MAX_ACCOUNTS && addingAccount && (
+            <div className="flex items-center gap-1.5">
+              <input
+                value={aliasInput}
+                onChange={(e) => setAliasInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !busy) connect(aliasInput);
+                  if (e.key === "Escape") setAddingAccount(false);
+                }}
+                maxLength={64}
+                placeholder="label — e.g. work, personal"
+                autoFocus
+                className="h-7 w-52 rounded-md px-2 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
+              />
+              <Button
+                onClick={() => connect(aliasInput)}
+                disabled={busy}
+                size="sm"
+                className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+              >
+                {pendingAction === "connect" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ExternalLink className="h-3 w-3" />
+                )}
+                connect
+              </Button>
+              <Button
+                onClick={() => {
+                  setAddingAccount(false);
+                  setAliasInput("");
+                }}
+                disabled={busy}
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs normal-case font-sans tracking-normal"
+              >
+                cancel
+              </Button>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {supportsMulti && !waiting && !addingAccount && accounts.length < MAX_ACCOUNTS && (
+              <Button
+                onClick={() => setAddingAccount(true)}
+                disabled={busy}
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+              >
+                <Plus className="h-3 w-3" />add another account
+              </Button>
+            )}
+            <Button
+              onClick={() => disconnect()}
+              disabled={busy}
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive"
+            >
+              {pendingAction === "disconnect-all" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <X className="h-3 w-3" />
+              )}
+              {accounts.length > 1 ? "disconnect all" : "disconnect"}
+            </Button>
+          </div>
           {privacyNote}
         </div>
       ) : (
@@ -399,7 +661,7 @@ export function ComposioCard({
           )}
           {error && <p className="text-xs text-destructive">{error}</p>}
           <Button
-            onClick={connect}
+            onClick={() => connect()}
             disabled={busy || waiting}
             size="sm"
             className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"

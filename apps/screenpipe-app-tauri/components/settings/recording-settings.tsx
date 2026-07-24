@@ -118,7 +118,6 @@ import {
   useSettings,
   Settings,
 } from "@/lib/hooks/use-settings";
-import { hasAppEntitlement } from "@/lib/app-entitlement";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { localFetch } from "@/lib/api";
@@ -143,7 +142,6 @@ import {
 } from "@/lib/language";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ToastAction } from "@/components/ui/toast";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { getMediaFile } from "@/lib/actions/video-actions";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -208,7 +206,6 @@ const TRANSCRIPTION_ENGINE_LABELS: Record<string, string> = {
 
 type AudioEngineFallbackReason =
   | "notLoggedIn"
-  | "notSubscribed"
   | "missingDeepgramKey";
 
 type AudioEngineResolution = {
@@ -282,14 +279,8 @@ const getAudioEngineResolution = (
     };
   }
 
-  if (requested === "screenpipe-cloud" && !hasAppEntitlement(settings.user as any)) {
-    return {
-      requested,
-      active: fallback,
-      fallbackReason: "notSubscribed",
-    };
-  }
-
+  // Signed-in users get cloud transcription on every plan (the free tier
+  // includes an allowance enforced server-side) — never gate on subscription.
   if (requested === "deepgram" && !hasDeepgramKey) {
     return {
       requested,
@@ -309,8 +300,6 @@ const getAudioFallbackMessage = (reason: AudioEngineFallbackReason) => {
   switch (reason) {
     case "notLoggedIn":
       return "You are not logged in, so audio is being transcribed locally.";
-    case "notSubscribed":
-      return "Screenpipe Cloud requires an active subscription, so audio is being transcribed locally.";
     case "missingDeepgramKey":
       return "Deepgram has no API key configured, so audio is being transcribed locally.";
   }
@@ -1954,7 +1943,6 @@ export function RecordingSettings() {
       settings.user?.token,
     ]
   );
-  const hasCloudTranscriptionAccess = hasAppEntitlement(settings.user as any);
   const languageSupportEngine = audioEngineResolution.active;
   const languageSupportKey =
     getTranscriptionEngineLanguageSupportKey(languageSupportEngine);
@@ -2389,33 +2377,9 @@ export function RecordingSettings() {
     realtime = false
   ) => {
     const isLoggedIn = checkLogin(settings.user);
-    // If trying to use cloud but not logged in
+    // Cloud transcription works on every plan (free tier allowance is
+    // enforced server-side) — the only requirement is being logged in.
     if (value === "screenpipe-cloud" && !isLoggedIn) {
-      return;
-    }
-
-    // If trying to use cloud but not subscribed
-    if (value === "screenpipe-cloud" && !hasCloudTranscriptionAccess) {
-      try {
-        const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${settings.user?.token}`,
-          },
-          body: JSON.stringify({
-            tier: "pro",
-            billingPeriod: "monthly",
-            userId: settings.user?.id,
-            email: settings.user?.email,
-          }),
-        });
-        const data = await response.json();
-        openUrl(data.url || "https://screenpipe.com/billing");
-      } catch {
-        openUrl("https://screenpipe.com/billing");
-      }
-      // Revert back to previous value in the Select component
       return;
     }
 
@@ -2758,8 +2722,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
-                      <SelectItem value="screenpipe-cloud" disabled={!hasCloudTranscriptionAccess}>
-                        Screenpipe Cloud {!hasCloudTranscriptionAccess && "(Business)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
+                      <SelectItem value="screenpipe-cloud">
+                        Screenpipe Cloud{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
                       </SelectItem>
                       <SelectItem value="deepgram">Deepgram</SelectItem>
                     </SelectGroup>
@@ -2817,18 +2781,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                         onClick={() => checkLogin(settings.user)}
                       >
                         Log in
-                      </Button>
-                    )}
-                    {audioEngineResolution.fallbackReason === "notSubscribed" && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        data-testid="audio-engine-fallback-upgrade"
-                        onClick={() => openUrl("https://screenpipe.com/billing")}
-                      >
-                        Upgrade
                       </Button>
                     )}
                     <Button

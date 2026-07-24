@@ -3422,8 +3422,9 @@ showOverlayInScreenRecording?: boolean;
  */
 chatAlwaysOnTop?: boolean;
 /**
- * Show restart notifications when audio/vision capture stalls.
- * Disabled by default for now until the stall detector is more reliable.
+ * Show recording-health overlay alerts and restart notifications when
+ * audio/vision capture stalls. Disabled by default for now until the
+ * detector is more reliable.
  */
 showRestartNotifications?: boolean;
 /**

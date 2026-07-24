@@ -97,6 +97,8 @@ mod sync;
 mod tray;
 #[cfg(target_os = "macos")]
 mod tray_monitor_preview;
+#[cfg(target_os = "macos")]
+mod staged_update;
 mod updates;
 mod voice_training;
 mod window;
@@ -2103,6 +2105,12 @@ async fn main() {
                     });
 
                     process_exit::run_blocking_pre_exit_teardown(app_handle.app_handle().clone());
+
+                    // Plain-quit path: apply a staged update so the next manual
+                    // launch runs the new version. Restart paths install in
+                    // force_app_relaunch; this call is idempotent with that.
+                    #[cfg(target_os = "macos")]
+                    staged_update::install_staged_if_any(app_handle.app_handle());
 
                     if process_exit::PENDING_RESTART.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("Restart pending — spawning replacement and force-exiting");

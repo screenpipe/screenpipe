@@ -653,7 +653,6 @@ export function MeetingNotesSection({
       comingUpStatus={comingUpStatus}
       connectedCalendarSources={connectedCalendarSources}
       onOpenCalendarConnections={openCalendarConnections}
-      onCalendarConnectionChange={refreshUpcoming}
       meetingActive={meetingState.active === true}
       captureState={activeCaptureState}
       searchInput={searchInput}

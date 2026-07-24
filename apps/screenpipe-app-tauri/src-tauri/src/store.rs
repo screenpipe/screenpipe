@@ -1222,14 +1222,13 @@ pub(crate) enum LocalPlanPolicy {
 #[serde(rename_all = "camelCase")]
 pub enum AudioEngineFallbackReason {
     NotLoggedIn,
-    NotSubscribed,
     MissingDeepgramKey,
 }
 
 impl AudioEngineFallbackReason {
     pub fn notification_title(&self) -> &'static str {
         match self {
-            Self::NotLoggedIn | Self::NotSubscribed => "Screenpipe Cloud unavailable",
+            Self::NotLoggedIn => "Screenpipe Cloud unavailable",
             Self::MissingDeepgramKey => "Deepgram unavailable",
         }
     }
@@ -1238,9 +1237,6 @@ impl AudioEngineFallbackReason {
         match self {
             Self::NotLoggedIn => {
                 "You are not logged in, so audio is being transcribed locally with Whisper Turbo (fast). Log in to use Screenpipe Cloud."
-            }
-            Self::NotSubscribed => {
-                "Screenpipe Cloud requires an active subscription, so audio is being transcribed locally with Whisper Turbo (fast)."
             }
             Self::MissingDeepgramKey => {
                 "Deepgram has no API key configured, so audio is being transcribed locally with Whisper Turbo (fast)."
@@ -1796,10 +1792,6 @@ impl SettingsStore {
         !has_consumer_entitlement
     }
 
-    fn cloud_transcription_entitled(&self) -> bool {
-        self.has_current_app_entitlement()
-    }
-
     pub fn audio_engine_resolution(&self) -> AudioEngineResolution {
         let has_cloud_auth = self
             .resolved_cloud_auth_token(crate::auth_token::cached_cloud_token())
@@ -1812,7 +1804,6 @@ impl SettingsStore {
         has_cloud_auth: bool,
     ) -> AudioEngineResolution {
         let engine = self.recording.audio_transcription_engine.clone();
-        let is_subscribed = self.cloud_transcription_entitled();
         let has_deepgram_key = !self.recording.deepgram_api_key.is_empty()
             && self.recording.deepgram_api_key != "default";
         let fallback = "whisper-large-v3-turbo-quantized".to_string();
@@ -1823,15 +1814,13 @@ impl SettingsStore {
         };
 
         match engine.as_str() {
+            // Any signed-in account may use cloud transcription — the free tier
+            // includes a cloud transcription allowance enforced server-side.
+            // Never gate on subscription/entitlement here.
             "screenpipe-cloud" if !has_cloud_auth => {
                 tracing::warn!("screenpipe-cloud selected but user not logged in, falling back to whisper-large-v3-turbo-quantized");
                 resolution.active = fallback;
                 resolution.fallback_reason = Some(AudioEngineFallbackReason::NotLoggedIn);
-            }
-            "screenpipe-cloud" if !is_subscribed => {
-                tracing::warn!("screenpipe-cloud selected but user is not a pro subscriber, falling back to whisper-large-v3-turbo-quantized");
-                resolution.active = fallback;
-                resolution.fallback_reason = Some(AudioEngineFallbackReason::NotSubscribed);
             }
             "deepgram" if !has_deepgram_key => {
                 tracing::warn!("deepgram selected but no API key configured, falling back to whisper-large-v3-turbo-quantized");
@@ -2454,20 +2443,19 @@ mod tests {
     }
 
     #[test]
-    fn screenpipe_cloud_falls_back_when_not_subscribed() {
+    fn screenpipe_cloud_stays_active_for_signed_in_free_users() {
+        // Free tier includes cloud transcription; the allowance is enforced
+        // server-side, never by a local subscription gate.
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
         store.user.token = Some("token".to_string());
-        store.user.id = Some("user_paid".to_string());
+        store.user.id = Some("user_free".to_string());
         store.user.cloud_subscribed = Some(false);
 
         let resolution = store.audio_engine_resolution();
 
-        assert_eq!(resolution.active, FALLBACK_ENGINE);
-        assert_eq!(
-            resolution.fallback_reason,
-            Some(AudioEngineFallbackReason::NotSubscribed)
-        );
+        assert_eq!(resolution.active, "screenpipe-cloud");
+        assert_eq!(resolution.fallback_reason, None);
     }
 
     #[test]
@@ -2494,7 +2482,9 @@ mod tests {
     }
 
     #[test]
-    fn screenpipe_cloud_falls_back_for_stale_legacy_cloud_subscribed_without_entitlement() {
+    fn screenpipe_cloud_stays_active_for_stale_legacy_cloud_subscribed_without_entitlement() {
+        // Even without verified entitlement evidence, a signed-in token is
+        // enough for cloud transcription (free tier allowance, server-enforced).
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
         store.user.token = Some("token".to_string());
@@ -2502,11 +2492,8 @@ mod tests {
 
         let resolution = store.audio_engine_resolution();
 
-        assert_eq!(resolution.active, FALLBACK_ENGINE);
-        assert_eq!(
-            resolution.fallback_reason,
-            Some(AudioEngineFallbackReason::NotSubscribed)
-        );
+        assert_eq!(resolution.active, "screenpipe-cloud");
+        assert_eq!(resolution.fallback_reason, None);
     }
 
     #[test]

@@ -180,7 +180,7 @@ function composioSyntheticConnection(id: string, serverId: string): ConnectionIt
     mcp: true,
     mcp_server_id: serverId,
     category: meta.category,
-    description: `${meta.name} via Composio managed auth. Discover tools with sp_mcp_list_tools (server_id "${serverId}"), then call them with sp_mcp_call — e.g. GMAIL_* / GOOGLEDRIVE_* / GOOGLEDOCS_* / GOOGLESHEETS_* / ZOOM_* tools through COMPOSIO_SEARCH_TOOLS and COMPOSIO_MULTI_EXECUTE_TOOL.`,
+    description: `${meta.name} via Composio managed auth. Discover tools with sp_mcp_list_tools (server_id "${serverId}"), then call them with sp_mcp_call — e.g. GMAIL_* / GOOGLEDRIVE_* / GOOGLEDOCS_* / GOOGLESHEETS_* / ZOOM_* tools through COMPOSIO_SEARCH_TOOLS and COMPOSIO_MULTI_EXECUTE_TOOL. The user may have connected multiple ${meta.name} accounts (labeled with aliases like "work" or "personal"); tool calls default to the most recently connected account, and when the user names a specific one (e.g. "my work gmail"), pass the account parameter with that alias.`,
   };
 }
 
