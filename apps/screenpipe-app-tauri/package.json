@@ -6,6 +6,8 @@
     "test": "bun run test:vitest && bun run test:bun",
     "test:vitest": "bunx vitest run --config vitest.config.ts",
     "test:automation-pipe-evals": "bunx vitest run lib/automation-pipe-evals.test.ts components/chat/summary-cards.test.tsx",
+    "test:daily-summary-prompt-evals": "bunx vitest run lib/daily-summary-prompt-evals.test.ts components/rewind/timeline/daily-summary.test.tsx",
+    "eval:daily-summary-prompt": "bun scripts/eval-daily-summary-prompt.ts",
     "test:bun": "bun test lib/utils/html-sandbox.test.ts lib/utils/meeting-state.test.ts lib/utils/sanitize-tool-call-xml.test.ts lib/__tests__/team-crypto.test.ts lib/__tests__/team-api-contract.test.ts lib/__tests__/team-pipes.test.ts components/__tests__/url-detection-benchmark.test.ts lib/hooks/__tests__/timeline-reconnection.test.ts lib/hooks/__tests__/timeline-liveness.test.ts lib/hooks/__tests__/timeline-store-logic.test.ts lib/hooks/__tests__/use-meetings.test.ts lib/hooks/__tests__/server-push-old-frames.test.ts lib/hooks/__tests__/window-focus-refresh.test.ts lib/hooks/__tests__/timeline-ui-issues.test.ts lib/events/__tests__/types.test.ts lib/hooks/__tests__/server-poll-logic.test.ts lib/events/__tests__/bus.test.ts",
     "test:watch": "bunx vitest --config vitest.config.ts",
     "lint:effects": "ESLINT_USE_FLAT_CONFIG=true eslint --config eslint.effects.config.mjs \"lib/**/*.{ts,tsx}\" \"components/**/*.{ts,tsx}\" \"app/**/*.{ts,tsx}\"",
