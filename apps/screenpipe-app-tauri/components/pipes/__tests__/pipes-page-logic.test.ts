@@ -12,6 +12,7 @@ import {
   formatLastRunMeta,
   formatRowSubtitle,
   formatRunDuration,
+  formatRunRow,
   humanizeScheduleInterval,
   lifecyclePhaseFromEventType,
   lifecycleStatusText,
@@ -164,6 +165,40 @@ describe("time formatting", () => {
   });
 });
 
+describe("run row (previous runs)", () => {
+  // local, not UTC: the row is about the user's day
+  const now = Date.parse("2026-07-25T15:00:00");
+
+  it("puts the duration in the right column when the run finished", () => {
+    expect(formatRunRow("2026-07-25T13:59:00", 44_100, now).duration).toBe("44.1s");
+    expect(formatRunRow("2026-07-25T13:59:00", 64_000, now).duration).toBe("1m 04s");
+  });
+
+  it("falls back to an em dash — never a relative age — with no duration", () => {
+    expect(formatRunRow("2026-07-23T13:59:00", null, now).duration).toBe("—");
+    expect(formatRunRow("2026-07-25T13:59:00", undefined, now).duration).toBe("—");
+    // the old behaviour leaked "1d ago" / "2d ago" into a duration column
+    expect(formatRunRow("2026-07-23T13:59:00", null, now).duration).not.toMatch(/ago/);
+  });
+
+  it("keeps the bare clock for today's runs", () => {
+    expect(formatRunRow("2026-07-25T13:59:00", 1200, now).clock).toBe("1:59pm");
+    expect(formatRunRow("2026-07-25T00:05:00", 1200, now).clock).toBe("12:05am");
+  });
+
+  it("folds the date into the clock for any other day, so nothing is lost", () => {
+    expect(formatRunRow("2026-07-23T13:59:00", null, now).clock).toBe("jul 23 · 1:59pm");
+    expect(formatRunRow("2026-01-02T09:07:00", 500, now).clock).toBe("jan 2 · 9:07am");
+    // last year, same month/day — still a different day
+    expect(formatRunRow("2025-07-25T13:59:00", null, now).clock).toBe("jul 25 · 1:59pm");
+  });
+
+  it("says queued when the run has no start time yet", () => {
+    expect(formatRunRow(null, null, now)).toEqual({ clock: "queued", duration: "—" });
+    expect(formatRunRow("nonsense", 900, now).clock).toBe("queued");
+  });
+});
+
 describe("row subtitle", () => {
   it("joins schedule and next run", () => {
     const nextRunAt = new Date(2026, 0, 2, 14, 14).toISOString();
@@ -261,6 +296,20 @@ describe("suggestions demote rule", () => {
     ];
     const picks = pickSuggestedPipes(store, new Set(["d"]), 3);
     expect(picks.map((p) => p.slug)).toEqual(["c", "b", "a"]);
+  });
+
+  it("pickSuggestedPipes dedupes by slug — the slug is a React key downstream", () => {
+    // The store response merges featured and popular lists, so the same pipe
+    // can legitimately arrive twice; rendering both throws a duplicate-key error.
+    const store = [
+      { slug: "a", install_count: 10, featured: true },
+      { slug: "b", install_count: 50 },
+      { slug: "a", install_count: 10 },
+      { slug: "b", install_count: 50 },
+    ];
+    const picks = pickSuggestedPipes(store, new Set(), 5);
+    expect(picks.map((p) => p.slug)).toEqual(["a", "b"]);
+    expect(new Set(picks.map((p) => p.slug)).size).toBe(picks.length);
   });
 
   it("pickSuggestedPipes respects the limit", () => {

@@ -8,7 +8,9 @@ import posthog from "posthog-js";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
+import { SETTINGS_LABEL_CLASS } from "@/components/ui/settings-group";
 import { apiCache } from "@/lib/cache";
+import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
@@ -156,19 +158,23 @@ export function PipeSuggestions({
           type="button"
           data-testid="pipe-suggestions-toggle"
           onClick={toggleCollapsed}
-          className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          className={cn(
+            SETTINGS_LABEL_CLASS,
+            "flex items-center gap-1.5 transition-colors duration-150 hover:text-foreground",
+          )}
         >
           {collapsed ? (
             <ChevronRight className="h-3 w-3" />
           ) : (
             <ChevronDown className="h-3 w-3" />
           )}
-          suggestions ({suggestions.length})
+          suggestions
+          {/* The count is a trailing number, not part of the label — same
+              quiet caption treatment the detail pane uses. */}
+          <span className="text-muted-foreground/70">{suggestions.length}</span>
         </button>
       ) : (
-        <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-          suggestions — from your activity
-        </p>
+        <p className={SETTINGS_LABEL_CLASS}>suggestions — from your activity</p>
       )}
 
       {showList && (

@@ -118,6 +118,65 @@ export function formatRunDuration(ms: number | null | undefined): string | null 
   return `${mins}m ${String(secs % 60).padStart(2, "0")}s`;
 }
 
+const MONTHS_SHORT = [
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "may",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+  "oct",
+  "nov",
+  "dec",
+] as const;
+
+/** Placeholder for a run that never produced a duration (interrupted, killed). */
+export const RUN_DURATION_EMPTY = "—";
+
+export interface RunRowFormat {
+  /** left column: "1:59pm" today, "jul 23 · 1:59pm" any other day */
+  clock: string;
+  /** right column: a DURATION or the em dash — never a relative age */
+  duration: string;
+}
+
+function isSameLocalDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+/**
+ * The two strings of one `previous runs` row.
+ *
+ * The right column is duration ONLY. It used to fall back to "1d ago" when a
+ * run had no duration, which put two different units ("44.1s" and "2d ago") in
+ * the same column — unreadable. A run with no duration now shows an em dash,
+ * and the day it happened is folded into the left-hand clock instead, so no
+ * information is lost: today's runs keep the bare clock, older runs read
+ * "jul 23 · 1:59pm".
+ */
+export function formatRunRow(
+  startedAt: string | null | undefined,
+  durationMs: number | null | undefined,
+  now: number = Date.now(),
+): RunRowFormat {
+  const duration = formatRunDuration(durationMs) ?? RUN_DURATION_EMPTY;
+  const clock = formatClock(startedAt, now);
+  if (!clock || !startedAt) return { clock: "queued", duration };
+
+  const started = new Date(Date.parse(startedAt));
+  if (isSameLocalDay(started, new Date(now))) return { clock, duration };
+
+  const month = MONTHS_SHORT[started.getMonth()];
+  return { clock: `${month} ${started.getDate()} · ${clock}`, duration };
+}
+
 /** Live elapsed for an in-progress run: "0:07", "1:42", "1:02:03". */
 export function formatElapsedClock(
   startedAt: string | null | undefined,
@@ -248,9 +307,17 @@ export function pickSuggestedPipes<T extends SuggestionCandidate>(
   installedNames: ReadonlySet<string>,
   limit = 3,
 ): T[] {
-  return storePipes
-    .filter((pipe) => !!pipe.slug && !installedNames.has(pipe.slug))
-    .slice()
+  // Dedupe by slug first. The store response merges featured and popular
+  // lists, so the same pipe can appear twice — and since the slug is the
+  // React key downstream, a duplicate renders two children with the same key
+  // and React throws.
+  const bySlug = new Map<string, T>();
+  for (const pipe of storePipes) {
+    if (!pipe.slug || installedNames.has(pipe.slug)) continue;
+    if (!bySlug.has(pipe.slug)) bySlug.set(pipe.slug, pipe);
+  }
+
+  return Array.from(bySlug.values())
     .sort((a, b) => {
       if (!!a.featured !== !!b.featured) return a.featured ? -1 : 1;
       return (b.install_count ?? 0) - (a.install_count ?? 0);

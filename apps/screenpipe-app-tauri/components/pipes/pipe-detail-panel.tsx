@@ -40,8 +40,7 @@ import { scrollFadeStyle, useScrollFade } from "./use-scroll-fade";
 import {
   formatClock,
   formatElapsedClock,
-  formatRunDuration,
-  relativeTimeShort,
+  formatRunRow,
 } from "./pipes-page-logic";
 
 export interface PanelExecution {
@@ -82,18 +81,25 @@ export interface PipeDetailPanelProps {
 
   // reused widgets owned by the pipes page.
   //
-  // Slots are split into a compact `*Slot` (the row's right-hand VALUE) and an
-  // optional `*Footer` (a group-level affordance rendered below the box). A
-  // row never hosts a widget that titles itself — that is what produced two
-  // "when to run" headings and two "ai preset" headings in the same pane.
-  /** compact preset control — lives in the row's value column */
+  // Every slot is a row's right-hand VALUE, or a row of its own. There is no
+  // group footer any more: a strip of affordances hanging under the box
+  // belonged to no row and put two controls in two visual languages side by
+  // side. A row still never hosts a widget that titles itself — that is what
+  // produced two "when to run" headings in the same pane.
+  /** compact preset control — lives in the `ai preset` row's value column */
   presetSlot: React.ReactNode;
-  /** "+ add fallback preset" — rendered under the details group */
-  presetFooter?: React.ReactNode;
+  /**
+   * Slim fallback-preset control. Rendered as its own row under `advanced`:
+   * it is a failover knob most users never touch.
+   */
+  fallbackPresetSlot?: React.ReactNode;
   /** connection chips — the row's value column */
   connectionsSlot: React.ReactNode;
-  /** connection picker — rendered under the details group */
-  connectionsFooter?: React.ReactNode;
+  /**
+   * The `add ⌄` affordance, rendered INSIDE the connections row's value next
+   * to the chips, drawn like every other value.
+   */
+  connectionsAddSlot?: React.ReactNode;
   /** one-line summary of the current triggers, e.g. `every 1h` */
   scheduleSummary: React.ReactNode;
   /** the trigger/schedule builder, disclosed IN PLACE OF the `when to run` row */
@@ -189,9 +195,9 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
     saveState,
     saveError,
     presetSlot,
-    presetFooter,
+    fallbackPresetSlot,
     connectionsSlot,
-    connectionsFooter,
+    connectionsAddSlot,
     scheduleSummary,
     scheduleSlot,
     notificationsEnabled,
@@ -306,6 +312,22 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                   aria-label="remember context between runs"
                 />
               </SettingsRow>
+              {/* Failover, not configuration: it belongs next to timeout, not
+                  as a loose link hanging under the details group. */}
+              {fallbackPresetSlot != null && (
+                <SettingsRow
+                  label="fallback preset"
+                  description="used when the primary preset hits a rate limit"
+                  testId="pipe-detail-fallback-preset-row"
+                >
+                  <div
+                    data-testid="pipe-detail-fallback-preset"
+                    className="flex min-w-0 items-center justify-end"
+                  >
+                    {fallbackPresetSlot}
+                  </div>
+                </SettingsRow>
+              )}
             </SettingsGroup>
           )}
 
@@ -484,19 +506,9 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
           </div>
         </section>
 
-        {/* details — every row is label-left / value-right; group-level
-            affordances hang below the box instead of nesting in a row. */}
-        <SettingsGroup
-          label="details"
-          footer={
-            (presetFooter || connectionsFooter) && (
-              <>
-                {presetFooter}
-                {connectionsFooter}
-              </>
-            )
-          }
-        >
+        {/* details — every row is label-left / value-right, and every
+            affordance the group owns lives inside a row's value. */}
+        <SettingsGroup label="details">
           <SettingsRow label="chat" onClick={() => onOpenChat(null)}>
             <SettingsRowAction data-testid="pipe-detail-open-chat">
               <span className="truncate">
@@ -519,6 +531,14 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
               className="flex min-w-0 flex-wrap items-center justify-end gap-2"
             >
               {connectionsSlot}
+              {connectionsAddSlot != null && (
+                <>
+                  <span aria-hidden className="text-[12px] text-muted-foreground/50">
+                    ·
+                  </span>
+                  {connectionsAddSlot}
+                </>
+              )}
             </div>
           </SettingsRow>
         </SettingsGroup>
@@ -616,6 +636,13 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                   exec.status === "failed" ||
                   exec.status === "timed_out" ||
                   exec.status === "cancelled";
+                // One unit per column: the clock carries the day, the right
+                // column carries a duration (or an em dash) and never an age.
+                const { clock, duration } = formatRunRow(
+                  exec.started_at,
+                  exec.duration_ms,
+                  now,
+                );
                 return (
                   <div key={exec.id} className={RUN_ROW_CLASS}>
                     <button
@@ -625,20 +652,17 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
                       <PipeStatusDot state={running ? "running" : failed ? "paused" : "active"} />
-                      <span className="shrink-0 font-mono text-[12.5px]">
-                        {formatClock(exec.started_at, now) ?? "queued"}
-                      </span>
+                      <span className="shrink-0 font-mono text-[12.5px]">{clock}</span>
                       <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">
                         {running
                           ? lifecycleText || "running"
                           : exec.error_message || exec.status}
                       </span>
-                      <span className="shrink-0 font-mono text-[12.5px] text-muted-foreground">
-                        {running
-                          ? formatElapsedClock(exec.started_at, now)
-                          : formatRunDuration(exec.duration_ms) ??
-                            relativeTimeShort(exec.started_at, now) ??
-                            ""}
+                      <span
+                        data-testid={`pipe-detail-run-duration-${exec.id}`}
+                        className="shrink-0 font-mono text-[12.5px] text-muted-foreground"
+                      >
+                        {running ? formatElapsedClock(exec.started_at, now) : duration}
                       </span>
                     </button>
                     {!running && exec.stdout && (

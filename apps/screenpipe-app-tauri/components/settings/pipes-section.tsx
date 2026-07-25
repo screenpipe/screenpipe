@@ -15,7 +15,6 @@ import {
   Loader2,
   ExternalLink,
   Check,
-  Plus,
   Search,
   Share2,
   Link,
@@ -35,7 +34,6 @@ import {
   pipeConnectionInstanceName,
   pipeConnectionLookupKey,
 } from "@/lib/pipe-connections";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PipeTriggerPicker } from "./pipe-trigger-picker";
@@ -510,16 +508,20 @@ function PipeConnectionPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
+        {/* This is a settings row's VALUE now, not a standalone button: it
+            lives beside the connection chips and is drawn exactly like the
+            `notifications` / `timeout` values — borderless at rest,
+            content-width, hover wash only. */}
         <Button
-          variant="outline"
+          variant="ghost"
           size="sm"
-          className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5"
+          className={SETTINGS_SELECT_TRIGGER_CLASS}
           aria-expanded={open}
+          aria-label="add connection"
           data-testid="pipe-connection-add"
         >
-          <Plus className="h-3 w-3" />
           add
-          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+          <ChevronDown className="h-3.5 w-3.5" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -911,6 +913,13 @@ function PipePresetPrimary(props: PipePresetProps) {
       <AIPresetsSelector
         compact
         allowNone
+        showNameOnly
+        // Sentence case, and the same words a settings value would use — the
+        // popover's own "none (use pipe defaults)" is a menu entry, not a value.
+        noneLabel="pipe defaults"
+        // `ghost`, not `outline`: see AIPresetsSelector.triggerVariant.
+        triggerVariant="ghost"
+        containerClassName="w-auto gap-0"
         triggerClassName={SETTINGS_SELECT_TRIGGER_CLASS}
         controlledPresetId={primaryPreset}
         onControlledSelect={(presetId) => savePresets(presetId || null, fallbackPreset)}
@@ -919,50 +928,27 @@ function PipePresetPrimary(props: PipePresetProps) {
   );
 }
 
-/** Group-level fallback affordance — rendered UNDER the details group. */
+/**
+ * The `fallback preset` row's VALUE, under `advanced`. Picking "none" clears
+ * the fallback, so the old add/remove pair is no longer needed — one control
+ * both sets and unsets it.
+ */
 function PipePresetFallback(props: PipePresetProps) {
   const { primaryPreset, fallbackPreset, savePresets } = usePipePresets(props);
-  const [showFallback, setShowFallback] = useState(!!fallbackPreset);
-
-  if (!showFallback) {
-    return (
-      <button
-        data-testid="pipe-preset-add-fallback"
-        className="text-[12px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
-        onClick={() => setShowFallback(true)}
-      >
-        + add fallback preset
-      </button>
-    );
-  }
 
   return (
-    <div className="w-full" data-testid="pipe-preset-fallback">
-      <div className="flex items-center justify-between gap-3">
-        <Label className="text-[12px] font-normal text-muted-foreground">
-          fallback ai preset
-        </Label>
-        <button
-          className="text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
-          onClick={() => {
-            setShowFallback(false);
-            savePresets(primaryPreset, null);
-          }}
-        >
-          remove
-        </button>
-      </div>
-      <div className="mt-1">
-        <AIPresetsSelector
-          compact
-          allowNone
-          controlledPresetId={fallbackPreset}
-          onControlledSelect={(presetId) => savePresets(primaryPreset, presetId || null)}
-        />
-      </div>
-      <p className="mt-1 text-[11px] text-muted-foreground">
-        used when primary hits rate limit
-      </p>
+    <div className="flex max-w-full justify-end" data-testid="pipe-preset-fallback">
+      <AIPresetsSelector
+        compact
+        allowNone
+        showNameOnly
+        noneLabel="none"
+        triggerVariant="ghost"
+        containerClassName="w-auto gap-0"
+        triggerClassName={SETTINGS_SELECT_TRIGGER_CLASS}
+        controlledPresetId={fallbackPreset}
+        onControlledSelect={(presetId) => savePresets(primaryPreset, presetId || null)}
+      />
     </div>
   );
 }
@@ -2713,16 +2699,20 @@ export function PipesSection({
     />
   );
 
-  /** Full width, on its own line, 9px/12px padding and 11px mono. */
+  /**
+   * Full width, on its own line. 10px vertical / 13px horizontal padding and
+   * 13.5px type — at 11px the field read as a caption rather than something
+   * you type into.
+   */
   const searchRow = (
     <div className="relative w-full">
-      <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Search className="absolute left-[13px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         data-testid="pipes-search"
         placeholder="search pipes..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        className="h-auto w-full rounded-none py-[9px] pl-8 pr-3 font-mono text-[11px]"
+        className="h-auto w-full rounded-none py-[10px] pl-[35px] pr-[13px] font-mono text-[13.5px]"
         spellCheck={false}
         autoCorrect="off"
       />
@@ -2730,24 +2720,25 @@ export function PipesSection({
   );
 
   // One wrapper so the toolbar owns its own rhythm instead of inheriting the
-  // shell's uniform stack: 26px above the title, 18px title→search,
-  // 16px search→filters, 10px filters→first row (the shell contributes 16px
-  // above and 12px below, hence the +10 / −2 corrections). Split mode keeps
-  // the same scale, proportionally tightened.
+  // shell's uniform stack: 26px above the title, 6px title→subtitle,
+  // 18px subtitle→search, 18px search→filters, 10px filters→first row (the
+  // shell contributes 16px above and 12px below, hence the +10 / −2
+  // corrections). At 8px the search read as part of the filter lump; 18px on
+  // both sides makes it its own row. Split mode keeps the same scale,
+  // proportionally tightened.
   const toolbar = (
     <div
       className={cn(
         compactToolbar ? "pt-[2px] -mb-[4px]" : "pt-[10px] -mb-[2px]",
       )}
     >
+      {/* Counts are not passed: the subtitle is always the tagline now and the
+          filter tabs are the single place counts are rendered. */}
       <PipesPageHeader
-        total={headerCounts.total}
-        active={headerCounts.active}
         creating={creatingPipe}
         compact={compactToolbar}
         leading={compactToolbar ? filterTabs : null}
         actions={headerActions}
-        showTagline={headerCounts.total === 0}
         onOpenCommunity={() => onOpenCommunity?.()}
         onDescribeInChat={() => void startCreatePipeInChat()}
         onSetUpManually={() => void createBlankPipe()}
@@ -2798,7 +2789,7 @@ export function PipesSection({
         <>
           <div className={compactToolbar ? "mt-3" : "mt-[18px]"}>{searchRow}</div>
           {/* Split mode moves the filters up into the compact header row. */}
-          {!compactToolbar && <div className="mt-4">{filterTabs}</div>}
+          {!compactToolbar && <div className="mt-[18px]">{filterTabs}</div>}
         </>
       )}
     </div>
@@ -3147,7 +3138,7 @@ export function PipesSection({
                     />
                   )
                 }
-                presetFooter={
+                fallbackPresetSlot={
                   enterpriseManaged ? null : (
                     <PipePresetFallback
                       pipe={selectedPipe}
@@ -3227,7 +3218,7 @@ export function PipesSection({
                     )}
                   </>
                 }
-                connectionsFooter={
+                connectionsAddSlot={
                   <PipeConnectionPicker
                       availableConnections={availableConnections}
                       selectedConnections={selectedPipe.config.connections || []}

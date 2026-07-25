@@ -20,8 +20,16 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
  *
  * Selectors are data-testid only — no text matching that breaks on copy change.
  *   pipes-page-header    →  data-testid="pipes-title" / "pipes-header-title-row" /
- *                           "pipes-header-meta-row" / "pipes-count" /
- *                           "pipes-community-btn" / "pipes-new-btn"
+ *                           "pipes-header-meta-row" / "pipes-subtitle" /
+ *                           "pipes-community-btn" / "pipes-new-split" /
+ *                           "pipes-new-btn" (label half) /
+ *                           "pipes-new-menu-btn" (chevron half)
+ *
+ * `+ new pipe` is a SPLIT button: `pipes-new-btn` fires describe-in-chat
+ * directly (no menu), `pipes-new-menu-btn` opens the two-item menu
+ * (`pipes-new-manual`, `pipes-new-community`). There is no `pipes-new-describe`
+ * item any more — the label *is* that action. The subtitle is always the
+ * tagline; counts live only in the filter tabs.
  *   pipe-filter-tabs     →  data-testid="pipe-filter-{all|active|paused|starred}"
  *   pipe-row             →  data-testid="pipe-row-{name}" / "pipe-row-progress-{name}" /
  *                           "pipe-row-toggle-{name}" / "pipe-row-star-{name}" /
@@ -35,7 +43,7 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
  *                           "pipe-detail-schedule-builder" / "pipe-detail-schedule-done" /
  *                           "pipe-detail-preset-row" / "pipe-detail-connections-row"
  *
- * In split mode the header is compact: `pipes-count` and `pipes-community-btn`
+ * In split mode the header is compact: `pipes-subtitle` and `pipes-community-btn`
  * are NOT rendered, and the filter tabs carry no counts. The notification bell
  * no longer lives in this header at all — it is app-global chrome.
  *   pipes-split-view     →  data-testid="pipes-split-view" (data-layout-mode) /
@@ -113,7 +121,7 @@ async function waitForPipesPage(timeout = t(20_000)): Promise<void> {
     async () => {
       try {
         const section = await $('[data-testid="section-pipes"]');
-        // `pipes-page-header` exists in both layouts; `pipes-count` is list-mode
+        // `pipes-page-header` exists in both layouts; `pipes-subtitle` is list-mode
         // only (compact/split drops it), so gating on the count would hang here
         // whenever a previous test left the detail pane open.
         const header = await $('[data-testid="pipes-page-header"]');
@@ -198,39 +206,76 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
 
   // ─── Header ───────────────────────────────────────────────────────────────
 
-  it('renders one pipes page with a count and no tabs', async () => {
+  it('renders one pipes page with the tagline subtitle and no tabs', async () => {
     await openPipesPage();
 
     // The tabs are gone — community is a drill-in, not a sibling tab.
     const oldTab = await $('[data-testid="tab-discover"]');
     expect(await oldTab.isExisting()).toBe(false);
 
-    const count = await $('[data-testid="pipes-count"]');
-    expect(await count.getText()).toMatch(/(pipes?|no pipes yet)/i);
+    // The subtitle is always the tagline; the old `N pipes · M active` line is
+    // gone entirely — counts live in the filter tabs and nowhere else.
+    const subtitle = await $('[data-testid="pipes-subtitle"]');
+    expect(await subtitle.getText()).toMatch(/agents that run on a schedule/i);
+    expect(await $('[data-testid="pipes-count"]').isExisting()).toBe(false);
+    const headerText = await $('[data-testid="pipes-page-header"]').getText();
+    expect(headerText).not.toMatch(/\d+\s*pipes?\s*·/i);
 
     const community = await $('[data-testid="pipes-community-btn"]');
     expect(await community.isExisting()).toBe(true);
+    expect((await community.getText()).toLowerCase()).toContain('browse store');
 
     const newPipe = await $('[data-testid="pipes-new-btn"]');
     expect(await newPipe.isExisting()).toBe(true);
+    expect(await $('[data-testid="pipes-new-menu-btn"]').isExisting()).toBe(true);
 
     const filepath = await saveScreenshot('pipes-page-header');
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it('exposes the three creation entry points behind + NEW PIPE', async () => {
+  it('opens the two remaining creation entry points from the chevron half', async () => {
     await openPipesPage();
 
-    const newPipe = await $('[data-testid="pipes-new-btn"]');
-    await newPipe.click();
+    await $('[data-testid="pipes-new-menu-btn"]').click();
 
-    for (const id of ['pipes-new-describe', 'pipes-new-manual', 'pipes-new-community']) {
+    for (const id of ['pipes-new-manual', 'pipes-new-community']) {
       const item = await $(`[data-testid="${id}"]`);
       await item.waitForExist({ timeout: t(5_000) });
       expect(await item.isExisting()).toBe(true);
     }
 
+    // Exactly two — "describe in chat" is the label half now, and
+    // "start from a community pipe" duplicated the store button.
+    const items = await $$('[role="menuitem"]');
+    expect(items.length).toBe(2);
+    expect(await $('[data-testid="pipes-new-describe"]').isExisting()).toBe(false);
+
     await closeAnyMenu();
+  });
+
+  it('keeps the label half a one-click action — no menu appears on click', async () => {
+    await openPipesPage();
+
+    const labelHalf = await $('[data-testid="pipes-new-btn"]');
+    const chevronHalf = await $('[data-testid="pipes-new-menu-btn"]');
+
+    // Two separate targets inside one group: the chevron starts to the right
+    // of the label and neither contains the other.
+    const labelBox = { ...(await labelHalf.getLocation()), ...(await labelHalf.getSize()) };
+    const chevronBox = await chevronHalf.getLocation();
+    expect(chevronBox.x).toBeGreaterThanOrEqual(labelBox.x + labelBox.width - 2);
+
+    const nested = await browser.execute(() => {
+      const label = document.querySelector('[data-testid="pipes-new-btn"]');
+      const chevron = document.querySelector('[data-testid="pipes-new-menu-btn"]');
+      return !!label && !!chevron && (label.contains(chevron) || chevron.contains(label));
+    });
+    expect(nested).toBe(false);
+
+    await labelHalf.click();
+    await browser.pause(400);
+    // The default action fires straight away — no dropdown in between.
+    expect(await $('[data-testid="pipes-new-manual"]').isExisting()).toBe(false);
   });
 
   // ─── Filters ──────────────────────────────────────────────────────────────
@@ -420,19 +465,24 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     const filters = await $('[data-testid="pipe-filters"]');
     expect(await filters.isExisting()).toBe(true);
 
-    const searchBox = await search.getLocation();
+    const searchBox = { ...(await search.getLocation()), ...(await search.getSize()) };
     const filtersBox = await filters.getLocation();
     // Search is its own row, above the filters — not beside them.
     expect(searchBox.y).toBeLessThan(filtersBox.y);
+
+    // …and it is not glued to them either. At the old 8px the two read as one
+    // lump; 18px of air is what makes the search its own row.
+    const searchToFilters = filtersBox.y - (searchBox.y + searchBox.height);
+    expect(searchToFilters).toBeGreaterThanOrEqual(14);
 
     // …and the ☆ / ⟳ icon buttons are gone entirely: favourites became the
     // fourth filter tab and the list refreshes itself on a 10s poll.
     expect(await $('[data-testid="pipes-favorites-toggle"]').isExisting()).toBe(false);
     expect(await $('[data-testid="pipes-refresh"]').isExisting()).toBe(false);
 
-    // The count line carries the breakdown instead of a tagline.
-    const count = await $('[data-testid="pipes-count"]');
-    expect(await count.getText()).toMatch(/(no pipes yet|\d+ pipes? · \d+ active)/i);
+    // The subtitle is the tagline, always — never a counts breakdown.
+    const subtitle = await $('[data-testid="pipes-subtitle"]');
+    expect(await subtitle.getText()).toMatch(/agents that run on a schedule/i);
 
     // List-only mode is the centered reading column.
     const splitView = await $('[data-testid="pipes-split-view"]');
@@ -509,10 +559,15 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     const newCentre = newBox.y + newBox.height / 2;
     expect(Math.abs(titleCentre - newCentre)).toBeLessThanOrEqual(4);
 
-    // The count line sits strictly below the whole title row.
-    const count = await $('[data-testid="pipes-count"]');
-    const countBox = await count.getLocation();
-    expect(countBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1);
+    // The subtitle sits strictly below the whole title row.
+    const subtitle = await $('[data-testid="pipes-subtitle"]');
+    const subtitleBox = await subtitle.getLocation();
+    expect(subtitleBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1);
+
+    // Both halves of the split button share the title's baseline.
+    const menuBtn = await $('[data-testid="pipes-new-menu-btn"]');
+    const menuBox = { ...(await menuBtn.getLocation()), ...(await menuBtn.getSize()) };
+    expect(Math.abs(titleCentre - (menuBox.y + menuBox.height / 2))).toBeLessThanOrEqual(4);
 
     // And the bell no longer squats in the page header.
     const bell = await $('[data-testid="notification-bell"]');
@@ -806,7 +861,7 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     await $('[data-testid="pipe-detail-close"]').click();
   });
 
-  it('drops counts, the count line and the community button in compact mode', async function () {
+  it('drops counts, the subtitle and the store button in compact mode', async function () {
     if (!fixtureInstalled) this.skip();
     await openPipesPage();
     await waitForFixtureRow();
@@ -817,16 +872,18 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     const header = await $('[data-testid="pipes-page-header"]');
     expect(await header.getAttribute('data-compact')).toBe('true');
 
-    // Community lives on inside the `+ new` menu — one button, not two.
+    // The store lives on inside the chevron menu — one control, not two.
     expect(await $('[data-testid="pipes-community-btn"]').isExisting()).toBe(false);
-    // The `N pipes · M active` line is not rendered at all in compact mode.
-    expect(await $('[data-testid="pipes-count"]').isExisting()).toBe(false);
+    // The tagline is not rendered at all in compact mode.
+    expect(await $('[data-testid="pipes-subtitle"]').isExisting()).toBe(false);
     // …and the filter tabs carry no `(n)` counts.
     const filtersText = await $('[data-testid="pipe-filters"]').getText();
     expect(filtersText).not.toMatch(/\(\d+\)/);
 
-    // The one creation entry point still offers the community drill-in.
-    await $('[data-testid="pipes-new-btn"]').click();
+    // The split button survives whole: label half + chevron half.
+    expect(await $('[data-testid="pipes-new-btn"]').isExisting()).toBe(true);
+    // The chevron menu still offers the store drill-in.
+    await $('[data-testid="pipes-new-menu-btn"]').click();
     const communityItem = await $('[data-testid="pipes-new-community"]');
     await communityItem.waitForExist({ timeout: t(5_000) });
     expect(await communityItem.isExisting()).toBe(true);
@@ -990,8 +1047,9 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     const list = await $('[data-testid="pipes-virtual-list"]');
     await list.waitForExist({ timeout: t(15_000) });
 
+    // Counts now live only in the filter tabs — `all (219)`.
     const total = Number(
-      ((await $('[data-testid="pipes-count"]').getText()) || '').match(/(\d+)\s*pipes?/i)?.[1] ?? 0,
+      ((await $('[data-testid="pipe-filter-all"]').getText()) || '').match(/\((\d+)\)/)?.[1] ?? 0,
     );
     const rendered = await browser.execute(
       () => document.querySelectorAll('[data-testid^="pipe-row-"]').length,
@@ -1025,7 +1083,7 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
       async () =>
         (await $('[data-testid="pipes-list-skeleton"]').isExisting()) ||
         (await $('[data-testid="pipes-virtual-list"]').isExisting()) ||
-        (await $('[data-testid="pipes-count"]').isExisting()),
+        (await $('[data-testid="pipes-subtitle"]').isExisting()),
       { timeout: t(4_000), timeoutMsg: 'pipes tab showed nothing within 4s of opening' },
     );
     expect(sawSomething).toBe(true);
@@ -1058,14 +1116,14 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
 
   // ─── Create in chat ───────────────────────────────────────────────────────
 
-  it('describe in chat opens a chat with the prompt pre-written, not auto-sent', async () => {
+  it('one click on the label half opens a chat with the prompt pre-written, not auto-sent', async () => {
     await openPipesPage();
 
-    const newPipe = await $('[data-testid="pipes-new-btn"]');
-    await newPipe.click();
-    const describe = await $('[data-testid="pipes-new-describe"]');
-    await describe.waitForExist({ timeout: t(5_000) });
-    await describe.click();
+    // Split button: the label half *is* describe-in-chat. One click, no menu.
+    const labelHalf = await $('[data-testid="pipes-new-btn"]');
+    await labelHalf.click();
+    expect(await $('[data-testid="pipes-new-manual"]').isExisting()).toBe(false);
+    expect(await $('[data-testid="pipes-new-describe"]').isExisting()).toBe(false);
 
     // Lands in the chat composer with the interview prompt already typed.
     const composer = await $('form textarea');

@@ -71,29 +71,19 @@ describe("SettingsGroup", () => {
     expect(label.textContent).toBe("previous runs");
   });
 
-  it("renders a footer BELOW the bordered box for group-level affordances", () => {
-    render(
-      <SettingsGroup label="details" footer={<button>+ add fallback preset</button>}>
-        <SettingsRow label="ai preset" />
-      </SettingsGroup>,
-    );
-
-    const container = screen.getByTestId("settings-group-container");
-    const footer = screen.getByTestId("settings-group-footer");
-    expect(container.contains(footer)).toBe(false);
-    expect(
-      container.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(screen.getByText("+ add fallback preset")).toBeTruthy();
-  });
-
-  it("renders no footer element when no footer is given", () => {
-    render(
+  // The group has NO footer slot: an affordance is either a row's value or a
+  // row of its own. Two loose controls in two visual languages under one box
+  // is exactly what the slot produced.
+  it("renders nothing below the bordered box", () => {
+    const { container: root } = render(
       <SettingsGroup label="details">
         <SettingsRow label="chat" />
       </SettingsGroup>,
     );
     expect(screen.queryByTestId("settings-group-footer")).toBeNull();
+    const section = root.firstElementChild!;
+    const box = screen.getByTestId("settings-group-container");
+    expect(section.lastElementChild).toBe(box);
   });
 
   it("renders without a label when none is given", () => {
@@ -236,6 +226,20 @@ describe("SETTINGS_SELECT_TRIGGER_CLASS", () => {
     const trigger = screen.getByLabelText("notifications");
     expect(trigger.getAttribute("role")).toBe("combobox");
     expect(trigger.textContent).toContain("all runs");
+  });
+
+  // Regression: the shared `Button` base is `uppercase tracking-wide`, and
+  // case has no tailwind-merge conflict group — so a trigger built on Button
+  // (the ai preset popover) shouted while the Radix selects beside it did not.
+  it("neutralises the Button base's uppercase so button-backed triggers match", () => {
+    const classes = cn(
+      "inline-flex uppercase tracking-wide font-mono text-sm",
+      SETTINGS_SELECT_TRIGGER_CLASS,
+    ).split(/\s+/);
+    expect(classes).toContain("normal-case");
+    expect(classes).not.toContain("uppercase");
+    expect(classes).toContain("tracking-normal");
+    expect(classes).not.toContain("tracking-wide");
   });
 
   it("composes with cn so callers can add per-row tweaks", () => {

@@ -951,8 +951,21 @@ interface AIPresetsSelectorProps {
   containerClassName?: string;
   /** Class applied to the trigger button. */
   triggerClassName?: string;
+  /**
+   * Button variant for the trigger. Defaults to `outline` — the standalone
+   * form-field look. Pass `ghost` when the selector is a settings row's VALUE:
+   * `outline` brings `border-foreground bg-background` AND the Button base's
+   * `uppercase tracking-wide`, which a `triggerClassName` alone cannot undo
+   * (case has no tailwind-merge conflict group, so `uppercase` survived).
+   */
+  triggerVariant?: React.ComponentProps<typeof Button>["variant"];
   /** For tight composer UIs, show the active model instead of preset details. */
   showModelOnly?: boolean;
+  /**
+   * Show ONLY the preset name — no provider chip, no model. For in-row values
+   * where the whole control is ~120px wide.
+   */
+  showNameOnly?: boolean;
 }
 
 export const AIPresetDialog = ({
@@ -1043,7 +1056,9 @@ export const AIPresetsSelector = ({
   compact = false,
   containerClassName,
   triggerClassName,
+  triggerVariant = "outline",
   showModelOnly = false,
+  showNameOnly = false,
 }: AIPresetsSelectorProps) => {
   const { settings, updateSettings } = useSettings();
   const [open, setOpen] = useState(false);
@@ -1404,7 +1419,7 @@ export const AIPresetsSelector = ({
               <PopoverTrigger asChild>
                 <Button
                   type="button"
-                  variant="outline"
+                  variant={triggerVariant}
                   role="combobox"
                   aria-expanded={open}
                   className={cn(
@@ -1431,6 +1446,17 @@ export const AIPresetsSelector = ({
                           {selectedPresetData?.model || formatPresetName(selectedPreset)}
                         </span>
                       </div>
+                    ) : showNameOnly ? (
+                      <span
+                        className="truncate text-left"
+                        title={
+                          selectedPresetData
+                            ? `${selectedPresetData.id} (${selectedPresetData.model})`
+                            : undefined
+                        }
+                      >
+                        {formatPresetName(selectedPresetData?.id || selectedPreset)}
+                      </span>
                     ) : (
                       <div className="flex w-full items-center justify-between gap-2 overflow-hidden min-w-0">
                         <div className="flex items-center gap-2 min-w-0 flex-shrink overflow-hidden">

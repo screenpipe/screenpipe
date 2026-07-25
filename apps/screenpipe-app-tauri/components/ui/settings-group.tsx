@@ -39,18 +39,21 @@ export const SETTINGS_LABEL_CLASS = "text-[12.5px] font-normal text-muted-foregr
  * `tailwind-merge` drops the primitive's `h-10 w-full border …` for these.
  */
 export const SETTINGS_SELECT_TRIGGER_CLASS =
-  "ml-auto inline-flex h-auto w-auto max-w-full justify-end gap-1 rounded-none border-0 bg-transparent px-1.5 py-1 text-[12px] font-mono text-muted-foreground transition-colors duration-150 hover:bg-accent/40 hover:text-foreground focus:border-0 focus-visible:bg-accent/40 focus-visible:text-foreground data-[state=open]:text-foreground [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-60";
+  // `normal-case` is load-bearing, not decoration: the shared `Button` base is
+  // `uppercase tracking-wide`, so any trigger built on it (e.g. the ai preset
+  // popover) shouted `NONE (USE PIPE DEFAULTS)` while the Radix selects beside
+  // it read `all runs`. Two rows in one group cannot disagree about case.
+  "ml-auto inline-flex h-auto w-auto max-w-full justify-end gap-1 rounded-none border-0 bg-transparent px-1.5 py-1 text-[12px] font-mono font-normal normal-case tracking-normal text-muted-foreground transition-colors duration-150 hover:bg-accent/40 hover:text-foreground focus:border-0 focus-visible:bg-accent/40 focus-visible:text-foreground data-[state=open]:text-foreground [&>svg]:ml-0 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-60";
 
 export interface SettingsGroupProps {
   /** sentence-case caption rendered above and outside the bordered box */
   label?: React.ReactNode;
   /** optional trailing slot on the label line (status text, count, action) */
   labelAccessory?: React.ReactNode;
-  /**
-   * Rendered BELOW the bordered box — the place for a group-level affordance
-   * ("+ add fallback preset") that must not be nested inside a titled row.
-   */
-  footer?: React.ReactNode;
+  // There is deliberately no `footer` slot. A strip of loose affordances under
+  // the box belonged to no row and made two different controls ("+ add
+  // fallback preset", "+ ADD ⌄") sit side by side in two different visual
+  // languages. An affordance either IS a row's value or IS its own row.
   className?: string;
   /** class applied to the bordered container itself */
   containerClassName?: string;
@@ -60,7 +63,6 @@ export interface SettingsGroupProps {
 export function SettingsGroup({
   label,
   labelAccessory,
-  footer,
   className,
   containerClassName,
   children,
@@ -86,14 +88,6 @@ export function SettingsGroup({
       >
         {children}
       </div>
-      {footer && (
-        <div
-          data-testid="settings-group-footer"
-          className="mt-2 flex flex-wrap items-center gap-3"
-        >
-          {footer}
-        </div>
-      )}
     </section>
   );
 }

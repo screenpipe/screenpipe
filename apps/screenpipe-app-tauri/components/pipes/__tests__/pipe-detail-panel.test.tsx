@@ -32,9 +32,9 @@ function renderPanel(overrides: Partial<PipeDetailPanelProps> = {}) {
     bodyValue: "summarize my day",
     onBodyChange: vi.fn(),
     presetSlot: <span>gpt-5</span>,
-    presetFooter: <button>+ add fallback preset</button>,
+    fallbackPresetSlot: <button>fallback picker</button>,
     connectionsSlot: <span>slack</span>,
-    connectionsFooter: <button>+ add connection</button>,
+    connectionsAddSlot: <button>add</button>,
     scheduleSummary: "every 1h",
     // Stands in for `PipeTriggerPicker`, which titles itself the same way.
     scheduleSlot: (
@@ -79,6 +79,51 @@ function elementsNaming(text: string): Element[] {
     ),
   );
 }
+
+/**
+ * React key warnings surface as a dev error overlay
+ * (`warnOnInvalidKey → reconcileChildrenArray`) and are otherwise invisible in
+ * tests, because every assertion below would still pass with one. This mounts
+ * the pane with EVERY branch live — optimistic run, running + finished runs,
+ * the live-output tail, load-more, both slot props, advanced open with disk
+ * logs, the schedule disclosed — and fails on any missing/duplicate key.
+ */
+describe("PipeDetailPanel — no React key warnings", () => {
+  it("renders every branch without a key warning", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderPanel({
+        isRunning: true,
+        optimisticRun: { execId: null, startedAt: "2026-07-25T10:00:00Z" },
+        lifecycleText: "queued — waking the agent…",
+        liveOutput: ["hello\n", "world\n"],
+        hasMoreExecutions: true,
+        totalRunCount: 9,
+        executions: [
+          run({ id: 1 }),
+          run({ id: 2, status: "running", duration_ms: null }),
+          run({ id: 3, status: "failed", error_message: "boom" }),
+        ],
+        logs: [
+          {
+            started_at: "2026-07-25T10:00:00Z",
+            finished_at: "2026-07-25T10:01:00Z",
+            success: true,
+            stdout: "ok",
+            stderr: "",
+          },
+        ],
+      });
+      fireEvent.click(screen.getByTestId("pipe-detail-advanced-toggle"));
+      fireEvent.click(screen.getByTestId("pipe-detail-schedule-row"));
+
+      const messages = spy.mock.calls.map((call) => String(call[0]));
+      expect(messages.filter((m) => /unique "?key"?|same key/i.test(m))).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
 
 describe("PipeDetailPanel — prompt", () => {
   it("drops the PROMPT caption entirely", () => {
@@ -144,8 +189,8 @@ describe("PipeDetailPanel — when to run", () => {
   });
 });
 
-describe("PipeDetailPanel — ai preset row", () => {
-  it("shows the preset as the row's value and keeps the fallback link out of the row", () => {
+describe("PipeDetailPanel — details rows own their affordances", () => {
+  it("shows the preset as the row's value and names the setting once", () => {
     renderPanel();
 
     const row = screen.getByTestId("pipe-detail-preset-row");
@@ -155,19 +200,49 @@ describe("PipeDetailPanel — ai preset row", () => {
     // the widget no longer titles itself "primary ai preset"
     expect(elementsNaming("primary ai preset")).toHaveLength(0);
     expect(elementsNaming("ai preset")).toHaveLength(1);
-
-    const fallback = screen.getByText("+ add fallback preset");
-    expect(row.contains(fallback)).toBe(false);
-    expect(screen.getByTestId("settings-group-footer").contains(fallback)).toBe(true);
   });
 
-  it("keeps the connections picker under the group, chips in the row", () => {
+  it("has no group footer at all — nothing hangs under the box", () => {
+    renderPanel();
+    expect(screen.queryByTestId("settings-group-footer")).toBeNull();
+  });
+
+  it("hosts the add affordance INSIDE the connections row's value, with the chips", () => {
     renderPanel();
     const row = screen.getByTestId("pipe-detail-connections-row");
+    const value = screen.getByTestId("pipe-detail-connections");
+    const add = screen.getByText("add");
+
     expect(row.textContent).toContain("slack");
-    const picker = screen.getByText("+ add connection");
-    expect(row.contains(picker)).toBe(false);
-    expect(screen.getByTestId("settings-group-footer").contains(picker)).toBe(true);
+    expect(value.contains(add)).toBe(true);
+    expect(row.contains(add)).toBe(true);
+    // …and the value reads as one line: chips · add
+    expect(value.textContent).toContain("·");
+  });
+
+  it("re-homes the fallback preset to a row under advanced", () => {
+    renderPanel();
+    // failover is not front-page: it is not in the details group
+    expect(screen.queryByTestId("pipe-detail-fallback-preset-row")).toBeNull();
+    expect(screen.queryByText("fallback picker")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("pipe-detail-advanced-toggle"));
+
+    const row = screen.getByTestId("pipe-detail-fallback-preset-row");
+    expect(row.textContent).toContain("fallback preset");
+    expect(
+      screen.getByTestId("pipe-detail-fallback-preset").contains(
+        screen.getByText("fallback picker"),
+      ),
+    ).toBe(true);
+    // exactly one element names it
+    expect(elementsNaming("fallback preset")).toHaveLength(1);
+  });
+
+  it("omits the fallback row entirely when the pipe is enterprise managed", () => {
+    renderPanel({ enterpriseManaged: true, fallbackPresetSlot: null });
+    fireEvent.click(screen.getByTestId("pipe-detail-advanced-toggle"));
+    expect(screen.queryByTestId("pipe-detail-fallback-preset-row")).toBeNull();
   });
 });
 
@@ -286,6 +361,43 @@ describe("PipeDetailPanel — previous runs is NOT a box", () => {
       "queued — waking the agent…",
     );
     expect(screen.getByTestId("pipe-detail-live-output").textContent).toContain("world");
+  });
+
+  // Regression: the column mixed units — "44.1s" for finished runs, "2d ago"
+  // for runs that never produced a duration. One column, one unit.
+  it("shows a duration, never a relative age, in the right-hand column", () => {
+    renderPanel({
+      executions: [
+        run({ id: 1, duration_ms: 44_100 }),
+        run({ id: 2, duration_ms: null, status: "cancelled" }),
+      ],
+    });
+
+    expect(screen.getByTestId("pipe-detail-run-duration-1").textContent).toBe("44.1s");
+    expect(screen.getByTestId("pipe-detail-run-duration-2").textContent).toBe("—");
+
+    const list = screen.getByTestId("pipe-detail-runs-list");
+    expect(list.textContent).not.toMatch(/\d+[smhd] ago|just now/);
+  });
+
+  it("folds the date into the clock for runs that are not from today", () => {
+    // "now" is a day after the run, so the day cannot be inferred from context
+    const now = Date.parse("2026-07-25T10:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      renderPanel({
+        executions: [
+          run({ id: 1, started_at: "2026-07-23T13:59:00", duration_ms: null }),
+          run({ id: 2, started_at: "2026-07-25T09:00:00", duration_ms: 1200 }),
+        ],
+      });
+      expect(screen.getByTestId("pipe-detail-run-1").textContent).toContain("jul 23 · 1:59pm");
+      // today's run keeps the bare clock — no redundant date
+      expect(screen.getByTestId("pipe-detail-run-2").textContent).toContain("9:00am");
+      expect(screen.getByTestId("pipe-detail-run-2").textContent).not.toContain("jul");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("keeps show older runs working", () => {
