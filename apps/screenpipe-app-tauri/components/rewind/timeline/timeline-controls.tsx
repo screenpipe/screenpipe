@@ -25,6 +25,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { TimelineDailySummary } from "./daily-summary";
 
 interface TimeRange {
 	start: Date;
@@ -235,6 +236,8 @@ export function TimelineControls({
 						<RefreshCw className="h-4 w-4" />
 					</Button>
 				</div>
+
+				<TimelineDailySummary currentDate={currentDate} embedded={embedded} />
 
 				{hasAudioNearby && onTogglePlayPause && (
 					<div className="flex items-center h-10 bg-background border border-border px-1 gap-0.5">
