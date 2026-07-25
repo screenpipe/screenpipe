@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.screenpipe%2Fscreenpipe-mcp.svg)](https://mcptoplist.com/server/io.github.screenpipe%2Fscreenpipe-mcp)
+
 
 <img width="1500" height="500" alt="image" src="https://github.com/user-attachments/assets/058a44b8-fcad-4a37-92d8-830167dbd400" />
 
