@@ -7,7 +7,7 @@ import React from "react";
 import { Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useInterval } from "@/lib/hooks/use-interval";
-import { PipeStatusButton } from "./pipe-status-dot";
+import { PIPE_ROW_LEAD_SIZE, PipeStatusButton } from "./pipe-status-dot";
 import { useIsTruncated } from "./use-is-truncated";
 import {
   formatElapsedClock,
@@ -42,7 +42,12 @@ export interface PipeRowProps {
   badges?: React.ReactNode;
   /** the `⋯` menu (PipeActionsMenu) */
   menu?: React.ReactNode;
-  /** bulk-select checkbox, when select mode is on */
+  /**
+   * Bulk-select checkbox, when select mode is on. It *replaces* the status dot
+   * in the leading slot rather than sitting beside it — two near-identical
+   * controls 4px apart read as one broken control. Same box, same width, so
+   * toggling select mode reflows nothing.
+   */
   selectSlot?: React.ReactNode;
   isFavorite?: boolean;
   /**
@@ -138,15 +143,24 @@ function PipeRowImpl({
         paddingRight: 14,
       }}
     >
-      {selectSlot}
-
-      <PipeStatusButton
-        state={isRunning ? "running" : enabled ? "active" : "paused"}
-        pipeName={name}
-        disabled={toggleDisabled || !onToggleEnabled}
-        disabledReason={toggleDisabledReason}
-        onToggle={(next) => onToggleEnabled?.(name, next)}
-      />
+      {/* Leading slot — exactly one control, always PIPE_ROW_LEAD_SIZE wide. */}
+      {selectSlot ? (
+        <span
+          data-testid={`pipe-row-lead-${name}`}
+          className="flex shrink-0 items-center justify-center"
+          style={{ width: PIPE_ROW_LEAD_SIZE, height: PIPE_ROW_LEAD_SIZE }}
+        >
+          {selectSlot}
+        </span>
+      ) : (
+        <PipeStatusButton
+          state={isRunning ? "running" : enabled ? "active" : "paused"}
+          pipeName={name}
+          disabled={toggleDisabled || !onToggleEnabled}
+          disabledReason={toggleDisabledReason}
+          onToggle={(next) => onToggleEnabled?.(name, next)}
+        />
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span

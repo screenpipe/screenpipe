@@ -5,7 +5,20 @@
 import React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SettingsCell, SettingsGroup, SettingsRow } from "@/components/ui/settings-group";
+import {
+  SETTINGS_SELECT_TRIGGER_CLASS,
+  SettingsCell,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/ui/settings-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 
 afterEach(() => cleanup());
 
@@ -174,6 +187,61 @@ describe("SettingsRow", () => {
     render(<SettingsRow label="when to run" testId="pipe-detail-schedule-row" />);
     expect(screen.getByTestId("pipe-detail-schedule-row")).toBeTruthy();
     expect(screen.queryByTestId("settings-row")).toBeNull();
+  });
+});
+
+describe("SETTINGS_SELECT_TRIGGER_CLASS", () => {
+  function renderSelect() {
+    return render(
+      <SettingsGroup label="frequency">
+        <SettingsRow label="notifications" htmlFor="notif">
+          <Select defaultValue="all">
+            <SelectTrigger id="notif" className={SETTINGS_SELECT_TRIGGER_CLASS}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">all runs</SelectItem>
+              <SelectItem value="off">off</SelectItem>
+            </SelectContent>
+          </Select>
+        </SettingsRow>
+      </SettingsGroup>,
+    );
+  }
+
+  it("strips the primitive's border and full-width slab sizing", () => {
+    renderSelect();
+    // tailwind-merge must drop `border`/`w-full`/`h-10` from the trigger skin
+    const classes = screen.getByLabelText("notifications").className.split(/\s+/);
+    expect(classes).not.toContain("border");
+    expect(classes).not.toContain("w-full");
+    expect(classes).not.toContain("h-10");
+    expect(classes).toContain("border-0");
+    expect(classes).toContain("w-auto");
+    expect(classes).toContain("h-auto");
+  });
+
+  it("stays muted at rest and lifts on hover, right-aligned", () => {
+    renderSelect();
+    const trigger = screen.getByLabelText("notifications");
+    expect(trigger.className).toContain("text-muted-foreground");
+    expect(trigger.className).toContain("hover:text-foreground");
+    expect(trigger.className).toContain("hover:bg-accent/40");
+    expect(trigger.className).toContain("ml-auto");
+    expect(trigger.className).toContain("duration-150");
+  });
+
+  it("is still a real, accessible select", () => {
+    renderSelect();
+    const trigger = screen.getByLabelText("notifications");
+    expect(trigger.getAttribute("role")).toBe("combobox");
+    expect(trigger.textContent).toContain("all runs");
+  });
+
+  it("composes with cn so callers can add per-row tweaks", () => {
+    const merged = cn(SETTINGS_SELECT_TRIGGER_CLASS, "text-[11px]");
+    expect(merged).toContain("text-[11px]");
+    expect(merged).not.toContain("text-[12px]");
   });
 });
 

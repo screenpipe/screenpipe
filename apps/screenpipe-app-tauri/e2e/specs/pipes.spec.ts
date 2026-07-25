@@ -19,19 +19,25 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
  * agent subprocess is ever spawned.
  *
  * Selectors are data-testid only — no text matching that breaks on copy change.
- *   pipes-page-header    →  data-testid="pipes-count" / "pipes-community-btn" / "pipes-new-btn"
+ *   pipes-page-header    →  data-testid="pipes-title" / "pipes-header-title-row" /
+ *                           "pipes-header-meta-row" / "pipes-count" /
+ *                           "pipes-community-btn" / "pipes-new-btn"
  *   pipe-filter-tabs     →  data-testid="pipe-filter-{all|active|paused|starred}"
  *   pipe-row             →  data-testid="pipe-row-{name}" / "pipe-row-progress-{name}" /
  *                           "pipe-row-toggle-{name}" / "pipe-row-star-{name}" /
- *                           "pipe-row-status-{name}" (spinner, while running)
- *   pipe-actions-menu    →  data-testid="pipe-menu-{name}" / "pipe-menu-run-now"
+ *                           "pipe-row-status-{name}" (spinner, while running) /
+ *                           "pipe-row-lead-{name}" (leading slot, selection mode)
+ *   pipe-actions-menu    →  data-testid="pipe-menu-{name}" / "pipe-menu-run-now" /
+ *                           "pipe-menu-select" — NO pause/resume item, by design
+ *   selection mode       →  data-testid="pipes-selection-bar" / "pipes-selection-exit"
  *   pipe-detail-panel    →  data-testid="pipe-detail-panel" / "pipe-detail-prompt" / "pipe-detail-runs" /
  *                           "pipe-detail-schedule-row" / "pipe-detail-schedule-summary" /
  *                           "pipe-detail-schedule-builder" / "pipe-detail-schedule-done" /
  *                           "pipe-detail-preset-row" / "pipe-detail-connections-row"
  *
- * In split mode the header is compact: `pipes-count`, the notification bell and
- * `pipes-community-btn` are NOT rendered, and the filter tabs carry no counts.
+ * In split mode the header is compact: `pipes-count` and `pipes-community-btn`
+ * are NOT rendered, and the filter tabs carry no counts. The notification bell
+ * no longer lives in this header at all — it is app-global chrome.
  *   pipes-split-view     →  data-testid="pipes-split-view" (data-layout-mode) /
  *                           "pipes-master-column" / "pipes-list-scroll" /
  *                           "pipes-detail-pane" / "pipes-pane-splitter"
@@ -447,7 +453,6 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
 
     for (const id of [
       'pipe-menu-run-now',
-      'pipe-menu-toggle-enabled',
       'pipe-menu-fork',
       'pipe-menu-optimize',
       'pipe-menu-delete',
@@ -463,6 +468,105 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     await closeAnyMenu();
     const filepath = await saveScreenshot('pipes-row-menu');
     expect(existsSync(filepath)).toBe(true);
+  });
+
+  it('offers no pause/resume in the ⋯ menu — the status dot and the pane own it', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    expect(await openRowMenu()).toBe(true);
+
+    const toggleItem = await $('[data-testid="pipe-menu-toggle-enabled"]');
+    expect(await toggleItem.isExisting()).toBe(false);
+
+    // Belt and braces: no menu item *reads* pause/resume either.
+    const items = await $$('[role="menuitem"]');
+    for (const item of items) {
+      expect((await item.getText()).toLowerCase()).not.toMatch(/^(pause|resume)$/);
+    }
+
+    // The one-click control is still there on the row.
+    await closeAnyMenu();
+    const dot = await $(`[data-testid="pipe-row-toggle-${PIPE_NAME}"]`);
+    expect(await dot.isExisting()).toBe(true);
+  });
+
+  // ─── Header alignment ─────────────────────────────────────────────────────
+
+  it('centres + new pipe on the title, not on the top of the title block', async function () {
+    await openPipesPage();
+
+    const title = await $('[data-testid="pipes-title"]');
+    const newBtn = await $('[data-testid="pipes-new-btn"]');
+    await title.waitForExist({ timeout: t(10_000) });
+    await newBtn.waitForExist({ timeout: t(10_000) });
+
+    const titleBox = { ...(await title.getLocation()), ...(await title.getSize()) };
+    const newBox = { ...(await newBtn.getLocation()), ...(await newBtn.getSize()) };
+
+    const titleCentre = titleBox.y + titleBox.height / 2;
+    const newCentre = newBox.y + newBox.height / 2;
+    expect(Math.abs(titleCentre - newCentre)).toBeLessThanOrEqual(4);
+
+    // The count line sits strictly below the whole title row.
+    const count = await $('[data-testid="pipes-count"]');
+    const countBox = await count.getLocation();
+    expect(countBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1);
+
+    // And the bell no longer squats in the page header.
+    const bell = await $('[data-testid="notification-bell"]');
+    expect(await bell.isExisting()).toBe(false);
+
+    const filepath = await saveScreenshot('pipes-header-alignment');
+    expect(existsSync(filepath)).toBe(true);
+  });
+
+  // ─── Selection mode ───────────────────────────────────────────────────────
+
+  it('swaps the status dot for the checkbox — one control in the leading slot', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    // Before: the dot is the leading control.
+    const dotBefore = await $(`[data-testid="pipe-row-toggle-${PIPE_NAME}"]`);
+    expect(await dotBefore.isExisting()).toBe(true);
+    const dotBox = {
+      ...(await dotBefore.getLocation()),
+      ...(await dotBefore.getSize()),
+    };
+
+    expect(await openRowMenu()).toBe(true);
+    const selectItem = await $('[data-testid="pipe-menu-select"]');
+    await selectItem.waitForExist({ timeout: t(5_000) });
+    await selectItem.click();
+    await browser.pause(400);
+
+    const lead = await $(`[data-testid="pipe-row-lead-${PIPE_NAME}"]`);
+    await lead.waitForExist({ timeout: t(5_000) });
+
+    // Exactly one control: the checkbox replaced the dot, it did not join it.
+    const dotAfter = await $(`[data-testid="pipe-row-toggle-${PIPE_NAME}"]`);
+    expect(await dotAfter.isExisting()).toBe(false);
+
+    const checkboxes = await lead.$$('button, input[type="checkbox"]');
+    expect(checkboxes.length).toBe(1);
+
+    // Same slot: the leading control did not move when selection mode came on.
+    const leadBox = { ...(await lead.getLocation()), ...(await lead.getSize()) };
+    expect(Math.abs(leadBox.x - dotBox.x)).toBeLessThanOrEqual(2);
+    expect(leadBox.width).toBe(dotBox.width);
+
+    const filepath = await saveScreenshot('pipes-selection-mode-lead-slot');
+    expect(existsSync(filepath)).toBe(true);
+
+    // Leave selection mode so later specs see a normal list again.
+    const exit = await $('[data-testid="pipes-selection-exit"]');
+    if (await exit.isExisting()) await exit.click();
+    await browser.pause(300);
+    const dotBack = await $(`[data-testid="pipe-row-toggle-${PIPE_NAME}"]`);
+    await dotBack.waitForExist({ timeout: t(5_000) });
   });
 
   // ─── Detail panel ─────────────────────────────────────────────────────────

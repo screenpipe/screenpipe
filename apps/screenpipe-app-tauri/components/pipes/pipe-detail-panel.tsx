@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import {
   SETTINGS_LABEL_CLASS,
+  SETTINGS_SELECT_TRIGGER_CLASS,
   SettingsCell,
   SettingsGroup,
   SettingsRow,
@@ -34,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { PipeStatusDot } from "./pipe-status-dot";
+import { useIsTruncated } from "./use-is-truncated";
 import { scrollFadeStyle, useScrollFade } from "./use-scroll-fade";
 import {
   formatClock,
@@ -139,6 +141,24 @@ const TIMEOUT_OPTIONS = [
 ];
 
 /**
+ * One row of the un-boxed `previous runs` list.
+ *
+ * History is not settings: it gets no container border and no hairlines —
+ * just a hover wash on a 9px-padded row, so the list reads as content rather
+ * than as a third slab nested inside the pane.
+ */
+const RUN_ROW_CLASS =
+  "group/run flex items-center gap-2 px-2 py-[9px] transition-colors duration-150 hover:bg-accent/40";
+
+/**
+ * Copy-output affordance. Hidden at rest so 20 rows do not each carry a
+ * standing icon; revealed on row hover, on focus anywhere in the row, and on
+ * its own keyboard focus — so it is never unreachable from the keyboard.
+ */
+const RUN_COPY_BUTTON_CLASS =
+  "shrink-0 p-0.5 text-muted-foreground opacity-0 transition-opacity duration-150 hover:text-foreground focus:opacity-100 focus-visible:opacity-100 group-hover/run:opacity-100 group-focus-within/run:opacity-100";
+
+/**
  * Standalone section caption — same quiet sentence-case treatment
  * `SettingsGroup` gives its label, for the sections that are NOT settings
  * groups (raw pipe.md, disk logs). No mono, no uppercase, no wide tracking:
@@ -209,6 +229,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
   useInterval(() => setNow(Date.now()), isRunning ? 1000 : null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const scrollFade = useScrollFade(scrollRef);
+  // Tooltip only when the name is actually clipped — measured on hover/focus.
+  const nameTruncation = useIsTruncated<HTMLHeadingElement>(pipeName);
 
   const statusLabel = isRunning ? "running" : enabled ? "active" : "paused";
   const liveExecutionIds = new Set(
@@ -251,7 +273,11 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                   value={String(timeoutSeconds || 600)}
                   onValueChange={(value) => onTimeoutChange(Number(value))}
                 >
-                  <SelectTrigger id="pipe-detail-timeout" className="h-8 rounded-none text-xs">
+                  <SelectTrigger
+                    id="pipe-detail-timeout"
+                    data-testid="pipe-detail-timeout"
+                    className={SETTINGS_SELECT_TRIGGER_CLASS}
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="rounded-none">
@@ -351,44 +377,56 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
       // pane only fills whatever geometry it is handed.
       className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col"
     >
-      {/* Header. `relative z-10` + an opaque background is load-bearing: the
-          scroll box below is a *later sibling*, so without it the scroll box
-          paints over the bottom half of the 32px icon buttons and swallows
-          their clicks. `py-1.5` + `min-h-*`-free sizing keeps the row's height
-          derived from its tallest child (the buttons), so nothing overflows the
-          header box in the first place. */}
-      <div className="relative z-10 flex shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-1.5">
-        <PipeStatusDot state={isRunning ? "running" : enabled ? "active" : "paused"} />
-        <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-          {statusLabel}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={pipeName}>
+      {/* Header — TWO lines. On one line a long pipe name fought three icon
+          buttons for the same 200px; now the actions own line 1 (next to the
+          quiet status word) and the name gets the full width of line 2.
+          No status dot: the word already says it.
+
+          `relative z-10` + an opaque background is load-bearing: the scroll box
+          below is a *later sibling*, so without it the scroll box paints over
+          the bottom half of the 32px icon buttons and swallows their clicks. */}
+      <div className="relative z-10 shrink-0 border-b border-border bg-background px-3 pb-2 pt-1.5">
+        <div className="flex items-center gap-2">
+          <span
+            data-testid="pipe-detail-status"
+            className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground"
+          >
+            {statusLabel}
+          </span>
+          {menu}
+          <Button
+            variant="ghost"
+            size="icon"
+            // 32×32 hit target, icon centered, sharp corners (DESIGN.md).
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none p-0"
+            disabled={enterpriseManaged}
+            title={enabled ? "pause" : "resume"}
+            aria-label={enabled ? "pause pipe" : "resume pipe"}
+            onClick={() => onToggleEnabled(!enabled)}
+          >
+            {enabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            // 32×32 hit target, icon centered, sharp corners (DESIGN.md).
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none p-0"
+            aria-label="close panel"
+            data-testid="pipe-detail-close"
+            onClick={onClose}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+        <h2
+          ref={nameTruncation.ref}
+          {...nameTruncation.measureProps}
+          data-testid="pipe-detail-name"
+          title={nameTruncation.title}
+          className="truncate text-[17px] font-medium leading-tight"
+        >
           {pipeName}
-        </span>
-        {menu}
-        <Button
-          variant="ghost"
-          size="icon"
-          // 32×32 hit target, icon centered, sharp corners (DESIGN.md).
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none p-0"
-          disabled={enterpriseManaged}
-          title={enabled ? "pause" : "resume"}
-          aria-label={enabled ? "pause pipe" : "resume pipe"}
-          onClick={() => onToggleEnabled(!enabled)}
-        >
-          {enabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          // 32×32 hit target, icon centered, sharp corners (DESIGN.md).
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none p-0"
-          aria-label="close panel"
-          data-testid="pipe-detail-close"
-          onClick={onClose}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
+        </h2>
       </div>
 
       {/* the pane owns its own scroll; the header above stays pinned */}
@@ -523,7 +561,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
             >
               <SelectTrigger
                 id="pipe-detail-notifications"
-                className="h-8 rounded-none text-xs"
+                className={SETTINGS_SELECT_TRIGGER_CLASS}
                 data-testid="pipe-detail-notifications"
               >
                 <SelectValue />
@@ -536,18 +574,19 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
           </SettingsRow>
         </SettingsGroup>
 
-        {/* previous runs — a real bordered group, same shape as details and
-            frequency, instead of loose rows floating under a heading. */}
-        <SettingsGroup
-          label={`previous runs (${totalRunCount})`}
-          data-testid="pipe-detail-runs"
-        >
+        {/* previous runs — plain rows under a quiet caption, NO container.
+            Settings and history are different kinds of content: boxing the log
+            put a third slab inside the pane and made the run list read as one
+            more thing to configure. */}
+        <section data-testid="pipe-detail-runs">
+          <GroupLabel className="mb-1">previous runs ({totalRunCount})</GroupLabel>
+          <div data-testid="pipe-detail-runs-list">
             {showOptimistic && optimisticRun && (
               <button
                 type="button"
                 data-testid="pipe-detail-run-live"
                 onClick={() => onOpenChat(optimisticRun.execId)}
-                className="flex w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-left transition-colors duration-150 hover:bg-accent/40"
+                className={cn(RUN_ROW_CLASS, "w-full text-left")}
               >
                 <PipeStatusDot state="running" />
                 <span className="font-mono text-[12.5px]">
@@ -563,11 +602,11 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
             )}
 
             {executionsLoading && executions.length === 0 ? (
-              <p className="px-3.5 py-4 text-center text-[12.5px] text-muted-foreground">
+              <p className="px-2 py-[9px] text-[12.5px] text-muted-foreground">
                 loading runs…
               </p>
             ) : executions.length === 0 && !showOptimistic ? (
-              <p className="px-3.5 py-4 text-center text-[12.5px] text-muted-foreground">
+              <p className="px-2 py-[9px] text-[12.5px] text-muted-foreground">
                 no runs yet — use ⋯ → run now
               </p>
             ) : (
@@ -578,10 +617,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                   exec.status === "timed_out" ||
                   exec.status === "cancelled";
                 return (
-                  <div
-                    key={exec.id}
-                    className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 last:border-b-0 transition-colors duration-150 hover:bg-accent/40"
-                  >
+                  <div key={exec.id} className={RUN_ROW_CLASS}>
                     <button
                       type="button"
                       data-testid={`pipe-detail-run-${exec.id}`}
@@ -610,7 +646,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                         type="button"
                         title="copy output"
                         aria-label="copy output"
-                        className="shrink-0 p-0.5 text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                        data-testid={`pipe-detail-run-copy-${exec.id}`}
+                        className={RUN_COPY_BUTTON_CLASS}
                         onClick={() => onCopyRun(exec)}
                       >
                         {copiedExecId === exec.id ? (
@@ -630,7 +667,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                 ref={(el) => {
                   if (el) el.scrollTop = el.scrollHeight;
                 }}
-                className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words border-t border-border bg-muted/40 p-2 font-mono text-[11.5px] text-muted-foreground"
+                data-testid="pipe-detail-live-output"
+                className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words bg-muted/40 p-2 font-mono text-[11.5px] text-muted-foreground"
               >
                 {liveOutput.slice(-200).join("")}
                 <span className="animate-pulse">▊</span>
@@ -641,7 +679,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-9 w-full rounded-none border-t border-border text-[12.5px]"
+                data-testid="pipe-detail-load-more"
+                className="h-8 justify-start rounded-none px-2 text-[12.5px] font-normal text-muted-foreground hover:text-foreground"
                 disabled={loadingMoreExecutions}
                 onClick={onLoadMoreExecutions}
               >
@@ -653,7 +692,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                 show older runs
               </Button>
             )}
-        </SettingsGroup>
+          </div>
+        </section>
 
         {/* advanced — last, by design */}
         {advancedSection}

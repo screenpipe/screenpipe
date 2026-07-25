@@ -48,6 +48,7 @@ import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
 import { RecordingStatus, type RecordingDevice } from "@/components/recording-status";
+import { NotificationBell } from "@/components/notification-bell";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
 import { listen } from "@tauri-apps/api/event";
@@ -1089,6 +1090,11 @@ function HomeContent() {
                 </TooltipContent>
               </Tooltip>
             )}
+
+            {/* Notifications are app-global, so the shell owns the bell — it
+                used to be mounted inside the pipes page header, which made a
+                whole-app inbox reachable only from one page. */}
+            {!sidebarCollapsed && <NotificationBell />}
 
             <RecordingStatus
               devices={recordingDevices}

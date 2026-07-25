@@ -183,10 +183,14 @@ describe("PipeDetailPanel — section order and shape", () => {
     ];
     for (const node of order) expect(scroll.contains(node)).toBe(true);
 
+    // only the SETTINGS sections are groups — previous runs is plain content
     const labels = screen
       .getAllByTestId("settings-group-label")
       .map((el) => el.textContent);
-    expect(labels).toEqual(["details", "frequency", "previous runs (0)"]);
+    expect(labels).toEqual(["details", "frequency"]);
+    expect(screen.getByTestId("pipe-detail-runs").textContent).toContain(
+      "previous runs (0)",
+    );
 
     // advanced comes after the previous-runs group in document order
     const runs = screen.getByTestId("pipe-detail-runs");
@@ -194,15 +198,6 @@ describe("PipeDetailPanel — section order and shape", () => {
     expect(
       runs.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-  });
-
-  it("makes previous runs a real bordered group", () => {
-    renderPanel({ totalRunCount: 7 });
-    const runs = screen.getByTestId("pipe-detail-runs");
-    const box = runs.querySelector('[data-testid="settings-group-container"]');
-    expect(box).toBeTruthy();
-    expect(box!.className).toContain("border");
-    expect(runs.textContent).toContain("previous runs (7)");
   });
 
   it("keeps advanced collapsed by default and still reachable", () => {
@@ -218,5 +213,190 @@ describe("PipeDetailPanel — section order and shape", () => {
     const scroll = screen.getByTestId("pipe-detail-scroll");
     expect(scroll.className).toContain("p-5");
     expect(scroll.className).toContain("space-y-[26px]");
+  });
+});
+
+/** minimal finished execution */
+function run(overrides: Partial<PipeDetailPanelProps["executions"][number]> = {}) {
+  return {
+    id: 1,
+    pipe_name: "daily-digest",
+    status: "completed",
+    started_at: "2026-07-25T10:00:00Z",
+    duration_ms: 4200,
+    error_message: null,
+    stdout: "all good",
+    trigger_type: "schedule",
+    ...overrides,
+  };
+}
+
+describe("PipeDetailPanel — previous runs is NOT a box", () => {
+  it("renders the run list with no bordered container while settings groups keep theirs", () => {
+    renderPanel({ totalRunCount: 7, executions: [run()] });
+
+    const runs = screen.getByTestId("pipe-detail-runs");
+    // history is content, not settings: no group container inside the section
+    expect(runs.querySelector('[data-testid="settings-group-container"]')).toBeNull();
+    const list = screen.getByTestId("pipe-detail-runs-list");
+    expect(list.className).not.toContain("border");
+    expect(runs.textContent).toContain("previous runs (7)");
+
+    // …while details + frequency are still real bordered groups
+    const boxes = screen.getAllByTestId("settings-group-container");
+    expect(boxes).toHaveLength(2);
+    for (const box of boxes) expect(box.className).toContain("border");
+    for (const box of boxes) expect(box.contains(list)).toBe(false);
+  });
+
+  it("gives each run row a hover wash, 9px padding and no hairline", () => {
+    renderPanel({ executions: [run()] });
+    const row = screen.getByTestId("pipe-detail-run-1").parentElement!;
+    expect(row.className).toContain("py-[9px]");
+    expect(row.className).toContain("hover:bg-accent/40");
+    expect(row.className).not.toContain("border-b");
+  });
+
+  it("hides the copy button until the row is hovered or focused", () => {
+    renderPanel({ executions: [run()] });
+    const copy = screen.getByTestId("pipe-detail-run-copy-1");
+    expect(copy.className).toContain("opacity-0");
+    expect(copy.className).toContain("group-hover/run:opacity-100");
+    // still reachable by keyboard alone
+    expect(copy.className).toContain("focus-visible:opacity-100");
+    expect(copy.className).toContain("group-focus-within/run:opacity-100");
+  });
+
+  it("keeps the copy button functional", () => {
+    const onCopyRun = vi.fn();
+    renderPanel({ executions: [run()], onCopyRun });
+    fireEvent.click(screen.getByTestId("pipe-detail-run-copy-1"));
+    expect(onCopyRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the pinned optimistic entry and the live output tail", () => {
+    renderPanel({
+      isRunning: true,
+      optimisticRun: { execId: null, startedAt: new Date().toISOString() },
+      lifecycleText: "queued — waking the agent…",
+      liveOutput: ["hello\n", "world\n"],
+    });
+
+    expect(screen.getByTestId("pipe-detail-run-live").textContent).toContain(
+      "queued — waking the agent…",
+    );
+    expect(screen.getByTestId("pipe-detail-live-output").textContent).toContain("world");
+  });
+
+  it("keeps show older runs working", () => {
+    const onLoadMoreExecutions = vi.fn();
+    renderPanel({
+      executions: [run()],
+      hasMoreExecutions: true,
+      onLoadMoreExecutions,
+    });
+    fireEvent.click(screen.getByTestId("pipe-detail-load-more"));
+    expect(onLoadMoreExecutions).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the chat for a run", () => {
+    const onOpenChat = vi.fn();
+    renderPanel({ executions: [run({ id: 12 })], onOpenChat });
+    fireEvent.click(screen.getByTestId("pipe-detail-run-12"));
+    expect(onOpenChat).toHaveBeenCalledWith(12);
+  });
+});
+
+describe("PipeDetailPanel — in-row selects", () => {
+  /** the primitive's own skin is `border border-border` — that must be gone */
+  function expectBorderless(trigger: HTMLElement) {
+    const classes = trigger.className.split(/\s+/);
+    expect(classes).not.toContain("border");
+    expect(classes).toContain("border-0");
+    // content width, not a full-width slab
+    expect(classes).not.toContain("w-full");
+    expect(classes).toContain("w-auto");
+    // still muted at rest, foreground on hover
+    expect(trigger.className).toContain("text-muted-foreground");
+    expect(trigger.className).toContain("hover:text-foreground");
+    expect(trigger.className).toContain("hover:bg-accent/40");
+  }
+
+  it("draws no border around the notifications value at rest", () => {
+    renderPanel();
+    expectBorderless(screen.getByTestId("pipe-detail-notifications"));
+  });
+
+  it("draws no border around the advanced timeout value at rest", () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("pipe-detail-advanced-toggle"));
+    expectBorderless(screen.getByTestId("pipe-detail-timeout"));
+  });
+
+  it("keeps them real, labelled selects", () => {
+    renderPanel();
+    const notifications = screen.getByTestId("pipe-detail-notifications");
+    expect(notifications.getAttribute("role")).toBe("combobox");
+    expect(screen.getByLabelText("notifications")).toBe(notifications);
+  });
+});
+
+describe("PipeDetailPanel — header", () => {
+  it("puts the status word on line 1 and the name on line 2, with no status dot", () => {
+    renderPanel({ pipeName: "daily-digest", enabled: true, isRunning: false });
+
+    const status = screen.getByTestId("pipe-detail-status");
+    const name = screen.getByTestId("pipe-detail-name");
+    expect(status.textContent).toBe("active");
+    expect(name.textContent).toBe("daily-digest");
+
+    // separate lines: the name is NOT a sibling of the status inside the
+    // actions row — the actions row and the name are stacked.
+    const actionsRow = status.parentElement!;
+    expect(actionsRow.contains(name)).toBe(false);
+    expect(actionsRow.contains(screen.getByTestId("pipe-detail-close"))).toBe(true);
+    expect(
+      status.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // the word says it — no dot repeating it
+    const header = actionsRow.parentElement!;
+    expect(header.querySelector('[aria-label="active"]')).toBeNull();
+    expect(header.querySelector('[aria-label="paused"]')).toBeNull();
+  });
+
+  it("keeps the header pinned and non-scrolling", () => {
+    renderPanel();
+    const header = screen.getByTestId("pipe-detail-status").parentElement!.parentElement!;
+    expect(header.className).toContain("shrink-0");
+    expect(header.className).toContain("relative");
+    expect(header.className).toContain("z-10");
+    expect(header.className).toContain("bg-background");
+    expect(screen.getByTestId("pipe-detail-scroll").contains(header)).toBe(false);
+  });
+
+  it("says running / paused rather than a dot", () => {
+    renderPanel({ isRunning: true });
+    expect(screen.getByTestId("pipe-detail-status").textContent).toBe("running");
+    cleanup();
+    renderPanel({ enabled: false });
+    expect(screen.getByTestId("pipe-detail-status").textContent).toBe("paused");
+  });
+
+  it("gives the name no title when it fits, and one when it is clipped", () => {
+    renderPanel({ pipeName: "daily-digest" });
+    const name = screen.getByTestId("pipe-detail-name");
+    expect(name.className).toContain("truncate");
+    expect(name.className).toContain("text-[17px]");
+    expect(name.getAttribute("title")).toBeNull();
+
+    // jsdom reports 0/0 until we stub the metrics — unclipped stays untitled
+    fireEvent.pointerEnter(name);
+    expect(name.getAttribute("title")).toBeNull();
+
+    Object.defineProperty(name, "scrollWidth", { value: 900, configurable: true });
+    Object.defineProperty(name, "clientWidth", { value: 200, configurable: true });
+    fireEvent.pointerEnter(name);
+    expect(name.getAttribute("title")).toBe("daily-digest");
   });
 });

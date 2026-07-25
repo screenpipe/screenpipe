@@ -615,7 +615,8 @@ export function NotificationBell() {
         if (o) {
           posthog.capture("notification_bell_opened", {
             unread_count: unreadCount,
-            surface: "pipe_store",
+            // The bell lives in the app shell now, not on the pipes page.
+            surface: "app_shell",
           });
         } else {
           void pollUnread();
@@ -626,7 +627,8 @@ export function NotificationBell() {
         <button
           aria-label={unreadCount > 0 ? `notifications, ${unreadCount} unread` : "notifications"}
           data-testid="notification-bell-trigger"
-          className="relative p-1.5 rounded-md hover:bg-muted/60 transition-colors"
+          // p-1 matches the sibling chrome buttons in the shell's top strip.
+          className="relative rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
         >
           <Bell className="h-3.5 w-3.5 text-muted-foreground" />
           {/* Quiet unread marker — a dot, not a count. Chrome only
@@ -642,7 +644,9 @@ export function NotificationBell() {
       <PopoverContent
         data-testid="notification-bell-popover"
         className="w-[320px] p-0 border-border"
-        align="end"
+        // The bell sits in the top-LEFT chrome strip, so the panel opens to the
+        // right of it; `end` would push a 320px panel off the left edge.
+        align="start"
         sideOffset={4}
       >
         <NotificationInboxPanel onRequestClose={() => setOpen(false)} />

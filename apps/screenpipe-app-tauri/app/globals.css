@@ -253,6 +253,45 @@
     display: none;
   }
 
+  /* Grabbable scrollbars, everywhere.
+     With 219 pipe rows the scrollbar stops being decoration and becomes the
+     primary navigation control — a 4px hairline is not a target. 10px track,
+     9px rounded thumb, muted at rest and stronger on hover.
+     Opt out with `.scrollbar-hide` (utilities layer wins over base). */
+  * {
+    scrollbar-width: auto;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.45) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.45);
+    border-radius: 9999px;
+    /* 0.5px inset keeps the thumb ~9px inside the 10px track. */
+    border: 0.5px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.75);
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:active {
+    background: hsl(var(--foreground) / 0.7);
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  /* No stepper arrows — they eat a third of the track. */
+  *::-webkit-scrollbar-button {
+    display: none;
+  }
+
   *,
   a,
   button {
@@ -378,24 +417,33 @@
     display: none;  /* Chrome, Safari and Opera */
   }
 
-  /* Minimal scrollbar: visible track + thumb, no up/down arrow buttons (like reference) */
+  /* Explicit opt-in to the grabbable default (kept as a named utility for the
+     containers that used to ask for the 8px version). Same 10px track / 9px
+     rounded thumb as the base rule above, no arrow buttons. */
   .scrollbar-minimal {
-    scrollbar-width: thin;  /* Firefox: thin scrollbar, no arrows */
-    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+    scrollbar-width: auto;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.45) transparent;
   }
   .scrollbar-minimal::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
   }
   .scrollbar-minimal::-webkit-scrollbar-track {
     background: transparent;
   }
   .scrollbar-minimal::-webkit-scrollbar-thumb {
-    background: hsl(var(--muted-foreground) / 0.4);
-    border-radius: 4px;
+    background: hsl(var(--muted-foreground) / 0.45);
+    border-radius: 9999px;
+    border: 0.5px solid transparent;
+    background-clip: padding-box;
   }
   .scrollbar-minimal::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground) / 0.6);
+    background: hsl(var(--muted-foreground) / 0.75);
+    background-clip: padding-box;
+  }
+  .scrollbar-minimal::-webkit-scrollbar-thumb:active {
+    background: hsl(var(--foreground) / 0.7);
+    background-clip: padding-box;
   }
   .scrollbar-minimal::-webkit-scrollbar-button {
     display: none;  /* No arrow buttons */

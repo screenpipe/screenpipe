@@ -16,6 +16,13 @@ import {
 export type PipeDotState = "active" | "paused" | "running";
 
 /**
+ * Width/height of the row's leading control slot, in px. The status dot button
+ * and the bulk-select checkbox both fill exactly this box so that entering or
+ * leaving selection mode swaps the control without reflowing the row.
+ */
+export const PIPE_ROW_LEAD_SIZE = 22;
+
+/**
  * Grayscale status marker for a pipe row / panel header.
  * filled = active, outline = paused, spinner = running. No color, per DESIGN.md.
  */

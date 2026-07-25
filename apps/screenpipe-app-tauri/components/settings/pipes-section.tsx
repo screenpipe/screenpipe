@@ -124,6 +124,7 @@ import {
 } from "@/components/pipes/pipe-row-view-model";
 import { PipeActionsMenu } from "@/components/pipes/pipe-actions-menu";
 import { PipeDetailPanel } from "@/components/pipes/pipe-detail-panel";
+import { SETTINGS_SELECT_TRIGGER_CLASS } from "@/components/ui/settings-group";
 import { PipeSuggestions } from "@/components/pipes/pipe-suggestions";
 import { PipesSplitView } from "@/components/pipes/pipes-split-view";
 import { resolvePipesLayoutMode } from "@/components/pipes/use-pane-width";
@@ -904,10 +905,13 @@ function usePipePresets({
 function PipePresetPrimary(props: PipePresetProps) {
   const { primaryPreset, fallbackPreset, savePresets } = usePipePresets(props);
   return (
-    <div className="w-[210px] max-w-full" data-testid="pipe-preset-primary">
+    // No fixed width and no bordered trigger: in-row values are borderless and
+    // sized to their content, so every settings row reads the same way.
+    <div className="flex max-w-full justify-end" data-testid="pipe-preset-primary">
       <AIPresetsSelector
         compact
         allowNone
+        triggerClassName={SETTINGS_SELECT_TRIGGER_CLASS}
         controlledPresetId={primaryPreset}
         onControlledSelect={(presetId) => savePresets(presetId || null, fallbackPreset)}
       />
@@ -2569,6 +2573,7 @@ export function PipesSection({
             )}
             {!enterpriseManaged && (
               <DropdownMenuItem
+                data-testid="pipe-menu-select"
                 onClick={() => {
                   if (selectedPipes.has(name)) {
                     toggleSelectPipe(name);
@@ -2751,6 +2756,7 @@ export function PipesSection({
       {/* Toolbar: swaps between search bar and selection bar */}
       {selectMode ? (
         <div
+          data-testid="pipes-selection-bar"
           className={cn(
             "flex items-center gap-2 border border-border bg-muted/50 px-3 py-2",
             compactToolbar ? "mt-3" : "mt-[18px]",
@@ -2780,6 +2786,8 @@ export function PipesSection({
           <Button
             variant="ghost"
             size="icon"
+            data-testid="pipes-selection-exit"
+            aria-label="exit selection mode"
             className="h-7 w-7"
             onClick={clearSelection}
           >
@@ -2948,16 +2956,18 @@ export function PipesSection({
                   onWatchLive={handleRowWatchLive}
                   isFavorite={pipeFavorites.isFavorite(name)}
                   onToggleFavorite={handleRowToggleFavorite}
+                  // The checkbox takes over the status dot's slot in select
+                  // mode (see PipeRow). Enterprise-managed pipes can't be
+                  // bulk-acted on, so they keep their dot — the `managed`
+                  // badge below already carries the lock.
                   selectSlot={
                     selectMode && !enterpriseManaged ? (
                       <Checkbox
                         checked={selectedPipes.has(name)}
                         onCheckedChange={() => toggleSelectPipe(name)}
                         onClick={(e) => e.stopPropagation()}
-                        className="h-4 w-4 shrink-0"
+                        className="h-4 w-4 shrink-0 rounded-none"
                       />
-                    ) : enterpriseManaged ? (
-                      <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     ) : null
                   }
                   badges={

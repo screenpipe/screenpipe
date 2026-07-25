@@ -186,8 +186,13 @@ export interface LastRunMetaInput {
 }
 
 /**
- * Right-hand row meta:
- *   "last ✓ 10m ago · 29.8s" | "✕ failed 12:31pm" | "never run"
+ * Right-hand row meta — one fact, not four:
+ *   "10m ago" | "failed 12:31pm" | "timed out 4:12pm" | "cancelled 5:00pm" | "never run"
+ *
+ * A healthy run says only *when*. The "last" prefix is implied by the column,
+ * the ✓/✕ glyphs duplicate the status dot, and the duration belongs in the
+ * detail pane's run list where it can be compared against other runs.
+ * Failures keep their verb — that is the fact the row is carrying.
  */
 export function formatLastRunMeta(input: LastRunMetaInput): string {
   const now = input.now ?? Date.now();
@@ -196,13 +201,16 @@ export function formatLastRunMeta(input: LastRunMetaInput): string {
   const status = (input.status ?? "").toLowerCase();
   if (status === "failed" || status === "timed_out" || status === "cancelled") {
     const clock = formatClock(input.startedAt, now);
-    const verb = status === "cancelled" ? "cancelled" : "failed";
-    return clock ? `✕ ${verb} ${clock}` : `✕ ${verb}`;
+    const verb =
+      status === "cancelled"
+        ? "cancelled"
+        : status === "timed_out"
+          ? "timed out"
+          : "failed";
+    return clock ? `${verb} ${clock}` : verb;
   }
 
-  const rel = relativeTimeShort(input.startedAt, now) ?? "recently";
-  const dur = formatRunDuration(input.durationMs);
-  return dur ? `last ✓ ${rel} · ${dur}` : `last ✓ ${rel}`;
+  return relativeTimeShort(input.startedAt, now) ?? "recently";
 }
 
 /** "in progress · started just now" for a row that is currently running. */

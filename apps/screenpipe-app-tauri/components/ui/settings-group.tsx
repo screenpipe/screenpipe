@@ -24,6 +24,23 @@ import { cn } from "@/lib/utils";
 /** Shared caption treatment so standalone section headings match group labels. */
 export const SETTINGS_LABEL_CLASS = "text-[12.5px] font-normal text-muted-foreground";
 
+/**
+ * Trigger classes for a `<Select>` used as a settings row's VALUE.
+ *
+ * A row's value is not a form field standing on its own — it already sits
+ * inside a bordered group inside a bordered pane, so a third box around it
+ * reads as a nested slab and makes two rows in the same group look
+ * structurally different. The value is therefore drawn as text: current value
+ * + chevron, right-aligned, content-width, muted at rest, foreground with a
+ * faint wash on hover. It is still the real Radix select — only the trigger's
+ * skin changes, so keyboard and a11y behaviour are untouched.
+ *
+ * Spread onto the trigger via `cn(SETTINGS_SELECT_TRIGGER_CLASS, …)`;
+ * `tailwind-merge` drops the primitive's `h-10 w-full border …` for these.
+ */
+export const SETTINGS_SELECT_TRIGGER_CLASS =
+  "ml-auto inline-flex h-auto w-auto max-w-full justify-end gap-1 rounded-none border-0 bg-transparent px-1.5 py-1 text-[12px] font-mono text-muted-foreground transition-colors duration-150 hover:bg-accent/40 hover:text-foreground focus:border-0 focus-visible:bg-accent/40 focus-visible:text-foreground data-[state=open]:text-foreground [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-60";
+
 export interface SettingsGroupProps {
   /** sentence-case caption rendered above and outside the bordered box */
   label?: React.ReactNode;

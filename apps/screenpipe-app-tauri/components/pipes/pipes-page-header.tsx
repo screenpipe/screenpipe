@@ -12,8 +12,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { NotificationBell } from "@/components/notification-bell";
 import { cn } from "@/lib/utils";
+// NotificationBell used to mount here, which made an app-wide control the
+// property of one page and forced the header into a three-item action row that
+// never aligned with the title. It now lives in the shell's top chrome strip
+// (`app/(main)/home/page.tsx`), mounted once for every route.
 import { pipeCountsLabel } from "./pipes-page-logic";
 
 export interface PipesPageHeaderProps {
@@ -55,94 +58,115 @@ export function PipesPageHeader({
   onDescribeInChat,
   onSetUpManually,
 }: PipesPageHeaderProps) {
-  return (
-    <div
-      data-testid="pipes-page-header"
-      data-compact={compact || undefined}
-      className={cn(
-        "flex justify-between gap-4",
-        compact ? "items-center" : "items-start",
+  const actionGroup = (
+    <div className="flex shrink-0 items-center gap-2">
+      {actions}
+      {/* Community is list-mode only — it lives on in the `+ new pipe` menu
+          as "start from a community pipe". */}
+      {!compact && (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="pipes-community-btn"
+          onClick={onOpenCommunity}
+          className="h-9 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
+        >
+          community
+        </Button>
       )}
-    >
-      {compact ? (
-        // Compact toolbar = filters only. The counts line, the community
-        // button and the bell all fought the filter tabs for a ~430px column
-        // and lost by overlapping them; each one is reachable elsewhere.
-        <div className="flex min-w-0 flex-1 items-center">{leading}</div>
-      ) : (
-        <div className="min-w-0">
-          <h2 className="text-2xl font-medium tracking-tight">pipes</h2>
-          {showTagline && (
-            <p className="mt-1.5 text-[15px] text-muted-foreground">
-              agents that run on a schedule
-            </p>
-          )}
-          {/* One subtitle line, counts folded in: "218 pipes · 214 active · 4 paused". */}
-          <p
-            data-testid="pipes-count"
-            className="mt-1.5 font-mono text-[12.5px] text-muted-foreground"
-          >
-            {pipeCountsLabel(total, active)}
-          </p>
-        </div>
-      )}
-
-      <div className="flex shrink-0 items-center gap-2">
-        {actions}
-        {/* Bell and community are list-mode only — community lives on in the
-            `+ new pipe` menu as "start from a community pipe". */}
-        {!compact && <NotificationBell />}
-        {!compact && (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
           <Button
-            variant="outline"
             size="sm"
-            data-testid="pipes-community-btn"
-            onClick={onOpenCommunity}
-            className="h-9 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
+            data-testid="pipes-new-btn"
+            className="h-9 shrink-0 gap-1.5 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
           >
-            community
+            {creating ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Plus className="h-3 w-3" />
+            )}
+            {compact ? "new" : "new pipe"}
+            <ChevronDown className="h-3 w-3 opacity-70" />
           </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="rounded-none">
+          <DropdownMenuItem
+            data-testid="pipes-new-describe"
+            className="text-[13px]"
+            onClick={onDescribeInChat}
+          >
+            describe in chat
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="pipes-new-manual"
+            className="text-[13px]"
+            onClick={onSetUpManually}
+          >
+            set up manually
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="pipes-new-community"
+            className="text-[13px]"
+            onClick={onOpenCommunity}
+          >
+            start from a community pipe
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+
+  if (compact) {
+    // Compact toolbar = filters + one button on a single line. The counts
+    // line and the community button both fought the filter tabs for a ~430px
+    // column and lost by overlapping them; each is reachable elsewhere.
+    return (
+      <div
+        data-testid="pipes-page-header"
+        data-compact
+        className="flex items-center justify-between gap-4"
+      >
+        <div className="flex min-w-0 flex-1 items-center">{leading}</div>
+        {actionGroup}
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="pipes-page-header" className="flex flex-col gap-1.5">
+      {/* Row 1 — title and actions share one baseline, so the buttons'
+          optical centre sits on the word "pipes" rather than above it. */}
+      <div
+        data-testid="pipes-header-title-row"
+        className="flex items-center justify-between gap-4"
+      >
+        <h2
+          data-testid="pipes-title"
+          className="min-w-0 truncate text-2xl font-medium tracking-tight"
+        >
+          pipes
+        </h2>
+        {actionGroup}
+      </div>
+
+      {/* Row 2 — the count line spans the full width underneath. */}
+      <div data-testid="pipes-header-meta-row" className="min-w-0">
+        {showTagline && (
+          <p className="text-[15px] text-muted-foreground">
+            agents that run on a schedule
+          </p>
         )}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="sm"
-              data-testid="pipes-new-btn"
-              className="h-9 shrink-0 gap-1.5 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
-            >
-              {creating ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Plus className="h-3 w-3" />
-              )}
-              {compact ? "new" : "new pipe"}
-              <ChevronDown className="h-3 w-3 opacity-70" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="rounded-none">
-            <DropdownMenuItem
-              data-testid="pipes-new-describe"
-              className="text-[13px]"
-              onClick={onDescribeInChat}
-            >
-              describe in chat
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              data-testid="pipes-new-manual"
-              className="text-[13px]"
-              onClick={onSetUpManually}
-            >
-              set up manually
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              data-testid="pipes-new-community"
-              className="text-[13px]"
-              onClick={onOpenCommunity}
-            >
-              start from a community pipe
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* One subtitle line, counts folded in: "218 pipes · 214 active · 4 paused". */}
+        <p
+          data-testid="pipes-count"
+          className={cn(
+            "font-mono text-[12.5px] text-muted-foreground",
+            showTagline && "mt-1.5",
+          )}
+        >
+          {pipeCountsLabel(total, active)}
+        </p>
       </div>
     </div>
   );

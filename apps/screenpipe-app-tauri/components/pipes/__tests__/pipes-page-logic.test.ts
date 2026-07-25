@@ -192,7 +192,7 @@ describe("last run meta", () => {
     expect(formatLastRunMeta({ now })).toBe("never run");
   });
 
-  it("renders a successful run with duration", () => {
+  it("renders a successful run as the relative time alone — no 'last', no ✓, no duration", () => {
     expect(
       formatLastRunMeta({
         startedAt: "2026-01-02T11:50:00Z",
@@ -200,12 +200,37 @@ describe("last run meta", () => {
         durationMs: 29_800,
         now,
       }),
-    ).toBe("last ✓ 10m ago · 29.8s");
+    ).toBe("10m ago");
   });
 
-  it("renders a failure with a clock time", () => {
+  it("drops the duration even when one is available (it belongs in the run list)", () => {
+    const meta = formatLastRunMeta({
+      startedAt: "2026-01-02T11:59:00Z",
+      status: "completed",
+      durationMs: 31_200,
+      now,
+    });
+    expect(meta).toBe("1m ago");
+    expect(meta).not.toMatch(/31\.2s|·|✓|last/);
+  });
+
+  it("renders a failure with the verb and a clock time, no ✕", () => {
     const startedAt = new Date(2026, 0, 2, 12, 31).toISOString();
-    expect(formatLastRunMeta({ startedAt, status: "failed", now })).toBe("✕ failed 12:31pm");
+    expect(formatLastRunMeta({ startedAt, status: "failed", now })).toBe("failed 12:31pm");
+  });
+
+  it("renders a timeout as 'timed out <clock>'", () => {
+    const startedAt = new Date(2026, 0, 2, 16, 12).toISOString();
+    expect(formatLastRunMeta({ startedAt, status: "timed_out", now })).toBe(
+      "timed out 4:12pm",
+    );
+  });
+
+  it("renders a cancellation as 'cancelled <clock>'", () => {
+    const startedAt = new Date(2026, 0, 2, 17, 0).toISOString();
+    expect(formatLastRunMeta({ startedAt, status: "cancelled", now })).toBe(
+      "cancelled 5:00pm",
+    );
   });
 
   it("renders in-progress meta", () => {

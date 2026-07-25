@@ -8,7 +8,6 @@ import {
   GitFork,
   Loader2,
   MoreHorizontal,
-  Pause,
   Play,
   Sparkles,
   Square,
@@ -26,16 +25,19 @@ import { cn } from "@/lib/utils";
 
 export interface PipeActionsMenuProps {
   pipeName: string;
-  enabled: boolean;
+  /** @deprecated pause/resume left this menu — kept so callers still typecheck. */
+  enabled?: boolean;
   isRunning: boolean;
   stopping?: boolean;
   /** Team-shared / enterprise-managed pipes cannot be edited or deleted. */
   readOnly?: boolean;
   canDelete?: boolean;
+  /** @deprecated pause/resume left this menu — kept so callers still typecheck. */
   canToggle?: boolean;
   onRunNow: () => void;
   onStop: () => void;
-  onToggleEnabled: (enabled: boolean) => void;
+  /** @deprecated pause/resume left this menu — kept so callers still typecheck. */
+  onToggleEnabled?: (enabled: boolean) => void;
   onFork: () => void;
   onOptimize: () => void;
   onDelete: () => void;
@@ -47,20 +49,20 @@ export interface PipeActionsMenuProps {
 
 /**
  * The `⋯` menu shared by the pipe row and the detail panel header:
- * run now / pause / fork / optimize with ai / delete, plus whatever extra
- * items the page injects (team share, publish, updates, bulk select).
+ * run now (or stop run) / fork / optimize with ai / delete, plus whatever
+ * extra items the page injects (team share, publish, updates, bulk select).
+ *
+ * Pause/resume is deliberately absent — the row's status dot and the pane's
+ * ⏸ button already own it.
  */
 export function PipeActionsMenu({
   pipeName,
-  enabled,
   isRunning,
   stopping = false,
   readOnly = false,
   canDelete = true,
-  canToggle = true,
   onRunNow,
   onStop,
-  onToggleEnabled,
   onFork,
   onOptimize,
   onDelete,
@@ -107,19 +109,9 @@ export function PipeActionsMenu({
           </DropdownMenuItem>
         )}
 
-        {canToggle && (
-          <DropdownMenuItem
-            data-testid="pipe-menu-toggle-enabled"
-            onClick={() => onToggleEnabled(!enabled)}
-          >
-            {enabled ? (
-              <Pause className="mr-2 h-3.5 w-3.5" />
-            ) : (
-              <Play className="mr-2 h-3.5 w-3.5" />
-            )}
-            {enabled ? "pause" : "resume"}
-          </DropdownMenuItem>
-        )}
+        {/* No pause/resume here. It is the third way to do one thing — the
+            row's status dot toggles it in one click and the detail pane has a
+            dedicated ⏸ button in its header. See `PipeStatusButton`. */}
 
         {!readOnly && (
           <>

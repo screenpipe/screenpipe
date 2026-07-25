@@ -118,6 +118,86 @@ describe("PipeRow — status dot as pause/resume", () => {
   });
 });
 
+describe("PipeRow — selection mode replaces the status dot", () => {
+  it("renders the checkbox and NOT the status dot when a selectSlot is given", () => {
+    const { getByTestId, queryByTestId } = render(
+      <PipeRow
+        {...baseProps}
+        enabled
+        onSelect={() => {}}
+        onToggleEnabled={() => {}}
+        selectSlot={<input type="checkbox" data-testid="bulk-checkbox" />}
+      />,
+    );
+
+    expect(getByTestId("bulk-checkbox")).toBeTruthy();
+    // Exactly one control in the leading slot — no dot beside the checkbox.
+    expect(queryByTestId("pipe-row-toggle-daily-digest")).toBeNull();
+    expect(queryByTestId("pipe-row-status-daily-digest")).toBeNull();
+  });
+
+  it("puts the checkbox in the same fixed-size slot the dot uses, so nothing reflows", () => {
+    const withDot = render(
+      <PipeRow {...baseProps} enabled onSelect={() => {}} onToggleEnabled={() => {}} />,
+    );
+    const dot = withDot
+      .getByTestId("pipe-row-toggle-daily-digest")
+      .parentElement!;
+
+    const withCheckbox = render(
+      <PipeRow
+        {...baseProps}
+        name="other-pipe"
+        enabled
+        onSelect={() => {}}
+        onToggleEnabled={() => {}}
+        selectSlot={<input type="checkbox" />}
+      />,
+    );
+    const lead = withCheckbox.getByTestId("pipe-row-lead-other-pipe");
+
+    expect(lead.style.width).toBe("22px");
+    expect(lead.style.height).toBe("22px");
+    // Both sit as the row's first child, so the columns after them don't move.
+    expect(dot.parentElement!.firstElementChild).toBe(dot);
+    expect(lead.parentElement!.firstElementChild).toBe(lead);
+  });
+
+  it("brings back the status dot the moment selection mode is off", () => {
+    const { getByTestId, queryByTestId, rerender } = render(
+      <PipeRow
+        {...baseProps}
+        enabled
+        onSelect={() => {}}
+        onToggleEnabled={() => {}}
+        selectSlot={<input type="checkbox" data-testid="bulk-checkbox" />}
+      />,
+    );
+    rerender(
+      <PipeRow {...baseProps} enabled onSelect={() => {}} onToggleEnabled={() => {}} />,
+    );
+    expect(queryByTestId("bulk-checkbox")).toBeNull();
+    expect(getByTestId("pipe-row-toggle-daily-digest")).toBeTruthy();
+  });
+
+  it("keeps the star hover-only in selection mode too", () => {
+    const { getByTestId } = render(
+      <PipeRow
+        {...baseProps}
+        enabled
+        onSelect={() => {}}
+        onToggleEnabled={() => {}}
+        isFavorite={false}
+        onToggleFavorite={() => {}}
+        selectSlot={<input type="checkbox" />}
+      />,
+    );
+    const star = getByTestId("pipe-row-star-daily-digest");
+    expect(star.className).toMatch(/opacity-0/);
+    expect(star.className).toMatch(/group-hover:opacity-100/);
+  });
+});
+
 describe("PipeRow — tooltip discipline and chrome", () => {
   it("does not set a native title when the name fits (jsdom: scrollWidth === clientWidth)", () => {
     const { getByTestId } = render(
