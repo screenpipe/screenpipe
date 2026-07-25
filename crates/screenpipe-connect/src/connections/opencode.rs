@@ -13,7 +13,7 @@ static DEF: IntegrationDef = IntegrationDef {
     name: "OpenCode",
     icon: "opencode",
     category: Category::Productivity,
-    description: "Continuously sync screenpipe memories into OpenCode's global memory store (XDG_CONFIG_HOME/opencode/AGENTS.md by default). Screenpipe writes a marker block that it owns and rewrites idempotently — hand-edited content outside the block is left alone. Leave home_path empty to use the default ($XDG_CONFIG_HOME/opencode or ~/.config/opencode).",
+    description: "Continuously sync screenpipe memories into OpenCode's global memory store (OPENCODE_CONFIG_DIR, or XDG_CONFIG_HOME/opencode, by default). Screenpipe writes a marker block that it owns and rewrites idempotently — hand-edited content outside the block is left alone. Leave home_path empty to use the default (OPENCODE_CONFIG_DIR, then $XDG_CONFIG_HOME/opencode, then ~/.config/opencode).",
     fields: &[FieldDef {
         key: "home_path",
         label: "OpenCode config directory (optional)",
@@ -52,21 +52,32 @@ impl Integration for OpenCode {
 }
 
 /// Resolve the user-configured OpenCode config directory. Precedence:
-/// explicit `home_path` field → `$XDG_CONFIG_HOME/opencode` → `~/.config/opencode`.
-/// Mirrors what OpenCode itself does (`xdg-basedir`'s `xdgConfig`, which
-/// uses `$XDG_CONFIG_HOME` or `~/.config` on every platform including
-/// Windows — no OS-specific branching) so screenpipe writes to the same
-/// place the user's local OpenCode installation reads from.
+/// explicit `home_path` field → `$OPENCODE_CONFIG_DIR` → `$XDG_CONFIG_HOME/opencode`
+/// → `~/.config/opencode`. Mirrors OpenCode's own resolution exactly —
+/// `packages/core/src/global.ts`'s `make()` sets
+/// `config: Flag.OPENCODE_CONFIG_DIR ?? Path.config` where `Path.config` is
+/// `xdgConfig/opencode` (via the `xdg-basedir` package, `$XDG_CONFIG_HOME`
+/// or `~/.config` on every platform including Windows — no OS-specific
+/// branching) — so screenpipe writes to the same place the user's local
+/// OpenCode installation reads from. Unlike `$XDG_CONFIG_HOME`,
+/// `$OPENCODE_CONFIG_DIR` is used as-is (it replaces the whole resolved
+/// config dir, not just the XDG base — OpenCode never appends "opencode"
+/// to it).
 pub fn resolve_home_path(creds: &Map<String, Value>) -> Result<std::path::PathBuf> {
-    resolve_with(creds, std::env::var("XDG_CONFIG_HOME").ok().as_deref())
+    resolve_with(
+        creds,
+        std::env::var("OPENCODE_CONFIG_DIR").ok().as_deref(),
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+    )
 }
 
 /// Inner pure-function variant of [`resolve_home_path`] — the env-var
-/// lookup is hoisted to a parameter so tests can exercise every branch
-/// without poking at process-global state. The public entry point
-/// reads `$XDG_CONFIG_HOME` once and hands it here.
+/// lookups are hoisted to parameters so tests can exercise every branch
+/// without poking at process-global state. The public entry point reads
+/// `$OPENCODE_CONFIG_DIR` and `$XDG_CONFIG_HOME` once and hands them here.
 pub fn resolve_with(
     creds: &Map<String, Value>,
+    env_opencode_config_dir: Option<&str>,
     env_xdg_config_home: Option<&str>,
 ) -> Result<std::path::PathBuf> {
     let raw = creds
@@ -77,6 +88,13 @@ pub fn resolve_with(
 
     if let Some(s) = raw {
         return expand_tilde(s);
+    }
+    if let Some(env) = env_opencode_config_dir {
+        let trimmed = env.trim();
+        if !trimmed.is_empty() {
+            // As-is, no "opencode" suffix — see doc comment above.
+            return expand_tilde(trimmed);
+        }
     }
     if let Some(env) = env_xdg_config_home {
         let trimmed = env.trim();
@@ -115,54 +133,100 @@ mod tests {
     }
 
     #[test]
-    fn explicit_home_path_wins_over_env() {
+    fn explicit_home_path_wins_over_opencode_config_dir_and_xdg() {
         let p = resolve_with(
             &creds(Some("/tmp/explicit-opencode")),
+            Some("/tmp/env-opencode-config-dir"),
             Some("/tmp/env-config"),
         )
         .unwrap();
         assert_eq!(p, std::path::PathBuf::from("/tmp/explicit-opencode"));
     }
 
+    // OPENCODE_CONFIG_DIR takes priority over XDG_CONFIG_HOME/opencode —
+    // mirrors OpenCode's own `Flag.OPENCODE_CONFIG_DIR ?? Path.config`
+    // (packages/core/src/global.ts), where `Path.config` is itself derived
+    // from XDG. If we resolved XDG first, screenpipe could write to a
+    // directory the user's real OpenCode never reads once they've set
+    // OPENCODE_CONFIG_DIR.
     #[test]
-    fn env_xdg_config_home_used_when_no_explicit() {
-        let p = resolve_with(&creds(None), Some("/tmp/env-config")).unwrap();
+    fn env_opencode_config_dir_wins_over_xdg_when_no_explicit() {
+        let p = resolve_with(
+            &creds(None),
+            Some("/tmp/env-opencode-config-dir"),
+            Some("/tmp/env-config"),
+        )
+        .unwrap();
+        // Used as-is — no "opencode" suffix appended (see doc comment on
+        // resolve_with: OPENCODE_CONFIG_DIR replaces the whole config dir).
+        assert_eq!(p, std::path::PathBuf::from("/tmp/env-opencode-config-dir"));
+    }
+
+    #[test]
+    fn env_xdg_config_home_used_when_no_explicit_or_opencode_config_dir() {
+        let p = resolve_with(&creds(None), None, Some("/tmp/env-config")).unwrap();
         assert_eq!(p, std::path::PathBuf::from("/tmp/env-config/opencode"));
     }
 
     #[test]
-    fn defaults_to_dot_config_opencode_when_neither_set() {
-        let p = resolve_with(&creds(None), None).unwrap();
+    fn defaults_to_dot_config_opencode_when_nothing_set() {
+        let p = resolve_with(&creds(None), None, None).unwrap();
         let expected = dirs::home_dir().unwrap().join(".config").join("opencode");
         assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn empty_opencode_config_dir_falls_back_to_xdg() {
+        // OPENCODE_CONFIG_DIR="" should be treated as unset, not as "" →
+        // that would resolve to <filesystem root> and silently misroute
+        // every sync.
+        let p = resolve_with(&creds(None), Some("   "), Some("/tmp/env-config")).unwrap();
+        assert_eq!(p, std::path::PathBuf::from("/tmp/env-config/opencode"));
     }
 
     #[test]
     fn empty_env_falls_back_to_default() {
-        // XDG_CONFIG_HOME="" should be treated as unset, not as "" → that
-        // would resolve to <filesystem root>/opencode and silently misroute
-        // every sync.
-        let p = resolve_with(&creds(None), Some("   ")).unwrap();
+        // Same for XDG_CONFIG_HOME="" with nothing else set — must not
+        // resolve to <filesystem root>/opencode.
+        let p = resolve_with(&creds(None), None, Some("   ")).unwrap();
         let expected = dirs::home_dir().unwrap().join(".config").join("opencode");
         assert_eq!(p, expected);
     }
 
     #[test]
-    fn empty_explicit_falls_back_to_env() {
-        let p = resolve_with(&creds(Some("   ")), Some("/tmp/env-config")).unwrap();
+    fn empty_explicit_falls_back_to_opencode_config_dir() {
+        let p = resolve_with(
+            &creds(Some("   ")),
+            Some("/tmp/env-opencode-config-dir"),
+            Some("/tmp/env-config"),
+        )
+        .unwrap();
+        assert_eq!(p, std::path::PathBuf::from("/tmp/env-opencode-config-dir"));
+    }
+
+    #[test]
+    fn empty_explicit_and_opencode_config_dir_falls_back_to_xdg() {
+        let p = resolve_with(&creds(Some("   ")), Some("   "), Some("/tmp/env-config")).unwrap();
         assert_eq!(p, std::path::PathBuf::from("/tmp/env-config/opencode"));
     }
 
     #[test]
     fn tilde_in_explicit_expands_to_home() {
-        let p = resolve_with(&creds(Some("~/custom-opencode")), None).unwrap();
+        let p = resolve_with(&creds(Some("~/custom-opencode")), None, None).unwrap();
         let expected = dirs::home_dir().unwrap().join("custom-opencode");
         assert_eq!(p, expected);
     }
 
     #[test]
-    fn tilde_in_env_expands_to_home() {
-        let p = resolve_with(&creds(None), Some("~/config-from-env")).unwrap();
+    fn tilde_in_opencode_config_dir_expands_to_home_without_suffix() {
+        let p = resolve_with(&creds(None), Some("~/config-from-env"), None).unwrap();
+        let expected = dirs::home_dir().unwrap().join("config-from-env");
+        assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn tilde_in_xdg_expands_to_home() {
+        let p = resolve_with(&creds(None), None, Some("~/config-from-env")).unwrap();
         let expected = dirs::home_dir()
             .unwrap()
             .join("config-from-env")

@@ -345,15 +345,25 @@ enum McpFormat {
     OpenCodeJson,
 }
 
-/// OpenCode's config directory. Respects `$XDG_CONFIG_HOME` like OpenCode
-/// itself does (via the `xdg-basedir` package — no OS-specific branching,
-/// same on macOS/Linux/Windows), falling back to `~/.config/opencode`.
-/// Mirrors `screenpipe_connect::connections::opencode::resolve_home_path`'s
-/// default precedence (that function additionally supports a per-connection
+/// OpenCode's config directory. Precedence: `$OPENCODE_CONFIG_DIR` →
+/// `$XDG_CONFIG_HOME/opencode` → `~/.config/opencode`. Mirrors OpenCode's own
+/// resolution exactly — `packages/core/src/global.ts`'s `make()` sets
+/// `config: Flag.OPENCODE_CONFIG_DIR ?? Path.config` where `Path.config` is
+/// `xdgConfig/opencode` (via the `xdg-basedir` package — no OS-specific
+/// branching, same on macOS/Linux/Windows). Unlike `$XDG_CONFIG_HOME`,
+/// `$OPENCODE_CONFIG_DIR` is used as-is (it replaces the whole resolved
+/// config dir, not just the XDG base). Mirrors
+/// `screenpipe_connect::connections::opencode::resolve_home_path`'s
+/// precedence (that function additionally supports a per-connection
 /// `home_path` override, which doesn't apply here).
 fn opencode_config_home(h: &Path) -> PathBuf {
+    if let Ok(v) = std::env::var("OPENCODE_CONFIG_DIR") {
+        if !v.trim().is_empty() {
+            return PathBuf::from(v.trim());
+        }
+    }
     match std::env::var("XDG_CONFIG_HOME") {
-        Ok(v) if !v.trim().is_empty() => PathBuf::from(v).join("opencode"),
+        Ok(v) if !v.trim().is_empty() => PathBuf::from(v.trim()).join("opencode"),
         _ => h.join(".config/opencode"),
     }
 }
@@ -1051,52 +1061,117 @@ mod tests {
             .is_some_and(|path| path.ends_with(".claude/skills")));
     }
 
-    /// `XDG_CONFIG_HOME` is process-wide global state, so every test that
-    /// reads or sets it (directly or via `opencode_config_home`) must hold
-    /// this lock to avoid racing with the others (cargo test runs in
-    /// parallel by default).
+    /// `OPENCODE_CONFIG_DIR`/`XDG_CONFIG_HOME` are process-wide global state,
+    /// so every test that reads or sets either (directly or via
+    /// `opencode_config_home`) must hold this lock to avoid racing with the
+    /// others (cargo test runs in parallel by default).
     static XDG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// RAII guard: sets (or clears, if `None`) both OpenCode-relevant env
+    /// vars for the duration of a test and restores their original values
+    /// on drop — including on panic, unlike the manual save/restore this
+    /// replaces. Caller must still hold `XDG_ENV_LOCK` for the guard's
+    /// lifetime; this only handles the env vars themselves.
+    struct OpencodeEnvGuard {
+        saved_opencode_config_dir: Option<String>,
+        saved_xdg_config_home: Option<String>,
+    }
+
+    impl OpencodeEnvGuard {
+        fn new(opencode_config_dir: Option<&str>, xdg_config_home: Option<&str>) -> Self {
+            let saved_opencode_config_dir = std::env::var("OPENCODE_CONFIG_DIR").ok();
+            let saved_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
+            match opencode_config_dir {
+                Some(v) => std::env::set_var("OPENCODE_CONFIG_DIR", v),
+                None => std::env::remove_var("OPENCODE_CONFIG_DIR"),
+            }
+            match xdg_config_home {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            Self {
+                saved_opencode_config_dir,
+                saved_xdg_config_home,
+            }
+        }
+    }
+
+    impl Drop for OpencodeEnvGuard {
+        fn drop(&mut self) {
+            match self.saved_opencode_config_dir.take() {
+                Some(v) => std::env::set_var("OPENCODE_CONFIG_DIR", v),
+                None => std::env::remove_var("OPENCODE_CONFIG_DIR"),
+            }
+            match self.saved_xdg_config_home.take() {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
     #[test]
-    fn test_opencode_config_home_defaults_without_xdg_override() {
+    fn test_opencode_config_home_defaults_without_any_override() {
         let _lock = XDG_ENV_LOCK.lock().unwrap();
-        let saved = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::remove_var("XDG_CONFIG_HOME");
+        let _env = OpencodeEnvGuard::new(None, None);
 
         let home = Path::new("/tmp/fake-home");
         assert_eq!(
             opencode_config_home(home),
             Path::new("/tmp/fake-home/.config/opencode")
         );
-
-        if let Some(v) = saved {
-            std::env::set_var("XDG_CONFIG_HOME", v);
-        }
     }
 
     #[test]
     fn test_opencode_config_home_respects_xdg_override() {
         let _lock = XDG_ENV_LOCK.lock().unwrap();
-        let saved = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::set_var("XDG_CONFIG_HOME", "/tmp/custom-xdg-config");
+        let _env = OpencodeEnvGuard::new(None, Some("/tmp/custom-xdg-config"));
 
         let home = Path::new("/tmp/fake-home");
         assert_eq!(
             opencode_config_home(home),
             Path::new("/tmp/custom-xdg-config/opencode")
         );
+    }
 
-        match saved {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
+    // OPENCODE_CONFIG_DIR takes priority over XDG_CONFIG_HOME — mirrors
+    // OpenCode's own `Flag.OPENCODE_CONFIG_DIR ?? Path.config`
+    // (packages/core/src/global.ts), where `Path.config` is itself derived
+    // from XDG. Getting this backwards would mean screenpipe writes
+    // opencode.json/skills to a directory the user's real OpenCode never
+    // reads once they've set OPENCODE_CONFIG_DIR.
+    #[test]
+    fn test_opencode_config_home_respects_opencode_config_dir_override_over_xdg() {
+        let _lock = XDG_ENV_LOCK.lock().unwrap();
+        let _env = OpencodeEnvGuard::new(
+            Some("/tmp/custom-opencode-config-dir"),
+            Some("/tmp/custom-xdg-config"),
+        );
+
+        let home = Path::new("/tmp/fake-home");
+        // Used as-is — no "opencode" suffix appended, unlike XDG_CONFIG_HOME
+        // (see doc comment on opencode_config_home).
+        assert_eq!(
+            opencode_config_home(home),
+            Path::new("/tmp/custom-opencode-config-dir")
+        );
+    }
+
+    #[test]
+    fn test_opencode_config_home_treats_blank_opencode_config_dir_as_unset() {
+        let _lock = XDG_ENV_LOCK.lock().unwrap();
+        let _env = OpencodeEnvGuard::new(Some("   "), Some("/tmp/custom-xdg-config"));
+
+        let home = Path::new("/tmp/fake-home");
+        assert_eq!(
+            opencode_config_home(home),
+            Path::new("/tmp/custom-xdg-config/opencode")
+        );
     }
 
     #[test]
     fn test_opencode_layout_uses_config_skills_dir_and_json_mcp() {
         let _lock = XDG_ENV_LOCK.lock().unwrap();
-        let saved = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::remove_var("XDG_CONFIG_HOME");
+        let _env = OpencodeEnvGuard::new(None, None);
 
         let home = Path::new("/tmp/fake-home");
         let layout = layout_in("opencode", home).unwrap();
@@ -1110,10 +1185,6 @@ mod tests {
             Path::new("/tmp/fake-home/.config/opencode/opencode.json")
         );
         assert!(layout.mcp_format == McpFormat::OpenCodeJson);
-
-        if let Some(v) = saved {
-            std::env::set_var("XDG_CONFIG_HOME", v);
-        }
     }
 
     #[test]
@@ -1243,18 +1314,13 @@ mod tests {
     #[test]
     fn test_opencode_detected_when_config_dir_exists() {
         let _lock = XDG_ENV_LOCK.lock().unwrap();
-        let saved = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::remove_var("XDG_CONFIG_HOME");
+        let _env = OpencodeEnvGuard::new(None, None);
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".config/opencode")).unwrap();
 
         let detected = detected_agents_in(dir.path());
         assert!(detected.iter().any(|a| a.target == "opencode"));
-
-        if let Some(v) = saved {
-            std::env::set_var("XDG_CONFIG_HOME", v);
-        }
     }
 
     #[test]
