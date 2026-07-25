@@ -27,8 +27,13 @@ export interface PipesPageHeaderProps {
   compact?: boolean;
   /** Rendered on the left in compact mode — the filter tabs. */
   leading?: React.ReactNode;
-  /** Icon-button actions that used to crowd the search field (☆, ⟳, …). */
+  /** Extra actions for the title row (the managed-deployment local/cloud picker). */
   actions?: React.ReactNode;
+  /**
+   * The tagline only earns its line when there is nothing else to read —
+   * once pipes exist, the count line says more.
+   */
+  showTagline?: boolean;
   onOpenCommunity: () => void;
   onDescribeInChat: () => void;
   onSetUpManually: () => void;
@@ -45,6 +50,7 @@ export function PipesPageHeader({
   compact = false,
   leading,
   actions,
+  showTagline = false,
   onOpenCommunity,
   onDescribeInChat,
   onSetUpManually,
@@ -71,10 +77,15 @@ export function PipesPageHeader({
       ) : (
         <div className="min-w-0">
           <h2 className="text-lg font-medium tracking-tight">pipes</h2>
-          <p className="text-sm text-muted-foreground">agents that run on a schedule</p>
+          {showTagline && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              agents that run on a schedule
+            </p>
+          )}
+          {/* One subtitle line, counts folded in: "218 pipes · 214 active · 4 paused". */}
           <p
             data-testid="pipes-count"
-            className="mt-0.5 font-mono text-[11px] text-muted-foreground"
+            className="mt-1 font-mono text-[11px] text-muted-foreground"
           >
             {pipeCountsLabel(total, active)}
           </p>

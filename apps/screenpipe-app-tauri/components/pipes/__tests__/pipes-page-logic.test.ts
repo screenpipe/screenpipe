@@ -12,11 +12,13 @@ import {
   formatLastRunMeta,
   formatRowSubtitle,
   formatRunDuration,
+  humanizeScheduleInterval,
   lifecyclePhaseFromEventType,
   lifecycleStatusText,
   matchesStatusFilter,
   parseRunResponse,
   pickSuggestedPipes,
+  PIPE_STATUS_FILTERS,
   pipeCountsLabel,
   relativeTimeShort,
   replacePipeBody,
@@ -52,9 +54,82 @@ describe("status filter", () => {
   it("countActivePipes and pipeCountsLabel produce the header line", () => {
     const pipes = [pipe("a", true), pipe("b", false), pipe("c", true)];
     expect(countActivePipes(pipes)).toBe(2);
-    expect(pipeCountsLabel(pipes.length, countActivePipes(pipes))).toBe("3 pipes · 2 active");
+    expect(pipeCountsLabel(pipes.length, countActivePipes(pipes))).toBe(
+      "3 pipes · 2 active · 1 paused",
+    );
     expect(pipeCountsLabel(1, 1)).toBe("1 pipe · 1 active");
     expect(pipeCountsLabel(0, 0)).toBe("no pipes yet");
+  });
+
+  it("pipeCountsLabel folds the paused count in, and drops it at zero", () => {
+    expect(pipeCountsLabel(218, 214)).toBe("218 pipes · 214 active · 4 paused");
+    expect(pipeCountsLabel(214, 214)).toBe("214 pipes · 214 active");
+  });
+
+  it("matchesStatusFilter: starred reads the favorites flag, not enabled", () => {
+    expect(matchesStatusFilter(true, "starred", true)).toBe(true);
+    expect(matchesStatusFilter(false, "starred", true)).toBe(true);
+    expect(matchesStatusFilter(true, "starred", false)).toBe(false);
+    // No favorites predicate supplied → nothing is starred.
+    expect(matchesStatusFilter(true, "starred")).toBe(false);
+  });
+
+  it("filterPipesByStatus: starred keeps favorites regardless of enabled", () => {
+    const pipes = [pipe("a", true), pipe("b", false), pipe("c", true)];
+    const starred = new Set(["b", "c"]);
+    expect(
+      filterPipesByStatus(pipes, "starred", (p) => starred.has(p.config.name)).map(
+        (p) => p.config.name,
+      ),
+    ).toEqual(["b", "c"]);
+    // The other filters ignore the predicate entirely.
+    expect(
+      filterPipesByStatus(pipes, "active", (p) => starred.has(p.config.name)).map(
+        (p) => p.config.name,
+      ),
+    ).toEqual(["a", "c"]);
+  });
+
+  it("PIPE_STATUS_FILTERS is the four-tab row, in reading order", () => {
+    expect([...PIPE_STATUS_FILTERS]).toEqual(["all", "active", "paused", "starred"]);
+  });
+});
+
+describe("schedule label", () => {
+  it("humanizeScheduleInterval prefixes bare intervals with every", () => {
+    expect(humanizeScheduleInterval("1h")).toBe("every 1h");
+    expect(humanizeScheduleInterval("30min")).toBe("every 30min");
+    expect(humanizeScheduleInterval("2h")).toBe("every 2h");
+    expect(humanizeScheduleInterval("7d")).toBe("every 7d");
+  });
+
+  it("humanizeScheduleInterval leaves humanised labels alone", () => {
+    for (const label of [
+      "weekdays at 8:00",
+      "after each meeting",
+      "manual",
+      "daily · 9am",
+      "every 4h",
+      "30min · 3pm–11pm",
+    ]) {
+      expect(humanizeScheduleInterval(label)).toBe(label);
+    }
+  });
+
+  it("formatRowSubtitle reads 'every 1h · next run …' for a bare interval", () => {
+    const nextRunAt = new Date(2026, 0, 2, 16, 0).toISOString();
+    expect(formatRowSubtitle({ scheduleLabel: "1h", nextRunAt })).toBe(
+      "every 1h · next run 4:00pm",
+    );
+  });
+
+  it("formatRowSubtitle renders the schedule alone until next-run resolves", () => {
+    // No dangling separator while `usePipeNextRuns` is still in flight.
+    expect(formatRowSubtitle({ scheduleLabel: "1h" })).toBe("every 1h");
+    expect(formatRowSubtitle({ scheduleLabel: "1h", nextRunAt: null })).toBe("every 1h");
+    expect(formatRowSubtitle({ scheduleLabel: "1h", nextRunAt: "not-a-date" })).toBe(
+      "every 1h",
+    );
   });
 });
 

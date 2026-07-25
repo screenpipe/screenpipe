@@ -32,6 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { PipeStatusDot } from "./pipe-status-dot";
+import { scrollFadeStyle, useScrollFade } from "./use-scroll-fade";
 import {
   formatClock,
   formatElapsedClock,
@@ -192,6 +193,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
   const [logsOpen, setLogsOpen] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
   useInterval(() => setNow(Date.now()), isRunning ? 1000 : null);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const scrollFade = useScrollFade(scrollRef);
 
   const statusLabel = isRunning ? "running" : enabled ? "active" : "paused";
   const liveExecutionIds = new Set(
@@ -211,8 +214,13 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
       // pane only fills whatever geometry it is handed.
       className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col"
     >
-      {/* header */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2.5">
+      {/* Header. `relative z-10` + an opaque background is load-bearing: the
+          scroll box below is a *later sibling*, so without it the scroll box
+          paints over the bottom half of the 32px icon buttons and swallows
+          their clicks. `py-1.5` + `min-h-*`-free sizing keeps the row's height
+          derived from its tallest child (the buttons), so nothing overflows the
+          header box in the first place. */}
+      <div className="relative z-10 flex shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-1.5">
         <PipeStatusDot state={isRunning ? "running" : enabled ? "active" : "paused"} />
         <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
           {statusLabel}
@@ -224,7 +232,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 rounded-none"
+          // 32×32 hit target, icon centered, sharp corners (DESIGN.md).
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none p-0"
           disabled={enterpriseManaged}
           title={enabled ? "pause" : "resume"}
           aria-label={enabled ? "pause pipe" : "resume pipe"}
@@ -235,7 +244,8 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 rounded-none"
+          // 32×32 hit target, icon centered, sharp corners (DESIGN.md).
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none p-0"
           aria-label="close panel"
           data-testid="pipe-detail-close"
           onClick={onClose}
@@ -246,8 +256,10 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
 
       {/* the pane owns its own scroll; the header above stays pinned */}
       <div
+        ref={scrollRef}
         data-testid="pipe-detail-scroll"
-        className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-3"
+        className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-3 [scrollbar-gutter:stable]"
+        style={scrollFadeStyle(scrollFade)}
       >
         {/* prompt */}
         <section data-testid="pipe-detail-prompt">

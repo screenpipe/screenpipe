@@ -14,6 +14,7 @@ import {
   type PipesLayoutMode,
   usePaneWidth,
 } from "./use-pane-width";
+import { scrollFadeStyle, useScrollFade } from "./use-scroll-fade";
 
 /**
  * Two render slots passed as a single children object. The detail pane is
@@ -57,8 +58,32 @@ export function PipesSplitView({
 }: PipesSplitViewProps) {
   const { master, detail } = children;
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const listScrollRef = React.useRef<HTMLDivElement>(null);
   const { width, containerWidth, setWidth } = usePaneWidth(containerRef);
   const split = mode === "split" && !!detail;
+  const listFade = useScrollFade(listScrollRef);
+
+  /**
+   * The centered reading column geometry. Applied to the toolbar and to the
+   * list content *separately* — they live in different boxes now that the
+   * scroll lives on the full-width region (so the scrollbar rides the window
+   * edge, not the middle of the page) — so both must animate identically.
+   */
+  const columnStyle: React.CSSProperties = {
+    // A numeric max-width in both modes — `none` is not interpolable, so the
+    // mode change would snap instead of animating.
+    maxWidth: split
+      ? Math.max(LIST_MODE_MAX_WIDTH, Math.ceil(containerWidth ?? 2000))
+      : LIST_MODE_MAX_WIDTH,
+    paddingLeft: LIST_MODE_GUTTER,
+    paddingRight: split ? 12 : LIST_MODE_GUTTER,
+    transitionDuration: `${PANE_MODE_TRANSITION_MS}ms`,
+  };
+
+  const columnClass = cn(
+    "mx-auto w-full",
+    "transition-[max-width,padding] ease-out motion-reduce:transition-none",
+  );
 
   return (
     <div
@@ -67,43 +92,50 @@ export function PipesSplitView({
       data-layout-mode={split ? "split" : "list"}
       className="flex h-full min-h-0 w-full overflow-hidden"
     >
-      {/* Master column. `mx-auto` is harmless in split mode (max-width is
-          released, so the margins collapse to zero) which is exactly what lets
-          the mode change animate as a pure width change. */}
+      {/* Master region — spans the full width available to the list, so its
+          scrollbar sits on the region's outer edge (the window edge in
+          list-only mode) instead of riding the centered column's edge in the
+          middle of the page. The centered column is now a plain child of the
+          toolbar box and of the scroll box. `mx-auto` on it is harmless in
+          split mode (max-width is released, so the margins collapse to zero)
+          which is exactly what lets the mode change animate as a pure width
+          change. */}
       <div
         data-testid="pipes-master-column"
-        className={cn(
-          "mx-auto flex min-h-0 w-full flex-1 flex-col",
-          "transition-[max-width,padding] ease-out motion-reduce:transition-none",
-        )}
-        style={{
-          // A numeric max-width in both modes — `none` is not interpolable, so
-          // the mode change would snap instead of animating.
-          maxWidth: split
-            ? Math.max(LIST_MODE_MAX_WIDTH, Math.ceil(containerWidth ?? 2000))
-            : LIST_MODE_MAX_WIDTH,
-          minWidth: split ? LIST_MIN_WIDTH : undefined,
-          paddingLeft: LIST_MODE_GUTTER,
-          paddingRight: split ? 12 : LIST_MODE_GUTTER,
-          transitionDuration: `${PANE_MODE_TRANSITION_MS}ms`,
-        }}
+        className="flex min-h-0 w-full min-w-0 flex-1 flex-col"
+        // Backstop for the pane clamp: the list never gets squeezed below its
+        // minimum, even in a window narrower than pane + list.
+        style={{ minWidth: split ? LIST_MIN_WIDTH : undefined }}
       >
+        {/* `relative z-10` + an opaque background: the scroll box below is a
+            later sibling and would otherwise paint over — and swallow clicks
+            on — anything overflowing the toolbar's box. */}
         <div
           data-testid="pipes-toolbar"
-          className="shrink-0 space-y-3 bg-background pb-3 pt-4"
+          className="relative z-10 w-full shrink-0 bg-background"
         >
-          {toolbar}
+          <div className={cn(columnClass, "space-y-3 pb-3 pt-4")} style={columnStyle}>
+            {toolbar}
+          </div>
         </div>
 
         <div
+          ref={listScrollRef}
           data-testid="pipes-list-scroll"
           onKeyDown={onListKeyDown}
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto pb-10 [overscroll-behavior:contain]",
+            "min-h-0 flex-1 overflow-y-auto [overscroll-behavior:contain]",
+            // `both-edges` keeps the reading column optically centered when the
+            // platform draws a classic (space-taking) scrollbar; plain `stable`
+            // would nudge it half a scrollbar to the left of the toolbar above.
+            "[scrollbar-gutter:stable_both-edges]",
             "focus:outline-none",
           )}
+          style={scrollFadeStyle(listFade)}
         >
-          {master}
+          <div className={cn(columnClass, "pb-10")} style={columnStyle}>
+            {master}
+          </div>
         </div>
       </div>
 

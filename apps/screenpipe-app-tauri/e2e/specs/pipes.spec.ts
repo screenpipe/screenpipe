@@ -11,23 +11,29 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
 /**
  * Pipes page — single-page redesign (no tabs).
  *
- * Covers: header + counts, the all/active/paused filters, the row `⋯` menu,
- * the right-side detail panel, optimistic "run now", and the community
- * drill-in. Everything is hermetic: the pipe under test is a local fixture
- * installed through `POST /pipes/install`, and the run itself is stubbed at
- * `window.fetch` so no agent subprocess is ever spawned.
+ * Covers: header + counts, the all/active/paused/starred filters, the status
+ * dot as the pause/resume control, the row `⋯` menu, the right-side detail
+ * panel, optimistic "run now", and the community drill-in. Everything is
+ * hermetic: the pipe under test is a local fixture installed through
+ * `POST /pipes/install`, and the run itself is stubbed at `window.fetch` so no
+ * agent subprocess is ever spawned.
  *
  * Selectors are data-testid only — no text matching that breaks on copy change.
  *   pipes-page-header    →  data-testid="pipes-count" / "pipes-community-btn" / "pipes-new-btn"
- *   pipe-filter-tabs     →  data-testid="pipe-filter-{all|active|paused}"
- *   pipe-row             →  data-testid="pipe-row-{name}" / "pipe-row-progress-{name}"
+ *   pipe-filter-tabs     →  data-testid="pipe-filter-{all|active|paused|starred}"
+ *   pipe-row             →  data-testid="pipe-row-{name}" / "pipe-row-progress-{name}" /
+ *                           "pipe-row-toggle-{name}" / "pipe-row-star-{name}" /
+ *                           "pipe-row-status-{name}" (spinner, while running)
  *   pipe-actions-menu    →  data-testid="pipe-menu-{name}" / "pipe-menu-run-now"
  *   pipe-detail-panel    →  data-testid="pipe-detail-panel" / "pipe-detail-prompt" / "pipe-detail-runs"
  *   pipes-split-view     →  data-testid="pipes-split-view" (data-layout-mode) /
  *                           "pipes-master-column" / "pipes-list-scroll" /
  *                           "pipes-detail-pane" / "pipes-pane-splitter"
- *   toolbar              →  data-testid="pipes-search" / "pipes-favorites-toggle" / "pipes-refresh"
+ *   toolbar              →  data-testid="pipes-search"
  *   pipe-store           →  data-testid="pipes-community-view" / "pipes-community-back"
+ *
+ * Note: ☆ and ⟳ no longer exist as header icon buttons — favourites is the
+ * fourth filter tab and the list polls every 10s.
  */
 
 const PIPE_NAME = 'e2e-pipes-page-fixture';
@@ -186,7 +192,7 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
 
   // ─── Filters ──────────────────────────────────────────────────────────────
 
-  it('renders all · active · paused filters and narrows the list', async function () {
+  it('renders all · active · paused · starred filters and narrows the list', async function () {
     if (!fixtureInstalled) this.skip();
     await openPipesPage();
     await waitForFixtureRow();
@@ -211,7 +217,151 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     await all.click();
     await waitForFixtureRow();
 
+    // Favourites is the fourth tab now, not a ☆ icon button beside the search.
+    const starred = await $('[data-testid="pipe-filter-starred"]');
+    expect(await starred.isExisting()).toBe(true);
+
     const filepath = await saveScreenshot('pipes-filters');
+    expect(existsSync(filepath)).toBe(true);
+  });
+
+  it('starred narrows the list to favourites, and starring the fixture puts it there', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    const rowSel = `[data-testid="pipe-row-${PIPE_NAME}"]`;
+    const starSel = `[data-testid="pipe-row-star-${PIPE_NAME}"]`;
+
+    // Unstarred to begin with → the starred tab must not list it.
+    await $('[data-testid="pipe-filter-starred"]').click();
+    await browser.waitUntil(async () => !(await $(rowSel).isExisting()), {
+      timeout: t(8_000),
+      timeoutMsg: 'starred filter still listed an unstarred pipe',
+    });
+
+    // Star it from the row (hover-revealed, but click works regardless of the
+    // opacity transition), then it must appear under starred.
+    await $('[data-testid="pipe-filter-all"]').click();
+    await waitForFixtureRow();
+    await $(rowSel).moveTo();
+    await $(starSel).click();
+    await browser.pause(500);
+
+    await $('[data-testid="pipe-filter-starred"]').click();
+    await browser.waitUntil(async () => await $(rowSel).isExisting(), {
+      timeout: t(8_000),
+      timeoutMsg: 'starred filter did not list the pipe that was just starred',
+    });
+
+    const filepath = await saveScreenshot('pipes-filter-starred');
+    expect(existsSync(filepath)).toBe(true);
+
+    // Unstar and go back to all so the rest of the suite starts clean.
+    await $(rowSel).moveTo();
+    await $(starSel).click();
+    await browser.pause(300);
+    await $('[data-testid="pipe-filter-all"]').click();
+    await waitForFixtureRow();
+  });
+
+  // ─── Status dot = pause / resume ─────────────────────────────────────────
+
+  it('hovering the status dot reveals pause; clicking it moves the pipe to paused, then back', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    const rowSel = `[data-testid="pipe-row-${PIPE_NAME}"]`;
+    const toggleSel = `[data-testid="pipe-row-toggle-${PIPE_NAME}"]`;
+
+    const toggle = await $(toggleSel);
+    await toggle.waitForExist({ timeout: t(10_000) });
+    // A real, labelled button — not a decorative span.
+    expect((await toggle.getTagName()).toLowerCase()).toBe('button');
+    expect(await toggle.getAttribute('aria-label')).toBe('pause pipe');
+
+    // Hover reveals the ⏸ glyph + the app tooltip.
+    await toggle.moveTo();
+    await browser.pause(400);
+    const tooltip = (await browser.execute(
+      () => document.body.innerText || '',
+    )) as string;
+    expect(tooltip.toLowerCase()).toContain('pause');
+    await saveScreenshot('pipes-status-dot-hover-pause');
+
+    // Click pauses the pipe → it drops out of "active" and shows up in "paused".
+    await toggle.click();
+    await browser.waitUntil(
+      async () => (await $(toggleSel).getAttribute('aria-label')) === 'resume pipe',
+      { timeout: t(10_000), timeoutMsg: 'status dot did not flip to resume after pausing' },
+    );
+
+    await $('[data-testid="pipe-filter-active"]').click();
+    await browser.waitUntil(async () => !(await $(rowSel).isExisting()), {
+      timeout: t(10_000),
+      timeoutMsg: 'paused pipe still showed under the active filter',
+    });
+
+    await $('[data-testid="pipe-filter-paused"]').click();
+    await browser.waitUntil(async () => await $(rowSel).isExisting(), {
+      timeout: t(10_000),
+      timeoutMsg: 'paused pipe did not appear under the paused filter',
+    });
+
+    const filepath = await saveScreenshot('pipes-status-dot-paused');
+    expect(existsSync(filepath)).toBe(true);
+
+    // Resume from the dot → back under "active".
+    await $(toggleSel).click();
+    await browser.waitUntil(
+      async () => (await $(toggleSel).getAttribute('aria-label')) === 'pause pipe',
+      { timeout: t(10_000), timeoutMsg: 'status dot did not flip back to pause' },
+    );
+
+    await $('[data-testid="pipe-filter-active"]').click();
+    await browser.waitUntil(async () => await $(rowSel).isExisting(), {
+      timeout: t(10_000),
+      timeoutMsg: 'resumed pipe did not come back under the active filter',
+    });
+
+    await $('[data-testid="pipe-filter-all"]').click();
+    await waitForFixtureRow();
+  });
+
+  it('the dot toggle never opens the detail panel', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    const toggleSel = `[data-testid="pipe-row-toggle-${PIPE_NAME}"]`;
+    await $(toggleSel).click();
+    await browser.pause(600);
+    expect(await $('[data-testid="pipe-detail-panel"]').isExisting()).toBe(false);
+
+    // Put the fixture back to enabled.
+    await $(toggleSel).click();
+    await browser.waitUntil(
+      async () => (await $(toggleSel).getAttribute('aria-label')) === 'pause pipe',
+      { timeout: t(10_000), timeoutMsg: 'fixture pipe was left paused' },
+    );
+  });
+
+  // ─── Row chrome ───────────────────────────────────────────────────────────
+
+  it('draws no separator between rows', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    const borderBottom = (await browser.execute((name: string) => {
+      const row = document.querySelector(`[data-testid="pipe-row-${name}"]`);
+      return row ? getComputedStyle(row).borderBottomWidth : 'missing';
+    }, PIPE_NAME)) as string;
+
+    expect(borderBottom).toBe('0px');
+
+    const filepath = await saveScreenshot('pipes-row-no-separators');
     expect(existsSync(filepath)).toBe(true);
   });
 
@@ -230,12 +380,14 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     // Search is its own row, above the filters — not beside them.
     expect(searchBox.y).toBeLessThan(filtersBox.y);
 
-    // …and it is not crowded by the ☆ / ⟳ icon buttons, which moved up into
-    // the title row.
-    const favorites = await $('[data-testid="pipes-favorites-toggle"]');
-    expect(await favorites.isExisting()).toBe(true);
-    const favBox = await favorites.getLocation();
-    expect(favBox.y).toBeLessThan(searchBox.y);
+    // …and the ☆ / ⟳ icon buttons are gone entirely: favourites became the
+    // fourth filter tab and the list refreshes itself on a 10s poll.
+    expect(await $('[data-testid="pipes-favorites-toggle"]').isExisting()).toBe(false);
+    expect(await $('[data-testid="pipes-refresh"]').isExisting()).toBe(false);
+
+    // The count line carries the breakdown instead of a tagline.
+    const count = await $('[data-testid="pipes-count"]');
+    expect(await count.getText()).toMatch(/(no pipes yet|\d+ pipes? · \d+ active)/i);
 
     // List-only mode is the centered reading column.
     const splitView = await $('[data-testid="pipes-split-view"]');

@@ -89,7 +89,11 @@ export function PaneSplitter({
         // The 1px left border IS the divider between the two panes — the
         // remaining 4px are an invisible grab margin, so the seam stays a
         // hairline while the hit target is pointer-friendly.
-        "w-[5px] shrink-0 cursor-col-resize touch-none select-none self-stretch",
+        // `relative z-0`: the strip runs alongside the detail pane's header
+        // controls, which sit at z-10 — pinning the splitter below them means
+        // the two can never contest the same pixels. The splitter's own hit
+        // area is unaffected (it has no overlapping sibling of its own).
+        "relative z-0 w-[5px] shrink-0 cursor-col-resize touch-none select-none self-stretch",
         "border-l border-border bg-transparent transition-colors duration-150 hover:bg-border",
         "focus:outline-none focus-visible:bg-foreground/50",
         dragging && "bg-foreground/50",

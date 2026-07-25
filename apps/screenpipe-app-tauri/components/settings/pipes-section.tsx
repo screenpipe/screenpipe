@@ -24,7 +24,6 @@ import {
   ArrowUpCircle,
   AlertCircle,
   Copy,
-  Star,
   CheckSquare,
   X,
 } from "lucide-react";
@@ -968,7 +967,6 @@ export function PipesSection({
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
   const [saveStatus, setSaveStatus] = useState<Record<string, "saving" | "saved" | "error">>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
-  const [refreshing, setRefreshing] = useState(false);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const pendingSaves = useRef<Record<string, string>>({});
   // Track in-flight config saves so runPipe can await them
@@ -1004,7 +1002,20 @@ export function PipesSection({
   const [liveOutput, setLiveOutput] = useState<Record<string, string[]>>({});
   const liveOutputRef = useRef<Record<string, string[]>>({});
   // ── single-page state ────────────────────────────────────────────────────
-  const [statusFilter, setStatusFilter] = useState<PipeStatusFilter>("all");
+  // `all · active · paused · starred`. Favorites used to be a separate ☆
+  // toggle with its own persisted flag; it is a filter tab now, so the tab
+  // seeds itself from that flag and keeps writing it back (the preference
+  // still survives a reload, just through one control instead of two).
+  const [statusFilter, setStatusFilter] = useState<PipeStatusFilter>(() =>
+    pipeFavorites.showOnly ? "starred" : "all",
+  );
+  const selectStatusFilter = useCallback(
+    (filter: PipeStatusFilter) => {
+      setStatusFilter(filter);
+      pipeFavorites.setShowOnly(filter === "starred");
+    },
+    [pipeFavorites],
+  );
   // Optimistic run entries, keyed by pipe name. Rendered the instant the user
   // hits "run now" so the row flips without waiting for the status poll.
   const [optimisticRuns, setOptimisticRuns] = useState<
@@ -1065,9 +1076,8 @@ export function PipesSection({
 
           if (!shouldShowInMyPipes(p)) return false;
 
-          // Favorites filter — only applied when the user has toggled the star chip on.
-          if (pipeFavorites.showOnly && !pipeFavorites.isFavorite(p.config.name)) return false;
-
+          // Starred is a status filter now (see `visiblePipes`), so this stage
+          // only handles search + visibility.
           return true;
         })
         .sort((a, b) => {
@@ -1091,10 +1101,13 @@ export function PipesSection({
     [pipes, searchQuery, pipeTypeFilter, pipeFavorites.showOnly, pipeFavorites.isFavorite, pipeExecutions]
   );
 
-  // `all · active · paused` narrows the already-searched/starred list.
+  // `all · active · paused · starred` narrows the already-searched list.
   const visiblePipes = React.useMemo(
-    () => filterPipesByStatus(filteredPipes, statusFilter),
-    [filteredPipes, statusFilter],
+    () =>
+      filterPipesByStatus(filteredPipes, statusFilter, (pipe) =>
+        pipeFavorites.isFavorite(pipe.config.name),
+      ),
+    [filteredPipes, statusFilter, pipeFavorites.isFavorite],
   );
 
   // Counts for sub-tab badges — memoized so the filter doesn't re-run on every render
@@ -1116,8 +1129,10 @@ export function PipesSection({
       all: filteredPipes.length,
       active: countActivePipes(filteredPipes),
       paused: filteredPipes.length - countActivePipes(filteredPipes),
+      starred: filteredPipes.filter((p) => pipeFavorites.isFavorite(p.config.name))
+        .length,
     }),
-    [filteredPipes],
+    [filteredPipes, pipeFavorites.isFavorite],
   );
 
   const installedPipeNames = React.useMemo(
@@ -1125,11 +1140,7 @@ export function PipesSection({
     [pipes],
   );
 
-  const starredEmptyTitle = React.useMemo(() => {
-    if (!pipeFavorites.showOnly) return null;
-
-    return "no starred pipes";
-  }, [pipeFavorites.showOnly]);
+  const starredEmptyTitle = statusFilter === "starred" ? "no starred pipes" : null;
 
   const sharePipePublic = async (pipe: PipeStatus) => {
     setSharingPublic(pipe.config.name);
@@ -2434,7 +2445,11 @@ export function PipesSection({
       ?.focus();
   };
 
-  /** ☆ / ⟳ live in the title row so the search field can go full width. */
+  /**
+   * The title row carries no icon buttons any more: ☆ became the fourth filter
+   * tab, ⟳ was redundant (the list polls every 10s). Only the managed-deployment
+   * local/cloud picker is left, and only when that deployment mode is on.
+   */
   const headerActions = selectMode ? null : (
     <>
       {isManagedDeployment && (
@@ -2466,75 +2481,54 @@ export function PipesSection({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      <Button
-        variant="outline"
-        size="icon"
-        data-testid="pipes-favorites-toggle"
-        aria-pressed={pipeFavorites.showOnly}
-        className="h-8 w-8 rounded-none"
-        onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
-        title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
-      >
-        <Star className={cn("h-3.5 w-3.5", pipeFavorites.showOnly && "fill-foreground")} />
-      </Button>
-      <Button
-        variant="outline"
-        size="icon"
-        data-testid="pipes-refresh"
-        title="refresh"
-        className={cn(
-          "h-8 w-8 rounded-none",
-          refreshing && "pointer-events-none opacity-70",
-        )}
-        onClick={async () => {
-          if (refreshing) return;
-          setRefreshing(true);
-          await Promise.all([fetchPipes(), new Promise((r) => setTimeout(r, 2000))]);
-          setRefreshing(false);
-        }}
-      >
-        {refreshing ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-        ) : (
-          <RefreshCw className="h-3.5 w-3.5" />
-        )}
-      </Button>
     </>
   );
 
   const filterTabs = (
     <PipeFilterTabs
       value={statusFilter}
-      onChange={setStatusFilter}
+      onChange={selectStatusFilter}
       counts={filterCounts}
     />
   );
 
-  /** Full width, on its own line — never crowded by the icon buttons. */
+  /** Full width, on its own line, 9px/12px padding and 11px mono. */
   const searchRow = (
     <div className="relative w-full">
-      <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         data-testid="pipes-search"
         placeholder="search pipes..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        className="h-8 w-full rounded-none pl-8 text-sm"
+        className="h-auto w-full rounded-none py-[9px] pl-8 pr-3 font-mono text-[11px]"
         spellCheck={false}
         autoCorrect="off"
       />
     </div>
   );
 
+  const compactToolbar = layoutMode === "split";
+
+  // One wrapper so the toolbar owns its own rhythm instead of inheriting the
+  // shell's uniform stack: 26px above the title, 18px title→search,
+  // 16px search→filters, 10px filters→first row (the shell contributes 16px
+  // above and 12px below, hence the +10 / −2 corrections). Split mode keeps
+  // the same scale, proportionally tightened.
   const toolbar = (
-    <>
+    <div
+      className={cn(
+        compactToolbar ? "pt-[2px] -mb-[4px]" : "pt-[10px] -mb-[2px]",
+      )}
+    >
       <PipesPageHeader
         total={headerCounts.total}
         active={headerCounts.active}
         creating={creatingPipe}
-        compact={layoutMode === "split"}
-        leading={layoutMode === "split" ? filterTabs : null}
+        compact={compactToolbar}
+        leading={compactToolbar ? filterTabs : null}
         actions={headerActions}
+        showTagline={headerCounts.total === 0}
         onOpenCommunity={() => onOpenCommunity?.()}
         onDescribeInChat={() => void startCreatePipeInChat()}
         onSetUpManually={() => void createBlankPipe()}
@@ -2542,7 +2536,12 @@ export function PipesSection({
 
       {/* Toolbar: swaps between search bar and selection bar */}
       {selectMode ? (
-        <div className="flex items-center gap-2 border border-border bg-muted/50 px-3 py-2">
+        <div
+          className={cn(
+            "flex items-center gap-2 border border-border bg-muted/50 px-3 py-2",
+            compactToolbar ? "mt-3" : "mt-[18px]",
+          )}
+        >
           <Checkbox
             checked={selectablePipeCount > 0 && selectedPipes.size === selectablePipeCount ? true : selectedPipes.size > 0 ? "indeterminate" : false}
             onCheckedChange={(checked) => {
@@ -2575,12 +2574,12 @@ export function PipesSection({
         </div>
       ) : (
         <>
-          {searchRow}
+          <div className={compactToolbar ? "mt-3" : "mt-[18px]"}>{searchRow}</div>
           {/* Split mode moves the filters up into the compact header row. */}
-          {layoutMode === "list" && filterTabs}
+          {!compactToolbar && <div className="mt-4">{filterTabs}</div>}
         </>
       )}
-    </>
+    </div>
   );
 
   return (
@@ -2655,14 +2654,7 @@ export function PipesSection({
           <CardContent className="py-8 text-center text-muted-foreground">
             {searchQuery ? (
               <p>no pipes match your search</p>
-            ) : statusFilter !== "all" && filteredPipes.length > 0 ? (
-              <div className="space-y-3">
-                <p>no {statusFilter} pipes</p>
-                <Button variant="outline" size="sm" onClick={() => setStatusFilter("all")}>
-                  show all pipes
-                </Button>
-              </div>
-            ) : pipeFavorites.showOnly && tabCounts[pipeTypeFilter] > 0 ? (
+            ) : statusFilter === "starred" && tabCounts[pipeTypeFilter] > 0 ? (
               <div className="space-y-4">
                 <div>
                   <p className="text-foreground font-medium text-base">
@@ -2678,11 +2670,22 @@ export function PipesSection({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => pipeFavorites.setShowOnly(false)}
+                    onClick={() => selectStatusFilter("all")}
                   >
                     show all pipes
                   </Button>
                 </div>
+              </div>
+            ) : statusFilter !== "all" && filteredPipes.length > 0 ? (
+              <div className="space-y-3">
+                <p>no {statusFilter} pipes</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => selectStatusFilter("all")}
+                >
+                  show all pipes
+                </Button>
               </div>
             ) : (
               <div className="space-y-4">
@@ -2719,8 +2722,8 @@ export function PipesSection({
           </CardContent>
         </Card>
       ) : (
-        // No per-row boxes: one column, hairline rules between rows.
-        <div className="flex flex-col border-t border-border/50">
+        // No per-row boxes and no rules — spacing plus the hover fill carry it.
+        <div className="flex flex-col">
           {visiblePipes.map((pipe) => {
               const name = pipe.config.name;
               const recentExecs = pipeExecutions[name] || [];
@@ -2781,6 +2784,19 @@ export function PipesSection({
                   }}
                   errorText={errorText}
                   onSelect={() => selectPipe(name)}
+                  // Same rule the `⋯` menu uses for its pause/resume item:
+                  // organization-managed pipes are enforced, and a pipe with
+                  // unconfigured connections can't be resumed into a failure.
+                  onToggleEnabled={(next) => togglePipe(name, next)}
+                  toggleDisabled={
+                    enterpriseManaged ||
+                    (hasMissingConnections && !pipe.config.enabled)
+                  }
+                  toggleDisabledReason={
+                    enterpriseManaged
+                      ? "managed by your organization"
+                      : "connect its apps first"
+                  }
                   onWatchLive={() => void openPipeChat(name, optimistic?.execId ?? runningExec?.id ?? null)}
                   favorite={{
                     isFavorite: pipeFavorites.isFavorite(name),

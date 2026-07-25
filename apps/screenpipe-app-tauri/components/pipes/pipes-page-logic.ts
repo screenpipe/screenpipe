@@ -13,29 +13,45 @@
 
 // ── status filter ──────────────────────────────────────────────────────────
 
-export type PipeStatusFilter = "all" | "active" | "paused";
+export type PipeStatusFilter = "all" | "active" | "paused" | "starred";
 
 export const PIPE_STATUS_FILTERS: readonly PipeStatusFilter[] = [
   "all",
   "active",
   "paused",
+  "starred",
 ];
 
-/** A pipe is "active" when auto-run is on; "paused" is enabled=false. */
+/**
+ * A pipe is "active" when auto-run is on; "paused" is enabled=false.
+ * "starred" is orthogonal to enabled — it reads the favorites list instead,
+ * which is why it lives here as a fourth tab rather than a separate toggle.
+ */
 export function matchesStatusFilter(
   enabled: boolean,
   filter: PipeStatusFilter,
+  isStarred = false,
 ): boolean {
   if (filter === "all") return true;
   if (filter === "active") return enabled;
+  if (filter === "starred") return isStarred;
   return !enabled;
 }
 
-export function filterPipesByStatus<T extends { config: { enabled: boolean } }>(
+export function filterPipesByStatus<
+  T extends { config: { enabled: boolean; name: string } },
+>(
   pipes: readonly T[],
   filter: PipeStatusFilter,
+  isStarred?: (pipe: T) => boolean,
 ): T[] {
-  return pipes.filter((pipe) => matchesStatusFilter(pipe.config.enabled, filter));
+  return pipes.filter((pipe) =>
+    matchesStatusFilter(
+      pipe.config.enabled,
+      filter,
+      isStarred ? isStarred(pipe) : false,
+    ),
+  );
 }
 
 export function countActivePipes<T extends { config: { enabled: boolean } }>(
@@ -44,11 +60,17 @@ export function countActivePipes<T extends { config: { enabled: boolean } }>(
   return pipes.reduce((n, pipe) => (pipe.config.enabled ? n + 1 : n), 0);
 }
 
-/** "9 pipes · 7 active" — the header count line. */
+/**
+ * "218 pipes · 214 active · 4 paused" — the header subtitle line.
+ * The paused clause is dropped when nothing is paused, so a healthy list
+ * never carries a "0 paused" tail.
+ */
 export function pipeCountsLabel(total: number, active: number): string {
   if (total === 0) return "no pipes yet";
   const noun = total === 1 ? "pipe" : "pipes";
-  return `${total} ${noun} · ${active} active`;
+  const paused = Math.max(0, total - active);
+  const head = `${total} ${noun} · ${active} active`;
+  return paused > 0 ? `${head} · ${paused} paused` : head;
 }
 
 // ── time formatting ────────────────────────────────────────────────────────
@@ -123,11 +145,23 @@ export interface RowSubtitleInput {
   now?: number;
 }
 
+/**
+ * `humanizeSchedule` hands back bare intervals for the common cases — "1h",
+ * "30min", "2d" — which read as a bald measurement in the row ("1h" alone
+ * says nothing). Prefix those with "every"; anything already humanised
+ * ("weekdays at 8:00", "after each meeting", "manual", "30min · 3pm–11pm")
+ * is left exactly as the humanizer wrote it.
+ */
+export function humanizeScheduleInterval(label: string): string {
+  const trimmed = label.trim();
+  return /^\d+(?:s|min|m|h|d)$/i.test(trimmed) ? `every ${trimmed}` : trimmed;
+}
+
 /** "every 1h · next run 2:14pm" (falls back gracefully when parts are absent). */
 export function formatRowSubtitle(input: RowSubtitleInput): string {
   const now = input.now ?? Date.now();
   const parts: string[] = [];
-  const schedule = (input.scheduleLabel ?? "").trim();
+  const schedule = humanizeScheduleInterval(input.scheduleLabel ?? "");
   const triggers = input.triggerCount ?? 0;
 
   if (schedule && schedule !== "manual") parts.push(schedule);

@@ -7,7 +7,8 @@ import React from "react";
 import { Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useInterval } from "@/lib/hooks/use-interval";
-import { PipeStatusDot } from "./pipe-status-dot";
+import { PipeStatusButton } from "./pipe-status-dot";
+import { useIsTruncated } from "./use-is-truncated";
 import {
   formatElapsedClock,
   formatInProgressMeta,
@@ -35,14 +36,20 @@ export interface PipeRowProps {
   /** bulk-select checkbox, when select mode is on */
   selectSlot?: React.ReactNode;
   favorite?: { isFavorite: boolean; onToggle: () => void };
+  /** Pause / resume straight from the status dot. */
+  onToggleEnabled?: (enabled: boolean) => void;
+  /** Enterprise-managed (or otherwise locked) pipes can't be toggled. */
+  toggleDisabled?: boolean;
+  toggleDisabledReason?: string;
   onSelect: () => void;
   /** "watch live" — jumps to the run's chat thread. */
   onWatchLive?: () => void;
 }
 
 /**
- * One pipe in the list. No hover-revealed action strip: everything lives in
- * the `⋯` menu or the detail panel, so the scan path stays quiet.
+ * One pipe in the list. No separators and no hover-revealed action strip: the
+ * list reads as a column through spacing and hover fill alone, and everything
+ * beyond pause/resume lives in the `⋯` menu or the detail panel.
  */
 export function PipeRow({
   name,
@@ -58,12 +65,19 @@ export function PipeRow({
   menu,
   selectSlot,
   favorite,
+  onToggleEnabled,
+  toggleDisabled = false,
+  toggleDisabledReason,
   onSelect,
   onWatchLive,
 }: PipeRowProps) {
   // Only tick while something is actually in progress.
   const [now, setNow] = React.useState(() => Date.now());
   useInterval(() => setNow(Date.now()), isRunning ? 1000 : null);
+
+  // Tooltips only where they add information — see use-is-truncated.
+  const nameText = useIsTruncated<HTMLSpanElement>(name);
+  const subtitleText = useIsTruncated<HTMLSpanElement>(subtitle);
 
   const meta = isRunning
     ? lifecycleText || formatInProgressMeta(runStartedAt, now)
@@ -84,51 +98,52 @@ export function PipeRow({
         }
       }}
       className={cn(
-        // No box per row — a hairline rule between rows keeps the scan path
-        // quiet and lets the list read as one column instead of a stack of
-        // cards. Sharp corners, per DESIGN.md.
-        "group flex w-full items-center gap-3 border-b border-border/50 px-2 text-left",
+        // No rules between rows and no box per row — spacing plus the hover
+        // fill carry the list. Sharp corners, per DESIGN.md.
+        "group flex w-full items-center gap-3 text-left",
         "cursor-pointer select-none transition-colors duration-150",
         "hover:bg-accent/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         selected &&
           "bg-accent/50 shadow-[inset_2px_0_0_0_hsl(var(--foreground))]",
         !enabled && !isRunning && "opacity-60",
       )}
-      style={{ paddingTop: 9, paddingBottom: 9 }}
+      style={{
+        paddingTop: 11,
+        paddingBottom: 11,
+        paddingLeft: 14,
+        paddingRight: 14,
+      }}
     >
       {selectSlot}
 
-      <PipeStatusDot state={isRunning ? "running" : enabled ? "active" : "paused"} />
-
-      {favorite && (
-        <button
-          type="button"
-          aria-pressed={favorite.isFavorite}
-          title={favorite.isFavorite ? "unstar" : "star this pipe"}
-          onClick={(event) => {
-            event.stopPropagation();
-            favorite.onToggle();
-          }}
-          className={cn(
-            "shrink-0 p-0.5 transition-colors duration-150",
-            favorite.isFavorite
-              ? "text-foreground"
-              : "text-muted-foreground/40 hover:text-muted-foreground",
-          )}
-        >
-          <Star className={cn("h-3.5 w-3.5", favorite.isFavorite && "fill-foreground")} />
-        </button>
-      )}
+      <PipeStatusButton
+        state={isRunning ? "running" : enabled ? "active" : "paused"}
+        pipeName={name}
+        disabled={toggleDisabled || !onToggleEnabled}
+        disabledReason={toggleDisabledReason}
+        onToggle={(next) => onToggleEnabled?.(next)}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-sm font-medium" title={name}>
+        <span
+          ref={nameText.ref}
+          title={nameText.title}
+          className="truncate text-[12.5px] font-semibold leading-tight"
+        >
           {name}
         </span>
-        <span className="truncate font-mono text-[11px] text-muted-foreground">
+        <span
+          ref={subtitleText.ref}
+          title={subtitleText.title}
+          className="truncate font-mono text-[10.5px] leading-tight text-muted-foreground"
+        >
           {subtitle}
         </span>
         {errorText && (
-          <span className="truncate text-[11px] text-destructive" title={errorText}>
+          <span
+            className="truncate text-[10.5px] text-destructive"
+            title={errorText}
+          >
             {errorText}
           </span>
         )}
@@ -137,9 +152,36 @@ export function PipeRow({
       {badges}
 
       <div className="flex shrink-0 items-center gap-2">
+        {favorite && (
+          <button
+            type="button"
+            data-testid={`pipe-row-star-${name}`}
+            aria-pressed={favorite.isFavorite}
+            aria-label={favorite.isFavorite ? "unstar pipe" : "star pipe"}
+            title={favorite.isFavorite ? "unstar" : "star this pipe"}
+            onClick={(event) => {
+              event.stopPropagation();
+              favorite.onToggle();
+            }}
+            className={cn(
+              // Favourited stars are always on; the rest only appear on row
+              // hover or when the star itself takes focus.
+              "shrink-0 p-0.5 transition-opacity duration-150",
+              "transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              favorite.isFavorite
+                ? "text-foreground opacity-100"
+                : "text-muted-foreground/60 opacity-0 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            <Star
+              className={cn("h-3.5 w-3.5", favorite.isFavorite && "fill-foreground")}
+            />
+          </button>
+        )}
+
         <span
           data-testid={isRunning ? `pipe-row-progress-${name}` : undefined}
-          className="max-w-[220px] truncate text-right font-mono text-[11px] text-muted-foreground"
+          className="max-w-[220px] truncate text-right font-mono text-[10.5px] text-muted-foreground"
         >
           {meta}
           {isRunning && runStartedAt ? ` · ${formatElapsedClock(runStartedAt, now)}` : ""}
