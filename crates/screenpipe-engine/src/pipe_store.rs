@@ -393,11 +393,13 @@ impl PipeStore for SqlitePipeStore {
                       COALESCE(execution.finished_at, execution.started_at) AS last_run_at,
                       execution.status
                FROM (
+                   -- Live (queued/running) executions are included on purpose:
+                   -- the sidebar shows in-flight runs with a spinner instead of
+                   -- pretending nothing is happening until the run finishes.
                    SELECT pipe_name,
                           COUNT(*) AS execution_count,
                           MAX(id) AS latest_execution_id
                    FROM pipe_executions
-                   WHERE status NOT IN ('queued', 'running')
                    GROUP BY pipe_name
                ) AS latest
                JOIN pipe_executions AS execution
@@ -1150,16 +1152,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_execution_activity_excludes_active_executions() {
+    async fn test_execution_activity_includes_live_executions() {
         let (store, _tmp) = setup_test_store().await;
         let first_run = store
             .create_execution("new-pipe", "manual", "m", None)
             .await
             .unwrap();
-        store.set_execution_running(first_run, None).await.unwrap();
 
+        // Queued run is already visible — the sidebar shows in-flight runs.
         let activity = store.get_execution_activity(20, None).await.unwrap();
-        assert!(activity.is_empty());
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].pipe_name, "new-pipe");
+        assert_eq!(activity[0].status, "queued");
+
+        store.set_execution_running(first_run, None).await.unwrap();
+        let activity = store.get_execution_activity(20, None).await.unwrap();
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].status, "running");
+        assert_eq!(activity[0].latest_execution_id, first_run);
 
         store
             .finish_execution(first_run, "completed", "", "", Some(0), None, None, None)
@@ -1167,9 +1177,9 @@ mod tests {
             .unwrap();
         let activity = store.get_execution_activity(20, None).await.unwrap();
         assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].pipe_name, "new-pipe");
         assert_eq!(activity[0].execution_count, 1);
         assert_eq!(activity[0].latest_execution_id, first_run);
+        assert_eq!(activity[0].status, "completed");
         let finished_execution = store
             .get_executions("new-pipe", 1, None)
             .await
@@ -1177,6 +1187,7 @@ mod tests {
             .remove(0);
         assert_eq!(activity[0].last_run_at, finished_execution.finished_at);
 
+        // A newer live run takes over as the latest row for the pipe.
         let second_run = store
             .create_execution("new-pipe", "manual", "m", None)
             .await
@@ -1184,9 +1195,9 @@ mod tests {
         store.set_execution_running(second_run, None).await.unwrap();
         let activity = store.get_execution_activity(20, None).await.unwrap();
         assert_eq!(activity.len(), 1);
-        assert_eq!(activity[0].execution_count, 1);
-        assert_eq!(activity[0].latest_execution_id, first_run);
-        assert_eq!(activity[0].status, "completed");
+        assert_eq!(activity[0].execution_count, 2);
+        assert_eq!(activity[0].latest_execution_id, second_run);
+        assert_eq!(activity[0].status, "running");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

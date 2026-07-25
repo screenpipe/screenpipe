@@ -164,12 +164,62 @@ fn is_rate_limit_error(text: &str) -> bool {
 /// (offline, timeout, gateway down) we fall back to a minimal hardcoded list
 /// so the app still works without network.
 pub async fn screenpipe_cloud_models(api_url: &str, token: Option<&str>) -> serde_json::Value {
+    // Short-lived process cache. A single manual pipe run resolves the catalog
+    // 3-4 times (ensure_pi_config in the API handler, resolve_screenpipe_model,
+    // ensure_pi_config again pre-spawn); each miss is an HTTP call with a 5s
+    // timeout, which alone accounted for most of the run-button dead zone.
+    if let Some(cached) = models_cache_get(api_url, token) {
+        return cached;
+    }
     match fetch_models_from_gateway(api_url, token).await {
-        Some(models) => models,
+        Some(models) => {
+            models_cache_put(api_url, token, models.clone());
+            models
+        }
         None => {
             warn!("failed to fetch models from gateway, using fallback list");
+            // Fallback list is not cached: recover as soon as the network does.
             fallback_cloud_models()
         }
+    }
+}
+
+/// TTL for the in-process model-catalog cache.
+const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// (api_url, token) -> (fetched_at, catalog)
+static MODELS_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<String, (std::time::Instant, serde_json::Value)>>,
+> = std::sync::Mutex::new(None);
+
+fn models_cache_key(api_url: &str, token: Option<&str>) -> String {
+    // Token participates in the key: authenticated catalogs differ (locked tiers).
+    format!("{}\u{0}{}", api_url, token.unwrap_or(""))
+}
+
+fn models_cache_get(api_url: &str, token: Option<&str>) -> Option<serde_json::Value> {
+    let guard = MODELS_CACHE.lock().ok()?;
+    let map = guard.as_ref()?;
+    let (at, value) = map.get(&models_cache_key(api_url, token))?;
+    (at.elapsed() < MODELS_CACHE_TTL).then(|| value.clone())
+}
+
+fn models_cache_put(api_url: &str, token: Option<&str>, value: serde_json::Value) {
+    if let Ok(mut guard) = MODELS_CACHE.lock() {
+        guard
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(
+                models_cache_key(api_url, token),
+                (std::time::Instant::now(), value),
+            );
+    }
+}
+
+/// Test-only: drop all cached catalogs.
+#[cfg(test)]
+pub(crate) fn clear_models_cache() {
+    if let Ok(mut guard) = MODELS_CACHE.lock() {
+        *guard = None;
     }
 }
 
@@ -4087,5 +4137,30 @@ mod tests {
             Some(None),
             "bun subprocesses on Linux must clear inherited LD_LIBRARY_PATH"
         );
+    }
+
+    #[test]
+    fn models_cache_round_trips_and_isolates_by_token() {
+        clear_models_cache();
+        let catalog_a = serde_json::json!([{ "id": "auto" }]);
+        let catalog_b = serde_json::json!([{ "id": "auto" }, { "id": "pro" }]);
+
+        assert!(models_cache_get("https://api.example", None).is_none());
+
+        models_cache_put("https://api.example", None, catalog_a.clone());
+        models_cache_put("https://api.example", Some("tok"), catalog_b.clone());
+
+        assert_eq!(
+            models_cache_get("https://api.example", None),
+            Some(catalog_a)
+        );
+        assert_eq!(
+            models_cache_get("https://api.example", Some("tok")),
+            Some(catalog_b)
+        );
+        // Different gateway URL is a different entry.
+        assert!(models_cache_get("https://other.example", None).is_none());
+        clear_models_cache();
+        assert!(models_cache_get("https://api.example", None).is_none());
     }
 }

@@ -2964,20 +2964,23 @@ impl PipeManager {
     }
 
     /// Start a pipe in the background (non-blocking).
-    /// Returns immediately after validation and setup.  The execution runs
-    /// in a spawned tokio task.  Use this from API handlers to avoid holding
-    /// the PipeManager mutex for the entire execution duration.
-    pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
+    /// Returns immediately after validation and setup with the DB execution id
+    /// (None when no store is configured).  The execution runs in a spawned
+    /// tokio task.  Use this from API handlers to avoid holding the
+    /// PipeManager mutex for the entire execution duration.
+    pub async fn start_pipe_background(&self, name: &str) -> Result<Option<i64>> {
         self.start_pipe_background_with_trigger(name, "manual")
             .await
     }
 
     /// Start a pipe in the background with an explicit, low-cardinality trigger type.
+    /// Returns the DB execution id so callers (API handlers) can hand the UI a
+    /// handle to watch the run before any agent output exists.
     pub async fn start_pipe_background_with_trigger(
         &self,
         name: &str,
         trigger: &str,
-    ) -> Result<()> {
+    ) -> Result<Option<i64>> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
             match pipes.get(name).cloned() {
@@ -3117,6 +3120,13 @@ impl PipeManager {
             None
         };
 
+        // Lifecycle event: the run exists. Emitted through the same channel as
+        // agent stdout so the UI gets instant feedback long before the first
+        // model token (pi cold start alone can take several seconds).
+        if let Some(ref cb) = self.on_output_line {
+            cb(name, exec_id.unwrap_or(0), r#"{"type":"pipe_queued"}"#);
+        }
+
         // Check if history/session continuation is enabled for this pipe
         let history_enabled = config
             .config
@@ -3140,6 +3150,11 @@ impl PipeManager {
         // Mark running in DB
         if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
             let _ = store.set_execution_running(id, None).await;
+        }
+
+        // Lifecycle event: setup done, agent process is about to spawn.
+        if let Some(ref cb) = self.on_output_line {
+            cb(name, exec_id.unwrap_or(0), r#"{"type":"pipe_spawning"}"#);
         }
 
         let shared_pid_for_kill = shared_pid.clone();
@@ -3467,7 +3482,7 @@ impl PipeManager {
             }
         });
 
-        Ok(())
+        Ok(exec_id)
     }
 
     /// Run a pipe once with an explicit trigger type.

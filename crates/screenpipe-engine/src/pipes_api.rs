@@ -314,7 +314,9 @@ pub async fn run_pipe_now(
     }
 
     match result {
-        Ok(()) => Json(json!({ "success": true })),
+        // execution_id lets the UI attach to the run (live output, watch view)
+        // immediately, instead of polling until the execution row appears.
+        Ok(execution_id) => Json(json!({ "success": true, "execution_id": execution_id })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
 }
@@ -849,5 +851,46 @@ mod tests {
 
         executor.allow_pid_publish.notify_waiters();
         executor.wait_for_pid_published().await;
+    }
+
+    #[tokio::test]
+    async fn start_pipe_background_emits_lifecycle_events_before_agent_output() {
+        let dir = TempDir::new().unwrap();
+        let executor = std::sync::Arc::new(FakeExecutor::new(FakePublishMode::Immediate, 4242));
+        let mut executors: HashMap<String, std::sync::Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("fake".to_string(), executor.clone());
+        let mut manager = PipeManager::new(dir.path().to_path_buf(), executors, None, 3030);
+
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<(String, i64, String)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_ref = captured.clone();
+        manager.set_on_output_line(std::sync::Arc::new(move |pipe, exec_id, line| {
+            captured_ref
+                .lock()
+                .unwrap()
+                .push((pipe.to_string(), exec_id, line.to_string()));
+        }));
+
+        let pm = std::sync::Arc::new(Mutex::new(manager));
+        write_test_pipe(&dir, "lifecycle");
+        let mgr = pm.lock().await;
+        mgr.reload_pipes().await.unwrap();
+        let exec_id = mgr.start_pipe_background("lifecycle").await.unwrap();
+        drop(mgr);
+        executor.started.notified().await;
+
+        // No store configured in this harness — id is None, events still fire with 0.
+        assert_eq!(exec_id, None);
+
+        let events = captured.lock().unwrap().clone();
+        assert!(
+            events.len() >= 2,
+            "expected queued+spawning lifecycle events, got: {events:?}"
+        );
+        assert_eq!(events[0].0, "lifecycle");
+        assert_eq!(events[0].2, r#"{"type":"pipe_queued"}"#);
+        assert_eq!(events[1].2, r#"{"type":"pipe_spawning"}"#);
+
+        executor.allow_finish.notify_waiters();
     }
 }
