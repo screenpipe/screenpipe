@@ -42,6 +42,7 @@ const CONNECT_ALL_TOOL_IDS = [
   "openclaw",
   "hermes",
   "windsurf",
+  "opencode",
 ] as const;
 export type ConnectAllToolId = (typeof CONNECT_ALL_TOOL_IDS)[number];
 
@@ -55,12 +56,14 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
   // config stayed at ~/.codeium/windsurf — show both names so users on either
   // side of the OTA update recognize it.
   windsurf: "Windsurf (Devin Desktop)",
+  opencode: "OpenCode",
 };
 
 // Skills support per tool lives in the disconnect-all component's
-// SKILLS_TARGET map: claude/codex/openclaw/hermes read SKILL.md skills,
-// cursor and windsurf are MCP-only. Grok is intentionally not in this matrix:
-// it isn't part of connect-all and its settings panel has its own disconnect.
+// SKILLS_TARGET map: claude/codex/cursor/openclaw/hermes/opencode read
+// SKILL.md skills, windsurf is MCP-only. Grok is intentionally not in this
+// matrix: it isn't part of connect-all and its settings panel has its own
+// disconnect.
 
 export async function detectAiTools(): Promise<ConnectAllToolId[]> {
   const home = await homeDir();
@@ -80,6 +83,9 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
     ["openclaw", async () => exists(await join(home, ".openclaw"))],
     ["hermes", async () => exists(await join(home, ".hermes"))],
     ["windsurf", async () => exists(await join(home, ".codeium", "windsurf"))],
+    // Does not account for a custom $XDG_CONFIG_HOME — same simplification
+    // every other check here already makes (no per-tool env overrides).
+    ["opencode", async () => exists(await join(home, ".config", "opencode"))],
   ];
 
   const detected: ConnectAllToolId[] = [];
@@ -506,6 +512,55 @@ export async function uninstallWindsurfMcp(): Promise<void> {
   await removeScreenpipeFromJsonConfig(await getWindsurfMcpConfigPath());
 }
 
+// ─── OpenCode ────────────────────────────────────────────────────────────────
+// Skills at ~/.config/opencode/skills (also falls back to ~/.claude/skills
+// for Claude Code compatibility — see https://opencode.ai/docs/skills/).
+// MCP servers use a schema that doesn't match every other JSON-format tool
+// above: a top-level `mcp` key (not `mcpServers`), `command` as an array (not
+// split command+args), an explicit `enabled` flag, and `environment` instead
+// of `env` — see https://opencode.ai/docs/mcp-servers/#local-server. Mirrors
+// crates/screenpipe-engine/src/cli/agent.rs's merge_mcp_opencode_json /
+// remove_mcp_opencode_json, which needed the same bespoke treatment.
+// Does not account for a custom $XDG_CONFIG_HOME — same simplification every
+// other path in this file already makes (no per-tool env overrides).
+
+export async function getOpencodeConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".config", "opencode", "opencode.json");
+}
+
+export async function isOpencodeMcpInstalled(): Promise<boolean> {
+  try {
+    const content = await readTextFile(await getOpencodeConfigPath());
+    const entry = JSON.parse(content)?.mcp?.screenpipe;
+    return !!entry && entry !== null;
+  } catch { return false; }
+}
+
+export async function installOpencodeMcp(): Promise<McpCommand> {
+  const configPath = await getOpencodeConfigPath();
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig();
+  if (!config.mcp || typeof config.mcp !== "object") config.mcp = {};
+  (config.mcp as Record<string, unknown>).screenpipe = {
+    type: "local",
+    command: [mcp.command, ...mcp.args],
+    enabled: true,
+    ...(mcp.env ? { environment: mcp.env } : {}),
+  };
+  await writeJsonConfig(configPath, config);
+  return mcp;
+}
+
+export async function uninstallOpencodeMcp(): Promise<void> {
+  const configPath = await getOpencodeConfigPath();
+  const config = await readJsonConfigStrict(configPath);
+  const servers = config.mcp as Record<string, unknown> | undefined;
+  if (!servers?.screenpipe) return;
+  delete servers.screenpipe;
+  await writeJsonConfig(configPath, config);
+}
+
 // ─── Transactional connect / disconnect orchestrators (issue #5291) ─────────
 //
 // Every surface (onboarding per-tool cards, onboarding connect-all, settings
@@ -522,6 +577,7 @@ export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSk
   cursor: "cursor",
   openclaw: "openclaw",
   hermes: "hermes",
+  opencode: "opencode",
 };
 
 const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
@@ -531,6 +587,7 @@ const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
   openclaw: installOpenclawMcp,
   hermes: installHermesMcp,
   windsurf: installWindsurfMcp,
+  opencode: installOpencodeMcp,
 };
 
 const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
@@ -540,6 +597,7 @@ const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
   openclaw: uninstallOpenclawMcp,
   hermes: uninstallHermesMcp,
   windsurf: uninstallWindsurfMcp,
+  opencode: uninstallOpencodeMcp,
 };
 
 /**
@@ -675,6 +733,9 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
         // Our one refusal: a hand-authored mcp_servers block without screenpipe.
         return hermesHasScreenpipe(text) || !HERMES_MCP_BLOCK.test(text);
       }
+      case "opencode":
+        await readJsonConfigStrict(await getOpencodeConfigPath());
+        return true;
     }
   } catch {
     return false;

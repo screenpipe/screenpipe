@@ -63,6 +63,7 @@ pub fn install_external_agent_skills(target: String) -> Result<Vec<String>, Stri
         "cursor" => "cursor",
         "openclaw" => "openclaw",
         "hermes" => "hermes",
+        "opencode" => "opencode",
         _ => return Err(format!("unsupported external agent: {target}")),
     };
 
@@ -88,6 +89,7 @@ pub fn remove_external_agent_skills(target: String) -> Result<Vec<String>, Strin
         "cursor" => "cursor",
         "openclaw" => "openclaw",
         "hermes" => "hermes",
+        "opencode" => "opencode",
         _ => return Err(format!("unsupported external agent: {target}")),
     };
 

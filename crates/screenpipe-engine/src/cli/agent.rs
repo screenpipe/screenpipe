@@ -34,7 +34,7 @@ pub enum AgentCommand {
     Setup {
         /// Which agent to wire up. Omit when using --all.
         #[arg(
-            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf"],
+            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf", "opencode"],
             required_unless_present = "all",
             conflicts_with = "all"
         )]
@@ -54,7 +54,7 @@ pub enum AgentCommand {
     /// agent's own config or other skills.
     Remove {
         /// Which agent to unwire.
-        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf"])]
+        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf", "opencode"])]
         target: String,
     },
 }
@@ -204,6 +204,13 @@ fn detected_agents_in(home: &Path) -> Vec<DetectedAgent> {
             detected.push(DetectedAgent { target, name });
         }
     }
+    // Respects $XDG_CONFIG_HOME, unlike the dot-dir checks above.
+    if opencode_config_home(home).exists() {
+        detected.push(DetectedAgent {
+            target: "opencode",
+            name: "OpenCode",
+        });
+    }
     detected
 }
 
@@ -234,6 +241,10 @@ fn has_screenpipe_mcp(layout: &AgentLayout) -> bool {
         McpFormat::Json => serde_json::from_str::<serde_json::Value>(&existing)
             .ok()
             .and_then(|root| root.get("mcpServers")?.get("screenpipe").cloned())
+            .is_some_and(|entry| !entry.is_null()),
+        McpFormat::OpenCodeJson => serde_json::from_str::<serde_json::Value>(&existing)
+            .ok()
+            .and_then(|root| root.get("mcp")?.get("screenpipe").cloned())
             .is_some_and(|entry| !entry.is_null()),
         McpFormat::Toml => existing.lines().any(|line| {
             line.trim() == "[mcp_servers.screenpipe]"
@@ -325,6 +336,26 @@ enum McpFormat {
     Json,
     Yaml,
     Toml,
+    /// OpenCode's `opencode.json` — a JSON config, but with a schema that
+    /// doesn't match every other JSON-format agent here (`mcpServers.name =
+    /// {command, args, env}`). OpenCode instead uses a top-level `mcp` key,
+    /// an array-form `command`, an `enabled` flag, and `environment` instead
+    /// of `env` — see https://opencode.ai/docs/mcp-servers/. Needs its own
+    /// merge/remove pair, same treatment as Codex's TOML format.
+    OpenCodeJson,
+}
+
+/// OpenCode's config directory. Respects `$XDG_CONFIG_HOME` like OpenCode
+/// itself does (via the `xdg-basedir` package — no OS-specific branching,
+/// same on macOS/Linux/Windows), falling back to `~/.config/opencode`.
+/// Mirrors `screenpipe_connect::connections::opencode::resolve_home_path`'s
+/// default precedence (that function additionally supports a per-connection
+/// `home_path` override, which doesn't apply here).
+fn opencode_config_home(h: &Path) -> PathBuf {
+    match std::env::var("XDG_CONFIG_HOME") {
+        Ok(v) if !v.trim().is_empty() => PathBuf::from(v).join("opencode"),
+        _ => h.join(".config/opencode"),
+    }
 }
 
 fn layout(target: &str) -> Result<AgentLayout> {
@@ -382,8 +413,21 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_path: h.join(".codeium/windsurf/mcp_config.json"),
             mcp_format: McpFormat::Json,
         },
+        // OpenCode reads global skills from ~/.config/opencode/skills (also
+        // falls back to ~/.claude/skills for Claude Code compatibility) and
+        // MCP servers from the top-level `mcp` key in opencode.json — see
+        // https://opencode.ai/docs/skills/ and /docs/mcp-servers/.
+        "opencode" => {
+            let config_home = opencode_config_home(h);
+            AgentLayout {
+                name: "OpenCode",
+                skills_dir: Some(config_home.join("skills")),
+                mcp_path: config_home.join("opencode.json"),
+                mcp_format: McpFormat::OpenCodeJson,
+            }
+        }
         other => anyhow::bail!(
-            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, windsurf)"
+            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, windsurf, opencode)"
         ),
     })
 }
@@ -508,6 +552,7 @@ fn setup(target: &str, api_url: &str) -> Result<()> {
         McpFormat::Json => merge_mcp_json(&l.mcp_path, remote, api_url)?,
         McpFormat::Yaml => merge_mcp_yaml(&l.mcp_path, remote, api_url)?,
         McpFormat::Toml => merge_mcp_toml(&l.mcp_path, remote, api_url)?,
+        McpFormat::OpenCodeJson => merge_mcp_opencode_json(&l.mcp_path, remote, api_url)?,
     }
 
     println!(
@@ -589,6 +634,7 @@ fn remove(target: &str) -> Result<()> {
         McpFormat::Json => remove_mcp_json(&l.mcp_path)?,
         McpFormat::Toml => remove_mcp_toml(&l.mcp_path)?,
         McpFormat::Yaml => remove_mcp_yaml(&l.mcp_path)?,
+        McpFormat::OpenCodeJson => remove_mcp_opencode_json(&l.mcp_path)?,
     }
 
     println!(
@@ -613,6 +659,34 @@ fn remove_mcp_json(path: &Path) -> Result<()> {
         .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?;
     let removed = root
         .get_mut("mcpServers")
+        .and_then(|s| s.as_object_mut())
+        .and_then(|s| s.remove("screenpipe"))
+        .is_some();
+    if !removed {
+        println!("  · no screenpipe mcp entry in {}", path.display());
+        return Ok(());
+    }
+    replace_config(path, &(serde_json::to_string_pretty(&root)? + "\n"))?;
+    println!("  ✓ mcp removed from {}", path.display());
+    Ok(())
+}
+
+/// Remove `mcp.screenpipe` from OpenCode's `opencode.json`, preserving
+/// everything else (other MCP servers, `$schema`, `instructions`, etc.).
+/// Same shape as [`remove_mcp_json`] but keyed on `mcp`, not `mcpServers`.
+fn remove_mcp_opencode_json(path: &Path) -> Result<()> {
+    use serde_json::Value;
+    let existing = match read_config_text(path)? {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => {
+            println!("  · no screenpipe mcp entry in {}", path.display());
+            return Ok(());
+        }
+    };
+    let mut root: Value = serde_json::from_str(&existing)
+        .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?;
+    let removed = root
+        .get_mut("mcp")
         .and_then(|s| s.as_object_mut())
         .and_then(|s| s.remove("screenpipe"))
         .is_some();
@@ -795,6 +869,45 @@ fn merge_mcp_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Add the `screenpipe` server to OpenCode's `opencode.json`. Different
+/// schema from every other JSON-format agent here — top-level `mcp` key
+/// (not `mcpServers`), `command` as an array (not split `command`+`args`),
+/// an explicit `enabled` flag, and `environment` instead of `env` — see
+/// https://opencode.ai/docs/mcp-servers/#local-server. Same
+/// read-merge-write structure as [`merge_mcp_json`], just a different shape.
+fn merge_mcp_opencode_json(path: &Path, remote: bool, api_url: &str) -> Result<()> {
+    use serde_json::{json, Value};
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let mut root: Value = match read_config_text(path)? {
+        Some(s) if !s.trim().is_empty() => serde_json::from_str(&s)
+            .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?,
+        _ => json!({}),
+    };
+    if !root.is_object() {
+        anyhow::bail!("{} is not a JSON object", path.display());
+    }
+    let mut entry = json!({
+        "type": "local",
+        "command": ["npx", "-y", "screenpipe-mcp@latest"],
+        "enabled": true,
+    });
+    if remote {
+        entry["environment"] = json!({ "SCREENPIPE_API_URL": api_url });
+    }
+    let obj = root.as_object_mut().unwrap();
+    let servers = obj
+        .entry("mcp")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("mcp is present but not an object")?;
+    servers.insert("screenpipe".to_string(), entry);
+    replace_config(path, &(serde_json::to_string_pretty(&root)? + "\n"))?;
+    println!("  ✓ mcp   {}", path.display());
+    Ok(())
+}
+
 /// Add the `screenpipe` server to a YAML MCP config (Hermes). We don't pull a
 /// YAML parser because rewriting the document would discard comments. Instead,
 /// merge only into an ordinary top-level `mcp_servers:` mapping and preserve
@@ -896,6 +1009,7 @@ fn merge_mcp_toml(path: &Path, remote: bool, api_url: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn test_host_port() {
@@ -935,6 +1049,71 @@ mod tests {
             .skills_dir
             .as_deref()
             .is_some_and(|path| path.ends_with(".claude/skills")));
+    }
+
+    /// `XDG_CONFIG_HOME` is process-wide global state, so every test that
+    /// reads or sets it (directly or via `opencode_config_home`) must hold
+    /// this lock to avoid racing with the others (cargo test runs in
+    /// parallel by default).
+    static XDG_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_opencode_config_home_defaults_without_xdg_override() {
+        let _lock = XDG_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let home = Path::new("/tmp/fake-home");
+        assert_eq!(
+            opencode_config_home(home),
+            Path::new("/tmp/fake-home/.config/opencode")
+        );
+
+        if let Some(v) = saved {
+            std::env::set_var("XDG_CONFIG_HOME", v);
+        }
+    }
+
+    #[test]
+    fn test_opencode_config_home_respects_xdg_override() {
+        let _lock = XDG_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/custom-xdg-config");
+
+        let home = Path::new("/tmp/fake-home");
+        assert_eq!(
+            opencode_config_home(home),
+            Path::new("/tmp/custom-xdg-config/opencode")
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
+    #[test]
+    fn test_opencode_layout_uses_config_skills_dir_and_json_mcp() {
+        let _lock = XDG_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let home = Path::new("/tmp/fake-home");
+        let layout = layout_in("opencode", home).unwrap();
+        assert_eq!(layout.name, "OpenCode");
+        assert_eq!(
+            layout.skills_dir.as_deref(),
+            Some(Path::new("/tmp/fake-home/.config/opencode/skills"))
+        );
+        assert_eq!(
+            layout.mcp_path,
+            Path::new("/tmp/fake-home/.config/opencode/opencode.json")
+        );
+        assert!(layout.mcp_format == McpFormat::OpenCodeJson);
+
+        if let Some(v) = saved {
+            std::env::set_var("XDG_CONFIG_HOME", v);
+        }
     }
 
     #[test]
@@ -988,6 +1167,94 @@ mod tests {
             "http://box:3030"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_merge_mcp_opencode_json_fresh_and_idempotent() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-oc-test-{}", std::process::id()));
+        let path = dir.join("opencode.json");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        merge_mcp_opencode_json(&path, false, "http://localhost:3030").unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["mcp"]["screenpipe"]["type"], "local");
+        assert_eq!(v["mcp"]["screenpipe"]["command"][0], "npx");
+        assert_eq!(v["mcp"]["screenpipe"]["enabled"], true);
+        assert!(v["mcp"]["screenpipe"]["environment"].is_null());
+        // Must not use the generic mcpServers key other JSON agents use.
+        assert!(v["mcpServers"].is_null());
+
+        // Idempotent + preserves a pre-existing server and unrelated keys
+        // (e.g. `$schema`, `instructions` — real opencode.json content).
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "$schema": "https://opencode.ai/config.json",
+                "mcp": {"other": {"type": "local", "command": ["x"]}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        merge_mcp_opencode_json(&path, true, "http://box:3030").unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["$schema"], "https://opencode.ai/config.json");
+        assert_eq!(v["mcp"]["other"]["command"][0], "x");
+        assert_eq!(
+            v["mcp"]["screenpipe"]["environment"]["SCREENPIPE_API_URL"],
+            "http://box:3030"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_mcp_opencode_json_preserves_other_servers() {
+        let dir = std::env::temp_dir().join(format!("sp-agent-oc-rm-{}", std::process::id()));
+        let path = dir.join("opencode.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "mcp": {
+                    "other": {"type": "local", "command": ["x"]},
+                    "screenpipe": {"type": "local", "command": ["bun"], "enabled": true}
+                },
+                "instructions": ["CONTRIBUTING.md"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        remove_mcp_opencode_json(&path).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["mcp"]["other"]["command"][0], "x");
+        assert_eq!(v["instructions"][0], "CONTRIBUTING.md");
+        assert!(v["mcp"]["screenpipe"].is_null());
+
+        // Idempotent + missing file is a no-op.
+        remove_mcp_opencode_json(&path).unwrap();
+        remove_mcp_opencode_json(&dir.join("missing.json")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_opencode_detected_when_config_dir_exists() {
+        let _lock = XDG_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".config/opencode")).unwrap();
+
+        let detected = detected_agents_in(dir.path());
+        assert!(detected.iter().any(|a| a.target == "opencode"));
+
+        if let Some(v) = saved {
+            std::env::set_var("XDG_CONFIG_HOME", v);
+        }
     }
 
     #[test]

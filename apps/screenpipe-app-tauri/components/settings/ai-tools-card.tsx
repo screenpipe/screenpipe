@@ -30,6 +30,7 @@ import {
   isOpenclawMcpInstalled,
   isHermesMcpInstalled,
   isWindsurfMcpInstalled,
+  isOpencodeMcpInstalled,
 } from "@/lib/ai-tools-mcp";
 import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import {
@@ -58,6 +59,8 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
       return (await isHermesMcpInstalled()) && (await areExternalAgentSkillsInstalled("hermes"));
     case "windsurf":
       return isWindsurfMcpInstalled();
+    case "opencode":
+      return (await isOpencodeMcpInstalled()) && (await areExternalAgentSkillsInstalled("opencode"));
   }
 }
 
@@ -80,6 +83,8 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
     case "windsurf":
       // Devin mark (black vector) — Windsurf was rebranded to Devin Desktop.
       return <img src="/images/devin.svg" alt="" className={`${img} dark:invert`} />;
+    case "opencode":
+      return <img src="/images/opencode.svg" alt="" className={`${img} dark:invert`} />;
   }
 }
 
