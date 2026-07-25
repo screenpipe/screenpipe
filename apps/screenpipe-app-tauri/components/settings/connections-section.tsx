@@ -2518,6 +2518,17 @@ export interface IntegrationInfo {
 // Reusable credential form for a single connection instance
 // ---------------------------------------------------------------------------
 
+// Fields are conventionally labeled "... (optional)" (see FieldDef instances
+// across crates/screenpipe-connect) — there's no machine-readable
+// required/optional flag on the wire, so this mirrors that convention. Used
+// to (a) let "connect" be clickable with every optional field left blank
+// (e.g. OpenCode/Claude Code/Codex's home-directory field, meant to fall
+// back to a default) and (b) decide which fields must be non-empty before
+// the button unlocks.
+function isOptionalField(field: IntegrationField): boolean {
+  return /\(optional\b/i.test(field.label);
+}
+
 export function ConnectionCredentialForm({
   integrationId,
   fields,
@@ -2566,18 +2577,26 @@ export function ConnectionCredentialForm({
   const handleConnect = async () => {
     setStatus("connecting");
     setError(null);
+    // Always send every field's key, defaulting unset ones to "" — this
+    // guarantees a non-empty credentials map even when every field is an
+    // untouched optional default (e.g. OpenCode's home directory), matching
+    // the backend's `enabled && !credentials.is_empty()` definition of
+    // "connected" (ConnectionManager::list). Sending `creds` as-is would omit
+    // never-typed-into keys entirely, saving `{}` — which the backend (and
+    // this form, post-fix) would then read back as NOT connected.
+    const credsToSend = Object.fromEntries(fields.map(f => [f.key, creds[f.key] ?? ""]));
     try {
       const testRes = await localFetch(`/connections/${integrationId}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials: creds }),
+        body: JSON.stringify({ credentials: credsToSend }),
       });
       const testData = await testRes.json();
       if (!testRes.ok || testData.error) throw new Error(testData.error || "connection test failed");
       const saveRes = await localFetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials: creds }),
+        body: JSON.stringify({ credentials: credsToSend }),
       });
       const saveData = await saveRes.json();
       if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
@@ -2611,7 +2630,14 @@ export function ConnectionCredentialForm({
     }
   };
 
-  const hasCredentials = Object.values(creds).some(v => !!v);
+  // "connect" unlocks once every non-optional field has a value. A field
+  // marked "(optional)" — e.g. OpenCode's config directory — is allowed to
+  // stay blank forever; the button must not sit permanently disabled just
+  // because the user accepted the default, or the field's own "optional"
+  // label would be a lie.
+  const missingRequiredField = fields.some(
+    (f) => !isOptionalField(f) && !(creds[f.key] || "").trim()
+  );
 
   return (
     <div className="space-y-3">
@@ -2661,7 +2687,7 @@ export function ConnectionCredentialForm({
       {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex gap-2">
         {!isSaved && (
-          <Button onClick={handleConnect} disabled={!hasCredentials || status === "connecting"} variant={status === "error" ? "outline" : "default"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          <Button onClick={handleConnect} disabled={missingRequiredField || status === "connecting"} variant={status === "error" ? "outline" : "default"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
             {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
              : status === "error" ? (<>retry</>)
              : (<><Check className="h-3 w-3" />connect</>)}
