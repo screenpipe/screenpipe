@@ -661,25 +661,25 @@ private struct ViewerOverrideButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: {
-            // Try Obsidian first for markdown — same logic as Rust's
-            // `open_note_path`. Falls through to NSWorkspace.open(URL).
-            let lower = path.lowercased()
-            if lower.hasSuffix(".md") || lower.hasSuffix(".markdown") {
-                if let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                   let obsidian = URL(string: "obsidian://open?path=\(encoded)") {
-                    if NSWorkspace.shared.open(obsidian) { return }
+        Text("↗")
+            .font(Brand.swiftUIMonoFont(size: 10))
+            .foregroundColor(isHovered ? .primary.opacity(0.9) : .primary.opacity(0.35))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // Try Obsidian first for markdown — same logic as Rust's
+                // `open_note_path`. Falls through to NSWorkspace.open(URL).
+                let lower = path.lowercased()
+                if lower.hasSuffix(".md") || lower.hasSuffix(".markdown") {
+                    if let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                       let obsidian = URL(string: "obsidian://open?path=\(encoded)") {
+                        if NSWorkspace.shared.open(obsidian) { return }
+                    }
                 }
-            }
-            let fileUrl = URL(fileURLWithPath: path)
-            NSWorkspace.shared.open(fileUrl)
-        }) {
-            Text("↗")
-                .font(Brand.swiftUIMonoFont(size: 10))
-                .foregroundColor(isHovered ? .primary.opacity(0.9) : .primary.opacity(0.35))
+                let fileUrl = URL(fileURLWithPath: path)
+                NSWorkspace.shared.open(fileUrl)
         }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
         .help("open in default app")
         .onHover { h in
             withAnimation(.linear(duration: Brand.animDuration)) { isHovered = h }
@@ -704,9 +704,8 @@ private func openLinkUrl(_ url: URL) {
     NSWorkspace.shared.open(url)
 }
 
-/// A clickable link rendered as a Button so it works in non-activating panels.
-/// SwiftUI Text with AttributedString links requires key focus to handle clicks,
-/// which non-activating panels don't provide. Button works without activation.
+/// A clickable link rendered with an explicit tap target so near-miss clicks
+/// work in the non-activating notification panel.
 @available(macOS 13.0, *)
 private struct LinkButton: View {
     let label: String
@@ -714,16 +713,16 @@ private struct LinkButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: {
-            openLinkUrl(url)
-        }) {
-            Text(label)
-                .font(Brand.swiftUIMonoFont(size: 11))
-                .foregroundColor(isHovered ? .primary.opacity(0.9) : .primary.opacity(0.7))
-                .underline()
-        }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
+        Text(label)
+            .font(Brand.swiftUIMonoFont(size: 11))
+            .foregroundColor(isHovered ? .primary.opacity(0.9) : .primary.opacity(0.7))
+            .underline()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                openLinkUrl(url)
+            }
         .onHover { h in
             withAnimation(.linear(duration: Brand.animDuration)) { isHovered = h }
         }
