@@ -4,6 +4,7 @@
 
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { format } from "date-fns";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -59,6 +60,7 @@ vi.mock("@/components/markdown", () => ({
 describe("daily summary helpers", () => {
 	it("builds a bounded evidence bundle", () => {
 		const oversized = "x".repeat(800);
+		const selectedDate = new Date(2026, 6, 25);
 		const context = JSON.parse(
 			buildDailySummaryContext(
 				{
@@ -93,7 +95,7 @@ describe("daily summary helpers", () => {
 						timestamp: "2026-07-25T10:30:00Z",
 					})),
 				},
-				new Date(2026, 6, 25),
+				selectedDate,
 			),
 		);
 
@@ -101,7 +103,7 @@ describe("daily summary helpers", () => {
 		expect(context.activity_snippets).toHaveLength(12);
 		expect(context.activity_snippets[0].text.length).toBeLessThanOrEqual(480);
 		expect(context.total_active_minutes).toBe(124);
-		expect(context.timezone_offset).toBe("-07:00");
+		expect(context.timezone_offset).toBe(format(selectedDate, "xxx"));
 		expect(context.top_windows[0].site).toBe("docs.example.com");
 		expect(JSON.stringify(context)).not.toContain("id=secret");
 		expect(context.edited_files[0].path).toBe("…/screenpipe/src/daily-summary.ts");
