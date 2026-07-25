@@ -7,12 +7,17 @@
  *
  * Listens on the agent-event bus for pipe-sourced events that aren't
  * being actively watched (no foreground handler claimed them) and
- * persists each completed pipe execution as a `kind: "pipe-run"`
- * conversation alongside chats. Replaces the prior post-hoc
- * `pipeExecutionToConversation()` rendering path: instead of replaying
- * raw stdout from the executions table every time the user opens a
- * pipe, we materialize a real conversation file at the moment the run
- * finishes.
+ * appends each completed pipe execution to that pipe's single thread
+ * conversation (`pipe:<name>`, see `lib/pipe-thread.ts`). Replaces the
+ * prior post-hoc `pipeExecutionToConversation()` rendering path:
+ * instead of replaying raw stdout from the executions table every time
+ * the user opens a pipe, we materialize a real conversation file at the
+ * moment the run finishes.
+ *
+ * One thread per pipe, not one conversation per run: a pipe on a
+ * 5-minute schedule used to mint 288 sidebar rows a day. Each run now
+ * appends a segment behind a `run #<id> · …` divider and the thread is
+ * capped at the most recent runs.
  *
  * Why a separate module from the chat router:
  *   - The chat router skips pipe-sourced envelopes (`source !== "pi"`)
@@ -40,10 +45,12 @@ import type { AgentEventEnvelope, AgentInnerEvent } from "./types";
 import { parsePipeSessionId } from "./types";
 import {
   conversationMetaFromJson,
+  loadConversationFile,
   saveConversationFile,
 } from "@/lib/chat-storage";
 import { parsePipeNdjsonToMessages } from "@/lib/pipe-ndjson-to-chat";
-import type { ChatConversation, ChatMessage } from "@/lib/hooks/use-settings";
+import { appendRunSegment, pipeThreadId } from "@/lib/pipe-thread";
+import type { ChatMessage } from "@/lib/hooks/use-settings";
 
 /** Per-pipe-sid recording state. We accumulate raw NDJSON serializations
  *  rather than partial state because the existing parser is the most
@@ -60,6 +67,11 @@ interface PipeRunBuffer {
   firstEventAt: number;
   /** ms since epoch of the most recent event — used as `updatedAt`. */
   lastEventAt: number;
+  /** How the run was triggered, when the runtime tells us. Rendered into
+   *  the run divider. */
+  trigger?: string;
+  /** Terminal status, derived from the terminal event. */
+  status?: string;
 }
 
 const buffers = new Map<string, PipeRunBuffer>();
@@ -122,6 +134,7 @@ async function handlePipeEnvelope(envelope: AgentEventEnvelope): Promise<void> {
       lines: [],
       firstEventAt: Date.now(),
       lastEventAt: Date.now(),
+      trigger: extractTrigger(inner),
     };
     buffers.set(sid, buf);
   } else {
@@ -129,6 +142,7 @@ async function handlePipeEnvelope(envelope: AgentEventEnvelope): Promise<void> {
     // before, prefer the wire value over our wall-clock fallback.
     const fromWire = extractStartedAt(inner);
     if (fromWire && buf.startedAt !== fromWire) buf.startedAt = fromWire;
+    if (!buf.trigger) buf.trigger = extractTrigger(inner);
   }
 
   // Append the raw NDJSON line. We re-stringify to ensure deterministic
@@ -143,8 +157,31 @@ async function handlePipeEnvelope(envelope: AgentEventEnvelope): Promise<void> {
   buf.lastEventAt = Date.now();
 
   if (typeof inner.type === "string" && TERMINAL_EVENT_TYPES.has(inner.type)) {
+    buf.status = extractTerminalStatus(inner);
     await finalizeBuffer(sid, buf);
   }
+}
+
+function extractTrigger(inner: AgentInnerEvent): string | undefined {
+  const candidate =
+    (inner as any).trigger ??
+    (inner as any).trigger_type ??
+    (inner as any).triggerType;
+  if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  return undefined;
+}
+
+/** The pipe runtime reports failure either as an explicit status or as a
+ *  non-zero exit code on `pipe_done`. Default to completed — a run that
+ *  reached a terminal event without complaining is a success. */
+function extractTerminalStatus(inner: AgentInnerEvent): string {
+  const status = (inner as any).status;
+  if (typeof status === "string" && status.trim()) return status.trim();
+  const exitCode = (inner as any).exit_code ?? (inner as any).exitCode;
+  if (typeof exitCode === "number" && exitCode !== 0) return "failed";
+  const error = (inner as any).error ?? (inner as any).error_message;
+  if (typeof error === "string" && error.trim()) return "failed";
+  return "completed";
 }
 
 function extractStartedAt(inner: AgentInnerEvent): string | undefined {
@@ -161,15 +198,26 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
   // no-op rather than re-saving.
   buffers.delete(sid);
 
-  // If the chat-store already has a session record for this sid, the
+  // If the chat-store already has a session record for this run, the
   // panel was the foreground owner at some point during the run — its
   // persistence pipeline (chat-store → saveConversationFile via the
   // background-router) is the authoritative writer. Skipping here
   // avoids clobbering the panel's view with the recorder's
   // recorder-only NDJSON replay.
+  //
+  // Two shapes count as "owned": the legacy per-run session id, and the
+  // pipe thread when it is live-watching THIS execution (the
+  // open_pipe_chat path re-keys the watch onto `pipe:<name>`).
+  const threadId = pipeThreadId(buf.pipeName);
   try {
     const { useChatStore } = await import("@/lib/stores/chat-store");
-    if (useChatStore.getState().sessions[sid]) {
+    const sessions = useChatStore.getState().sessions;
+    if (sessions[sid]) return;
+    const thread = sessions[threadId];
+    if (
+      thread?.kind === "pipe-watch" &&
+      thread.pipeContext?.executionId === buf.executionId
+    ) {
       return;
     }
   } catch {
@@ -201,28 +249,31 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
   );
   if (!hasAssistantContent) return;
 
-  const conv: ChatConversation = {
-    id: sid,
-    title: `${buf.pipeName} #${buf.executionId}`,
-    titleSource: "user",
-    messages,
-    createdAt: buf.firstEventAt,
-    updatedAt: buf.lastEventAt,
-    // Unwatched completed pipe runs should surface as unread until opened.
-    lastContentAt: buf.lastEventAt,
-    lastViewedAt: 0,
-    kind: "pipe-run",
-    pipeContext: {
-      pipeName: buf.pipeName,
+  // Read-modify-write the pipe's single thread. `appendRunSegment` is
+  // idempotent by execution id, so a duplicate terminal event (or a
+  // recorder/watch race) replaces the segment rather than doubling it.
+  const existing = await loadConversationFile(threadId);
+  const conv = appendRunSegment(existing, {
+    pipeName: buf.pipeName,
+    meta: {
       executionId: buf.executionId,
       startedAt: buf.startedAt,
+      finishedAt: buf.lastEventAt,
+      trigger: buf.trigger,
+      status: buf.status ?? "completed",
     },
-  };
+    messages,
+    now: buf.lastEventAt,
+  });
+  // Unwatched completed pipe runs surface as unread until opened. Preserve
+  // an already-read watermark so re-reading a thread the user just viewed
+  // doesn't re-light the dot for nothing.
+  conv.lastViewedAt = existing?.lastViewedAt ?? 0;
 
   try {
     await saveConversationFile(conv);
   } catch (e) {
-    console.warn("[pipe-run-recorder] save failed for", sid, e);
+    console.warn("[pipe-run-recorder] save failed for", threadId, e);
     return;
   }
 
@@ -240,7 +291,16 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
       useChatStore.getState().actions.upsert(sessionRecordFromMeta(meta));
     }
   } catch (e) {
-    console.warn("[pipe-run-recorder] sidebar upsert failed for", sid, e);
+    console.warn("[pipe-run-recorder] sidebar upsert failed for", threadId, e);
+  }
+
+  // Mirror into the other webview's in-memory sidebar (the chat window and
+  // the home window keep separate zustand stores).
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit("chat-conversation-saved", { id: threadId });
+  } catch {
+    // best effort — the next hydrate repairs the row
   }
 }
 

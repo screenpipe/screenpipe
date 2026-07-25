@@ -62,7 +62,6 @@ import {
   conversationMetaFromJson,
   deleteConversationFile,
   loadConversationFile,
-  saveConversationFile,
   updateConversationFlags,
 } from "@/lib/chat-storage";
 import { commands } from "@/lib/utils/tauri";
@@ -105,13 +104,14 @@ import { toast } from "@/components/ui/use-toast";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { localFetch } from "@/lib/api";
-import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import {
-  buildPipeExecutionHistoryPage,
-  isTerminalPipeExecutionStatus,
-} from "@/lib/pipe-execution-status";
-import { parsePipeSessionId, pipeSessionId } from "@/lib/events/types";
-import type { ChatConversation } from "@/lib/hooks/use-settings";
+  buildPipeSidebarEntries,
+  parsePipeThreadId,
+  type PipeActivityRow,
+  type PipeSidebarEntry,
+} from "@/lib/pipe-thread";
+import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
+import { parsePipeSessionId } from "@/lib/events/types";
 import {
   PIPES_SIDEBAR_COLLAPSED_EVENT,
   PIPES_SIDEBAR_COLLAPSED_KEY,
@@ -119,10 +119,8 @@ import {
 import {
   applySidebarRecentsCap,
   buildSidebarRecentsSections,
-  latestSidebarPipeRunTimes,
   listMoveTargetGroups,
   recurringPipeGroupKeys,
-  visibleSidebarPipeNames,
   sessionGroupKey,
   type SidebarItem,
   type SidebarRecentsSection,
@@ -131,75 +129,8 @@ import {
 
 /** Max top-level rows shown in recents. Pipes use the authoritative inventory. */
 const SIDEBAR_CAP = 15;
-const PIPE_RUNS_PER_GROUP = 10;
 const PIPE_INVENTORY_PAGE_SIZE = 20;
 const DELETED_PIPE_EXECUTIONS_KEY = "screenpipe:deleted-pipe-executions";
-
-interface SidebarPipeInventoryItem {
-  name: string;
-  executionCount: number;
-  latestExecutionId: number;
-  lastRun: string | null;
-}
-
-interface SidebarPipeExecution {
-  id: number;
-  pipe_name: string;
-  status: string;
-  started_at: string | null;
-  finished_at: string | null;
-  stdout: string;
-  stderr: string;
-  error_message: string | null;
-}
-
-function pipeExecutionConversation(execution: SidebarPipeExecution): ChatConversation {
-  const conversation = pipeExecutionToConversation(
-    execution.pipe_name,
-    execution.id,
-    execution.stdout || execution.stderr || "",
-    execution.started_at,
-  );
-  const startedAt = execution.started_at ?? execution.finished_at ?? new Date().toISOString();
-  const finishedAtMs = execution.finished_at
-    ? new Date(execution.finished_at).getTime()
-    : conversation.updatedAt;
-
-  conversation.id = pipeSessionId(execution.pipe_name, execution.id);
-  conversation.kind = "pipe-run";
-  conversation.titleSource = "user";
-  conversation.pipeContext = {
-    pipeName: execution.pipe_name,
-    executionId: execution.id,
-    startedAt,
-  };
-  conversation.updatedAt = Number.isFinite(finishedAtMs)
-    ? finishedAtMs
-    : conversation.updatedAt;
-
-  if (conversation.messages.length === 0) {
-    const detail =
-      execution.error_message?.trim() ||
-      execution.stderr?.trim() ||
-      `pipe execution ${execution.status}`;
-    conversation.messages = [{
-      id: `pipe-execution-status-${execution.id}`,
-      role: "assistant",
-      content: detail,
-      timestamp: conversation.updatedAt,
-    }];
-  }
-  return conversation;
-}
-
-function mergePipeRunRecords(
-  existing: SessionRecord[],
-  incoming: SessionRecord[],
-): SessionRecord[] {
-  const merged = new Map(existing.map((record) => [record.id, record]));
-  for (const record of incoming) merged.set(record.id, record);
-  return Array.from(merged.values()).sort((a, b) => b.updatedAt - a.updatedAt);
-}
 
 function readDeletedPipeExecutionIds(): Set<string> {
   try {
@@ -427,6 +358,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         (event) => {
           const id = event.payload?.id;
           if (!id) return;
+          // A re-saved conversation is alive again — a deleted pipe thread
+          // that runs once more must come back rather than stay tombstoned.
+          if (deletedPipeExecutionIdsRef.current.delete(id)) {
+            persistDeletedPipeExecutionIds(deletedPipeExecutionIdsRef.current);
+          }
           void syncConversationFromDisk(id);
         }
       );
@@ -512,38 +448,16 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     PIPES_SIDEBAR_COLLAPSED_KEY,
     true
   );
-  const [pipeInventory, setPipeInventory] = useState<SidebarPipeInventoryItem[]>([]);
+  const [pipeInventory, setPipeInventory] = useState<PipeActivityRow[]>([]);
   const [pipeInventoryLoaded, setPipeInventoryLoaded] = useState(false);
   const [pipeInventoryAuthoritative, setPipeInventoryAuthoritative] = useState(false);
   const [pipeInventoryLoadingMore, setPipeInventoryLoadingMore] = useState(false);
   const [pipeInventoryHasMore, setPipeInventoryHasMore] = useState(false);
   const pipeInventoryCursorRef = useRef<number | null>(null);
-  const [loadedPipeRuns, setLoadedPipeRuns] = useState<Record<string, SessionRecord[]>>({});
-  const [pipeRunCursors, setPipeRunCursors] = useState<Record<string, number | null>>({});
-  const [pipeRunsHaveMore, setPipeRunsHaveMore] = useState<Record<string, boolean>>({});
-  const [loadingPipeRuns, setLoadingPipeRuns] = useState<Set<string>>(() => new Set());
-  const executionConversationsRef = useRef<Map<string, ChatConversation>>(new Map());
-  const executionMetadataRef = useRef<Map<string, SidebarPipeExecution>>(new Map());
-  const syntheticExecutionIdsRef = useRef<Set<string>>(new Set());
   const pipeDataGenerationRef = useRef(0);
 
   const releasePipeData = useCallback(() => {
     pipeDataGenerationRef.current += 1;
-    const activeId = useChatStore.getState().currentId;
-    const storeActions = useChatStore.getState().actions;
-    for (const id of syntheticExecutionIdsRef.current) {
-      if (id !== activeId) storeActions.drop(id);
-    }
-    syntheticExecutionIdsRef.current =
-      activeId && syntheticExecutionIdsRef.current.has(activeId)
-        ? new Set([activeId])
-        : new Set();
-    executionConversationsRef.current.clear();
-    executionMetadataRef.current.clear();
-    setLoadedPipeRuns({});
-    setPipeRunCursors({});
-    setPipeRunsHaveMore({});
-    setLoadingPipeRuns(new Set());
     setPipeInventory([]);
     setPipeInventoryLoaded(false);
     setPipeInventoryAuthoritative(false);
@@ -576,7 +490,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       const payload = await response.json();
       if (generation !== pipeDataGenerationRef.current) return;
       if (!Array.isArray(payload.data)) return;
-      const page: SidebarPipeInventoryItem[] = [];
+      const page: PipeActivityRow[] = [];
       for (const pipe of payload.data) {
         const name = pipe?.pipe_name;
         if (typeof name !== "string") continue;
@@ -587,6 +501,9 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
           latestExecutionId:
             typeof pipe.latest_execution_id === "number" ? pipe.latest_execution_id : 0,
           lastRun: typeof pipe.last_run_at === "string" ? pipe.last_run_at : null,
+          // Queued/running rows are returned on purpose — the entry shows a
+          // spinner instead of pretending the pipe is idle.
+          status: typeof pipe.status === "string" ? pipe.status : null,
         });
       }
       setPipeInventory((previous) => {
@@ -622,144 +539,52 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     pipesCollapsed || pipeInventory.length > PIPE_INVENTORY_PAGE_SIZE ? null : 15_000,
   );
 
-  const loadPipeRuns = useCallback(async (pipeName: string, append = false) => {
-    if (loadingPipeRuns.has(pipeName) || (!append && loadedPipeRuns[pipeName])) return;
-    const generation = pipeDataGenerationRef.current;
-    setLoadingPipeRuns((prev) => new Set(prev).add(pipeName));
-    try {
-      const params = new URLSearchParams({
-        limit: String(PIPE_RUNS_PER_GROUP + 1),
-        include_output: "false",
-      });
-      const cursor = pipeRunCursors[pipeName];
-      if (append && cursor != null) params.set("before_id", String(cursor));
-      const response = await localFetch(
-        `/pipes/${encodeURIComponent(pipeName)}/executions?${params.toString()}`,
-      );
-      if (!response.ok) throw new Error(`failed to load runs: ${response.status}`);
-      const payload = await response.json();
-      if (generation !== pipeDataGenerationRef.current) return;
-      if (!Array.isArray(payload.data)) throw new Error("invalid executions response");
-      const executions = payload.data as SidebarPipeExecution[];
-      const {
-        visibleExecutions: terminalExecutions,
-        hasMore,
-        nextCursor,
-      } = buildPipeExecutionHistoryPage(executions, PIPE_RUNS_PER_GROUP);
-      const visibleExecutions = terminalExecutions.filter(
-        (execution) =>
-          !deletedPipeExecutionIdsRef.current.has(
-            pipeSessionId(execution.pipe_name, execution.id),
-          ),
-      );
-      const candidates = await Promise.all(visibleExecutions.map(async (execution) => {
-        const sessionId = pipeSessionId(execution.pipe_name, execution.id);
-        executionMetadataRef.current.set(sessionId, execution);
-        const savedConversation = await loadConversationFile(sessionId);
-        const conversation = savedConversation ?? pipeExecutionConversation(execution);
-        if (!savedConversation) syntheticExecutionIdsRef.current.add(sessionId);
-        const meta = conversationMetaFromJson(conversation);
-        if (!meta) return null;
-        executionConversationsRef.current.set(conversation.id, conversation);
-        return {
-          record: sessionRecordFromMeta(meta),
-          belongsInPipeGroup: !meta.hidden && !meta.pinned,
-        };
-      }));
-      const storeActions = useChatStore.getState().actions;
-      for (const candidate of candidates) {
-        if (candidate) storeActions.upsert(candidate.record);
-      }
-      const records = candidates.flatMap((candidate) =>
-        candidate?.belongsInPipeGroup ? [candidate.record] : [],
-      );
-      setLoadedPipeRuns((prev) => ({
-        ...prev,
-        [pipeName]: append
-          ? mergePipeRunRecords(prev[pipeName] ?? [], records)
-          : records,
-      }));
-      setPipeRunsHaveMore((prev) => ({ ...prev, [pipeName]: hasMore }));
-      setPipeRunCursors((prev) => ({
-        ...prev,
-        [pipeName]: nextCursor,
-      }));
-    } catch {
-      if (generation === pipeDataGenerationRef.current) {
-        if (!append) setLoadedPipeRuns((prev) => ({ ...prev, [pipeName]: [] }));
-        setPipeRunsHaveMore((prev) => ({ ...prev, [pipeName]: false }));
-      }
-    } finally {
-      if (generation === pipeDataGenerationRef.current) {
-        setLoadingPipeRuns((prev) => {
-          const next = new Set(prev);
-          next.delete(pipeName);
-          return next;
-        });
-      }
-    }
-  }, [loadedPipeRuns, loadingPipeRuns, pipeRunCursors]);
+  // Store sessions, read reactively so a thread's unread dot updates when
+  // an unwatched run finishes and the recorder upserts the row.
+  const storeSessions = useChatStore((s) => s.sessions);
 
-  // Live session ids from the store — used to discard stale loadedPipeRuns
-  // entries after a pipe run is deleted.
-  const storeSessionIds = useChatStore((s) => s.sessions);
-
-  const pipeItems = useMemo(() => {
-    const sessionsByPipe = new Map<string, SessionRecord[]>();
-    for (const session of pipes) {
-      const name = session.pipeContext?.pipeName;
-      if (!name) continue;
-      const bucket = sessionsByPipe.get(name);
-      if (bucket) bucket.push(session);
-      else sessionsByPipe.set(name, [session]);
-    }
-
-    const orderedNames = visibleSidebarPipeNames(pipeInventory, pipes);
-
-    return orderedNames.map((name) => {
-      // Keep a newly completed run visible before the activity inventory
-      // refreshes, while deduping the same saved row returned by both sources.
-      // Filter out sessions deleted from the store but still in the lazy cache.
-      const cached = (loadedPipeRuns[name] ?? []).filter((s) => {
-        const live = storeSessionIds[s.id];
-        const execution = executionMetadataRef.current.get(s.id);
-        // Drop deleted, pinned, or archived sessions from the cache —
-        // they either no longer exist or belong to a different section.
-        // Also hide a running row already cached before a status refresh.
-        return (
-          live &&
-          !live.pinned &&
-          !live.hidden &&
-          (!execution || isTerminalPipeExecutionStatus(execution.status))
-        );
-      });
-      const merged = [...(sessionsByPipe.get(name) ?? []), ...cached];
-      const seen = new Set<string>();
-      const sessions = merged.filter((session) => {
-        if (seen.has(session.id)) return false;
-        seen.add(session.id);
-        return true;
-      });
-      return {
-        kind: "group" as const,
-        key: `pipe:${name}`,
-        title: name,
-        sessions,
-      };
-    });
-  }, [pipeInventory, pipes, loadedPipeRuns, storeSessionIds]);
-
-  const pipeLastRuns = useMemo(
-    () => latestSidebarPipeRunTimes(pipeInventory, pipes),
-    [pipeInventory, pipes],
+  // Realtime liveness. `/pipes/activity` already reports queued/running,
+  // but it only refreshes every 15s — the bus flips the spinner on the
+  // frame `pipe_queued` lands. Poll is the self-heal, not the source.
+  const runningPipes = useRunningPipes();
+  const runningPipeNames = useMemo(
+    () => new Set(runningPipes.map((pipe) => pipe.pipeName)),
+    [runningPipes],
   );
 
-  // Auto-expand the pipes section when the current session is a pipe run
-  // so the highlighted row is visible. Only depends on currentId and the
-  // pipes list — reads collapse state imperatively to avoid re-fire loops.
+  // One entry per pipe that has ever run. The activity endpoint is the
+  // authority; threads already saved on disk are folded in so a pipe whose
+  // executions were pruned still has a readable chat.
+  const pipeEntries = useMemo<PipeSidebarEntry[]>(() => {
+    const rows: PipeActivityRow[] = [...pipeInventory];
+    const known = new Set(rows.map((row) => row.name));
+    for (const session of pipes) {
+      const name = parsePipeThreadId(session.id);
+      if (!name || known.has(name)) continue;
+      known.add(name);
+      rows.push({
+        name,
+        executionCount: 0,
+        latestExecutionId: session.pipeContext?.executionId ?? 0,
+        lastRun: new Date(session.updatedAt).toISOString(),
+        status: null,
+      });
+    }
+    return buildPipeSidebarEntries(rows, runningPipeNames).filter(
+      (entry) => !deletedPipeExecutionIdsRef.current.has(entry.threadId),
+    );
+    // deletedPipeExecutionIdsRef is a ref by design — deletions re-render
+    // through the store drop that accompanies them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeInventory, pipes, runningPipeNames]);
+
+  // Auto-expand the pipes section when the current session is a pipe
+  // thread so the highlighted entry is visible. A live run is keyed
+  // `kind: "pipe-watch"` and therefore absent from `pipes`, so match on the
+  // id shape too — otherwise "run now → open chat" leaves the section shut.
   useEffect(() => {
     if (!currentId) return;
-    if (pipes.some((s) => s.id === currentId)) {
+    if (parsePipeThreadId(currentId) || pipes.some((s) => s.id === currentId)) {
       setPipesCollapsed(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -814,7 +639,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     return set;
   });
   const toggleGroupExpanded = (key: string) => {
-    const wasExpanded = expandedGroups.has(key);
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       const expanded = next.has(key);
@@ -831,22 +655,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       } catch { /* ignore */ }
       return next;
     });
-    if (!wasExpanded && key.startsWith("pipe:")) {
-      void loadPipeRuns(key.slice("pipe:".length));
-    }
   };
-
-  // Restore lazy children only for activity rows currently visible. This keeps
-  // the collapsed section at zero work and bounds restart hydration to the
-  // current inventory page even if many old expand-state keys exist.
-  useEffect(() => {
-    if (pipesCollapsed) return;
-    for (const item of pipeItems) {
-      if (expandedGroups.has(item.key)) {
-        void loadPipeRuns(item.title);
-      }
-    }
-  }, [expandedGroups, loadPipeRuns, pipeItems, pipesCollapsed]);
 
   // Auto-expand the pipe group containing the current session so the
   // highlighted row is visible (e.g. after "open in chat" from Pipes).
@@ -870,10 +679,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   useEffect(() => {
     if (!pipeInventoryAuthoritative) return;
     try {
-      const validKeys = new Set([
-        ...recurringPipeGroupKeys(recents),
-        ...pipeItems.map((item) => item.key),
-      ]);
+      const validKeys = new Set(recurringPipeGroupKeys(recents));
       const toRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
@@ -884,7 +690,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       }
       for (const k of toRemove) localStorage.removeItem(k);
     } catch { /* ignore */ }
-  }, [recents, pipeItems, pipeInventoryAuthoritative]);
+  }, [recents, pipeInventoryAuthoritative]);
 
   // GC stale manual subsection collapse-state keys when sidebar groups are
   // renamed or disappear. Only titled subsections participate.
@@ -940,52 +746,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     [groupedSections, collapsedRecentsSections, recentsCap],
   );
 
-  const materializePipeExecution = async (
-    id: string,
-    metadata: SidebarPipeExecution,
-  ): Promise<boolean> => {
-    const existing = await loadConversationFile(id);
-    if (existing) return true;
-
-    let fullExecution: SidebarPipeExecution | undefined;
-    try {
-      const params = new URLSearchParams({
-        limit: "1",
-        before_id: String(metadata.id + 1),
-      });
-      const response = await localFetch(
-        `/pipes/${encodeURIComponent(metadata.pipe_name)}/executions?${params.toString()}`,
-      );
-      if (response.ok) {
-        const payload = await response.json();
-        fullExecution = Array.isArray(payload.data)
-          ? (payload.data as SidebarPipeExecution[])
-              .find((execution) => execution.id === metadata.id)
-          : undefined;
-      }
-    } catch {
-      // Report the same bounded failure below. Do not persist the metadata-only
-      // placeholder or it would mask the real output on future attempts.
-    }
-    if (
-      !fullExecution ||
-      !isTerminalPipeExecutionStatus(fullExecution.status)
-    ) {
-      toast({
-        title: "couldn't load pipe run",
-        description: "the execution output is temporarily unavailable",
-        variant: "destructive",
-      });
-      return false;
-    }
-
-    const conversation = pipeExecutionConversation(fullExecution);
-    executionConversationsRef.current.set(id, conversation);
-    await saveConversationFile(conversation);
-    syntheticExecutionIdsRef.current.delete(id);
-    return true;
-  };
-
   const handleSelect = async (id: string) => {
     setOpenConversationMenuId(null);
     // No early return for id === currentId. Two reasons:
@@ -996,31 +756,23 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     //      the page-level chat-load-conversation listener flip the
     //      view; standalone-chat skips the snapshot+swap when the id
     //      already matches its piSessionIdRef so there's no flicker.
-    const executionMetadata = executionMetadataRef.current.get(id);
-    if (
-      executionMetadata &&
-      !isTerminalPipeExecutionStatus(executionMetadata.status)
-    ) {
-      return;
-    }
-    if (
-      executionMetadata &&
-      !(await materializePipeExecution(id, executionMetadata))
-    ) {
-      return;
-    }
     actions.setCurrent(id);
     await emit("chat-load-conversation", { conversationId: id });
   };
 
+  /**
+   * Open a pipe's thread. Goes through `open_pipe_chat` rather than
+   * `chat-load-conversation` so the chat panel can attach a live watch when
+   * a run is in flight — clicking a spinning pipe should show the run
+   * streaming, not a stale transcript.
+   */
+  const handleSelectPipe = async (entry: PipeSidebarEntry) => {
+    setOpenConversationMenuId(null);
+    actions.setCurrent(entry.threadId);
+    await emit("open_pipe_chat", { pipeName: entry.name, execId: null });
+  };
+
   const handleArchive = async (id: string) => {
-    const executionMetadata = executionMetadataRef.current.get(id);
-    if (
-      executionMetadata &&
-      !(await materializePipeExecution(id, executionMetadata))
-    ) {
-      return;
-    }
     // Stop any active session first to avoid immediate row resurrection
     // from trailing stream events.
     commands.piAbort(id).catch(() => {});
@@ -1074,12 +826,13 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const handleDeleteConfirmed = async (id: string) => {
-    if (parsePipeSessionId(id)) {
+    // Tombstone both shapes: the legacy per-run id and the per-pipe thread.
+    // The activity endpoint keeps reporting the pipe after its chat is
+    // deleted, so without a tombstone the entry would reappear on the next
+    // 15s poll. A new run re-saves the file and clears the tombstone.
+    if (parsePipeSessionId(id) || parsePipeThreadId(id)) {
       deletedPipeExecutionIdsRef.current.add(id);
       persistDeletedPipeExecutionIds(deletedPipeExecutionIdsRef.current);
-      executionConversationsRef.current.delete(id);
-      executionMetadataRef.current.delete(id);
-      syntheticExecutionIdsRef.current.delete(id);
     }
     actions.drop(id);
     try {
@@ -1114,13 +867,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const handleTogglePin = async (id: string) => {
     const session = useChatStore.getState().sessions[id];
     if (!session) return;
-    const executionMetadata = executionMetadataRef.current.get(id);
-    if (
-      executionMetadata &&
-      !(await materializePipeExecution(id, executionMetadata))
-    ) {
-      return;
-    }
     const next = !session.pinned;
     actions.togglePinned(id);
     try {
@@ -1137,13 +883,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const handleRenameConfirmed = async (id: string, nextTitleRaw: string) => {
-    const executionMetadata = executionMetadataRef.current.get(id);
-    if (
-      executionMetadata &&
-      !(await materializePipeExecution(id, executionMetadata))
-    ) {
-      return;
-    }
     const nextTitle = nextTitleRaw.trim() || "untitled";
     actions.patch(id, { title: nextTitle, titleSource: "user" });
     try {
@@ -1169,13 +908,6 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         return false;
       }
       normalized = validation.normalized;
-    }
-    const executionMetadata = executionMetadataRef.current.get(id);
-    if (
-      executionMetadata &&
-      !(await materializePipeExecution(id, executionMetadata))
-    ) {
-      return false;
     }
     actions.patch(id, { sidebarGroup: normalized });
     try {
@@ -1323,40 +1055,24 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                 }
                 bodyClassName=""
               >
-                {!pipeInventoryLoaded && pipeItems.length === 0 ? (
+                {!pipeInventoryLoaded && pipeEntries.length === 0 ? (
                   <div className="px-2.5 py-2 space-y-1.5">
                     {Array.from({ length: 3 }).map((_, i) => (
                       <Skeleton key={i} className="h-6 w-full rounded-md" />
                     ))}
                   </div>
-                ) : pipeItems.length === 0 ? (
+                ) : pipeEntries.length === 0 ? (
                   <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
                     no pipe runs yet
                   </div>
-                ) : pipeItems.map((item) => (
-                    <PipeGroupRow
-                      key={item.key}
-                      item={item}
-                      lastRun={pipeLastRuns[item.title]}
-                      runsLoading={loadingPipeRuns.has(item.title)}
-                      runsLoaded={loadedPipeRuns[item.title] != null}
-                      hasMoreRuns={pipeRunsHaveMore[item.title] === true}
-                      expanded={expandedGroups.has(item.key)}
-                      onToggleExpand={() => toggleGroupExpanded(item.key)}
-                      onLoadMore={() => void loadPipeRuns(item.title, true)}
-                      currentId={currentId}
-                      queueDepths={queueDepths}
-                      onSelect={handleSelect}
-                      onArchive={handleArchive}
-                      onUnarchive={handleUnarchive}
+                ) : pipeEntries.map((entry) => (
+                    <PipeThreadRow
+                      key={entry.threadId}
+                      entry={entry}
+                      isCurrent={entry.threadId === currentId}
+                      unread={storeSessions[entry.threadId]?.unread === true}
+                      onSelect={handleSelectPipe}
                       onDeleteRequest={setDeletingSessionId}
-                      onTogglePin={handleTogglePin}
-                      onRenameRequest={handleRenameRequest}
-                      onMoveToGroup={handleMoveToGroup}
-                      onNewGroupRequest={setNewGroupSessionId}
-                      existingGroups={existingGroups}
-                      openConversationMenuId={openConversationMenuId}
-                      setOpenConversationMenuId={setOpenConversationMenuId}
                     />
                 ))}
                 {pipeInventoryHasMore && (
@@ -1966,6 +1682,89 @@ function RecentsBody({
         );
       })}
     </>
+  );
+}
+
+/**
+ * One row per pipe in the PIPES section — the pipe's whole history is a
+ * single thread (`pipe:<name>`), so there is nothing to expand.
+ *
+ * Right-hand meta is the run state: a spinner while a run is queued or
+ * running (fed by the agent-event bus, so it lights up on `pipe_queued`
+ * rather than on the next 15s poll), otherwise the age of the last run.
+ */
+function PipeThreadRow({
+  entry,
+  isCurrent,
+  unread,
+  onSelect,
+  onDeleteRequest,
+}: {
+  entry: PipeSidebarEntry;
+  isCurrent: boolean;
+  unread: boolean;
+  onSelect: (entry: PipeSidebarEntry) => Promise<void> | void;
+  onDeleteRequest: (id: string | null) => void;
+}) {
+  const now = useMinuteTick(!entry.live && !!entry.lastRun);
+  const lastRunAge =
+    !entry.live && entry.lastRun
+      ? formatCompactAge(new Date(entry.lastRun).getTime(), now)
+      : null;
+  return (
+    <div data-testid={`pipe-entry-${entry.name}`}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            data-testid={`pipe-entry-button-${entry.name}`}
+            data-live={entry.live ? "true" : "false"}
+            onClick={() => void onSelect(entry)}
+            className={cn(
+              "group/pipe w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-left select-none",
+              "transition-colors",
+              isCurrent
+                ? "bg-muted/40 text-foreground"
+                : "text-muted-foreground hover:bg-muted/20",
+            )}
+            title={entry.name}
+          >
+            <span
+              className={cn(
+                "truncate flex-1 text-xs",
+                unread && !isCurrent && "text-foreground font-medium",
+              )}
+            >
+              {entry.name}
+            </span>
+            <span className="inline-flex items-center justify-end shrink-0 h-4 min-w-6">
+              {entry.live ? (
+                <span
+                  className="text-[10px] text-muted-foreground/80 animate-spin inline-block"
+                  aria-label="running"
+                  data-testid={`pipe-entry-spinner-${entry.name}`}
+                >
+                  ◌
+                </span>
+              ) : lastRunAge ? (
+                <span className="text-[10px] tabular-nums text-muted-foreground/60">
+                  {lastRunAge}
+                </span>
+              ) : null}
+            </span>
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-44">
+          <ContextMenuItem
+            className="text-destructive focus:text-destructive"
+            onSelect={() => onDeleteRequest(entry.threadId)}
+          >
+            <Trash2 className="mr-2 h-3.5 w-3.5" />
+            Delete thread
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    </div>
   );
 }
 

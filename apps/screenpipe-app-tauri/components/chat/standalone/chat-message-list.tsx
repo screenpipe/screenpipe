@@ -27,6 +27,7 @@ import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
+import { usePipeThreadScroll } from "./hooks/use-pipe-thread-scroll";
 
 function messageDate(timestamp: number): Date | null {
   const date = new Date(timestamp);
@@ -127,6 +128,9 @@ export function ChatMessageList({
   onAskUserReply,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
+  // Pipe threads: honour "open this specific run" by scrolling to its divider.
+  usePipeThreadScroll();
+
   return (
     <>
       <AnimatePresence mode="popLayout">

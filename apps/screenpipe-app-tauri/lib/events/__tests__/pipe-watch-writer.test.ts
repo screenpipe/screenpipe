@@ -281,6 +281,91 @@ describe("pipe-watch-writer: agent_end takes precedence", () => {
   });
 });
 
+describe("pipe-watch-writer: per-pipe thread routing", () => {
+  const THREAD = "pipe:my-pipe";
+
+  function seedThreadWatch(executionId: number, messages: any[] = []) {
+    useChatStore.getState().actions.upsert({
+      id: THREAD,
+      title: "my-pipe",
+      preview: "",
+      status: "streaming",
+      messageCount: messages.length,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      pinned: false,
+      unread: false,
+      kind: "pipe-watch",
+      pipeContext: { pipeName: "my-pipe", executionId },
+      messages,
+      isLoading: true,
+      isStreaming: true,
+    } as any);
+  }
+
+  it("routes `pipe:<name>:<execId>` events into the watched thread", () => {
+    seedThreadWatch(42);
+    expect(__testing.resolveWatchTargetSessionId(SID)).toBe(THREAD);
+    __testing.inject(env({ type: "text_delta", delta: "live output" }));
+    const messages = useChatStore.getState().sessions[THREAD]!.messages! as any[];
+    expect(messages.map((m) => m.content)).toEqual(["live output"]);
+  });
+
+  it("ignores a run the thread is not watching", () => {
+    // Another execution of the same pipe streaming in the background must
+    // not write into the run the user has open.
+    seedThreadWatch(41);
+    expect(__testing.resolveWatchTargetSessionId(SID)).toBeNull();
+    __testing.inject(env({ type: "text_delta", delta: "other run" }));
+    expect(useChatStore.getState().sessions[THREAD]!.messages ?? []).toHaveLength(0);
+  });
+
+  it("prefers the legacy per-run session when one exists", () => {
+    seedPipeWatchSession();
+    seedThreadWatch(42);
+    expect(__testing.resolveWatchTargetSessionId(SID)).toBe(SID);
+  });
+
+  it("keeps earlier run segments when agent_end settles the current run", () => {
+    seedThreadWatch(42, [
+      { id: "pipe-run-divider-41", role: "assistant", content: "run #41", timestamp: 1 },
+      { id: "old-1", role: "assistant", content: "previous run output", timestamp: 2 },
+      { id: "pipe-run-divider-42", role: "assistant", content: "run #42", timestamp: 3 },
+    ]);
+    __testing.inject(env({ type: "text_delta", delta: "draft" }));
+    __testing.inject(
+      env({
+        type: "agent_end",
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+        ],
+      }),
+    );
+    const messages = useChatStore.getState().sessions[THREAD]!.messages! as any[];
+    expect(messages.map((m) => m.content)).toEqual([
+      "run #41",
+      "previous run output",
+      "run #42",
+      "final answer",
+    ]);
+  });
+
+  it("still replaces everything for a legacy dividerless session", () => {
+    seedPipeWatchSession();
+    __testing.inject(env({ type: "text_delta", delta: "draft" }));
+    __testing.inject(
+      env({
+        type: "agent_end",
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+        ],
+      }),
+    );
+    const messages = useChatStore.getState().sessions[SID]!.messages! as any[];
+    expect(messages.map((m) => m.content)).toEqual(["final answer"]);
+  });
+});
+
 describe("pipe-watch-writer: regression — switch-away preserves messages", () => {
   it("does not lose prior messages when toggling currentId", () => {
     // Reproduces the user's reported flow: stream multiple turns, then

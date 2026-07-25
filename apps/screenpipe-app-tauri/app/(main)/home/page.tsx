@@ -847,7 +847,14 @@ function HomeContent() {
     })();
   });
 
-  // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
+  // Opening a pipe's thread (run-now toast, previous-runs row, sidebar
+  // entry) has to flip the view to chat — the chat panel handles the
+  // conversation swap, but the user may be sitting on the Pipes page.
+  // `watch_pipe` is the legacy name for the same intent; both are handled
+  // end-to-end by `usePipeWatchSession`.
+  useTauriEvent<{ pipeName: string; execId?: number | null }>("open_pipe_chat", () => {
+    setActiveSection("home");
+  });
   useTauriEvent<{ pipeName: string; executionId: number }>("watch_pipe", () => {
     setActiveSection("home");
   });

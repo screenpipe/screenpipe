@@ -37,7 +37,9 @@ import {
   type Unregister,
 } from "./bus";
 import type { AgentEventEnvelope, AgentInnerEvent } from "./types";
+import { parsePipeSessionId } from "./types";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { isRunDividerMessage, pipeThreadId } from "@/lib/pipe-thread";
 
 let mounted = false;
 let mountPromise: Promise<() => void> | null = null;
@@ -72,17 +74,44 @@ function unmountPipeWatchWriter(): void {
   mountPromise = null;
 }
 
+/**
+ * Map a wire session id (`pipe:<name>:<execId>`) onto the chat-store
+ * session that should receive its events.
+ *
+ * Two shapes are watchable:
+ *   - the legacy per-run session, keyed by the wire id verbatim;
+ *   - the pipe *thread* (`pipe:<name>`), when the user opened it while
+ *     this execution is in flight. The thread carries the watched
+ *     execution id in `pipeContext`, so a second pipe run streaming
+ *     concurrently can never write into someone else's thread view.
+ *
+ * Returns null for anything not being watched — those runs flow through
+ * the pipe-run-recorder instead, which appends them at terminal time.
+ */
+export function resolveWatchTargetSessionId(sid: string): string | null {
+  const sessions = useChatStore.getState().sessions;
+  const direct = sessions[sid];
+  if (direct?.kind === "pipe-watch") return sid;
+  const parsed = parsePipeSessionId(sid);
+  if (!parsed) return null;
+  const threadId = pipeThreadId(parsed.pipeName);
+  const thread = sessions[threadId];
+  if (
+    thread?.kind === "pipe-watch" &&
+    thread.pipeContext?.executionId === parsed.executionId
+  ) {
+    return threadId;
+  }
+  return null;
+}
+
 async function handle(env: AgentEventEnvelope): Promise<void> {
   if (env.source !== "pipe") return;
   const sid = env.sessionId;
   if (!sid) return;
-  const session = useChatStore.getState().sessions[sid];
-  // Only pipe-watch sessions go through this writer. Unwatched pipes
-  // (no chat-store record, or kind != pipe-watch) flow through the
-  // pipe-run-recorder, which serializes raw NDJSON to a saved
-  // conversation at terminal time.
-  if (!session || session.kind !== "pipe-watch") return;
-  apply(sid, env.event);
+  const target = resolveWatchTargetSessionId(sid);
+  if (!target) return;
+  apply(target, env.event);
 }
 
 /** Ensure there's an in-flight assistant message to append content to.
@@ -361,11 +390,18 @@ function apply(sid: string, payload: AgentInnerEvent): void {
         }
       }
 
-      const notificationMarkers = ((useChatStore.getState().sessions[sid]?.messages as any[]) ?? [])
-        .filter(isNotificationMessage);
+      // In a pipe thread the session holds every prior run behind its own
+      // `run #N` divider. agent_end is authoritative only for the CURRENT
+      // run, so replace from the last divider onward and keep the history
+      // above it — otherwise finishing a run would erase the thread.
+      const existing = ((useChatStore.getState().sessions[sid]?.messages as any[]) ?? []);
+      const lastDividerIndex = findLastRunDividerIndex(existing);
+      const prefix = existing.slice(0, lastDividerIndex + 1);
+      const tail = existing.slice(lastDividerIndex + 1);
+      const notificationMarkers = tail.filter(isNotificationMessage);
       const merged = appendUniqueNotificationMessages(reconstructed, notificationMarkers);
       if (merged.length > 0) {
-        store.actions.setMessages(sid, merged as any);
+        store.actions.setMessages(sid, [...prefix, ...merged] as any);
       }
     }
     // Clean up the cached prompt — this session is done.
@@ -399,6 +435,15 @@ function notificationEventToMessage(payload: AgentInnerEvent): any {
     timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
     contentBlocks: [{ type: "text", text: content }],
   };
+}
+
+/** Index of the newest `run #N` divider, or -1 for a legacy single-run
+ *  session that has no dividers at all. */
+function findLastRunDividerIndex(messages: any[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isRunDividerMessage(messages[i])) return i;
+  }
+  return -1;
 }
 
 function isNotificationMessage(message: any): boolean {
@@ -548,4 +593,6 @@ export const __testing = {
     void handle(env);
   },
   apply,
+  resolveWatchTargetSessionId,
+  findLastRunDividerIndex,
 };

@@ -66,7 +66,6 @@ import { MemoizedReactMarkdown } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
-import { NotificationBell } from "@/components/notification-bell";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 // --- Types ---
@@ -308,87 +307,55 @@ function normalizePipe(raw: any): any {
   };
 }
 
+/**
+ * The pipes surface. One page — the community store is a drill-in sub-view
+ * reached from the header's COMMUNITY button, not a sibling tab.
+ */
 export function PipeStoreView() {
-  // Track installed pipe count to auto-switch to Discover for new users
-  const [installedCount, setInstalledCount] = useState<number | null>(null);
+  const [view, setView] = useState<"pipes" | "community">("pipes");
 
-  useEffect(() => {
-    localFetch("/pipes")
-      .then((r) => r.json())
-      .then((data) => {
-        const list = Array.isArray(data) ? data : data.data || data.pipes || [];
-        setInstalledCount(list.length);
-      })
-      .catch(() => setInstalledCount(0));
+  const openCommunity = useCallback(() => {
+    posthog.capture("pipes_community_opened");
+    setView("community");
   }, []);
 
-  const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">("my-pipes");
-
-  // listen for tab switch events from empty state button
+  // Legacy event kept so older call sites ("browse the store" buttons, deep
+  // links) still land somewhere sensible after the tabs were removed.
   useEventListener("switch-pipes-tab", (e) => {
-    setActiveTab((e as CustomEvent<{ tab: "discover" | "my-pipes" }>).detail.tab);
+    const tab = (e as CustomEvent<{ tab: "discover" | "my-pipes" }>).detail?.tab;
+    if (tab === "discover") openCommunity();
+    else setView("pipes");
   });
 
   // Read ?tab= from URL after mount, then strip it so it doesn't persist
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("tab");
-    if (tab === "discover") setActiveTab("discover");
-    else if (tab === "my-pipes") setActiveTab("my-pipes");
+    if (tab === "discover") setView("community");
+    else if (tab === "my-pipes") setView("pipes");
     if (tab) {
       params.delete("tab");
       window.history.replaceState({}, "", `${window.location.pathname}?${params}`);
     }
   }, []);
 
-  // Once we know installed count, switch new users to discover
-  useEffect(() => {
-    if (installedCount !== null && installedCount === 0) {
-      const params = new URLSearchParams(window.location.search);
-      if (!params.get("tab")) setActiveTab("discover");
-    }
-  }, [installedCount]);
-
-  const tabs = [
-    { key: "my-pipes" as const, label: "My Pipes" },
-    { key: "discover" as const, label: "Discover" },
-  ];
-
-  return (
-    <div className="space-y-4">
-      {/* Tab bar */}
-      <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
-        {tabs.map(({ key, label }) => (
-          <button
-            key={key}
-            data-testid={`tab-${key}`}
-            onClick={() => setActiveTab(key)}
-            className={cn(
-              "pb-3 text-sm font-medium transition-colors duration-150 border-b-2 -mb-px",
-              activeTab === key
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {label}
-          </button>
-        ))}
-        {/* Notifications are pipe output, so the bell lives here rather
-            than in the global window chrome. mb-3 cancels the tabs'
-            pb-3 so the bell centers on the tab labels, not the row. */}
-        <div className="ml-auto mb-3">
-          <NotificationBell />
-        </div>
+  if (view === "community") {
+    return (
+      <div className="space-y-4" data-testid="pipes-community-view">
+        <button
+          data-testid="pipes-community-back"
+          onClick={() => setView("pipes")}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          pipes
+        </button>
+        <DiscoverView onInstalled={() => setView("pipes")} />
       </div>
+    );
+  }
 
-      {/* Tab content */}
-      {activeTab === "discover" ? (
-        <DiscoverView onInstalled={() => setActiveTab("my-pipes")} />
-      ) : (
-        <PipesSection />
-      )}
-    </div>
-  );
+  return <PipesSection onOpenCommunity={openCommunity} />;
 }
 
 // --- Discover View ---

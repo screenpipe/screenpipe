@@ -4,9 +4,17 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const saveSpy = vi.fn(async () => undefined);
+// `vi.mock` factories are hoisted above every top-level statement, so the
+// spies they close over must be created with `vi.hoisted` — a plain `const`
+// is still in its temporal dead zone when the factory runs.
+const { saveSpy, loadSpy } = vi.hoisted(() => ({
+  saveSpy: vi.fn(async () => undefined),
+  loadSpy: vi.fn(async () => null as any),
+}));
 vi.mock("@/lib/chat-storage", () => ({
   saveConversationFile: saveSpy,
+  loadConversationFile: loadSpy,
+  conversationMetaFromJson: () => null,
 }));
 
 vi.mock("@/lib/hooks/use-settings", async () => {
@@ -29,6 +37,8 @@ const env = (event: any): AgentEventEnvelope => ({
 
 beforeEach(() => {
   saveSpy.mockClear();
+  loadSpy.mockClear();
+  loadSpy.mockResolvedValue(null as any);
   __testing.reset();
 });
 
@@ -68,7 +78,7 @@ describe("pipe-run-recorder: buffering", () => {
 });
 
 describe("pipe-run-recorder: finalize on terminal event", () => {
-  it("saves a kind=pipe-run conversation on agent_end", async () => {
+  it("appends the run to the pipe's thread on agent_end", async () => {
     await __testing.inject(env({ type: "message_start", message: { role: "assistant" } }));
     await __testing.inject(
       env({
@@ -80,15 +90,58 @@ describe("pipe-run-recorder: finalize on terminal event", () => {
 
     expect(saveSpy).toHaveBeenCalledTimes(1);
     const arg = saveSpy.mock.calls[0]![0] as any;
-    expect(arg.id).toBe(SID);
+    // One conversation per pipe — no execution id in the id or the title.
+    expect(arg.id).toBe("pipe:my-pipe");
     expect(arg.kind).toBe("pipe-run");
+    expect(arg.title).toBe("my-pipe");
     expect(arg.pipeContext).toEqual(
       expect.objectContaining({ pipeName: "my-pipe", executionId: 42 }),
     );
-    expect(arg.title).toBe("my-pipe #42");
     expect(arg.lastContentAt).toBe(arg.updatedAt);
     expect(arg.lastViewedAt).toBe(0);
+    expect(arg.messages[0].id).toBe("pipe-run-divider-42");
+    expect(arg.messages[0].content).toContain("run #42");
     expect(arg.messages.some((m: any) => m.role === "assistant" && m.content?.includes("result"))).toBe(true);
+  });
+
+  it("keeps the previous run's segment when a second run finishes", async () => {
+    loadSpy.mockResolvedValue({
+      id: "pipe:my-pipe",
+      title: "my-pipe",
+      kind: "pipe-run",
+      createdAt: 1,
+      updatedAt: 1,
+      messages: [
+        { id: "pipe-run-divider-41", role: "assistant", content: "run #41", timestamp: 1 },
+        { id: "old", role: "assistant", content: "earlier output", timestamp: 2 },
+      ],
+    } as any);
+    await __testing.inject(env({ type: "message_start", message: { role: "assistant" } }));
+    await __testing.inject(
+      env({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "result" },
+      }),
+    );
+    await __testing.inject(env({ type: "agent_end" }));
+
+    const arg = saveSpy.mock.calls[0]![0] as any;
+    const ids = arg.messages.map((m: any) => m.id);
+    expect(ids.slice(0, 3)).toEqual(["pipe-run-divider-41", "old", "pipe-run-divider-42"]);
+  });
+
+  it("marks the divider failed when pipe_done reports a non-zero exit", async () => {
+    await __testing.inject(env({ type: "message_start", message: { role: "assistant" } }));
+    await __testing.inject(
+      env({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "boom" },
+      }),
+    );
+    await __testing.inject(env({ type: "pipe_done", exit_code: 1 }));
+
+    const arg = saveSpy.mock.calls[0]![0] as any;
+    expect(arg.messages[0].content).toContain("failed");
   });
 
   it("clears the buffer after finalize (idempotent)", async () => {

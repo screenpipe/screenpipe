@@ -50,10 +50,10 @@ export default defineConfig({
 			// fix in follow-ups. Don't add new entries without an owner.
 			//   - text-overlay.test.tsx: container.firstChild null + missing
 			//     "solid" underline on link blocks
-			//   - pipe-run-recorder.test.ts: vi.mock factory hoist issue
 			//   - use-frame-ocr-data.test.ts: fetch flow drifted
+			// (pipe-run-recorder.test.ts is fixed — the vi.mock factory hoist
+			//  issue was a TDZ read of a plain `const`; it uses `vi.hoisted` now.)
 			"components/__tests__/text-overlay.test.tsx",
-			"lib/events/__tests__/pipe-run-recorder.test.ts",
 			"lib/hooks/__tests__/use-frame-ocr-data.test.ts",
 		],
 	},
