@@ -12,20 +12,32 @@ export function PipeFilterTabs({
   value,
   onChange,
   counts,
+  showCounts = true,
   className,
 }: {
   value: PipeStatusFilter;
   onChange: (filter: PipeStatusFilter) => void;
   counts?: Partial<Record<PipeStatusFilter, number>>;
+  /**
+   * Counts are the first thing to go when the toolbar is squeezed: in split
+   * mode `starred (1)` next to `219` is what physically collided with the
+   * action buttons. The filters themselves must always stay reachable.
+   */
+  showCounts?: boolean;
   className?: string;
 }) {
   return (
     <div
-      className={cn("flex shrink-0 items-center gap-4", className)}
+      // `min-w-0` + horizontal scroll: more filters must degrade to scrolling,
+      // never to overlapping whatever sits to the right of the toolbar.
+      className={cn(
+        "flex min-w-0 items-center gap-4 overflow-x-auto scrollbar-hide",
+        className,
+      )}
       data-testid="pipe-filters"
     >
       {PIPE_STATUS_FILTERS.map((filter) => {
-        const count = counts?.[filter];
+        const count = showCounts ? counts?.[filter] : undefined;
         return (
           <button
             key={filter}
@@ -34,7 +46,7 @@ export function PipeFilterTabs({
             aria-pressed={value === filter}
             onClick={() => onChange(filter)}
             className={cn(
-              "border-b pb-1 font-mono text-[12.5px] lowercase tracking-wider transition-colors duration-150",
+              "shrink-0 whitespace-nowrap border-b pb-1 font-mono text-[12.5px] lowercase tracking-wider transition-colors duration-150",
               value === filter
                 ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",

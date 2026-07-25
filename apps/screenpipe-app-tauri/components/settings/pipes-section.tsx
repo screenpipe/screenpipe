@@ -832,20 +832,29 @@ export function pipeExecutionCompletedBeforeContinueError(exec: PipeExecutionSta
   );
 }
 
-/** Primary + fallback AI preset selector for a pipe. */
-function PipePresetSelector({
-  pipe,
-  setPipes,
-  fetchPipes,
-  pendingConfigSaves,
-  apiBase,
-}: {
+interface PipePresetProps {
   pipe: { config: PipeConfig };
   setPipes: React.Dispatch<React.SetStateAction<any[]>>;
   fetchPipes: () => void;
   pendingConfigSaves: React.MutableRefObject<Record<string, Promise<void>>>;
   apiBase: string;
-}) {
+}
+
+/**
+ * Read/write core for a pipe's primary + fallback AI presets.
+ *
+ * The two controls no longer live in one box: the primary preset is the VALUE
+ * of the `ai preset` settings row (which already names it — the old widget's
+ * own "primary ai preset" caption was the second label for the same control),
+ * and the fallback affordance hangs under the group.
+ */
+function usePipePresets({
+  pipe,
+  setPipes,
+  fetchPipes,
+  pendingConfigSaves,
+  apiBase,
+}: PipePresetProps) {
   const presetList: string[] = Array.isArray(pipe.config.preset)
     ? pipe.config.preset
     : pipe.config.preset
@@ -855,7 +864,6 @@ function PipePresetSelector({
   // "auto" is a legacy/special value meaning "use default" — treat as no selection
   const primaryPreset = presetList[0] && presetList[0] !== "auto" ? presetList[0] : null;
   const fallbackPreset = presetList[1] && presetList[1] !== "auto" ? presetList[1] : null;
-  const [showFallback, setShowFallback] = useState(!!fallbackPreset);
 
   const savePresets = (primary: string | null, fallback: string | null) => {
     const pipeName = pipe.config.name;
@@ -889,54 +897,68 @@ function PipePresetSelector({
     pendingConfigSaves.current[pipeName] = savePromise;
   };
 
+  return { primaryPreset, fallbackPreset, savePresets };
+}
+
+/** The `ai preset` row's VALUE — a compact select, no caption of its own. */
+function PipePresetPrimary(props: PipePresetProps) {
+  const { primaryPreset, fallbackPreset, savePresets } = usePipePresets(props);
   return (
-    <div className="space-y-2">
-      <div>
-        <Label className="text-xs">primary ai preset</Label>
+    <div className="w-[210px] max-w-full" data-testid="pipe-preset-primary">
+      <AIPresetsSelector
+        compact
+        allowNone
+        controlledPresetId={primaryPreset}
+        onControlledSelect={(presetId) => savePresets(presetId || null, fallbackPreset)}
+      />
+    </div>
+  );
+}
+
+/** Group-level fallback affordance — rendered UNDER the details group. */
+function PipePresetFallback(props: PipePresetProps) {
+  const { primaryPreset, fallbackPreset, savePresets } = usePipePresets(props);
+  const [showFallback, setShowFallback] = useState(!!fallbackPreset);
+
+  if (!showFallback) {
+    return (
+      <button
+        data-testid="pipe-preset-add-fallback"
+        className="text-[12px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+        onClick={() => setShowFallback(true)}
+      >
+        + add fallback preset
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full" data-testid="pipe-preset-fallback">
+      <div className="flex items-center justify-between gap-3">
+        <Label className="text-[12px] font-normal text-muted-foreground">
+          fallback ai preset
+        </Label>
+        <button
+          className="text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          onClick={() => {
+            setShowFallback(false);
+            savePresets(primaryPreset, null);
+          }}
+        >
+          remove
+        </button>
+      </div>
+      <div className="mt-1">
         <AIPresetsSelector
           compact
           allowNone
-          controlledPresetId={primaryPreset}
-          onControlledSelect={(presetId) =>
-            savePresets(presetId || null, fallbackPreset)
-          }
+          controlledPresetId={fallbackPreset}
+          onControlledSelect={(presetId) => savePresets(primaryPreset, presetId || null)}
         />
       </div>
-
-      {showFallback ? (
-        <div>
-          <div className="flex items-center justify-between">
-            <Label className="text-xs">fallback ai preset</Label>
-            <button
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                setShowFallback(false);
-                savePresets(primaryPreset, null);
-              }}
-            >
-              remove
-            </button>
-          </div>
-          <AIPresetsSelector
-            compact
-            allowNone
-            controlledPresetId={fallbackPreset}
-            onControlledSelect={(presetId) =>
-              savePresets(primaryPreset, presetId || null)
-            }
-          />
-          <p className="text-[10px] text-muted-foreground mt-1">
-            used when primary hits rate limit
-          </p>
-        </div>
-      ) : (
-        <button
-          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-          onClick={() => setShowFallback(true)}
-        >
-          + add fallback preset
-        </button>
-      )}
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        used when primary hits rate limit
+      </p>
     </div>
   );
 }
@@ -944,6 +966,25 @@ function PipePresetSelector({
 /** Compact label for a pipe's current schedule (structured config preferred). */
 function pipeScheduleLabel(config: PipeConfig): string {
   return describeSchedule(config.schedule_config ?? null, config.schedule);
+}
+
+/**
+ * One-line value for the `when to run` row: the schedule plus a count of the
+ * event triggers stacked on top of it. The row shows this instead of hosting
+ * the whole trigger builder inline.
+ */
+function pipeTriggerSummary(config: PipeConfig): string {
+  const parts: string[] = [];
+  if (pipeHasSchedule(config)) parts.push(pipeScheduleLabel(config));
+  const trigger = config.trigger;
+  const triggerCount =
+    (trigger?.events?.length ?? 0) +
+    (trigger?.sources?.length ?? 0) +
+    (trigger?.custom?.length ?? 0);
+  if (triggerCount > 0) {
+    parts.push(`${triggerCount} trigger${triggerCount === 1 ? "" : "s"}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "manual";
 }
 
 
@@ -2654,11 +2695,16 @@ export function PipesSection({
     </>
   );
 
+  const compactToolbar = layoutMode === "split";
+
+  // Split mode drops the counts: in a ~430px column `starred (1)` beside `219`
+  // is exactly what overran the action buttons. The filters keep their labels.
   const filterTabs = (
     <PipeFilterTabs
       value={statusFilter}
       onChange={selectStatusFilter}
       counts={filterCounts}
+      showCounts={!compactToolbar}
     />
   );
 
@@ -2677,8 +2723,6 @@ export function PipesSection({
       />
     </div>
   );
-
-  const compactToolbar = layoutMode === "split";
 
   // One wrapper so the toolbar owns its own rhythm instead of inheriting the
   // shell's uniform stack: 26px above the title, 18px title→search,
@@ -3049,6 +3093,9 @@ export function PipesSection({
 
             return (
               <PipeDetailPanel
+                // Remount per pipe so pane-local disclosure state (advanced,
+                // the schedule builder) never leaks across a selection change.
+                key={name}
                 pipeName={name}
                 enabled={selectedPipe.config.enabled}
                 isRunning={isRunning}
@@ -3075,13 +3122,24 @@ export function PipesSection({
                 saveError={saveErrors[name]}
                 presetSlot={
                   enterpriseManaged ? (
-                    <p className="font-mono text-[11px] text-muted-foreground">
+                    <p className="truncate font-mono text-[12px] text-muted-foreground">
                       {Array.isArray(selectedPipe.config.preset)
                         ? selectedPipe.config.preset[0]
                         : selectedPipe.config.preset || "organization default"}
                     </p>
                   ) : (
-                    <PipePresetSelector
+                    <PipePresetPrimary
+                      pipe={selectedPipe}
+                      setPipes={setPipes}
+                      fetchPipes={fetchPipes}
+                      pendingConfigSaves={pendingConfigSaves}
+                      apiBase={apiBase}
+                    />
+                  )
+                }
+                presetFooter={
+                  enterpriseManaged ? null : (
+                    <PipePresetFallback
                       pipe={selectedPipe}
                       setPipes={setPipes}
                       fetchPipes={fetchPipes}
@@ -3091,7 +3149,7 @@ export function PipesSection({
                   )
                 }
                 connectionsSlot={
-                  <div className="flex flex-wrap items-center gap-2">
+                  <>
                     {(selectedPipe.config.connections || []).map((connId) => {
                       const baseId = pipeConnectionLookupKey(connId);
                       const instanceName = pipeConnectionInstanceName(connId);
@@ -3154,7 +3212,13 @@ export function PipesSection({
                         </div>
                       );
                     })}
-                    <PipeConnectionPicker
+                    {(selectedPipe.config.connections || []).length === 0 && (
+                      <span className="font-mono text-[12px] text-muted-foreground">none</span>
+                    )}
+                  </>
+                }
+                connectionsFooter={
+                  <PipeConnectionPicker
                       availableConnections={availableConnections}
                       selectedConnections={selectedPipe.config.connections || []}
                       onAdd={(key) => {
@@ -3182,11 +3246,15 @@ export function PipesSection({
                         );
                       }}
                     />
-                  </div>
+                }
+                scheduleSummary={
+                  enterpriseManaged
+                    ? `${pipeScheduleLabel(selectedPipe.config)} · managed`
+                    : pipeTriggerSummary(selectedPipe.config)
                 }
                 scheduleSlot={
                   enterpriseManaged ? (
-                    <p className="font-mono text-[11px] text-muted-foreground">
+                    <p className="font-mono text-[12px] text-muted-foreground">
                       {pipeScheduleLabel(selectedPipe.config)} · managed by your organization
                     </p>
                   ) : (

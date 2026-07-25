@@ -65,15 +65,10 @@ export function PipesPageHeader({
       )}
     >
       {compact ? (
-        <div className="flex min-w-0 items-center gap-4">
-          {leading}
-          <span
-            data-testid="pipes-count"
-            className="truncate font-mono text-[12.5px] text-muted-foreground"
-          >
-            {pipeCountsLabel(total, active)}
-          </span>
-        </div>
+        // Compact toolbar = filters only. The counts line, the community
+        // button and the bell all fought the filter tabs for a ~430px column
+        // and lost by overlapping them; each one is reachable elsewhere.
+        <div className="flex min-w-0 flex-1 items-center">{leading}</div>
       ) : (
         <div className="min-w-0">
           <h2 className="text-2xl font-medium tracking-tight">pipes</h2>
@@ -94,29 +89,33 @@ export function PipesPageHeader({
 
       <div className="flex shrink-0 items-center gap-2">
         {actions}
-        <NotificationBell />
-        <Button
-          variant="outline"
-          size="sm"
-          data-testid="pipes-community-btn"
-          onClick={onOpenCommunity}
-          className="h-9 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
-        >
-          community
-        </Button>
+        {/* Bell and community are list-mode only — community lives on in the
+            `+ new pipe` menu as "start from a community pipe". */}
+        {!compact && <NotificationBell />}
+        {!compact && (
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="pipes-community-btn"
+            onClick={onOpenCommunity}
+            className="h-9 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
+          >
+            community
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               size="sm"
               data-testid="pipes-new-btn"
-              className="h-9 gap-1.5 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
+              className="h-9 shrink-0 gap-1.5 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
             >
               {creating ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
                 <Plus className="h-3 w-3" />
               )}
-              new pipe
+              {compact ? "new" : "new pipe"}
               <ChevronDown className="h-3 w-3 opacity-70" />
             </Button>
           </DropdownMenuTrigger>

@@ -25,6 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  SETTINGS_LABEL_CLASS,
+  SettingsCell,
   SettingsGroup,
   SettingsRow,
   SettingsRowAction,
@@ -76,9 +78,23 @@ export interface PipeDetailPanelProps {
   saveState?: "saving" | "saved" | "error";
   saveError?: string | null;
 
-  // reused widgets owned by the pipes page
+  // reused widgets owned by the pipes page.
+  //
+  // Slots are split into a compact `*Slot` (the row's right-hand VALUE) and an
+  // optional `*Footer` (a group-level affordance rendered below the box). A
+  // row never hosts a widget that titles itself — that is what produced two
+  // "when to run" headings and two "ai preset" headings in the same pane.
+  /** compact preset control — lives in the row's value column */
   presetSlot: React.ReactNode;
+  /** "+ add fallback preset" — rendered under the details group */
+  presetFooter?: React.ReactNode;
+  /** connection chips — the row's value column */
   connectionsSlot: React.ReactNode;
+  /** connection picker — rendered under the details group */
+  connectionsFooter?: React.ReactNode;
+  /** one-line summary of the current triggers, e.g. `every 1h` */
+  scheduleSummary: React.ReactNode;
+  /** the trigger/schedule builder, disclosed IN PLACE OF the `when to run` row */
   scheduleSlot: React.ReactNode;
 
   // frequency group
@@ -123,21 +139,13 @@ const TIMEOUT_OPTIONS = [
 ];
 
 /**
- * Standalone section caption — same uppercase mono treatment `SettingsGroup`
- * gives its label, for the sections that are NOT settings groups (prompt
- * editor, raw pipe.md, run history).
+ * Standalone section caption — same quiet sentence-case treatment
+ * `SettingsGroup` gives its label, for the sections that are NOT settings
+ * groups (raw pipe.md, disk logs). No mono, no uppercase, no wide tracking:
+ * a pane of shouting captions has no hierarchy at all.
  */
 function GroupLabel({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <p
-      className={cn(
-        "font-mono text-[11px] uppercase tracking-widest text-muted-foreground",
-        className,
-      )}
-    >
-      {children}
-    </p>
-  );
+  return <p className={cn(SETTINGS_LABEL_CLASS, className)}>{children}</p>;
 }
 
 /**
@@ -161,7 +169,10 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
     saveState,
     saveError,
     presetSlot,
+    presetFooter,
     connectionsSlot,
+    connectionsFooter,
+    scheduleSummary,
     scheduleSlot,
     notificationsEnabled,
     onNotificationsChange,
@@ -191,6 +202,9 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
 
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [logsOpen, setLogsOpen] = React.useState(false);
+  // The schedule builder is disclosed IN PLACE OF the `when to run` row, so
+  // exactly one element ever names the setting.
+  const [scheduleOpen, setScheduleOpen] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
   useInterval(() => setNow(Date.now()), isRunning ? 1000 : null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -205,6 +219,129 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
     !!optimisticRun &&
     (optimisticRun.execId == null || !liveExecutionIds.has(optimisticRun.execId)) &&
     liveExecutionIds.size === 0;
+
+  // Rendered LAST in the pane (see the section order below) but declared here
+  // so the JSX stays readable — advanced is the least-used section and must
+  // not sit between `frequency` and `previous runs`.
+  const advancedSection = (
+    <section>
+      <button
+        type="button"
+        data-testid="pipe-detail-advanced-toggle"
+        onClick={() => setAdvancedOpen((open) => !open)}
+        className={cn(
+          SETTINGS_LABEL_CLASS,
+          "flex w-full items-center gap-1.5 transition-colors duration-150 hover:text-foreground",
+        )}
+      >
+        {advancedOpen ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        advanced
+      </button>
+
+      {advancedOpen && (
+        <div className="mt-2 space-y-3">
+          {!enterpriseManaged && (
+            <SettingsGroup>
+              <SettingsRow label="timeout" htmlFor="pipe-detail-timeout">
+                <Select
+                  value={String(timeoutSeconds || 600)}
+                  onValueChange={(value) => onTimeoutChange(Number(value))}
+                >
+                  <SelectTrigger id="pipe-detail-timeout" className="h-8 rounded-none text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-none">
+                    {TIMEOUT_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingsRow>
+              <SettingsRow
+                label="notify api"
+                description="let this pipe post desktop notifications"
+              >
+                <Switch
+                  checked={notificationsEnabled}
+                  onCheckedChange={onNotificationsChange}
+                  aria-label="allow notification api"
+                />
+              </SettingsRow>
+              <SettingsRow label="history" description="remember context between runs">
+                <Switch
+                  checked={historyEnabled}
+                  onCheckedChange={onHistoryChange}
+                  aria-label="remember context between runs"
+                />
+              </SettingsRow>
+            </SettingsGroup>
+          )}
+
+          <div>
+            <GroupLabel className="mb-2">pipe.md</GroupLabel>
+            <Textarea
+              value={rawValue}
+              readOnly={readOnly}
+              onChange={(event) => onRawChange(event.target.value)}
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
+              className={cn(
+                "h-56 rounded-none border-border font-mono text-[12.5px]",
+                readOnly && "cursor-not-allowed opacity-70",
+              )}
+            />
+          </div>
+
+          <div>
+            <button
+              type="button"
+              onClick={() => setLogsOpen((open) => !open)}
+              className={cn(
+                SETTINGS_LABEL_CLASS,
+                "flex items-center gap-1.5 transition-colors duration-150 hover:text-foreground",
+              )}
+            >
+              {logsOpen ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+              disk logs ({logs.length})
+            </button>
+            {logsOpen && (
+              <div className="mt-2 max-h-60 space-y-2 overflow-y-auto">
+                {logs.length === 0 ? (
+                  <p className="text-[12.5px] text-muted-foreground">no disk logs</p>
+                ) : (
+                  logs
+                    .slice()
+                    .reverse()
+                    .map((log, index) => (
+                      <div key={index} className="border border-border p-2">
+                        <div className="flex items-center gap-2 font-mono text-[11.5px] text-muted-foreground">
+                          <span>{new Date(log.started_at).toLocaleString()}</span>
+                          <span>{log.success ? "✓" : "✕"}</span>
+                        </div>
+                        <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-muted-foreground">
+                          {log.success ? cleanStdout(log.stdout) : log.stderr}
+                        </pre>
+                      </div>
+                    ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <aside
@@ -258,14 +395,38 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
       <div
         ref={scrollRef}
         data-testid="pipe-detail-scroll"
-        className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-3 [scrollbar-gutter:stable]"
+        // 20px pane padding, 26px between sections — the pane's whole problem
+        // was that everything touched everything else.
+        className="min-h-0 flex-1 space-y-[26px] overflow-y-auto overscroll-contain p-5 [scrollbar-gutter:stable]"
         style={scrollFadeStyle(scrollFade)}
       >
-        {/* prompt */}
+        {/* prompt — no caption. It is the first thing under the pipe's name and
+            the pane's primary content; a "PROMPT" label above it only repeats
+            what the block obviously is. */}
         <section data-testid="pipe-detail-prompt">
-          <div className="mb-2 flex items-center gap-2">
-            <GroupLabel>prompt</GroupLabel>
-            <span className="text-[11.5px] text-muted-foreground">
+          <Textarea
+            value={bodyValue}
+            readOnly={readOnly}
+            onChange={(event) => onBodyChange(event.target.value)}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+            aria-label="pipe prompt"
+            className={cn(
+              "h-44 resize-none rounded-none border border-border bg-muted/20 px-4 py-3.5 text-[13.5px] leading-[1.65]",
+              readOnly && "cursor-not-allowed opacity-70",
+            )}
+          />
+          <div className="mt-1.5 flex items-start gap-3">
+            {readOnly && readOnlyNote ? (
+              <p className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">{readOnlyNote}</p>
+            ) : (
+              <span className="flex-1" />
+            )}
+            <span
+              data-testid="pipe-detail-save-state"
+              className="shrink-0 text-[11.5px] text-muted-foreground"
+            >
               {saveState === "saving" && (
                 <span className="flex items-center gap-1">
                   <Loader2 className="h-3 w-3 animate-spin" /> saving…
@@ -283,25 +444,21 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
               )}
             </span>
           </div>
-          <Textarea
-            value={bodyValue}
-            readOnly={readOnly}
-            onChange={(event) => onBodyChange(event.target.value)}
-            spellCheck={false}
-            autoCorrect="off"
-            autoCapitalize="off"
-            className={cn(
-              "h-44 rounded-none border-border font-mono text-xs",
-              readOnly && "cursor-not-allowed opacity-70",
-            )}
-          />
-          {readOnly && readOnlyNote && (
-            <p className="mt-1 text-[12.5px] text-muted-foreground">{readOnlyNote}</p>
-          )}
         </section>
 
-        {/* details */}
-        <SettingsGroup label="details">
+        {/* details — every row is label-left / value-right; group-level
+            affordances hang below the box instead of nesting in a row. */}
+        <SettingsGroup
+          label="details"
+          footer={
+            (presetFooter || connectionsFooter) && (
+              <>
+                {presetFooter}
+                {connectionsFooter}
+              </>
+            )
+          }
+        >
           <SettingsRow label="chat" onClick={() => onOpenChat(null)}>
             <SettingsRowAction data-testid="pipe-detail-open-chat">
               <span className="truncate">
@@ -310,19 +467,55 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
               <span className="underline underline-offset-2">open →</span>
             </SettingsRowAction>
           </SettingsRow>
-          <SettingsRow label="ai preset" align="start">
-            {presetSlot}
+          <SettingsRow label="ai preset" testId="pipe-detail-preset-row">
+            <div
+              data-testid="pipe-detail-preset"
+              className="flex min-w-0 items-center justify-end"
+            >
+              {presetSlot}
+            </div>
           </SettingsRow>
-          <SettingsRow label="connections" align="start">
-            {connectionsSlot}
+          <SettingsRow label="connections" testId="pipe-detail-connections-row">
+            <div
+              data-testid="pipe-detail-connections"
+              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+            >
+              {connectionsSlot}
+            </div>
           </SettingsRow>
         </SettingsGroup>
 
         {/* frequency */}
         <SettingsGroup label="frequency">
-          <SettingsRow label="when to run" align="start">
-            {scheduleSlot}
-          </SettingsRow>
+          {scheduleOpen ? (
+            // Disclosed in place of the row: the builder titles itself, so the
+            // row's own "when to run" label must not also be on screen.
+            <SettingsCell data-testid="pipe-detail-schedule-builder">
+              {scheduleSlot}
+              <div className="mt-3 flex justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  data-testid="pipe-detail-schedule-done"
+                  className="h-7 rounded-none px-2 text-[12px]"
+                  onClick={() => setScheduleOpen(false)}
+                >
+                  done
+                </Button>
+              </div>
+            </SettingsCell>
+          ) : (
+            <SettingsRow
+              label="when to run"
+              testId="pipe-detail-schedule-row"
+              onClick={() => setScheduleOpen(true)}
+            >
+              <SettingsRowAction data-testid="pipe-detail-schedule-summary">
+                <span className="truncate">{scheduleSummary}</span>
+                <span className="underline underline-offset-2">edit</span>
+              </SettingsRowAction>
+            </SettingsRow>
+          )}
           <SettingsRow label="notifications" htmlFor="pipe-detail-notifications">
             <Select
               value={notificationsEnabled ? "all" : "off"}
@@ -343,132 +536,18 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
           </SettingsRow>
         </SettingsGroup>
 
-        {/* advanced */}
-        <section>
-          <button
-            type="button"
-            data-testid="pipe-detail-advanced-toggle"
-            onClick={() => setAdvancedOpen((open) => !open)}
-            className="flex w-full items-center gap-1.5 font-mono text-[11px] uppercase tracking-widest text-muted-foreground transition-colors duration-150 hover:text-foreground"
-          >
-            {advancedOpen ? (
-              <ChevronDown className="h-3 w-3" />
-            ) : (
-              <ChevronRight className="h-3 w-3" />
-            )}
-            advanced
-          </button>
-
-          {advancedOpen && (
-            <div className="mt-2 space-y-3">
-              {!enterpriseManaged && (
-                <SettingsGroup>
-                  <SettingsRow label="timeout" htmlFor="pipe-detail-timeout">
-                    <Select
-                      value={String(timeoutSeconds || 600)}
-                      onValueChange={(value) => onTimeoutChange(Number(value))}
-                    >
-                      <SelectTrigger id="pipe-detail-timeout" className="h-8 rounded-none text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-none">
-                        {TIMEOUT_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </SettingsRow>
-                  <SettingsRow
-                    label="notify api"
-                    description="let this pipe post desktop notifications"
-                  >
-                    <Switch
-                      checked={notificationsEnabled}
-                      onCheckedChange={onNotificationsChange}
-                      aria-label="allow notification api"
-                    />
-                  </SettingsRow>
-                  <SettingsRow
-                    label="history"
-                    description="remember context between runs"
-                  >
-                    <Switch
-                      checked={historyEnabled}
-                      onCheckedChange={onHistoryChange}
-                      aria-label="remember context between runs"
-                    />
-                  </SettingsRow>
-                </SettingsGroup>
-              )}
-
-              <div>
-                <GroupLabel className="mb-2">pipe.md</GroupLabel>
-                <Textarea
-                  value={rawValue}
-                  readOnly={readOnly}
-                  onChange={(event) => onRawChange(event.target.value)}
-                  spellCheck={false}
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  className={cn(
-                    "h-56 rounded-none border-border font-mono text-[12.5px]",
-                    readOnly && "cursor-not-allowed opacity-70",
-                  )}
-                />
-              </div>
-
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setLogsOpen((open) => !open)}
-                  className="flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-widest text-muted-foreground transition-colors duration-150 hover:text-foreground"
-                >
-                  {logsOpen ? (
-                    <ChevronDown className="h-3 w-3" />
-                  ) : (
-                    <ChevronRight className="h-3 w-3" />
-                  )}
-                  disk logs ({logs.length})
-                </button>
-                {logsOpen && (
-                  <div className="mt-2 max-h-60 space-y-2 overflow-y-auto">
-                    {logs.length === 0 ? (
-                      <p className="text-[12.5px] text-muted-foreground">no disk logs</p>
-                    ) : (
-                      logs
-                        .slice()
-                        .reverse()
-                        .map((log, index) => (
-                          <div key={index} className="border border-border p-2">
-                            <div className="flex items-center gap-2 font-mono text-[11.5px] text-muted-foreground">
-                              <span>{new Date(log.started_at).toLocaleString()}</span>
-                              <span>{log.success ? "✓" : "✕"}</span>
-                            </div>
-                            <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-muted-foreground">
-                              {log.success ? cleanStdout(log.stdout) : log.stderr}
-                            </pre>
-                          </div>
-                        ))
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* previous runs */}
-        <section data-testid="pipe-detail-runs">
-          <GroupLabel className="mb-2">previous runs ({totalRunCount})</GroupLabel>
-          <div className="border border-border">
+        {/* previous runs — a real bordered group, same shape as details and
+            frequency, instead of loose rows floating under a heading. */}
+        <SettingsGroup
+          label={`previous runs (${totalRunCount})`}
+          data-testid="pipe-detail-runs"
+        >
             {showOptimistic && optimisticRun && (
               <button
                 type="button"
                 data-testid="pipe-detail-run-live"
                 onClick={() => onOpenChat(optimisticRun.execId)}
-                className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left transition-colors duration-150 hover:bg-accent/40"
+                className="flex w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-left transition-colors duration-150 hover:bg-accent/40"
               >
                 <PipeStatusDot state="running" />
                 <span className="font-mono text-[12.5px]">
@@ -484,11 +563,11 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
             )}
 
             {executionsLoading && executions.length === 0 ? (
-              <p className="px-3 py-4 text-center text-[12.5px] text-muted-foreground">
+              <p className="px-3.5 py-4 text-center text-[12.5px] text-muted-foreground">
                 loading runs…
               </p>
             ) : executions.length === 0 && !showOptimistic ? (
-              <p className="px-3 py-4 text-center text-[12.5px] text-muted-foreground">
+              <p className="px-3.5 py-4 text-center text-[12.5px] text-muted-foreground">
                 no runs yet — use ⋯ → run now
               </p>
             ) : (
@@ -501,7 +580,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                 return (
                   <div
                     key={exec.id}
-                    className="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0 transition-colors duration-150 hover:bg-accent/40"
+                    className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 last:border-b-0 transition-colors duration-150 hover:bg-accent/40"
                   >
                     <button
                       type="button"
@@ -545,37 +624,39 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                 );
               })
             )}
-          </div>
 
-          {liveOutput && liveOutput.length > 0 && (
-            <pre
-              ref={(el) => {
-                if (el) el.scrollTop = el.scrollHeight;
-              }}
-              className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words border border-border bg-muted/40 p-2 font-mono text-[11.5px] text-muted-foreground"
-            >
-              {liveOutput.slice(-200).join("")}
-              <span className="animate-pulse">▊</span>
-            </pre>
-          )}
+            {liveOutput && liveOutput.length > 0 && (
+              <pre
+                ref={(el) => {
+                  if (el) el.scrollTop = el.scrollHeight;
+                }}
+                className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words border-t border-border bg-muted/40 p-2 font-mono text-[11.5px] text-muted-foreground"
+              >
+                {liveOutput.slice(-200).join("")}
+                <span className="animate-pulse">▊</span>
+              </pre>
+            )}
 
-          {hasMoreExecutions && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mt-2 h-8 w-full rounded-none font-mono text-[11px] uppercase tracking-wider"
-              disabled={loadingMoreExecutions}
-              onClick={onLoadMoreExecutions}
-            >
-              {loadingMoreExecutions ? (
-                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ChevronDown className="mr-2 h-3.5 w-3.5" />
-              )}
-              show older runs
-            </Button>
-          )}
-        </section>
+            {hasMoreExecutions && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 w-full rounded-none border-t border-border text-[12.5px]"
+                disabled={loadingMoreExecutions}
+                onClick={onLoadMoreExecutions}
+              >
+                {loadingMoreExecutions ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ChevronDown className="mr-2 h-3.5 w-3.5" />
+                )}
+                show older runs
+              </Button>
+            )}
+        </SettingsGroup>
+
+        {/* advanced — last, by design */}
+        {advancedSection}
       </div>
     </aside>
   );

@@ -12,18 +12,28 @@ import { cn } from "@/lib/utils";
  *
  * The border belongs to the GROUP, not the row: one bordered container holds
  * hairline-separated rows, and the group's label sits ABOVE and OUTSIDE the
- * box in uppercase mono. Rows never draw their own outer border, so nesting
+ * box. The label is a quiet sentence-case caption, NOT uppercase mono —
+ * section captions are wayfinding, not headlines, and four shouting labels in
+ * one pane read as noise. Rows never draw their own outer border, so nesting
  * a group inside a group is never the right move — flatten instead.
  *
  * Both components are dumb/presentational: no data fetching, no feature
  * logic, no knowledge of pipes.
  */
 
+/** Shared caption treatment so standalone section headings match group labels. */
+export const SETTINGS_LABEL_CLASS = "text-[12.5px] font-normal text-muted-foreground";
+
 export interface SettingsGroupProps {
-  /** uppercase mono caption rendered above and outside the bordered box */
+  /** sentence-case caption rendered above and outside the bordered box */
   label?: React.ReactNode;
   /** optional trailing slot on the label line (status text, count, action) */
   labelAccessory?: React.ReactNode;
+  /**
+   * Rendered BELOW the bordered box — the place for a group-level affordance
+   * ("+ add fallback preset") that must not be nested inside a titled row.
+   */
+  footer?: React.ReactNode;
   className?: string;
   /** class applied to the bordered container itself */
   containerClassName?: string;
@@ -33,6 +43,7 @@ export interface SettingsGroupProps {
 export function SettingsGroup({
   label,
   labelAccessory,
+  footer,
   className,
   containerClassName,
   children,
@@ -43,15 +54,12 @@ export function SettingsGroup({
       {(label || labelAccessory) && (
         <div className="mb-2 flex items-center gap-2">
           {label && (
-            <p
-              data-testid="settings-group-label"
-              className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground"
-            >
+            <p data-testid="settings-group-label" className={SETTINGS_LABEL_CLASS}>
               {label}
             </p>
           )}
           {labelAccessory && (
-            <span className="text-[11px] text-muted-foreground">{labelAccessory}</span>
+            <span className="text-[11.5px] text-muted-foreground">{labelAccessory}</span>
           )}
         </div>
       )}
@@ -61,6 +69,14 @@ export function SettingsGroup({
       >
         {children}
       </div>
+      {footer && (
+        <div
+          data-testid="settings-group-footer"
+          className="mt-2 flex flex-wrap items-center gap-3"
+        >
+          {footer}
+        </div>
+      )}
     </section>
   );
 }
@@ -75,10 +91,16 @@ export interface SettingsRowProps {
   /**
    * "center" keeps label + control on one line (control right-aligned),
    * "start" stacks a full-width control under the label.
+   *
+   * `start` exists for legacy callers only — a row that expands inline ends up
+   * hosting a widget with its own heading, which is how the pane grew two
+   * "when to run" labels. Prefer `center` + a disclosure.
    */
   align?: "center" | "start";
   /** makes the whole row a click target (role=button + keyboard) */
   onClick?: () => void;
+  /** overrides the default `settings-row` testid */
+  testId?: string;
   className?: string;
   children?: React.ReactNode;
 }
@@ -89,6 +111,7 @@ export function SettingsRow({
   htmlFor,
   align = "center",
   onClick,
+  testId = "settings-row",
   className,
   children,
 }: SettingsRowProps) {
@@ -100,7 +123,7 @@ export function SettingsRow({
       <div
         className={cn(
           "min-w-0 shrink-0",
-          align === "center" ? "w-28" : "w-full",
+          align === "center" ? "w-32" : "w-full",
         )}
       >
         <LabelTag
@@ -131,8 +154,10 @@ export function SettingsRow({
     </>
   );
 
+  // 44px minimum row, 13px vertical / 14px horizontal padding — one rhythm for
+  // every row in every group so the pane scans as a single column.
   const classes = cn(
-    "flex gap-3 border-b border-border px-3 py-2.5 last:border-b-0 transition-colors duration-150",
+    "flex min-h-[44px] gap-3 border-b border-border px-3.5 py-[13px] last:border-b-0 transition-colors duration-150",
     align === "center" ? "items-center" : "flex-col items-stretch",
     interactive && "group w-full cursor-pointer text-left hover:bg-accent/40",
     className,
@@ -143,7 +168,7 @@ export function SettingsRow({
       <div
         role="button"
         tabIndex={0}
-        data-testid="settings-row"
+        data-testid={testId}
         className={classes}
         onClick={onClick}
         onKeyDown={(event) => {
@@ -159,8 +184,32 @@ export function SettingsRow({
   }
 
   return (
-    <div data-testid="settings-row" className={classes}>
+    <div data-testid={testId} className={classes}>
       {body}
+    </div>
+  );
+}
+
+/**
+ * A full-width, un-titled cell inside a group — used when a row's editor is
+ * disclosed IN PLACE OF the row. It shares the group's hairline rhythm but
+ * carries no label of its own, so the disclosed widget is free to be the only
+ * thing naming the setting.
+ */
+export function SettingsCell({
+  children,
+  className,
+  ...rest
+}: {
+  children: React.ReactNode;
+  className?: string;
+} & Omit<React.HTMLAttributes<HTMLDivElement>, "children">) {
+  return (
+    <div
+      className={cn("border-b border-border px-3.5 py-3 last:border-b-0", className)}
+      {...rest}
+    >
+      {children}
     </div>
   );
 }

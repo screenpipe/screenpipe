@@ -25,7 +25,13 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
  *                           "pipe-row-toggle-{name}" / "pipe-row-star-{name}" /
  *                           "pipe-row-status-{name}" (spinner, while running)
  *   pipe-actions-menu    →  data-testid="pipe-menu-{name}" / "pipe-menu-run-now"
- *   pipe-detail-panel    →  data-testid="pipe-detail-panel" / "pipe-detail-prompt" / "pipe-detail-runs"
+ *   pipe-detail-panel    →  data-testid="pipe-detail-panel" / "pipe-detail-prompt" / "pipe-detail-runs" /
+ *                           "pipe-detail-schedule-row" / "pipe-detail-schedule-summary" /
+ *                           "pipe-detail-schedule-builder" / "pipe-detail-schedule-done" /
+ *                           "pipe-detail-preset-row" / "pipe-detail-connections-row"
+ *
+ * In split mode the header is compact: `pipes-count`, the notification bell and
+ * `pipes-community-btn` are NOT rendered, and the filter tabs carry no counts.
  *   pipes-split-view     →  data-testid="pipes-split-view" (data-layout-mode) /
  *                           "pipes-master-column" / "pipes-list-scroll" /
  *                           "pipes-detail-pane" / "pipes-pane-splitter"
@@ -101,7 +107,10 @@ async function waitForPipesPage(timeout = t(20_000)): Promise<void> {
     async () => {
       try {
         const section = await $('[data-testid="section-pipes"]');
-        const header = await $('[data-testid="pipes-count"]');
+        // `pipes-page-header` exists in both layouts; `pipes-count` is list-mode
+        // only (compact/split drops it), so gating on the count would hang here
+        // whenever a previous test left the detail pane open.
+        const header = await $('[data-testid="pipes-page-header"]');
         return (await section.isExisting()) && (await header.isExisting());
       } catch {
         return false;
@@ -543,6 +552,186 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
 
     const filepath = await saveScreenshot('pipes-layout-split-mode');
     expect(existsSync(filepath)).toBe(true);
+
+    await $('[data-testid="pipe-detail-close"]').click();
+  });
+
+  // ─── Detail pane: no duplicated labels ────────────────────────────────────
+
+  it('names "when to run" exactly once — the row titles it, the widget does not', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    await $(`[data-testid="pipe-row-${PIPE_NAME}"]`).click();
+    await $('[data-testid="pipe-detail-panel"]').waitForExist({ timeout: t(10_000) });
+
+    // Regression: the `when to run` SettingsRow was labelled, and the trigger
+    // picker nested inside it rendered its OWN "when to run" heading plus the
+    // "on a schedule, after a meeting…" description — two labels, one control.
+    const naming = await browser.execute(() => {
+      const pane = document.querySelector('[data-testid="pipe-detail-panel"]');
+      if (!pane) return -1;
+      return Array.from(pane.querySelectorAll('*')).filter((el) =>
+        Array.from(el.childNodes).some(
+          (n) =>
+            n.nodeType === Node.TEXT_NODE &&
+            (n.textContent || '').trim().toLowerCase() === 'when to run',
+        ),
+      ).length;
+    });
+    expect(naming).toBe(1);
+
+    // The row is a summary + edit affordance; the builder is disclosed, not nested.
+    const summary = await $('[data-testid="pipe-detail-schedule-summary"]');
+    expect(await summary.isExisting()).toBe(true);
+    expect((await summary.getText()).toLowerCase()).toContain('edit');
+    expect(await $('[data-testid="pipe-detail-schedule-builder"]').isExisting()).toBe(false);
+
+    // Same bug, second instance: the `ai preset` row hosted a widget captioned
+    // "primary ai preset".
+    const presetNaming = await browser.execute(() => {
+      const pane = document.querySelector('[data-testid="pipe-detail-panel"]');
+      if (!pane) return -1;
+      return Array.from(pane.querySelectorAll('*')).filter((el) =>
+        Array.from(el.childNodes).some(
+          (n) =>
+            n.nodeType === Node.TEXT_NODE &&
+            (n.textContent || '').trim().toLowerCase() === 'primary ai preset',
+        ),
+      ).length;
+    });
+    expect(presetNaming).toBe(0);
+
+    const filepath = await saveScreenshot('pipes-detail-single-when-to-run');
+    expect(existsSync(filepath)).toBe(true);
+
+    await $('[data-testid="pipe-detail-close"]').click();
+  });
+
+  it('discloses the schedule builder only when the row is activated', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    await $(`[data-testid="pipe-row-${PIPE_NAME}"]`).click();
+    await $('[data-testid="pipe-detail-panel"]').waitForExist({ timeout: t(10_000) });
+
+    const row = await $('[data-testid="pipe-detail-schedule-row"]');
+    await row.click();
+
+    const builder = await $('[data-testid="pipe-detail-schedule-builder"]');
+    await builder.waitForExist({ timeout: t(5_000) });
+    // Still only one "when to run" — the builder replaces the row, it does not
+    // stack under it.
+    const naming = await browser.execute(() => {
+      const pane = document.querySelector('[data-testid="pipe-detail-panel"]');
+      if (!pane) return -1;
+      return Array.from(pane.querySelectorAll('*')).filter((el) =>
+        Array.from(el.childNodes).some(
+          (n) =>
+            n.nodeType === Node.TEXT_NODE &&
+            (n.textContent || '').trim().toLowerCase() === 'when to run',
+        ),
+      ).length;
+    });
+    expect(naming).toBe(1);
+
+    await $('[data-testid="pipe-detail-schedule-done"]').click();
+    await browser.waitUntil(
+      async () => !(await $('[data-testid="pipe-detail-schedule-builder"]').isExisting()),
+      { timeout: t(5_000), timeoutMsg: 'schedule builder did not collapse' },
+    );
+
+    await $('[data-testid="pipe-detail-close"]').click();
+  });
+
+  it('never labels the prompt block — the prompt is the pane, not a field', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    await $(`[data-testid="pipe-row-${PIPE_NAME}"]`).click();
+    await $('[data-testid="pipe-detail-panel"]').waitForExist({ timeout: t(10_000) });
+
+    const promptLabels = await browser.execute(() => {
+      const pane = document.querySelector('[data-testid="pipe-detail-panel"]');
+      if (!pane) return -1;
+      return Array.from(pane.querySelectorAll('*')).filter((el) =>
+        Array.from(el.childNodes).some(
+          (n) =>
+            n.nodeType === Node.TEXT_NODE &&
+            (n.textContent || '').trim().toLowerCase() === 'prompt',
+        ),
+      ).length;
+    });
+    expect(promptLabels).toBe(0);
+
+    // …the editor itself is untouched.
+    const prompt = await $('[data-testid="pipe-detail-prompt"] textarea');
+    expect(await prompt.isExisting()).toBe(true);
+
+    await $('[data-testid="pipe-detail-close"]').click();
+  });
+
+  // ─── Compact toolbar: no overlap ──────────────────────────────────────────
+
+  it('never lets the filter tabs overlap the + new button in split mode', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    await $(`[data-testid="pipe-row-${PIPE_NAME}"]`).click();
+    await $('[data-testid="pipe-detail-panel"]').waitForExist({ timeout: t(10_000) });
+
+    const splitView = await $('[data-testid="pipes-split-view"]');
+    expect(await splitView.getAttribute('data-layout-mode')).toBe('split');
+
+    const filters = await $('[data-testid="pipe-filters"]');
+    const newBtn = await $('[data-testid="pipes-new-btn"]');
+    const filtersBox = { ...(await filters.getLocation()), ...(await filters.getSize()) };
+    const newBox = { ...(await newBtn.getLocation()), ...(await newBtn.getSize()) };
+
+    // The artifact this replaces: `starred (1)` painted straight through the
+    // count text and the buttons at a ~430px master column.
+    expect(filtersBox.x + filtersBox.width).toBeLessThanOrEqual(newBox.x);
+
+    const filepath = await saveScreenshot('pipes-compact-toolbar-no-overlap');
+    expect(existsSync(filepath)).toBe(true);
+
+    await $('[data-testid="pipe-detail-close"]').click();
+  });
+
+  it('drops counts, the count line and the community button in compact mode', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    await $(`[data-testid="pipe-row-${PIPE_NAME}"]`).click();
+    await $('[data-testid="pipe-detail-panel"]').waitForExist({ timeout: t(10_000) });
+
+    const header = await $('[data-testid="pipes-page-header"]');
+    expect(await header.getAttribute('data-compact')).toBe('true');
+
+    // Community lives on inside the `+ new` menu — one button, not two.
+    expect(await $('[data-testid="pipes-community-btn"]').isExisting()).toBe(false);
+    // The `N pipes · M active` line is not rendered at all in compact mode.
+    expect(await $('[data-testid="pipes-count"]').isExisting()).toBe(false);
+    // …and the filter tabs carry no `(n)` counts.
+    const filtersText = await $('[data-testid="pipe-filters"]').getText();
+    expect(filtersText).not.toMatch(/\(\d+\)/);
+
+    // The one creation entry point still offers the community drill-in.
+    await $('[data-testid="pipes-new-btn"]').click();
+    const communityItem = await $('[data-testid="pipes-new-community"]');
+    await communityItem.waitForExist({ timeout: t(5_000) });
+    expect(await communityItem.isExisting()).toBe(true);
+    await closeAnyMenu();
+
+    // Search keeps its own line below the compact row.
+    const search = await $('[data-testid="pipes-search"]');
+    const filters = await $('[data-testid="pipe-filters"]');
+    expect((await search.getLocation()).y).toBeGreaterThan((await filters.getLocation()).y);
 
     await $('[data-testid="pipe-detail-close"]').click();
   });
