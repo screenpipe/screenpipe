@@ -69,23 +69,23 @@ export function PipesPageHeader({
           {leading}
           <span
             data-testid="pipes-count"
-            className="truncate font-mono text-[11px] text-muted-foreground"
+            className="truncate font-mono text-[12.5px] text-muted-foreground"
           >
             {pipeCountsLabel(total, active)}
           </span>
         </div>
       ) : (
         <div className="min-w-0">
-          <h2 className="text-lg font-medium tracking-tight">pipes</h2>
+          <h2 className="text-2xl font-medium tracking-tight">pipes</h2>
           {showTagline && (
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1.5 text-[15px] text-muted-foreground">
               agents that run on a schedule
             </p>
           )}
           {/* One subtitle line, counts folded in: "218 pipes · 214 active · 4 paused". */}
           <p
             data-testid="pipes-count"
-            className="mt-1 font-mono text-[11px] text-muted-foreground"
+            className="mt-1.5 font-mono text-[12.5px] text-muted-foreground"
           >
             {pipeCountsLabel(total, active)}
           </p>
@@ -100,7 +100,7 @@ export function PipesPageHeader({
           size="sm"
           data-testid="pipes-community-btn"
           onClick={onOpenCommunity}
-          className="h-8 rounded-none px-3 font-mono text-[10px] uppercase tracking-wider"
+          className="h-9 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
         >
           community
         </Button>
@@ -109,7 +109,7 @@ export function PipesPageHeader({
             <Button
               size="sm"
               data-testid="pipes-new-btn"
-              className="h-8 gap-1.5 rounded-none px-3 font-mono text-[10px] uppercase tracking-wider"
+              className="h-9 gap-1.5 rounded-none px-3.5 font-mono text-[11.5px] uppercase tracking-wider"
             >
               {creating ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -121,13 +121,25 @@ export function PipesPageHeader({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="rounded-none">
-            <DropdownMenuItem data-testid="pipes-new-describe" onClick={onDescribeInChat}>
+            <DropdownMenuItem
+              data-testid="pipes-new-describe"
+              className="text-[13px]"
+              onClick={onDescribeInChat}
+            >
               describe in chat
             </DropdownMenuItem>
-            <DropdownMenuItem data-testid="pipes-new-manual" onClick={onSetUpManually}>
+            <DropdownMenuItem
+              data-testid="pipes-new-manual"
+              className="text-[13px]"
+              onClick={onSetUpManually}
+            >
               set up manually
             </DropdownMenuItem>
-            <DropdownMenuItem data-testid="pipes-new-community" onClick={onOpenCommunity}>
+            <DropdownMenuItem
+              data-testid="pipes-new-community"
+              className="text-[13px]"
+              onClick={onOpenCommunity}
+            >
               start from a community pipe
             </DropdownMenuItem>
           </DropdownMenuContent>

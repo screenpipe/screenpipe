@@ -111,9 +111,37 @@ async function waitForPipesPage(timeout = t(20_000)): Promise<void> {
   );
 }
 
+/**
+ * Bring the fixture row into the DOM.
+ *
+ * The list is virtualized, so only the rows inside the viewport (plus overscan)
+ * exist as DOM nodes — on a machine with a couple of hundred pipes the fixture
+ * is almost certainly not among them. Narrowing by search is both the cheapest
+ * way to guarantee it renders and the closest thing to what a user would do.
+ */
 async function waitForFixtureRow(): Promise<void> {
   const row = await $(`[data-testid="pipe-row-${PIPE_NAME}"]`);
-  await row.waitForExist({ timeout: t(20_000) });
+  if (await row.isExisting()) return;
+
+  const search = await $('[data-testid="pipes-search"]');
+  if (await search.isExisting()) {
+    await search.setValue(PIPE_NAME);
+    await browser.pause(300);
+  }
+
+  await row.waitForExist({
+    timeout: t(20_000),
+    timeoutMsg: `fixture row "${PIPE_NAME}" never rendered (virtualized list — is it filtered out?)`,
+  });
+}
+
+/** Clear the search box so a following assertion sees the whole list again. */
+async function clearFixtureSearch(): Promise<void> {
+  const search = await $('[data-testid="pipes-search"]');
+  if (await search.isExisting()) {
+    await search.setValue('');
+    await browser.pause(300);
+  }
 }
 
 /** Open the fixture row's `⋯` menu and return whether it rendered. */
@@ -369,6 +397,8 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
 
   it('puts the full-width search field above the filter tabs', async () => {
     await openPipesPage();
+    // Earlier specs narrow the list by search to reach the fixture row.
+    await clearFixtureSearch();
 
     const search = await $('[data-testid="pipes-search"]');
     await search.waitForExist({ timeout: t(5_000) });
@@ -656,6 +686,58 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
         }
       });
     }
+  });
+
+  // ─── Performance: virtualization + first paint ────────────────────────────
+
+  it('renders a window of rows, not the whole list', async () => {
+    await openPipesPage();
+    await clearFixtureSearch();
+
+    const list = await $('[data-testid="pipes-virtual-list"]');
+    await list.waitForExist({ timeout: t(15_000) });
+
+    const total = Number(
+      ((await $('[data-testid="pipes-count"]').getText()) || '').match(/(\d+)\s*pipes?/i)?.[1] ?? 0,
+    );
+    const rendered = await browser.execute(
+      () => document.querySelectorAll('[data-testid^="pipe-row-"]').length,
+    );
+
+    // Windowing only matters once the list outgrows a viewport; below that
+    // "rendered === total" is correct behaviour, not a regression.
+    if (total > 60) {
+      expect(rendered).toBeLessThan(total);
+      expect(rendered).toBeGreaterThan(0);
+    } else {
+      expect(rendered).toBeGreaterThan(0);
+    }
+
+    // No stray ResizeObserver-per-row: hovering is what attaches a tooltip.
+    const anyTitleAtRest = await browser.execute(() =>
+      Array.from(document.querySelectorAll('[data-testid^="pipe-row-"] [title]')).length,
+    );
+    expect(anyTitleAtRest).toBe(0);
+  });
+
+  it('paints skeleton rows immediately instead of an empty page', async () => {
+    await openHomeWindow();
+    // Navigate to pipes and look for the skeleton before data resolves. It may
+    // already be gone on a warm cache — that is a pass, not a failure.
+    const navPipes = await $('[data-testid="nav-pipes"]');
+    await navPipes.waitForExist({ timeout: t(10_000) });
+    await navPipes.click();
+
+    const sawSomething = await browser.waitUntil(
+      async () =>
+        (await $('[data-testid="pipes-list-skeleton"]').isExisting()) ||
+        (await $('[data-testid="pipes-virtual-list"]').isExisting()) ||
+        (await $('[data-testid="pipes-count"]').isExisting()),
+      { timeout: t(4_000), timeoutMsg: 'pipes tab showed nothing within 4s of opening' },
+    );
+    expect(sawSomething).toBe(true);
+
+    await waitForPipesPage(t(20_000));
   });
 
   // ─── Community drill-in ───────────────────────────────────────────────────

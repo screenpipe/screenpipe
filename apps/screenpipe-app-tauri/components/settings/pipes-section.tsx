@@ -7,7 +7,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
   Trash2,
@@ -111,7 +110,18 @@ import { requestPipeStop } from "@/lib/pipe-stop";
 import { ToastAction } from "@/components/ui/toast";
 import { PipesPageHeader } from "@/components/pipes/pipes-page-header";
 import { PipeFilterTabs } from "@/components/pipes/pipe-filter-tabs";
-import { PipeRow } from "@/components/pipes/pipe-row";
+import { PipeRow, PIPE_ROW_HEIGHT } from "@/components/pipes/pipe-row";
+import { PipeRowSkeletonList } from "@/components/pipes/pipe-row-skeleton";
+import {
+  VirtualPipeList,
+  type VirtualPipeListHandle,
+} from "@/components/pipes/virtual-pipe-list";
+import {
+  buildPipeRowViewModel,
+  pipesPayloadSignature,
+  reconcilePipeRowViewModels,
+  type PipeRowViewModel,
+} from "@/components/pipes/pipe-row-view-model";
 import { PipeActionsMenu } from "@/components/pipes/pipe-actions-menu";
 import { PipeDetailPanel } from "@/components/pipes/pipe-detail-panel";
 import { PipeSuggestions } from "@/components/pipes/pipe-suggestions";
@@ -123,7 +133,6 @@ import { startCreatePipeInChat } from "@/components/pipes/create-pipe-in-chat";
 import {
   countActivePipes,
   filterPipesByStatus,
-  formatRowSubtitle,
   lifecyclePhaseFromEventType,
   lifecycleStatusText,
   parseRunResponse,
@@ -950,7 +959,22 @@ export function PipesSection({
   const [discoverResult, setDiscoverResult] = useState<number | null>(null);
   const discoverResultTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [pipes, setPipes] = useState<PipeStatus[]>([]);
+  const [pipes, setPipesState] = useState<PipeStatus[]>([]);
+  /**
+   * Signature of the last `/pipes` payload we accepted. The 10s poll compares
+   * against it and skips the state swap when nothing the list renders changed.
+   * Any *local* write to `pipes` (optimistic toggles, config saves, deletes)
+   * clears it through the `setPipes` wrapper below, so the very next poll is
+   * always allowed to reconcile the optimistic state against the server.
+   */
+  const lastPipesSignature = useRef<string | null>(null);
+  const setPipes = useCallback<React.Dispatch<React.SetStateAction<PipeStatus[]>>>(
+    (action) => {
+      lastPipesSignature.current = null;
+      setPipesState(action);
+    },
+    [],
+  );
   const [expanded, setExpanded] = useState<string | null>(null);
   const expandedRef = useRef<string | null>(null);
   const [logs, setLogs] = useState<PipeRunLog[]>([]);
@@ -1200,8 +1224,16 @@ export function PipesSection({
       }
       // Preserve optimistic UI for pipes with in-flight config saves
       const pendingNames = Object.keys(pendingConfigSaves.current);
+      // Skip the state swap entirely when the poll brought back exactly what
+      // we already render. `/pipes` is polled every 10s (3s while a pipe is
+      // running) and used to hand React a brand-new array, which invalidated
+      // every downstream memo and re-rendered all 218 rows for nothing.
+      const signature = pipesPayloadSignature(fetched, results);
       if (pendingNames.length > 0) {
-        setPipes((prev) => {
+        // Merged with local optimistic state — what we hold no longer matches
+        // the payload, so never let the guard short-circuit the next poll.
+        lastPipesSignature.current = null;
+        setPipesState((prev) => {
           const prevByName = new Map(prev.map((p) => [p.config.name, p]));
           return fetched.map((p) =>
             pendingNames.includes(p.config.name) && prevByName.has(p.config.name)
@@ -1209,10 +1241,12 @@ export function PipesSection({
               : p
           );
         });
-      } else {
-        setPipes(fetched);
+        setPipeExecutions(results);
+      } else if (signature !== lastPipesSignature.current) {
+        lastPipesSignature.current = signature;
+        setPipesState(fetched);
+        setPipeExecutions(results);
       }
-      setPipeExecutions(results);
       // Retire optimistic run entries once the engine reports the pipe idle.
       // The 20s floor covers the gap between POST /run and the first status
       // poll that shows `is_running`, so the row never flickers back.
@@ -2245,6 +2279,130 @@ export function PipesSection({
     ? pipes.find((p) => p.config.name === expanded) ?? null
     : null;
 
+  // ── row view-models ──────────────────────────────────────────────────────
+  // Everything the row renders is derived once per change here instead of
+  // inline in the list map, so a row's props keep their identity across
+  // renders and `React.memo(PipeRow)` can actually bail out.
+
+  const missingConnectionsByName = React.useMemo(() => {
+    const missing = new Set<string>();
+    for (const pipe of visiblePipes) {
+      const unmet = (pipe.config.connections ?? []).some((id) => {
+        // support instance keys like "notion:crm" — match on base id
+        const baseId = pipeConnectionLookupKey(id);
+        const conn = availableConnections.find((c) => c.id === baseId);
+        return !conn || !conn.connected;
+      });
+      if (unmet) missing.add(pipe.config.name);
+    }
+    return missing;
+  }, [visiblePipes, availableConnections]);
+
+  const rowViewModelCache = useRef<Map<string, PipeRowViewModel>>(new Map());
+  const rowViewModels = React.useMemo(() => {
+    const built = visiblePipes.map((pipe) => {
+      const name = pipe.config.name;
+      const recentExecs = pipeExecutions[name] || [];
+      const runningExec = recentExecs.find((e) => e.status === "running");
+      const optimistic = optimisticRuns[name];
+      const isRunning =
+        pipe.is_running || runningPipe === name || !!runningExec || !!optimistic;
+      const lastExec = recentExecs[0];
+      const lifecycle = runLifecycle[name];
+      const parsedError =
+        !isRunning && pipe.last_success === false && pipe.last_error
+          ? parsePipeError(pipe.last_error)
+          : null;
+      return buildPipeRowViewModel({
+        name,
+        enabled: pipe.config.enabled,
+        isRunning,
+        scheduleLabel: pipeHasSchedule(pipe.config)
+          ? pipeScheduleLabel(pipe.config)
+          : null,
+        // Next-run times land after the list has already painted — the row
+        // renders from /pipes alone and picks this up when it arrives.
+        nextRunAt: nextRuns[name],
+        triggerCount:
+          (pipe.config.trigger?.events?.length || 0) +
+          (pipe.config.trigger?.custom?.length || 0),
+        runStartedAt: runningExec?.started_at || optimistic?.startedAt || null,
+        lifecycleText:
+          isRunning && lifecycle && lifecycle !== "running"
+            ? lifecycleStatusText(lifecycle)
+            : null,
+        lastRun: {
+          startedAt: lastExec?.started_at,
+          status: lastExec?.status,
+          durationMs: lastExec?.duration_ms,
+        },
+        errorText:
+          parsedError &&
+          parsedError.type !== "daily_limit" &&
+          parsedError.type !== "credits_exhausted"
+            ? parsedError.message
+            : null,
+        enterpriseManaged: isEnterpriseManagedPipe(pipe),
+        hasMissingConnections: missingConnectionsByName.has(name),
+      });
+    });
+    const reconciled = reconcilePipeRowViewModels(rowViewModelCache.current, built);
+    rowViewModelCache.current = reconciled;
+    return reconciled;
+  }, [
+    visiblePipes,
+    pipeExecutions,
+    optimisticRuns,
+    runningPipe,
+    runLifecycle,
+    nextRuns,
+    missingConnectionsByName,
+  ]);
+
+  /**
+   * One callback per action for the whole list, not per row. They read the
+   * live handlers off a ref that is refreshed every render, so they are stable
+   * (`useCallback([])`) without ever capturing stale state.
+   */
+  const rowActionsRef = useRef<{
+    select: (name: string) => void;
+    toggleEnabled: (name: string, enabled: boolean) => void;
+    watchLive: (name: string) => void;
+    toggleFavorite: (name: string) => void;
+  }>(null as never);
+  rowActionsRef.current = {
+    select: (name) => selectPipe(name),
+    toggleEnabled: (name, enabled) => togglePipe(name, enabled),
+    watchLive: (name) => {
+      const optimistic = optimisticRuns[name];
+      const runningExec = (pipeExecutions[name] || []).find(
+        (e) => e.status === "running",
+      );
+      void openPipeChat(name, optimistic?.execId ?? runningExec?.id ?? null);
+    },
+    toggleFavorite: (name) => pipeFavorites.toggle(name),
+  };
+  const handleRowSelect = useCallback(
+    (name: string) => rowActionsRef.current.select(name),
+    [],
+  );
+  const handleRowToggleEnabled = useCallback(
+    (name: string, enabled: boolean) =>
+      rowActionsRef.current.toggleEnabled(name, enabled),
+    [],
+  );
+  const handleRowWatchLive = useCallback(
+    (name: string) => rowActionsRef.current.watchLive(name),
+    [],
+  );
+  const handleRowToggleFavorite = useCallback(
+    (name: string) => rowActionsRef.current.toggleFavorite(name),
+    [],
+  );
+
+  /** Imperative handle on the virtualizer — used by ↑/↓ to reveal a row. */
+  const virtualListRef = useRef<VirtualPipeListHandle | null>(null);
+
   /**
    * The `⋯` menu, shared by the row and the panel header so both offer the
    * exact same actions. Team sharing / publish / updates / bulk-select stay
@@ -2434,15 +2592,27 @@ export function PipesSection({
     event.preventDefault();
 
     const current = expanded ? names.indexOf(expanded) : -1;
-    const next =
+    const nextIndex =
       event.key === "ArrowDown"
-        ? names[current < 0 ? 0 : Math.min(current + 1, names.length - 1)]
-        : names[current <= 0 ? 0 : current - 1];
+        ? current < 0
+          ? 0
+          : Math.min(current + 1, names.length - 1)
+        : current <= 0
+          ? 0
+          : current - 1;
+    const next = names[nextIndex];
     if (!next) return;
     if (next !== expanded) selectPipe(next);
-    document
-      .querySelector<HTMLElement>(`[data-pipe-row="${CSS.escape(next)}"]`)
-      ?.focus();
+    // The list is windowed, so the target row may not be mounted yet: ask the
+    // virtualizer to reveal it, then focus on the next frame.
+    virtualListRef.current?.scrollToIndex(nextIndex);
+    const focusRow = () =>
+      document
+        .querySelector<HTMLElement>(`[data-pipe-row="${CSS.escape(next)}"]`)
+        ?.focus();
+    focusRow();
+    // Row not mounted before the scroll — try again once it is.
+    requestAnimationFrame(focusRow);
   };
 
   /**
@@ -2601,32 +2771,9 @@ export function PipesSection({
         // local pipe list, so it renders its own component.
         <CloudPipesTab active />
       ) : loading ? (
-        <div className="space-y-2">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <Skeleton className="h-4 w-4" />
-                  <Skeleton className="h-4 w-32" />
-                  <div className="flex-1" />
-                  <Skeleton className="h-5 w-20 rounded-full" />
-                  <Skeleton className="h-8 w-8 rounded-md" />
-                  <Skeleton className="h-5 w-9 rounded-full" />
-                </div>
-                <div className="mt-3 space-y-1.5">
-                  {[1, 2, 3].map((j) => (
-                    <div key={j} className="flex items-center gap-3">
-                      <Skeleton className="h-3 w-32" />
-                      <Skeleton className="h-3 w-10" />
-                      <Skeleton className="h-3 w-8" />
-                      <Skeleton className="h-3 w-24" />
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        // Row-shaped placeholders, painted on mount — the tab opens instantly
+        // instead of waiting on the first /pipes round-trip.
+        <PipeRowSkeletonList rows={7} />
       ) : loadError ? (
         <Card>
           <CardContent className="py-8 text-center">
@@ -2723,85 +2870,40 @@ export function PipesSection({
         </Card>
       ) : (
         // No per-row boxes and no rules — spacing plus the hover fill carry it.
-        <div className="flex flex-col">
-          {visiblePipes.map((pipe) => {
+        // Windowed: only the rows in (and just outside) the viewport mount, so
+        // a 218-pipe list costs the same as a 10-pipe one.
+        <VirtualPipeList
+          ref={virtualListRef}
+          items={visiblePipes}
+          itemKey={(pipe) => pipe.config.name}
+          estimateSize={PIPE_ROW_HEIGHT}
+          overscan={10}
+          renderItem={(pipe) => {
               const name = pipe.config.name;
-              const recentExecs = pipeExecutions[name] || [];
-              const runningExec = recentExecs.find((e) => e.status === "running");
-              const optimistic = optimisticRuns[name];
-              const isRunning =
-                pipe.is_running ||
-                runningPipe === name ||
-                !!runningExec ||
-                !!optimistic;
-              const lastExec = recentExecs[0];
+              const vm = rowViewModels.get(name);
+              if (!vm) return null;
+              const isRunning = vm.isRunning;
               const enterpriseManaged = isEnterpriseManagedPipe(pipe);
-              const hasMissingConnections = (pipe.config.connections ?? []).some((id) => {
-                // support instance keys like "notion:crm" — match on base id
-                const baseId = pipeConnectionLookupKey(id);
-                const conn = availableConnections.find((c) => c.id === baseId);
-                return !conn || !conn.connected;
-              });
-              const triggerCount =
-                (pipe.config.trigger?.events?.length || 0) +
-                (pipe.config.trigger?.custom?.length || 0);
-              const lifecycle = runLifecycle[name];
-              const errorText =
-                !isRunning && pipe.last_success === false && pipe.last_error
-                  ? (() => {
-                      const parsed = parsePipeError(pipe.last_error!);
-                      return parsed.type === "daily_limit" ||
-                        parsed.type === "credits_exhausted"
-                        ? null
-                        : parsed.message;
-                    })()
-                  : null;
+              const hasMissingConnections = missingConnectionsByName.has(name);
 
               return (
                 <PipeRow
-                  key={name}
                   name={name}
-                  enabled={pipe.config.enabled}
+                  enabled={vm.enabled}
                   isRunning={isRunning}
                   selected={expanded === name}
-                  subtitle={formatRowSubtitle({
-                    scheduleLabel: pipeHasSchedule(pipe.config)
-                      ? pipeScheduleLabel(pipe.config)
-                      : "manual",
-                    nextRunAt: nextRuns[name],
-                    triggerCount,
-                  })}
-                  runStartedAt={runningExec?.started_at || optimistic?.startedAt || null}
-                  lifecycleText={
-                    isRunning && lifecycle && lifecycle !== "running"
-                      ? lifecycleStatusText(lifecycle)
-                      : null
-                  }
-                  lastRun={{
-                    startedAt: lastExec?.started_at,
-                    status: lastExec?.status,
-                    durationMs: lastExec?.duration_ms,
-                  }}
-                  errorText={errorText}
-                  onSelect={() => selectPipe(name)}
-                  // Same rule the `⋯` menu uses for its pause/resume item:
-                  // organization-managed pipes are enforced, and a pipe with
-                  // unconfigured connections can't be resumed into a failure.
-                  onToggleEnabled={(next) => togglePipe(name, next)}
-                  toggleDisabled={
-                    enterpriseManaged ||
-                    (hasMissingConnections && !pipe.config.enabled)
-                  }
-                  toggleDisabledReason={
-                    enterpriseManaged
-                      ? "managed by your organization"
-                      : "connect its apps first"
-                  }
-                  onWatchLive={() => void openPipeChat(name, optimistic?.execId ?? runningExec?.id ?? null)}
-                  favorite={{
-                    isFavorite: pipeFavorites.isFavorite(name),
-                    onToggle: () => pipeFavorites.toggle(name),
-                  }}
+                  subtitle={vm.subtitle}
+                  runStartedAt={vm.runStartedAt}
+                  lifecycleText={vm.lifecycleText}
+                  lastRun={vm.lastRun}
+                  errorText={vm.errorText}
+                  onSelect={handleRowSelect}
+                  onToggleEnabled={handleRowToggleEnabled}
+                  toggleDisabled={vm.toggleDisabled}
+                  toggleDisabledReason={vm.toggleDisabledReason}
+                  onWatchLive={handleRowWatchLive}
+                  isFavorite={pipeFavorites.isFavorite(name)}
+                  onToggleFavorite={handleRowToggleFavorite}
                   selectSlot={
                     selectMode && !enterpriseManaged ? (
                       <Checkbox
@@ -2908,8 +3010,8 @@ export function PipesSection({
                   menu={renderPipeMenu(pipe, isRunning, hasMissingConnections, "row")}
                 />
               );
-            })}
-        </div>
+            }}
+        />
       )}
 
       <PipeSuggestions

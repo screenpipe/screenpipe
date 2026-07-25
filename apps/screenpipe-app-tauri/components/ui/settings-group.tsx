@@ -45,13 +45,13 @@ export function SettingsGroup({
           {label && (
             <p
               data-testid="settings-group-label"
-              className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground"
+              className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground"
             >
               {label}
             </p>
           )}
           {labelAccessory && (
-            <span className="text-[10px] text-muted-foreground">{labelAccessory}</span>
+            <span className="text-[11px] text-muted-foreground">{labelAccessory}</span>
           )}
         </div>
       )}
@@ -106,14 +106,14 @@ export function SettingsRow({
         <LabelTag
           {...(htmlFor ? { htmlFor } : {})}
           className={cn(
-            "block text-xs text-muted-foreground",
+            "block text-[13px] text-muted-foreground",
             htmlFor && "cursor-pointer",
           )}
         >
           {label}
         </LabelTag>
         {description && (
-          <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground/80">
+          <p className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground/80">
             {description}
           </p>
         )}
@@ -182,7 +182,7 @@ export function SettingsRowAction({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-center gap-1.5 font-mono text-[11px] text-muted-foreground transition-colors duration-150 group-hover:text-foreground",
+        "inline-flex max-w-full items-center gap-1.5 font-mono text-[12px] text-muted-foreground transition-colors duration-150 group-hover:text-foreground",
         className,
       )}
       {...rest}

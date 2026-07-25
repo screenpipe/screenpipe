@@ -57,7 +57,8 @@ describe("PipeRow — status dot as pause/resume", () => {
     );
 
     fireEvent.click(getByTestId("pipe-row-toggle-daily-digest"));
-    expect(onToggleEnabled).toHaveBeenCalledWith(false);
+    // Handlers take the pipe name so the page can share one function per action.
+    expect(onToggleEnabled).toHaveBeenCalledWith("daily-digest", false);
     expect(onSelect).not.toHaveBeenCalled();
   });
 
@@ -72,7 +73,7 @@ describe("PipeRow — status dot as pause/resume", () => {
       />,
     );
     fireEvent.click(getByTestId("pipe-row-toggle-daily-digest"));
-    expect(onToggleEnabled).toHaveBeenCalledWith(true);
+    expect(onToggleEnabled).toHaveBeenCalledWith("daily-digest", true);
   });
 
   it("locks the toggle for enterprise-managed pipes", () => {
@@ -144,7 +145,8 @@ describe("PipeRow — tooltip discipline and chrome", () => {
         enabled
         onSelect={() => {}}
         onToggleEnabled={() => {}}
-        favorite={{ isFavorite: true, onToggle: () => {} }}
+        isFavorite
+        onToggleFavorite={() => {}}
       />,
     );
     expect(
@@ -158,7 +160,8 @@ describe("PipeRow — tooltip discipline and chrome", () => {
         enabled
         onSelect={() => {}}
         onToggleEnabled={() => {}}
-        favorite={{ isFavorite: false, onToggle: () => {} }}
+        isFavorite={false}
+        onToggleFavorite={() => {}}
       />,
     );
     const star = plain.getByTestId("pipe-row-star-other-pipe");
@@ -175,7 +178,8 @@ describe("PipeRow — tooltip discipline and chrome", () => {
         enabled
         onSelect={onSelect}
         onToggleEnabled={() => {}}
-        favorite={{ isFavorite: false, onToggle }}
+        isFavorite={false}
+        onToggleFavorite={onToggle}
       />,
     );
     fireEvent.click(getByTestId("pipe-row-star-daily-digest"));

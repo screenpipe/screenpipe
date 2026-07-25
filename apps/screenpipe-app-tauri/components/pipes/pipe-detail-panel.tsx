@@ -131,7 +131,7 @@ function GroupLabel({ children, className }: { children: React.ReactNode; classN
   return (
     <p
       className={cn(
-        "font-mono text-[10px] uppercase tracking-widest text-muted-foreground",
+        "font-mono text-[11px] uppercase tracking-widest text-muted-foreground",
         className,
       )}
     >
@@ -222,7 +222,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
           header box in the first place. */}
       <div className="relative z-10 flex shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-1.5">
         <PipeStatusDot state={isRunning ? "running" : enabled ? "active" : "paused"} />
-        <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
           {statusLabel}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm font-medium" title={pipeName}>
@@ -265,7 +265,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
         <section data-testid="pipe-detail-prompt">
           <div className="mb-2 flex items-center gap-2">
             <GroupLabel>prompt</GroupLabel>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[11.5px] text-muted-foreground">
               {saveState === "saving" && (
                 <span className="flex items-center gap-1">
                   <Loader2 className="h-3 w-3 animate-spin" /> saving…
@@ -296,7 +296,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
             )}
           />
           {readOnly && readOnlyNote && (
-            <p className="mt-1 text-[11px] text-muted-foreground">{readOnlyNote}</p>
+            <p className="mt-1 text-[12.5px] text-muted-foreground">{readOnlyNote}</p>
           )}
         </section>
 
@@ -349,7 +349,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
             type="button"
             data-testid="pipe-detail-advanced-toggle"
             onClick={() => setAdvancedOpen((open) => !open)}
-            className="flex w-full items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            className="flex w-full items-center gap-1.5 font-mono text-[11px] uppercase tracking-widest text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
             {advancedOpen ? (
               <ChevronDown className="h-3 w-3" />
@@ -413,7 +413,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                   autoCorrect="off"
                   autoCapitalize="off"
                   className={cn(
-                    "h-56 rounded-none border-border font-mono text-[11px]",
+                    "h-56 rounded-none border-border font-mono text-[12.5px]",
                     readOnly && "cursor-not-allowed opacity-70",
                   )}
                 />
@@ -423,7 +423,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                 <button
                   type="button"
                   onClick={() => setLogsOpen((open) => !open)}
-                  className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                  className="flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-widest text-muted-foreground transition-colors duration-150 hover:text-foreground"
                 >
                   {logsOpen ? (
                     <ChevronDown className="h-3 w-3" />
@@ -435,18 +435,18 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                 {logsOpen && (
                   <div className="mt-2 max-h-60 space-y-2 overflow-y-auto">
                     {logs.length === 0 ? (
-                      <p className="text-[11px] text-muted-foreground">no disk logs</p>
+                      <p className="text-[12.5px] text-muted-foreground">no disk logs</p>
                     ) : (
                       logs
                         .slice()
                         .reverse()
                         .map((log, index) => (
                           <div key={index} className="border border-border p-2">
-                            <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+                            <div className="flex items-center gap-2 font-mono text-[11.5px] text-muted-foreground">
                               <span>{new Date(log.started_at).toLocaleString()}</span>
                               <span>{log.success ? "✓" : "✕"}</span>
                             </div>
-                            <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground">
+                            <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-muted-foreground">
                               {log.success ? cleanStdout(log.stdout) : log.stderr}
                             </pre>
                           </div>
@@ -471,24 +471,24 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                 className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left transition-colors duration-150 hover:bg-accent/40"
               >
                 <PipeStatusDot state="running" />
-                <span className="font-mono text-[11px]">
+                <span className="font-mono text-[12.5px]">
                   {formatClock(optimisticRun.startedAt, now) ?? "now"}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">
                   {lifecycleText || "running"}
                 </span>
-                <span className="font-mono text-[11px] text-muted-foreground">
+                <span className="font-mono text-[12.5px] text-muted-foreground">
                   {formatElapsedClock(optimisticRun.startedAt, now)}
                 </span>
               </button>
             )}
 
             {executionsLoading && executions.length === 0 ? (
-              <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+              <p className="px-3 py-4 text-center text-[12.5px] text-muted-foreground">
                 loading runs…
               </p>
             ) : executions.length === 0 && !showOptimistic ? (
-              <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+              <p className="px-3 py-4 text-center text-[12.5px] text-muted-foreground">
                 no runs yet — use ⋯ → run now
               </p>
             ) : (
@@ -510,15 +510,15 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
                       <PipeStatusDot state={running ? "running" : failed ? "paused" : "active"} />
-                      <span className="shrink-0 font-mono text-[11px]">
+                      <span className="shrink-0 font-mono text-[12.5px]">
                         {formatClock(exec.started_at, now) ?? "queued"}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                      <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">
                         {running
                           ? lifecycleText || "running"
                           : exec.error_message || exec.status}
                       </span>
-                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                      <span className="shrink-0 font-mono text-[12.5px] text-muted-foreground">
                         {running
                           ? formatElapsedClock(exec.started_at, now)
                           : formatRunDuration(exec.duration_ms) ??
@@ -552,7 +552,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
               ref={(el) => {
                 if (el) el.scrollTop = el.scrollHeight;
               }}
-              className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words border border-border bg-muted/40 p-2 font-mono text-[10px] text-muted-foreground"
+              className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words border border-border bg-muted/40 p-2 font-mono text-[11.5px] text-muted-foreground"
             >
               {liveOutput.slice(-200).join("")}
               <span className="animate-pulse">▊</span>
@@ -563,7 +563,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
             <Button
               variant="ghost"
               size="sm"
-              className="mt-2 h-8 w-full rounded-none font-mono text-[10px] uppercase tracking-wider"
+              className="mt-2 h-8 w-full rounded-none font-mono text-[11px] uppercase tracking-wider"
               disabled={loadingMoreExecutions}
               onClick={onLoadMoreExecutions}
             >

@@ -34,7 +34,7 @@ export function PipeFilterTabs({
             aria-pressed={value === filter}
             onClick={() => onChange(filter)}
             className={cn(
-              "border-b pb-0.5 font-mono text-[11px] lowercase tracking-wider transition-colors duration-150",
+              "border-b pb-1 font-mono text-[12.5px] lowercase tracking-wider transition-colors duration-150",
               value === filter
                 ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",

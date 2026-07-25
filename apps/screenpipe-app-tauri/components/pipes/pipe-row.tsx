@@ -16,6 +16,15 @@ import {
   type LastRunMetaInput,
 } from "./pipes-page-logic";
 
+/**
+ * Uniform row height, in px. The virtualizer estimates with this and the
+ * skeleton matches it, so the list never jumps between skeleton, first paint
+ * and scroll. Keep it in step with the padding + type sizes below.
+ */
+export const PIPE_ROW_HEIGHT = 58;
+
+const ROW_PADDING_Y = 12;
+
 export interface PipeRowProps {
   name: string;
   enabled: boolean;
@@ -35,23 +44,32 @@ export interface PipeRowProps {
   menu?: React.ReactNode;
   /** bulk-select checkbox, when select mode is on */
   selectSlot?: React.ReactNode;
-  favorite?: { isFavorite: boolean; onToggle: () => void };
+  isFavorite?: boolean;
+  /**
+   * Callbacks take the pipe name so the page can hand every row the *same*
+   * function. Per-row arrow functions defeated `React.memo` and were a real
+   * cost at 218 rows.
+   */
+  onToggleFavorite?: (name: string) => void;
   /** Pause / resume straight from the status dot. */
-  onToggleEnabled?: (enabled: boolean) => void;
+  onToggleEnabled?: (name: string, enabled: boolean) => void;
   /** Enterprise-managed (or otherwise locked) pipes can't be toggled. */
   toggleDisabled?: boolean;
   toggleDisabledReason?: string;
-  onSelect: () => void;
+  onSelect: (name: string) => void;
   /** "watch live" — jumps to the run's chat thread. */
-  onWatchLive?: () => void;
+  onWatchLive?: (name: string) => void;
 }
 
 /**
  * One pipe in the list. No separators and no hover-revealed action strip: the
  * list reads as a column through spacing and hover fill alone, and everything
  * beyond pause/resume lives in the `⋯` menu or the detail panel.
+ *
+ * Memoized: the page renders this inside a virtualized list and re-renders on
+ * every poll, so a row must be free when its own content has not changed.
  */
-export function PipeRow({
+function PipeRowImpl({
   name,
   enabled,
   isRunning,
@@ -64,24 +82,29 @@ export function PipeRow({
   badges,
   menu,
   selectSlot,
-  favorite,
+  isFavorite,
+  onToggleFavorite,
   onToggleEnabled,
   toggleDisabled = false,
   toggleDisabledReason,
   onSelect,
   onWatchLive,
 }: PipeRowProps) {
-  // Only tick while something is actually in progress.
+  // Only tick while something is actually in progress — idle rows never arm
+  // an interval (`useInterval` treats a null delay as "off").
   const [now, setNow] = React.useState(() => Date.now());
   useInterval(() => setNow(Date.now()), isRunning ? 1000 : null);
 
-  // Tooltips only where they add information — see use-is-truncated.
+  // Tooltips only where they add information, measured on hover — see
+  // use-is-truncated (no observers, nothing runs at rest).
   const nameText = useIsTruncated<HTMLSpanElement>(name);
   const subtitleText = useIsTruncated<HTMLSpanElement>(subtitle);
 
   const meta = isRunning
     ? lifecycleText || formatInProgressMeta(runStartedAt, now)
     : formatLastRunMeta({ ...lastRun, now });
+
+  const handleSelect = React.useCallback(() => onSelect(name), [onSelect, name]);
 
   return (
     <div
@@ -90,11 +113,11 @@ export function PipeRow({
       role="button"
       tabIndex={0}
       aria-pressed={selected}
-      onClick={onSelect}
+      onClick={handleSelect}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onSelect();
+          handleSelect();
         }
       }}
       className={cn(
@@ -108,8 +131,9 @@ export function PipeRow({
         !enabled && !isRunning && "opacity-60",
       )}
       style={{
-        paddingTop: 11,
-        paddingBottom: 11,
+        minHeight: PIPE_ROW_HEIGHT,
+        paddingTop: ROW_PADDING_Y,
+        paddingBottom: ROW_PADDING_Y,
         paddingLeft: 14,
         paddingRight: 14,
       }}
@@ -121,27 +145,29 @@ export function PipeRow({
         pipeName={name}
         disabled={toggleDisabled || !onToggleEnabled}
         disabledReason={toggleDisabledReason}
-        onToggle={(next) => onToggleEnabled?.(next)}
+        onToggle={(next) => onToggleEnabled?.(name, next)}
       />
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span
           ref={nameText.ref}
           title={nameText.title}
-          className="truncate text-[12.5px] font-semibold leading-tight"
+          {...nameText.measureProps}
+          className="truncate text-[14px] font-semibold leading-tight"
         >
           {name}
         </span>
         <span
           ref={subtitleText.ref}
           title={subtitleText.title}
-          className="truncate font-mono text-[10.5px] leading-tight text-muted-foreground"
+          {...subtitleText.measureProps}
+          className="truncate font-mono text-[12px] leading-tight text-muted-foreground"
         >
           {subtitle}
         </span>
         {errorText && (
           <span
-            className="truncate text-[10.5px] text-destructive"
+            className="truncate text-[11.5px] text-destructive"
             title={errorText}
           >
             {errorText}
@@ -152,36 +178,34 @@ export function PipeRow({
       {badges}
 
       <div className="flex shrink-0 items-center gap-2">
-        {favorite && (
+        {onToggleFavorite && (
           <button
             type="button"
             data-testid={`pipe-row-star-${name}`}
-            aria-pressed={favorite.isFavorite}
-            aria-label={favorite.isFavorite ? "unstar pipe" : "star pipe"}
-            title={favorite.isFavorite ? "unstar" : "star this pipe"}
+            aria-pressed={!!isFavorite}
+            aria-label={isFavorite ? "unstar pipe" : "star pipe"}
+            title={isFavorite ? "unstar" : "star this pipe"}
             onClick={(event) => {
               event.stopPropagation();
-              favorite.onToggle();
+              onToggleFavorite(name);
             }}
             className={cn(
               // Favourited stars are always on; the rest only appear on row
               // hover or when the star itself takes focus.
               "shrink-0 p-0.5 transition-opacity duration-150",
               "transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              favorite.isFavorite
+              isFavorite
                 ? "text-foreground opacity-100"
                 : "text-muted-foreground/60 opacity-0 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100",
             )}
           >
-            <Star
-              className={cn("h-3.5 w-3.5", favorite.isFavorite && "fill-foreground")}
-            />
+            <Star className={cn("h-3.5 w-3.5", isFavorite && "fill-foreground")} />
           </button>
         )}
 
         <span
           data-testid={isRunning ? `pipe-row-progress-${name}` : undefined}
-          className="max-w-[220px] truncate text-right font-mono text-[10.5px] text-muted-foreground"
+          className="max-w-[220px] truncate text-right font-mono text-[11.5px] text-muted-foreground"
         >
           {meta}
           {isRunning && runStartedAt ? ` · ${formatElapsedClock(runStartedAt, now)}` : ""}
@@ -193,9 +217,9 @@ export function PipeRow({
             data-testid={`pipe-watch-live-${name}`}
             onClick={(event) => {
               event.stopPropagation();
-              onWatchLive();
+              onWatchLive(name);
             }}
-            className="shrink-0 border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+            className="shrink-0 border border-border px-2 py-0.5 font-mono text-[11.5px] uppercase tracking-wider text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
           >
             watch live
           </button>
@@ -206,3 +230,6 @@ export function PipeRow({
     </div>
   );
 }
+
+export const PipeRow = React.memo(PipeRowImpl);
+PipeRow.displayName = "PipeRow";
