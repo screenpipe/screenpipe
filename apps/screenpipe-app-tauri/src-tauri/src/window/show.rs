@@ -145,6 +145,23 @@ fn allowed_while_hidden_ui(id: &RewindWindowId, onboarding_completed: bool) -> b
         || (*id == RewindWindowId::Onboarding && !onboarding_completed)
 }
 
+/// Search bar geometry. The width is clamped to `SEARCH_BAR_MIN_W` on both the
+/// create and the reposition path: the window can never be narrower than its
+/// `min_inner_size`, so computing a smaller width would only throw the
+/// centering math off by the difference. 400px used to be the minimum, which
+/// was narrower than the header's own contents — the query input and the four
+/// scope segments cannot both fit — so one of them got squeezed to nothing.
+const SEARCH_BAR_DEFAULT_W: f64 = 680.0;
+const SEARCH_BAR_MIN_W: f64 = 600.0;
+const SEARCH_BAR_H: f64 = 80.0; // input row + footer
+
+/// Width for a display of `logical_width`, never below the window minimum.
+fn search_bar_width(logical_width: f64) -> f64 {
+    SEARCH_BAR_DEFAULT_W
+        .min(logical_width - 40.0)
+        .max(SEARCH_BAR_MIN_W)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, specta::Type)]
 pub enum ShowRewindWindow {
     Main,
@@ -536,8 +553,8 @@ impl ShowRewindWindow {
                     let scale = monitor.scale_factor();
                     let origin_x = pos.x as f64 / scale;
                     let origin_y = pos.y as f64 / scale;
-                    let bar_w = 680.0_f64.min(logical.width - 40.0);
-                    let bar_h = 80.0;
+                    let bar_w = search_bar_width(logical.width);
+                    let bar_h = SEARCH_BAR_H;
                     let x = origin_x + (logical.width - bar_w) / 2.0;
                     let y = origin_y + logical.height * 0.22;
                     window
@@ -1698,22 +1715,21 @@ impl ShowRewindWindow {
 
         // Compact, centered, no chrome. Start thin (just the input row); JS
         // resizes as results appear.
-        let default_bar_w = 680.0_f64;
-        let bar_h = 80.0; // input row + footer
+        let bar_h = SEARCH_BAR_H;
         let (x, y, bar_w) = if let Ok(Some(monitor)) = app.primary_monitor() {
             let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
             let pos = monitor.position();
             let scale = monitor.scale_factor();
             let origin_x = pos.x as f64 / scale;
             let origin_y = pos.y as f64 / scale;
-            let w = default_bar_w.min(logical.width - 40.0);
+            let w = search_bar_width(logical.width);
             (
                 origin_x + (logical.width - w) / 2.0,
                 origin_y + logical.height * 0.22, // ~22% from top
                 w,
             )
         } else {
-            (200.0, 140.0, default_bar_w)
+            (200.0, 140.0, SEARCH_BAR_DEFAULT_W)
         };
 
         let builder = WebviewWindow::builder(
@@ -1730,7 +1746,7 @@ impl ShowRewindWindow {
         .always_on_top(true)
         .visible_on_all_workspaces(true)
         .inner_size(bar_w, bar_h)
-        .min_inner_size(400.0, 56.0)
+        .min_inner_size(SEARCH_BAR_MIN_W, 56.0)
         .position(x, y)
         .focused(focus)
         .resizable(true);

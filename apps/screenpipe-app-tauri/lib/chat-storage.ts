@@ -560,6 +560,37 @@ export async function listConversations(
   return metas;
 }
 
+// listConversations reads and parses every chat file off disk, which is far too
+// slow to run on the search window's open path — the empty state would flash
+// "type to search" before the list arrives. The search webview is prewarmed and
+// kept alive across opens, so we cache the last result in-module and let the
+// prewarm pass fill it before the window is ever shown.
+let recentChatsCache: ConversationMeta[] | null = null;
+
+export function getCachedRecentChats(): ConversationMeta[] | null {
+  return recentChatsCache;
+}
+
+/**
+ * Drop the cached list so the next paint can't show a deleted or stale-titled
+ * row. Call this from whatever learns the chat list changed (in the search
+ * window that means the cross-window `chat-deleted` / `chat-renamed` events) —
+ * the cache is per-webview module state, so each webview clears its own.
+ */
+export function clearRecentChatsCache(): void {
+  recentChatsCache = null;
+}
+
+export async function prefetchRecentChats(): Promise<ConversationMeta[]> {
+  const all = await listConversations({
+    limit: CHAT_HISTORY_INITIAL_LIMIT,
+    includeHidden: false,
+    kind: "chat",
+  });
+  recentChatsCache = all;
+  return all;
+}
+
 function conversationMatchesQuery(conv: ChatConversation, query: string): boolean {
   const q = query.toLowerCase();
   const title = typeof conv.title === "string" ? conv.title : "";
