@@ -24,6 +24,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowAction,
+} from "@/components/ui/settings-group";
 import { cn } from "@/lib/utils";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { PipeStatusDot } from "./pipe-status-dot";
@@ -116,42 +121,21 @@ const TIMEOUT_OPTIONS = [
   { value: "3600", label: "1 hour" },
 ];
 
-function GroupLabel({ children }: { children: React.ReactNode }) {
+/**
+ * Standalone section caption — same uppercase mono treatment `SettingsGroup`
+ * gives its label, for the sections that are NOT settings groups (prompt
+ * editor, raw pipe.md, run history).
+ */
+function GroupLabel({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-      {children}
-    </p>
-  );
-}
-
-function PanelRow({
-  label,
-  children,
-  align = "center",
-}: {
-  label: string;
-  children: React.ReactNode;
-  align?: "center" | "start";
-}) {
-  return (
-    <div
+    <p
       className={cn(
-        "flex gap-3 border-b border-border px-3 py-2.5 last:border-b-0",
-        align === "center" ? "items-center" : "flex-col items-stretch",
+        "font-mono text-[10px] uppercase tracking-widest text-muted-foreground",
+        className,
       )}
     >
-      <span
-        className={cn(
-          "shrink-0 text-xs text-muted-foreground",
-          align === "center" ? "w-24" : "",
-        )}
-      >
-        {label}
-      </span>
-      <div className={cn("min-w-0", align === "center" ? "flex-1 text-right" : "w-full")}>
-        {children}
-      </div>
-    </div>
+      {children}
+    </p>
   );
 }
 
@@ -223,10 +207,12 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
     <aside
       data-testid="pipe-detail-panel"
       data-pipe-detail={pipeName}
-      className="flex w-[400px] shrink-0 flex-col border-l border-border"
+      // Width and the pane border come from the split view + splitter; the
+      // pane only fills whatever geometry it is handed.
+      className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col"
     >
       {/* header */}
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2.5">
         <PipeStatusDot state={isRunning ? "running" : enabled ? "active" : "paused"} />
         <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
           {statusLabel}
@@ -258,12 +244,16 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-3">
+      {/* the pane owns its own scroll; the header above stays pinned */}
+      <div
+        data-testid="pipe-detail-scroll"
+        className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-3"
+      >
         {/* prompt */}
         <section data-testid="pipe-detail-prompt">
           <div className="mb-2 flex items-center gap-2">
             <GroupLabel>prompt</GroupLabel>
-            <span className="mb-2 text-[10px] text-muted-foreground">
+            <span className="text-[10px] text-muted-foreground">
               {saveState === "saving" && (
                 <span className="flex items-center gap-1">
                   <Loader2 className="h-3 w-3 animate-spin" /> saving…
@@ -299,57 +289,47 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
         </section>
 
         {/* details */}
-        <section>
-          <GroupLabel>details</GroupLabel>
-          <div className="border border-border">
-            <PanelRow label="chat">
-              <button
-                type="button"
-                data-testid="pipe-detail-open-chat"
-                onClick={() => onOpenChat(null)}
-                className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
-              >
-                <span className="truncate">
-                  {pipeName} · {chatRunCount} run{chatRunCount === 1 ? "" : "s"}
-                </span>
-                <span className="underline underline-offset-2">open</span>
-              </button>
-            </PanelRow>
-            <PanelRow label="ai preset" align="start">
-              {presetSlot}
-            </PanelRow>
-            <PanelRow label="connections" align="start">
-              {connectionsSlot}
-            </PanelRow>
-          </div>
-        </section>
+        <SettingsGroup label="details">
+          <SettingsRow label="chat" onClick={() => onOpenChat(null)}>
+            <SettingsRowAction data-testid="pipe-detail-open-chat">
+              <span className="truncate">
+                {chatRunCount} run{chatRunCount === 1 ? "" : "s"}
+              </span>
+              <span className="underline underline-offset-2">open →</span>
+            </SettingsRowAction>
+          </SettingsRow>
+          <SettingsRow label="ai preset" align="start">
+            {presetSlot}
+          </SettingsRow>
+          <SettingsRow label="connections" align="start">
+            {connectionsSlot}
+          </SettingsRow>
+        </SettingsGroup>
 
         {/* frequency */}
-        <section>
-          <GroupLabel>frequency</GroupLabel>
-          <div className="border border-border">
-            <PanelRow label="repeat / at" align="start">
-              {scheduleSlot}
-            </PanelRow>
-            <PanelRow label="notifications">
-              <Select
-                value={notificationsEnabled ? "all" : "off"}
-                onValueChange={(value) => onNotificationsChange(value === "all")}
+        <SettingsGroup label="frequency">
+          <SettingsRow label="when to run" align="start">
+            {scheduleSlot}
+          </SettingsRow>
+          <SettingsRow label="notifications" htmlFor="pipe-detail-notifications">
+            <Select
+              value={notificationsEnabled ? "all" : "off"}
+              onValueChange={(value) => onNotificationsChange(value === "all")}
+            >
+              <SelectTrigger
+                id="pipe-detail-notifications"
+                className="h-8 rounded-none text-xs"
+                data-testid="pipe-detail-notifications"
               >
-                <SelectTrigger
-                  className="h-8 rounded-none text-xs"
-                  data-testid="pipe-detail-notifications"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="rounded-none">
-                  <SelectItem value="all">all runs</SelectItem>
-                  <SelectItem value="off">off</SelectItem>
-                </SelectContent>
-              </Select>
-            </PanelRow>
-          </div>
-        </section>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="rounded-none">
+                <SelectItem value="all">all runs</SelectItem>
+                <SelectItem value="off">off</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+        </SettingsGroup>
 
         {/* advanced */}
         <section>
@@ -369,46 +349,50 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
 
           {advancedOpen && (
             <div className="mt-2 space-y-3">
-              <div className="border border-border">
-                {!enterpriseManaged && (
-                  <>
-                    <PanelRow label="timeout">
-                      <Select
-                        value={String(timeoutSeconds || 600)}
-                        onValueChange={(value) => onTimeoutChange(Number(value))}
-                      >
-                        <SelectTrigger className="h-8 rounded-none text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="rounded-none">
-                          {TIMEOUT_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </PanelRow>
-                    <PanelRow label="notify api">
-                      <Switch
-                        checked={notificationsEnabled}
-                        onCheckedChange={onNotificationsChange}
-                        aria-label="allow notification api"
-                      />
-                    </PanelRow>
-                    <PanelRow label="history">
-                      <Switch
-                        checked={historyEnabled}
-                        onCheckedChange={onHistoryChange}
-                        aria-label="remember context between runs"
-                      />
-                    </PanelRow>
-                  </>
-                )}
-              </div>
+              {!enterpriseManaged && (
+                <SettingsGroup>
+                  <SettingsRow label="timeout" htmlFor="pipe-detail-timeout">
+                    <Select
+                      value={String(timeoutSeconds || 600)}
+                      onValueChange={(value) => onTimeoutChange(Number(value))}
+                    >
+                      <SelectTrigger id="pipe-detail-timeout" className="h-8 rounded-none text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-none">
+                        {TIMEOUT_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </SettingsRow>
+                  <SettingsRow
+                    label="notify api"
+                    description="let this pipe post desktop notifications"
+                  >
+                    <Switch
+                      checked={notificationsEnabled}
+                      onCheckedChange={onNotificationsChange}
+                      aria-label="allow notification api"
+                    />
+                  </SettingsRow>
+                  <SettingsRow
+                    label="history"
+                    description="remember context between runs"
+                  >
+                    <Switch
+                      checked={historyEnabled}
+                      onCheckedChange={onHistoryChange}
+                      aria-label="remember context between runs"
+                    />
+                  </SettingsRow>
+                </SettingsGroup>
+              )}
 
               <div>
-                <GroupLabel>pipe.md</GroupLabel>
+                <GroupLabel className="mb-2">pipe.md</GroupLabel>
                 <Textarea
                   value={rawValue}
                   readOnly={readOnly}
@@ -465,7 +449,7 @@ export function PipeDetailPanel(props: PipeDetailPanelProps) {
 
         {/* previous runs */}
         <section data-testid="pipe-detail-runs">
-          <GroupLabel>previous runs ({totalRunCount})</GroupLabel>
+          <GroupLabel className="mb-2">previous runs ({totalRunCount})</GroupLabel>
           <div className="border border-border">
             {showOptimistic && optimisticRun && (
               <button

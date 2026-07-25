@@ -10,7 +10,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
-  Sparkles,
   Trash2,
   ChevronDown,
   RefreshCw,
@@ -18,7 +17,6 @@ import {
   ExternalLink,
   Check,
   Plus,
-  ArrowRight,
   Search,
   Share2,
   Link,
@@ -118,8 +116,11 @@ import { PipeRow } from "@/components/pipes/pipe-row";
 import { PipeActionsMenu } from "@/components/pipes/pipe-actions-menu";
 import { PipeDetailPanel } from "@/components/pipes/pipe-detail-panel";
 import { PipeSuggestions } from "@/components/pipes/pipe-suggestions";
+import { PipesSplitView } from "@/components/pipes/pipes-split-view";
+import { resolvePipesLayoutMode } from "@/components/pipes/use-pane-width";
 import { usePipeNextRuns } from "@/components/pipes/use-pipe-next-runs";
 import { openPipeChat } from "@/components/pipes/open-pipe-chat";
+import { startCreatePipeInChat } from "@/components/pipes/create-pipe-in-chat";
 import {
   countActivePipes,
   filterPipesByStatus,
@@ -1012,7 +1013,6 @@ export function PipesSection({
   // "queued — waking the agent…" → "starting agent…" → first token = running.
   const [runLifecycle, setRunLifecycle] = useState<Record<string, PipeLifecyclePhase>>({});
   const [creatingPipe, setCreatingPipe] = useState(false);
-  const createInputRef = useRef<HTMLInputElement | null>(null);
   // Single create-pipe entry point shared by the create box and the example
   // chips. Marks the generation attempt (so standalone-chat can fire
   // `pipe_generation_completed` when a new pipe lands), captures the north-star
@@ -2038,13 +2038,6 @@ export function PipesSection({
     }
   };
 
-  const focusCreateInput = () => {
-    const input = createInputRef.current;
-    if (!input) return;
-    input.scrollIntoView({ block: "center", behavior: "smooth" });
-    input.focus();
-  };
-
   const savePipeContent = useCallback(async (name: string, content: string) => {
     const pipe = pipes.find((candidate) => candidate.config.name === name);
     if (pipe && parseEnterpriseManagedVersion(pipe.raw_content) !== null) return;
@@ -2403,20 +2396,153 @@ export function PipesSection({
     (pipe) => parseEnterpriseManagedVersion(pipe.raw_content) === null,
   ).length;
 
-  return (
-    <div className="space-y-4" data-testid="section-pipes">
+  // Selecting a pipe is the only thing that flips the page from the centered
+  // reading column to the edge-to-edge master–detail layout.
+  const layoutMode = resolvePipesLayoutMode(
+    !!selectedPipe && pipeTypeFilter !== "cloud",
+  );
+
+  /**
+   * ↑/↓ walk the visible rows and drive the detail pane; Escape closes it.
+   * Typing inside the search field (or any editor in the list) is left alone.
+   */
+  const handleListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      if (expandedRef.current) {
+        event.preventDefault();
+        closePanel();
+      }
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+
+    const names = visiblePipes.map((pipe) => pipe.config.name);
+    if (names.length === 0) return;
+    event.preventDefault();
+
+    const current = expanded ? names.indexOf(expanded) : -1;
+    const next =
+      event.key === "ArrowDown"
+        ? names[current < 0 ? 0 : Math.min(current + 1, names.length - 1)]
+        : names[current <= 0 ? 0 : current - 1];
+    if (!next) return;
+    if (next !== expanded) selectPipe(next);
+    document
+      .querySelector<HTMLElement>(`[data-pipe-row="${CSS.escape(next)}"]`)
+      ?.focus();
+  };
+
+  /** ☆ / ⟳ live in the title row so the search field can go full width. */
+  const headerActions = selectMode ? null : (
+    <>
+      {isManagedDeployment && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 rounded-none text-xs capitalize"
+            >
+              {pipeTypeFilter === "cloud" ? "cloud" : `${pipeTypeFilter} (${tabCounts.local})`}
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {(["local", "cloud"] as const).map((tab) => (
+              <DropdownMenuItem
+                key={tab}
+                onClick={() => setPipeTypeFilter(tab)}
+                className={cn("capitalize gap-2", pipeTypeFilter === tab && "font-medium")}
+              >
+                <span className="flex-1">{tab}</span>
+                {tab === "local" && (
+                  <span className="text-muted-foreground text-xs">{tabCounts.local}</span>
+                )}
+                {pipeTypeFilter === tab && <Check className="h-3.5 w-3.5 ml-1" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      <Button
+        variant="outline"
+        size="icon"
+        data-testid="pipes-favorites-toggle"
+        aria-pressed={pipeFavorites.showOnly}
+        className="h-8 w-8 rounded-none"
+        onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
+        title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
+      >
+        <Star className={cn("h-3.5 w-3.5", pipeFavorites.showOnly && "fill-foreground")} />
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        data-testid="pipes-refresh"
+        title="refresh"
+        className={cn(
+          "h-8 w-8 rounded-none",
+          refreshing && "pointer-events-none opacity-70",
+        )}
+        onClick={async () => {
+          if (refreshing) return;
+          setRefreshing(true);
+          await Promise.all([fetchPipes(), new Promise((r) => setTimeout(r, 2000))]);
+          setRefreshing(false);
+        }}
+      >
+        {refreshing ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+        ) : (
+          <RefreshCw className="h-3.5 w-3.5" />
+        )}
+      </Button>
+    </>
+  );
+
+  const filterTabs = (
+    <PipeFilterTabs
+      value={statusFilter}
+      onChange={setStatusFilter}
+      counts={filterCounts}
+    />
+  );
+
+  /** Full width, on its own line — never crowded by the icon buttons. */
+  const searchRow = (
+    <div className="relative w-full">
+      <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        data-testid="pipes-search"
+        placeholder="search pipes..."
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        className="h-8 w-full rounded-none pl-8 text-sm"
+        spellCheck={false}
+        autoCorrect="off"
+      />
+    </div>
+  );
+
+  const toolbar = (
+    <>
       <PipesPageHeader
         total={headerCounts.total}
         active={headerCounts.active}
         creating={creatingPipe}
+        compact={layoutMode === "split"}
+        leading={layoutMode === "split" ? filterTabs : null}
+        actions={headerActions}
         onOpenCommunity={() => onOpenCommunity?.()}
-        onDescribeInChat={focusCreateInput}
+        onDescribeInChat={() => void startCreatePipeInChat()}
         onSetUpManually={() => void createBlankPipe()}
       />
 
       {/* Toolbar: swaps between search bar and selection bar */}
       {selectMode ? (
-        <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-md bg-muted/50">
+        <div className="flex items-center gap-2 border border-border bg-muted/50 px-3 py-2">
           <Checkbox
             checked={selectablePipeCount > 0 && selectedPipes.size === selectablePipeCount ? true : selectedPipes.size > 0 ? "indeterminate" : false}
             onCheckedChange={(checked) => {
@@ -2448,76 +2574,28 @@ export function PipesSection({
           </Button>
         </div>
       ) : (
-        <div className="flex items-center gap-3">
-          <PipeFilterTabs
-            value={statusFilter}
-            onChange={setStatusFilter}
-            counts={filterCounts}
-          />
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="search pipes..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-8 h-8 text-sm"
-              spellCheck={false}
-              autoCorrect="off"
-            />
-          </div>
-          {isManagedDeployment && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
-                  {pipeTypeFilter === "cloud" ? "cloud" : `${pipeTypeFilter} (${tabCounts.local})`}
-                  <ChevronDown className="h-3 w-3 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {(["local", "cloud"] as const).map((tab) => (
-                  <DropdownMenuItem
-                    key={tab}
-                    onClick={() => setPipeTypeFilter(tab)}
-                    className={cn("capitalize gap-2", pipeTypeFilter === tab && "font-medium")}
-                  >
-                    <span className="flex-1">{tab}</span>
-                    {tab === "local" && (
-                      <span className="text-muted-foreground text-xs">{tabCounts.local}</span>
-                    )}
-                    {pipeTypeFilter === tab && <Check className="h-3.5 w-3.5 ml-1" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
-            title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
-          >
-            <Star
-              className={cn(
-                "h-3.5 w-3.5",
-                pipeFavorites.showOnly && "fill-foreground"
-              )}
-            />
-          </Button>
-          <Button variant="outline" size="icon" className={`h-8 w-8 ${refreshing ? "pointer-events-none opacity-70" : ""}`} onClick={async () => {
-            if (refreshing) return;
-            setRefreshing(true);
-            await Promise.all([
-              fetchPipes(),
-              new Promise((r) => setTimeout(r, 2000)),
-            ]);
-            setRefreshing(false);
-          }}>
-            {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          </Button>
-        </div>
+        <>
+          {searchRow}
+          {/* Split mode moves the filters up into the compact header row. */}
+          {layoutMode === "list" && filterTabs}
+        </>
       )}
+    </>
+  );
 
+  return (
+    <div
+      className="flex h-full min-h-0 flex-col overflow-hidden"
+      data-testid="section-pipes"
+    >
+      <PipesSplitView
+        mode={layoutMode}
+        toolbar={toolbar}
+        onListKeyDown={handleListKeyDown}
+      >
+        {{
+          master: (
+            <div className="space-y-4">
       {pipeTypeFilter === "cloud" ? (
         // Cloud pipes: the team's shared pipes running on screenpipe-managed
         // infra against centralized data — different data source from the
@@ -2641,9 +2719,9 @@ export function PipesSection({
           </CardContent>
         </Card>
       ) : (
-        <div className="flex items-start gap-0">
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
-            {visiblePipes.map((pipe) => {
+        // No per-row boxes: one column, hairline rules between rows.
+        <div className="flex flex-col border-t border-border/50">
+          {visiblePipes.map((pipe) => {
               const name = pipe.config.name;
               const recentExecs = pipeExecutions[name] || [];
               const runningExec = recentExecs.find((e) => e.status === "running");
@@ -2815,9 +2893,22 @@ export function PipesSection({
                 />
               );
             })}
-          </div>
+        </div>
+      )}
 
-          {selectedPipe && (() => {
+      <PipeSuggestions
+        installedNames={installedPipeNames}
+        installedCount={headerCounts.total}
+        onInstalled={(pipeName) => {
+          void fetchPipes();
+          setExpanded(pipeName);
+          expandedRef.current = pipeName;
+        }}
+        onBrowseCommunity={() => onOpenCommunity?.()}
+      />
+            </div>
+          ),
+          detail: selectedPipe && pipeTypeFilter !== "cloud" && (() => {
             const name = selectedPipe.config.name;
             const recentExecs = pipeExecutions[name] || [];
             const runningExec =
@@ -3107,58 +3198,9 @@ export function PipesSection({
                 onClose={closePanel}
               />
             );
-          })()}
-        </div>
-      )}
-
-      <PipeSuggestions
-        installedNames={installedPipeNames}
-        installedCount={headerCounts.total}
-        onInstalled={(pipeName) => {
-          void fetchPipes();
-          setExpanded(pipeName);
-          expandedRef.current = pipeName;
+          })(),
         }}
-        onBrowseCommunity={() => onOpenCommunity?.()}
-      />
-
-      {/* Create your own pipe — at bottom */}
-      <div className="space-y-2 pt-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-muted-foreground shrink-0" />
-          <p className="text-sm font-medium text-foreground">create your own pipe</p>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          describe what you want in plain english — screenpipe builds, installs, and schedules it for you.
-        </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const form = e.currentTarget;
-            const input = form.querySelector("input") as HTMLInputElement;
-            const value = input?.value?.trim();
-            if (!value) return;
-            input.value = "";
-            startPipeGeneration(value, "create_box");
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <Input
-              ref={createInputRef}
-              data-testid="pipe-create-input"
-              placeholder="e.g. every morning, list the people i still need to reply to"
-              className="font-mono text-sm"
-            />
-            <button
-              type="submit"
-              aria-label="create pipe"
-              className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-            >
-              <ArrowRight className="h-4 w-4" />
-            </button>
-          </div>
-        </form>
-      </div>
+      </PipesSplitView>
 
       {connectionModal && (
         <PostInstallConnectionsModal

@@ -1003,7 +1003,11 @@ function HomeContent() {
     activeSection === "timeline" ||
     activeSection === "meetings" ||
     activeSection === "history" ||
-    activeSection === "brain";
+    activeSection === "brain" ||
+    // Pipes owns its own scrolling: the master list and the detail pane are
+    // independent scroll regions, which only works if the page shell doesn't
+    // scroll underneath them.
+    activeSection === "pipes";
 
   // The outer flex row (sidebar shell + content column) lives in the shared
   // (main)/layout.tsx so the sidebar width survives navigation to /settings.

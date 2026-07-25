@@ -84,12 +84,17 @@ export function PipeRow({
         }
       }}
       className={cn(
-        "group flex w-full items-center gap-3 border border-border px-3 py-2.5 text-left",
+        // No box per row — a hairline rule between rows keeps the scan path
+        // quiet and lets the list read as one column instead of a stack of
+        // cards. Sharp corners, per DESIGN.md.
+        "group flex w-full items-center gap-3 border-b border-border/50 px-2 text-left",
         "cursor-pointer select-none transition-colors duration-150",
         "hover:bg-accent/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        selected && "border-foreground bg-accent/30",
+        selected &&
+          "bg-accent/50 shadow-[inset_2px_0_0_0_hsl(var(--foreground))]",
         !enabled && !isRunning && "opacity-60",
       )}
+      style={{ paddingTop: 9, paddingBottom: 9 }}
     >
       {selectSlot}
 

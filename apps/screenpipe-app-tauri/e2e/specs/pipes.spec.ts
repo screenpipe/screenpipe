@@ -23,6 +23,10 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
  *   pipe-row             →  data-testid="pipe-row-{name}" / "pipe-row-progress-{name}"
  *   pipe-actions-menu    →  data-testid="pipe-menu-{name}" / "pipe-menu-run-now"
  *   pipe-detail-panel    →  data-testid="pipe-detail-panel" / "pipe-detail-prompt" / "pipe-detail-runs"
+ *   pipes-split-view     →  data-testid="pipes-split-view" (data-layout-mode) /
+ *                           "pipes-master-column" / "pipes-list-scroll" /
+ *                           "pipes-detail-pane" / "pipes-pane-splitter"
+ *   toolbar              →  data-testid="pipes-search" / "pipes-favorites-toggle" / "pipes-refresh"
  *   pipe-store           →  data-testid="pipes-community-view" / "pipes-community-back"
  */
 
@@ -211,6 +215,36 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  // ─── Layout: list mode ────────────────────────────────────────────────────
+
+  it('puts the full-width search field above the filter tabs', async () => {
+    await openPipesPage();
+
+    const search = await $('[data-testid="pipes-search"]');
+    await search.waitForExist({ timeout: t(5_000) });
+    const filters = await $('[data-testid="pipe-filters"]');
+    expect(await filters.isExisting()).toBe(true);
+
+    const searchBox = await search.getLocation();
+    const filtersBox = await filters.getLocation();
+    // Search is its own row, above the filters — not beside them.
+    expect(searchBox.y).toBeLessThan(filtersBox.y);
+
+    // …and it is not crowded by the ☆ / ⟳ icon buttons, which moved up into
+    // the title row.
+    const favorites = await $('[data-testid="pipes-favorites-toggle"]');
+    expect(await favorites.isExisting()).toBe(true);
+    const favBox = await favorites.getLocation();
+    expect(favBox.y).toBeLessThan(searchBox.y);
+
+    // List-only mode is the centered reading column.
+    const splitView = await $('[data-testid="pipes-split-view"]');
+    expect(await splitView.getAttribute('data-layout-mode')).toBe('list');
+
+    const filepath = await saveScreenshot('pipes-layout-list-mode');
+    expect(existsSync(filepath)).toBe(true);
+  });
+
   // ─── Row menu ─────────────────────────────────────────────────────────────
 
   it('offers run now (and the rest of the actions) in the row ⋯ menu', async function () {
@@ -282,6 +316,87 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
       async () => !(await $('[data-testid="pipe-detail-panel"]').isExisting()),
       { timeout: t(5_000), timeoutMsg: 'detail panel did not close' }
     );
+  });
+
+  // ─── Layout: split mode ───────────────────────────────────────────────────
+
+  it('opens the detail pane flush against the right edge, list still visible', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    const row = await $(`[data-testid="pipe-row-${PIPE_NAME}"]`);
+    await row.click();
+    await $('[data-testid="pipe-detail-panel"]').waitForExist({ timeout: t(10_000) });
+
+    const splitView = await $('[data-testid="pipes-split-view"]');
+    expect(await splitView.getAttribute('data-layout-mode')).toBe('split');
+
+    const region = {
+      ...(await splitView.getLocation()),
+      ...(await splitView.getSize()),
+    };
+    const pane = await $('[data-testid="pipes-detail-pane"]');
+    const paneBox = {
+      ...(await pane.getLocation()),
+      ...(await pane.getSize()),
+    };
+
+    // Flush right: the pane's right edge sits on the content region's.
+    const regionRight = region.x + region.width;
+    const paneRight = paneBox.x + paneBox.width;
+    expect(Math.abs(regionRight - paneRight)).toBeLessThanOrEqual(3);
+
+    // The master list did not get pushed off-screen.
+    const master = await $('[data-testid="pipes-master-column"]');
+    const masterSize = await master.getSize();
+    expect(masterSize.width).toBeGreaterThanOrEqual(320);
+    expect(await row.isDisplayed()).toBe(true);
+
+    // The splitter is a real, focusable separator.
+    const splitter = await $('[data-testid="pipes-pane-splitter"]');
+    expect(await splitter.isExisting()).toBe(true);
+    expect(await splitter.getAttribute('role')).toBe('separator');
+    expect(await splitter.getAttribute('aria-orientation')).toBe('vertical');
+
+    const filepath = await saveScreenshot('pipes-layout-split-mode');
+    expect(existsSync(filepath)).toBe(true);
+
+    await $('[data-testid="pipe-detail-close"]').click();
+  });
+
+  it('scrolls the detail pane without moving the master list', async function () {
+    if (!fixtureInstalled) this.skip();
+    await openPipesPage();
+    await waitForFixtureRow();
+
+    await $(`[data-testid="pipe-row-${PIPE_NAME}"]`).click();
+    const panel = await $('[data-testid="pipe-detail-panel"]');
+    await panel.waitForExist({ timeout: t(10_000) });
+
+    const listTop = async () =>
+      browser.execute(
+        () =>
+          document.querySelector('[data-testid="pipes-list-scroll"]')?.scrollTop ?? -1,
+      );
+
+    const before = await listTop();
+
+    // Scroll every scrollable box inside the pane to its bottom.
+    await browser.execute(() => {
+      const pane = document.querySelector('[data-testid="pipes-detail-pane"]');
+      if (!pane) return;
+      pane.querySelectorAll('*').forEach((el) => {
+        const node = el as HTMLElement;
+        if (node.scrollHeight > node.clientHeight) node.scrollTop = node.scrollHeight;
+      });
+    });
+    await browser.pause(300);
+
+    // Independent scroll regions: the list must not have been dragged along.
+    expect(await listTop()).toBe(before);
+
+    await $('[data-testid="pipe-detail-close"]').click();
   });
 
   // ─── Run now (optimistic) ─────────────────────────────────────────────────
@@ -412,5 +527,37 @@ describe('Pipes page: header, filters, detail panel, run now', function () {
     await back.click();
     await waitForPipesPage(t(15_000));
     expect(await $('[data-testid="pipes-community-view"]').isExisting()).toBe(false);
+  });
+
+  // ─── Create in chat ───────────────────────────────────────────────────────
+
+  it('describe in chat opens a chat with the prompt pre-written, not auto-sent', async () => {
+    await openPipesPage();
+
+    const newPipe = await $('[data-testid="pipes-new-btn"]');
+    await newPipe.click();
+    const describe = await $('[data-testid="pipes-new-describe"]');
+    await describe.waitForExist({ timeout: t(5_000) });
+    await describe.click();
+
+    // Lands in the chat composer with the interview prompt already typed.
+    const composer = await $('form textarea');
+    await composer.waitForExist({ timeout: t(20_000) });
+
+    await browser.waitUntil(
+      async () => ((await composer.getValue()) || '').includes("let's set up a pipe together"),
+      {
+        timeout: t(15_000),
+        timeoutMsg: 'create-pipe prompt was not prefilled into the chat composer',
+      },
+    );
+
+    // autoSend:false — the prompt is still editable in the composer and has
+    // NOT been dispatched as a user turn.
+    const value = (await composer.getValue()) || '';
+    expect(value.length).toBeGreaterThan(0);
+
+    const filepath = await saveScreenshot('pipes-describe-in-chat');
+    expect(existsSync(filepath)).toBe(true);
   });
 });

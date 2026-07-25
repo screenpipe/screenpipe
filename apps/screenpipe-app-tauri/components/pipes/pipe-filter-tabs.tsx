@@ -12,13 +12,18 @@ export function PipeFilterTabs({
   value,
   onChange,
   counts,
+  className,
 }: {
   value: PipeStatusFilter;
   onChange: (filter: PipeStatusFilter) => void;
   counts?: Partial<Record<PipeStatusFilter, number>>;
+  className?: string;
 }) {
   return (
-    <div className="flex items-center gap-4" data-testid="pipe-filters">
+    <div
+      className={cn("flex shrink-0 items-center gap-4", className)}
+      data-testid="pipe-filters"
+    >
       {PIPE_STATUS_FILTERS.map((filter) => {
         const count = counts?.[filter];
         return (

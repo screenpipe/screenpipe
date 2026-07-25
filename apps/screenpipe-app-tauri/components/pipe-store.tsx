@@ -340,17 +340,22 @@ export function PipeStoreView() {
   }, []);
 
   if (view === "community") {
+    // The pipes surface is a full-height section now (the my-pipes view owns
+    // two independent scroll regions), so the community drill-in has to bring
+    // its own scroll container and the page padding it used to inherit.
     return (
-      <div className="space-y-4" data-testid="pipes-community-view">
-        <button
-          data-testid="pipes-community-back"
-          onClick={() => setView("pipes")}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          pipes
-        </button>
-        <DiscoverView onInstalled={() => setView("pipes")} />
+      <div className="h-full overflow-y-auto" data-testid="pipes-community-view">
+        <div className="mx-auto max-w-4xl space-y-4 p-6 pb-12">
+          <button
+            data-testid="pipes-community-back"
+            onClick={() => setView("pipes")}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            pipes
+          </button>
+          <DiscoverView onInstalled={() => setView("pipes")} />
+        </div>
       </div>
     );
   }
