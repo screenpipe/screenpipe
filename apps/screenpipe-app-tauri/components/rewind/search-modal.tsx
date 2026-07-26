@@ -1039,6 +1039,29 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     uiEventResults,
   ]);
 
+  // How many frame cards the grid is actually painting per row. The track is
+  // `auto-fit, minmax(300px, 1fr)`, so it resolves to 2 columns at the default
+  // window width and 4 once you widen past ~1260 — a hardcoded 3 made ArrowDown
+  // skip a row at the default size and drift diagonally when wide. Read off the
+  // resolved style rather than tracked in state: it's only needed inside the
+  // keydown handler, and asking the browser stays correct if the track changes.
+  const frameColumns = useCallback(() => {
+    const grid = gridRef.current?.querySelector<HTMLElement>("[data-frame-grid]");
+    if (!grid) return 1;
+    const tracks = getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length;
+    return Math.max(1, tracks);
+  }, []);
+
+  // True once ↑/↓ has moved the selection into the results. While it holds,
+  // ←/→ steer the grid instead of the text caret — otherwise every press is
+  // eaten walking the caret to the end of the query first, so ← took one press
+  // per character before it moved a card. Typing clears it (below), which is
+  // what keeps the query editable.
+  const gridNavModeRef = useRef(false);
+  useEffect(() => {
+    gridNavModeRef.current = false;
+  }, [query]);
+
   const navItemsRef = useRef(navItems);
   navItemsRef.current = navItems;
   const navIndexRef = useRef(navIndex);
@@ -1715,7 +1738,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       // clipboard, screen frames). Screen frames paint as a grid, so vertical
       // movement steps a whole row of them while ←→ walks them one at a time.
       const items = navItemsRef.current;
-      const cols = 3;
+      const cols = frameColumns();
       const step = (delta: number) => {
         setNavIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(items.length - 1, 0)));
       };
@@ -1730,6 +1753,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       const caretOwnsHorizontal = (key: string) => {
         const el = inputElRef.current;
         if (!inputFocused || !el) return false;
+        // Already navigating the grid — the caret stops competing until the
+        // next keystroke edits the query.
+        if (gridNavModeRef.current) return false;
         const start = el.selectionStart ?? 0;
         const end = el.selectionEnd ?? start;
         // A selection is always the caret's to collapse.
@@ -1758,12 +1784,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           break;
         case "ArrowDown":
           e.preventDefault();
+          // ↑/↓ are unambiguous — the caret has nowhere vertical to go — so they
+          // are what hands ←/→ over to the grid.
+          gridNavModeRef.current = true;
           // Inside the grid a "row" is `cols` items — but only when that lands
           // on another frame, so leaving the grid still moves one step.
           step(isFrameAt(navIndexRef.current) && isFrameAt(navIndexRef.current + cols) ? cols : 1);
           break;
         case "ArrowUp":
           e.preventDefault();
+          gridNavModeRef.current = true;
           step(isFrameAt(navIndexRef.current) && isFrameAt(navIndexRef.current - cols) ? -cols : -1);
           break;
         case "Enter": {
@@ -1801,7 +1831,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected, embedded]);
+  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected, embedded, frameColumns]);
 
   // Scroll selected row into view (only on arrow-key navigation, not on new page load)
   const prevNavIndex = useRef(navIndex);
@@ -2876,7 +2906,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
                 if (contentFilter !== "screen") {
                   return (
-                    <div className="grid gap-2.5" style={cellStyle}>
+                    <div data-frame-grid className="grid gap-2.5" style={cellStyle}>
                       {filteredResults.map(renderCard)}
                     </div>
                   );
@@ -2893,7 +2923,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 return filled.map((bucket) => (
                   <div key={bucket} className="mb-1">
                     {filled.length > 1 && <SectionLabel>{CHAT_BUCKET_LABELS[bucket]}</SectionLabel>}
-                    <div className="grid gap-2.5" style={cellStyle}>
+                    <div data-frame-grid className="grid gap-2.5" style={cellStyle}>
                       {buckets[bucket].map(({ result, index }) => renderCard(result, index))}
                     </div>
                   </div>
