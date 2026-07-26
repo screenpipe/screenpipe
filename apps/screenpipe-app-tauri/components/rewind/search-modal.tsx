@@ -4,7 +4,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { Search, X, Loader2, Clock, MessageSquare, User, ArrowLeft, Mic, Volume2, Hash, Tag, Keyboard, ClipboardCopy, AppWindow } from "lucide-react";
+import { Search, X, Loader2, Clock, MessageSquare, User, ArrowLeft, Mic, Volume2, Hash, Tag, Monitor, Keyboard, ClipboardCopy, AppWindow } from "lucide-react";
 import {
   useKeywordSearchStore,
   SearchMatch,
@@ -1820,6 +1820,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // we haven't caught up to yet is transparent rather than white dead space.
   const STANDALONE_MIN_H = 80; // matches the window's initial input-row height
   const STANDALONE_MAX_H = 620; // input + footer + the results area's max-h-[500px]
+  // Mirrors SEARCH_BAR_MIN_W in window/show.rs — the width below which the
+  // input and the scope switcher stop fitting on one line.
+  const SEARCH_WINDOW_MIN_W = 600;
   const lastStandaloneH = useRef(0);
 
   useEffect(() => {
@@ -1837,7 +1840,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       // Ignore sub-pixel churn so measuring never ping-pongs with the resize.
       if (Math.abs(target - lastStandaloneH.current) < 4) return;
       lastStandaloneH.current = target;
-      commands.resizeSearchWindow(680, target).catch(() => {});
+      // Pass the panel's *current* width, never a constant: the Rust side
+      // applies width unconditionally and keeps origin.x, so hardcoding 680
+      // snapped a user-widened window back from the right edge mid-layout and
+      // clipped the result grid. Only the height is ours to drive.
+      const width = Math.max(SEARCH_WINDOW_MIN_W, Math.round(window.innerWidth));
+      commands.resizeSearchWindow(width, target).catch(() => {});
     };
 
     const observer = new ResizeObserver(applyHeight);
@@ -2009,21 +2017,20 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     // non-default scope is active so you can never get stranded in one.
     if (!query.trim() && contentFilter === "all") return null;
     return (
-      // Text, not icons. HIG allows a segmented control to be all-icons or
-      // all-text but never both — and "all" has no honest glyph (Layers read as
-      // "stacks", not "everything"), so words are the option that stays
-      // truthful for every segment. Equal min-width keeps the segments the same
-      // size, and selection only changes colour, never size or content.
+      // Icon + label on every scope that has an honest glyph; "all" stays
+      // text-only because no single icon reads as "everything". Selection
+      // changes colour only — never size or content — so the row never
+      // reflows as you switch.
       // Explicit radii: the theme sets --radius: 0, so rounded-md/lg both
       // compute to 0 and render as bare rectangles. ~25% of the control's
       // height — softened, not pill-shaped.
       <div className="flex items-center gap-0.5 shrink-0 rounded-[8px] bg-muted/60 p-0.5">
         {([
-          { key: "all" as ContentFilter, label: "all" },
-          { key: "screen" as ContentFilter, label: "screen" },
-          { key: "input" as ContentFilter, label: "keys" },
-          { key: "chats" as ContentFilter, label: "chats" },
-        ] as const).map(({ key, label }) => {
+          { key: "all" as ContentFilter, label: "all", icon: null },
+          { key: "screen" as ContentFilter, label: "screen", icon: Monitor },
+          { key: "input" as ContentFilter, label: "keys", icon: Keyboard },
+          { key: "chats" as ContentFilter, label: "chats", icon: MessageSquare },
+        ] as const).map(({ key, label, icon: Icon }) => {
           const isActive = contentFilter === key;
           return (
             <button
@@ -2032,12 +2039,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               aria-pressed={isActive}
               onClick={() => { setContentFilter(key); setNavIndex(0); }}
               className={cn(
-                "inline-flex h-7 min-w-[58px] items-center justify-center rounded-[6px] px-2.5 text-xs capitalize transition-colors",
+                "inline-flex h-7 min-w-[58px] items-center justify-center gap-1.5 rounded-[6px] px-2.5 text-xs capitalize transition-colors",
                 isActive
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
+              {Icon && <Icon className="h-3.5 w-3.5 shrink-0" />}
               {label}
             </button>
           );
@@ -2177,9 +2185,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
           {filteredSpeakerTranscriptions.length > 0 && (
             <div
-                className="grid gap-3"
+                className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  // Matches the screen and tag grids — see the note there.
+                  gridTemplateColumns: "repeat(auto-fit, minmax(max(240px, 30%), 1fr))",
                 }}
               >
               {filteredSpeakerTranscriptions.map((t, index) => {
@@ -2327,7 +2336,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                         setSearchEpoch((epoch) => epoch + 1);
                       }}
                       className={cn(
-                        "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors cursor-pointer",
+                        // rounded-[6px], not rounded-full: the scope switcher
+                        // and every result row use the same softened corner,
+                        // and the theme's --radius: 0 makes rounded-md a no-op.
+                        "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-[6px] border transition-colors cursor-pointer",
                         isActive
                           ? "bg-foreground text-background border-foreground"
                           : "border-border text-foreground/70 hover:bg-muted hover:border-foreground/30"
@@ -2345,9 +2357,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Tag timeline entries — thumbnail grid */}
           {isTagSearch && tagResults.length > 0 && (
             <div
-                className="grid gap-3"
+                className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  // Same track as the screen results: a flat 180px floor packed
+                  // in more columns as the window grew, so widening the panel
+                  // bought you more thumbnails at the same small size instead
+                  // of bigger ones.
+                  gridTemplateColumns: "repeat(auto-fit, minmax(max(240px, 30%), 1fr))",
                 }}
               >
               {tagResults.map((frame) => (
@@ -2363,33 +2379,29 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     onNavigateToTimestamp(frame.timestamp, frame.frame_id, queryTokens, resultsJson, query);
                     if (!embedded) onClose();
                   }}
-                  className="cursor-pointer rounded overflow-hidden border border-border hover:border-foreground/50 transition-all duration-150"
+                  className="cursor-pointer rounded-[6px] overflow-hidden border border-border hover:border-foreground/50 transition-colors"
                 >
                   <FrameThumbnail
                     key={frame.frame_id}
                     frameId={frame.frame_id}
                     alt={frame.tag_names.join(", ")}
                   />
-                  <div className="p-2 bg-card">
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                      <Clock className="w-3 h-3" />
-                      <span className="font-mono">
-                        {formatRelativeTime(frame.timestamp)}
-                      </span>
-                    </div>
-                    <p className="text-xs font-medium text-foreground truncate">
+                  {/* Fixed one-line caption, same as the screen results. The
+                      old block stacked time over app over a wrapping row of
+                      tag chips, so a frame with three tags was taller than one
+                      with one and every grid row came out ragged. The tags go
+                      to the tooltip — you already know them, you searched for
+                      one. */}
+                  <div
+                    className="flex items-center gap-2 px-2 py-1.5 bg-card"
+                    title={frame.tag_names.join(", ")}
+                  >
+                    <span className="text-[11px] font-mono text-muted-foreground shrink-0">
+                      {formatRelativeTime(frame.timestamp)}
+                    </span>
+                    <p className="text-xs text-foreground truncate">
                       {frame.app_name || frame.tag_names[0]}
                     </p>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {frame.tag_names.map((t) => (
-                        <span
-                          key={t}
-                          className="px-1.5 py-0.5 text-[10px] rounded-full bg-foreground/8 text-foreground/60"
-                        >
-                          {t}
-                        </span>
-                      ))}
-                    </div>
                   </div>
                 </div>
               ))}
