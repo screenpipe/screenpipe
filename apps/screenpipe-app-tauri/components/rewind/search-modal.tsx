@@ -656,6 +656,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [chatsPassPending, setChatsPassPending] = useState(false);
   const chatSearchRequestRef = useRef(0);
   const recentChatRequestRef = useRef(0);
+  // The query a chat load has already been dispatched for. Guards against
+  // refetching the same query when only the scope changed. Seeded from the
+  // prewarm cache, which holds the no-query list the Chats scope would ask for.
+  const dispatchedChatQueryRef = useRef<string | null>(cachedChats ? "" : null);
   // Recent chats shown in the suggestions area (loaded on open, independent of chats tab)
   const [recentChats, setRecentChats] = useState<ConversationMeta[]>(
     cachedChats ? cachedChats.slice(0, 5) : [],
@@ -963,6 +967,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       // Cleared in the same commit that starts the pass — `isLoadingChats`
       // carries the loading state from here, so the panel never blinks.
       setChatsPassPending(false);
+      // `contentFilter` is a dep, so switching scope re-entered here and
+      // refetched a query that was already loaded — and because loadChats flips
+      // isLoadingChats, the Chats scope hid the rows it already had and painted
+      // a skeleton. loadChats doesn't read contentFilter, so All and Chats get
+      // identical rows for the same query and the second fetch is pure waste.
+      if (dispatchedChatQueryRef.current === q) return;
+      dispatchedChatQueryRef.current = q;
       void loadChats(q);
       return;
     }
@@ -1125,6 +1136,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         if (!queryRef.current.trim()) {
           setChatResults(all);
           setChatsQuery("");
+          // Same list the Chats scope would fetch for an empty query, so mark
+          // it dispatched and let entering that scope reuse it.
+          dispatchedChatQueryRef.current = "";
           setNavIndex(0);
         }
       })
