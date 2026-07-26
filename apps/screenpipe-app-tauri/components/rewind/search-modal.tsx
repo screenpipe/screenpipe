@@ -1040,9 +1040,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   ]);
 
   // How many frame cards the grid is actually painting per row. The track is
-  // `auto-fit, minmax(300px, 1fr)`, so it resolves to 2 columns at the default
-  // window width and 4 once you widen past ~1260 — a hardcoded 3 made ArrowDown
-  // skip a row at the default size and drift diagonally when wide. Read off the
+  // `auto-fit, minmax(200px, 1fr)`, so the count changes with the window — a
+  // hardcoded 3 made ArrowDown skip a row at some widths and drift diagonally
+  // at others. Read off the
   // resolved style rather than tracked in state: it's only needed inside the
   // keydown handler, and asking the browser stays correct if the track changes.
   const frameColumns = useCallback(() => {
@@ -2218,7 +2218,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 className="grid gap-2.5"
                 style={{
                   // Matches the screen and tag grids — see the note there.
-                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
               {filteredSpeakerTranscriptions.map((t, index) => {
@@ -2392,7 +2392,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   // Same track as the screen results — see the note there.
                   // Was a 180px floor, which packed in columns small enough
                   // that the frames stopped being readable.
-                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
               {tagResults.map((frame) => (
@@ -2491,7 +2491,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               <div
                 className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -2636,7 +2636,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               <div
                 className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -2895,14 +2895,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   );
                 };
 
-                // Flat 300px floor, deliberately not a percentage. A `30%`
+                // Flat 200px floor, deliberately not a percentage. A `30%`
                 // floor caps the grid at three columns and spends extra width
                 // enlarging cards; users asked for the opposite — a wider
-                // window should show *more* results. 300px is high enough that
-                // the extra columns stay legible instead of shrinking to
-                // thumbnails. auto-fit (not auto-fill) collapses empty tracks
-                // so a lone result has no gap beside it.
-                const cellStyle = { gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" } as const;
+                // window should show *more* results, and the grid should break
+                // into columns early rather than sitting at two oversized
+                // cards. auto-fit (not auto-fill) collapses empty tracks so a
+                // lone result has no gap beside it.
+                const cellStyle = { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" } as const;
 
                 if (contentFilter !== "screen") {
                   return (
