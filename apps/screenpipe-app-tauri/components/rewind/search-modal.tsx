@@ -2188,7 +2188,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 className="grid gap-2.5"
                 style={{
                   // Matches the screen and tag grids — see the note there.
-                  gridTemplateColumns: "repeat(auto-fit, minmax(max(240px, 30%), 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
                 }}
               >
               {filteredSpeakerTranscriptions.map((t, index) => {
@@ -2359,11 +2359,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             <div
                 className="grid gap-2.5"
                 style={{
-                  // Same track as the screen results: a flat 180px floor packed
-                  // in more columns as the window grew, so widening the panel
-                  // bought you more thumbnails at the same small size instead
-                  // of bigger ones.
-                  gridTemplateColumns: "repeat(auto-fit, minmax(max(240px, 30%), 1fr))",
+                  // Same track as the screen results — see the note there.
+                  // Was a 180px floor, which packed in columns small enough
+                  // that the frames stopped being readable.
+                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
                 }}
               >
               {tagResults.map((frame) => (
@@ -2462,7 +2461,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               <div
                 className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(max(240px, 30%), 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
                 }}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -2607,7 +2606,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               <div
                 className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fit, minmax(max(240px, 30%), 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
                 }}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -2866,13 +2865,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   );
                 };
 
-                // The min track is `max(240px, 30%)`, not a flat 240px: a flat
-                // floor packs in more columns as the window grows, so widening
-                // the panel gave you more thumbnails at the same small size.
-                // The 30% floor caps it at three columns, so extra width makes
-                // the cards bigger instead. auto-fit (not auto-fill) still
-                // collapses empty tracks so a lone result has no gap beside it.
-                const cellStyle = { gridTemplateColumns: "repeat(auto-fit, minmax(max(240px, 30%), 1fr))" } as const;
+                // Flat 300px floor, deliberately not a percentage. A `30%`
+                // floor caps the grid at three columns and spends extra width
+                // enlarging cards; users asked for the opposite — a wider
+                // window should show *more* results. 300px is high enough that
+                // the extra columns stay legible instead of shrinking to
+                // thumbnails. auto-fit (not auto-fill) collapses empty tracks
+                // so a lone result has no gap beside it.
+                const cellStyle = { gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" } as const;
 
                 if (contentFilter !== "screen") {
                   return (
