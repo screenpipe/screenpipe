@@ -116,44 +116,42 @@ async function clickFirstButtonWithText(text: string, timeoutMs = t(15_000)): Pr
   throw new Error(`No displayed button found with text "${text}"`);
 }
 
+// The palette publishes what it is showing as data-search-state on the results
+// container. Wait on that, never on utility classes or empty-state wording:
+// this wait used to sniff both, and a restyle that moved `flex-1` and reworded
+// the empty state timed the whole journey out while search itself was fine.
 async function waitForSearchResultsSurface(): Promise<void> {
-  await browser.waitUntil(
-    async () => {
-      const state = (await browser.execute(
-        (selector: string, query: string) => {
+  const settled = ["empty", "results"];
+  let lastState = "<no results container>";
+
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = (await browser.execute((selector: string) => {
           const input = document.querySelector<HTMLInputElement>(selector);
-          const hasResultRegion = Array.from(document.querySelectorAll<HTMLElement>("div")).some((node) => {
-            const className = node.getAttribute("class") ?? "";
-            return (
-              className.includes("flex-1") &&
-              className.includes("min-h-0") &&
-              className.includes("overflow-y-auto")
-            );
-          });
-          const bodyText = (document.body.innerText || "").toLowerCase();
+          const results = document.querySelector<HTMLElement>('[data-testid="search-results"]');
 
           return {
             inputValue: input?.value ?? "",
-            hasResultRegion,
-            hasEmptyState: bodyText.includes(`no results for "${query.toLowerCase()}"`),
+            searchState: results?.getAttribute("data-search-state") ?? null,
           };
-        },
-        SEARCH_INPUT_SELECTOR,
-        SEARCH_QUERY,
-      )) as {
-        inputValue: string;
-        hasResultRegion: boolean;
-        hasEmptyState: boolean;
-      };
+        }, SEARCH_INPUT_SELECTOR)) as { inputValue: string; searchState: string | null };
 
-      return state.inputValue === SEARCH_QUERY && (state.hasResultRegion || state.hasEmptyState);
-    },
-    {
-      timeout: t(20_000),
-      interval: 250,
-      timeoutMsg: "Search did not show a results or empty-state surface after typing",
-    },
-  );
+        if (state.searchState) lastState = state.searchState;
+
+        return state.inputValue === SEARCH_QUERY && settled.includes(state.searchState ?? "");
+      },
+      {
+        timeout: t(20_000),
+        interval: 250,
+        timeoutMsg: "Search did not settle",
+      },
+    );
+  } catch {
+    throw new Error(
+      `Search did not reach a results or empty state after typing (last state: ${lastState})`,
+    );
+  }
 }
 
 async function expectTimelineShell(): Promise<void> {

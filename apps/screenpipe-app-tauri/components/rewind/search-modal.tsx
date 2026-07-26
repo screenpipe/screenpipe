@@ -2041,6 +2041,23 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     && trimmedQuery.length >= MIN_QUERY_CHARS;
   const showEmpty = emptyEligible && !anyLoading && querySettled && !showSearchError
     && trimmedQuery.length >= MIN_QUERY_CHARS && !facetsHidEverything;
+  // One machine-readable name for what the results area is showing, published
+  // as data-search-state on that container. E2E used to sniff utility classes
+  // and the empty-state wording to decide a search had settled, so restyling
+  // the palette broke the Windows journey test; this survives redesigns.
+  // Loading wins over everything: rows from the previous query are still on
+  // screen mid-search, and calling that "results" lets a waiter pass early.
+  const resultsState = !querySettled || anyLoading
+    ? "searching"
+    : showMinChars
+      ? "min-chars"
+      : showSearchError
+        ? "error"
+        : showEmpty
+          ? "empty"
+          : nothingRendered
+            ? "idle"
+            : "results";
   const SCOPE_NOUNS: Record<ContentFilter, string> = {
     all: "results",
     screen: "screen matches",
@@ -3095,6 +3112,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         <div
           key={contentFilter}
           ref={gridRef}
+          data-testid="search-results"
+          data-search-state={resultsState}
           className={cn(
             "min-h-0 overflow-y-auto overscroll-contain touch-pan-y",
             // Standalone: height follows content up to the cap, so the card (and
@@ -3190,6 +3209,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         <div
           key={contentFilter}
           ref={gridRef}
+          data-testid="search-results"
+          data-search-state={resultsState}
           className={cn(
             "overflow-y-auto px-4 pb-4 pt-1 overscroll-contain touch-pan-y",
             // Standalone search window: fill the window instead of leaving
