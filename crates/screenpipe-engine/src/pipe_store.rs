@@ -35,8 +35,59 @@ impl PipeStore for SqlitePipeStore {
     ) -> Result<i64> {
         Ok(self
             .db
-            .pipe_create_execution_queued(pipe_name, trigger_type, model, provider)
+            .pipe_create_execution_queued(pipe_name, trigger_type, model, provider, None, None)
             .await?)
+    }
+
+    async fn create_execution_with_trigger(
+        &self,
+        pipe_name: &str,
+        trigger_type: &str,
+        model: &str,
+        provider: Option<&str>,
+        trigger_event: Option<&str>,
+        trigger_key: Option<&str>,
+    ) -> Result<i64> {
+        Ok(self
+            .db
+            .pipe_create_execution_queued(
+                pipe_name,
+                trigger_type,
+                model,
+                provider,
+                trigger_event,
+                trigger_key,
+            )
+            .await?)
+    }
+
+    async fn claim_event_run(
+        &self,
+        pipe_name: &str,
+        event_name: &str,
+        event_key: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .db
+            .pipe_claim_event_run_queued(pipe_name, event_name, event_key)
+            .await?)
+    }
+
+    async fn release_event_run(
+        &self,
+        pipe_name: &str,
+        event_name: &str,
+        event_key: &str,
+    ) -> Result<()> {
+        self.db
+            .pipe_release_event_run_queued(pipe_name, event_name, event_key)
+            .await?;
+        Ok(())
+    }
+
+    async fn prune_event_runs(&self, before: DateTime<Utc>) -> Result<()> {
+        self.db.pipe_prune_event_runs_queued(before).await?;
+        Ok(())
     }
 
     async fn set_execution_running(&self, id: i64, pid: Option<u32>) -> Result<()> {
@@ -116,7 +167,8 @@ impl PipeStore for SqlitePipeStore {
             sqlx::query_as::<_, PipeExecutionRow>(
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at, stdout, stderr, exit_code,
-                          error_type, error_message, duration_ms, session_path
+                          error_type, error_message, duration_ms, session_path,
+                          trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ? AND id < ?
                    ORDER BY id DESC
@@ -131,7 +183,8 @@ impl PipeStore for SqlitePipeStore {
             sqlx::query_as::<_, PipeExecutionRow>(
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at, stdout, stderr, exit_code,
-                          error_type, error_message, duration_ms, session_path
+                          error_type, error_message, duration_ms, session_path,
+                          trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ?
                    ORDER BY id DESC
@@ -157,7 +210,8 @@ impl PipeStore for SqlitePipeStore {
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at,
                           '' AS stdout, '' AS stderr,
-                          exit_code, error_type, error_message, duration_ms, session_path
+                          exit_code, error_type, error_message, duration_ms, session_path,
+                          trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ? AND id < ?
                    ORDER BY id DESC
@@ -173,7 +227,8 @@ impl PipeStore for SqlitePipeStore {
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at,
                           '' AS stdout, '' AS stderr,
-                          exit_code, error_type, error_message, duration_ms, session_path
+                          exit_code, error_type, error_message, duration_ms, session_path,
+                          trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ?
                    ORDER BY id DESC
@@ -338,7 +393,8 @@ impl PipeStore for SqlitePipeStore {
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at,
                           '' AS stdout, '' AS stderr,
-                          exit_code, error_type, error_message, duration_ms, session_path
+                          exit_code, error_type, error_message, duration_ms, session_path,
+                          trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ?
                    ORDER BY id DESC
@@ -447,6 +503,8 @@ struct PipeExecutionRow {
     error_message: Option<String>,
     duration_ms: Option<i64>,
     session_path: Option<String>,
+    trigger_event: Option<String>,
+    trigger_key: Option<String>,
 }
 
 impl From<PipeExecutionRow> for PipeExecution {
@@ -468,6 +526,8 @@ impl From<PipeExecutionRow> for PipeExecution {
             error_message: r.error_message,
             duration_ms: r.duration_ms,
             session_path: r.session_path,
+            trigger_event: r.trigger_event,
+            trigger_key: r.trigger_key,
         }
     }
 }
@@ -598,6 +658,116 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+    }
+
+    /// #5481: `meeting_ended` fires twice for one meeting when the user rejoins
+    /// within the 120s merge window. The second delivery must not win a claim.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_duplicate_meeting_ended_claims_once() {
+        let (store, _tmp) = setup_test_store().await;
+
+        assert!(store
+            .claim_event_run("meeting-summary", "meeting_ended", "42")
+            .await
+            .unwrap());
+        assert!(
+            !store
+                .claim_event_run("meeting-summary", "meeting_ended", "42")
+                .await
+                .unwrap(),
+            "duplicate meeting_ended for meeting 42 should be suppressed"
+        );
+
+        // A different meeting is unrelated work.
+        assert!(store
+            .claim_event_run("meeting-summary", "meeting_ended", "43")
+            .await
+            .unwrap());
+        // So is the same meeting seen by a different pipe.
+        assert!(store
+            .claim_event_run("meeting-notes", "meeting_ended", "42")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_released_claim_can_run_again() {
+        let (store, _tmp) = setup_test_store().await;
+
+        assert!(store
+            .claim_event_run("p", "meeting_ended", "7")
+            .await
+            .unwrap());
+        store
+            .release_event_run("p", "meeting_ended", "7")
+            .await
+            .unwrap();
+        assert!(
+            store
+                .claim_event_run("p", "meeting_ended", "7")
+                .await
+                .unwrap(),
+            "a failed run releases its claim so the event can be retried"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_prune_event_runs_drops_old_claims() {
+        let (store, _tmp) = setup_test_store().await;
+
+        assert!(store
+            .claim_event_run("p", "meeting_ended", "1")
+            .await
+            .unwrap());
+        store
+            .prune_event_runs(Utc::now() + chrono::Duration::days(1))
+            .await
+            .unwrap();
+        assert!(
+            store
+                .claim_event_run("p", "meeting_ended", "1")
+                .await
+                .unwrap(),
+            "pruned claims no longer suppress"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_execution_records_triggering_event() {
+        let (store, _tmp) = setup_test_store().await;
+
+        store
+            .create_execution_with_trigger(
+                "meeting-summary",
+                "event",
+                "opus",
+                None,
+                Some("meeting_ended"),
+                Some("42"),
+            )
+            .await
+            .unwrap();
+
+        let execs = store
+            .get_executions("meeting-summary", 10, None)
+            .await
+            .unwrap();
+        assert_eq!(execs[0].trigger_event.as_deref(), Some("meeting_ended"));
+        assert_eq!(execs[0].trigger_key.as_deref(), Some("42"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_scheduled_execution_has_no_trigger_event() {
+        let (store, _tmp) = setup_test_store().await;
+
+        store
+            .create_execution("p", "scheduled", "m", None)
+            .await
+            .unwrap();
+
+        let execs = store.get_executions("p", 10, None).await.unwrap();
+        assert_eq!(execs[0].trigger_event, None);
+        assert_eq!(execs[0].trigger_key, None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
