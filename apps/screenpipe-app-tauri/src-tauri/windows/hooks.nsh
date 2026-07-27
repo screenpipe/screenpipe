@@ -97,8 +97,9 @@
   Push $0 ; full path
   Push $1 ; lock-wait attempt counter
   Push $2 ; open-for-write probe handle
-  Push $3 ; move-aside suffix counter
+  Push $3 ; move-aside suffix
   Push $4 ; move-aside candidate path
+  Push $5 ; rename attempt guard
 
   StrCpy $0 "$INSTDIR\${Name}"
   ${If} ${FileExists} "$0"
@@ -116,15 +117,26 @@
       IntOp $1 $1 + 1
       ${If} $1 >= 3
         DetailPrint "${Name} still locked after $1 tries - moving it aside"
-        StrCpy $3 0
+
+        ; Seed the suffix with the tick count so repeated upgrades never reuse a
+        ; name: leftovers that are themselves still locked (an orphan from an
+        ; earlier update) must not be able to exhaust the destinations. Falls
+        ; back to 0 if the System plugin is unavailable, and increments from
+        ; there on collision.
+        StrCpy $3 ""
+        System::Call 'kernel32::GetTickCount()i.r3' ; ms since boot
+        ${If} $3 == ""
+          StrCpy $3 0
+        ${EndIf}
+        ; GetTickCount is a DWORD but NSIS ints are signed, so mask the sign bit
+        ; off rather than building names like `.sp-old--1234` after 24 days up.
+        IntOp $3 $3 & 2147483647
+
+        StrCpy $5 0
         ${Do}
-          ${If} $3 == 0
-            StrCpy $4 "$0.sp-old"
-          ${Else}
-            StrCpy $4 "$0.sp-old$3"
-          ${EndIf}
-          ; Drop a leftover from an earlier update so the name is free. If that
-          ; one is locked too, Rename fails and the next suffix is tried.
+          StrCpy $4 "$0.sp-old-$3"
+          ; Drop a same-named leftover so the destination is free. If that one
+          ; is locked too, Rename fails and the next suffix is tried.
           Delete "$4"
           ClearErrors
           Rename "$0" "$4"
@@ -135,9 +147,18 @@
             ${ExitDo}
           ${EndIf}
           IntOp $3 $3 + 1
-          ${If} $3 >= 5
-            DetailPrint "could not move ${Name} aside - extraction may fail"
-            ${ExitDo}
+          IntOp $5 $5 + 1
+          ; Pure hang guard, not a cap on destinations: with a tick-count seed a
+          ; collision needs a leftover of that exact name, so reaching this many
+          ; failures means the *source* cannot be renamed at all (the holder
+          ; denied FILE_SHARE_DELETE, or the directory is not writable).
+          ${If} $5 >= 1000
+            DetailPrint "could not move ${Name} aside after $5 attempts"
+            ; Fail loudly instead of letting extraction hit the locked path and
+            ; raise the unrecoverable "Error opening file for writing" dialog.
+            MessageBox MB_OK|MB_ICONSTOP "Setup could not replace ${Name} because another program is using it.$\r$\n$\r$\nClose screenpipe (and any bun.exe in Task Manager), then run this installer again." /SD IDOK
+            SetErrors
+            Abort "could not replace ${Name} - it is locked by another program"
           ${EndIf}
         ${Loop}
         ${ExitDo}
@@ -148,6 +169,7 @@
     ${Loop}
   ${EndIf}
 
+  Pop $5
   Pop $4
   Pop $3
   Pop $2
@@ -162,6 +184,9 @@
   ; tidy path; these checks are what actually guarantee extraction can write,
   ; whether or not it worked.
   DetailPrint "Making app binaries writable..."
+  ; Leftovers from earlier updates whose holder has since exited. Clearing them
+  ; first keeps them from accumulating across repeated upgrades.
+  Delete "$INSTDIR\*.sp-old*"
   !insertmacro _SP_ClearLockedFile "bun.exe"
   !insertmacro _SP_ClearLockedFile "screenpipe.exe"
   !insertmacro _SP_ClearLockedFile "screenpipe-app.exe"
@@ -172,8 +197,7 @@
 !macro NSIS_HOOK_POSTINSTALL
   ; Binaries moved aside above. The orphan holding them has usually exited by
   ; now; whatever is left gets swept by the app on its next boot.
-  Delete "$INSTDIR\*.sp-old"
-  Delete "$INSTDIR\*.sp-old?"
+  Delete "$INSTDIR\*.sp-old*"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

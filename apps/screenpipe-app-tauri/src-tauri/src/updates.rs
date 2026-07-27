@@ -476,8 +476,9 @@ fn sweep_sp_old_files(dir: &std::path::Path) -> usize {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        // `bun.exe.sp-old`, `bun.exe.sp-old2`, ... — the suffixes hooks.nsh
-        // walks when an earlier leftover is itself still locked.
+        // `bun.exe.sp-old-<tick>` — hooks.nsh seeds the suffix with the tick
+        // count and increments on collision, so match the whole family (older
+        // installers wrote plain `.sp-old` / `.sp-old2`).
         let is_leftover = name
             .rsplit('.')
             .next()
@@ -1345,6 +1346,20 @@ mod tests {
         assert!(!dir.path().join("screenpipe.exe.sp-old2").exists());
         assert!(dir.path().join("bun.exe").exists());
         assert!(dir.path().join("screenpipe.exe").exists());
+    }
+
+    #[test]
+    fn sweep_clears_leftovers_accumulated_across_upgrades() {
+        // Repeated upgrades where the holder outlived each install: hooks.nsh
+        // seeds the suffix with the tick count, so the names differ every run.
+        let dir = tempfile::tempdir().unwrap();
+        for suffix in ["sp-old", "sp-old2", "sp-old-1", "sp-old-874219", "sp-old-9"] {
+            std::fs::write(dir.path().join(format!("bun.exe.{suffix}")), b"old").unwrap();
+        }
+        std::fs::write(dir.path().join("bun.exe"), b"new").unwrap();
+
+        assert_eq!(sweep_sp_old_files(dir.path()), 5);
+        assert!(dir.path().join("bun.exe").exists());
     }
 
     #[test]

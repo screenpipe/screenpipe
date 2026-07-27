@@ -139,14 +139,6 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           update = await check(checkOptions as any);
         }
 
-        // Fall back to the endpoints baked into the build config. Empty in
-        // production (check() rejects immediately — no behavior change), but
-        // e2e updater-harness builds (tauri.e2e.json) point at the local mock
-        // server, so the staged update is installable on Windows too.
-        if (!update?.available) {
-          update = await check().catch(() => null);
-        }
-
         if (update?.available) {
 
 
