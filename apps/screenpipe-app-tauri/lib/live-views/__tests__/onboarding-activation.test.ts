@@ -4,6 +4,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearLegacyUserGoalCategory,
   completeOnboardingLiveViewActivation,
   consumeOnboardingBrainHandoff,
   getOnboardingLiveViewActivation,
@@ -11,9 +12,11 @@ import {
   markOnboardingLiveViewSetupNeedsRetry,
   markOnboardingLiveViewSetupReady,
   removeOnboardingLiveViewActivation,
+  readLegacyUserGoalCategory,
   selectedLiveViewDashboardId,
   setOnboardingLiveViewGuideStep,
   startOnboardingLiveViewActivation,
+  USER_GOAL_STORAGE_KEY,
 } from "../onboarding-activation";
 
 const localStorageMock = (() => {
@@ -58,6 +61,43 @@ describe("onboarding Live View activation", () => {
         completedAt: null,
       }),
     );
+  });
+
+  it("prefers the explicit legacy user goal during settings migration", () => {
+    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, "process_automation");
+    startOnboardingLiveViewActivation("first-dashboard-4", "work_memory");
+
+    expect(readLegacyUserGoalCategory()).toBe("process_automation");
+  });
+
+  it("defaults an untouched existing user to work memory", () => {
+    expect(readLegacyUserGoalCategory()).toBe("work_memory");
+    expect(window.localStorage.getItem(USER_GOAL_STORAGE_KEY)).toBeNull();
+  });
+
+  it("preserves an explicit No specific goal choice", () => {
+    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, "default");
+
+    expect(readLegacyUserGoalCategory()).toBe("default");
+  });
+
+  it("uses the default order for a custom onboarding goal", () => {
+    startOnboardingLiveViewActivation("first-dashboard-5", "custom");
+
+    expect(readLegacyUserGoalCategory()).toBe("default");
+  });
+
+  it("reads and then clears browser-only goal keys after settings migration", () => {
+    window.localStorage.setItem("screenpipe.home.focus.v1", "work_patterns");
+
+    expect(readLegacyUserGoalCategory()).toBe("work_patterns");
+    expect(window.localStorage.getItem("screenpipe.home.focus.v1")).toBe(
+      "work_patterns",
+    );
+
+    clearLegacyUserGoalCategory();
+
+    expect(window.localStorage.getItem("screenpipe.home.focus.v1")).toBeNull();
   });
 
   it("keeps setup recovery and guide progress on the same activation", () => {

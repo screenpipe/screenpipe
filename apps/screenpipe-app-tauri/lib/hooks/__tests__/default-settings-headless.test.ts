@@ -13,4 +13,10 @@ describe("headless default", () => {
     expect(settings.headless).toBe(false);
     expect(settings.headlessRecordOnly).toBe(false);
   });
+
+  it("stores work memory as the default user goal", () => {
+    const settings = createDefaultSettingsObject();
+
+    expect(settings.userGoalCategory).toBe("work_memory");
+  });
 });

@@ -14,7 +14,14 @@ Automate releasing all components of the screenpipe monorepo.
 |-----------|--------------|-----------------|----------|
 | Desktop App | `apps/screenpipe-app-tauri/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | `release-app.yml` |
 | CLI/Server | `Cargo.toml` (workspace.package) | `version = "0.2.X"` | `release-cli.yml` |
-| MCP | `packages/screenpipe-mcp/package.json` | `"version": "X.Y.Z"` | `release-mcp.yml` |
+| MCP | `packages/screenpipe-mcp/package.json` **and** `server.json` (2 fields) | `"version": "X.Y.Z"` | `release-mcp.yml` |
+
+> **MCP has no commit-prefix trigger** — unlike the app, `release-mcp.yml` fires
+> only on an `mcp-v*` tag or `workflow_dispatch`, and it refuses to run when
+> `package.json`'s version is already on npm (npm cannot overwrite a published
+> version, so the run would publish nothing). Follow
+> `packages/screenpipe-mcp/RELEASE.md` — it has the exact commands and the
+> post-publish checks.
 
 ## When to Release What
 

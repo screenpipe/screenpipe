@@ -34,6 +34,7 @@ import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { buildBoundedFacetSql, sanitizeFts5Query } from "@/lib/search/facet-sql";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import posthog from "posthog-js";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 
 interface SpeakerResult {
   id: number;
@@ -1480,6 +1481,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         has_domain_filter: Boolean(domainFilter),
         has_time_filter: Boolean(timeFilter),
       });
+      qualifiedValue.searchResultOpened();
     },
     [
       analyticsSurface,

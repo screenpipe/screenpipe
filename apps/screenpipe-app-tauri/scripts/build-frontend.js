@@ -63,6 +63,18 @@ const SKIP_FILES = new Set(['.DS_Store', 'tsconfig.tsbuildinfo'])
 // the hash so toggling one invalidates the cache.
 const INPUT_ENV = ['SHIP_SOURCE_MAPS', 'NODE_ENV']
 
+// Next inlines EVERY `NEXT_PUBLIC_*` var into the emitted chunks at build
+// time, so each one is a bundle input — enumerated dynamically because a
+// hardcoded list goes stale the day someone adds a knob. A cache key that
+// missed one served a bundle baked with the OLD value whenever only the env
+// changed: rebaking `NEXT_PUBLIC_SCREENPIPE_WEB_URL` with untouched sources
+// was a cache hit, and the "new" app shipped a control plane URL pointing at
+// a dead IP.
+function bundleInputEnvKeys() {
+	const dynamic = Object.keys(process.env).filter((k) => k.startsWith('NEXT_PUBLIC_'))
+	return [...new Set([...INPUT_ENV, ...dynamic])].sort()
+}
+
 async function walk(dir, files) {
 	let entries
 	try {
@@ -99,7 +111,7 @@ export async function computeInputHash(root = appRoot) {
 		hash.update(content)
 		hash.update('\0')
 	}
-	for (const key of INPUT_ENV) {
+	for (const key of bundleInputEnvKeys()) {
 		hash.update(`${key}=${process.env[key] ?? ''}`)
 		hash.update('\0')
 	}

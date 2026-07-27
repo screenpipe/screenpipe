@@ -11,6 +11,7 @@ import {
   parseArgs,
   runFromArgv,
 } from "./http-server";
+import { PKG_VERSION } from "./version";
 
 describe("parseArgs", () => {
   it("defaults to localhost on 3031 with no api key", () => {
@@ -221,7 +222,14 @@ describe("buildHttpServer", () => {
       expect(initResponse.status).toBe(200);
       const sessionId = initResponse.headers.get("mcp-session-id");
       expect(sessionId).toBeTruthy();
-      await initResponse.text();
+      // serverInfo.version must be the real package version. It was a frozen
+      // literal "0.14.0" for months, so the HTTP transport advertised a version
+      // unrelated to the installed build — the same ambiguity that made the
+      // npm-0.18.15-vs-repo-0.18.15 mixup (SCR-352) undiagnosable from a
+      // support transcript.
+      const initBody = await initResponse.text();
+      expect(initBody).toContain('"name":"screenpipe-http"');
+      expect(initBody).toContain(`"version":"${PKG_VERSION}"`);
 
       const healthResponse = await fetch(`${baseUrl}/health`);
       expect(healthResponse.status).toBe(200);

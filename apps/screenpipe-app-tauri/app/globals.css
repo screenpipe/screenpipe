@@ -2,6 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+.live-view-process-canvas .react-flow__node {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.live-view-process-canvas .react-flow__node:focus,
+.live-view-process-canvas .react-flow__edge:focus {
+  outline: none;
+}
+
+.live-view-process-canvas .react-flow__selection,
+.live-view-process-canvas .react-flow__nodesselection-rect {
+  border: 1px solid hsl(var(--foreground));
+  border-radius: 0;
+  background: hsl(var(--foreground) / 0.04);
+}
+
+.live-view-process-canvas .react-flow__edge-textbg {
+  fill: hsl(var(--background));
+}
+
+.live-view-process-canvas .react-flow__edge-text {
+  fill: hsl(var(--foreground));
+  font-size: 11px;
+}
+
 @layer base {
   :root {
     /* Tell the engine the UI is light by default so native scrollbars and form

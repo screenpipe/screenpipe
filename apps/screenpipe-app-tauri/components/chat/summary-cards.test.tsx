@@ -4,14 +4,80 @@
 
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SummaryCards } from "./summary-cards";
 
+const { captureMock } = vi.hoisted(() => ({ captureMock: vi.fn() }));
+
 vi.mock("posthog-js", () => ({
-  default: { capture: vi.fn() },
+  default: { capture: captureMock },
 }));
 
 describe("SummaryCards", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("prioritizes cards from the saved onboarding goal", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+        userGoalCategory="work_patterns"
+      />,
+    );
+
+    const cards = screen.getAllByTestId(/^summary-card-/);
+    expect(cards.slice(0, 4).map((card) => card.dataset.testid)).toEqual([
+      "summary-card-time-breakdown",
+      "summary-card-day-recap",
+      "summary-card-automate-my-work",
+      "summary-card-missed-todos",
+    ]);
+    expect(captureMock).toHaveBeenCalledWith("home_card_impression", {
+      schema_version: 1,
+      surface: "chat_home",
+      layout_version: "home_v2",
+      card: "other_builtin",
+      position: 1,
+      presentation: "hero",
+    });
+  });
+
+  it("reorders an open Home view when the General Settings goal changes", () => {
+    const props = {
+      onSendMessage: vi.fn(),
+      customTemplates: [],
+      onSaveCustomTemplate: vi.fn(),
+      onUpdateCustomTemplate: vi.fn(),
+      onDeleteCustomTemplate: vi.fn(),
+    };
+    const { rerender } = render(
+      <SummaryCards
+        {...props}
+        userGoalCategory="work_memory"
+      />,
+    );
+
+    rerender(
+      <SummaryCards
+        {...props}
+        userGoalCategory="meeting_follow_through"
+      />,
+    );
+
+    const cards = screen.getAllByTestId(/^summary-card-/);
+    expect(cards.slice(0, 4).map((card) => card.dataset.testid)).toEqual([
+      "summary-card-missed-todos",
+      "summary-card-day-recap",
+      "summary-card-automate-my-work",
+      "summary-card-time-breakdown",
+    ]);
+  });
+
   it("gives Automate My Work the installed pipe inventory instead of the static fallback prompt", () => {
     const onSendMessage = vi.fn();
 
@@ -22,6 +88,7 @@ describe("SummaryCards", () => {
         onSaveCustomTemplate={vi.fn()}
         onUpdateCustomTemplate={vi.fn()}
         onDeleteCustomTemplate={vi.fn()}
+        userGoalCategory="default"
         existingPipes={[
           {
             name: "focus-pulse",
@@ -39,15 +106,36 @@ describe("SummaryCards", () => {
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Focus Pulse (focus-pulse; enabled; every 1h)"),
       "⚡ Automate My Work",
+      "home_card",
+      "automate_my_work",
     );
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Recommend exactly one next action"),
       expect.any(String),
+      "home_card",
+      "automate_my_work",
     );
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Create and test this one?"),
       expect.any(String),
+      "home_card",
+      "automate_my_work",
     );
+    expect(captureMock).toHaveBeenCalledWith("home_card_clicked", {
+      kind: "template_featured",
+      template_name: "automate-my-work",
+      card: "automate_my_work",
+    });
+    expect(captureMock).toHaveBeenCalledWith("home_card_impression", {
+      schema_version: 1,
+      surface: "chat_home",
+      layout_version: "home_v2",
+      card: "automate_my_work",
+      position: 1,
+      presentation: "hero",
+    });
+    expect(screen.getByRole("button", { name: /automate my work/i }).closest(".ph-no-capture"))
+      .not.toBeNull();
   });
 
   describe("saved template edit-before-run (#5239)", () => {
@@ -108,8 +196,21 @@ describe("SummaryCards", () => {
       expect(onSendMessage).toHaveBeenCalledWith(
         expect.stringContaining("Summarize my day focusing on issue triage"),
         "📌 Daily Recap",
+        "home_card",
+        "custom",
       );
       expect(onUpdateCustomTemplate).not.toHaveBeenCalled();
+
+      const customRunEvent = captureMock.mock.calls.find(
+        ([event, properties]) =>
+          event === "home_card_clicked" && properties.kind === "custom_template_run",
+      );
+      expect(customRunEvent).toEqual([
+        "home_card_clicked",
+        { kind: "custom_template_run" },
+      ]);
+      expect(JSON.stringify(customRunEvent)).not.toContain("Daily Recap");
+      expect(JSON.stringify(customRunEvent)).not.toContain("custom-123");
     });
 
     it("persists edits only via the explicit Update Template action", () => {

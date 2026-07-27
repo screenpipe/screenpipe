@@ -30,10 +30,18 @@
     {
       "identifier": "shell:allow-open",
       "allow": [
-        { "url": "^https?://.*" },
-        { "url": "^mailto:.*" },
-        { "url": "^tel:.*" },
-        { "url": "^x-apple-reminderkit://.*" }
+        {
+          "url": "^https?://.*"
+        },
+        {
+          "url": "^mailto:.*"
+        },
+        {
+          "url": "^tel:.*"
+        },
+        {
+          "url": "^x-apple-reminderkit://.*"
+        }
       ]
     },
     "store:default",
@@ -61,11 +69,21 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "^https?://.*" },
-        { "url": "^mailto:.*" },
-        { "url": "^tel:.*" },
-        { "url": "^x-apple-reminderkit://.*" },
-        { "url": "^obsidian://.*" }
+        {
+          "url": "^https?://.*"
+        },
+        {
+          "url": "^mailto:.*"
+        },
+        {
+          "url": "^tel:.*"
+        },
+        {
+          "url": "^x-apple-reminderkit://.*"
+        },
+        {
+          "url": "^obsidian://.*"
+        }
       ]
     },
     "core:window:default",
@@ -484,6 +502,30 @@
         },
         {
           "url": "https://**/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://**:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://**:*/*",
           "methods": [
             "GET",
             "POST",

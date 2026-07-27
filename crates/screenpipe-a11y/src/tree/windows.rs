@@ -8,8 +8,8 @@
 //! the focused window's tree and extract all visible text — matching macOS behavior.
 
 use super::{
-    AccessibilityTreeNode, NodeBounds, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
-    TreeWalkerPlatform,
+    apply_focused_window_filters, AccessibilityTreeNode, FocusedWindowFilterResult, NodeBounds,
+    SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig, TreeWalkerPlatform,
 };
 use crate::events::AccessibilityNode;
 use crate::platform::windows_uia::UiaContext;
@@ -100,6 +100,29 @@ pub struct WindowsTreeWalker {
 /// After the initial send, it is never moved again — all access is single-threaded.
 /// The `Send` bound is required by `TreeWalkerPlatform` (for `Box<dyn …>` transfer).
 unsafe impl Send for WindowsTreeWalker {}
+
+pub(super) fn check_focused_window_filters(
+    config: &TreeWalkerConfig,
+) -> Result<FocusedWindowFilterResult> {
+    let (app_name, window_name) =
+        match crate::platform::windows::get_focused_app_window_lightweight() {
+            Some(metadata) => metadata,
+            None => return Ok(FocusedWindowFilterResult::NotFound),
+        };
+    let app_lower = app_name.to_lowercase();
+    let excluded = EXCLUDED_APPS
+        .iter()
+        .any(|excluded| app_lower.contains(excluded))
+        || crate::platform::windows_uia::is_fragile_uia_tree_provider(&app_name);
+
+    Ok(apply_focused_window_filters(
+        config,
+        app_name,
+        window_name.unwrap_or_default(),
+        false,
+        excluded,
+    ))
+}
 
 impl WindowsTreeWalker {
     pub fn new(mut config: TreeWalkerConfig) -> Self {

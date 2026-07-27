@@ -13,7 +13,23 @@ const ACTIVATIONS_STORAGE_KEY =
   "screenpipe.live-view.onboarding-activations.v1";
 const BRAIN_HANDOFF_STORAGE_KEY =
   "screenpipe.live-view.onboarding-brain-handoff.v1";
+export const USER_GOAL_STORAGE_KEY = "screenpipe.user.goal-category.v1";
+const LEGACY_HOME_FOCUS_STORAGE_KEY = "screenpipe.home.focus.v1";
 const MAX_STORED_ACTIVATIONS = 12;
+
+export type UserGoalCategory =
+  | Exclude<OnboardingGoalCategory, "custom">
+  | "default";
+
+const USER_GOAL_CATEGORIES = new Set<UserGoalCategory>([
+  "default",
+  "work_memory",
+  "meeting_follow_through",
+  "work_patterns",
+  "process_automation",
+]);
+
+export const DEFAULT_USER_GOAL_CATEGORY: UserGoalCategory = "work_memory";
 
 export type OnboardingLiveViewActivation = {
   viewId: string;
@@ -98,6 +114,58 @@ function writeActivations(activations: ActivationMap): void {
     );
   } catch {
     // This state improves the handoff but is not required to use Live Views.
+  }
+}
+
+export function normalizeUserGoalCategory(
+  value: unknown,
+): UserGoalCategory | null {
+  return typeof value === "string" &&
+    USER_GOAL_CATEGORIES.has(value as UserGoalCategory)
+    ? (value as UserGoalCategory)
+    : null;
+}
+
+/**
+ * Read the pre-settings-store goal once during migration. This deliberately
+ * does not write or delete anything: the caller clears the legacy keys only
+ * after store.bin has been saved successfully.
+ */
+export function readLegacyUserGoalCategory(): UserGoalCategory {
+  if (typeof window === "undefined") return DEFAULT_USER_GOAL_CATEGORY;
+  try {
+    const stored = normalizeUserGoalCategory(
+      window.localStorage.getItem(USER_GOAL_STORAGE_KEY),
+    );
+    if (stored) return stored;
+
+    const legacy = normalizeUserGoalCategory(
+      window.localStorage.getItem(LEGACY_HOME_FOCUS_STORAGE_KEY),
+    );
+    if (legacy) return legacy;
+
+    // Migrate existing onboarding activations without reading the free-text goal.
+    const latest = Object.values(readActivations()).sort(
+      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+    )[0];
+    const migratedGoal = latest
+      ? latest.goalCategory === "custom"
+        ? "default"
+        : latest.goalCategory
+      : DEFAULT_USER_GOAL_CATEGORY;
+    return migratedGoal;
+  } catch {
+    return DEFAULT_USER_GOAL_CATEGORY;
+  }
+}
+
+export function clearLegacyUserGoalCategory(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(USER_GOAL_STORAGE_KEY);
+    window.localStorage.removeItem(LEGACY_HOME_FOCUS_STORAGE_KEY);
+  } catch {
+    // The durable settings value already won; stale legacy state is harmless.
   }
 }
 

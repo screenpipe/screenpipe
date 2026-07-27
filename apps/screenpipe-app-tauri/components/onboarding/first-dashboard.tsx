@@ -162,7 +162,7 @@ function ScreenpipeBuildVisual({ currentIndex }: { currentIndex: number }) {
 
 export default function FirstDashboard() {
   const { completeOnboarding } = useOnboarding();
-  const { settings, isSettingsLoaded } = useSettings();
+  const { settings, updateSettings, isSettingsLoaded } = useSettings();
   const [goal, setGoal] = useState("");
   const [goalCategory, setGoalCategory] =
     useState<OnboardingGoalCategory>("custom");
@@ -263,6 +263,10 @@ export default function FirstDashboard() {
     });
 
     try {
+      await updateSettings({
+        userGoalCategory:
+          goalCategory === "custom" ? "default" : goalCategory,
+      });
       const preparedView = await withTimeout(
         prepareOnboardingLiveViewShell({
           dashboardId: dashboardIdRef.current,
@@ -337,6 +341,7 @@ export default function FirstDashboard() {
     goalCategory,
     reportProgress,
     settings.user?.token,
+    updateSettings,
   ]);
 
   const handleContinueWithoutWaiting = useCallback(async () => {

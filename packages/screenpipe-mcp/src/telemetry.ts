@@ -6,11 +6,9 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import * as Sentry from "@sentry/node";
+import { PKG_VERSION } from "./version";
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const packageJson = require("../package.json") as { version?: string };
-
-const MCP_VERSION = packageJson.version || "0.0.0";
+const MCP_VERSION = PKG_VERSION;
 const DEFAULT_MCP_SENTRY_DSN =
   "https://123656092b01a72b0417355ebbfb471f@o4505591122886656.ingest.us.sentry.io/4510761360949248";
 

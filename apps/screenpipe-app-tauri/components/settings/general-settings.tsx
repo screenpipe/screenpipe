@@ -13,12 +13,26 @@ import { Separator } from "@/components/ui/separator";
 import { Rocket, Moon, Sun, Monitor, FlaskConical, ExternalLink, Layers, RefreshCw, MonitorOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Settings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { UpdateBanner } from "@/components/update-banner";
 import type { SettingsField } from "./settings-search";
+import { ONBOARDING_GOALS } from "@/lib/live-views/onboarding-goals";
+import {
+  DEFAULT_USER_GOAL_CATEGORY,
+  normalizeUserGoalCategory,
+  type UserGoalCategory,
+} from "@/lib/live-views/onboarding-activation";
+import posthog from "posthog-js";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
@@ -27,10 +41,12 @@ export const searchIndex: SettingsField[] = [
   { label: "Check for updates", keywords: ["version"] },
   { label: "Auto-Update Pipes" },
   { label: "Reset Onboarding", keywords: ["setup"] },
+  { label: "Your goal", keywords: ["onboarding", "purpose", "personalization"] },
   { label: "Headless", keywords: ["low resource", "tray only", "memory", "webview"] },
   { label: "Record only", keywords: ["headless", "pipes", "scheduler", "automation"] },
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import {
   DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
@@ -46,6 +62,26 @@ export default function GeneralSettings() {
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
   const [isResettingOnboarding, setIsResettingOnboarding] = useState(false);
+  const userGoal =
+    normalizeUserGoalCategory(settings.userGoalCategory) ??
+    DEFAULT_USER_GOAL_CATEGORY;
+
+  const handleUserGoalChange = async (category: UserGoalCategory) => {
+    try {
+      await updateSettings({ userGoalCategory: category });
+      posthog.capture("user_goal_changed", {
+        goal_category: category,
+        source: "general_settings",
+      });
+    } catch (error) {
+      console.error("failed to save user goal:", error);
+      toast({
+        title: "couldn't save your goal",
+        description: "please try again",
+        variant: "destructive",
+      });
+    }
+  };
 
   const handleResetOnboarding = async () => {
     setIsResettingOnboarding(true);
@@ -170,7 +206,7 @@ export default function GeneralSettings() {
 
     const path = isManagedDeployment ? "/enterprise" : "/account/versions";
     if (isManagedDeployment) params.set("tab", "builds");
-    const url = `https://screenpipe.com${path}?${params.toString()}`;
+    const url = screenpipeWebUrl(`${path}?${params.toString()}`, "https://screenpipe.com");
 
     try {
       await openUrl(url);
@@ -350,6 +386,40 @@ export default function GeneralSettings() {
       </div>
 
       <Separator />
+
+      <Card className="border-border bg-card">
+        <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center space-x-2.5">
+              <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Your goal</h3>
+                <p className="text-xs text-muted-foreground">
+                  What you want screenpipe to help you accomplish
+                </p>
+              </div>
+            </div>
+            <Select
+              value={userGoal}
+              onValueChange={(value) =>
+                void handleUserGoalChange(value as UserGoalCategory)
+              }
+            >
+              <SelectTrigger className="h-8 w-[230px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">No specific goal</SelectItem>
+                {ONBOARDING_GOALS.map((goal) => (
+                  <SelectItem key={goal.category} value={goal.category}>
+                    {goal.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card className="border-border bg-card">
         <CardContent className="px-3 py-2.5">

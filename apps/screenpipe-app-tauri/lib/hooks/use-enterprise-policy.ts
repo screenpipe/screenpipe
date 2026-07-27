@@ -5,11 +5,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useEnterpriseBuildStatus } from "./use-is-enterprise-build";
 import { commands } from "@/lib/utils/tauri";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { isLocalControlPlaneBase, tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 import { getStore, useSettings } from "./use-settings";
 import { computeManagedSettingUpdates } from "./managed-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import { localFetch } from "@/lib/api";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import { platform as getPlatform } from "@tauri-apps/plugin-os";
 
 import { syncManagedPipes, gatherPipeStatuses, type ManagedPipe } from "./use-enterprise-pipes";
@@ -75,6 +76,42 @@ const ENTERPRISE_DEFAULT_HIDDEN = ["referral"];
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const LOCAL_POLICY_COMMAND_TIMEOUT_MS = 8_000;
 const ENGINE_RESTART_COMMAND_TIMEOUT_MS = 12_000;
+
+/**
+ * Deadline for the mount-time entitlement check. The gate renders a blank
+ * "checking enterprise access" spinner for as long as this hook stays in
+ * "checking", and nothing else bounds the policy request: an unreachable host
+ * waits out the OS TCP connect timeout (~75s on macOS), and a host that accepts
+ * the connection and never answers never returns at all. 12s is long enough for
+ * a slow-but-working control plane and short enough that the employee gets the
+ * credential prompt (and the existing retryable "check your connection" copy)
+ * instead of a dead spinner.
+ */
+const INITIAL_POLICY_FETCH_TIMEOUT_MS = 12_000;
+/**
+ * Same check when NEXT_PUBLIC_SCREENPIPE_WEB_URL points at a control plane on
+ * this machine or this LAN. A cold `next dev` compile of
+ * /api/enterprise/policy on localhost regularly exceeds 15s on the first hit,
+ * so a flat production deadline would make every local launch fail the gate. A
+ * baked build pointing at a customer's own PUBLIC control plane is production
+ * and keeps the production deadline — see isLocalControlPlaneBase.
+ */
+const INITIAL_POLICY_FETCH_LOCAL_TIMEOUT_MS = 60_000;
+/**
+ * Bounded backoff for the initial check. A deadline on its own would only make
+ * the existing dead end arrive sooner: no failure branch of
+ * authenticateCredential starts polling, so a single slow response strands the
+ * employee on the credential prompt until they type a key or sign in. These
+ * retries run in the background *after* the prompt is already on screen, and
+ * clear it automatically if the control plane answers.
+ */
+const INITIAL_CHECK_RETRY_DELAYS_MS = [15_000, 45_000];
+
+function initialPolicyFetchTimeoutMs(): number {
+  return isLocalControlPlaneBase()
+    ? INITIAL_POLICY_FETCH_LOCAL_TIMEOUT_MS
+    : INITIAL_POLICY_FETCH_TIMEOUT_MS;
+}
 
 const CACHE_KEY = "enterprise-policy-cache";
 export const E2E_ENTERPRISE_POLICY_KEY = "screenpipe_e2e_enterprise_policy";
@@ -366,7 +403,10 @@ type EnterpriseCredential =
   | { type: "license_key"; value: string }
   | { type: "account"; value: string };
 
-async function sendHeartbeat(credential: EnterpriseCredential): Promise<HeartbeatResult> {
+async function sendHeartbeat(
+  credential: EnterpriseCredential,
+  options: { timeoutMs?: number } = {}
+): Promise<HeartbeatResult> {
   const e2eHeartbeat = readE2eHeartbeatMock();
   if (e2eHeartbeat) return e2eHeartbeat;
 
@@ -405,31 +445,35 @@ async function sendHeartbeat(credential: EnterpriseCredential): Promise<Heartbea
     const credentialHeaders: Record<string, string> = credential.type === "license_key"
       ? { "X-License-Key": credential.value }
       : { Authorization: `Bearer ${credential.value}` };
-    const res = await tauriFetch("https://screenpipe.com/api/enterprise/heartbeat", {
-      method: "POST",
-      headers: {
-        ...credentialHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        device_id: deviceId,
-        hostname,
-        platform: devicePlatform,
-        app_version: appVersion,
-        recording_status: { frame_status: frameStatus, audio_status: audioStatus },
-        update_manager: installMetadata.update_manager,
-        management_detected: installMetadata.managed,
-        install_source: installMetadata.install_source,
-        management_detected_by: installMetadata.detected_by,
-        update_status: {
-          policy_mode: appUpdatePolicy.mode,
-          default_auto_update: appUpdatePolicy.default_auto_update,
-          allow_employee_override: appUpdatePolicy.allow_employee_override,
-          channel: appUpdatePolicy.channel,
+    const res = await tauriFetchWithDeadline(
+      screenpipeWebUrl("/api/enterprise/heartbeat", "https://screenpipe.com"),
+      {
+        method: "POST",
+        headers: {
+          ...credentialHeaders,
+          "Content-Type": "application/json",
         },
-        pipe_statuses: pipeStatuses,
-      }),
-    });
+        body: JSON.stringify({
+          device_id: deviceId,
+          hostname,
+          platform: devicePlatform,
+          app_version: appVersion,
+          recording_status: { frame_status: frameStatus, audio_status: audioStatus },
+          update_manager: installMetadata.update_manager,
+          management_detected: installMetadata.managed,
+          install_source: installMetadata.install_source,
+          management_detected_by: installMetadata.detected_by,
+          update_status: {
+            policy_mode: appUpdatePolicy.mode,
+            default_auto_update: appUpdatePolicy.default_auto_update,
+            allow_employee_override: appUpdatePolicy.allow_employee_override,
+            channel: appUpdatePolicy.channel,
+          },
+          pipe_statuses: pipeStatuses,
+        }),
+      },
+      { timeoutMs: options.timeoutMs }
+    );
 
     if (res.status === 403) {
       return { ok: false, reason: "seat_limit", error: "license seat limit reached" };
@@ -500,6 +544,28 @@ type FetchResult =
 
 interface FetchPolicyOptions {
   applyLocalPolicy?: boolean;
+  /**
+   * Overall deadline for the policy request. Omitted = the shared native-fetch
+   * default. Only the mount-time check passes a short value; the 5-minute poll
+   * has a cached policy to fall back on and manual activation shows its own
+   * spinner.
+   */
+  timeoutMs?: number;
+  /**
+   * Cancels the native request. The background retries of the initial check use
+   * it so an attempt that has been abandoned (the employee activated by hand)
+   * does not keep its Rust FetchRequest and connection alive to the deadline.
+   */
+  signal?: AbortSignal;
+}
+
+interface AuthenticationOutcome {
+  authenticated: boolean;
+  /**
+   * The attempt failed on connectivity (unreachable, timed out, malformed
+   * response) rather than on the credential itself, so retrying can succeed.
+   */
+  retryable: boolean;
 }
 
 /**
@@ -535,8 +601,26 @@ export function useEnterprisePolicyRuntime() {
   const accountTokenRef = useRef<string | null>(accountToken);
   accountTokenRef.current = accountToken;
   const authenticateCredentialRef = useRef<
-    ((credential: EnterpriseCredential) => Promise<boolean>) | null
+    ((credential: EnterpriseCredential) => Promise<AuthenticationOutcome>) | null
   >(null);
+  // Generation token for the mount-time entitlement check. Bumped whenever the
+  // run in progress is abandoned — the employee submitted a key or picked a
+  // sign-in method, or the effect re-ran. An initial-check attempt compares the
+  // generation it started under against this ref BEFORE it writes any state, so
+  // an attempt that was already in flight (its 12s deadline counting down)
+  // cannot demote an activation that has since succeeded. Guarding only the
+  // scheduling of the NEXT attempt is not enough; the damage is done by the
+  // attempt that is already running.
+  const initialCheckGenerationRef = useRef(0);
+  // The in-flight initial-check request, so abandoning a run also cancels it
+  // instead of leaving the native request alive until its own deadline.
+  const initialCheckAbortRef = useRef<AbortController | null>(null);
+
+  const abandonInitialCheck = useCallback(() => {
+    initialCheckGenerationRef.current += 1;
+    initialCheckAbortRef.current?.abort();
+    initialCheckAbortRef.current = null;
+  }, []);
 
   const fetchPolicy = useCallback(async (
     credential: EnterpriseCredential,
@@ -570,7 +654,11 @@ export function useEnterprisePolicyRuntime() {
       // on-disk copy maintained by the pi-agent configuration flow.
       if (credential.type === "account" && !cloudToken) {
         try {
-          const fallback = await commands.getCloudToken();
+          const fallback = await withTimeout(
+            "enterprise getCloudToken",
+            commands.getCloudToken(),
+            LOCAL_POLICY_COMMAND_TIMEOUT_MS
+          );
           if (typeof fallback === "string" && fallback.length > 0) {
             cloudToken = fallback;
           }
@@ -596,10 +684,15 @@ export function useEnterprisePolicyRuntime() {
         }
         data = e2ePolicy.data;
       } else {
-        const res = await tauriFetch("https://screenpipe.com/api/enterprise/policy", {
-          method: "GET",
-          headers,
-        });
+        const res = await tauriFetchWithDeadline(
+          screenpipeWebUrl("/api/enterprise/policy", "https://screenpipe.com"),
+          {
+            method: "GET",
+            headers,
+            signal: options.signal,
+          },
+          { timeoutMs: options.timeoutMs }
+        );
         if (res.status === 401) {
           if (credential.type === "account") {
             console.error("[enterprise] policy fetch: account is not an enterprise member");
@@ -763,12 +856,27 @@ export function useEnterprisePolicyRuntime() {
       if (cloudToken) {
         try {
           const adminFlag = Boolean(data.isAdmin);
+          // A gateway org's data-API base. Re-asserted on every poll, so a
+          // changed gateway URL lands within one interval. `null` when the
+          // server omits it (hosted org, or a backend that predates the
+          // field) — leave whatever is already on disk alone.
+          //
+          // Admins only: every consumer of this key also needs the admin
+          // `sk_ent_` token, so a non-admin has no use for the URL and no
+          // reason to have the org's internal hostname on disk. The server
+          // is the authoritative gate — this is the second lock.
+          const gatewayUrl =
+            adminFlag &&
+            typeof data.gatewayUrl === "string" &&
+            data.gatewayUrl.trim()
+              ? data.gatewayUrl.trim()
+              : null;
           console.log(
-            `[enterprise] persisting team config: is_admin=${adminFlag} (raw response.isAdmin=${data.isAdmin})`
+            `[enterprise] persisting team config: is_admin=${adminFlag} (raw response.isAdmin=${data.isAdmin}), gateway_url=${gatewayUrl ?? "(unchanged)"}`
           );
           await withTimeout(
             "enterprise saveEnterpriseTeamConfig",
-            commands.saveEnterpriseTeamConfig(adminFlag, true, null),
+            commands.saveEnterpriseTeamConfig(adminFlag, true, null, gatewayUrl),
             LOCAL_POLICY_COMMAND_TIMEOUT_MS
           );
         } catch (e) {
@@ -811,11 +919,11 @@ export function useEnterprisePolicyRuntime() {
           stopPolling();
           const token = accountTokenRef.current;
           if (token && authenticateCredentialRef.current) {
-            const reauthenticated = await authenticateCredentialRef.current({
+            const reauthentication = await authenticateCredentialRef.current({
               type: "account",
               value: token,
             });
-            if (reauthenticated) return;
+            if (reauthentication.authenticated) return;
           }
           setAuthenticationState("account");
           setAuthenticationError(ACCOUNT_LOGIN_REQUIRED_ERROR);
@@ -842,8 +950,39 @@ export function useEnterprisePolicyRuntime() {
 
   const authenticateCredential = useCallback(async (
     credential: EnterpriseCredential,
-  ): Promise<boolean> => {
-    const result = await fetchPolicy(credential);
+    options: {
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      /**
+       * Re-checked after the request resolves and before any of the state
+       * transitions BELOW — authenticationState, authenticationError, policy,
+       * polling. False = this attempt was abandoned while it was in flight, so
+       * those belong to a run nobody is waiting for.
+       *
+       * Scope, precisely: it does NOT unwind what `fetchPolicy` already applied
+       * on a SUCCESS path before returning (cached policy, ai-preset /
+       * app-update / managed-device settings, the heartbeat, managed pipes, the
+       * Rust-side policy + UI visibility + sync streams, the team config). So an
+       * abandoned-but-successful attempt still applies a real org policy locally.
+       * That is the fail-closed direction — it is the genuine policy for a
+       * credential this device holds, and the gate itself stays unauthenticated —
+       * but it is not "nothing is written".
+       */
+      shouldApply?: () => boolean;
+    } = {},
+  ): Promise<AuthenticationOutcome> => {
+    const result = await fetchPolicy(credential, {
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+    });
+    // Abandoned mid-flight: the employee activated a key by hand, switched
+    // sign-in method, or the runtime remounted. Writing state here would demote
+    // an already-authenticated device back to the credential prompt on the
+    // strength of a request nobody is waiting for — and the entitlement gate
+    // stops the recorder for every state except "checking".
+    if (options.shouldApply && !options.shouldApply()) {
+      return { authenticated: false, retryable: false };
+    }
     if (result.ok) {
       // The key is valid as a device credential, but the org requires every
       // employee to sign in with their screenpipe account. Device policy was
@@ -852,34 +991,37 @@ export function useEnterprisePolicyRuntime() {
         setPolicy(result.policy);
         setAuthenticationState("account");
         setAuthenticationError(ACCOUNT_LOGIN_REQUIRED_ERROR);
-        return false;
+        return { authenticated: false, retryable: false };
       }
       setAuthenticationError(null);
       setAuthenticationState("authenticated");
       setPolicy(result.policy);
       startPolling(credential);
-      return true;
+      return { authenticated: true, retryable: false };
     }
 
     if (result.reason === "invalid_key") {
       setAuthenticationState("license_key");
       setAuthenticationError("invalid enterprise key");
-      return false;
+      return { authenticated: false, retryable: false };
     }
     if (result.reason === "expired_key") {
       setAuthenticationState("license_key");
       setAuthenticationError("enterprise key has expired - contact your admin");
-      return false;
+      return { authenticated: false, retryable: false };
     }
     if (result.reason === "not_member") {
       setAuthenticationState("account");
       setAuthenticationError("this account is not associated with the enterprise organization");
-      return false;
+      return { authenticated: false, retryable: false };
     }
 
+    // Connectivity (unreachable, timed out, unusable response): route to the
+    // credential prompt with retryable copy, and tell the caller it is worth
+    // trying again.
     setAuthenticationState(credential.type);
     setAuthenticationError("could not verify enterprise access - check your connection and try again");
-    return false;
+    return { authenticated: false, retryable: true };
   }, [fetchPolicy, startPolling]);
   authenticateCredentialRef.current = authenticateCredential;
 
@@ -888,6 +1030,7 @@ export function useEnterprisePolicyRuntime() {
    * API, saves it to ~/.screenpipe/enterprise.json, and starts fetching policy.
    */
   const submitLicenseKey = useCallback(async (key: string): Promise<{ ok: boolean; error?: string }> => {
+    abandonInitialCheck();
     setAuthenticationState("license_key");
     setAuthenticationError(null);
     const credential: EnterpriseCredential = { type: "license_key", value: key };
@@ -912,9 +1055,12 @@ export function useEnterprisePolicyRuntime() {
       return { ok: false, error: ACCOUNT_LOGIN_REQUIRED_ERROR };
     }
 
+    // withTimeout only *races* the promise, so the native request has to carry
+    // the same deadline itself — otherwise the abandoned heartbeat keeps its
+    // Rust FetchRequest and connection alive long after activation moved on.
     const heartbeat = await withTimeout(
       "enterprise heartbeat",
-      sendHeartbeat(credential),
+      sendHeartbeat(credential, { timeoutMs: LOCAL_POLICY_COMMAND_TIMEOUT_MS }),
       LOCAL_POLICY_COMMAND_TIMEOUT_MS
     ).catch((e): HeartbeatResult => ({
       ok: false,
@@ -967,27 +1113,81 @@ export function useEnterprisePolicyRuntime() {
       });
 
     return { ok: true };
-  }, [fetchPolicy, startPolling]);
+  }, [abandonInitialCheck, fetchPolicy, startPolling]);
 
   const selectAuthenticationMethod = useCallback((method: EnterpriseAuthenticationMethod) => {
+    abandonInitialCheck();
     setAuthenticationError(null);
     setAuthenticationState(method);
     if (method === "account" && accountToken) {
       void authenticateCredential({ type: "account", value: accountToken });
     }
-  }, [accountToken, authenticateCredential]);
+  }, [abandonInitialCheck, accountToken, authenticateCredential]);
 
   useEffect(() => {
     if (!isEnterprise) return;
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let releaseRetryWait: (() => void) | null = null;
+    // This run's generation. A fresh run of the initial check (mount, or a newly
+    // available account token) supersedes any earlier one, and an interaction
+    // with the prompt supersedes this one.
+    const generation = ++initialCheckGenerationRef.current;
+    const initialCheckActive = () =>
+      !cancelled && initialCheckGenerationRef.current === generation;
+
+    const waitBeforeRetry = (ms: number) =>
+      new Promise<void>((resolve) => {
+        releaseRetryWait = resolve;
+        retryTimer = setTimeout(resolve, ms);
+      });
+
+    /**
+     * The mount-time check: one deadline-bounded attempt, then bounded backoff
+     * retries while the only thing failing is connectivity. The first attempt
+     * has already moved the gate off the blank spinner onto the credential
+     * prompt, so the retries are invisible unless they succeed — in which case
+     * they clear the prompt instead of leaving the employee stuck on it.
+     */
+    const runInitialCheck = async (credential: EnterpriseCredential): Promise<boolean> => {
+      for (let attempt = 0; ; attempt += 1) {
+        const abort = new AbortController();
+        initialCheckAbortRef.current = abort;
+        let outcome: AuthenticationOutcome;
+        try {
+          outcome = await authenticateCredential(credential, {
+            timeoutMs: initialPolicyFetchTimeoutMs(),
+            signal: abort.signal,
+            shouldApply: initialCheckActive,
+          });
+        } finally {
+          if (initialCheckAbortRef.current === abort) initialCheckAbortRef.current = null;
+        }
+        // Re-read the guard rather than trusting the outcome: an abandoned
+        // attempt reports `authenticated: false`, and continuing on that would
+        // walk straight into the account attempt below.
+        if (!initialCheckActive()) return false;
+        if (outcome.authenticated || !outcome.retryable) return outcome.authenticated;
+        if (attempt >= INITIAL_CHECK_RETRY_DELAYS_MS.length) return false;
+        console.warn(
+          `[enterprise] initial entitlement check failed on connectivity — retrying in ${INITIAL_CHECK_RETRY_DELAYS_MS[attempt]}ms`
+        );
+        await waitBeforeRetry(INITIAL_CHECK_RETRY_DELAYS_MS[attempt]);
+        if (!initialCheckActive()) return false;
+      }
+    };
 
     (async () => {
       // Read license key from enterprise.json (MDM or ~/.screenpipe/)
       let key: string | null = null;
       if (!shouldSkipSavedLicenseForE2e()) {
         try {
-          key = await commands.getEnterpriseLicenseKey();
+          key = await withTimeout(
+            "enterprise getEnterpriseLicenseKey",
+            commands.getEnterpriseLicenseKey(),
+            LOCAL_POLICY_COMMAND_TIMEOUT_MS
+          );
           if (key) {
             console.log(`[enterprise] license key found: ${key.slice(0, 8)}...`);
           } else {
@@ -1000,19 +1200,19 @@ export function useEnterprisePolicyRuntime() {
         console.warn("[enterprise] e2e skipping saved enterprise license");
       }
 
-      if (cancelled) return;
+      if (!initialCheckActive()) return;
 
       if (key) {
-        const authenticated = await authenticateCredential({ type: "license_key", value: key });
-        if (cancelled || authenticated) return;
+        const authenticated = await runInitialCheck({ type: "license_key", value: key });
+        if (!initialCheckActive() || authenticated) return;
       }
 
       if (accountToken) {
-        await authenticateCredential({ type: "account", value: accountToken });
+        await runInitialCheck({ type: "account", value: accountToken });
         return;
       }
 
-      if (!key) {
+      if (!key && initialCheckActive()) {
         setAuthenticationError(null);
         setAuthenticationState("choice");
         setPolicy({ ...EMPTY_POLICY, hiddenSections: ENTERPRISE_DEFAULT_HIDDEN });
@@ -1021,9 +1221,15 @@ export function useEnterprisePolicyRuntime() {
 
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      // Let a suspended retry wait observe `cancelled` and unwind instead of
+      // leaving the initial-check loop parked on a cleared timer forever.
+      releaseRetryWait?.();
+      // Supersede this run and cancel whatever it still has in flight.
+      abandonInitialCheck();
       stopPolling();
     };
-  }, [isEnterprise, accountToken, authenticateCredential, stopPolling]);
+  }, [isEnterprise, accountToken, abandonInitialCheck, authenticateCredential, stopPolling]);
 
   // Consumer builds: stable no-op functions (no network calls, no re-renders)
   const noop = useCallback(() => false, []);

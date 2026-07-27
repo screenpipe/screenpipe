@@ -11,16 +11,118 @@
 use crate::store::SettingsStore;
 use screenpipe_core::pipes::install_bundled_pipe;
 use screenpipe_engine::live_views::{
-    delete_live_view, list_bundled_live_view_kits, list_live_views, save_live_view, LiveView,
-    LiveViewBlock, LiveViewBlockKind, LiveViewKit, LiveViewPeriodPolicy, LiveViewSource,
-    LiveViewTemplateBlock, LiveViewTimeRange, SaveLiveViewRequest,
+    delete_live_view, list_bundled_live_view_kits, list_live_view_templates, list_live_views,
+    save_live_view, LiveView, LiveViewBlock, LiveViewBlockKind, LiveViewKit, LiveViewPeriodPolicy,
+    LiveViewSource, LiveViewTemplateBlock, LiveViewTimeRange, SaveLiveViewRequest,
 };
 use screenpipe_engine::structured_outputs::{
     OutputFeedbackRating, OutputFeedbackSummary, StructuredOutputValue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+const BRAIN_VIEW_CANVAS_SCHEMA: &str = "live-view-canvas.v1";
+const MAX_CANVAS_NOTES: usize = 64;
+const MAX_CANVAS_ARROWS: usize = 128;
+const MAX_CANVAS_STROKES: usize = 64;
+const MAX_CANVAS_STROKE_POINTS: usize = 1024;
+
+static CANVAS_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn canvas_store_lock() -> &'static Mutex<()> {
+    CANVAS_STORE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainViewDisplayMode {
+    #[default]
+    Dashboard,
+    Canvas,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewCanvasViewport {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewCanvasBlock {
+    pub slot_id: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewCanvasNote {
+    pub id: String,
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewCanvasArrow {
+    pub id: String,
+    pub from_id: String,
+    pub to_id: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewCanvasPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewCanvasStroke {
+    pub id: String,
+    pub points: Vec<BrainViewCanvasPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewCanvasDocument {
+    pub schema: String,
+    pub view_id: String,
+    pub revision: u64,
+    pub mode: BrainViewDisplayMode,
+    pub viewport: BrainViewCanvasViewport,
+    pub blocks: Vec<BrainViewCanvasBlock>,
+    pub notes: Vec<BrainViewCanvasNote>,
+    pub arrows: Vec<BrainViewCanvasArrow>,
+    pub strokes: Vec<BrainViewCanvasStroke>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveBrainViewCanvasRequest {
+    pub view_id: String,
+    pub expected_revision: Option<u64>,
+    pub mode: BrainViewDisplayMode,
+    pub viewport: BrainViewCanvasViewport,
+    pub blocks: Vec<BrainViewCanvasBlock>,
+    pub notes: Vec<BrainViewCanvasNote>,
+    pub arrows: Vec<BrainViewCanvasArrow>,
+    pub strokes: Vec<BrainViewCanvasStroke>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -443,12 +545,315 @@ fn active_screenpipe_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(crate::config::resolve_data_dir(&settings.data_dir).0)
 }
 
+fn canvas_document_path(screenpipe_dir: &Path, view_id: &str) -> PathBuf {
+    screenpipe_dir
+        .join("live-views")
+        .join("canvas")
+        .join(format!("{view_id}.json"))
+}
+
+fn valid_canvas_id(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some(character) if character.is_ascii_lowercase() || character.is_ascii_digit())
+        && value.len() <= 64
+        && characters.all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '-' | '_')
+        })
+}
+
+fn validate_canvas_number(
+    value: f64,
+    minimum: f64,
+    maximum: f64,
+    label: &str,
+) -> Result<(), String> {
+    if !value.is_finite() || value < minimum || value > maximum {
+        return Err(format!(
+            "{label} must be a finite number between {minimum} and {maximum}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_canvas_request(
+    request: &SaveBrainViewCanvasRequest,
+    valid_slot_ids: &HashSet<String>,
+) -> Result<(), String> {
+    if !valid_canvas_id(&request.view_id) {
+        return Err("Live View id is invalid".to_string());
+    }
+    validate_canvas_number(request.viewport.x, -100_000.0, 100_000.0, "viewport x")?;
+    validate_canvas_number(request.viewport.y, -100_000.0, 100_000.0, "viewport y")?;
+    validate_canvas_number(request.viewport.zoom, 0.25, 2.5, "viewport zoom")?;
+
+    if request.blocks.len() > valid_slot_ids.len() {
+        return Err("canvas contains more Block positions than the Live View".to_string());
+    }
+    if request.notes.len() > MAX_CANVAS_NOTES {
+        return Err(format!(
+            "a canvas may contain at most {MAX_CANVAS_NOTES} notes"
+        ));
+    }
+    if request.arrows.len() > MAX_CANVAS_ARROWS {
+        return Err(format!(
+            "a canvas may contain at most {MAX_CANVAS_ARROWS} arrows"
+        ));
+    }
+    if request.strokes.len() > MAX_CANVAS_STROKES {
+        return Err(format!(
+            "a canvas may contain at most {MAX_CANVAS_STROKES} strokes"
+        ));
+    }
+
+    let mut block_ids = HashSet::new();
+    for block in &request.blocks {
+        if !valid_slot_ids.contains(&block.slot_id) {
+            return Err(format!(
+                "canvas references unknown Block '{}'",
+                block.slot_id
+            ));
+        }
+        if !block_ids.insert(block.slot_id.clone()) {
+            return Err(format!(
+                "canvas contains duplicate Block position '{}'",
+                block.slot_id
+            ));
+        }
+        validate_canvas_number(block.x, -100_000.0, 100_000.0, "Block x")?;
+        validate_canvas_number(block.y, -100_000.0, 100_000.0, "Block y")?;
+        validate_canvas_number(block.width, 220.0, 1_600.0, "Block width")?;
+        validate_canvas_number(block.height, 160.0, 1_200.0, "Block height")?;
+    }
+
+    let mut note_ids = HashSet::new();
+    for note in &request.notes {
+        if !valid_canvas_id(&note.id) || !note_ids.insert(note.id.clone()) {
+            return Err(format!(
+                "canvas note id '{}' is invalid or duplicated",
+                note.id
+            ));
+        }
+        if note.text.chars().count() > 4_000 {
+            return Err("canvas notes may contain at most 4,000 characters".to_string());
+        }
+        validate_canvas_number(note.x, -100_000.0, 100_000.0, "note x")?;
+        validate_canvas_number(note.y, -100_000.0, 100_000.0, "note y")?;
+        validate_canvas_number(note.width, 140.0, 1_200.0, "note width")?;
+        validate_canvas_number(note.height, 80.0, 1_000.0, "note height")?;
+    }
+
+    let mut node_ids = block_ids
+        .iter()
+        .map(|id| format!("block:{id}"))
+        .collect::<HashSet<_>>();
+    node_ids.extend(note_ids.iter().map(|id| format!("note:{id}")));
+    let mut arrow_ids = HashSet::new();
+    for arrow in &request.arrows {
+        if !valid_canvas_id(&arrow.id) || !arrow_ids.insert(arrow.id.clone()) {
+            return Err(format!(
+                "canvas arrow id '{}' is invalid or duplicated",
+                arrow.id
+            ));
+        }
+        if arrow.from_id == arrow.to_id
+            || !node_ids.contains(&arrow.from_id)
+            || !node_ids.contains(&arrow.to_id)
+        {
+            return Err(format!(
+                "canvas arrow '{}' has an invalid endpoint",
+                arrow.id
+            ));
+        }
+        if arrow
+            .label
+            .as_ref()
+            .is_some_and(|label| label.chars().count() > 200)
+        {
+            return Err("canvas arrow labels may contain at most 200 characters".to_string());
+        }
+    }
+
+    let mut stroke_ids = HashSet::new();
+    for stroke in &request.strokes {
+        if !valid_canvas_id(&stroke.id) || !stroke_ids.insert(stroke.id.clone()) {
+            return Err(format!(
+                "canvas stroke id '{}' is invalid or duplicated",
+                stroke.id
+            ));
+        }
+        if stroke.points.len() < 2 || stroke.points.len() > MAX_CANVAS_STROKE_POINTS {
+            return Err(format!(
+                "canvas strokes must contain between 2 and {MAX_CANVAS_STROKE_POINTS} points"
+            ));
+        }
+        for point in &stroke.points {
+            validate_canvas_number(point.x, -100_000.0, 100_000.0, "stroke x")?;
+            validate_canvas_number(point.y, -100_000.0, 100_000.0, "stroke y")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_canvas_document(
+    document: &BrainViewCanvasDocument,
+    valid_slot_ids: &HashSet<String>,
+) -> Result<(), String> {
+    if document.revision == 0 {
+        return Err("canvas revision must be greater than zero".to_string());
+    }
+    validate_canvas_request(
+        &SaveBrainViewCanvasRequest {
+            view_id: document.view_id.clone(),
+            expected_revision: None,
+            mode: document.mode,
+            viewport: document.viewport.clone(),
+            blocks: document.blocks.clone(),
+            notes: document.notes.clone(),
+            arrows: document.arrows.clone(),
+            strokes: document.strokes.clone(),
+        },
+        valid_slot_ids,
+    )
+}
+
+fn read_canvas_document(
+    screenpipe_dir: &Path,
+    view_id: &str,
+) -> Result<Option<BrainViewCanvasDocument>, String> {
+    let path = canvas_document_path(screenpipe_dir, view_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let document: BrainViewCanvasDocument = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    if document.schema != BRAIN_VIEW_CANVAS_SCHEMA || document.view_id != view_id {
+        return Err(format!(
+            "{} is not a valid canvas document for this Live View",
+            path.display()
+        ));
+    }
+    Ok(Some(document))
+}
+
+fn save_canvas_document(
+    screenpipe_dir: &Path,
+    request: SaveBrainViewCanvasRequest,
+) -> Result<BrainViewCanvasDocument, String> {
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    let template = list_live_view_templates(screenpipe_dir)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|template| template.id == request.view_id)
+        .ok_or_else(|| format!("Live View '{}' was not found", request.view_id))?;
+    let valid_slot_ids = template
+        .blocks
+        .into_iter()
+        .map(|block| block.id)
+        .collect::<HashSet<_>>();
+    validate_canvas_request(&request, &valid_slot_ids)?;
+
+    let existing = read_canvas_document(screenpipe_dir, &request.view_id)?;
+    match &existing {
+        Some(document) if request.expected_revision != Some(document.revision) => {
+            return Err(format!(
+                "canvas revision changed (expected {}, received {:?})",
+                document.revision, request.expected_revision
+            ));
+        }
+        None if request.expected_revision.is_some() => {
+            return Err("cannot provide expectedRevision when creating a canvas".to_string());
+        }
+        _ => {}
+    }
+
+    let document = BrainViewCanvasDocument {
+        schema: BRAIN_VIEW_CANVAS_SCHEMA.to_string(),
+        view_id: request.view_id,
+        revision: existing.map_or(1, |document| document.revision + 1),
+        mode: request.mode,
+        viewport: request.viewport,
+        blocks: request.blocks,
+        notes: request.notes,
+        arrows: request.arrows,
+        strokes: request.strokes,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let path = canvas_document_path(screenpipe_dir, &document.view_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    }
+    let bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|error| format!("failed to serialize Live View canvas: {error}"))?;
+    crate::store::durable_write(&path, &bytes)
+        .map_err(|error| format!("failed to replace {}: {error}", path.display()))?;
+    Ok(document)
+}
+
+fn remove_canvas_document(screenpipe_dir: &Path, view_id: &str) -> Result<(), String> {
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    let path = canvas_document_path(screenpipe_dir, view_id);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("failed to remove {}: {error}", path.display())),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn list_brain_views(app: tauri::AppHandle) -> Result<Vec<BrainViewDefinition>, String> {
     list_live_views(&active_screenpipe_dir(&app)?)
         .map(|views| views.into_iter().map(Into::into).collect())
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn load_brain_view_canvas(
+    app: tauri::AppHandle,
+    view_id: String,
+) -> Result<Option<BrainViewCanvasDocument>, String> {
+    if !valid_canvas_id(&view_id) {
+        return Err("Live View id is invalid".to_string());
+    }
+    let screenpipe_dir = active_screenpipe_dir(&app)?;
+    let template = list_live_view_templates(&screenpipe_dir)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|template| template.id == view_id)
+        .ok_or_else(|| format!("Live View '{view_id}' was not found"))?;
+    let valid_slot_ids = template
+        .blocks
+        .into_iter()
+        .map(|block| block.id)
+        .collect::<HashSet<_>>();
+    let _guard = canvas_store_lock()
+        .lock()
+        .map_err(|_| "canvas store lock was poisoned".to_string())?;
+    let document = read_canvas_document(&screenpipe_dir, &view_id)?;
+    if let Some(document) = document.as_ref() {
+        validate_canvas_document(document, &valid_slot_ids)?;
+    }
+    Ok(document)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_brain_view_canvas(
+    app: tauri::AppHandle,
+    request: SaveBrainViewCanvasRequest,
+) -> Result<BrainViewCanvasDocument, String> {
+    save_canvas_document(&active_screenpipe_dir(&app)?, request)
 }
 
 #[tauri::command]
@@ -510,12 +915,78 @@ pub async fn save_brain_view(
 #[tauri::command]
 #[specta::specta]
 pub async fn delete_brain_view(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    delete_live_view(&active_screenpipe_dir(&app)?, &id).map_err(|error| error.to_string())
+    let screenpipe_dir = active_screenpipe_dir(&app)?;
+    delete_live_view(&screenpipe_dir, &id).map_err(|error| error.to_string())?;
+    remove_canvas_document(&screenpipe_dir, &id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn canvas_request(view_id: &str, expected_revision: Option<u64>) -> SaveBrainViewCanvasRequest {
+        SaveBrainViewCanvasRequest {
+            view_id: view_id.to_string(),
+            expected_revision,
+            mode: BrainViewDisplayMode::Canvas,
+            viewport: BrainViewCanvasViewport {
+                x: 24.0,
+                y: 32.0,
+                zoom: 1.0,
+            },
+            blocks: vec![BrainViewCanvasBlock {
+                slot_id: "focus-time".to_string(),
+                x: 80.0,
+                y: 96.0,
+                width: 360.0,
+                height: 260.0,
+            }],
+            notes: vec![BrainViewCanvasNote {
+                id: "note-one".to_string(),
+                text: "Review the evidence before automating.".to_string(),
+                x: 500.0,
+                y: 96.0,
+                width: 240.0,
+                height: 160.0,
+            }],
+            arrows: vec![BrainViewCanvasArrow {
+                id: "arrow-one".to_string(),
+                from_id: "block:focus-time".to_string(),
+                to_id: "note:note-one".to_string(),
+                label: Some("review".to_string()),
+            }],
+            strokes: vec![BrainViewCanvasStroke {
+                id: "stroke-one".to_string(),
+                points: vec![
+                    BrainViewCanvasPoint { x: 10.0, y: 20.0 },
+                    BrainViewCanvasPoint { x: 30.0, y: 40.0 },
+                ],
+            }],
+        }
+    }
+
+    fn create_canvas_test_view(dir: &Path) {
+        save_live_view(
+            dir,
+            SaveLiveViewRequest {
+                id: "canvas-test".to_string(),
+                title: "Canvas test".to_string(),
+                expected_revision: None,
+                time_range: LiveViewTimeRange::Today,
+                period_policy: None,
+                blocks: vec![LiveViewTemplateBlock {
+                    id: "focus-time".to_string(),
+                    title: "Focus time".to_string(),
+                    kind: LiveViewBlockKind::MetricV1,
+                    width: 6,
+                    order: 0,
+                    intent: None,
+                    source: None,
+                }],
+            },
+        )
+        .unwrap();
+    }
 
     #[test]
     fn brain_adapter_preserves_the_portable_block_contract() {
@@ -544,5 +1015,63 @@ mod tests {
                 install_bundled_pipe(dir.path(), &pipe.name).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn canvas_document_round_trips_with_revision_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        create_canvas_test_view(dir.path());
+
+        let first = save_canvas_document(dir.path(), canvas_request("canvas-test", None)).unwrap();
+        assert_eq!(first.schema, BRAIN_VIEW_CANVAS_SCHEMA);
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.blocks[0].slot_id, "focus-time");
+        assert_eq!(
+            read_canvas_document(dir.path(), "canvas-test")
+                .unwrap()
+                .unwrap(),
+            first
+        );
+
+        let mut update = canvas_request("canvas-test", Some(first.revision));
+        update.viewport.zoom = 1.5;
+        let second = save_canvas_document(dir.path(), update).unwrap();
+        assert_eq!(second.revision, 2);
+        assert_eq!(second.viewport.zoom, 1.5);
+
+        let conflict = save_canvas_document(
+            dir.path(),
+            canvas_request("canvas-test", Some(first.revision)),
+        )
+        .unwrap_err();
+        assert!(conflict.contains("canvas revision changed"));
+    }
+
+    #[test]
+    fn canvas_rejects_unknown_blocks_and_dangling_arrows() {
+        let dir = tempfile::tempdir().unwrap();
+        create_canvas_test_view(dir.path());
+
+        let mut unknown_block = canvas_request("canvas-test", None);
+        unknown_block.blocks[0].slot_id = "private-unknown-block".to_string();
+        let error = save_canvas_document(dir.path(), unknown_block).unwrap_err();
+        assert!(error.contains("unknown Block"));
+
+        let mut dangling_arrow = canvas_request("canvas-test", None);
+        dangling_arrow.arrows[0].to_id = "note:missing".to_string();
+        let error = save_canvas_document(dir.path(), dangling_arrow).unwrap_err();
+        assert!(error.contains("invalid endpoint"));
+    }
+
+    #[test]
+    fn deleting_a_live_view_removes_its_canvas_document() {
+        let dir = tempfile::tempdir().unwrap();
+        create_canvas_test_view(dir.path());
+        save_canvas_document(dir.path(), canvas_request("canvas-test", None)).unwrap();
+        assert!(canvas_document_path(dir.path(), "canvas-test").exists());
+
+        delete_live_view(dir.path(), "canvas-test").unwrap();
+        remove_canvas_document(dir.path(), "canvas-test").unwrap();
+        assert!(!canvas_document_path(dir.path(), "canvas-test").exists());
     }
 }

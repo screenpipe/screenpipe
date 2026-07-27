@@ -12,6 +12,7 @@ import { useAdvisoryStore } from "@/lib/advisories";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
 import { commands } from "@/lib/utils/tauri";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 /**
  * Watches scheduled pipes for the silent failure modes a background automation
@@ -62,7 +63,7 @@ export function PipeAdvisoryWatcher() {
           await commands.openLoginWindow(null);
           return;
         }
-        const res = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
+        const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ tier: "pro", billingPeriod: "monthly", userId, email }),

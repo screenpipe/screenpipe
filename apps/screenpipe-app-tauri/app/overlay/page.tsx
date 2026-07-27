@@ -37,6 +37,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import SplashScreen from "@/components/splash-screen";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { hasCachedData } from "@/lib/hooks/use-timeline-cache";
+import { screenpipeWebBase } from "@/lib/web-url";
 
 function TimelineErrorFallback({
   error,
@@ -251,7 +252,7 @@ export default function OverlayPage() {
   const sendLogs = async () => {
     setIsSendingLogs(true);
     try {
-      const BASE_URL = "https://screenpipe.com";
+      const BASE_URL = screenpipeWebBase("https://screenpipe.com");
       const machineId = localStorage?.getItem("machineId") || crypto.randomUUID();
       try { localStorage?.setItem("machineId", machineId); } catch {}
       const identifier = settings.user?.id || machineId;

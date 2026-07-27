@@ -51,6 +51,10 @@ stale version forever. Get your key with `screenpipe auth token`. If you omit th
 key, the server will try to discover it (bundled bun → npx → local DB) — this works
 but is slower and can time out on first run.
 
+Enterprise admins: add `SCREENPIPE_ENTERPRISE_TOKEN` (and, for orgs running their
+own query gateway, `SCREENPIPE_TEAM_API_URL`) to the same `env` block to get the
+`team-*` tools — see [Enterprise team tools](#enterprise-team-tools-team-).
+
 ### Option 3: HTTP Server (Remote / Network Access)
 
 The MCP server can run over HTTP using the [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), allowing remote MCP clients to connect over the network instead of stdio. This is ideal when your AI assistant (e.g., OpenClaw) runs on a different machine than screenpipe.
@@ -131,6 +135,76 @@ Then configure Claude Desktop:
 ```
 
 **Note:** Restart Claude Desktop after making changes.
+
+## Enterprise team tools (`team-*`)
+
+`team-search`, `team-devices` and `team-records` query your whole org instead of
+just this machine. They are registered **only** when an enterprise admin token is
+present, and they need **two** independent settings: a token, and the base URL of
+the API that token is valid for.
+
+### 1. The token
+
+An `sk_ent_…` enterprise admin token, resolved in this order:
+
+1. `SCREENPIPE_ENTERPRISE_TOKEN` env var (MCP config, terminal)
+2. `team_api_token` in `~/.screenpipe/enterprise.json` — written by the desktop
+   app's **Settings → Privacy → Admin Team API Token**
+
+No token → the `team-*` tools do not appear at all.
+
+### 2. The base URL
+
+| Priority | Where | Example |
+|---|---|---|
+| 1 | `--team-api-url` flag | `npx -y screenpipe-mcp --team-api-url https://sp-gw.acme.internal/api/enterprise/v1` |
+| 2 | `SCREENPIPE_TEAM_API_URL` env var | `SCREENPIPE_TEAM_API_URL=https://sp-gw.acme.internal/api/enterprise/v1` |
+| 3 | `gateway_url` in `~/.screenpipe/enterprise.json` | `{ "gateway_url": "https://sp-gw.acme.internal/api/enterprise/v1" }` |
+| 4 | *(default)* the hosted control plane | `https://screenpi.pe/api/enterprise/v1` |
+
+Trailing slashes are trimmed, so both `…/v1` and `…/v1/` work.
+
+**If your org runs its own query gateway, you must set this.** On the write-only
+archive tier your telemetry never reaches the hosted API — it lands in your own
+object storage and is served by a gateway inside your network. The hosted API has
+no read path to that data, so leaving the default in place makes every `team-*`
+call fail with **HTTP 401**, even though the tools show up and the token is valid.
+The bearer token is the same either way; only the base URL moves.
+
+Full Claude Desktop config for a gateway org:
+
+```json
+{
+  "mcpServers": {
+    "screenpipe": {
+      "command": "npx",
+      "args": ["-y", "screenpipe-mcp@latest"],
+      "env": {
+        "SCREENPIPE_LOCAL_API_KEY": "sp-…",
+        "SCREENPIPE_ENTERPRISE_TOKEN": "sk_ent_…",
+        "SCREENPIPE_TEAM_API_URL": "https://sp-gw.acme.internal/api/enterprise/v1"
+      }
+    }
+  }
+}
+```
+
+Verify which base a running server picked up by asking for `team-devices` — the
+error text on a missing token also prints the base currently in use.
+
+### Known limits
+
+- **Requires `screenpipe-mcp` >= 0.19.0.** `0.18.15` and earlier hardcode the
+  hosted base and cannot be repointed at a gateway at all. Check with
+  `npm view screenpipe-mcp version`, or read `serverInfo.version` from the MCP
+  `initialize` response.
+- Priority 3 is populated by the desktop app, which writes `gateway_url` from
+  the org's policy poll. It needs an admin signed in on that machine; on a
+  server or CI box use the env var or the flag.
+- The HTTP transport (`--http`) exposes `search_content` only; `team-*` tools are
+  stdio-only.
+- The `.mcpb` bundle (Claude Desktop extension install) has no UI for these
+  variables — use the manual NPX config above for gateway orgs.
 
 ## Testing
 
@@ -221,7 +295,7 @@ List available monitors/screens for capture.
 Manage pipes — scheduled AI automations that run a markdown prompt on a schedule (e.g. "every day at 9am"). `list-pipes` shows enabled state + schedule; `create-pipe` creates one; `run-pipe` triggers a one-off test run; `pipe-logs` fetches recent execution output.
 
 ### team-search / team-devices / team-records
-Team-tier tools, registered only when an enterprise admin token is configured. `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), and `team-records` dumps chronological org data for a time window.
+Team-tier tools, registered only when an enterprise admin token is configured. `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), and `team-records` dumps chronological org data for a time window. Orgs running their own query gateway must also set `SCREENPIPE_TEAM_API_URL` — see [Enterprise team tools](#enterprise-team-tools-team-) for the full precedence order.
 
 ## Example Queries in Claude
 

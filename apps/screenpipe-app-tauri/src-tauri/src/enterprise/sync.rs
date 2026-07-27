@@ -41,8 +41,8 @@ use tracing::{debug, error, info, warn};
 #[path = "upload.rs"]
 mod enterprise_upload;
 use enterprise_upload::{
-    upload_direct_encrypted_batch, upload_direct_readable_batch, DirectUploadCursors,
-    DirectUploadRecordCounts, EnterpriseUploadMode,
+    upload_direct_readable_batch, upload_direct_write_only_batch, DirectUploadRecordCounts,
+    EnterpriseUploadMode,
 };
 
 /// How often we wake up and try to sync.
@@ -76,7 +76,12 @@ const LOG_REQUEST_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Default endpoint. Overridable via `SCREENPIPE_ENTERPRISE_INGEST_URL` for
 /// staging / on-prem.
-pub const DEFAULT_INGEST_URL: &str = "https://screenpipe.com/api/enterprise/ingest";
+pub fn default_ingest_url() -> String {
+    // Baked control-plane base (crate::web_base): a build produced with
+    // NEXT_PUBLIC_SCREENPIPE_WEB_URL targets that deployment app-wide,
+    // exactly like a prod build targets screenpipe.com.
+    crate::web_base::screenpipe_web_url("/api/enterprise/ingest")
+}
 
 /// Cursor file in app data dir.
 pub const CURSOR_FILENAME: &str = "enterprise_sync_cursor.json";
@@ -95,7 +100,8 @@ pub struct EnterpriseSyncConfig {
     pub ingest_url: String,
     /// Where to persist the cursor (typically the app data dir).
     pub cursor_path: PathBuf,
-    /// Hosted plaintext ingest or direct encrypted customer-storage upload.
+    /// Hosted plaintext ingest or direct customer-storage upload
+    /// (write-only or readable).
     pub upload_mode: EnterpriseUploadMode,
     /// Directories to scan for `*.log` files when an admin requests diagnostics.
     /// Set by the caller to the app's log dirs.
@@ -107,9 +113,9 @@ impl EnterpriseSyncConfig {
     /// required env (`SCREENPIPE_ENTERPRISE_LICENSE_KEY`) is missing — caller
     /// should silently skip sync in that case.
     ///
-    /// `upload_mode` is initialized to `HostedIngest` as a safe default. The
-    /// caller should run [`Self::resolve_upload_mode`] once the async runtime
-    /// is up to upgrade to `DirectReadable` / `DirectEncrypted` based on the
+    /// `upload_mode` starts `Blocked` (fail closed). The caller should run
+    /// [`Self::resolve_upload_mode`] once the async runtime is up to switch
+    /// to `HostedIngest` / `DirectReadable` / `DirectWriteOnly` based on the
     /// customer's storage binding in the control plane. This replaces the
     /// old "set `SCREENPIPE_ENTERPRISE_UPLOAD_MODE` on every device" UX —
     /// the dashboard binding is now the single source of truth.
@@ -118,21 +124,23 @@ impl EnterpriseSyncConfig {
         device_id: String,
         device_label: String,
     ) -> Option<Self> {
-        Self::from_env_with_fallback(app_data_dir, device_id, device_label, None)
+        Self::from_env_with_fallback(app_data_dir, device_id, device_label, None, None)
     }
 
-    /// Same as `from_env` but lets the caller pass a license key resolved
-    /// from somewhere else (e.g. `~/.screenpipe/enterprise.json` populated
-    /// by the desktop's in-app prompt). Env var still wins when set — that
-    /// keeps MDM rollouts working — but a missing env no longer disables
-    /// enterprise sync when the user has signed in normally through the
-    /// app. Without this fallback the entire telemetry pipeline silently
-    /// no-ops because the license key lives in the file, not the shell.
+    /// Same as `from_env` but lets the caller pass a license key and ingest
+    /// URL resolved from somewhere else (`~/.screenpipe/enterprise.json`,
+    /// populated by the desktop's in-app prompt or the sign-in-driven
+    /// device-config fetch). Env vars still win when set — that keeps MDM
+    /// rollouts working — but a missing env no longer disables enterprise
+    /// sync when the user has signed in normally through the app. Without
+    /// this fallback the entire telemetry pipeline silently no-ops because
+    /// the config lives in the file, not the shell.
     pub fn from_env_with_fallback(
         app_data_dir: PathBuf,
         device_id: String,
         device_label: String,
         license_key_fallback: Option<String>,
+        ingest_url_fallback: Option<String>,
     ) -> Option<Self> {
         let license_key = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY")
             .ok()
@@ -141,21 +149,25 @@ impl EnterpriseSyncConfig {
         let ingest_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_INGEST_URL.to_string());
-        // Honor an explicit env override at boot for MDM / dev / test flows.
-        // Fail-closed semantics: if the operator explicitly set a mode and
-        // it can't be honored (invalid keys etc.), refuse to start sync — a
-        // silent fallback to plaintext could leak data. When no override is
-        // set we start in HostedIngest and let `resolve_upload_mode` ask
-        // the control plane what this license is actually configured for.
+            .or_else(|| ingest_url_fallback.filter(|s| !s.trim().is_empty()))
+            .unwrap_or_else(default_ingest_url);
+        // Honor only an enforceable non-default env override at boot for MDM /
+        // dev / test flows. Otherwise start blocked until the control plane
+        // positively resolves the license policy. Starting in HostedIngest
+        // could transmit plaintext during a policy-lookup outage before the
+        // hosted route has a chance to reject the request.
         let explicit_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE")
             .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && s != "auto");
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| {
+                !s.is_empty() && s != "auto" && s != "screenpipe_write" && s != "hosted_ingest"
+            });
         let upload_mode = if explicit_mode.is_some() {
             EnterpriseUploadMode::from_env(&ingest_url)?
         } else {
-            EnterpriseUploadMode::HostedIngest
+            EnterpriseUploadMode::Blocked(
+                "enterprise upload mode has not been resolved by the control plane".to_string(),
+            )
         };
         let cursor_path = app_data_dir.join(CURSOR_FILENAME);
         Some(Self {
@@ -179,8 +191,11 @@ impl EnterpriseSyncConfig {
     /// → uploads start" flow possible without any env-var setup on the
     /// customer's machine.
     pub async fn resolve_upload_mode(&mut self) {
-        let resolved = EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await;
-        self.upload_mode = resolved;
+        if let Some(resolved) =
+            EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await
+        {
+            self.upload_mode = resolved;
+        }
     }
 }
 
@@ -321,134 +336,14 @@ pub trait LocalApiClient: Send + Sync {
 }
 
 // ─── Wire types — what we POST upstream ─────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FrameRow {
-    /// Local DB id — stable across restarts of this device. Server uses
-    /// `(device_id, frame_id)` as idempotency key.
-    pub frame_id: i64,
-    /// RFC3339 UTC.
-    pub timestamp: String,
-    pub app_name: Option<String>,
-    pub window_name: Option<String>,
-    pub browser_url: Option<String>,
-    /// Merged accessibility + OCR text (from `frames.full_text`). Already
-    /// PII-sanitized on the device if PII removal is enabled.
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AudioRow {
-    pub transcription_id: i64,
-    pub timestamp: String,
-    pub transcription: String,
-    pub speaker: Option<String>,
-    pub device: Option<String>,
-}
-
-/// One UI event — click, keystroke, focus change, clipboard. The verbs
-/// of any workflow. Coordinates and key codes are deliberately omitted
-/// from sync (privacy + token cost) — what the model actually needs is
-/// "what kind of action, on what element, in what app".
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UiEventRow {
-    pub event_id: i64,
-    pub timestamp: String,
-    /// e.g. "click", "keypress", "clipboard_copy", "clipboard_paste",
-    /// "text_input", "focus_change". Free-form on the device side.
-    pub event_type: String,
-    pub app_name: Option<String>,
-    pub window_title: Option<String>,
-    pub browser_url: Option<String>,
-    /// Element name from the accessibility tree (e.g. "Submit", "Subject"
-    /// field). Most useful field by far for SOP synthesis.
-    pub element_name: Option<String>,
-    /// Element role from the accessibility tree (e.g. "button", "textfield").
-    pub element_role: Option<String>,
-    /// Text content for text/clipboard events. Truncated upstream.
-    pub text_content: Option<String>,
-}
-
-/// A downsized screenshot thumbnail. JPEG @ Q60, 320×180 — small enough to
-/// embed inline as base64 in the JSONL stream (~30KB per record after
-/// base64). The model uses these to anchor SOP steps to actual UI shots
-/// the way Tango / Scribe do, except continuous instead of explicit-record.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SnapshotRow {
-    /// Frame id this thumbnail is derived from. Lets downstream link
-    /// the snapshot back to the OCR/AX text record by `frame_id`.
-    pub frame_id: i64,
-    pub timestamp: String,
-    /// Always "image/jpeg" today; the field is here so we can switch
-    /// to webp later without breaking the wire format.
-    pub mime: String,
-    /// Base64 (no data: prefix). Caller decodes by `Buffer.from(b64,'base64')`.
-    pub image_b64: String,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// One memory row — a user- or AI-curated fact, preference, decision, or
-/// insight. The `memories` table is screenpipe's *distilled* layer above raw
-/// frame/audio — small (10s–1000s of rows), high-signal, and the unit of
-/// institutional knowledge that should follow a person across machines and
-/// (for enterprise) into the org's dashboard. Frame provenance is preserved
-/// via `frame_id` so downstream can link back to the source moment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MemoryRow {
-    /// Local DB id — stable across restarts of this device. Server dedups by
-    /// `(device_id, memory_id)`.
-    pub memory_id: i64,
-    /// RFC3339 UTC. Set when the memory was first created locally.
-    pub created_at: String,
-    /// RFC3339 UTC. Updated when the memory body/tags/importance change.
-    pub updated_at: String,
-    pub content: String,
-    /// "user" (manually saved) or the agent/source that wrote it.
-    pub source: String,
-    pub tags: Vec<String>,
-    /// 0.0 (trivial) – 1.0 (critical). Drives dashboard ranking.
-    pub importance: f64,
-    /// Optional link back to the frame this memory was distilled from.
-    pub frame_id: Option<i64>,
-}
-
-/// One JSONL line. Tagged enum keeps mixed streams trivially parseable on the
-/// server side — `kind: "frame" | "audio" | "ui" | "snapshot" | "memory"`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum TelemetryRecord {
-    Frame {
-        device_id: String,
-        device_label: String,
-        #[serde(flatten)]
-        frame: FrameRow,
-    },
-    Audio {
-        device_id: String,
-        device_label: String,
-        #[serde(flatten)]
-        audio: AudioRow,
-    },
-    Ui {
-        device_id: String,
-        device_label: String,
-        #[serde(flatten)]
-        ui: UiEventRow,
-    },
-    Snapshot {
-        device_id: String,
-        device_label: String,
-        #[serde(flatten)]
-        snapshot: SnapshotRow,
-    },
-    Memory {
-        device_id: String,
-        device_label: String,
-        #[serde(flatten)]
-        memory: MemoryRow,
-    },
-}
+//
+// The record schema (`TelemetryRecord` + the `*Row` flattenings) is the
+// shared wire contract — the customer query gateway parses batches with the
+// same types — so it lives in `screenpipe-telemetry-wire`. Re-exported here
+// so the desktop shim keeps importing everything from `ee_sync::`.
+pub use screenpipe_telemetry_wire::{
+    AudioRow, FrameRow, MemoryRow, SnapshotRow, TelemetryRecord, UiEventRow,
+};
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
 
@@ -466,6 +361,14 @@ pub enum EnterpriseSyncError {
     IngestServerError(u16),
     #[error("control-plane network error: {0}")]
     Network(String),
+    #[error("enterprise upload configuration blocked: {0}")]
+    Configuration(String),
+    /// The control plane's upload ticket pointed at a host outside the
+    /// MDM-pinned destination list (`SCREENPIPE_ENTERPRISE_UPLOAD_PINNED_HOSTS`).
+    /// This is the destination-pin tamper signal — permanent, loud, never
+    /// retried into compliance. Enumerated code: `E_DESTINATION_NOT_PINNED`.
+    #[error("E_DESTINATION_NOT_PINNED: upload refused, ticket host not pinned: {0}")]
+    DestinationNotPinned(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -496,118 +399,9 @@ pub fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
 
 // ─── Pure logic: build the JSONL payload ────────────────────────────────────
 
-/// Serialize a batch of frames + audio + UI rows + snapshots + memories into
-/// JSONL bytes, tagged with the device's identity. Public for unit tests.
-pub fn build_jsonl(
-    device_id: &str,
-    device_label: &str,
-    frames: &[FrameRow],
-    audio: &[AudioRow],
-    ui: &[UiEventRow],
-    snapshots: &[SnapshotRow],
-    memories: &[MemoryRow],
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(
-        (frames.len() + audio.len() + ui.len() + memories.len()) * 256 + snapshots.len() * 50_000,
-    );
-    for f in frames {
-        let rec = TelemetryRecord::Frame {
-            device_id: device_id.to_string(),
-            device_label: device_label.to_string(),
-            frame: f.clone(),
-        };
-        // Per-record write — one bad row never poisons the whole batch.
-        match serde_json::to_vec(&rec) {
-            Ok(line) => {
-                out.extend_from_slice(&line);
-                out.push(b'\n');
-            }
-            Err(e) => {
-                warn!(
-                    "enterprise sync: failed to serialize frame {}: {}",
-                    f.frame_id, e
-                );
-            }
-        }
-    }
-    for a in audio {
-        let rec = TelemetryRecord::Audio {
-            device_id: device_id.to_string(),
-            device_label: device_label.to_string(),
-            audio: a.clone(),
-        };
-        match serde_json::to_vec(&rec) {
-            Ok(line) => {
-                out.extend_from_slice(&line);
-                out.push(b'\n');
-            }
-            Err(e) => {
-                warn!(
-                    "enterprise sync: failed to serialize audio {}: {}",
-                    a.transcription_id, e
-                );
-            }
-        }
-    }
-    for u in ui {
-        let rec = TelemetryRecord::Ui {
-            device_id: device_id.to_string(),
-            device_label: device_label.to_string(),
-            ui: u.clone(),
-        };
-        match serde_json::to_vec(&rec) {
-            Ok(line) => {
-                out.extend_from_slice(&line);
-                out.push(b'\n');
-            }
-            Err(e) => {
-                warn!(
-                    "enterprise sync: failed to serialize ui event {}: {}",
-                    u.event_id, e
-                );
-            }
-        }
-    }
-    for s in snapshots {
-        let rec = TelemetryRecord::Snapshot {
-            device_id: device_id.to_string(),
-            device_label: device_label.to_string(),
-            snapshot: s.clone(),
-        };
-        match serde_json::to_vec(&rec) {
-            Ok(line) => {
-                out.extend_from_slice(&line);
-                out.push(b'\n');
-            }
-            Err(e) => {
-                warn!(
-                    "enterprise sync: failed to serialize snapshot {}: {}",
-                    s.frame_id, e
-                );
-            }
-        }
-    }
-    for m in memories {
-        let rec = TelemetryRecord::Memory {
-            device_id: device_id.to_string(),
-            device_label: device_label.to_string(),
-            memory: m.clone(),
-        };
-        match serde_json::to_vec(&rec) {
-            Ok(line) => {
-                out.extend_from_slice(&line);
-                out.push(b'\n');
-            }
-            Err(e) => {
-                warn!(
-                    "enterprise sync: failed to serialize memory {}: {}",
-                    m.memory_id, e
-                );
-            }
-        }
-    }
-    out
-}
+// `build_jsonl` moved to the wire crate with the record types (the gateway
+// uses it to synthesize test fixtures byte-identical to real batches).
+pub use screenpipe_telemetry_wire::build_jsonl;
 
 /// Split JSONL on record boundaries for hosted ingest. Concatenating the
 /// returned chunks always reproduces `body` byte-for-byte; no record is
@@ -696,6 +490,10 @@ pub async fn run_one_sync(
     local: &dyn LocalApiClient,
     http: &reqwest::Client,
 ) -> Result<SyncTickReport, EnterpriseSyncError> {
+    if let EnterpriseUploadMode::Blocked(reason) = &cfg.upload_mode {
+        return Err(EnterpriseSyncError::Configuration(reason.clone()));
+    }
+
     // First-run safeguard: if cursor is empty, backfill SAFE_BACKFILL only —
     // not the entire DB. An enterprise customer enrolling a long-running
     // device shouldn't dump 6 months of personal history upstream.
@@ -828,7 +626,7 @@ pub async fn run_one_sync(
                 post_jsonl(http, &cfg.ingest_url, &cfg.license_key, request_body).await?;
             }
         }
-        EnterpriseUploadMode::DirectEncrypted(direct) => {
+        EnterpriseUploadMode::DirectWriteOnly(direct) => {
             let counts = DirectUploadRecordCounts {
                 frames: frames.len(),
                 audio: audio.len(),
@@ -836,13 +634,13 @@ pub async fn run_one_sync(
                 snapshots: snapshots.len(),
                 memories: memories.len(),
             };
-            upload_direct_encrypted_batch(
+            upload_direct_write_only_batch(
                 http,
                 cfg,
                 direct,
                 body,
                 counts,
-                DirectUploadCursors::from_cursor(&next_cursor),
+                enterprise_upload::direct_upload_cursors(&next_cursor),
             )
             .await?;
         }
@@ -860,9 +658,12 @@ pub async fn run_one_sync(
                 direct,
                 body,
                 counts,
-                DirectUploadCursors::from_cursor(&next_cursor),
+                enterprise_upload::direct_upload_cursors(&next_cursor),
             )
             .await?;
+        }
+        EnterpriseUploadMode::Blocked(reason) => {
+            return Err(EnterpriseSyncError::Configuration(reason.clone()));
         }
     }
 
@@ -1372,6 +1173,17 @@ async fn fulfill_log_requests(
     http: &reqwest::Client,
     already_handled: Option<&str>,
 ) -> Option<String> {
+    // Only strict write-only storage disables remote support logs.
+    // Existing readable customer-storage orgs deliberately grant Screenpipe
+    // read access so cloud pipes and support workflows continue to work.
+    if matches!(
+        cfg.upload_mode,
+        EnterpriseUploadMode::DirectWriteOnly(_) | EnterpriseUploadMode::Blocked(_)
+    ) {
+        debug!("log-requests: disabled for write-only or unresolved mode");
+        return None;
+    }
+
     let base = control_plane_base(&cfg.ingest_url)?;
     let url = format!("{base}/api/enterprise/log-requests");
 
@@ -1443,8 +1255,16 @@ async fn run_log_request_loop(
 }
 
 fn enterprise_http_client() -> reqwest::Client {
+    enterprise_http_client_with_timeout(Duration::from_secs(60))
+}
+
+/// The single place that knows the redirect policy for license-authenticated
+/// requests. Build every such client through here rather than calling
+/// `reqwest::Client::builder()` directly, so the no-redirect guarantee can't
+/// be lost by a new call site that only wanted a different timeout.
+pub(crate) fn enterprise_http_client_with_timeout(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+        .timeout(timeout)
         // License-authenticated control-plane requests use X-License-Key.
         // Reqwest only strips a small standard set of sensitive headers on
         // cross-origin redirects, so following redirects could leak that key.
@@ -1454,7 +1274,7 @@ fn enterprise_http_client() -> reqwest::Client {
 }
 
 pub async fn run(
-    cfg: EnterpriseSyncConfig,
+    mut cfg: EnterpriseSyncConfig,
     local: Arc<dyn LocalApiClient>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
@@ -1474,6 +1294,10 @@ pub async fn run(
     ));
 
     loop {
+        // Re-resolve before touching local telemetry. This picks up a live
+        // hosted-to-customer-storage policy change without requiring an app
+        // restart, and preserves the last safe mode on lookup failure.
+        cfg.resolve_upload_mode().await;
         let result = run_one_sync(&cfg, &mut cursor, local.as_ref(), &http).await;
 
         match &result {
@@ -1571,7 +1395,7 @@ pub async fn run(
 /// Trade-off: tests that signal shutdown have to wait up to one `dur` before
 /// the loop notices. That's fine — production `dur` is 5min, tests can use
 /// short intervals.
-async fn sleep_or_shutdown(
+pub(crate) async fn sleep_or_shutdown(
     dur: Duration,
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
 ) -> bool {
@@ -1674,6 +1498,46 @@ mod tests {
         let empty: LogRequestsResponse = serde_json::from_str(r#"{}"#).unwrap();
         assert!(!empty.requested);
         assert!(empty.requested_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn strict_customer_storage_never_collects_remote_diagnostic_logs() {
+        let dir = TempDir::new().unwrap();
+        let cfg = direct_test_cfg(
+            &dir,
+            "http://should-not-be-called/ticket".to_string(),
+            "http://should-not-be-called/complete".to_string(),
+        );
+
+        let handled = fulfill_log_requests(&cfg, &reqwest::Client::new(), None).await;
+
+        assert!(handled.is_none());
+    }
+
+    #[tokio::test]
+    async fn readable_customer_storage_keeps_remote_diagnostic_logs_available() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "requested": false })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let mut cfg = readable_direct_test_cfg(
+            &dir,
+            "http://should-not-be-called/ticket".to_string(),
+            "http://should-not-be-called/complete".to_string(),
+        );
+        cfg.ingest_url = format!("{}/api/enterprise/ingest", server.uri());
+
+        let handled = fulfill_log_requests(&cfg, &reqwest::Client::new(), None).await;
+
+        assert!(handled.is_none());
     }
 
     #[tokio::test]
@@ -2091,12 +1955,6 @@ mod tests {
         let prior_license = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY").ok();
         let prior_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL").ok();
         let prior_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
-        let prior_root_key = std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64").ok();
-        let prior_key_id = std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID").ok();
-        let prior_recovery_root_key =
-            std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64").ok();
-        let prior_recovery_key_id =
-            std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID").ok();
 
         // Case 1: no license env → None.
         std::env::remove_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY");
@@ -2124,12 +1982,9 @@ mod tests {
         let cfg =
             EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
                 .expect("license set, must yield Some");
-        assert_eq!(cfg.ingest_url, DEFAULT_INGEST_URL);
+        assert_eq!(cfg.ingest_url, default_ingest_url());
         assert_eq!(cfg.license_key, "sek_test");
-        assert!(matches!(
-            cfg.upload_mode,
-            EnterpriseUploadMode::HostedIngest
-        ));
+        assert!(matches!(cfg.upload_mode, EnterpriseUploadMode::Blocked(_)));
 
         // Case 4: ingest url override is respected.
         std::env::set_var("SCREENPIPE_ENTERPRISE_INGEST_URL", "https://staging/ingest");
@@ -2139,93 +1994,64 @@ mod tests {
                 .unwrap();
         assert_eq!(cfg.ingest_url, "https://staging/ingest");
 
-        // Case 5: direct upload requires an MDM-provisioned root key and
+        // Case 5: write-only direct upload needs no local key material and
         // derives sibling control-plane URLs from the ingest URL.
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
-            "direct_upload_encrypted",
-        );
-        std::env::set_var(
-            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
-            base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
-        );
-        std::env::set_var(
-            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID",
-            "tenant-root-v1",
-        );
-        std::env::set_var(
-            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64",
-            base64::engine::general_purpose::STANDARD.encode([8u8; 32]),
-        );
-        std::env::set_var(
-            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID",
-            "tenant-recovery-v1",
+            "direct_upload_write_only",
         );
         let dir = TempDir::new().unwrap();
         let cfg =
             EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
                 .unwrap();
         match cfg.upload_mode {
-            EnterpriseUploadMode::DirectEncrypted(direct) => {
-                assert_eq!(direct.recipients.len(), 2);
-                assert_eq!(direct.recipients[0].purpose, "primary");
-                assert_eq!(direct.recipients[0].key_id, "tenant-root-v1");
-                assert_eq!(direct.recipients[0].root_key, [9u8; 32]);
-                assert_eq!(direct.recipients[1].purpose, "recovery");
-                assert_eq!(direct.recipients[1].key_id, "tenant-recovery-v1");
-                assert_eq!(direct.recipients[1].root_key, [8u8; 32]);
+            EnterpriseUploadMode::DirectWriteOnly(direct) => {
                 assert_eq!(direct.ticket_url, "https://staging/upload-ticket");
                 assert_eq!(direct.complete_url, "https://staging/upload-complete");
             }
-            EnterpriseUploadMode::HostedIngest => panic!("expected direct upload mode"),
-            EnterpriseUploadMode::DirectReadable(_) => {
-                panic!("expected encrypted direct upload mode")
-            }
+            other => panic!(
+                "expected write-only direct upload mode, got {}",
+                other.label()
+            ),
         }
 
-        // Case 6: readable direct upload does not require customer-held root keys.
+        // Case 6: readable direct upload derives the same sibling URLs.
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
             "direct_upload_readable",
         );
-        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64");
-        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64");
         let dir = TempDir::new().unwrap();
         let cfg =
             EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
                 .unwrap();
         match cfg.upload_mode {
             EnterpriseUploadMode::DirectReadable(direct) => {
-                assert!(direct.recipients.is_empty());
                 assert_eq!(direct.ticket_url, "https://staging/upload-ticket");
                 assert_eq!(direct.complete_url, "https://staging/upload-complete");
             }
-            EnterpriseUploadMode::HostedIngest => panic!("expected readable direct upload mode"),
-            EnterpriseUploadMode::DirectEncrypted(_) => {
-                panic!("expected readable direct upload mode")
-            }
+            other => panic!(
+                "expected readable direct upload mode, got {}",
+                other.label()
+            ),
         }
 
-        // Case 7: encrypted direct upload without a valid root key fails closed.
+        // Case 7: the legacy encrypted-era spelling still selects write-only,
+        // so MDM fleets configured before the rename keep uploading.
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
             "direct_upload_encrypted",
         );
-        std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64", "bad");
         let dir = TempDir::new().unwrap();
-        assert!(EnterpriseSyncConfig::from_env(
-            dir.path().to_path_buf(),
-            "dev".into(),
-            "host".into(),
-        )
-        .is_none());
+        let cfg =
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .unwrap();
+        assert!(matches!(
+            cfg.upload_mode,
+            EnterpriseUploadMode::DirectWriteOnly(_)
+        ));
 
-        // Case 8: encrypted direct upload without a recovery key also fails closed.
-        std::env::set_var(
-            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
-            base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
-        );
-        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64");
+        // Case 8: an unknown explicit mode refuses to start sync.
+        std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", "carrier_pigeon");
         let dir = TempDir::new().unwrap();
         assert!(EnterpriseSyncConfig::from_env(
             dir.path().to_path_buf(),
@@ -2246,27 +2072,6 @@ mod tests {
         match prior_mode {
             Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", v),
             None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
-        }
-        match prior_root_key {
-            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64", v),
-            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64"),
-        }
-        match prior_key_id {
-            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID", v),
-            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID"),
-        }
-        match prior_recovery_root_key {
-            Some(v) => std::env::set_var(
-                "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64",
-                v,
-            ),
-            None => {
-                std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64")
-            }
-        }
-        match prior_recovery_key_id {
-            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID", v),
-            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID"),
         }
     }
 
@@ -2358,29 +2163,33 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn unresolved_mode_blocks_before_reading_local_telemetry() {
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, "http://should-not-be-called".to_string());
+        cfg.upload_mode = EnterpriseUploadMode::Blocked("policy unresolved".to_string());
+        let local = MockLocal::new(Vec::new(), Vec::new());
+        let mut cursor = Cursor::default();
+
+        let error = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, EnterpriseSyncError::Configuration(_)));
+        assert!(cursor.last_frame_ts.is_none());
+        assert!(local.last_frames_since.lock().unwrap().is_none());
+    }
+
     fn direct_test_cfg(
         dir: &TempDir,
         ticket_url: String,
         complete_url: String,
     ) -> EnterpriseSyncConfig {
         let mut cfg = test_cfg(dir, "http://host/ingest".to_string());
-        cfg.upload_mode = EnterpriseUploadMode::DirectEncrypted(DirectUploadConfig {
+        cfg.upload_mode = EnterpriseUploadMode::DirectWriteOnly(DirectUploadConfig {
             ticket_url,
             complete_url,
-            recipients: vec![
-                enterprise_upload::DirectUploadKeyRecipientConfig {
-                    purpose: "primary".to_string(),
-                    key_provider: "mdm_symmetric_v1".to_string(),
-                    key_id: "tenant-root-v1".to_string(),
-                    root_key: [3u8; 32],
-                },
-                enterprise_upload::DirectUploadKeyRecipientConfig {
-                    purpose: "recovery".to_string(),
-                    key_provider: "mdm_symmetric_v1".to_string(),
-                    key_id: "tenant-recovery-v1".to_string(),
-                    root_key: [4u8; 32],
-                },
-            ],
+            pinned_hosts: Vec::new(),
         });
         cfg
     }
@@ -2394,7 +2203,7 @@ mod tests {
         cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
             ticket_url,
             complete_url,
-            recipients: Vec::new(),
+            pinned_hosts: Vec::new(),
         });
         cfg
     }
@@ -2639,6 +2448,9 @@ mod tests {
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/ticket"))
             .and(wiremock::matchers::header("X-License-Key", "sek_test"))
+            .and(wiremock::matchers::body_string_contains(
+                "\"mode\":\"direct_upload_write_only\"",
+            ))
             .respond_with(
                 wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "ok": true,
@@ -2653,8 +2465,12 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        // Write-only mode is plaintext JSONL on the wire — the trust model is
+        // IAM (no Screenpipe read principal), not ciphertext. The PUT body
+        // must therefore carry the record text as-is.
         wiremock::Mock::given(wiremock::matchers::method("PUT"))
             .and(wiremock::matchers::path("/blob"))
+            .and(wiremock::matchers::body_string_contains("secret"))
             .respond_with(wiremock::ResponseTemplate::new(201))
             .expect(1)
             .mount(&server)
@@ -2711,7 +2527,7 @@ mod tests {
                     "method": "PUT",
                     "upload_url": format!("{}/blob", server.uri()),
                     "headers": {
-                        "Content-Type": enterprise_upload::DIRECT_UPLOAD_READABLE_CONTENT_TYPE,
+                        "Content-Type": enterprise_upload::DIRECT_UPLOAD_CONTENT_TYPE,
                         "x-ms-blob-type": "BlockBlob"
                     }
                 })),
@@ -3445,7 +3261,7 @@ mod tests {
         cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
             ticket_url: format!("{}/ticket", server.uri()),
             complete_url: format!("{}/complete", server.uri()),
-            recipients: Vec::new(),
+            pinned_hosts: Vec::new(),
         });
         let http = reqwest::Client::new();
         let report = fulfill_frame_requests(&cfg, &FrameMock, &http).await;

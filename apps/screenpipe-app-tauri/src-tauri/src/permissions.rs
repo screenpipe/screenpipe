@@ -757,62 +757,11 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
     }
 }
 
-/// Known Chromium-based browsers that use AppleScript for incognito detection
-/// and (in Arc's case) URL capture. Each needs its own Automation permission.
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
-struct ChromiumBrowserInfo {
-    name: &'static str,
-    bundle_id: &'static str,
-    app_path: &'static str,
-    process_name: &'static str,
-}
-
-#[cfg(target_os = "macos")]
-const CHROMIUM_BROWSERS: &[ChromiumBrowserInfo] = &[
-    ChromiumBrowserInfo {
-        name: "Arc",
-        bundle_id: "company.thebrowser.Browser",
-        app_path: "/Applications/Arc.app",
-        process_name: "Arc",
-    },
-    ChromiumBrowserInfo {
-        name: "Google Chrome",
-        bundle_id: "com.google.Chrome",
-        app_path: "/Applications/Google Chrome.app",
-        process_name: "Google Chrome",
-    },
-    ChromiumBrowserInfo {
-        name: "Brave Browser",
-        bundle_id: "com.brave.Browser",
-        app_path: "/Applications/Brave Browser.app",
-        process_name: "Brave Browser",
-    },
-    ChromiumBrowserInfo {
-        name: "Microsoft Edge",
-        bundle_id: "com.microsoft.edgemac",
-        app_path: "/Applications/Microsoft Edge.app",
-        process_name: "Microsoft Edge",
-    },
-    ChromiumBrowserInfo {
-        name: "Vivaldi",
-        bundle_id: "com.vivaldi.Vivaldi",
-        app_path: "/Applications/Vivaldi.app",
-        process_name: "Vivaldi",
-    },
-    ChromiumBrowserInfo {
-        name: "Opera",
-        bundle_id: "com.operasoftware.Opera",
-        app_path: "/Applications/Opera.app",
-        process_name: "Opera",
-    },
-    ChromiumBrowserInfo {
-        name: "Chromium",
-        bundle_id: "org.chromium.Chromium",
-        app_path: "/Applications/Chromium.app",
-        process_name: "Chromium",
-    },
-];
+use screenpipe_a11y::incognito::{
+    MacOSBrowserAutomationTarget as ChromiumBrowserInfo,
+    MACOS_BROWSER_AUTOMATION_TARGETS as CHROMIUM_BROWSERS,
+};
 
 /// Returns true on platforms where Screenpipe's process-audio tap backend is
 /// available. On macOS that means CoreAudio Process Tap (14.4+); on Windows it

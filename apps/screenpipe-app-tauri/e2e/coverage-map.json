@@ -625,6 +625,16 @@
       "notes": "Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847)."
     },
     {
+      "spec": "timeline-daily-summary.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e"],
+      "features": ["timeline", "settings-ai"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens a cached Pi-generated daily summary in Timeline, checks its bounded scrolling layout, captures a screenshot, and closes it."
+    },
+    {
       "spec": "timeline.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "capture-ocr"],
@@ -778,11 +788,17 @@
       "spec": "brain-overview.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "local-api", "pipes"],
-      "features": ["brain", "brain-overview", "artifacts", "pipes"],
+      "features": [
+        "brain",
+        "brain-overview",
+        "brain-canvas",
+        "artifacts",
+        "pipes"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Creates the first-open starter dashboard, renders a Pipe-filled Live View, and checks top and horizontal bounds from the supported 800x600 minimum through 1920x1080."
+      "notes": "Creates the first-open starter dashboard, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
     },
     {
       "spec": "html-artifact-render.spec.ts",

@@ -11,6 +11,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { platform, arch } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 interface UpdateInfo {
   version: string;
@@ -80,7 +81,7 @@ async function getWindowsUpdateOptions() {
   return {
     checkOptions: {
       endpoints: [
-        `https://screenpipe.com/api/app-update/${channel}/windows-${cpuArch}/{{current_version}}`,
+        screenpipeWebUrl(`/api/app-update/${channel}/windows-${cpuArch}/{{current_version}}`, "https://screenpipe.com"),
       ],
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     },

@@ -99,10 +99,12 @@ export function AISettings() {
               <div>
                 <h3 className="text-sm font-medium text-foreground">Enhanced AI</h3>
                 <p className="text-xs text-muted-foreground">
-                  Use Screenpipe Cloud for smarter suggestions and on-demand daily summaries
+                  Use AI for smarter suggestions and on-demand daily summaries
                 </p>
                 <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                  sends recent activity to screenpipe cloud for processing. we don&apos;t store your data (zero retention).
+                  daily summaries use your configured AI model; suggestions may
+                  use screenpipe cloud. relevant activity is processed only when
+                  needed.
                 </p>
               </div>
             </div>

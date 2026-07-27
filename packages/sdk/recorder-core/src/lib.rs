@@ -62,6 +62,11 @@ pub struct RecorderOptions {
     /// URL patterns (domain-aware) to pause on when the focused window
     /// is a browser navigated to a matching URL.
     pub ignored_urls: Option<Vec<String>>,
+    /// Detect and skip incognito/private browser windows. Defaults to true.
+    pub ignore_incognito_windows: Option<bool>,
+    /// Use browser-native incognito detection on macOS. Defaults to false and
+    /// may require Automation permission for supported Chromium browsers.
+    pub enhanced_incognito_detection: Option<bool>,
     /// Opt into the event-driven paired-capture pipeline. Writes a
     /// SQLite at `{data_dir}/db.sqlite` and JPEG snapshots under
     /// `{data_dir}/data/` — same schema the screenpipe CLI writes.

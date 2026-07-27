@@ -1954,6 +1954,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
+name = "crc-fast"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75b2483e97a5a7da73ac68a05b629f9c53cff58d8ed1c77866079e18b00dba5"
+dependencies = [
+ "digest 0.10.7",
+ "spin 0.10.1",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3240,7 +3250,7 @@ checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
 dependencies = [
  "futures-core",
  "futures-sink",
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -3251,7 +3261,7 @@ checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
 dependencies = [
  "futures-core",
  "futures-sink",
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -4681,6 +4691,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4868,7 +4887,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -5574,7 +5593,7 @@ dependencies = [
  "httparse",
  "memchr",
  "mime",
- "spin",
+ "spin 0.9.8",
  "version_check",
 ]
 
@@ -6338,6 +6357,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "object_store"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354792e39fa5f0009e47623cf8b15b099bf9a652fa55c6f817fe28ac84fea50"
+dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "crc-fast",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "itertools 0.15.0",
+ "md-5",
+ "nix 0.31.3",
+ "parking_lot",
+ "percent-encoding",
+ "quick-xml 0.41.0",
+ "rand 0.10.1",
+ "reqwest 0.13.3",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "walkdir",
+ "wasm-bindgen-futures",
+ "web-time",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7221,6 +7282,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7645,6 +7716,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -8270,7 +8342,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8335,7 +8407,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8374,7 +8446,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -8387,7 +8459,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -8435,7 +8507,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8487,7 +8559,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8517,7 +8589,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8592,7 +8664,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8609,8 +8681,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-gateway"
+version = "0.4.31"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 2.2.0",
+ "futures",
+ "http-body-util",
+ "object_store",
+ "reqwest 0.13.3",
+ "screenpipe-config",
+ "screenpipe-db",
+ "screenpipe-sync",
+ "screenpipe-telemetry-wire",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "anyhow",
  "clap",
@@ -8622,7 +8724,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -8660,7 +8762,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "serde",
  "sysinfo",
@@ -8680,7 +8782,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -8743,7 +8845,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "libsqlite3-sys",
  "tempfile",
@@ -8753,7 +8855,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8775,7 +8877,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -8783,8 +8885,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-telemetry-wire"
+version = "0.4.31"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tracing",
+]
+
+[[package]]
 name = "screenpipe-vault"
-version = "0.4.30"
+version = "0.4.31"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -9493,6 +9605,12 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 dependencies = [
  "lock_api",
 ]
+
+[[package]]
+name = "spin"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
 
 [[package]]
 name = "spki"

@@ -132,7 +132,7 @@ fn store_json_has_presets(data: &[u8]) -> bool {
 /// therefore always either the previous complete file or the new complete one —
 /// never a torn one. Used for store.bin and its recovery snapshots so a single
 /// crash can never destroy both the live file and its backup at once.
-fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".durable.tmp");

@@ -45,6 +45,8 @@ pub struct VisionManagerConfig {
     pub use_all_monitors: bool,
     /// Automatically detect and skip incognito / private browsing windows.
     pub ignore_incognito_windows: bool,
+    /// Use browser-native APIs for more reliable incognito detection on macOS.
+    pub enhanced_incognito_detection: bool,
     /// Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
     pub pause_on_drm_content: bool,
     /// Languages for OCR recognition.
@@ -505,6 +507,7 @@ impl VisionManager {
             monitor_width: monitor.width() as f64,
             monitor_height: monitor.height() as f64,
             ignore_incognito_windows: self.config.ignore_incognito_windows,
+            enhanced_incognito_detection: self.config.enhanced_incognito_detection,
             ..TreeWalkerConfig::default()
         };
 
@@ -773,6 +776,7 @@ mod tests {
             monitor_ids,
             use_all_monitors: false,
             ignore_incognito_windows: false,
+            enhanced_incognito_detection: false,
             pause_on_drm_content: false,
             languages: vec![Language::English],
             video_quality: "balanced".to_string(),

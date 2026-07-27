@@ -35,24 +35,19 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { localFetch } from "@/lib/api";
 import {
-	type ActivitySummaryBundle,
-	buildDailySummaryMessages,
 	DAILY_SUMMARY_PROMPT_VERSION,
 	evaluateDailySummaryFormat,
-	hasDailySummaryEvidence,
 } from "@/lib/daily-summary-prompt";
+import { runDailySummaryWithPi } from "@/lib/daily-summary-pi";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import { cn } from "@/lib/utils";
-import { commands } from "@/lib/utils/tauri";
+import { commands, type AIPreset } from "@/lib/utils/tauri";
 
-const CLOUD_CHAT_URL = "https://api.screenpipe.com/v1/chat/completions";
-const SUMMARY_CACHE_PREFIX = "screenpipe:timeline-daily-summary:v2:";
+const SUMMARY_CACHE_PREFIX = "screenpipe:timeline-daily-summary:pi-v1:";
 
-type SummaryStatus = "idle" | "gathering" | "streaming" | "complete" | "error";
-
-type ParsedStreamLine = { text: string; done: boolean };
+type SummaryStatus = "idle" | "gathering" | "complete" | "error";
 
 export function dailySummaryCacheKey(date: Date): string {
 	return `${SUMMARY_CACHE_PREFIX}${format(date, "yyyy-MM-dd")}`;
@@ -64,42 +59,6 @@ export function dailySummaryTimeRange(date: Date, now = new Date()) {
 	const end = isSameDay(date, now) && now < dayEnd ? now : dayEnd;
 
 	return { start: start.toISOString(), end: end.toISOString() };
-}
-
-function assistantContent(value: unknown): string {
-	if (typeof value === "string") return value;
-	if (!Array.isArray(value)) return "";
-	return value
-		.map((part) => {
-			if (typeof part === "string") return part;
-			if (part && typeof part === "object" && "text" in part) {
-				return typeof part.text === "string" ? part.text : "";
-			}
-			return "";
-		})
-		.join("");
-}
-
-export function parseChatCompletionStreamLine(line: string): ParsedStreamLine {
-	const trimmed = line.trim();
-	if (!trimmed.startsWith("data:")) return { text: "", done: false };
-
-	const data = trimmed.slice(5).trim();
-	if (data === "[DONE]") return { text: "", done: true };
-	if (!data) return { text: "", done: false };
-
-	try {
-		const parsed = JSON.parse(data);
-		const choice = parsed?.choices?.[0];
-		return {
-			text:
-				assistantContent(choice?.delta?.content) ||
-				assistantContent(choice?.message?.content),
-			done: choice?.finish_reason != null,
-		};
-	} catch {
-		return { text: "", done: false };
-	}
 }
 
 function readCachedSummary(date: Date): string {
@@ -118,55 +77,14 @@ function cacheSummary(date: Date, summary: string) {
 	}
 }
 
-async function streamDailySummary(
-	response: Response,
-	onText: (text: string) => void,
-): Promise<string> {
-	const contentType = response.headers.get("content-type") ?? "";
-	if (contentType.includes("application/json") || !response.body) {
-		const payload = await response.json();
-		const text = assistantContent(payload?.choices?.[0]?.message?.content);
-		if (text) onText(text);
-		return text;
-	}
-
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-	let result = "";
-
-	while (true) {
-		const { done, value } = await reader.read();
-		buffer += decoder.decode(value, { stream: !done });
-		const lines = buffer.split(/\r?\n/);
-		buffer = lines.pop() ?? "";
-
-		for (const line of lines) {
-			const parsed = parseChatCompletionStreamLine(line);
-			if (parsed.text) {
-				result += parsed.text;
-				onText(result);
-			}
-			if (parsed.done) return result;
-		}
-
-		if (done) break;
-	}
-
-	const last = parseChatCompletionStreamLine(buffer);
-	if (last.text) {
-		result += last.text;
-		onText(result);
-	}
-
-	return result;
-}
-
 function friendlyGenerationError(error: unknown): string {
 	if (!(error instanceof Error)) return "Daily summary could not be generated.";
-	if (/401|403/.test(error.message)) return "Your session expired. Sign in again to continue.";
-	if (/429/.test(error.message)) return "AI is busy right now. Try again in a moment.";
-	if (/activity/i.test(error.message)) return "Screenpipe could not read this day's activity.";
+	if (/401|403/.test(error.message))
+		return "Your session expired. Sign in again to continue.";
+	if (/429/.test(error.message))
+		return "AI is busy right now. Try again in a moment.";
+	if (/timed out/i.test(error.message))
+		return "The AI took too long to read this day. Try again.";
 	return "Daily summary could not be generated. Try again.";
 }
 
@@ -191,7 +109,11 @@ export function TimelineDailySummary({
 	const dateId = format(currentDate, "yyyy-MM-dd");
 	const enhancedAI = settings?.enhancedAI ?? false;
 	const userToken = settings?.user?.token ?? "";
-	const isGenerating = status === "gathering" || status === "streaming";
+	const dailySummaryPreset = useMemo(
+		() => pickPipePreset((settings?.aiPresets ?? []) as AIPreset[]),
+		[settings?.aiPresets],
+	);
+	const isGenerating = status === "gathering";
 
 	const dateLabel = useMemo(
 		() =>
@@ -221,6 +143,12 @@ export function TimelineDailySummary({
 				setEnableDialogOpen(true);
 				return;
 			}
+			if (!dailySummaryPreset) {
+				setPanelOpen(true);
+				setStatus("error");
+				setError("No AI model is configured. Choose one in Settings.");
+				return;
+			}
 
 			abortRef.current?.abort();
 			const controller = new AbortController();
@@ -241,59 +169,16 @@ export function TimelineDailySummary({
 
 			try {
 				const range = dailySummaryTimeRange(requestedDate);
-				const params = new URLSearchParams({
-					start_time: range.start,
-					end_time: range.end,
-					include_key_texts: "false",
-					max_snippets: "12",
-					max_snippet_chars: "480",
-					max_memories: "5",
-				});
-				const activityResponse = await localFetch(`/activity-summary?${params}`, {
+				const completedSummary = await runDailySummaryWithPi({
+					date: requestedDate,
+					range,
+					preset: dailySummaryPreset,
+					userToken: token,
 					signal: controller.signal,
 				});
-				if (!activityResponse.ok) {
-					throw new Error(`activity request failed (${activityResponse.status})`);
-				}
-
-				const activity = (await activityResponse.json()) as ActivitySummaryBundle;
-				if (!hasDailySummaryEvidence(activity)) {
-					setStatus("error");
-					setError("No recorded activity was found for this day.");
-					posthog.capture("timeline_daily_summary_empty", {
-						selected_date: dateId,
-						data_status: activity.data_status ?? "unknown",
-					});
-					return;
-				}
-
-				setStatus("streaming");
-				const cloudResponse = await fetch(CLOUD_CHAT_URL, {
-					method: "POST",
-					signal: controller.signal,
-					headers: {
-						Authorization: `Bearer ${token}`,
-						"Content-Type": "application/json",
-						"x-screenpipe-latency": "interactive",
-					},
-					body: JSON.stringify({
-						model: "auto",
-						stream: true,
-						store: false,
-						temperature: 0.1,
-						max_tokens: 800,
-						messages: buildDailySummaryMessages(activity, requestedDate),
-					}),
-				});
-
-				if (!cloudResponse.ok) {
-					throw new Error(`cloud request failed (${cloudResponse.status})`);
-				}
-
-				const completedSummary = await streamDailySummary(cloudResponse, setSummary);
-				if (!completedSummary.trim()) throw new Error("cloud response was empty");
 				const formatFailures = evaluateDailySummaryFormat(completedSummary);
 
+				setSummary(completedSummary);
 				cacheSummary(requestedDate, completedSummary);
 				setStatus("complete");
 				posthog.capture("timeline_daily_summary_generated", {
@@ -301,11 +186,16 @@ export function TimelineDailySummary({
 					duration_ms: Math.round(performance.now() - startedAt),
 					summary_length: completedSummary.length,
 					prompt_version: DAILY_SUMMARY_PROMPT_VERSION,
+					runtime: "pi-agent",
+					model: dailySummaryPreset.model,
 					format_valid: formatFailures.length === 0,
 					format_failure_count: formatFailures.length,
 				});
 			} catch (generationError) {
-				if (generationError instanceof Error && generationError.name === "AbortError") {
+				if (
+					generationError instanceof Error &&
+					generationError.name === "AbortError"
+				) {
 					return;
 				}
 				console.error("daily summary generation failed", generationError);
@@ -320,7 +210,7 @@ export function TimelineDailySummary({
 				});
 			}
 		},
-		[currentDate, dateId, userToken],
+		[currentDate, dailySummaryPreset, dateId, userToken],
 	);
 
 	const handleTriggerClick = () => {
@@ -329,6 +219,14 @@ export function TimelineDailySummary({
 			enhanced_ai_enabled: enhancedAI,
 			has_cached_summary: Boolean(summary),
 		});
+
+		// Cached summaries are local output. Keep them readable if the user later
+		// disables Enhanced AI or signs out; only a new generation needs consent
+		// and an authenticated model session.
+		if (summary) {
+			setPanelOpen(true);
+			return;
+		}
 
 		if (!enhancedAI || !userToken) {
 			setEnableDialogOpen(true);
@@ -339,7 +237,7 @@ export function TimelineDailySummary({
 			return;
 		}
 
-		if (summary || isGenerating) {
+		if (isGenerating) {
 			setPanelOpen(true);
 			return;
 		}
@@ -396,12 +294,21 @@ export function TimelineDailySummary({
 		const handleOutsidePointerDown = (event: PointerEvent) => {
 			const target = event.target;
 			if (!(target instanceof Node)) return;
-			if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+			if (
+				panelRef.current?.contains(target) ||
+				triggerRef.current?.contains(target)
+			)
+				return;
 			closePanel();
 		};
 
 		document.addEventListener("pointerdown", handleOutsidePointerDown, true);
-		return () => document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+		return () =>
+			document.removeEventListener(
+				"pointerdown",
+				handleOutsidePointerDown,
+				true,
+			);
 	}, [closePanel, panelOpen]);
 
 	const copySummary = async () => {
@@ -420,10 +327,10 @@ export function TimelineDailySummary({
 		void generate();
 	};
 
-	const tooltipText = !enhancedAI
-		? "Turn on Enhanced AI to generate a summary for this day"
-		: summary
-			? "Open this day's summary"
+	const tooltipText = summary
+		? "Open this day's summary"
+		: !enhancedAI
+			? "Turn on Enhanced AI to generate a summary for this day"
 			: isGenerating
 				? "Generating this day's summary"
 				: "Generate a summary for this day";
@@ -469,13 +376,11 @@ export function TimelineDailySummary({
 					<motion.aside
 						ref={panelRef}
 						data-testid="timeline-daily-summary-panel"
-						initial={{ opacity: 0, y: -10, scale: 0.985 }}
-						animate={{ opacity: 1, y: 0, scale: 1 }}
-						exit={{ opacity: 0, y: -6, scale: 0.99 }}
-						transition={{ duration: 0.15, ease: "easeOut" }}
 						className={cn(
 							"ai-panel fixed right-5 z-[150] flex max-h-[min(620px,calc(100vh-112px))] w-[min(420px,calc(100vw-32px))] flex-col overflow-hidden border border-border bg-background/95 text-foreground shadow-lg shadow-black/5 backdrop-blur-xl",
-							embedded ? "top-[68px]" : "top-[calc(env(safe-area-inset-top)+76px)]",
+							embedded
+								? "top-[68px]"
+								: "top-[calc(env(safe-area-inset-top)+76px)]",
 						)}
 						onWheel={(event) => event.stopPropagation()}
 						aria-live="polite"
@@ -497,14 +402,20 @@ export function TimelineDailySummary({
 											</span>
 										)}
 									</div>
-									<p className="mt-0.5 text-xs text-muted-foreground">{dateLabel}</p>
+									<p className="mt-0.5 text-xs text-muted-foreground">
+										{dateLabel}
+									</p>
 								</div>
 							</div>
 							<button
 								type="button"
 								onClick={closePanel}
 								className="p-1.5 text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
-								aria-label={isGenerating ? "Stop and close daily summary" : "Close daily summary"}
+								aria-label={
+									isGenerating
+										? "Stop and close daily summary"
+										: "Close daily summary"
+								}
 							>
 								<X className="h-4 w-4" />
 							</button>
@@ -515,7 +426,11 @@ export function TimelineDailySummary({
 								<motion.div
 									className="absolute inset-y-0 w-1/4 bg-foreground"
 									animate={{ x: ["-100%", "220%"] }}
-									transition={{ duration: 1.25, repeat: Infinity, ease: "linear" }}
+									transition={{
+										duration: 1.25,
+										repeat: Infinity,
+										ease: "linear",
+									}}
 								/>
 							</div>
 						)}
@@ -525,7 +440,10 @@ export function TimelineDailySummary({
 							className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 select-text"
 						>
 							{status === "gathering" && !summary && (
-								<div className="space-y-4" data-testid="daily-summary-gathering">
+								<div
+									className="space-y-4"
+									data-testid="daily-summary-gathering"
+								>
 									<div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
 										<Loader2 className="h-3.5 w-3.5 animate-spin" />
 										Reading this day’s timeline…
@@ -538,26 +456,11 @@ export function TimelineDailySummary({
 								</div>
 							)}
 
-							{status === "streaming" && !summary && (
-								<div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-									<Sparkles className="h-3.5 w-3.5 animate-pulse" />
-									Writing your recap
-									<span className="flex gap-1">
-										<span className="h-1 w-1 animate-bounce bg-current [animation-delay:-200ms]" />
-										<span className="h-1 w-1 animate-bounce bg-current [animation-delay:-100ms]" />
-										<span className="h-1 w-1 animate-bounce bg-current" />
-									</span>
-								</div>
-							)}
-
 							{summary && (
 								<div className="relative">
 									<MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-sm leading-relaxed dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-wide prose-h3:mb-2 prose-h3:mt-5 prose-p:my-2 prose-li:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
 										{summary}
 									</MemoizedReactMarkdown>
-									{status === "streaming" && (
-										<span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-foreground align-middle" />
-									)}
 								</div>
 							)}
 
@@ -594,7 +497,11 @@ export function TimelineDailySummary({
 										className="p-2 text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
 										aria-label="Copy daily summary"
 									>
-										{copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+										{copied ? (
+											<Check className="h-3.5 w-3.5" />
+										) : (
+											<Copy className="h-3.5 w-3.5" />
+										)}
 									</button>
 									<button
 										type="button"
@@ -612,13 +519,22 @@ export function TimelineDailySummary({
 			</AnimatePresence>
 
 			<Dialog open={enableDialogOpen} onOpenChange={setEnableDialogOpen}>
-				<DialogContent className="max-w-md" data-testid="daily-summary-enable-dialog">
+				<DialogContent
+					className="max-w-md"
+					data-testid="daily-summary-enable-dialog"
+				>
 					<DialogHeader>
 						<div className="mb-3 flex h-10 w-10 items-center justify-center border border-foreground bg-foreground text-background">
-							{userToken ? <Sparkles className="h-5 w-5" /> : <LogIn className="h-5 w-5" />}
+							{userToken ? (
+								<Sparkles className="h-5 w-5" />
+							) : (
+								<LogIn className="h-5 w-5" />
+							)}
 						</div>
 						<DialogTitle>
-							{userToken ? "turn on enhanced ai?" : "sign in to use daily summaries"}
+							{userToken
+								? "turn on enhanced ai?"
+								: "sign in to use daily summaries"}
 						</DialogTitle>
 						<DialogDescription>
 							{userToken
@@ -634,16 +550,19 @@ export function TimelineDailySummary({
 								<div>
 									<p className="font-medium">Only when you ask</p>
 									<p className="text-xs text-muted-foreground">
-										Daily summaries never run on a timer or generate automatically.
+										Daily summaries never run on a timer or generate
+										automatically.
 									</p>
 								</div>
 							</div>
 							<div className="flex items-start gap-3">
 								<ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
 								<div>
-									<p className="font-medium">Zero retention</p>
+									<p className="font-medium">Bounded, read-only access</p>
 									<p className="text-xs text-muted-foreground">
-										A bounded view of the selected day is sent to Screenpipe Cloud for processing and is not stored there.
+										The AI agent can read only the selected day through local
+										Screenpipe APIs. Relevant evidence is processed by your
+										configured AI model.
 									</p>
 								</div>
 							</div>
@@ -651,11 +570,20 @@ export function TimelineDailySummary({
 					)}
 
 					<DialogFooter>
-						<Button variant="ghost" onClick={() => setEnableDialogOpen(false)} disabled={isEnabling}>
+						<Button
+							variant="ghost"
+							onClick={() => setEnableDialogOpen(false)}
+							disabled={isEnabling}
+						>
 							Not now
 						</Button>
-						<Button onClick={() => void handleEnableAndGenerate()} disabled={isEnabling}>
-							{isEnabling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+						<Button
+							onClick={() => void handleEnableAndGenerate()}
+							disabled={isEnabling}
+						>
+							{isEnabling ? (
+								<Loader2 className="mr-2 h-4 w-4 animate-spin" />
+							) : null}
 							{userToken ? "Turn on and summarize" : "Sign in"}
 						</Button>
 					</DialogFooter>

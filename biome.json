@@ -59,7 +59,29 @@
         "noExtraBooleanCast": "error",
         "noUselessTypeConstraint": "error",
         "noUselessCatch": "error"
+      },
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "@tauri-apps/plugin-http": "the tauri http plugin sets NO request timeout, so a bare plugin fetch is unbounded once the peer accepts the connection. import tauriFetchWithDeadline from @/lib/http/tauri-fetch instead (that file is exempt)."
+            }
+          }
+        }
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/screenpipe-app-tauri/lib/http/tauri-fetch.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    }
+  ]
 }
