@@ -1,6 +1,9 @@
 ; x64.nsh provides ${DisableX64FSRedirection} / ${EnableX64FSRedirection}.
-; It has its own include guard so repeated inclusion is safe.
+; LogicLib provides ${If}/${Do}/${ExitDo} and generates unique labels per use,
+; so the macros below can be inserted repeatedly.
+; Both have their own include guards so repeated inclusion is safe.
 !include "x64.nsh"
+!include "LogicLib.nsh"
 
 ; ---------------------------------------------------------------------------
 ; _SP_KillProcesses -- shared helper called by both PREINSTALL and PREUNINSTALL
@@ -64,8 +67,113 @@
   Pop $0
 !macroend
 
+; ---------------------------------------------------------------------------
+; _SP_ClearLockedFile <name> -- guarantee $INSTDIR\<name> is writable before
+; the installer extracts over it.
+;
+; Windows refuses to overwrite the image of a running process. That is the
+; "Error opening file for writing: ...\bun.exe" dialog (#5467, #3647): the
+; updater hands off to this installer via ShellExecuteW and then calls
+; std::process::exit(0), which orphans -- without killing -- the bun sidecars
+; that run out of $INSTDIR (pi agent, pipes). _SP_KillProcesses above is only
+; best effort: its PowerShell/WMI sweep swallows every error and gives up after
+; 30 s, which is easy to hit overnight while Defender runs its scheduled scan.
+; Retry in the dialog then never helps, because nothing in that path releases
+; the handle.
+;
+; So do not depend on the kill. A locked image cannot be deleted or
+; overwritten, but it *can* be renamed (the mapping is opened with
+; FILE_SHARE_DELETE) -- the same swap Chrome and Firefox use to update
+; themselves. Wait a few seconds first so short-lived locks (antivirus reading
+; the file) clear without leaving anything behind, then move the file aside.
+; The name is free for extraction and the orphan keeps running from the renamed
+; copy until it exits on its own.
+;
+; Deliberately no `Delete /REBOOTOK`: it needs admin for this per-user install
+; and would raise a reboot prompt. Leftovers are swept in POSTINSTALL and again
+; by the app at boot (see updates.rs::sweep_moved_aside_binaries).
+; ---------------------------------------------------------------------------
+!macro _SP_ClearLockedFile Name
+  Push $0 ; full path
+  Push $1 ; lock-wait attempt counter
+  Push $2 ; open-for-write probe handle
+  Push $3 ; move-aside suffix counter
+  Push $4 ; move-aside candidate path
+
+  StrCpy $0 "$INSTDIR\${Name}"
+  ${If} ${FileExists} "$0"
+    StrCpy $1 0
+    ${Do}
+      ; Mode "a" needs write access and does not truncate, so it fails in
+      ; exactly the cases where extraction would fail.
+      ClearErrors
+      FileOpen $2 "$0" a
+      ${IfNot} ${Errors}
+        FileClose $2
+        ${ExitDo}
+      ${EndIf}
+
+      IntOp $1 $1 + 1
+      ${If} $1 >= 3
+        DetailPrint "${Name} still locked after $1 tries - moving it aside"
+        StrCpy $3 0
+        ${Do}
+          ${If} $3 == 0
+            StrCpy $4 "$0.sp-old"
+          ${Else}
+            StrCpy $4 "$0.sp-old$3"
+          ${EndIf}
+          ; Drop a leftover from an earlier update so the name is free. If that
+          ; one is locked too, Rename fails and the next suffix is tried.
+          Delete "$4"
+          ClearErrors
+          Rename "$0" "$4"
+          ${IfNot} ${Errors}
+            DetailPrint "moved ${Name} aside to $4"
+            ; Usually fails while the orphan still runs - swept later.
+            Delete "$4"
+            ${ExitDo}
+          ${EndIf}
+          IntOp $3 $3 + 1
+          ${If} $3 >= 5
+            DetailPrint "could not move ${Name} aside - extraction may fail"
+            ${ExitDo}
+          ${EndIf}
+        ${Loop}
+        ${ExitDo}
+      ${EndIf}
+
+      DetailPrint "${Name} is locked, waiting ($1/3)..."
+      Sleep 1000
+    ${Loop}
+  ${EndIf}
+
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro _SP_KillProcesses
+
+  ; Everything the app keeps running out of $INSTDIR. The kill above is the
+  ; tidy path; these checks are what actually guarantee extraction can write,
+  ; whether or not it worked.
+  DetailPrint "Making app binaries writable..."
+  !insertmacro _SP_ClearLockedFile "bun.exe"
+  !insertmacro _SP_ClearLockedFile "screenpipe.exe"
+  !insertmacro _SP_ClearLockedFile "screenpipe-app.exe"
+  !insertmacro _SP_ClearLockedFile "ffmpeg.exe"
+  !insertmacro _SP_ClearLockedFile "ffprobe.exe"
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  ; Binaries moved aside above. The orphan holding them has usually exited by
+  ; now; whatever is left gets swept by the app on its next boot.
+  Delete "$INSTDIR\*.sp-old"
+  Delete "$INSTDIR\*.sp-old?"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
