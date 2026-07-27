@@ -609,6 +609,10 @@ impl ServerCore {
             Arc<dyn screenpipe_core::agents::AgentExecutor>,
         > = std::collections::HashMap::new();
         agent_executors.insert("pi".to_string(), pi_executor.clone());
+        agent_executors.insert(
+            "script".to_string(),
+            Arc::new(screenpipe_core::agents::script::ScriptExecutor::new()),
+        );
 
         let pipe_store: Option<Arc<dyn screenpipe_core::pipes::PipeStore>> = Some(Arc::new(
             screenpipe_engine::pipe_store::SqlitePipeStore::new(db.clone()),

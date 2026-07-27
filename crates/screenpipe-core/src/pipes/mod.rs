@@ -2071,6 +2071,17 @@ async fn setup_pipe_permissions(
         warn!("failed to install filtered skills: {}", e);
     }
 
+    setup_pipe_token(pipe_dir, config, token_registry).await
+}
+
+/// Create and register the scoped local API token shared by every Pipe
+/// executor. Unlike [`setup_pipe_permissions`], this does not install Pi
+/// extensions and is therefore safe for deterministic script Pipes.
+async fn setup_pipe_token(
+    pipe_dir: &Path,
+    config: &PipeConfig,
+    token_registry: Option<&Arc<dyn permissions::PipeTokenRegistry>>,
+) -> Option<String> {
     let mut perms = permissions::PipePermissions::from_config(config);
     perms.pipe_dir = Some(pipe_dir.to_string_lossy().to_string());
 
@@ -3237,9 +3248,12 @@ impl PipeManager {
             {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
-
+        }
+        if config.agent == "pi" {
             pipe_token =
                 setup_pipe_permissions(&pipe_dir, &config, self.token_registry.as_ref()).await;
+        } else if config.agent == "script" {
+            pipe_token = setup_pipe_token(&pipe_dir, &config, self.token_registry.as_ref()).await;
         }
         let token_registry_ref = self.token_registry.clone();
 
@@ -3312,7 +3326,13 @@ impl PipeManager {
                     &pipe_dir,
                     run_provider.as_deref(),
                     run_provider_url.as_deref(),
-                    run_api_key.as_deref(),
+                    if config.agent == "script" {
+                        token_registry_ref
+                            .as_ref()
+                            .and_then(|_| pipe_token.as_deref())
+                    } else {
+                        run_api_key.as_deref()
+                    },
                     Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
@@ -3786,8 +3806,16 @@ impl PipeManager {
                 {
                     warn!("failed to pre-configure pi provider: {}", e);
                 }
-
+            }
+            if config.agent == "pi" {
                 pipe_token = setup_pipe_permissions(
+                    &self.pipes_dir.join(name),
+                    &config,
+                    self.token_registry.as_ref(),
+                )
+                .await;
+            } else if config.agent == "script" {
+                pipe_token = setup_pipe_token(
                     &self.pipes_dir.join(name),
                     &config,
                     self.token_registry.as_ref(),
@@ -3850,7 +3878,13 @@ impl PipeManager {
                     &pipe_dir,
                     run_provider.as_deref(),
                     run_provider_url.as_deref(),
-                    run_api_key.as_deref(),
+                    if config.agent == "script" {
+                        self.token_registry
+                            .as_ref()
+                            .and_then(|_| pipe_token.as_deref())
+                    } else {
+                        run_api_key.as_deref()
+                    },
                     Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
@@ -5239,8 +5273,16 @@ impl PipeManager {
                         {
                             warn!("scheduler: failed to pre-configure pi provider: {}", e);
                         }
-
+                    }
+                    if config.agent == "pi" {
                         pipe_token = setup_pipe_permissions(
+                            &pipes_dir.join(name),
+                            config,
+                            token_registry.as_ref(),
+                        )
+                        .await;
+                    } else if config.agent == "script" {
+                        pipe_token = setup_pipe_token(
                             &pipes_dir.join(name),
                             config,
                             token_registry.as_ref(),
@@ -5292,6 +5334,7 @@ impl PipeManager {
                     let pipes_dir_for_mark = pipes_dir.clone();
                     let queued_ref = queued_or_running.clone();
                     let mcp_server_allowlist = selected_mcp_server_ids(config);
+                    let is_script = config.agent == "script";
 
                     tokio::spawn(async move {
                         // Scheduled pipes wait for the previous one to finish
@@ -5427,7 +5470,13 @@ impl PipeManager {
                                 &pipe_dir,
                                 provider.as_deref(),
                                 provider_url.as_deref(),
-                                api_key.as_deref(),
+                                if is_script {
+                                    token_registry_ref
+                                        .as_ref()
+                                        .and_then(|_| pipe_token.as_deref())
+                                } else {
+                                    api_key.as_deref()
+                                },
                                 Some(shared_pid.clone()),
                                 line_tx,
                                 history_enabled,
@@ -7133,6 +7182,16 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Timelike};
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct TestTokenRegistry;
+
+    #[async_trait::async_trait]
+    impl permissions::PipeTokenRegistry for TestTokenRegistry {
+        async fn register_token(&self, _token: String, _perms: permissions::PipePermissions) {}
+        async fn remove_token(&self, _token: &str) {}
+    }
 
     // -- scheduler lifecycle tests ------------------------------------------
 
@@ -8163,6 +8222,37 @@ mod tests {
         assert_eq!(config.model, "auto");
         assert!(config.enabled);
         assert!(config.provider.is_none());
+    }
+
+    #[tokio::test]
+    async fn script_pipe_runs_without_ai_and_receives_scoped_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let pipe_dir = pipes_dir.join("deterministic");
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(
+            pipe_dir.join("pipe.md"),
+            "---\nschedule: manual\nenabled: true\nagent: script\npermissions:\n  allow:\n    - Api(GET /memories)\n---\n\n```command\nprintf '%s' \"$SCREENPIPE_LOCAL_API_KEY\"\n```\n",
+        )
+        .unwrap();
+
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert(
+            "script".to_string(),
+            Arc::new(crate::agents::script::ScriptExecutor::new()),
+        );
+        let mut manager = PipeManager::new(pipes_dir, executors, None, 3030);
+        manager.set_token_registry(Arc::new(TestTokenRegistry));
+        manager.load_pipes().await.unwrap();
+
+        let log = manager.run_pipe("deterministic").await.unwrap();
+        assert!(log.success, "{}", log.stderr);
+        assert!(log.stdout.starts_with("sp_pipe_"), "{}", log.stdout);
+        assert!(pipe_dir.join(".screenpipe-permissions.json").exists());
+        assert!(
+            !pipe_dir.join(".pi").exists(),
+            "script Pipes must not install Pi extensions"
+        );
     }
 
     #[test]
