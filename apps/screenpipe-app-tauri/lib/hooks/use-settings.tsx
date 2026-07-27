@@ -188,6 +188,10 @@ export interface ChatConversation {
 	/** Optional user-assigned sidebar group label (lowercase, trimmed).
 	 *  Drives the manual-grouping sections in the chat sidebar. */
 	sidebarGroup?: string;
+	/** Id of the conversation this one was branched from. Set only by
+	 *  "branch in new chat". Exempts the branch from first-user-message
+	 *  dedup — it deliberately shares its parent's opening message. */
+	branchedFrom?: string;
 	/** Last URL the agent navigated the embedded browser sidebar to.
 	 *  Drives the right-side `<BrowserSidebar />` panel: when the user
 	 *  re-opens this conversation the panel restores to this URL.

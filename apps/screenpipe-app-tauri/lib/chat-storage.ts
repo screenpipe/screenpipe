@@ -256,6 +256,10 @@ export interface ConversationMeta {
    *  `chat-conversation-saved`) the same way `dedupeConversationMetas` does
    *  on disk. Undefined for pipe runs / chats with no user message yet. */
   dedupKey?: string;
+  /** Id of the conversation this was branched from. Exempts the row from
+   *  first-user-message dedup — a branch shares its parent's opening
+   *  message on purpose. */
+  branchedFrom?: string;
   /** The AI preset ID last used in this conversation. Used to restore
    *  the model selection when switching between chats. */
   presetId?: string;
@@ -400,6 +404,7 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     sidebarGroup: typeof conv.sidebarGroup === "string" ? conv.sidebarGroup : undefined,
     titleSource: conv.titleSource,
     dedupKey: conversationDedupKey(conv) ?? undefined,
+    branchedFrom: typeof conv.branchedFrom === "string" ? conv.branchedFrom : undefined,
     presetId: typeof conv.presetId === "string" ? conv.presetId : undefined,
   };
 }

@@ -743,6 +743,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       ...(existing?.kind ? { kind: existing.kind } : {}),
       ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
       ...(existing?.sidebarGroup ? { sidebarGroup: existing.sidebarGroup } : {}),
+      // Same for the branch marker: dropping it on the first typed reply would
+      // let the sidebar dedup collapse the fork back into its parent.
+      ...(existing?.branchedFrom ? { branchedFrom: existing.branchedFrom } : {}),
       ...(browserState ? { browserState } : {}),
       ...(existing?.pinned ? { pinned: existing.pinned } : {}),
       ...(existing?.hidden ? { hidden: existing.hidden } : {}),
@@ -1373,6 +1376,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const newId = crypto.randomUUID();
     const currentTitle = store.sessions[outgoingSid]?.title?.trim();
     const title = currentTitle || "Branched Chat";
+    const branchedFrom = outgoingSid || conversationId || undefined;
     const createdAt = Date.now();
     const lastUserMessageAt = [...branchedMessages]
       .reverse()
@@ -1419,6 +1423,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       createdAt,
       updatedAt: createdAt,
       ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
+      // Exempts the fork from the first-user-message dedup, which would
+      // otherwise collapse it into the parent it was branched from.
+      ...(branchedFrom ? { branchedFrom } : {}),
     };
 
     await saveConversationFile(conversation);
@@ -1439,6 +1446,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         draft: false,
         ...(conversation.lastUserMessageAt
           ? { lastUserMessageAt: conversation.lastUserMessageAt }
+          : {}),
+        ...(conversation.branchedFrom
+          ? { branchedFrom: conversation.branchedFrom }
           : {}),
       });
       store.actions.setMessages(newId, conversation.messages as any);

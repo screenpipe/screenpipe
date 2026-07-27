@@ -75,6 +75,9 @@ export interface SessionRecord {
    *  dedup can still match them; foreground rows that DO hold `messages` derive
    *  the key live instead. Never persisted. */
   dedupKey?: string;
+  /** Id of the conversation this was branched from. Exempts the row from
+   *  dedup: a branch shares its parent's first user message by design. */
+  branchedFrom?: string;
   /** Partial AI title being streamed — displayed in sidebar/header while
    *  generation is in progress. Cleared on completion or failure.
    *  Never persisted to disk. */
@@ -450,6 +453,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             pipeContext: existing.pipeContext ?? r.pipeContext,
             sidebarGroup: existing.sidebarGroup ?? r.sidebarGroup,
             dedupKey: existing.dedupKey ?? r.dedupKey,
+            branchedFrom: existing.branchedFrom ?? r.branchedFrom,
           };
           merged.unread = restoreUnread(existing, merged);
           next[r.id] = merged;
@@ -777,6 +781,7 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
     pipeContext: m.pipeContext,
     sidebarGroup: m.sidebarGroup,
     dedupKey: m.dedupKey,
+    branchedFrom: m.branchedFrom,
     presetId: m.presetId,
   };
   if (typeof m.lastViewedAt === "number") {
@@ -886,10 +891,13 @@ function compareForSidebar(a: SessionRecord, b: SessionRecord): number {
 /** First-user-message dedup key for a store session. Prefer the key derived
  *  from in-store `messages` (foreground / hydrated rows); fall back to the
  *  `dedupKey` carried from disk meta (metadata-only rows — a boot-hydrated row
- *  or a cross-window twin). Null exempts the row (pipe runs, or a chat with no
- *  user message yet). */
+ *  or a cross-window twin). Null exempts the row (pipe runs, branches, or a
+ *  chat with no user message yet). */
 function sessionDedupKey(s: SessionRecord): string | null {
   if (s.kind === "pipe-watch" || s.kind === "pipe-run") return null;
+  // Checked here as well as in conversationDedupKey: this path falls back to
+  // the persisted `dedupKey`, which would otherwise reinstate a key.
+  if (s.branchedFrom) return null;
   return conversationDedupKey({ kind: s.kind, messages: s.messages }) ?? s.dedupKey ?? null;
 }
 

@@ -410,6 +410,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             kind: meta.kind,
             pipeContext: meta.pipeContext,
             dedupKey: meta.dedupKey,
+            branchedFrom: meta.branchedFrom,
             draft: false,
           });
           return;
