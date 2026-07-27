@@ -21,6 +21,14 @@
 #[path = "../src/enterprise/policy.rs"]
 mod enterprise_policy;
 
+// `sync.rs` derives its default ingest URL from the baked control-plane base
+// (`crate::web_base`). The module has no dependencies on the Tauri binary
+// tree, so pull in the real source rather than shimming it — otherwise this
+// target silently stops compiling whenever the binary grows a new leaf module
+// that sync.rs reaches for, and every EE test here quietly stops running.
+#[path = "../src/web_base.rs"]
+mod web_base;
+
 // The production binary wires the shared bounded collector from
 // `src/diagnostic_logs.rs`. This isolated EE test target deliberately avoids
 // the Tauri binary tree, so provide the narrow boundary the sync module needs.

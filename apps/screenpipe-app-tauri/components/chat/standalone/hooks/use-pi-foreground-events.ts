@@ -16,6 +16,7 @@ import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, pars
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
 import {
@@ -687,6 +688,15 @@ export function usePiForegroundEvents({
             const blocksSnapshot = [...piContentBlocksRef.current];
             const streamedText = piStreamingTextRef.current;
             const wasStoppedByUser = piActiveStopRequestedRef.current;
+            const hasNonEmptyChatResult =
+              Boolean(streamedText?.trim()) ||
+              blocksSnapshot.some(
+                (block) => block.type === "text" && Boolean(block.text?.trim()),
+              );
+            const isQualifiedChatResult =
+              !wasStoppedByUser &&
+              !piLastErrorRef.current &&
+              hasNonEmptyChatResult;
 
             // Check if content was already set by error handlers above
             setMessages((prev) => {
@@ -771,6 +781,9 @@ export function usePiForegroundEvents({
               };
               setTimeout(() => {
                 posthog.capture("chat_response_received", analyticsPayload);
+                if (isQualifiedChatResult) {
+                  qualifiedValue.chatResponseReceived();
+                }
               }, POST_STREAM_SIDE_EFFECT_DELAY_MS);
             }
           }

@@ -388,10 +388,16 @@ impl PiExecutor {
 
         if should_install {
             std::fs::create_dir_all(&skill_dir)?;
-            std::fs::write(
-                &skill_path,
-                include_str!("../../assets/skills/screenpipe-team/SKILL.md"),
-            )?;
+            // Gateway orgs (write-only archive tier) query their own gateway
+            // inside the customer network — the hosted base has no read path
+            // to their data. Substitute the org's base URL at install time;
+            // hosted orgs get the asset verbatim.
+            let mut skill =
+                include_str!("../../assets/skills/screenpipe-team/SKILL.md").to_string();
+            if let Some(base) = Self::team_api_base_override() {
+                skill = skill.replace("https://screenpi.pe/api/enterprise/v1", &base);
+            }
+            std::fs::write(&skill_path, skill)?;
             debug!("screenpipe-team skill installed at {:?}", skill_path);
         } else if skill_dir.exists() {
             // Wipe the whole dir — defense against partial state if a user
@@ -403,6 +409,22 @@ impl PiExecutor {
         }
 
         Ok(())
+    }
+
+    /// The org's team-API base URL from `~/.screenpipe/enterprise.json`
+    /// (`gateway_url`, written by the desktop app from the storage
+    /// binding's gateway URL). `None` = hosted org, keep the baked base.
+    fn team_api_base_override() -> Option<String> {
+        let home = dirs::home_dir()?;
+        let raw = std::fs::read_to_string(home.join(".screenpipe").join("enterprise.json")).ok()?;
+        let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let base = parsed.get("gateway_url")?.as_str()?.trim();
+        let base = base.trim_end_matches('/');
+        if base.starts_with("http://") || base.starts_with("https://") {
+            Some(base.to_string())
+        } else {
+            None
+        }
     }
 
     /// True when `~/.screenpipe/enterprise.json` declares this user as an

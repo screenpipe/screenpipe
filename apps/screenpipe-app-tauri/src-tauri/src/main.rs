@@ -153,6 +153,7 @@ mod skills;
 mod specta_bindings;
 mod vault;
 mod viewer;
+mod web_base;
 
 #[cfg(target_os = "macos")]
 /// Tracks the observed permission transition so repeated focus events cannot

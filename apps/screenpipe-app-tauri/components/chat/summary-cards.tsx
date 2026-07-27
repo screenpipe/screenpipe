@@ -29,9 +29,7 @@ import {
 } from "@/lib/chat/response-feedback";
 import type { ChatEntryCard, ChatEntrySource } from "@/lib/chat/types";
 import {
-  getUserGoalCategory,
-  USER_GOAL_CHANGED_EVENT,
-  USER_GOAL_STORAGE_KEY,
+  DEFAULT_USER_GOAL_CATEGORY,
   type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
@@ -50,6 +48,7 @@ interface SummaryCardsProps {
   userName?: string;
   templatePipes?: TemplatePipe[];
   existingPipes?: AutomationPipeInventory[];
+  userGoalCategory?: UserGoalCategory;
 }
 
 export interface ConnectionSetupSuggestion {
@@ -105,27 +104,11 @@ export function SummaryCards({
   userName,
   templatePipes = [],
   existingPipes = [],
+  userGoalCategory = DEFAULT_USER_GOAL_CATEGORY,
 }: SummaryCardsProps) {
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(null);
-  const [userGoal, setUserGoal] = useState<UserGoalCategory>(() =>
-    getUserGoalCategory(),
-  );
-
-  useEffect(() => {
-    const refresh = () => setUserGoal(getUserGoalCategory());
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === USER_GOAL_STORAGE_KEY) refresh();
-    };
-    window.addEventListener(USER_GOAL_CHANGED_EVENT, refresh);
-    window.addEventListener("storage", handleStorage);
-    return () => {
-      window.removeEventListener(USER_GOAL_CHANGED_EVENT, refresh);
-      window.removeEventListener("storage", handleStorage);
-    };
-  }, []);
-
   // Curated home grid — kept deliberately small to reduce cognitive load.
   // Order matters. Definitions come from the app bundle (FALLBACK_TEMPLATES)
   // and win over engine template pipes, so prompt improvements ship with the
@@ -133,7 +116,7 @@ export function SummaryCards({
   // (install_builtin_pipes never overwrites an existing pipe.md). The discover
   // tier is intentionally removed — the metrics showed it earned ~9% of clicks
   // across 6 cards while doubling the visible surface.
-  const homeCardSlugs = homeCardSlugsForGoal(userGoal);
+  const homeCardSlugs = homeCardSlugsForGoal(userGoalCategory);
   const byName = new Map<string, TemplatePipe>();
   for (const t of templatePipes) byName.set(t.name, t);
   for (const t of FALLBACK_TEMPLATES) byName.set(t.name, t);

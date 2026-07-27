@@ -40,6 +40,7 @@ export function LiveViewDashboardSwitcher({
   views,
   current,
   busy,
+  selectionDisabled = busy,
   onSelect,
   onCreate,
   onRename,
@@ -49,6 +50,7 @@ export function LiveViewDashboardSwitcher({
   views: BrainViewDefinition[];
   current: BrainViewDefinition;
   busy: boolean;
+  selectionDisabled?: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onRename: (title: string) => void | Promise<void>;
@@ -85,7 +87,7 @@ export function LiveViewDashboardSwitcher({
             data-testid="overview-dashboard-selector"
             aria-label="Dashboard"
             value={current.id}
-            disabled={busy}
+            disabled={selectionDisabled}
             className="h-9 min-w-0 flex-1 border border-border bg-background px-3 text-sm font-medium outline-none focus:border-foreground disabled:opacity-50 sm:min-w-60"
             onChange={(event) => onSelect(event.target.value)}
           >

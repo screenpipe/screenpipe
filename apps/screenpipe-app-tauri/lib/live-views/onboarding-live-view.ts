@@ -598,7 +598,8 @@ async function saveFirstDashboard(
     title,
     expectedRevision: existing?.revision ?? null,
     timeRange: generated.timeRange,
-    periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+    periodPolicy:
+      generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
     slots: slotInputs(generated, readyPipeNames),
   });
   if (saved.status === "error") {

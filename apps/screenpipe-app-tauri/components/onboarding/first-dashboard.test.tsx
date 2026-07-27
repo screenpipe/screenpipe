@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   prepareOnboardingLiveViewShell: vi.fn(),
   createOnboardingLiveView: vi.fn(),
   completeOnboarding: vi.fn(),
+  updateSettings: vi.fn(),
   markSetupNeedsRetry: vi.fn(),
   capture: vi.fn(),
 }));
@@ -28,6 +29,7 @@ vi.mock("@/lib/hooks/use-onboarding", () => ({
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
     isSettingsLoaded: true,
+    updateSettings: mocks.updateSettings,
     settings: {
       user: { token: "user-token" },
       aiPresets: [
@@ -97,6 +99,7 @@ describe("FirstDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.completeOnboarding.mockResolvedValue(undefined);
+    mocks.updateSettings.mockResolvedValue(undefined);
     mocks.prepareOnboardingLiveViewShell.mockResolvedValue({
       id: "first-dashboard",
       title: "Meeting follow-through",
@@ -130,6 +133,9 @@ describe("FirstDashboard", () => {
     await waitFor(() =>
       expect(mocks.createOnboardingLiveView).toHaveBeenCalledTimes(1),
     );
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      userGoalCategory: "meeting_follow_through",
+    });
     expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
       expect.objectContaining({
         goal: expect.stringContaining("meeting follow-through"),
@@ -258,6 +264,9 @@ describe("FirstDashboard", () => {
         expect.objectContaining({ goal: "show my private project work" }),
       ),
     );
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      userGoalCategory: "default",
+    });
     const submitted = mocks.capture.mock.calls.find(
       ([event]) => event === "onboarding_first_dashboard_goal_submitted",
     );

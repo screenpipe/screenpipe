@@ -554,7 +554,11 @@ mod imp {
             .or_else(crate::commands::get_enterprise_license_key)
     }
 
-    const DEFAULT_POLICY_URL: &str = "https://screenpipe.com/api/enterprise/policy";
+    /// Default policy endpoint on the baked control-plane base
+    /// (crate::web_base — `NEXT_PUBLIC_SCREENPIPE_WEB_URL` at build time).
+    fn default_policy_url() -> String {
+        crate::web_base::screenpipe_web_url("/api/enterprise/policy")
+    }
     const HIDDEN_UI_POLICY_POLL_INTERVAL: std::time::Duration =
         std::time::Duration::from_secs(5 * 60);
 
@@ -623,7 +627,7 @@ mod imp {
             let policy_url = std::env::var("SCREENPIPE_ENTERPRISE_POLICY_URL")
                 .ok()
                 .filter(|url| !url.trim().is_empty())
-                .unwrap_or_else(|| DEFAULT_POLICY_URL.to_string());
+                .unwrap_or_else(default_policy_url);
             let http = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
@@ -757,47 +761,15 @@ mod imp {
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Resolve license key from the canonical file location the
-        // in-app license prompt writes to (~/.screenpipe/enterprise.json,
-        // or the MDM Resources/ copy). Without this the env-var-only
-        // discovery in `from_env` silently no-ops on every standard
-        // install — the telemetry pipeline would never start, even with
-        // the dashboard fully configured.
-        let license_fallback = crate::commands::get_enterprise_license_key();
-
-        let cfg = match EnterpriseSyncConfig::from_env_with_fallback(
-            app_data_dir,
-            device_id.clone(),
-            device_label.clone(),
-            license_fallback,
-        ) {
-            Some(c) => c,
-            None => {
-                info!(
-                    "enterprise sync: no license key in env or ~/.screenpipe/enterprise.json — skipping"
-                );
-                return None;
-            }
-        };
-
-        info!(
-            "enterprise sync: enabled for device={} (label={}) ingest={}",
-            cfg.device_id, cfg.device_label, cfg.ingest_url
-        );
-
         // Point the stalled-upload watchdog at the real app-log dirs. App logs
         // live in the screenpipe data dir (RollingFileAppender), NOT Tauri's
         // app_data_dir — so the from_env default would miss them.
-        let mut cfg = cfg;
         let mut log_dirs = Vec::new();
         if let Ok(d) = crate::log_files::get_screenpipe_data_dir(app) {
             log_dirs.push(d);
         }
         if let Ok(d) = crate::log_files::get_data_dir(app) {
             log_dirs.push(d);
-        }
-        if !log_dirs.is_empty() {
-            cfg.log_dirs = log_dirs;
         }
 
         let api = local_api_context_from_app(app);
@@ -810,22 +782,110 @@ mod imp {
             Arc::new(ScreenpipeLocalClient::new(api_url_base, app.clone()));
 
         let (tx, rx) = tokio::sync::watch::channel(false);
+        let mut shutdown_rx = rx.clone();
         tauri::async_runtime::spawn(async move {
-            // Small startup delay so the local screenpipe server is up before
-            // we hammer it. Mirrors calendar publisher's `sleep(10)`.
-            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            // Wait until a device config exists. Config sources, checked
+            // every tick until one lands (previously this was a boot-time
+            // check that returned None forever — pasting a license in the
+            // in-app prompt or signing in required a full app restart):
+            //   1. env / enterprise.json (MDM, in-app prompt) — as before
+            //   2. sign-in auto-config: a signed-in enterprise MEMBER's
+            //      cloud session fetches /api/enterprise/device-config and
+            //      persists license_key + ingest_url to enterprise.json,
+            //      so the next tick starts sync with zero manual config.
+            const CONFIG_POLL_SECS: u64 = 60;
+            let cfg = loop {
+                let file_cfg = crate::commands::get_enterprise_file_config();
+                if let Some(cfg) = EnterpriseSyncConfig::from_env_with_fallback(
+                    app_data_dir.clone(),
+                    device_id.clone(),
+                    device_label.clone(),
+                    file_cfg.license_key.clone(),
+                    file_cfg.ingest_url.clone(),
+                ) {
+                    break cfg;
+                }
+
+                if let Some(token) = crate::commands::get_cloud_token() {
+                    let url = crate::enterprise::device_config::device_config_url(
+                        file_cfg.ingest_url.as_deref(),
+                    );
+                    match crate::enterprise::device_config::fetch_remote_device_config(
+                        &url, &token,
+                    )
+                    .await
+                    {
+                        Ok(remote) => {
+                            info!(
+                                "enterprise sync: device auto-configured from {} (org={})",
+                                url,
+                                remote.org_name.as_deref().unwrap_or("?")
+                            );
+                            if let Err(e) = crate::commands::persist_enterprise_device_config(
+                                Some(&remote.license_key),
+                                remote.ingest_url.as_deref(),
+                            ) {
+                                warn!("enterprise sync: failed to persist device config: {e}");
+                            }
+                            // Loop around immediately: the file (or the
+                            // in-memory values on persist failure) now
+                            // satisfies from_env_with_fallback.
+                            if let Some(cfg) = EnterpriseSyncConfig::from_env_with_fallback(
+                                app_data_dir.clone(),
+                                device_id.clone(),
+                                device_label.clone(),
+                                Some(remote.license_key.clone()),
+                                remote.ingest_url.clone(),
+                            ) {
+                                break cfg;
+                            }
+                        }
+                        Err(e) => {
+                            // Signed out, consumer account, or control plane
+                            // unreachable — all normal, keep waiting quietly.
+                            tracing::debug!(
+                                "enterprise sync: device-config not available ({e}); retrying"
+                            );
+                        }
+                    }
+                }
+
+                if ee_sync::sleep_or_shutdown(
+                    std::time::Duration::from_secs(CONFIG_POLL_SECS),
+                    &mut shutdown_rx,
+                )
+                .await
+                {
+                    return;
+                }
+            };
+
+            let mut cfg = cfg;
+            if !log_dirs.is_empty() {
+                cfg.log_dirs = log_dirs;
+            }
+
+            info!(
+                "enterprise sync: enabled for device={} (label={}) ingest={}",
+                cfg.device_id, cfg.device_label, cfg.ingest_url
+            );
 
             // Ask the control plane what upload mode this license should run
             // in. Replaces the old "set SCREENPIPE_ENTERPRISE_UPLOAD_MODE on
             // every customer machine" UX — the dashboard binding is now the
             // single source of truth, so a fresh enterprise install just
             // needs the license key and uploads start automatically.
-            let mut cfg = cfg;
             cfg.resolve_upload_mode().await;
             info!(
                 "enterprise sync: resolved upload mode = {}",
                 cfg.upload_mode.label()
             );
+
+            // Small startup delay so the local screenpipe server is up before
+            // we hammer it. Mode resolution runs first so customer root keys
+            // are removed from the process environment before child agents
+            // can inherit them.
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
 
             ee_sync::run(cfg, local, rx).await;
         });

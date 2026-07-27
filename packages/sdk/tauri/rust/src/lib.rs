@@ -278,6 +278,10 @@ pub struct StartOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ignored_urls: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_incognito_windows: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enhanced_incognito_detection: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mp4_monitors: Option<Vec<u32>>,
@@ -513,6 +517,8 @@ impl StartOptions {
             ignored_windows: self.ignored_windows,
             included_windows: self.included_windows,
             ignored_urls: self.ignored_urls,
+            ignore_incognito_windows: self.ignore_incognito_windows,
+            enhanced_incognito_detection: self.enhanced_incognito_detection,
             data_dir: self.data_dir,
             mp4_monitors: self.mp4_monitors,
             paired_monitors: self.paired_monitors,
@@ -1143,6 +1149,8 @@ mod tests {
             ignored_windows: Some(vec!["1Password".into()]),
             included_windows: Some(vec!["Code".into()]),
             ignored_urls: Some(vec!["bank".into()]),
+            ignore_incognito_windows: Some(false),
+            enhanced_incognito_detection: Some(true),
             data_dir: Some("/data".into()),
             mp4_monitors: Some(vec![1, 2]),
             paired_monitors: Some(vec![1]),
@@ -1157,6 +1165,8 @@ mod tests {
         assert_eq!(rec.monitor_id, Some(2));
         assert_eq!(rec.microphone, Some(true));
         assert_eq!(rec.system_audio, Some(false));
+        assert_eq!(rec.ignore_incognito_windows, Some(false));
+        assert_eq!(rec.enhanced_incognito_detection, Some(true));
         assert_eq!(
             rec.ignored_windows.as_deref(),
             Some(&["1Password".to_string()][..])

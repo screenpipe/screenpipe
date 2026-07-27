@@ -10,12 +10,16 @@ import React, {
   useRef,
   useState,
 } from "react";
+import dynamic from "next/dynamic";
 import posthog from "posthog-js";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import {
   AlertCircle,
   CheckCircle2,
+  LayoutDashboard,
   LayoutTemplate,
   Loader2,
+  Network,
   RefreshCw,
   SlidersHorizontal,
   Undo2,
@@ -65,6 +69,11 @@ import {
 } from "@/lib/active-ai-preset";
 import { Input } from "@/components/ui/input";
 import {
+  createCanvasDocument,
+  reconcileCanvasDocument,
+  toSaveCanvasRequest,
+} from "@/lib/live-views/canvas-layout";
+import {
   generateLiveViewWithPi,
   type GeneratedLiveViewBlock,
   type LiveViewGenerationScope,
@@ -79,8 +88,10 @@ import {
 import {
   commands,
   type AIPreset,
+  type BrainViewCanvasDocument,
   type BrainViewComponent,
   type BrainViewDefinition,
+  type BrainViewDisplayMode,
   type BrainViewSlot,
   type BrainViewSlotInput,
   type BrainViewTemplateKit,
@@ -99,6 +110,24 @@ import {
 export type ViewComponent = BrainViewComponent;
 export type ViewSlot = BrainViewSlot;
 export type ViewDefinition = BrainViewDefinition;
+
+const LiveViewCanvas = dynamic(
+  () =>
+    import("@/components/settings/live-view-canvas").then(
+      (module) => module.LiveViewCanvas,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        data-testid="live-view-canvas-loading"
+        className="flex min-h-[480px] items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+      >
+        loading process map
+      </div>
+    ),
+  },
+);
 
 type DataRefreshState = {
   status: "starting" | "running" | "complete" | "partial" | "error";
@@ -384,6 +413,11 @@ export function BrainOverview({
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dataRefresh, setDataRefresh] = useState<DataRefreshState | null>(null);
+  const [canvasDocument, setCanvasDocument] =
+    useState<BrainViewCanvasDocument | null>(null);
+  const [canvasLoading, setCanvasLoading] = useState(false);
+  const [canvasError, setCanvasError] = useState<string | null>(null);
+  const [canvasSaving, setCanvasSaving] = useState(false);
   const [aiEditingSlotId, setAiEditingSlotId] = useState<string | null>(null);
   const [templateKits, setTemplateKits] = useState<BrainViewTemplateKit[]>([]);
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
@@ -405,6 +439,13 @@ export function BrainOverview({
     signature: string;
   } | null>(null);
   const lastRefreshOutcomeRef = useRef<number | null>(null);
+  const canvasLoadTokenRef = useRef(0);
+  const canvasLatestRef = useRef<BrainViewCanvasDocument | null>(null);
+  const canvasServerRevisionsRef = useRef(new Map<string, number>());
+  const pendingCanvasSavesRef = useRef(
+    new Map<string, BrainViewCanvasDocument>(),
+  );
+  const canvasSavePumpRef = useRef<Promise<void> | null>(null);
   const refreshOnboardingActivation = useCallback(
     () => setActivationVersion((version) => version + 1),
     [],
@@ -467,6 +508,144 @@ export function BrainOverview({
       : health.status === "unhealthy" || health.status === "error"
         ? ("blocked" as const)
         : ("ready" as const);
+
+  const pumpCanvasSaves = useCallback((): Promise<void> => {
+    if (canvasSavePumpRef.current) return canvasSavePumpRef.current;
+    const run = async () => {
+      setCanvasSaving(true);
+      while (pendingCanvasSavesRef.current.size > 0) {
+        const nextEntry = pendingCanvasSavesRef.current.entries().next()
+          .value as [string, BrainViewCanvasDocument] | undefined;
+        if (!nextEntry) break;
+        const [viewId, pending] = nextEntry;
+        pendingCanvasSavesRef.current.delete(viewId);
+        const request = toSaveCanvasRequest(pending);
+        request.expectedRevision =
+          canvasServerRevisionsRef.current.get(viewId) ?? null;
+        const result = await commands.saveBrainViewCanvas(request);
+        if (result.status === "error") {
+          setCanvasError(result.error);
+          toast({
+            title: "canvas changes were not saved",
+            description: result.error,
+            variant: "destructive",
+          });
+          continue;
+        }
+        canvasServerRevisionsRef.current.set(viewId, result.data.revision);
+        setCanvasError(null);
+        if (canvasLatestRef.current?.viewId === viewId) {
+          canvasLatestRef.current = {
+            ...canvasLatestRef.current,
+            revision: result.data.revision,
+            updatedAt: result.data.updatedAt,
+          };
+        }
+        setCanvasDocument((current) =>
+          current?.viewId === viewId
+            ? {
+                ...current,
+                revision: result.data.revision,
+                updatedAt: result.data.updatedAt,
+              }
+            : current,
+        );
+      }
+    };
+    const promise = run().finally(() => {
+      canvasSavePumpRef.current = null;
+      setCanvasSaving(false);
+      if (pendingCanvasSavesRef.current.size > 0) {
+        void pumpCanvasSaves();
+      }
+    });
+    canvasSavePumpRef.current = promise;
+    return promise;
+  }, [toast]);
+
+  const changeCanvasDocument = useCallback(
+    (next: BrainViewCanvasDocument, { persist }: { persist: boolean }) => {
+      canvasLatestRef.current = next;
+      setCanvasDocument(next);
+      if (!persist) return;
+      pendingCanvasSavesRef.current.set(next.viewId, next);
+      void pumpCanvasSaves();
+    },
+    [pumpCanvasSaves],
+  );
+
+  useEffect(() => {
+    if (!view) {
+      canvasLatestRef.current = null;
+      setCanvasDocument(null);
+      return;
+    }
+    const loadToken = canvasLoadTokenRef.current + 1;
+    canvasLoadTokenRef.current = loadToken;
+    setCanvasLoading(true);
+    setCanvasError(null);
+    void commands
+      .loadBrainViewCanvas(view.id)
+      .then((result) => {
+        if (canvasLoadTokenRef.current !== loadToken) return;
+        if (result.status === "error") {
+          setCanvasError(result.error);
+          canvasLatestRef.current = null;
+          setCanvasDocument(null);
+          return;
+        }
+        const reconciled = reconcileCanvasDocument(view, result.data);
+        if (result.data) {
+          canvasServerRevisionsRef.current.set(view.id, result.data.revision);
+        } else {
+          canvasServerRevisionsRef.current.delete(view.id);
+        }
+        canvasLatestRef.current = reconciled;
+        setCanvasDocument(reconciled);
+        if (result.data && reconciled !== result.data) {
+          pendingCanvasSavesRef.current.set(view.id, reconciled);
+          void pumpCanvasSaves();
+        }
+      })
+      .finally(() => {
+        if (canvasLoadTokenRef.current === loadToken) setCanvasLoading(false);
+      });
+  }, [pumpCanvasSaves, view?.id]);
+
+  const canvasSlotSignature = useMemo(
+    () =>
+      view?.slots
+        .map((slot) => slot.id)
+        .sort()
+        .join("|") ?? "",
+    [view?.slots],
+  );
+
+  useEffect(() => {
+    if (!view || !canvasDocument || canvasDocument.viewId !== view.id) return;
+    const reconciled = reconcileCanvasDocument(view, canvasDocument);
+    if (reconciled === canvasDocument) return;
+    changeCanvasDocument(reconciled, {
+      persist: canvasDocument.revision > 0,
+    });
+  }, [canvasDocument, canvasSlotSignature, changeCanvasDocument, view]);
+
+  const changeDisplayMode = (mode: BrainViewDisplayMode) => {
+    if (!view || canvasLoading || canvasError) return;
+    const current = reconcileCanvasDocument(
+      view,
+      canvasLatestRef.current ?? createCanvasDocument(view),
+    );
+    if (current.mode === mode) return;
+    const next = { ...current, mode };
+    changeCanvasDocument(next, { persist: true });
+    posthog.capture("live_view_layout_mode_changed", {
+      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+      mode,
+      block_count: view.slots.length,
+      has_result: view.slots.some((slot) => slot.value !== null),
+    });
+  };
 
   const load = useCallback(
     async (silent = false, preferredDashboardId?: string | null) => {
@@ -588,6 +767,7 @@ export function BrainOverview({
         onboarding_goal_category:
           onboardingActivation?.goalCategory ?? "unknown",
       });
+      qualifiedValue.artifactOpened(false);
     };
 
     captureVisibleResult();
@@ -895,7 +1075,9 @@ export function BrainOverview({
           (candidate) => candidate.id === dataRefresh.viewId,
         );
         if (!refreshedView) return;
-        setView(refreshedView);
+        setView((current) =>
+          current?.id === refreshedView.id ? refreshedView : current,
+        );
         const filled = refreshedView.slots.filter((slot) => {
           if (
             !dataRefresh.slotIds.includes(slot.id) ||
@@ -1135,7 +1317,8 @@ export function BrainOverview({
               title: generated.title,
               revision: 0,
               timeRange: generated.timeRange,
-              periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+              periodPolicy:
+                generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
               slots: [],
               createdAt: now,
               updatedAt: now,
@@ -1284,6 +1467,9 @@ export function BrainOverview({
         onboarding_goal_category:
           onboardingActivation?.goalCategory ?? "unknown",
       });
+      if (rating === "up" && persistedFeedback.current?.rating === "up") {
+        qualifiedValue.liveViewResultAccepted();
+      }
       if (rating) finishOnboardingActivation("feedback");
       return true;
     } catch (feedbackError) {
@@ -1671,6 +1857,11 @@ export function BrainOverview({
     }
     setSaving(true);
     try {
+      await pumpCanvasSaves();
+      const sourceCanvas =
+        canvasLatestRef.current?.viewId === view.id
+          ? canvasLatestRef.current
+          : null;
       const title = uniqueDashboardTitle(`${view.title} copy`, views);
       const result = await commands.saveBrainView({
         id: uniqueDashboardId(title, views),
@@ -1681,6 +1872,27 @@ export function BrainOverview({
         slots: serializedSlots(view.slots),
       });
       if (result.status === "error") throw new Error(result.error);
+      if (sourceCanvas) {
+        const canvasResult = await commands.saveBrainViewCanvas({
+          ...toSaveCanvasRequest({
+            ...sourceCanvas,
+            viewId: result.data.id,
+            revision: 0,
+            updatedAt: "",
+          }),
+          expectedRevision: null,
+        });
+        if (canvasResult.status === "error") {
+          await commands.deleteBrainView(result.data.id);
+          throw new Error(
+            `The copy was rolled back because its canvas could not be saved: ${canvasResult.error}`,
+          );
+        }
+        canvasServerRevisionsRef.current.set(
+          result.data.id,
+          canvasResult.data.revision,
+        );
+      }
       clearTransientState();
       setView(result.data);
       posthog.capture("live_view_dashboard_saved", {
@@ -1723,8 +1935,11 @@ export function BrainOverview({
     const nextViews = views.filter((candidate) => candidate.id !== deletingId);
     setSaving(true);
     try {
+      await pumpCanvasSaves();
       const result = await commands.deleteBrainView(deletingId);
       if (result.status === "error") throw new Error(result.error);
+      pendingCanvasSavesRef.current.delete(deletingId);
+      canvasServerRevisionsRef.current.delete(deletingId);
       clearTransientState();
       setViews(nextViews);
       const next = nextViews[0] ?? null;
@@ -2216,6 +2431,13 @@ export function BrainOverview({
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
   const dashboardBusy = saving || refreshIsActive || generating;
+  const displayMode = canvasDocument?.mode ?? "dashboard";
+  const canvasReady =
+    !canvasLoading && canvasDocument?.viewId === view.id && !canvasError;
+  const refreshingSlotIds = new Set(
+    refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
+  );
+  const dashboardSelectionDisabled = saving || generating;
   const showOnboardingActivation = Boolean(
     onboardingActivation && !onboardingActivation.completedAt,
   );
@@ -2231,6 +2453,7 @@ export function BrainOverview({
             views={views}
             current={view}
             busy={dashboardBusy}
+            selectionDisabled={dashboardSelectionDisabled}
             onSelect={selectDashboard}
             onCreate={beginCreate}
             onRename={renameDashboard}
@@ -2263,15 +2486,56 @@ export function BrainOverview({
           data-testid="overview-header-controls"
           className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end"
         >
-          {view.periodPolicy.type === "fixed.v1" ? (
+          {!onboardingColdStart && (
             <div
-              data-testid="overview-fixed-period"
-              aria-label={`Live View period: ${selectedPeriod.label}`}
-              className="inline-flex h-9 min-w-28 flex-1 items-center border border-border bg-muted/20 px-3 text-xs sm:flex-none"
+              data-testid="overview-display-mode"
+              className="inline-flex h-9 flex-1 border border-border sm:flex-none"
+              aria-label="Live View layout"
             >
-              {selectedPeriod.label}
+              <Button
+                data-testid="overview-mode-dashboard"
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={displayMode === "dashboard"}
+                disabled={
+                  dashboardBusy || canvasLoading || Boolean(canvasError)
+                }
+                className={`h-8 rounded-none border-r border-border px-2 text-xs ${
+                  displayMode === "dashboard"
+                    ? "bg-foreground text-background"
+                    : ""
+                }`}
+                onClick={() => changeDisplayMode("dashboard")}
+              >
+                <LayoutDashboard className="mr-1.5 h-3.5 w-3.5" /> dashboard
+              </Button>
+              <Button
+                data-testid="overview-mode-canvas"
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={displayMode === "canvas"}
+                disabled={
+                  dashboardBusy || canvasLoading || Boolean(canvasError)
+                }
+                className={`h-8 rounded-none px-2 text-xs ${
+                  displayMode === "canvas"
+                    ? "bg-foreground text-background"
+                    : ""
+                }`}
+                onClick={() => changeDisplayMode("canvas")}
+              >
+                {canvasLoading ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Network className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                canvas
+              </Button>
             </div>
-          ) : (
+          )}
+          {view.periodPolicy.type !== "fixed.v1" && (
             <Select
               value={view.timeRange}
               disabled={dashboardBusy}
@@ -2339,6 +2603,22 @@ export function BrainOverview({
           )}
         </div>
       </div>
+      {canvasError && (
+        <div
+          data-testid="live-view-canvas-error"
+          className="mb-4 flex items-center gap-2 border border-border px-3 py-2 text-xs"
+        >
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            Canvas could not be loaded. Dashboard mode is still available.
+          </span>
+        </div>
+      )}
+      {canvasSaving && displayMode === "canvas" && (
+        <p className="sr-only" role="status">
+          saving canvas
+        </p>
+      )}
       {templateGalleryOpen && !onboardingColdStart && (
         <div className="relative mb-5 border border-border p-4 pr-12">
           <Button
@@ -2438,6 +2718,20 @@ export function BrainOverview({
         >
           add your first Block
         </button>
+      ) : displayMode === "canvas" && canvasReady && canvasDocument ? (
+        <LiveViewCanvas
+          document={canvasDocument}
+          slots={slots}
+          timeRange={view.timeRange}
+          refreshingSlotIds={refreshingSlotIds}
+          aiEditingSlotId={aiEditingSlotId}
+          onChange={changeCanvasDocument}
+          onFeedback={recordCardFeedback}
+          onRegenerate={(slot) =>
+            void refreshConnectedPipes(view, [slot], "card_regenerated")
+          }
+          onAiEdit={editSlotWithAi}
+        />
       ) : (
         <div
           data-testid="brain-overview-grid"
@@ -2448,10 +2742,7 @@ export function BrainOverview({
               key={slot.id}
               slot={slot}
               timeRange={view.timeRange}
-              refreshing={
-                refreshIsActive &&
-                Boolean(dataRefresh?.slotIds.includes(slot.id))
-              }
+              refreshing={refreshingSlotIds.has(slot.id)}
               feedback={slot.feedback?.current?.rating ?? null}
               feedbackCorrection={slot.feedback?.current?.correction ?? null}
               aiEditing={aiEditingSlotId === slot.id}

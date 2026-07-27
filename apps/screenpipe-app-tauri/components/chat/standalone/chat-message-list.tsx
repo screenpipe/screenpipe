@@ -15,6 +15,7 @@ import {
   chatResponseValueActionProperties,
   chatTelemetryContextForResponse,
 } from "@/lib/chat/response-feedback";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import {
   GridDissolveLoader,
   MessageContent,
@@ -422,6 +423,7 @@ export function ChatMessageList({
                                     ),
                                   ),
                                 );
+                                qualifiedValue.chatResponseCopied();
                               }
                             }}
                             className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"

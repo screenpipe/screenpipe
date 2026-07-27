@@ -4,16 +4,16 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearLegacyUserGoalCategory,
   completeOnboardingLiveViewActivation,
   consumeOnboardingBrainHandoff,
   getOnboardingLiveViewActivation,
-  getUserGoalCategory,
   markOnboardingLiveViewFirstResult,
   markOnboardingLiveViewSetupNeedsRetry,
   markOnboardingLiveViewSetupReady,
   removeOnboardingLiveViewActivation,
+  readLegacyUserGoalCategory,
   selectedLiveViewDashboardId,
-  setUserGoalCategory,
   setOnboardingLiveViewGuideStep,
   startOnboardingLiveViewActivation,
   USER_GOAL_STORAGE_KEY,
@@ -49,7 +49,6 @@ describe("onboarding Live View activation", () => {
     });
 
     expect(selectedLiveViewDashboardId()).toBe("first-dashboard-1");
-    expect(getUserGoalCategory()).toBe("work_memory");
     expect(consumeOnboardingBrainHandoff()).toBe("first-dashboard-1");
     expect(consumeOnboardingBrainHandoff()).toBeNull();
     expect(getOnboardingLiveViewActivation("first-dashboard-1")).toEqual(
@@ -64,26 +63,40 @@ describe("onboarding Live View activation", () => {
     );
   });
 
-  it("lets General Settings override the onboarding goal", () => {
+  it("prefers the explicit legacy user goal during settings migration", () => {
+    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, "process_automation");
     startOnboardingLiveViewActivation("first-dashboard-4", "work_memory");
-    setUserGoalCategory("process_automation");
 
-    expect(getUserGoalCategory()).toBe("process_automation");
+    expect(readLegacyUserGoalCategory()).toBe("process_automation");
+  });
+
+  it("defaults an untouched existing user to work memory", () => {
+    expect(readLegacyUserGoalCategory()).toBe("work_memory");
+    expect(window.localStorage.getItem(USER_GOAL_STORAGE_KEY)).toBeNull();
+  });
+
+  it("preserves an explicit No specific goal choice", () => {
+    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, "default");
+
+    expect(readLegacyUserGoalCategory()).toBe("default");
   });
 
   it("uses the default order for a custom onboarding goal", () => {
     startOnboardingLiveViewActivation("first-dashboard-5", "custom");
 
-    expect(getUserGoalCategory()).toBe("default");
+    expect(readLegacyUserGoalCategory()).toBe("default");
   });
 
-  it("migrates the briefly shipped Home focus preference into the user goal", () => {
+  it("reads and then clears browser-only goal keys after settings migration", () => {
     window.localStorage.setItem("screenpipe.home.focus.v1", "work_patterns");
 
-    expect(getUserGoalCategory()).toBe("work_patterns");
-    expect(window.localStorage.getItem(USER_GOAL_STORAGE_KEY)).toBe(
+    expect(readLegacyUserGoalCategory()).toBe("work_patterns");
+    expect(window.localStorage.getItem("screenpipe.home.focus.v1")).toBe(
       "work_patterns",
     );
+
+    clearLegacyUserGoalCategory();
+
     expect(window.localStorage.getItem("screenpipe.home.focus.v1")).toBeNull();
   });
 

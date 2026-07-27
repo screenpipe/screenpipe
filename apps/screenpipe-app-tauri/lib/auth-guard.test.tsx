@@ -33,7 +33,13 @@ vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
 
 vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
 vi.mock("@/components/ui/toast", () => ({ ToastAction: () => null }));
-vi.mock("@/lib/web-url", () => ({ screenpipeWebUrl: () => "https://screenpipe.com/login" }));
+vi.mock("@/lib/web-url", () => ({
+  PROD_WEB_BASE: "https://screenpipe.com",
+  screenpipeWebUrl: () => "https://screenpipe.com/login",
+  // Tests run "unbaked": the resolved base is the prod fallback. The override
+  // branch is exercised by passing an explicit webBase to isScreenpipeAuthApi.
+  screenpipeWebBase: (fallbackHost: string) => fallbackHost,
+}));
 
 import {
   AuthGuard,
@@ -117,6 +123,33 @@ describe("isScreenpipeAuthApi", () => {
     expect(isScreenpipeAuthApi("https://api.screenpipe.com/v1/chat/completions")).toBe(false);
     expect(isScreenpipeAuthApi("https://api.screenpipe.com/v1/messages")).toBe(false);
     expect(isScreenpipeAuthApi("https://api.screenpi.pe/v1/models")).toBe(false);
+  });
+
+  it("with a web-base override, ONLY the override host is the session authority", () => {
+    const base = "http://192.168.10.166:3000";
+    // the baked control plane's own 401 is a real session death
+    expect(isScreenpipeAuthApi("http://192.168.10.166:3000/api/user", base)).toBe(true);
+    // a prod 401 means "prod doesn't know this token" — it never did; it must
+    // NOT clear a session prod didn't issue. Regression: a straggler call site
+    // hardcoding prod (/api/team) signed users out of baked local builds
+    // seconds after onboarding.
+    expect(isScreenpipeAuthApi("https://screenpipe.com/api/team", base)).toBe(false);
+    expect(isScreenpipeAuthApi("https://screenpi.pe/api/user", base)).toBe(false);
+    expect(isScreenpipeAuthApi("https://evil.example.com/api/user", base)).toBe(false);
+  });
+
+  it("with a localhost override, the engine's port is NOT the auth surface", () => {
+    const base = "http://localhost:3000";
+    expect(isScreenpipeAuthApi("http://localhost:3000/api/user", base)).toBe(true);
+    // same hostname, different port: the local engine's connection-level 401s
+    // are not session expiry (see isScreenpipeApi's localhost carve-out)
+    expect(isScreenpipeAuthApi("http://localhost:3030/search", base)).toBe(false);
+  });
+
+  it("an override equal to prod behaves exactly like no override", () => {
+    const base = "https://screenpipe.com";
+    expect(isScreenpipeAuthApi("https://screenpipe.com/api/user", base)).toBe(true);
+    expect(isScreenpipeAuthApi("https://api.screenpipe.com/v1/messages", base)).toBe(false);
   });
 
   it("returns false for the local engine and non-screenpipe hosts", () => {

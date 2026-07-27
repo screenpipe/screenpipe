@@ -55,6 +55,10 @@ const recorder = new Recorder({
   // Plain strings match anywhere; `App::Title` scopes to one window of one app.
   ignoredWindows: ["1password", "private", "Slack::#hr"],
   ignoredUrls: ["wellsfargo.com", "chase"],
+  // Defaults to true. Basic detection never requests browser Automation access.
+  ignoreIncognitoWindows: true,
+  // Optional macOS browser-native detection; request access from host UI first.
+  enhancedIncognitoDetection: false,
 });
 await recorder.start();
 
@@ -90,10 +94,17 @@ await recorder.stop();
   (case-insensitive, domain-aware match — `chase` matches `chase.com` and
   `online.chase.com` but not `purchase.com`). When the focused browser is on
   a matching URL, the recorder skips writing frames. Mirrors `--ignored-urls`.
+- `options.ignoreIncognitoWindows` (boolean, optional): detect and skip
+  private/incognito browser windows. Defaults to `true`; set it to `false` to
+  capture them. Basic detection does not request extra browser access.
+- `options.enhancedIncognitoDetection` (boolean, optional): on macOS, use
+  browser-native window properties for more reliable Chromium detection.
+  Defaults to `false` and may require Automation permission.
 
 Filtering uses the macOS Accessibility API; without that permission the
-filter fails open (records everything). Without any filter list set, the
-recorder stays on the zero-overhead fast path — no a11y polling is done.
+filter fails open (records everything). Set `ignoreIncognitoWindows: false`
+and leave all filter lists empty to use the zero-overhead path with no a11y
+polling.
 
 ### Methods
 

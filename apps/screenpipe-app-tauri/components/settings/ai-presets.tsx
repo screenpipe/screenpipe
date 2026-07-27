@@ -13,7 +13,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Embedding" },
 ];
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { Button } from "../ui/button";
 import {
@@ -30,6 +30,7 @@ import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
 } from "@/lib/utils/chat-test-body";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
 import { ValidatedInput } from "../ui/validated-input";
@@ -684,13 +685,15 @@ const AISection = ({
         chat: { status: "running", message: "Sending test message..." },
       }));
     } else {
-      // Local providers (Ollama, custom localhost) must go through tauriFetch —
+      // Local providers (Ollama, custom localhost) must go through native HTTP —
       // a browser fetch from the tauri://localhost webview to a local http server
-      // is blocked by WKWebView (mixed-content / cross-origin CORS).
+      // is blocked by WKWebView (mixed-content / cross-origin CORS). The
+      // wrapper composes `abort.signal` (cancel-on-restart) with its own
+      // deadline, so a wedged local server can no longer hang diagnostics.
       const modelsFetchFn =
         settingsPreset?.provider === "native-ollama" ||
         (settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url))
-          ? tauriFetch
+          ? tauriFetchWithDeadline
           : fetch;
       try {
         modelsResponse = await modelsFetchFn(modelsUrl, {
@@ -825,9 +828,17 @@ const AISection = ({
       chatHeaders["OpenAI-Beta"] = "responses=experimental";
     }
 
-    // Use tauriFetch for chatgpt.com, Anthropic, and local Ollama to bypass
+    // Use native HTTP for chatgpt.com, Anthropic, and local Ollama to bypass
     // CORS / WKWebView mixed-content blocking (localhost:11434 over http).
-    const fetchFn = (isChatGpt || isAnthropic || settingsPreset?.provider === "native-ollama") ? tauriFetch : fetch;
+    //
+    // The wrapper's deadline covers the response body, not just the headers, and
+    // it is flat rather than idle-based. That is fine for every arm here: the
+    // isChatGpt arm is an SSE stream whose body this probe deliberately never
+    // reads (it only asserts the stream started), so capping it just drops a
+    // body nobody wanted — and drops the Rust body resource with it. A caller
+    // that genuinely needs to consume a long-lived stream must pass
+    // `{ timeoutMs: Number.POSITIVE_INFINITY }`.
+    const fetchFn = (isChatGpt || isAnthropic || settingsPreset?.provider === "native-ollama") ? tauriFetchWithDeadline : fetch;
 
     const chatStart = performance.now();
     try {
@@ -926,10 +937,10 @@ const AISection = ({
       switch (settingsPreset?.provider) {
 
         case "native-ollama":
-          // Use tauriFetch (Rust-side HTTP) — a browser fetch from the
+          // Use native HTTP (Rust-side) — a browser fetch from the
           // tauri://localhost webview to http://localhost:11434 is blocked by
           // WKWebView (mixed-content / cross-origin), leaving the model list empty.
-          const ollamaResponse = await tauriFetch("http://localhost:11434/api/tags");
+          const ollamaResponse = await tauriFetchWithDeadline("http://localhost:11434/api/tags");
           if (!ollamaResponse.ok)
             throw new Error("Failed to fetch Ollama models");
           const ollamaData = (await ollamaResponse.json()) as {
@@ -968,7 +979,7 @@ const AISection = ({
           break;
         case "custom":
           try {
-            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriFetch : fetch;
+            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriFetchWithDeadline : fetch;
             const customResponse = await customFetchFn(
               aiEndpointUrl(settingsPreset?.url, "models"),
               {
@@ -1000,7 +1011,7 @@ const AISection = ({
 
         case "anthropic": {
           try {
-            const anthropicResp = await tauriFetch("https://api.anthropic.com/v1/models", {
+            const anthropicResp = await tauriFetchWithDeadline("https://api.anthropic.com/v1/models", {
               headers: {
                 "x-api-key": settingsPreset?.apiKey || "",
                 "anthropic-version": "2023-06-01",
@@ -1531,7 +1542,7 @@ const AISection = ({
                                   await commands.openLoginWindow(null);
                                 } else {
                                   try {
-                                    const res = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
+                                    const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.user.token}` },
                                       body: JSON.stringify({ tier: "pro", billingPeriod: "monthly", userId: settings.user.id, email: settings.user.email }),

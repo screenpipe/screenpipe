@@ -22,6 +22,7 @@ import {
   type NotificationAction,
 } from "@/lib/notifications/actions";
 import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 
 interface NotificationPayload {
   id: string;
@@ -157,6 +158,9 @@ export default function NotificationPanelPage() {
                 source: "action",
                 ...notificationAnalyticsProperties(payload, "toast"),
               });
+              if (payload?.pipe_name) {
+                qualifiedValue.pipeOutputCopied();
+              }
             }
             return;
           }
@@ -298,6 +302,9 @@ export default function NotificationPanelPage() {
         id: payload.id,
         ...notificationAnalyticsProperties(payload, "toast"),
       });
+      if (payload.pipe_name) {
+        qualifiedValue.pipeOutputCopied();
+      }
     } catch (e) {
       console.error("notification copy failed:", e);
     }
