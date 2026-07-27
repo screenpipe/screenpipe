@@ -627,6 +627,15 @@ impl ServerCore {
         let mcp_session_access =
             screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
         pipe_manager.set_mcp_session_access(mcp_session_access.clone());
+        // Keep the desktop's embedded PipeManager and HTTP auth middleware on
+        // the same scoped-token registry. Without this bridge Pi pipes receive
+        // an sp_pipe_* token, but every authenticated API call is rejected as
+        // unknown before endpoint permissions can be evaluated.
+        pipe_manager.set_token_registry(Arc::new(
+            screenpipe_engine::pipe_permissions_middleware::DashMapTokenRegistry::new(
+                server.pipe_permissions.clone(),
+            ),
+        ));
         if let Some(cb) = on_pipe_output {
             pipe_manager.set_on_output_line(cb);
         }

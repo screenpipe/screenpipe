@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 72
-- Declared test blocks: 221
-- Weighted coverage points: 171.0
+- Mapped specs: 73
+- Declared test blocks: 223
+- Weighted coverage points: 173.0
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 61 | 206 | 165.3 | 15 | 66 | 93% |
-| macos | 68 | 185 | 142.3 | 17 | 67 | 89% |
-| linux | 52 | 168 | 135.9 | 13 | 62 | 87% |
+| windows | 62 | 208 | 167.3 | 15 | 67 | 93% |
+| macos | 69 | 187 | 144.3 | 17 | 68 | 89% |
+| linux | 53 | 170 | 137.9 | 13 | 63 | 87% |
 
 ## Runtime Results
 
@@ -39,13 +39,13 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 15 tests / 6.0 pts | 4 specs / 6 tests / 2.4 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 18 specs / 31 tests / 22.4 pts | 21 specs / 35 tests / 23.7 pts | 17 specs / 30 tests / 21.9 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 14 specs / 94 tests / 78.0 pts | 14 specs / 69 tests / 59.0 pts | 11 specs / 67 tests / 58.2 pts |
+| local-api | 15 specs / 96 tests / 80.0 pts | 15 specs / 71 tests / 61.0 pts | 12 specs / 69 tests / 60.2 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts |
 | os-integration | 5 specs / 17 tests / 16.1 pts | 5 specs / 4 tests / 1.3 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
-| pipes | 3 specs / 12 tests / 12.0 pts | 3 specs / 12 tests / 12.0 pts | 3 specs / 12 tests / 12.0 pts |
-| real-ui-e2e | 39 specs / 124 tests / 99.1 pts | 41 specs / 111 tests / 88.6 pts | 36 specs / 104 tests / 86.3 pts |
+| pipes | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts |
+| real-ui-e2e | 40 specs / 126 tests / 101.1 pts | 42 specs / 113 tests / 90.6 pts | 37 specs / 106 tests / 88.3 pts |
 | settings | 13 specs / 33 tests / 30.6 pts | 15 specs / 28 tests / 24.3 pts | 12 specs / 25 tests / 22.6 pts |
 | storage-privacy | 6 specs / 21 tests / 20.1 pts | 5 specs / 13 tests / 12.1 pts | 4 specs / 13 tests / 12.1 pts |
 | tauri-command | 10 specs / 19 tests / 12.3 pts | 10 specs / 20 tests / 11.8 pts | 9 specs / 18 tests / 11.3 pts |
@@ -100,6 +100,7 @@ pass/fail/skip counts.
 | app-lifecycle.spec.ts | windows, macos, linux | real-ui-e2e, window-lifecycle | app-launch, home-navigation, webview-stability, route-churn, browser-storage | high | strong | mixed | 14 | Home webview, routing, reload, focus, resize, and storage stability. |
 | artifacts-api.spec.ts | windows, macos, linux | local-api | local-api-auth, artifacts | medium | strong | api | 7 | CRUD coverage for artifact registration, validation, unified listing, upsert, and delete. |
 | audio-fallback.spec.ts | macos | audio-device, settings, notifications | audio-device-health, settings-recording, notifications | medium | conditional | real-user-flow | 1 | Opt-in macOS cloud audio fallback seed. |
+| brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, artifacts, pipes | high | strong | real-user-flow | 2 | Creates the first-open starter dashboard, renders a Pipe-filled Live View, and checks top and horizontal bounds from the supported 800x600 minimum through 1920x1080. |
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | capture-frequency-floor.spec.ts | macos | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording, restart-flow | high | conditional | real-user-flow | 1 | macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes. |
 | chat-ask-user-tool-card.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-ask-user | medium | partial | mixed | 1 | Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path. |

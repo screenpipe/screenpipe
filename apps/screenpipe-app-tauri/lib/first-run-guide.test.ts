@@ -6,7 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeFirstRunGuidePending,
   isFirstRunGuidePending,
+  isFirstRunGuideReplayAfterOnboarding,
   setFirstRunGuidePending,
+  setFirstRunGuideReplayAfterOnboarding,
   shouldShowFirstRunGuide,
 } from "./first-run-guide";
 
@@ -89,5 +91,15 @@ describe("first-run guide eligibility", () => {
     expect(consumeFirstRunGuidePending()).toBe(true);
     expect(isFirstRunGuidePending()).toBe(false);
     expect(consumeFirstRunGuidePending()).toBe(false);
+  });
+
+  it("persists a reset replay request separately from the Home handoff", () => {
+    setFirstRunGuideReplayAfterOnboarding(true);
+
+    expect(isFirstRunGuideReplayAfterOnboarding()).toBe(true);
+    expect(isFirstRunGuidePending()).toBe(false);
+
+    setFirstRunGuideReplayAfterOnboarding(false);
+    expect(isFirstRunGuideReplayAfterOnboarding()).toBe(false);
   });
 });

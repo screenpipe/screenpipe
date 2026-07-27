@@ -230,9 +230,9 @@ export function ViewerFileContent({
   }, [content]);
 
   // Choose the FIRST tab (rendered vs source) once the content for a path
-  // loads, then leave it under the user's control. Full documents / marked
-  // artifacts open rendered; bare snippets open as source. A ref keyed on the
-  // path makes this init-once so a user's later toggle is never overridden, and
+  // loads, then leave it under the user's control. Every renderable HTML file
+  // opens rendered; source remains one click away. A ref keyed on the path
+  // makes this init-once so a user's later toggle is never overridden, and
   // re-applies when navigating to a different file.
   const defaultInitRef = useRef<string | null>(null);
   useEffect(() => {

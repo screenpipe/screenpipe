@@ -775,6 +775,16 @@
       "notes": "Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview."
     },
     {
+      "spec": "brain-overview.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api", "pipes"],
+      "features": ["brain", "brain-overview", "artifacts", "pipes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Creates the first-open starter dashboard, renders a Pipe-filled Live View, and checks top and horizontal bounds from the supported 800x600 minimum through 1920x1080."
+    },
+    {
       "spec": "html-artifact-render.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e"],

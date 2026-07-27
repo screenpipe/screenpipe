@@ -84,6 +84,7 @@ import {
 } from "@/components/ui/tooltip";
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
+import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 
 type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
@@ -987,7 +988,12 @@ function HomeContent() {
       router.push(`/settings?section=${mapped}`);
     } else {
       const mapped = section === "feedback" ? "help" : section;
-      if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
+      if (ALL_SECTIONS.includes(mapped)) {
+        setActiveSection(mapped);
+        if (mapped === "brain") {
+          window.dispatchEvent(new Event(ONBOARDING_BRAIN_HANDOFF_EVENT));
+        }
+      }
     }
   });
 

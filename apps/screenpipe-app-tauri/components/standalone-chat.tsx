@@ -6,6 +6,7 @@
 import * as React from "react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { writeActiveAiPresetId } from "@/lib/active-ai-preset";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
 import { Settings2, PanelRightClose, PanelRightOpen } from "lucide-react";
@@ -216,7 +217,7 @@ export function StandaloneChat({
       // (settings → home). Only for direct user selection, not the
       // lifecycle fallback which uses the function form.
       if (preset?.id) {
-        try { localStorage.setItem("chat-active-preset-id", preset.id); } catch {}
+        writeActiveAiPresetId(preset.id);
       }
     }
   }, []);

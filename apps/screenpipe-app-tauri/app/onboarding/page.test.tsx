@@ -79,8 +79,8 @@ vi.mock("@/components/onboarding/engine-startup", () => ({
 vi.mock("@/components/onboarding/connect-apps", () => ({
   default: () => <div>connect apps</div>,
 }));
-vi.mock("@/components/onboarding/pick-pipe", () => ({
-  default: () => <div>pick pipe</div>,
+vi.mock("@/components/onboarding/first-dashboard", () => ({
+  default: () => <div>first dashboard</div>,
 }));
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
@@ -133,6 +133,19 @@ describe("enterprise onboarding authentication", () => {
 
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /use enterprise key/i })).not.toBeInTheDocument();
+  });
+
+  it("gives the use-case step more room with a scroll fallback", async () => {
+    onboardingData.currentStep = "first-dashboard";
+
+    render(<OnboardingPage />);
+
+    await waitFor(() =>
+      expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 720),
+    );
+    expect(screen.getByTestId("onboarding-scroll-region")).toHaveClass(
+      "overflow-y-auto",
+    );
   });
 
   it("advances after either enterprise credential is verified", async () => {

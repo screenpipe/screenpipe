@@ -314,6 +314,14 @@ async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async deleteBrainView(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_brain_view", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async deleteCacheFiles(paths: string[]) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_cache_files", { paths }) };
@@ -922,6 +930,14 @@ async initSync(password: string) : Promise<Result<boolean, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async installBrainViewTemplateKit(request: InstallBrainViewTemplateKitRequest) : Promise<Result<BrainViewDefinition, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_brain_view_template_kit", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Install the two built-in screenpipe skills into a supported external agent.
  * MCP registration stays in the frontend because that path uses the app's
@@ -968,6 +984,22 @@ async isOverlayClickThrough() : Promise<boolean> {
 async isServerRunning() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("is_server_running") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listBrainViewTemplateKits() : Promise<Result<BrainViewTemplateKit[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_brain_view_template_kits") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listBrainViews() : Promise<Result<BrainViewDefinition[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_brain_views") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1633,14 +1665,6 @@ async readAudioExclusions() : Promise<Result<ExcludedApp[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async readLogTail(path: string, maxBytes: number) : Promise<Result<string, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("read_log_tail", { path, maxBytes }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 /**
  * Read text from the system clipboard (native API — navigator.clipboard.readText()
  * is not permitted in the Tauri webview). Returns empty string when the
@@ -1650,6 +1674,14 @@ async readLogTail(path: string, maxBytes: number) : Promise<Result<string, strin
 async readClipboardText() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("read_clipboard_text") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async readLogTail(path: string, maxBytes: number) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_log_tail", { path, maxBytes }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1963,6 +1995,14 @@ async revealInDefaultBrowser(path: string) : Promise<Result<null, string>> {
 async rollbackToVersion(version: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("rollback_to_version", { version }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveBrainView(request: SaveBrainViewRequest) : Promise<Result<BrainViewDefinition, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_brain_view", { request }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2568,6 +2608,20 @@ error: string | null;
  * show "X minutes" on slow migrations.
  */
 sinceEpochSecs: number }
+export type BrainViewBinding = { pipeName: string }
+export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "line-chart.v1" | "table.v1" | "timeline.v1" | "markdown.v1"
+export type BrainViewDefinition = { id: string; title: string; revision: number; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
+export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | null; transcriptionId: number | null; ts: string | null; deviceId: string | null }
+export type BrainViewFeedback = { rating: BrainViewFeedbackRating; artifactOutputId: number; artifactVersion: number; correction: string | null; createdAt: string }
+export type BrainViewFeedbackRating = "up" | "down"
+export type BrainViewFeedbackSummary = { upCount: number; downCount: number; current: BrainViewFeedback | null }
+export type BrainViewPeriodPolicy = { type: "fixed.v1"; value: BrainViewTimeRange } | { type: "selectable.v1"; values: BrainViewTimeRange[] }
+export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; intent: string | null; binding: BrainViewBinding | null; value: BrainViewValue | null; feedback: BrainViewFeedbackSummary }
+export type BrainViewSlotInput = { id: string; title: string; component: BrainViewComponent; width: number; order: number; intent: string | null; binding: BrainViewBinding | null }
+export type BrainViewTemplateKit = { id: string; title: string; description: string; version: number; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; pipes: BrainViewTemplatePipe[]; slots: BrainViewSlotInput[] }
+export type BrainViewTemplatePipe = { name: string; distribution: string }
+export type BrainViewTimeRange = "today" | "24h" | "7d" | "30d"
+export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
  * Also includes whether the browser is currently running.
@@ -2662,6 +2716,7 @@ export type ImportedSkill = { name: string; description: string;
  * Absolute path inside `<data_dir>/skills/`.
  */
 path: string }
+export type InstallBrainViewTemplateKitRequest = { kitId: string; targetViewId: string; expectedRevision: number | null }
 export type JobEvent = { kind: "started"; jobId: string; label: string; message: string | null } | { kind: "progress"; jobId: string; label: string; progress: number; message: string | null } | { kind: "completed"; jobId: string; label: string; outputPath: string | null; message: string | null } | { kind: "failed"; jobId: string; label: string; error: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
@@ -2821,6 +2876,7 @@ export type RemoteSyncConfig = { host: string; port: number; user: string; key_p
  * Result of a sync operation.
  */
 export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
+export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlotInput[] }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */

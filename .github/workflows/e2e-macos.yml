@@ -70,6 +70,7 @@ jobs:
           # --disable-telemetry so CI runs never reach Sentry/PostHog (the engine
           # also auto-detects GITHUB_ACTIONS/CI, but be explicit here too)
           ./target/release/screenpipe \
+            record \
             --disable-vision \
             --disable-audio \
             --disable-telemetry \

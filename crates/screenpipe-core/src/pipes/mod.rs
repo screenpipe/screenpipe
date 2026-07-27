@@ -86,6 +86,35 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         include_str!("../../assets/pipes/meeting-summary/pipe.md"),
     ),
 ];
+
+/// Explicitly install one trusted Pipe bundled with the app.
+///
+/// Unlike startup installation, this clears a deletion tombstone because the
+/// user has chosen a Live View kit that requires the Pipe. Existing local
+/// customization is preserved and never overwritten.
+pub fn install_bundled_pipe(pipes_dir: &Path, name: &str) -> Result<bool> {
+    let content = BUNDLED_BUILTIN_PIPES
+        .iter()
+        .find_map(|(builtin_name, content)| (*builtin_name == name).then_some(*content))
+        .ok_or_else(|| anyhow!("unknown bundled Pipe '{name}'"))?;
+    let pipe_dir = pipes_dir.join(name);
+    let pipe_md = pipe_dir.join("pipe.md");
+
+    std::fs::create_dir_all(&pipe_dir)?;
+    remove_tombstone(pipes_dir, name)?;
+    if pipe_md.exists() {
+        if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+            if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
+                atomic_write(&pipe_md, &migrated)?;
+            }
+        }
+        return Ok(false);
+    }
+
+    atomic_write(&pipe_md, content)?;
+    info!("explicitly installed bundled Pipe: {}", name);
+    Ok(true)
+}
 /// Max event-triggered pipe runs allowed to execute concurrently.
 ///
 /// Scheduled runs are already serialized (one at a time). Event-triggered runs
@@ -2035,6 +2064,9 @@ async fn setup_pipe_permissions(
     if let Err(e) = PiExecutor::ensure_register_artifact_extension(pipe_dir) {
         warn!("failed to install register-artifact extension: {}", e);
     }
+    if let Err(e) = PiExecutor::ensure_structured_output_extension(pipe_dir) {
+        warn!("failed to install structured-output extension: {}", e);
+    }
     if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
         warn!("failed to install filtered skills: {}", e);
     }
@@ -2968,7 +3000,19 @@ impl PipeManager {
     /// in a spawned tokio task.  Use this from API handlers to avoid holding
     /// the PipeManager mutex for the entire execution duration.
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
-        self.start_pipe_background_with_trigger(name, "manual")
+        self.start_pipe_background_with_trigger_and_context(name, "manual", None)
+            .await
+    }
+
+    /// Start one manual run with request-scoped context. Unlike the manager's
+    /// shared integration context, this value belongs only to this execution
+    /// and cannot leak into another concurrently started pipe.
+    pub async fn start_pipe_background_with_context(
+        &self,
+        name: &str,
+        run_context: Option<&str>,
+    ) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, "manual", run_context)
             .await
     }
 
@@ -2977,6 +3021,19 @@ impl PipeManager {
         &self,
         name: &str,
         trigger: &str,
+    ) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, trigger, None)
+            .await
+    }
+
+    /// Start a Pipe with both low-cardinality telemetry and execution-scoped
+    /// prompt context. Keeping both values as arguments avoids mutating shared
+    /// manager state while a background run is being prepared.
+    pub async fn start_pipe_background_with_trigger_and_context(
+        &self,
+        name: &str,
+        trigger: &str,
+        run_context: Option<&str>,
     ) -> Result<()> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
@@ -3134,7 +3191,19 @@ impl PipeManager {
             self.local_api_key.as_deref(),
             config.agent == "pi" && pi_package_enabled("pi-subagents"),
         );
-        let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
+        let combined_context = match (self.extra_context.as_deref(), run_context) {
+            (Some(shared), Some(scoped)) => Some(format!("{shared}\n{scoped}")),
+            (Some(shared), None) => Some(shared.to_string()),
+            (None, Some(scoped)) => Some(scoped.to_string()),
+            (None, None) => None,
+        };
+        let prompt = render_prompt_with_port(
+            &config,
+            &body,
+            self.api_port,
+            preset_prompt.as_deref(),
+            combined_context.as_deref(),
+        );
         let pipe_name = name.to_string();
 
         // Mark running in DB
@@ -6136,7 +6205,8 @@ fn render_prompt_with_port(
     let mut prompt = String::new();
 
     let header = format!(
-        r#"Time range: {start_time} to {end_time}
+        r#"Default run lookback: {start_time} to {end_time}
+Structured output targets may declare an authoritative time range that overrides this default for that target.
 Date: {date}
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
@@ -7079,6 +7149,31 @@ mod tests {
             "---\nschedule: manual\nenabled: true\ntemplate: {}\n---\n\n{}\n",
             template, body
         )
+    }
+
+    #[test]
+    fn explicitly_installs_only_known_bundled_pipes() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(dir.path().join("time-breakdown/pipe.md").exists());
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(install_bundled_pipe(dir.path(), "not-a-builtin").is_err());
+    }
+
+    #[test]
+    fn explicit_install_preserves_custom_pipe_and_clears_tombstone() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe_dir = dir.path().join("time-breakdown");
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(pipe_dir.join("pipe.md"), "custom prompt").unwrap();
+        add_tombstone(dir.path(), "time-breakdown", Some("old".into())).unwrap();
+
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(pipe_dir.join("pipe.md")).unwrap(),
+            "custom prompt"
+        );
+        assert!(!read_tombstones(dir.path()).contains_key("time-breakdown"));
     }
 
     fn write_pipe_source(dir: &Path, name: &str, template: bool) -> PathBuf {
@@ -8928,8 +9023,9 @@ mod tests {
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
-        // User prompt contains time range and the "Execute" instruction
-        assert!(prompt.contains("Time range:"));
+        // User prompt contains a default lookback and the "Execute" instruction.
+        assert!(prompt.contains("Default run lookback:"));
+        assert!(prompt.contains("authoritative time range"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
         let sys = render_pipe_system_prompt("body text", 3031, None, None, None, false);

@@ -40,6 +40,7 @@ use crate::analytics::start_analytics;
 mod agent_event_emitter;
 mod audio_exclusions;
 mod auth_token;
+mod brain_views;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;

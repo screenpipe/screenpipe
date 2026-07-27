@@ -200,6 +200,34 @@ describe("first-run guide", () => {
     }
   });
 
+  it("submits the real composer from the guide's primary action", () => {
+    const composer = document.createElement("form");
+    composer.setAttribute("data-firstrun-target", "composer");
+    const onSubmit = vi.fn((event: Event) => event.preventDefault());
+    composer.addEventListener("submit", onSubmit);
+    document.body.appendChild(composer);
+    try {
+      render(
+        <FirstRunGuide
+          onDone={vi.fn()}
+          onGoToAutomations={vi.fn()}
+        />,
+      );
+      startTour();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: /send prompt/i }),
+      );
+
+      expect(onSubmit).toHaveBeenCalledOnce();
+      expect(mocks.capture).toHaveBeenCalledWith(
+        "firstrun_send_prompt_clicked",
+      );
+    } finally {
+      composer.remove();
+    }
+  });
+
   it("ignores background pipe-run sessions — only a real chat advances the phase", () => {
     render(
       <FirstRunGuide

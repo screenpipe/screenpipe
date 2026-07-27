@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
+import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { UpdateBanner } from "@/components/update-banner";
 import type { SettingsField } from "./settings-search";
 
@@ -40,9 +41,30 @@ import {
 export default function GeneralSettings() {
   const { isManagedDeployment } = useManagedPolicy();
   const { settings, updateSettings } = useSettings();
+  const resetOnboarding = useOnboarding((state) => state.resetOnboarding);
   const { toast } = useToast();
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
+  const [isResettingOnboarding, setIsResettingOnboarding] = useState(false);
+
+  const handleResetOnboarding = async () => {
+    setIsResettingOnboarding(true);
+    try {
+      await resetOnboarding();
+      const result = await commands.showOnboardingWindow();
+      if (result.status === "error") throw new Error(result.error);
+    } catch (error) {
+      console.error("failed to reset onboarding:", error);
+      toast({
+        title: "couldn't reset onboarding",
+        description:
+          error instanceof Error ? error.message : "please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResettingOnboarding(false);
+    }
+  };
 
   const handleCheckForUpdates = async () => {
     setIsCheckingForUpdate(true);
@@ -343,16 +365,10 @@ export default function GeneralSettings() {
               variant="outline"
               size="sm"
               className="ml-4 h-7 text-xs"
-              onClick={async () => {
-                try {
-                  await commands.resetOnboarding();
-                  await commands.showOnboardingWindow();
-                } catch (e) {
-                  console.error("failed to open onboarding:", e);
-                }
-              }}
+              disabled={isResettingOnboarding}
+              onClick={() => void handleResetOnboarding()}
             >
-              reset
+              {isResettingOnboarding ? "resetting..." : "reset"}
             </Button>
           </div>
         </CardContent>

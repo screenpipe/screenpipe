@@ -25,6 +25,7 @@ pub mod survey;
 pub mod sync;
 pub mod team;
 pub mod vault;
+pub mod view;
 pub mod vision;
 
 use clap::parser::ValueSource;
@@ -218,6 +219,12 @@ pub enum Command {
     Pipe {
         #[command(subcommand)]
         subcommand: PipeCommand,
+    },
+
+    /// Manage portable Live Views rendered by desktop, CLI, or enterprise apps
+    View {
+        #[command(subcommand)]
+        subcommand: ViewCommand,
     },
 
     /// Audio device management commands
@@ -1616,6 +1623,72 @@ pub enum PipeCommand {
         /// Preset id(s) — multiple ids form a fallback chain (first works wins)
         #[arg(required = true, num_args = 1..)]
         preset: Vec<String>,
+    },
+}
+
+// =============================================================================
+// Live View commands
+// =============================================================================
+
+#[derive(Clone, Debug, ValueEnum, PartialEq)]
+pub enum ViewExportFormat {
+    Json,
+    Html,
+    Markdown,
+}
+
+#[derive(Subcommand)]
+pub enum ViewCommand {
+    /// List Live Views and their Blocks
+    List {
+        /// Output hydrated views as JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Screenpipe data directory
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Show one Live View, including current Block status
+    Show {
+        /// Live View id
+        id: String,
+        /// Output the hydrated view as JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Screenpipe data directory
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Import or update a live-view-template.v1 JSON file
+    Apply {
+        /// Template JSON file
+        #[arg(value_hint = ValueHint::FilePath)]
+        file: PathBuf,
+        /// Screenpipe data directory
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Delete one Live View
+    Delete {
+        /// Live View id
+        id: String,
+        /// Screenpipe data directory
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Export a Template or a safe static snapshot
+    Export {
+        /// Live View id
+        id: String,
+        /// Export format. JSON is the portable Template; HTML and Markdown include current values.
+        #[arg(long, value_enum, default_value_t = ViewExportFormat::Html)]
+        format: ViewExportFormat,
+        /// Write to this file instead of stdout
+        #[arg(short, long, value_hint = ValueHint::FilePath)]
+        output: Option<PathBuf>,
+        /// Screenpipe data directory
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
     },
 }
 

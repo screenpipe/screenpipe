@@ -20,14 +20,10 @@
 //!      external origins: `default-src 'none'`, no `connect-src`, no remote
 //!      `img-src`, no `form-action`. Nothing can phone home.
 //!
-//!   2. INTENT (default view, NOT a gate): any `.html` can be rendered in the
-//!      sandbox, and a "view source" toggle is always one click away. The
-//!      producer marker (`HUMAN_RENDER_MARKER`) and a full-document shape only
-//!      decide whether the rendered or the source tab is shown FIRST. They do
-//!      not change containment — every artifact is wrapped and rendered inside
-//!      the same locked-down iframe whether or not it is marked. (Earlier this
-//!      module required the marker to render at all; that just meant real AI
-//!      artifacts never rendered, so the marker was demoted to a default hint.)
+//!   2. INTENT (default view, NOT a gate): any non-empty `.html` opens rendered
+//!      in the sandbox, and a "view source" toggle is always one click away.
+//!      Full documents and bare fragments follow the same rule because the
+//!      sandbox wrapper safely turns either shape into a complete document.
 //!
 //! Multiple CSPs intersect (a resource must pass every policy), so an artifact
 //! that ships its own permissive `<meta>` CSP cannot loosen the one we inject.
@@ -61,10 +57,8 @@ export const SANDBOX_CSP = [
 ].join("; ");
 
 /**
- * Producer opt-in marker. A pipe/agent MUST embed this comment for the viewer
- * to offer a rendered preview; without it, the `.html` is shown as source only.
- * Accepts `screenpipe:render=human` or `screenpipe:render=html`, whitespace
- * tolerant, e.g. `<!-- screenpipe:render=human -->`.
+ * Legacy producer marker. Rendering no longer requires this marker, but keep
+ * recognizing it for artifacts produced by older pipes and agents.
  */
 export const HUMAN_RENDER_MARKER =
   /<!--\s*screenpipe:render\s*=\s*(?:human|html)\s*-->/i;
@@ -93,12 +87,10 @@ export function isHtmlFileName(name: string): boolean {
 }
 
 /**
- * Heuristic: does this text look like a full, human-facing HTML *document*
- * (rather than a tiny snippet)? A document-level tag means the producer almost
- * certainly intends it to be looked at rendered, not as source. Used only to
- * pick the DEFAULT view — it never affects containment (the sandbox + CSP wrap
- * everything regardless). Matches `<!doctype html>`, `<html>`, `<head>`,
- * `<body>`, or a `<style>` block anywhere in the text, case-insensitively.
+ * Heuristic retained for callers that need to distinguish a full HTML document
+ * from a fragment. The viewer no longer uses this to choose its default tab.
+ * Matches `<!doctype html>`, `<html>`, `<head>`, `<body>`, or a `<style>` block
+ * anywhere in the text, case-insensitively.
  */
 export function looksLikeFullHtmlDocument(text: string): boolean {
   return /<(?:!doctype\s+html|html|head|body|style)[\s>]/i.test(text);
@@ -106,15 +98,15 @@ export function looksLikeFullHtmlDocument(text: string): boolean {
 
 /**
  * Should an HTML artifact open as a rendered preview (vs. source) by default?
- * True when the producer explicitly opted in (marker) OR the content looks like
- * a full document. A bare fragment with no marker stays source-first so a code
- * snippet someone is inspecting isn't surprisingly executed in the sandbox.
+ * Every non-empty artifact opens rendered, including bare fragments. The file
+ * extension establishes that this is an HTML artifact; source stays one click
+ * away for inspection.
  *
  * IMPORTANT: this only chooses the initial tab. Rendering is ALWAYS done inside
  * the locked-down sandbox iframe; this flag is not a security gate.
  */
 export function shouldRenderHtmlByDefault(text: string): boolean {
-  return hasHumanRenderMarker(text) || looksLikeFullHtmlDocument(text);
+  return text.trim().length > 0;
 }
 
 /**

@@ -347,6 +347,18 @@ fn is_api_auth_exempt_path(path: &str) -> bool {
         || path.starts_with("/pipes/store")
 }
 
+fn is_api_auth_token_authorized(
+    api_auth_key: Option<&str>,
+    pipe_permissions: &DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>,
+    token: Option<&str>,
+) -> bool {
+    let Some(token) = token else {
+        return false;
+    };
+    api_auth_key == Some(token)
+        || (token.starts_with("sp_pipe_") && pipe_permissions.contains_key(token))
+}
+
 impl SCServer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -892,6 +904,41 @@ impl SCServer {
         // Build the main router with all routes
         let router = Router::new()
             .merge(server.into_router())
+            // Renderer-agnostic structured outputs are deliberately outside
+            // the public OpenAPI surface for now. Consumers define targets;
+            // authenticated pipes can discover and fill only their bindings.
+            .route(
+                "/outputs/targets",
+                get(crate::routes::structured_outputs::assigned_targets_handler),
+            )
+            .route(
+                "/outputs/targets/:target_id/submit",
+                axum::routing::post(
+                    crate::routes::structured_outputs::submit_structured_output_handler,
+                ),
+            )
+            .route(
+                "/outputs/targets/:target_id/feedback",
+                axum::routing::post(
+                    crate::routes::structured_outputs::set_structured_output_feedback_handler,
+                ),
+            )
+            // Live View Templates are a versioned cross-surface protocol.
+            // Local app/API clients can edit them; pipe tokens can only fill
+            // their assigned structured output targets above.
+            .route(
+                "/live-views",
+                get(crate::routes::live_views::list_live_views_handler),
+            )
+            .route(
+                "/live-views/schema",
+                get(crate::routes::live_views::live_view_schema_handler),
+            )
+            .route(
+                "/live-views/:id",
+                axum::routing::put(crate::routes::live_views::save_live_view_handler)
+                    .delete(crate::routes::live_views::delete_live_view_handler),
+            )
             .route(
                 "/speakers/sample/:audio_chunk_id",
                 get(get_speaker_sample_handler),
@@ -1204,10 +1251,12 @@ impl SCServer {
                 // are exempt so polling works before the frontend has the key.
                 let auth_enabled = self.api_auth;
                 let auth_key = self.api_auth_key.clone();
+                let pipe_permissions = app_state.pipe_permissions.clone();
                 axum::middleware::from_fn(
                     move |req: axum::extract::Request, next: axum::middleware::Next| {
                         let auth_enabled = auth_enabled;
                         let auth_key = auth_key.clone();
+                        let pipe_permissions = pipe_permissions.clone();
                         async move {
                             if !auth_enabled {
                                 return next.run(req).await;
@@ -1230,7 +1279,8 @@ impl SCServer {
                             }
 
                             // Check auth via (in priority order):
-                            // 1. Authorization: Bearer <token> header (localFetch)
+                            // 1. Authorization: Bearer <token> header (localFetch or
+                            //    an active short-lived pipe token)
                             // 2. screenpipe_auth=<token> cookie (img src, WebSocket)
                             // 3. ?token=<token> query param (fallback)
                             let header_token = req
@@ -1261,9 +1311,11 @@ impl SCServer {
                                 });
 
                             let token = header_token.or(cookie_token).or(query_token);
-                            let authorized = token
-                                .map(|t| auth_key.as_deref() == Some(t.as_str()))
-                                .unwrap_or(false);
+                            let authorized = is_api_auth_token_authorized(
+                                auth_key.as_deref(),
+                                &pipe_permissions,
+                                token.as_deref(),
+                            );
 
                             if authorized {
                                 next.run(req).await
@@ -1311,11 +1363,14 @@ impl SCServer {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_allowed_local_origin, is_api_auth_exempt_path, search_query_concurrency,
-        should_advertise_mdns, CORS_EXPOSED_HEADERS,
+        is_allowed_local_origin, is_api_auth_exempt_path, is_api_auth_token_authorized,
+        search_query_concurrency, should_advertise_mdns, CORS_EXPOSED_HEADERS,
     };
     use axum::http::{header, HeaderValue};
+    use dashmap::DashMap;
+    use screenpipe_core::pipes::permissions::PipePermissions;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::sync::Arc;
 
     #[test]
     fn search_admission_scales_conservatively_with_read_pool() {
@@ -1413,5 +1468,38 @@ mod tests {
         ] {
             assert!(is_api_auth_exempt_path(path));
         }
+    }
+
+    #[test]
+    fn api_auth_accepts_only_active_pipe_tokens() {
+        let tokens: DashMap<String, Arc<PipePermissions>> = DashMap::new();
+        let permissions = PipePermissions {
+            pipe_name: "daily-summary".to_string(),
+            allow_rules: vec![],
+            deny_rules: vec![],
+            use_default_allowlist: false,
+            time_range: None,
+            days: None,
+            pipe_token: None,
+            pipe_dir: None,
+            privacy_filter: false,
+        };
+        tokens.insert("sp_pipe_active".to_string(), Arc::new(permissions));
+
+        assert!(is_api_auth_token_authorized(
+            Some("local-key"),
+            &tokens,
+            Some("local-key")
+        ));
+        assert!(is_api_auth_token_authorized(
+            Some("local-key"),
+            &tokens,
+            Some("sp_pipe_active")
+        ));
+        assert!(!is_api_auth_token_authorized(
+            Some("local-key"),
+            &tokens,
+            Some("sp_pipe_stale")
+        ));
     }
 }

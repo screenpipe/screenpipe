@@ -2138,7 +2138,16 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
         return Ok(());
     }
 
-    show_window(app_handle.clone(), ShowRewindWindow::Home { page: None }).await?;
+    // Setup ends at Brain. If the user built a first Live View it is selected
+    // there; if they skipped, Brain presents the honest create-your-first-view
+    // state instead of dropping them into an unrelated chat screen.
+    show_window(
+        app_handle.clone(),
+        ShowRewindWindow::Home {
+            page: Some("brain".to_string()),
+        },
+    )
+    .await?;
 
     Ok(())
 }
