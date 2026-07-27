@@ -1135,7 +1135,7 @@ function PipeCard({
     >
       {/* Header: icon + action */}
       <div className="flex items-start justify-between gap-3">
-        <div className="text-xl bg-muted rounded-none h-10 w-10 flex items-center justify-center flex-shrink-0 grayscale">
+        <div className="text-xl bg-muted rounded-none h-10 w-10 flex items-center justify-center flex-shrink-0">
           {pipe.icon || "🔧"}
         </div>
         <Button
