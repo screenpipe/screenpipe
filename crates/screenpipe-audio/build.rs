@@ -70,17 +70,29 @@ fn install_bun() {
 }
 
 #[cfg(target_os = "windows")]
-fn find_unzip() -> Option<std::path::PathBuf> {
+fn find_7z() -> Option<std::path::PathBuf> {
+    // Check PATH first.
+    if let Ok(path) = which::which("7z") {
+        return Some(path);
+    }
     let paths = [
-        // check PATH first
-        which::which("unzip").ok(),
-        // fallback to common GnuWin32 location
-        Some(std::path::PathBuf::from(
-            r"C:\Program Files (x86)\GnuWin32\bin\unzip.exe",
-        )),
+        std::path::PathBuf::from(r"C:\Program Files\7-Zip\7z.exe"),
+        std::path::PathBuf::from(r"C:\Program Files (x86)\7-Zip\7z.exe"),
+        std::path::PathBuf::from(
+            std::path::Path::new(&env::var("LOCALAPPDATA").unwrap_or_default())
+                .join("Programs")
+                .join("7-Zip")
+                .join("7z.exe"),
+        ),
     ];
 
-    paths.into_iter().flatten().find(|p| p.exists())
+    for path in paths {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    which::which("7z").ok()
 }
 
 #[cfg(target_os = "windows")]
@@ -158,20 +170,25 @@ fn install_onnxruntime() {
             .args(["-fsSL", "--retry", "3", "-o", zip_name, &url])
             .status()
             .expect("failed to execute curl");
+
         if !status.success() {
-            panic!("failed to download onnx binary via curl");
+            panic!("failed to extract ONNX Runtime");
         }
-        let unzip_path = find_unzip().expect(
-            "could not find unzip executable - please install it via GnuWin32 or add it to PATH",
+        let seven_zip = find_7z().expect(
+            "could not find 7z executable. Install it via 'winget install -e --id 7zip.7zip' or add 7z.exe to PATH.",
         );
-
-        let status = Command::new(unzip_path)
-            .args(["-o", zip_name])
+        let status = Command::new(seven_zip)
+            .args([
+                "x",
+                zip_name,
+                "-o../../apps/screenpipe-app-tauri/src-tauri/",
+                "-y",
+            ])
             .status()
-            .expect("failed to execute unzip");
+            .expect("failed to execute 7z");
 
         if !status.success() {
-            panic!("failed to install onnx binary");
+            panic!("failed to extract ONNX Runtime");
         }
         if target_dir.exists() {
             fs::remove_dir_all(&target_dir).expect("failed to remove existing directory");
