@@ -6224,10 +6224,35 @@ fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
         // /meetings/:id, but the server only registers PUT (see
         // screenpipe-engine server.rs) — so every save 404'd. fix already
         // installed local copies. PR #4247.
-        "meeting-summary" => &[(
-            "-X PATCH \"http://localhost:3030/meetings/",
-            "-X PUT \"http://localhost:3030/meetings/",
-        )],
+        "meeting-summary" => &[
+            (
+                "-X PATCH \"http://localhost:3030/meetings/",
+                "-X PUT \"http://localhost:3030/meetings/",
+            ),
+            // the pipe picked "the most recent meeting", which is the wrong one
+            // whenever two meetings end close together. the scheduler now names
+            // the meeting in .trigger-context.json — point installed copies at
+            // it, since install_builtin_pipes never overwrites them. #5481.
+            (
+                "step 1 — find the meeting that just ended:",
+                concat!(
+                    "step 1 — find the meeting that just ended. when the scheduler woke you for an event ",
+                    "it wrote `./.trigger-context.json` in this pipe's folder; read it first and use the ",
+                    "meeting id it names:\n",
+                    "\n",
+                    "  cat ./.trigger-context.json   # {\"event\": \"meeting_ended\", \"key\": \"<MEETING_ID>\", ...}\n",
+                    "\n",
+                    "  curl -s -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" \\\n",
+                    "    \"http://localhost:3030/meetings/<MEETING_ID>\"\n",
+                    "\n",
+                    "only if that file is missing (a manual run) fall back to the most recent row:",
+                ),
+            ),
+            (
+                "the most recent row is the one that just ended. capture its",
+                "either way, capture the meeting's",
+            ),
+        ],
         _ => return None,
     };
 
@@ -7885,6 +7910,49 @@ mod tests {
         // other builtins and unrelated content are left alone.
         assert!(migrate_builtin_pipe_text("day-recap", stale).is_none());
         assert!(migrate_builtin_pipe_text("meeting-summary", "no api calls here").is_none());
+    }
+
+    /// #5481: installed copies still say "pick the most recent meeting", which is
+    /// wrong when two meetings end together. They must be pointed at the trigger
+    /// file, since install_builtin_pipes never overwrites an existing pipe.md.
+    #[test]
+    fn migrate_builtin_pipe_points_meeting_summary_at_trigger_context() {
+        let stale = concat!(
+            "read the screenpipe skill first.\n",
+            "\n",
+            "step 1 — find the meeting that just ended:\n",
+            "\n",
+            "  curl -s \"http://localhost:3030/meetings?limit=1\"\n",
+            "\n",
+            "the most recent row is the one that just ended. capture its `id` and `note`.\n",
+            "\n",
+            "step 2 — summarize it.",
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("stale most-recent-meeting content should migrate");
+        assert!(fixed.contains(".trigger-context.json"));
+        assert!(fixed.contains("/meetings/<MEETING_ID>"));
+        assert!(!fixed.contains("the most recent row is the one that just ended"));
+
+        // the manual-run fallback and the surrounding steps survive.
+        assert!(fixed.contains("http://localhost:3030/meetings?limit=1"));
+        assert!(fixed.starts_with("read the screenpipe skill first."));
+        assert!(fixed.ends_with("step 2 — summarize it."));
+
+        // idempotent: running it again is a no-op.
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
+    /// The shipped prompt must already be in its migrated form, or every fresh
+    /// install would be rewritten on the next startup.
+    #[test]
+    fn bundled_meeting_summary_needs_no_migration() {
+        let bundled = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(name, content)| (*name == "meeting-summary").then_some(*content))
+            .expect("meeting-summary is bundled");
+        assert!(migrate_builtin_pipe_text("meeting-summary", bundled).is_none());
     }
 
     #[test]
