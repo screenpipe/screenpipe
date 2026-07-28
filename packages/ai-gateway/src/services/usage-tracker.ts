@@ -147,6 +147,9 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'claude-opus-4-7': 5,
   'claude-opus': 15,
   'claude-sonnet': 3,
+  // MiniMax — mid-tier paid provider, charge 1 query per message
+  'minimax-m3': 1,
+  'minimax-m2.7': 1,
   // (gpt-5.5 / gpt-5.4 / gpt-5.4-mini were duplicated here once — duplicate
   // object keys silently override the earlier entries. Keep each model
   // defined exactly once, in the OpenAI block above.)

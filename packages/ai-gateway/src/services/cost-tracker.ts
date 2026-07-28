@@ -52,6 +52,10 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'qwen3-next-thinking': { input: 0, output: 0 },
   // Tinfoil — confidential inference (secure enclaves)
   'gemma4-31b': { input: 0.45, output: 1.00 },
+  // MiniMax — OpenAI-compatible chat provider (https://platform.minimax.io)
+  // Per-million-token USD pricing; cached input billed at 0.2x the input rate.
+  'minimax-m3': { input: 0.60, output: 2.40, cacheRead: 0.2 },
+  'minimax-m2.7': { input: 0.30, output: 1.20, cacheRead: 0.2, cacheWrite: 1.25 },
   // Anthropic Claude
   // Fable 5: most capable widely-released model (GA 2026-06-09), 1M ctx, $10/$50 per MTok.
   'claude-fable-5': { input: 10.00, output: 50.00, ...CLAUDE_CACHE },
@@ -329,6 +333,7 @@ export function inferProvider(model: string | null | undefined): string {
   if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3') || lower.includes('o4')) return 'openai';
   if (lower.includes('gemini')) return 'google';
   if (lower.includes('gemma4')) return 'tinfoil';
+  if (lower.includes('minimax')) return 'minimax';
   if (lower.includes('glm-') || lower.includes('kimi-k')) return 'vertex-maas';
   if (lower.includes('llama') || lower.includes('qwen') || lower.includes('mistral') || lower.includes('step-3.5') || lower.includes('stepfun')) return 'openrouter';
   if (lower.includes('screenpipe-event')) return 'screenpipe-vllm';

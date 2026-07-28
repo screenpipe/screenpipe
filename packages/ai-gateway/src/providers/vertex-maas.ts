@@ -100,13 +100,11 @@ const VERTEX_MAAS_MODELS: Record<string, { vertexId: string; region: string }> =
 	'glm-4.7': { vertexId: 'zai-org/glm-4.7-maas', region: 'global' },
 	'glm-5': { vertexId: 'zai-org/glm-5-maas', region: 'global' },
 	'kimi-k2.5': { vertexId: 'moonshotai/kimi-k2-thinking-maas', region: 'global' },
-	// MiniMax M2 not enabled — Vertex's openapi endpoint requires
-	// `<publisher>/<model>` format but rejects both `minimax/minimax-m2-maas`
-	// (404 "Publisher Model not found") and `minimax-m2-maas` alone (400
-	// "Malformed publisher model … expected '<publisher>/<model>'").
-	// The MiniMax MaaS docs list `minimax-m2-maas` as the model param but
-	// it must be a different endpoint shape — needs investigation in
-	// Vertex Model Garden console before re-adding.
+	// MiniMax is NOT served via Vertex MaaS — Vertex's openapi endpoint rejects
+	// both `minimax/minimax-m2-maas` (404 "Publisher Model not found") and
+	// `minimax-m2-maas` alone (400 "Malformed publisher model … expected
+	// '<publisher>/<model>'"). MiniMax-M3 / MiniMax-M2.7 route through the
+	// dedicated MiniMax lane in createProvider (see providers/index.ts).
 	'llama-4-maverick': { vertexId: 'meta/llama-4-maverick-17b-128e-instruct-maas', region: 'us-east5' },
 	'llama-4-scout': { vertexId: 'meta/llama-4-scout-17b-16e-instruct-maas', region: 'us-east5' },
 	'qwen3-coder': { vertexId: 'qwen/qwen3-coder-480b-a35b-instruct-maas', region: 'global' },
@@ -216,8 +214,10 @@ export function isVertexMaasModel(model: string): boolean {
 	const lower = model.toLowerCase();
 	// Exact match first (e.g. "llama-4-maverick"), then substring for legacy names.
 	// This prevents "meta-llama/llama-4-maverick" (OpenRouter) from matching.
+	// MiniMax models are NOT Vertex MaaS models — they route through the
+	// dedicated MiniMax lane in createProvider (see providers/index.ts).
 	return Object.keys(VERTEX_MAAS_MODELS).some((key) => lower === key) ||
-		['glm-', 'kimi-', 'qwen3-coder', 'qwen3-next', 'minimax-m'].some((prefix) => lower.includes(prefix));
+		['glm-', 'kimi-', 'qwen3-coder', 'qwen3-next'].some((prefix) => lower.includes(prefix));
 }
 
 export function resolveVertexMaasModel(model: string): { vertexId: string; region: string } | null {

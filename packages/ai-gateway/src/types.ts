@@ -190,6 +190,13 @@ export interface Env {
 	// fallback. Set this separately only if you need to rotate it
 	// independently of the gemma4-31b path.
 	SCREENPIPE_ENCLAVE_API_KEY?: string;
+	// MiniMax — OpenAI-compatible chat provider (https://api.minimax.io).
+	// Optional: the MiniMax-M3 / MiniMax-M2.7 entries in the model catalog are
+	// gated on `requires_env: 'MINIMAX_API_KEY'`, so the gateway hides them
+	// when this isn't set. MINIMAX_REGION selects the overseas endpoint
+	// ('global_en', default) or the China endpoint ('cn_zh').
+	MINIMAX_API_KEY?: string;
+	MINIMAX_REGION?: string;
 	// Admin API auth
 	ADMIN_SECRET: string;
 	// Transcription A/B/C test routing

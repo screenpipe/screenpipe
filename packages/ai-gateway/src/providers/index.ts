@@ -81,8 +81,6 @@ const RETIRED_HOSTED_MODEL_PREFIXES = [
 	'meta/llama-',
 	'meta-llama/llama-3.3-',
 	'meta-llama/',
-	'minimax/',
-	'minimax-',
 	'mistralai/',
 	'mistral-',
 	'openai/gpt-oss-',
@@ -121,6 +119,28 @@ function requireSecret(value: unknown, message: string): string {
 	return value.trim();
 }
 
+// MiniMax — OpenAI-compatible chat API. The model IDs MiniMax-M3 and
+// MiniMax-M2.7 are routed through OpenAIProvider against the MiniMax base
+// URL (no dedicated subclass: MiniMax speaks the OpenAI chat completions
+// schema natively, so the OpenAI-compatible lane handles it). Region picks
+// the overseas endpoint (api.minimax.io) or the China endpoint
+// (api.minimaxi.com) for users routed through the cn_zh region.
+const MINIMAX_BASE_URLS: Record<'global_en' | 'cn_zh', string> = {
+	'global_en': 'https://api.minimax.io/v1',
+	'cn_zh': 'https://api.minimaxi.com/v1',
+};
+
+export function isMiniMaxModel(model: string): boolean {
+	const lower = model.toLowerCase();
+	// Exact canonical IDs plus a MiniMax-M* prefix so future MiniMax-M* chat
+	// models route here without another edit.
+	return lower === 'minimax-m3' || lower === 'minimax-m2.7' || lower.startsWith('minimax-m');
+}
+
+export function resolveMiniMaxBaseURL(region?: string): string {
+	return region === 'cn_zh' ? MINIMAX_BASE_URLS.cn_zh : MINIMAX_BASE_URLS.global_en;
+}
+
 export function createProvider(model: string, env: Env): AIProvider {
 	// SCREENPIPE-AI-PROXY-1R: model can arrive undefined/empty on malformed
 	// request paths; fail with a clear message instead of a cryptic
@@ -136,6 +156,15 @@ export function createProvider(model: string, env: Env): AIProvider {
 	if (model === 'screenpipe-event-classifier') {
 		const vllmUrl = env.EVENT_CLASSIFIER_URL || 'http://34.122.128.37:8080/v1';
 		return new OpenAIProvider('none', vllmUrl);
+	}
+	// MiniMax — OpenAI-compatible chat provider. Routed before the generic
+	// OpenAI fallback so MiniMax-M3 / MiniMax-M2.7 reach the MiniMax endpoint
+	// instead of the default OpenAI base URL.
+	if (isMiniMaxModel(model)) {
+		return new OpenAIProvider(
+			requireSecret(env.MINIMAX_API_KEY, 'MiniMax API key not configured'),
+			resolveMiniMaxBaseURL(env.MINIMAX_REGION),
+		);
 	}
 	if (model.toLowerCase().includes('claude')) {
 		return new AnthropicProvider(requireSecret(env.ANTHROPIC_API_KEY, 'Anthropic API key not configured'));
