@@ -5,6 +5,11 @@ on:
     tags:
       - "mcp-v*"
   workflow_dispatch:
+    inputs:
+      allow_already_published:
+        description: "Version is already on npm and that's expected — re-run only the registry/mcpb/GitHub-release steps. THE NPM REGISTRY WILL NOT CHANGE."
+        type: boolean
+        default: false
 
 concurrency:
   # Serialize releases — aborting a release mid-flight is worse than waiting.
@@ -55,12 +60,41 @@ jobs:
         working-directory: packages/screenpipe-mcp
         run: cp ../../LICENSE.md .
 
+      # The release path never looked at WHAT it was publishing, which is the
+      # other half of the SCR-352 incident: 0.18.15 went to the registry with no
+      # dist/team-config.js in the tarball at all, so every `team-*` tool 401'd
+      # against a customer gateway. `npm publish` is irreversible (npm will not
+      # let you replace a published version), so the artifact is asserted here,
+      # in the last step before it ships — not only in test-mcp.yml, which does
+      # not gate this workflow and does not run on a tag push. Same script both
+      # places. `npm pack --dry-run` writes nothing and needs no auth.
+      - name: Verify the tarball is a gateway-capable build
+        working-directory: packages/screenpipe-mcp
+        run: npm run verify:pack
+
+      # A version already on npm used to SKIP quietly and let the whole workflow
+      # report success — so "Release MCP" could be re-run forever and change
+      # nothing. That is how screenpipe-mcp@0.18.15 stayed on the registry while
+      # the repo moved on: the tree gained src/team-config.ts (customer-gateway
+      # support for the team-* tools) but package.json still said 0.18.15, so
+      # every release run no-op'd and gateway orgs kept getting a build that
+      # 401'd (SCR-352). npm cannot overwrite a published version, so an
+      # unbumped version is an ERROR, not a skip. The escape hatch exists only
+      # for deliberately re-running the MCP-Registry / mcpb / GitHub-release
+      # steps after a partial failure.
       - name: Publish to npm
         working-directory: packages/screenpipe-mcp
+        env:
+          ALLOW_ALREADY_PUBLISHED: ${{ inputs.allow_already_published }}
         run: |
           VER=$(node -p "require('./package.json').version")
           if npm view "screenpipe-mcp@$VER" version >/dev/null 2>&1; then
-            echo "screenpipe-mcp@$VER already on npm — skipping publish"
+            if [ "$ALLOW_ALREADY_PUBLISHED" = "true" ]; then
+              echo "::warning::screenpipe-mcp@$VER is already on npm — publish skipped on request. THE REGISTRY IS UNCHANGED BY THIS RUN."
+            else
+              echo "::error::screenpipe-mcp@$VER is already on npm. npm cannot overwrite a published version, so this run would publish NOTHING while reporting success. Bump packages/screenpipe-mcp/package.json (and server.json — src/version.test.ts enforces both), or re-dispatch with allow_already_published=true if you only need the MCP-Registry / mcpb / GitHub-release steps."
+              exit 1
+            fi
           else
             npm publish --access public
           fi
@@ -107,6 +141,25 @@ jobs:
       - name: Build mcpb bundle
         working-directory: packages/screenpipe-mcp
         run: mcpb pack
+
+      # The .mcpb bundle is the Claude Desktop install path, and nobody has ever
+      # looked inside one (SCR-352 shipped with that as an explicitly unverified
+      # claim — the mcpb CLI is not installed on dev machines). dist/index.js
+      # `require`s ./team-config at startup, so a bundle without it is not
+      # merely missing the gateway knob, it is broken. Grep the whole archive
+      # rather than a fixed path so this stays correct if mcpb ever bundles or
+      # minifies. The listing is printed either way, so the release run is the
+      # evidence for "does the bundle carry the fix".
+      - name: Verify the mcpb bundle carries the gateway knob
+        working-directory: packages/screenpipe-mcp
+        run: |
+          unzip -l screenpipe-mcp.mcpb
+          if unzip -p screenpipe-mcp.mcpb | grep -q SCREENPIPE_TEAM_API_URL; then
+            echo "mcpb bundle contains the team API base override"
+          else
+            echo "::error::screenpipe-mcp.mcpb does not contain SCREENPIPE_TEAM_API_URL anywhere. The Claude Desktop bundle cannot reach a customer gateway, and dist/index.js requires ./team-config at startup. Check mcpb pack / manifest.json before releasing."
+            exit 1
+          fi
 
       - name: Get version
         id: version

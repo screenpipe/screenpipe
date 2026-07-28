@@ -130,9 +130,10 @@ pub fn preflight_check(need_screen: bool, need_audio: bool) -> bool {
 
 /// macOS Screen Recording TCC probes.
 ///
-/// - `preflight`: `CGPreflightScreenCaptureAccess` — fast, no side effects. A `true`
-///   result is always reliable; a `false` can be a false negative (known bug for CLI
-///   binaries on fresh TCC cache paths, e.g. via `npx`).
+/// - `preflight`: `CGPreflightScreenCaptureAccess` — fast, no side effects. A `false`
+///   can be a false negative (known bug for CLI binaries on fresh TCC cache paths,
+///   e.g. via `npx`). A `true` is usually reliable but goes stale in the macOS
+///   15+/26 lapsed-grant state (see `preflight()` docs below).
 /// - `capture_probe`: `CGWindowListCreateImage` — real capture attempt. Reliable on
 ///   macOS ≤ 14 and in CLI. On macOS 15+ inside a Tauri app, Apple changed it to
 ///   return the calling app's own windows even without permission → always non-NULL →
@@ -162,8 +163,22 @@ mod macos_screen_recording {
         fn CGImageRelease(image: CGImageRef);
     }
 
-    /// Cached TCC answer via `CGPreflightScreenCaptureAccess`. May lie
-    /// in the negative direction; never in the positive direction.
+    /// Cached TCC answer via `CGPreflightScreenCaptureAccess`. May lie in the
+    /// negative direction (known false negatives on fresh TCC cache paths).
+    ///
+    /// It can ALSO lie in the positive direction: in the macOS 15+/26
+    /// lapsed-grant state (periodic re-approval missed, or a grant
+    /// invalidated by an app update) preflight keeps answering `true` while
+    /// `SCShareableContent` fails — observed live in a user log where the
+    /// recovery flow's preflight read "granted" one second after display
+    /// enumeration reported `PermissionDenied` at runtime.
+    ///
+    /// This crate cannot see the capture-side verdict (it sits below the engine),
+    /// so the combined answer lives one layer up and every UI-facing check goes
+    /// through it: the app's `permissions::screen_recording_status`, which folds
+    /// this value together with `permission_monitor::screen_enumeration_denied`.
+    /// Reach for that, not for this function, when the answer drives what the
+    /// user is told or whether capture is allowed to start.
     pub fn preflight() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
     }

@@ -35,6 +35,7 @@ const SETTINGS_SECTIONS = [
   { id: 'display', keywords: ['display', 'theme', 'window', 'sidebar', 'appearance'] },
   { id: 'general', keywords: ['general', 'startup', 'language', 'auto'] },
   { id: 'ai', keywords: ['ai', 'model', 'preset', 'openai', 'ollama'] },
+  { id: 'ai-settings', keywords: ['ai', 'analysis', 'chat', 'enhanced'] },
   { id: 'recording', keywords: ['recording', 'fps', 'capture', 'monitor'] },
   { id: 'shortcuts', keywords: ['shortcut', 'keyboard', 'hotkey', 'overlay'] },
   { id: 'notifications', keywords: ['notification', 'toast', 'sound'] },
@@ -82,7 +83,7 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it('navigates to AI settings and renders model/preset controls', async () => {
+  it('navigates to AI Presets and renders model/preset controls', async () => {
     const navAi = await $('[data-testid="settings-nav-ai"]');
     await navAi.waitForExist({ timeout: 8_000 });
     await navAi.click();
@@ -93,8 +94,66 @@ describe('Settings sections', () => {
       body.includes('openai') || body.includes('ollama') || body.includes('api key');
     expect(hasContent).toBe(true);
 
-    const filepath = await saveScreenshot('settings-ai');
+    const intro = await $('p*=Configure AI models and preferences');
+    await intro.moveTo();
+    const filepath = await saveScreenshot('settings-ai-presets');
     expect(existsSync(filepath)).toBe(true);
+  });
+
+  it('moves AI preferences from General into AI Settings and covers enabled/disabled analysis flows', async () => {
+    const navAiSettings = await $('[data-testid="settings-nav-ai-settings"]');
+    await navAiSettings.waitForExist({ timeout: 8_000 });
+    await navAiSettings.click();
+
+    const section = await $('[data-testid="section-settings-ai-settings"]');
+    await section.waitForExist({ timeout: 8_000 });
+
+    const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
+    expect(body).toContain('enhanced ai');
+    expect(body).toContain('ai audio & video analysis');
+    expect(body).toContain('auto-generate chat titles');
+
+    const enhancedAiToggle = await $('#enhanced-ai-toggle');
+    const mediaAnalysisToggle = await $('#cloudMediaAnalysisEnabled');
+    const chatTitlesToggle = await $('#auto-generate-chat-titles-toggle');
+    await enhancedAiToggle.waitForExist({ timeout: 5_000 });
+    await mediaAnalysisToggle.waitForExist({ timeout: 5_000 });
+    await chatTitlesToggle.waitForExist({ timeout: 5_000 });
+
+    if ((await mediaAnalysisToggle.getAttribute('data-state')) !== 'checked') {
+      await mediaAnalysisToggle.click();
+    }
+    const preview = await $('[data-testid="cloud-media-analysis-preview"]');
+    await preview.waitForExist({ timeout: 5_000 });
+
+    await section.moveTo();
+    const enabledFilepath = await saveScreenshot('settings-ai-analysis-enabled');
+    expect(existsSync(enabledFilepath)).toBe(true);
+
+    await mediaAnalysisToggle.click();
+    await browser.waitUntil(
+      async () => (await mediaAnalysisToggle.getAttribute('data-state')) === 'unchecked',
+      { timeout: 5_000, timeoutMsg: 'AI media analysis toggle did not switch off' },
+    );
+    await preview.waitForExist({ reverse: true, timeout: 5_000 });
+
+    await section.moveTo();
+    const disabledFilepath = await saveScreenshot('settings-ai-analysis-disabled');
+    expect(existsSync(disabledFilepath)).toBe(true);
+
+    // Restore the seeded preference so this flow does not leak state into the
+    // remaining settings checks.
+    await mediaAnalysisToggle.click();
+    await preview.waitForExist({ timeout: 5_000 });
+
+    const navGeneral = await $('[data-testid="settings-nav-general"]');
+    await navGeneral.click();
+    const general = await $('[data-testid="section-settings-general"]');
+    await general.waitForExist({ timeout: 5_000 });
+    const generalBody = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
+    expect(generalBody).not.toContain('enhanced ai');
+    expect(generalBody).not.toContain('ai audio & video analysis');
+    expect(generalBody).not.toContain('auto-generate chat titles');
   });
 
   it('navigates to Speakers settings and mounts section container', async () => {
@@ -203,7 +262,7 @@ describe('Settings sections', () => {
   it('survives rapid section switching without a blank crash (Windows COM/DPI regression)', async () => {
     // Click through every section quickly — this has historically caused a white
     // blank render on Windows due to COM apartment threading issues (TESTING.md §14).
-    const sectionIds = ['general', 'recording', 'ai', 'display', 'shortcuts', 'speakers', 'privacy', 'storage'];
+    const sectionIds = ['general', 'recording', 'ai', 'ai-settings', 'display', 'shortcuts', 'speakers', 'privacy', 'storage'];
     for (const id of sectionIds) {
       const btn = await $(`[data-testid="settings-nav-${id}"]`);
       if (await btn.isExisting()) {

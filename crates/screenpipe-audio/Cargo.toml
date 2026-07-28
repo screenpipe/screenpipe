@@ -201,6 +201,14 @@ path = "examples/meeting_input_probe.rs"
 name = "bt_reopen_probe"
 path = "examples/bt_reopen_probe.rs"
 
+# Live chaos probe for the Windows per-app system-audio exclusion: drives the
+# ConfiguredExclusion loopback path directly and prints per-window Goertzel
+# tone amplitudes + receive gaps (see examples/exclusion_probe.rs doc comment).
+# Windows-only; stubbed out on other platforms in source.
+[[example]]
+name = "exclusion_probe"
+path = "examples/exclusion_probe.rs"
+
 # These benchmark/eval examples use the optional `audiopipe` crate (linked only
 # by the `parakeet` / `qwen3-asr` features). Without a `required-features` guard,
 # `cargo {build,clippy} --all-targets` on default features tries to compile them,

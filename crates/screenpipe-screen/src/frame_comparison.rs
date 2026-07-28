@@ -36,10 +36,10 @@
 //! ```
 
 use image::imageops::FilterType;
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView, GrayImage, Pixel};
 use image_compare::Metric;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Configuration for frame comparison optimizations.
 #[derive(Debug, Clone)]
@@ -121,10 +121,16 @@ impl FrameComparisonConfig {
 pub struct FrameComparer {
     config: FrameComparisonConfig,
     previous_hash: Option<u64>,
-    previous_image_downscaled: Option<DynamicImage>,
+    previous_image_downscaled: Option<GrayImage>,
     previous_image_full: Option<DynamicImage>,
     comparison_count: u64,
     hash_hits: u64,
+    downscale_failures: u64,
+}
+
+struct ComparisonThumbnail {
+    grayscale: GrayImage,
+    color_hash: u64,
 }
 
 impl FrameComparer {
@@ -137,6 +143,7 @@ impl FrameComparer {
             previous_image_full: None,
             comparison_count: 0,
             hash_hits: 0,
+            downscale_failures: 0,
         }
     }
 
@@ -154,16 +161,46 @@ impl FrameComparer {
         }
     }
 
-    /// Downscale an image for comparison.
-    fn downscale(&self, image: &DynamicImage) -> DynamicImage {
+    /// Downscale an image for comparison without an infallible allocation.
+    ///
+    /// `DynamicImage::resize_exact` uses a floating-point intermediate buffer
+    /// even with `FilterType::Nearest`. For a 1920x1080 RGBA frame resized to
+    /// 480x270, that intermediate is 8,294,400 bytes. Rust aborts the process
+    /// if the allocation fails, so a routine comparison could terminate the
+    /// entire desktop app under Windows memory pressure.
+    ///
+    /// Sampling directly into the final grayscale thumbnail needs only
+    /// 129,600 bytes for that frame size. `try_reserve_exact` lets the caller
+    /// skip the comparison if even that bounded allocation is unavailable.
+    fn downscale(&self, image: &DynamicImage) -> Option<ComparisonThumbnail> {
         let (w, h) = self.downscale_dims(image.width(), image.height());
-        image.resize_exact(w, h, FilterType::Nearest)
+        let pixel_count = usize::try_from(u64::from(w) * u64::from(h)).ok()?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(pixel_count).ok()?;
+        let mut color_hasher = DefaultHasher::new();
+
+        let source_width = image.width();
+        let source_height = image.height();
+        for y in 0..h {
+            let source_y = ((u64::from(y) * u64::from(source_height)) / u64::from(h)) as u32;
+            for x in 0..w {
+                let source_x = ((u64::from(x) * u64::from(source_width)) / u64::from(w)) as u32;
+                let pixel = image.get_pixel(source_x, source_y);
+                color_hasher.write(&pixel.0);
+                pixels.push(pixel.to_luma().0[0]);
+            }
+        }
+
+        Some(ComparisonThumbnail {
+            grayscale: GrayImage::from_vec(w, h, pixels)?,
+            color_hash: color_hasher.finish(),
+        })
     }
 
     /// Compute hash on a downscaled image (fast — operates on ~1/16th the pixels).
-    fn hash_image(&self, downscaled: &DynamicImage) -> u64 {
+    fn hash_bytes(&self, bytes: &[u8]) -> u64 {
         let mut hasher = DefaultHasher::new();
-        downscaled.as_bytes().hash(&mut hasher);
+        bytes.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -183,16 +220,35 @@ impl FrameComparer {
         self.comparison_count += 1;
 
         // Downscale once — shared between hash and comparison
-        let current_downscaled = if self.config.downscale_comparison {
-            Some(self.downscale(current_image))
+        let (current_downscaled, downscaled_color_hash) = if self.config.downscale_comparison {
+            match self.downscale(current_image) {
+                Some(thumbnail) => (Some(thumbnail.grayscale), Some(thumbnail.color_hash)),
+                None => {
+                    self.downscale_failures += 1;
+                    if self.downscale_failures == 1 || self.downscale_failures.is_power_of_two() {
+                        warn!(
+                            source_width = current_image.width(),
+                            source_height = current_image.height(),
+                            failures = self.downscale_failures,
+                            "skipping frame comparison because thumbnail allocation failed"
+                        );
+                    }
+                    // Treat this frame as unchanged so memory pressure does not
+                    // immediately trigger the more expensive OCR pipeline. The
+                    // comparer keeps its last good state and retries next frame.
+                    return 0.0;
+                }
+            }
         } else {
-            None
+            (None, None)
         };
 
         // Hash the downscaled image (or full image if not downscaling)
         let current_hash = if self.config.hash_early_exit {
-            let to_hash = current_downscaled.as_ref().unwrap_or(current_image);
-            Some(self.hash_image(to_hash))
+            Some(match current_downscaled.as_ref() {
+                Some(_) => downscaled_color_hash.expect("downscaled frames include a color hash"),
+                None => self.hash_bytes(current_image.as_bytes()),
+            })
         } else {
             None
         };
@@ -221,11 +277,19 @@ impl FrameComparer {
         }
 
         // Get images for comparison
-        let (prev_img, curr_img) = if self.config.downscale_comparison {
+        let diff = if self.config.downscale_comparison {
             let prev = self.previous_image_downscaled.as_ref();
             let curr = current_downscaled.as_ref();
             match (prev, curr) {
-                (Some(p), Some(c)) => (p, c.clone()),
+                (Some(p), Some(c)) if p.dimensions() == c.dimensions() => {
+                    if self.config.single_metric {
+                        compare_gray_histogram(p, c).unwrap_or(1.0)
+                    } else {
+                        let histogram_diff = compare_gray_histogram(p, c).unwrap_or(1.0);
+                        let ssim_diff = compare_gray_ssim(p, c);
+                        (histogram_diff + ssim_diff) / 2.0
+                    }
+                }
                 _ => {
                     self.update_previous_internal(current_image, current_downscaled, current_hash);
                     return 1.0;
@@ -234,21 +298,20 @@ impl FrameComparer {
         } else {
             let prev = self.previous_image_full.as_ref();
             match prev {
-                Some(p) => (p, current_image.clone()),
+                Some(p) => {
+                    if self.config.single_metric {
+                        compare_histogram(p, current_image).unwrap_or(1.0)
+                    } else {
+                        let histogram_diff = compare_histogram(p, current_image).unwrap_or(1.0);
+                        let ssim_diff = compare_ssim(p, current_image);
+                        (histogram_diff + ssim_diff) / 2.0
+                    }
+                }
                 None => {
                     self.update_previous_internal(current_image, current_downscaled, current_hash);
                     return 1.0;
                 }
             }
-        };
-
-        // Perform comparison
-        let diff = if self.config.single_metric {
-            compare_histogram(prev_img, &curr_img).unwrap_or(1.0)
-        } else {
-            let histogram_diff = compare_histogram(prev_img, &curr_img).unwrap_or(1.0);
-            let ssim_diff = compare_ssim(prev_img, &curr_img);
-            (histogram_diff + ssim_diff) / 2.0
         };
 
         // Update previous frame
@@ -267,14 +330,13 @@ impl FrameComparer {
     fn update_previous_internal(
         &mut self,
         full_image: &DynamicImage,
-        downscaled: Option<DynamicImage>,
+        downscaled: Option<GrayImage>,
         hash: Option<u64>,
     ) {
         self.previous_hash = hash;
 
         if self.config.downscale_comparison {
-            self.previous_image_downscaled =
-                downscaled.or_else(|| Some(self.downscale(full_image)));
+            self.previous_image_downscaled = downscaled;
             self.previous_image_full = None;
         } else {
             self.previous_image_full = Some(full_image.clone());
@@ -287,6 +349,7 @@ impl FrameComparer {
         FrameComparisonStats {
             total_comparisons: self.comparison_count,
             hash_hits: self.hash_hits,
+            downscale_failures: self.downscale_failures,
             hash_hit_rate: if self.comparison_count > 0 {
                 self.hash_hits as f64 / self.comparison_count as f64
             } else {
@@ -308,7 +371,23 @@ impl FrameComparer {
 pub struct FrameComparisonStats {
     pub total_comparisons: u64,
     pub hash_hits: u64,
+    pub downscale_failures: u64,
     pub hash_hit_rate: f64,
+}
+
+fn compare_gray_histogram(image1: &GrayImage, image2: &GrayImage) -> anyhow::Result<f64> {
+    image_compare::gray_similarity_histogram(Metric::Hellinger, image1, image2)
+        .map_err(|e| anyhow::anyhow!("Failed to compare images: {}", e))
+}
+
+fn compare_gray_ssim(image1: &GrayImage, image2: &GrayImage) -> f64 {
+    let result = image_compare::gray_similarity_structure(
+        &image_compare::Algorithm::MSSIMSimple,
+        image1,
+        image2,
+    )
+    .expect("grayscale thumbnails should have matching dimensions");
+    1.0 - result.score
 }
 
 /// Compare two images using histogram comparison.
@@ -457,6 +536,49 @@ mod tests {
         assert_eq!(comparer.downscale_dims(1920, 1080), (480, 270));
         assert_eq!(comparer.downscale_dims(5120, 1440), (1280, 360));
         assert_eq!(comparer.downscale_dims(3840, 2160), (960, 540));
+    }
+
+    #[test]
+    fn test_downscale_uses_only_final_grayscale_buffer() {
+        let comparer = FrameComparer::new(FrameComparisonConfig::default());
+        let image = create_gradient_image(1920, 1080);
+
+        let downscaled = comparer
+            .downscale(&image)
+            .expect("normal comparison thumbnail should allocate");
+
+        assert_eq!(downscaled.grayscale.dimensions(), (480, 270));
+        assert_eq!(downscaled.grayscale.as_raw().len(), 480 * 270);
+    }
+
+    #[test]
+    fn test_downscale_hash_preserves_color_changes() {
+        let comparer = FrameComparer::new(FrameComparisonConfig::default());
+        let red = create_solid_image(100, 100, 255, 0, 0);
+        let blue = create_solid_image(100, 100, 0, 0, 255);
+
+        let red_hash = comparer.downscale(&red).unwrap().color_hash;
+        let blue_hash = comparer.downscale(&blue).unwrap().color_hash;
+
+        assert_ne!(red_hash, blue_hash);
+    }
+
+    #[test]
+    fn test_downscale_allocation_failure_skips_comparison() {
+        let config = FrameComparisonConfig {
+            downscale_factor: 0,
+            comparison_width: u32::MAX,
+            comparison_height: u32::MAX,
+            ..Default::default()
+        };
+        let mut comparer = FrameComparer::new(config);
+        let image = create_solid_image(1, 1, 0, 0, 0);
+
+        let diff = comparer.compare(&image);
+
+        assert_eq!(diff, 0.0);
+        assert_eq!(comparer.stats().downscale_failures, 1);
+        assert!(comparer.previous_image_downscaled.is_none());
     }
 
     #[test]

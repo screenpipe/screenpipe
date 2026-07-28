@@ -49,12 +49,15 @@ interface DedupMessageLike {
 interface DedupConvLike {
   kind?: string | null;
   messages?: unknown;
+  branchedFrom?: string | null;
 }
 
 /** Dedup key for a conversation: its first user message, normalized to the
  *  user's SEMANTIC text. Returns null for non-chat (pipe) conversations —
  *  repeated pipe runs share a templated first message and must never be
- *  collapsed — and for chats with no user message.
+ *  collapsed — for branches, which repeat their parent's first message by
+ *  construction and would otherwise collapse into it — and for chats with no
+ *  user message.
  *
  *  Why semantic, not raw `content`: a cross-window save race persists one
  *  logical chat under two ids, and the two copies frequently disagree on the
@@ -67,6 +70,7 @@ interface DedupConvLike {
 export function conversationDedupKey(conv: DedupConvLike | null | undefined): string | null {
   const kind = conv?.kind ?? "chat";
   if (kind !== "chat") return null;
+  if (conv?.branchedFrom) return null;
   const messages = Array.isArray(conv?.messages) ? (conv!.messages as DedupMessageLike[]) : [];
   const firstUser = messages.find((m) => m?.role === "user");
   const display = typeof firstUser?.displayContent === "string" ? firstUser.displayContent : "";

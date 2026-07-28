@@ -1,6 +1,6 @@
 {
   "name": "screenpipe-mcp",
-  "version": "0.18.15",
+  "version": "0.19.0",
   "mcpName": "io.github.screenpipe/screenpipe-mcp",
   "description": "MCP server for screenpipe - search your screen recordings and audio transcriptions",
   "main": "dist/index.js",
@@ -10,12 +10,14 @@
   },
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "start": "node dist/cli.js",
     "start:http": "node dist/cli.js --http",
     "dev": "ts-node src/cli.ts",
     "dev:http": "ts-node src/cli.ts --http",
     "test": "vitest run",
     "test:watch": "vitest",
+    "verify:pack": "node scripts/assert-pack-contents.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

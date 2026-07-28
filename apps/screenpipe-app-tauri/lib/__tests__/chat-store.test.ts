@@ -725,6 +725,24 @@ describe("chat-store: cross-window duplicate row collapsing", () => {
     expect(rows[0].id).toBe("visibleTwin");
   });
 
+  it("keeps a branch that shares its parent's first user message", () => {
+    // A fork repeats its parent's opening message and is created inside the
+    // dedup window, so without the exemption it merged into the parent and
+    // vanished from the sidebar the moment it was created.
+    useChatStore.getState().actions.upsert(
+      withMessages("parent", "shared opener", "long answer", { createdAt: 1_000 }),
+    );
+    useChatStore.getState().actions.upsert(
+      withMessages("branch", "shared opener", "long answer", {
+        createdAt: 1_100,
+        branchedFrom: "parent",
+      }),
+    );
+    const rows = dedupeSessionRecords(Object.values(useChatStore.getState().sessions));
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id).sort()).toEqual(["branch", "parent"]);
+  });
+
   it("leaves distinct conversations untouched", () => {
     useChatStore.getState().actions.upsert(
       withMessages("a", "first chat", "x", { createdAt: 1_000 }),

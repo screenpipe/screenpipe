@@ -40,6 +40,7 @@ use crate::analytics::start_analytics;
 mod agent_event_emitter;
 mod audio_exclusions;
 mod auth_token;
+mod brain_views;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -97,6 +98,8 @@ mod sync;
 mod tray;
 #[cfg(target_os = "macos")]
 mod tray_monitor_preview;
+#[cfg(target_os = "macos")]
+mod staged_update;
 mod updates;
 mod voice_training;
 mod window;
@@ -105,6 +108,8 @@ mod windows_ca_bundle;
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
+#[cfg(target_os = "linux")]
+mod linux_webkit_env;
 
 pub use server::*;
 
@@ -148,6 +153,7 @@ mod skills;
 mod specta_bindings;
 mod vault;
 mod viewer;
+mod web_base;
 
 #[cfg(target_os = "macos")]
 /// Tracks the observed permission transition so repeated focus events cannot
@@ -288,6 +294,9 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    linux_webkit_env::configure();
+
     // Raise the file-descriptor soft limit BEFORE any DB/socket work. The app
     // embeds the engine in-process, so it never ran the engine binary's main()
     // and kept macOS's default soft RLIMIT_NOFILE of 256 — too low for the
@@ -1592,15 +1601,30 @@ async fn main() {
                     }),
                 );
 
-                std::thread::Builder::new()
+                let is_starting_after_spawn_error = is_starting_clone.clone();
+                let server_thread = std::thread::Builder::new()
                     .name("screenpipe-server".to_string())
                     .spawn(move || {
-                        let server_runtime = tokio::runtime::Builder::new_multi_thread()
+                        let server_runtime = match tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(16)
                             .thread_name("screenpipe-worker")
                             .enable_all()
                             .build()
-                            .expect("Failed to create server runtime");
+                        {
+                            Ok(runtime) => runtime,
+                            Err(error) => {
+                                let message =
+                                    format!("failed to create local API runtime: {error}");
+                                error!("{message}");
+                                crate::health::set_boot_error(&message);
+                                crate::health::set_recording_status(
+                                    crate::health::RecordingStatus::Error,
+                                );
+                                is_starting_clone
+                                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                                return;
+                            }
+                        };
 
                         server_runtime.block_on(async move {
                             // Resolve + seed the shared api_auth_key cache before building
@@ -1786,8 +1810,17 @@ async fn main() {
                                 }
                             }
                         });
-                    })
-                    .expect("Failed to spawn server thread");
+                    });
+                if let Err(error) = server_thread {
+                    let message = format!("failed to spawn local API thread: {error}");
+                    error!("{message}");
+                    crate::health::set_boot_error(&message);
+                    crate::health::set_recording_status(
+                        crate::health::RecordingStatus::Error,
+                    );
+                    is_starting_after_spawn_error
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                }
             }
 
             // Initialize update check
@@ -2103,6 +2136,12 @@ async fn main() {
                     });
 
                     process_exit::run_blocking_pre_exit_teardown(app_handle.app_handle().clone());
+
+                    // Plain-quit path: apply a staged update so the next manual
+                    // launch runs the new version. Restart paths install in
+                    // force_app_relaunch; this call is idempotent with that.
+                    #[cfg(target_os = "macos")]
+                    staged_update::install_staged_if_any(app_handle.app_handle());
 
                     if process_exit::PENDING_RESTART.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("Restart pending — spawning replacement and force-exiting");

@@ -79,7 +79,7 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 <img width="360" height="311" alt="image" src="https://github.com/user-attachments/assets/cfbf0fd3-84ef-4feb-8c6d-2779d67058a7" />
 
 - **search with ai** - find anything using natural language
-- **100% local** - your data never leaves your machine
+- **100% local** - your data lives on your machine only
 - **source-available** - inspect, modify, audit ([LICENSE.md](LICENSE.md))
 
 <p align="center">
@@ -102,6 +102,8 @@ npx screenpipe record
 then 
 
 ```bash
+npx screenpipe setup
+# or
 claude mcp add screenpipe -- npx -y screenpipe-mcp@latest
 ```
 
@@ -122,8 +124,7 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 
 <p align="center">
     <a href="https://docs.screenpi.pe">docs</a> ·
-    <a href="https://screenpi.pe/sdk">sdk</a> ·
-    <a href="https://screenpi.pe/team">team</a> ·
+    <a href="https://screenpi.pe/team">enterprise</a> ·
     <a href="https://discord.gg/screenpipe">discord</a> ·
     <a href="https://twitter.com/screenpipe">x</a> ·
     <a href="https://www.youtube.com/@screen_pipe">youtube</a> ·

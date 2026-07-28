@@ -10,14 +10,19 @@ import OnboardingLogin from "@/components/onboarding/login-gate";
 import PermissionsStep from "@/components/onboarding/permissions-step";
 import EngineStartup from "@/components/onboarding/engine-startup";
 import ConnectApps from "@/components/onboarding/connect-apps";
-import PickPipe from "@/components/onboarding/pick-pipe";
+import FirstDashboard from "@/components/onboarding/first-dashboard";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 
-type SlideKey = "login" | "permissions" | "engine" | "connect-apps" | "pipe";
+type SlideKey =
+  | "login"
+  | "permissions"
+  | "engine"
+  | "connect-apps"
+  | "first-dashboard";
 
 const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
   {
@@ -25,7 +30,7 @@ const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
     permissions: { width: 500, height: 560 },
     engine: { width: 500, height: 620 },
     "connect-apps": { width: 500, height: 680 },
-    pipe: { width: 500, height: 500 },
+    "first-dashboard": { width: 500, height: 720 },
   };
 
 const SLIDE_ORDER: SlideKey[] = [
@@ -33,7 +38,7 @@ const SLIDE_ORDER: SlideKey[] = [
   "permissions",
   "engine",
   "connect-apps",
-  "pipe",
+  "first-dashboard",
 ];
 
 // endowed progress: the bar first renders on permissions with login already
@@ -143,11 +148,12 @@ export default function OnboardingPage() {
           "connect-apps": "connect-apps",
           integrations: "connect-apps",
           connections: "connect-apps",
-          pipe: "pipe",
+          "first-dashboard": "first-dashboard",
+          pipe: "first-dashboard",
           // backwards compat with old onboarding
           encrypt: "engine",
-          read: "pipe",
-          shortcut: "pipe",
+          read: "first-dashboard",
+          shortcut: "first-dashboard",
           welcome: "login",
           intro: "login",
           usecases: "permissions",
@@ -178,7 +184,7 @@ export default function OnboardingPage() {
         return;
       }
       commands
-        .showWindow({ Home: { page: null } })
+        .showWindow({ Home: { page: "brain" } })
         .then(() => window.close())
         .catch(() => {});
     }
@@ -230,7 +236,7 @@ export default function OnboardingPage() {
       }
     }
 
-    const nextSlide = SLIDE_ORDER[currentIdx + 1] || "pipe";
+    const nextSlide = SLIDE_ORDER[currentIdx + 1] || "first-dashboard";
     try {
       await commands.setOnboardingStep(nextSlide);
     } catch {
@@ -284,10 +290,14 @@ export default function OnboardingPage() {
       {/* Drag region */}
       <div className="w-full bg-background p-3" data-tauri-drag-region />
 
-      {/* Content */}
-      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+      {/* Keep short steps centered, but let content taller than the available
+          display grow naturally and scroll from its top instead of clipping. */}
+      <div
+        data-testid="onboarding-scroll-region"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6"
+      >
         <div
-          className={`w-full max-w-lg mx-auto transition-opacity duration-300 ${
+          className={`mx-auto flex min-h-full w-full max-w-lg flex-col justify-center transition-opacity duration-300 ${
             isVisible ? "opacity-100" : "opacity-0"
           }`}
         >
@@ -355,7 +365,7 @@ export default function OnboardingPage() {
           {currentSlide === "connect-apps" && (
             <ConnectApps handleNextSlide={handleNextSlide} />
           )}
-          {currentSlide === "pipe" && <PickPipe />}
+          {currentSlide === "first-dashboard" && <FirstDashboard />}
         </div>
       </div>
     </div>

@@ -134,9 +134,13 @@ describe("shouldRenderHtmlByDefault", () => {
     ).toBe(true);
   });
 
-  it("returns false for bare fragments without marker", () => {
-    expect(shouldRenderHtmlByDefault("<p>just a paragraph</p>")).toBe(false);
-    expect(shouldRenderHtmlByDefault("<div>snippet</div>")).toBe(false);
+  it("returns true for bare fragments without marker", () => {
+    expect(shouldRenderHtmlByDefault("<p>just a paragraph</p>")).toBe(true);
+    expect(shouldRenderHtmlByDefault("<div>snippet</div>")).toBe(true);
+  });
+
+  it("returns false for empty content", () => {
+    expect(shouldRenderHtmlByDefault("")).toBe(false);
   });
 });
 

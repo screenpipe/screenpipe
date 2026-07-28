@@ -16,7 +16,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{broadcast, oneshot, Mutex, RwLock},
+    sync::{broadcast, oneshot, Mutex, Notify, RwLock},
     task::JoinHandle,
 };
 use tracing::{debug, error, info, warn};
@@ -121,6 +121,8 @@ struct MeetingEventData {
 
 type RecordingHandlesMap = DashMap<AudioDevice, Arc<Mutex<JoinHandle<Result<()>>>>>;
 const MEETING_AUDIO_FRAME_BUFFER: usize = 512;
+const RECONCILIATION_IDLE_INTERVAL: Duration = Duration::from_secs(120);
+const MAX_IMMEDIATE_RECONCILIATION_SWEEPS: usize = 4;
 
 /// Wall-clock milliseconds since the Unix epoch (0 if the clock predates it).
 /// Local to the audio manager so the receiver-loop stamping and the piggyback
@@ -164,6 +166,9 @@ pub struct AudioManager {
     engine_builds: EngineBuildCoordinator,
     /// Handle to the reconciliation background task so we can abort it on shutdown.
     reconciliation_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
+    /// Wakes the background reconciliation task when a foreground sweep fills
+    /// its 50-chunk cap, so a meeting backlog keeps draining immediately.
+    reconciliation_wakeup: Arc<Notify>,
     /// Output devices temporarily stopped due to DRM content detection.
     /// Stored so they can be restarted when DRM clears.
     drm_stopped_devices: Arc<RwLock<Vec<AudioDevice>>>,
@@ -375,6 +380,7 @@ impl AudioManager {
             engine: Arc::new(RwLock::new(None)),
             engine_builds: EngineBuildCoordinator::new(),
             reconciliation_handle: Arc::new(RwLock::new(None)),
+            reconciliation_wakeup: Arc::new(Notify::new()),
             drm_stopped_devices: Arc::new(RwLock::new(Vec::new())),
             user_disabled_devices: Arc::new(RwLock::new(HashSet::new())),
             session_devices: Arc::new(std::sync::RwLock::new(HashSet::new())),
@@ -500,9 +506,15 @@ impl AudioManager {
             let output_path_bg = self.options.read().await.output_path.clone();
             let metrics_bg = self.metrics.clone();
             let meeting_detector_bg = self.meeting_detector().await;
+            let reconciliation_wakeup = self.reconciliation_wakeup.clone();
             let handle = tokio::spawn(async move {
-                // Wait for model to load + initial recordings
-                tokio::time::sleep(Duration::from_secs(120)).await;
+                // Wait for model load + initial recordings, unless a foreground
+                // session-end sweep tells us its 50-chunk cap left more work.
+                tokio::select! {
+                    _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
+                    _ = reconciliation_wakeup.notified() => {}
+                }
+                let mut consecutive_full_sweeps = 0usize;
                 loop {
                     // Contain a panic inside a sweep so it cannot kill this
                     // long-lived worker (issue #3498: a single panic used to
@@ -519,7 +531,7 @@ impl AudioManager {
                                 debug!(
                                     "reconciliation: skipping background sweep during active audio session"
                                 );
-                                return;
+                                return false;
                             }
                         }
 
@@ -530,7 +542,7 @@ impl AudioManager {
                             let batch_max_dur = opts.batch_max_duration_secs;
                             drop(opts);
 
-                            let count = super::reconciliation::reconcile_untranscribed(
+                            let sweep = super::reconciliation::reconcile_untranscribed(
                                 &db,
                                 transcription_engine,
                                 on_insert_bg.as_ref(),
@@ -541,25 +553,48 @@ impl AudioManager {
                                 Some(metrics_bg.clone()),
                             )
                             .await;
+                            let count = sweep.processed_chunks;
                             if count > 0 {
                                 info!("reconciliation: transcribed {} orphaned chunks", count);
                             }
+                            return sweep.hit_candidate_limit;
                         }
+                        false
                     })
                     .catch_unwind()
                     .await;
-                    if let Err(panic) = swept {
-                        let reason = panic
-                            .downcast_ref::<&str>()
-                            .copied()
-                            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                            .unwrap_or("unknown cause");
-                        error!(
-                            "reconciliation: sweep panicked, worker continues: {}",
-                            reason
+                    let swept_full_batch = match swept {
+                        Ok(full) => full,
+                        Err(panic) => {
+                            let reason = panic
+                                .downcast_ref::<&str>()
+                                .copied()
+                                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                                .unwrap_or("unknown cause");
+                            error!(
+                                "reconciliation: sweep panicked, worker continues: {}",
+                                reason
+                            );
+                            false
+                        }
+                    };
+
+                    if swept_full_batch
+                        && consecutive_full_sweeps + 1 < MAX_IMMEDIATE_RECONCILIATION_SWEEPS
+                    {
+                        consecutive_full_sweeps += 1;
+                        info!(
+                            "reconciliation: sweep hit the chunk cap; continuing backlog drain immediately"
                         );
+                        tokio::task::yield_now().await;
+                        continue;
                     }
-                    tokio::time::sleep(Duration::from_secs(120)).await;
+
+                    consecutive_full_sweeps = 0;
+                    tokio::select! {
+                        _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
+                        _ = reconciliation_wakeup.notified() => {}
+                    }
                 }
             });
             *self.reconciliation_handle.write().await = Some(handle);
@@ -1153,6 +1188,7 @@ impl AudioManager {
         let meeting_audio_tap = self.meeting_audio_tap.clone();
         let db = self.db.clone();
         let on_insert_session = self.on_transcription_insert.clone();
+        let reconciliation_wakeup = self.reconciliation_wakeup.clone();
         // Session streams (Meeting Tap, piggyback mic) bypass the meetings-only
         // drop gate below — they exist only during a meeting by construction.
         let session_devices = self.session_devices.clone();
@@ -1406,7 +1442,7 @@ impl AudioManager {
                                 "batch mode: audio session ended, transcribing accumulated audio"
                             );
                             let data_dir = output_path.as_deref();
-                            let count = super::reconciliation::reconcile_untranscribed(
+                            let sweep = super::reconciliation::reconcile_untranscribed(
                                 &db,
                                 &engine,
                                 on_insert_session.as_ref(),
@@ -1417,8 +1453,12 @@ impl AudioManager {
                                 Some(metrics.clone()),
                             )
                             .await;
+                            let count = sweep.processed_chunks;
                             for _ in 0..count {
                                 metrics.record_segment_batch_processed();
+                            }
+                            if sweep.hit_candidate_limit {
+                                reconciliation_wakeup.notify_one();
                             }
                             info!("batch mode: transcribed {} chunks", count);
                         } else if now_in_session {
@@ -2479,17 +2519,23 @@ mod tests {
     /// ignored because it requires the multi-gigabyte model to already be in
     /// the Hugging Face cache and the Xcode Metal toolchain to be installed.
     #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    fn cached_parakeet_mlx_model_available() -> bool {
+        const MODEL_REPO: &str = "mlx-community/parakeet-tdt-0.6b-v3";
+
+        let cache = hf_hub::Cache::default().repo(hf_hub::Repo::model(MODEL_REPO.to_string()));
+        cache.get("model.safetensors").is_some()
+            && cache.get("config.json").is_some()
+            && (cache.get("vocab.txt").is_some() || cache.get("tokenizer.model").is_some())
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
     #[tokio::test]
     #[ignore = "requires cached Parakeet MLX weights and the Xcode Metal toolchain"]
     async fn cached_parakeet_refresh_reuses_single_mlx_model() {
         const MODEL_REPO: &str = "mlx-community/parakeet-tdt-0.6b-v3";
         const MAX_REUSE_DELTA_BYTES: usize = 64 * 1024 * 1024;
 
-        let cache = hf_hub::Cache::from_env().repo(hf_hub::Repo::model(MODEL_REPO.to_string()));
-        let model_cached = cache.get("model.safetensors").is_some()
-            && cache.get("config.json").is_some()
-            && (cache.get("vocab.txt").is_some() || cache.get("tokenizer.model").is_some());
-        if !model_cached {
+        if !cached_parakeet_mlx_model_available() {
             eprintln!(
                 "skipping cached Parakeet MLX smoke: {MODEL_REPO} is not complete in the HF cache"
             );

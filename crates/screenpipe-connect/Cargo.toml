@@ -49,6 +49,16 @@ sha2 = { workspace = true }
 crypto_box = { version = "0.9", features = ["salsa20"] }
 getrandom = { version = "0.2" }
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
+# IMAP inbox reading (Email inbox connector) — async-imap over tokio +
+# rustls, mail-parser for RFC5322/MIME → structured JSON.
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+futures = { workspace = true }
+mail-parser = "0.11"
+# default-features off + explicit ring: the workspace has both ring and
+# aws-lc-rs in the tree, so rustls can't auto-pick a CryptoProvider and
+# panics at runtime — we pass ring explicitly in imap.rs.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls-native-certs = "0.8"
 mdns-sd = "0.13"
 sqlx = { workspace = true }
 libsqlite3-sys = { workspace = true }

@@ -1242,7 +1242,9 @@ async fn spawn_screenpipe_inner(
         Ok(Err(e)) => {
             state.is_starting.store(false, Ordering::SeqCst);
             state.is_starting_capture.store(false, Ordering::SeqCst);
-            if e.contains("no monitors matched") {
+            if e.contains("no monitors matched")
+                || e.contains(screenpipe_engine::vision_manager::ZERO_DISPLAYS_ENUMERATED)
+            {
                 crate::health::set_recording_status(crate::health::RecordingStatus::Error);
             }
             Err(e)

@@ -386,13 +386,21 @@ fn screen_recording_preflight_status(granted: bool) -> OSPermissionStatus {
 /// clicked anything. It must use preflight directly: the broader core Tauri
 /// check may perform a real capture probe in debug builds, which macOS treats
 /// as a permission request.
+///
+/// It honors the engine's enumeration verdict for the same reason
+/// `do_permissions_check` does — otherwise onboarding renders screen recording
+/// green in the exact lapsed-grant state where the permission banner and the
+/// recovery window say denied.
 #[tauri::command(async)]
 #[specta::specta]
 pub fn check_screen_recording_permission() -> OSPermissionStatus {
     #[cfg(target_os = "macos")]
     {
         use core_graphics_helmer_fork::access::ScreenCaptureAccess;
-        screen_recording_preflight_status(ScreenCaptureAccess.preflight())
+        screen_recording_preflight_status(
+            ScreenCaptureAccess.preflight()
+                && !screenpipe_engine::permission_monitor::screen_enumeration_denied(),
+        )
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -677,6 +685,29 @@ pub fn get_missing_permissions() -> Vec<OSPermission> {
     }
 }
 
+/// Combine the TCC preflight answer with the engine's enumeration verdict.
+///
+/// `CGPreflightScreenCaptureAccess` keeps answering `true` in the macOS
+/// lapsed-grant state (periodic re-approval missed / grant invalidated by an
+/// update) while display enumeration fails — observed live in the wild:
+/// the recovery window opened on the enumeration-reported loss, then this
+/// check's preflight-only answer read as "restored" one second later, closed
+/// the window, restarted capture, and landed back in the same silent failure.
+/// The enumeration verdict outranks a positive preflight; it clears only when
+/// enumeration actually succeeds again (`report_screen_enumeration(true)`).
+#[cfg(any(target_os = "macos", test))]
+fn screen_recording_status(
+    preflight_granted: bool,
+    enumeration_denied: bool,
+    initial_check: bool,
+) -> OSPermissionStatus {
+    match (preflight_granted && !enumeration_denied, initial_check) {
+        (true, _) => OSPermissionStatus::Granted,
+        (false, true) => OSPermissionStatus::Empty,
+        (false, false) => OSPermissionStatus::Denied,
+    }
+}
+
 #[tauri::command(async)]
 #[specta::specta]
 #[allow(unused_variables)] // initial_check used on macOS
@@ -705,12 +736,11 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
         OSPermissionsCheck {
             screen_recording: {
                 use core_graphics_helmer_fork::access::ScreenCaptureAccess;
-                let result = ScreenCaptureAccess.preflight();
-                match (result, initial_check) {
-                    (true, _) => OSPermissionStatus::Granted,
-                    (false, true) => OSPermissionStatus::Empty,
-                    (false, false) => OSPermissionStatus::Denied,
-                }
+                screen_recording_status(
+                    ScreenCaptureAccess.preflight(),
+                    screenpipe_engine::permission_monitor::screen_enumeration_denied(),
+                    initial_check,
+                )
             },
             microphone: check_av_permission(AVMediaType::Audio),
             accessibility: check_accessibility_permission(),
@@ -727,62 +757,11 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
     }
 }
 
-/// Known Chromium-based browsers that use AppleScript for incognito detection
-/// and (in Arc's case) URL capture. Each needs its own Automation permission.
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
-struct ChromiumBrowserInfo {
-    name: &'static str,
-    bundle_id: &'static str,
-    app_path: &'static str,
-    process_name: &'static str,
-}
-
-#[cfg(target_os = "macos")]
-const CHROMIUM_BROWSERS: &[ChromiumBrowserInfo] = &[
-    ChromiumBrowserInfo {
-        name: "Arc",
-        bundle_id: "company.thebrowser.Browser",
-        app_path: "/Applications/Arc.app",
-        process_name: "Arc",
-    },
-    ChromiumBrowserInfo {
-        name: "Google Chrome",
-        bundle_id: "com.google.Chrome",
-        app_path: "/Applications/Google Chrome.app",
-        process_name: "Google Chrome",
-    },
-    ChromiumBrowserInfo {
-        name: "Brave Browser",
-        bundle_id: "com.brave.Browser",
-        app_path: "/Applications/Brave Browser.app",
-        process_name: "Brave Browser",
-    },
-    ChromiumBrowserInfo {
-        name: "Microsoft Edge",
-        bundle_id: "com.microsoft.edgemac",
-        app_path: "/Applications/Microsoft Edge.app",
-        process_name: "Microsoft Edge",
-    },
-    ChromiumBrowserInfo {
-        name: "Vivaldi",
-        bundle_id: "com.vivaldi.Vivaldi",
-        app_path: "/Applications/Vivaldi.app",
-        process_name: "Vivaldi",
-    },
-    ChromiumBrowserInfo {
-        name: "Opera",
-        bundle_id: "com.operasoftware.Opera",
-        app_path: "/Applications/Opera.app",
-        process_name: "Opera",
-    },
-    ChromiumBrowserInfo {
-        name: "Chromium",
-        bundle_id: "org.chromium.Chromium",
-        app_path: "/Applications/Chromium.app",
-        process_name: "Chromium",
-    },
-];
+use screenpipe_a11y::incognito::{
+    MacOSBrowserAutomationTarget as ChromiumBrowserInfo,
+    MACOS_BROWSER_AUTOMATION_TARGETS as CHROMIUM_BROWSERS,
+};
 
 /// Returns true on platforms where Screenpipe's process-audio tap backend is
 /// available. On macOS that means CoreAudio Process Tap (14.4+); on Windows it
@@ -1298,6 +1277,37 @@ mod screen_recording_preflight_tests {
         );
         assert_eq!(
             screen_recording_preflight_status(false),
+            OSPermissionStatus::Denied
+        );
+    }
+
+    /// Regression for the lapsed-grant loop: preflight answers `true` (stale)
+    /// while display enumeration is failing. The recovery window polls
+    /// `do_permissions_check(false)`; if this read as Granted it would treat
+    /// the loss as restored, close, and restart capture straight back into
+    /// the silent failure (observed in the wild: recovery opened at
+    /// 21:05:49Z, "restored" + stop/spawn at 21:05:50Z while enumeration
+    /// stayed empty). The enumeration verdict must outrank a positive
+    /// preflight so the window stays open and no restart fires.
+    #[test]
+    fn stale_positive_preflight_does_not_read_as_granted_while_enumeration_denied() {
+        assert_eq!(
+            screen_recording_status(true, true, false),
+            OSPermissionStatus::Denied
+        );
+        // Onboarding variant (initial_check) reads as not-yet-determined.
+        assert_eq!(
+            screen_recording_status(true, true, true),
+            OSPermissionStatus::Empty
+        );
+        // Verdict cleared (enumeration succeeded) → preflight trusted again.
+        assert_eq!(
+            screen_recording_status(true, false, false),
+            OSPermissionStatus::Granted
+        );
+        // Real denial still maps as before.
+        assert_eq!(
+            screen_recording_status(false, false, false),
             OSPermissionStatus::Denied
         );
     }

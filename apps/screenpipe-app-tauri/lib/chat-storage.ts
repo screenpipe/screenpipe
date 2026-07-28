@@ -256,6 +256,10 @@ export interface ConversationMeta {
    *  `chat-conversation-saved`) the same way `dedupeConversationMetas` does
    *  on disk. Undefined for pipe runs / chats with no user message yet. */
   dedupKey?: string;
+  /** Id of the conversation this was branched from. Exempts the row from
+   *  first-user-message dedup — a branch shares its parent's opening
+   *  message on purpose. */
+  branchedFrom?: string;
   /** The AI preset ID last used in this conversation. Used to restore
    *  the model selection when switching between chats. */
   presetId?: string;
@@ -400,6 +404,7 @@ export function conversationMetaFromJson(conv: any): ConversationMeta | null {
     sidebarGroup: typeof conv.sidebarGroup === "string" ? conv.sidebarGroup : undefined,
     titleSource: conv.titleSource,
     dedupKey: conversationDedupKey(conv) ?? undefined,
+    branchedFrom: typeof conv.branchedFrom === "string" ? conv.branchedFrom : undefined,
     presetId: typeof conv.presetId === "string" ? conv.presetId : undefined,
   };
 }
@@ -558,6 +563,37 @@ export async function listConversations(
   // Sort by updatedAt descending (most recent first)
   metas.sort((a, b) => b.updatedAt - a.updatedAt);
   return metas;
+}
+
+// listConversations reads and parses every chat file off disk, which is far too
+// slow to run on the search window's open path — the empty state would flash
+// "type to search" before the list arrives. The search webview is prewarmed and
+// kept alive across opens, so we cache the last result in-module and let the
+// prewarm pass fill it before the window is ever shown.
+let recentChatsCache: ConversationMeta[] | null = null;
+
+export function getCachedRecentChats(): ConversationMeta[] | null {
+  return recentChatsCache;
+}
+
+/**
+ * Drop the cached list so the next paint can't show a deleted or stale-titled
+ * row. Call this from whatever learns the chat list changed (in the search
+ * window that means the cross-window `chat-deleted` / `chat-renamed` events) —
+ * the cache is per-webview module state, so each webview clears its own.
+ */
+export function clearRecentChatsCache(): void {
+  recentChatsCache = null;
+}
+
+export async function prefetchRecentChats(): Promise<ConversationMeta[]> {
+  const all = await listConversations({
+    limit: CHAT_HISTORY_INITIAL_LIMIT,
+    includeHidden: false,
+    kind: "chat",
+  });
+  recentChatsCache = all;
+  return all;
 }
 
 function conversationMatchesQuery(conv: ChatConversation, query: string): boolean {

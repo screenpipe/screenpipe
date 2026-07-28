@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, RotateCw, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, RotateCw, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare, Inbox } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -32,12 +32,14 @@ import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { localFetch } from "@/lib/api";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import { exists, writeFile, readTextFile, mkdir } from "@tauri-apps/plugin-fs";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
+import { ImapCard } from "./imap-card";
 import { ComposioCard, COMPOSIO_TOOLKITS, type ComposioStatusMap } from "./composio-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
@@ -86,12 +88,24 @@ function formatRelativeTime(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** One budget for the whole release walk, not one per page. */
+const GITHUB_RELEASES_BUDGET_MS = 30_000;
+
 async function getLatestMcpRelease(): Promise<{ url: string; version: string }> {
   const maxPages = 5;
+  // The wrapper's deadline is per request, so five pages at the default would
+  // allow ~2.5 minutes of blocking. Share one deadline across the loop instead.
+  const deadlineAt = Date.now() + GITHUB_RELEASES_BUDGET_MS;
   for (let page = 1; page <= maxPages; page++) {
-    const response = await tauriFetch(
+    // Stop when the shared budget is gone rather than starting another page on
+    // the wrapper's minimum deadline — otherwise "one 30s budget" could still
+    // run ~1s per remaining page past it.
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) throw new Error("Timed out looking for an MCP release");
+    const response = await tauriFetchWithDeadline(
       `${GITHUB_RELEASES_API}?per_page=50&page=${page}`,
-      { method: "GET", headers: { "Accept": "application/vnd.github.v3+json" } }
+      { method: "GET", headers: { "Accept": "application/vnd.github.v3+json" } },
+      { timeoutMs: remainingMs }
     );
     if (!response.ok) throw new Error("Failed to fetch releases");
     const releases: GitHubRelease[] = await response.json();
@@ -520,6 +534,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     "remote-agent": <img src="/openclaw-icon.svg" alt="Remote agent" className="w-5 h-5" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
     email: <Send className="h-5 w-5 text-muted-foreground" />,
+    imap: <Inbox className="h-5 w-5 text-muted-foreground" />,
     todoist: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#E44332">
         <path d="M21 0H3C1.34 0 0 1.34 0 3v18c0 1.66 1.34 3 3 3h18c1.66 0 3-1.34 3-3V3c0-1.66-1.34-3-3-3zM5.8 15.2l1.06-1.58c.12-.18.36-.24.54-.12 1.46.94 3.1 1.44 4.8 1.44 1.7 0 3.34-.5 4.8-1.44.18-.12.42-.06.54.12l1.06 1.58c.12.18.06.42-.12.54C16.56 17.16 14.34 17.8 12 17.8s-4.56-.64-6.48-2.06c-.18-.12-.24-.36-.12-.54zm0-4l1.06-1.58c.12-.18.36-.24.54-.12 1.46.94 3.1 1.44 4.8 1.44 1.7 0 3.34-.5 4.8-1.44.18-.12.42-.06.54.12l1.06 1.58c.12.18.06.42-.12.54C16.56 13.16 14.34 13.8 12 13.8s-4.56-.64-6.48-2.06c-.18-.12-.24-.36-.12-.54zm0-4l1.06-1.58c.12-.18.36-.24.54-.12C8.86 6.44 10.5 6.94 12.2 6.94c1.7 0 3.34-.5 4.8-1.44.18-.12.42-.06.54.12l1.06 1.58c.12.18.06.42-.12.54C16.56 9.16 14.34 9.8 12 9.8s-4.56-.64-6.48-2.06c-.18-.12-.24-.36-.12-.54z"/>
@@ -748,6 +763,7 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   "apple-calendar": "What meetings do I have this week?",
   "ics-calendar": "What events are coming up this week?",
   granola: "Show notes from my recent meetings",
+  imap: "Summarize my recent emails",
   zoom: "Summarize my recent Zoom calls",
   gmail: "Summarize my recent emails",
   "google-drive": "Find my recent files in Google Drive",
@@ -3718,7 +3734,7 @@ export function ConnectionsSection({
   const composioToken = composioSettings.user?.token;
   useEffect(() => {
     if (!composioToken) return;
-    fetch("https://screenpipe.com/api/composio/status", {
+    fetch(screenpipeWebUrl("/api/composio/status", "https://screenpipe.com"), {
       headers: { Authorization: `Bearer ${composioToken}` },
     })
       .then((r) => (r.ok ? r.json() : null))
@@ -4124,6 +4140,7 @@ export function ConnectionsSection({
         onConnected={() => setGoogleCalendarConnected(true)}
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
+      case "imap": return <ImapCard onChanged={fetchIntegrations} />;
       case "google-docs": return (
         <div className="space-y-3">
           <ComposioCard toolkit="googledocs" initialConnected={composioConnected.googledocs} onChanged={setComposioConnected} />

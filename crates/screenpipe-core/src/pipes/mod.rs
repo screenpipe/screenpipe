@@ -86,6 +86,35 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         include_str!("../../assets/pipes/meeting-summary/pipe.md"),
     ),
 ];
+
+/// Explicitly install one trusted Pipe bundled with the app.
+///
+/// Unlike startup installation, this clears a deletion tombstone because the
+/// user has chosen a Live View kit that requires the Pipe. Existing local
+/// customization is preserved and never overwritten.
+pub fn install_bundled_pipe(pipes_dir: &Path, name: &str) -> Result<bool> {
+    let content = BUNDLED_BUILTIN_PIPES
+        .iter()
+        .find_map(|(builtin_name, content)| (*builtin_name == name).then_some(*content))
+        .ok_or_else(|| anyhow!("unknown bundled Pipe '{name}'"))?;
+    let pipe_dir = pipes_dir.join(name);
+    let pipe_md = pipe_dir.join("pipe.md");
+
+    std::fs::create_dir_all(&pipe_dir)?;
+    remove_tombstone(pipes_dir, name)?;
+    if pipe_md.exists() {
+        if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+            if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
+                atomic_write(&pipe_md, &migrated)?;
+            }
+        }
+        return Ok(false);
+    }
+
+    atomic_write(&pipe_md, content)?;
+    info!("explicitly installed bundled Pipe: {}", name);
+    Ok(true)
+}
 /// Max event-triggered pipe runs allowed to execute concurrently.
 ///
 /// Scheduled runs are already serialized (one at a time). Event-triggered runs
@@ -1084,6 +1113,10 @@ pub struct PipeStatus {
     pub last_run: Option<DateTime<Utc>>,
     pub last_success: Option<bool>,
     pub is_running: bool,
+    /// True only when this pipe's name and contents exactly match a pipe
+    /// bundled with the app. Any user edit makes this false.
+    #[serde(default)]
+    pub is_bundled_builtin: bool,
     /// Raw prompt body (below front-matter).
     pub prompt_body: String,
     /// Full raw pipe.md content (frontmatter + body).
@@ -1128,6 +1161,20 @@ pub struct PipeExecution {
     pub error_message: Option<String>,
     pub duration_ms: Option<i64>,
     pub session_path: Option<String>,
+}
+
+/// Compact activity row for sidebar/history inventory.
+///
+/// Unlike [`PipeStatus::last_run`], this timestamp always comes from an
+/// execution row. Scheduler watermarks (including skipped occurrences) do not
+/// participate, so consumers can safely treat each row as clickable history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipeExecutionActivity {
+    pub pipe_name: String,
+    pub execution_count: i64,
+    pub latest_execution_id: i64,
+    pub last_run_at: Option<String>,
+    pub status: String,
 }
 
 /// Persisted scheduler state for a single pipe.
@@ -1178,6 +1225,14 @@ pub trait PipeStore: Send + Sync {
         before_id: Option<i64>,
     ) -> Result<Vec<PipeExecution>>;
 
+    /// Get recent execution metadata without potentially large stdout/stderr.
+    async fn get_execution_metadata(
+        &self,
+        pipe_name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>>;
+
     /// Mark any 'running' executions as failed (orphan recovery on startup).
     /// Returns the number of rows updated.
     async fn mark_orphaned_running(&self) -> Result<u32>;
@@ -1211,6 +1266,13 @@ pub trait PipeStore: Send + Sync {
 
     /// Get the exact persisted execution count for every pipe.
     async fn get_all_execution_counts(&self) -> Result<HashMap<String, i64>>;
+
+    /// Get pipes with real execution history, newest execution first.
+    async fn get_execution_activity(
+        &self,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecutionActivity>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1943,11 +2005,12 @@ fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Manages all pipes: loading, scheduling, execution, logs.
-/// Callback fired after each scheduled pipe run completes.
-/// Args: (pipe_name, execution_id, success, duration_secs, error_type)
+/// Callback fired after each pipe run completes.
+/// Args: (pipe_name, execution_id, trigger_type, success, duration_secs, error_type)
 /// `error_type` is a sanitized category (e.g. "rate_limited", "auth_failed", "timeout", "crash")
 /// — never contains user data.
-pub type OnPipeRunComplete = Arc<dyn Fn(&str, Option<i64>, bool, f64, Option<&str>) + Send + Sync>;
+pub type OnPipeRunComplete =
+    Arc<dyn Fn(&str, Option<i64>, &str, bool, f64, Option<&str>) + Send + Sync>;
 
 /// Synchronous scheduler launch guard. Returning `Some(reason)` skips the run.
 pub type SchedulerRunGuard = Arc<dyn Fn() -> Option<String> + Send + Sync>;
@@ -2000,6 +2063,9 @@ async fn setup_pipe_permissions(
     }
     if let Err(e) = PiExecutor::ensure_register_artifact_extension(pipe_dir) {
         warn!("failed to install register-artifact extension: {}", e);
+    }
+    if let Err(e) = PiExecutor::ensure_structured_output_extension(pipe_dir) {
+        warn!("failed to install structured-output extension: {}", e);
     }
     if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
         warn!("failed to install filtered skills: {}", e);
@@ -2192,8 +2258,14 @@ impl PipeManager {
     ///
     /// Setting it never deletes pipe files. Over-limit pipes are kept on disk
     /// but omitted from the runtime until the limit is raised or a slot opens.
-    pub fn set_max_non_template_pipes(&mut self, limit: Option<usize>) {
+    /// Returns whether the effective limit changed, so live policy refreshes
+    /// can avoid rebuilding the full pipe catalog when nothing changed.
+    pub fn set_max_non_template_pipes(&mut self, limit: Option<usize>) -> bool {
+        if self.max_non_template_pipes == limit {
+            return false;
+        }
         self.max_non_template_pipes = limit;
+        true
     }
 
     /// Set extra context that gets appended to every pipe prompt.
@@ -2518,6 +2590,7 @@ impl PipeManager {
                     let pipe_logs = logs.get(name);
                     let last_log = pipe_logs.and_then(|l| l.back());
                     let last_error = last_log.filter(|l| !l.success).map(|l| l.stderr.clone());
+                    let is_bundled_builtin = Self::is_bundled_builtin_pipe(name, raw);
                     let mut cfg = config.clone();
                     cfg.name = name.clone();
                     let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
@@ -2539,6 +2612,7 @@ impl PipeManager {
                         last_run: last_log.map(|l| l.finished_at),
                         last_success: last_log.map(|l| l.success),
                         is_running: running.contains_key(name),
+                        is_bundled_builtin,
                         prompt_body: body.clone(),
                         raw_content: raw.clone(),
                         last_error,
@@ -2692,6 +2766,7 @@ impl PipeManager {
                 let pipe_logs = logs.get(name);
                 let last_log = pipe_logs.and_then(|l| l.back());
                 let last_error = last_log.filter(|l| !l.success).map(|l| l.stderr.clone());
+                let is_bundled_builtin = Self::is_bundled_builtin_pipe(name, raw);
                 let mut cfg = config.clone();
                 cfg.name = name.to_string();
                 let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
@@ -2713,6 +2788,7 @@ impl PipeManager {
                     last_run: last_log.map(|l| l.finished_at),
                     last_success: last_log.map(|l| l.success),
                     is_running: running.contains_key(name),
+                    is_bundled_builtin,
                     prompt_body: body.clone(),
                     raw_content: raw.clone(),
                     last_error,
@@ -2809,12 +2885,39 @@ impl PipeManager {
         }
     }
 
+    /// Get execution rows without loading stdout/stderr blobs.
+    pub async fn get_execution_metadata(
+        &self,
+        name: &str,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecution>> {
+        if let Some(ref store) = self.store {
+            store.get_execution_metadata(name, limit, before_id).await
+        } else {
+            Ok(vec![])
+        }
+    }
+
     /// Get exact persisted execution counts for all pipes in one grouped query.
     pub async fn get_all_execution_counts(&self) -> HashMap<String, i64> {
         if let Some(ref store) = self.store {
             store.get_all_execution_counts().await.unwrap_or_default()
         } else {
             HashMap::new()
+        }
+    }
+
+    /// Get compact, cursor-paginated pipe activity for history surfaces.
+    pub async fn get_execution_activity(
+        &self,
+        limit: i32,
+        before_id: Option<i64>,
+    ) -> Result<Vec<PipeExecutionActivity>> {
+        if let Some(ref store) = self.store {
+            store.get_execution_activity(limit, before_id).await
+        } else {
+            Ok(vec![])
         }
     }
 
@@ -2897,6 +3000,41 @@ impl PipeManager {
     /// in a spawned tokio task.  Use this from API handlers to avoid holding
     /// the PipeManager mutex for the entire execution duration.
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, "manual", None)
+            .await
+    }
+
+    /// Start one manual run with request-scoped context. Unlike the manager's
+    /// shared integration context, this value belongs only to this execution
+    /// and cannot leak into another concurrently started pipe.
+    pub async fn start_pipe_background_with_context(
+        &self,
+        name: &str,
+        run_context: Option<&str>,
+    ) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, "manual", run_context)
+            .await
+    }
+
+    /// Start a pipe in the background with an explicit, low-cardinality trigger type.
+    pub async fn start_pipe_background_with_trigger(
+        &self,
+        name: &str,
+        trigger: &str,
+    ) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, trigger, None)
+            .await
+    }
+
+    /// Start a Pipe with both low-cardinality telemetry and execution-scoped
+    /// prompt context. Keeping both values as arguments avoids mutating shared
+    /// manager state while a background run is being prepared.
+    pub async fn start_pipe_background_with_trigger_and_context(
+        &self,
+        name: &str,
+        trigger: &str,
+        run_context: Option<&str>,
+    ) -> Result<()> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
             match pipes.get(name).cloned() {
@@ -3019,7 +3157,7 @@ impl PipeManager {
         // Create DB execution row
         let exec_id = if let Some(ref store) = self.store {
             match store
-                .create_execution(name, "manual", &run_model, run_provider.as_deref())
+                .create_execution(name, trigger, &run_model, run_provider.as_deref())
                 .await
             {
                 Ok(id) => {
@@ -3053,7 +3191,19 @@ impl PipeManager {
             self.local_api_key.as_deref(),
             config.agent == "pi" && pi_package_enabled("pi-subagents"),
         );
-        let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
+        let combined_context = match (self.extra_context.as_deref(), run_context) {
+            (Some(shared), Some(scoped)) => Some(format!("{shared}\n{scoped}")),
+            (Some(shared), None) => Some(shared.to_string()),
+            (None, Some(scoped)) => Some(scoped.to_string()),
+            (None, None) => None,
+        };
+        let prompt = render_prompt_with_port(
+            &config,
+            &body,
+            self.api_port,
+            preset_prompt.as_deref(),
+            combined_context.as_deref(),
+        );
         let pipe_name = name.to_string();
 
         // Mark running in DB
@@ -3099,6 +3249,7 @@ impl PipeManager {
         let logs_ref = self.logs.clone();
         let store_ref = self.store.clone();
         let on_complete = self.on_run_complete.clone();
+        let trigger_for_cb = trigger.to_string();
         let on_output = self.on_output_line.clone();
         let pipes_dir_for_log = self.pipes_dir.clone();
         let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
@@ -3372,6 +3523,7 @@ impl PipeManager {
                 cb(
                     &name_for_cb,
                     exec_id,
+                    &trigger_for_cb,
                     success,
                     duration_secs,
                     cb_error_type.as_deref(),
@@ -4633,6 +4785,8 @@ impl PipeManager {
                 // high-frequency system events (ui_frame, window_ocr, etc.).
                 let mut event_triggered: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
+                let mut connection_triggered: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 {
                     use futures::FutureExt;
 
@@ -4672,6 +4826,7 @@ impl PipeManager {
                                     info!("scheduler: connection trigger fired pipe '{}'", name);
                                     last_run.remove(name);
                                     event_triggered.insert(name.clone());
+                                    connection_triggered.insert(name.clone());
                                 }
                             }
                         }
@@ -4740,6 +4895,13 @@ impl PipeManager {
                     }
 
                     let triggered_by_event = event_triggered.contains(name);
+                    let trigger = if connection_triggered.contains(name) {
+                        "connection"
+                    } else if triggered_by_event {
+                        "event"
+                    } else {
+                        "scheduled"
+                    };
                     let last = last_run.get(name).copied().unwrap_or(DateTime::UNIX_EPOCH);
                     // Structured `schedule_config` is authoritative when set;
                     // otherwise fall back to the legacy `schedule` string.
@@ -4800,11 +4962,6 @@ impl PipeManager {
                             let missing = check(config.connections.clone()).await;
                             if !missing.is_empty() {
                                 let skipped_at = Utc::now();
-                                let trigger = if triggered_by_event {
-                                    "event"
-                                } else {
-                                    "scheduled"
-                                };
                                 let message = format!(
                                     "pipe '{}' skipped: missing required connections: {}",
                                     name,
@@ -4815,6 +4972,7 @@ impl PipeManager {
                                     name, missing
                                 );
                                 last_run.insert(name.clone(), skipped_at);
+                                let mut execution_id = None;
                                 if let Some(ref store) = store {
                                     match store
                                         .create_execution(
@@ -4826,6 +4984,7 @@ impl PipeManager {
                                         .await
                                     {
                                         Ok(id) => {
+                                            execution_id = Some(id);
                                             let _ = store
                                                 .finish_execution(
                                                     id,
@@ -4863,7 +5022,14 @@ impl PipeManager {
                                     }
                                 }
                                 if let Some(ref cb) = on_run_complete {
-                                    cb(name, None, false, 0.0, Some("missing_connections"));
+                                    cb(
+                                        name,
+                                        execution_id,
+                                        trigger,
+                                        false,
+                                        0.0,
+                                        Some("missing_connections"),
+                                    );
                                 }
                                 continue;
                             }
@@ -4962,20 +5128,18 @@ impl PipeManager {
                                 );
                                 warn!("scheduler: pipe '{}': {}", name, message);
                                 let failed_at = Utc::now();
+                                let mut execution_id = None;
                                 if let Some(ref store) = store {
                                     if let Ok(id) = store
                                         .create_execution(
                                             name,
-                                            if triggered_by_event {
-                                                "event"
-                                            } else {
-                                                "scheduled"
-                                            },
+                                            trigger,
                                             &config.model,
                                             config.provider.as_deref(),
                                         )
                                         .await
                                     {
+                                        execution_id = Some(id);
                                         let _ = store
                                             .finish_execution(
                                                 id,
@@ -5013,7 +5177,14 @@ impl PipeManager {
                                     qr.remove(name);
                                 }
                                 if let Some(ref cb) = on_run_complete {
-                                    cb(name, None, false, 0.0, Some("ai_preset_unavailable"));
+                                    cb(
+                                        name,
+                                        execution_id,
+                                        trigger,
+                                        false,
+                                        0.0,
+                                        Some("ai_preset_unavailable"),
+                                    );
                                 }
                                 continue;
                             }
@@ -5103,6 +5274,7 @@ impl PipeManager {
                     );
                     let pipe_name = name.clone();
                     let is_event_triggered = triggered_by_event;
+                    let trigger = trigger.to_string();
                     let logs_ref = logs.clone();
                     let running_ref = running.clone();
                     let running_exec_ids_ref = running_execution_ids.clone();
@@ -5162,14 +5334,9 @@ impl PipeManager {
                         info!("scheduler: running pipe '{}'", pipe_name);
 
                         // Create DB execution row
-                        let trigger = if is_event_triggered {
-                            "event"
-                        } else {
-                            "scheduled"
-                        };
                         let exec_id = if let Some(ref store) = store_ref {
                             match store
-                                .create_execution(&pipe_name, trigger, &model, provider.as_deref())
+                                .create_execution(&pipe_name, &trigger, &model, provider.as_deref())
                                 .await
                             {
                                 Ok(id) => {
@@ -5493,6 +5660,7 @@ impl PipeManager {
                             cb(
                                 &name_for_cb,
                                 exec_id,
+                                &trigger,
                                 success,
                                 duration_secs,
                                 cb_error_type.as_deref(),
@@ -6037,7 +6205,8 @@ fn render_prompt_with_port(
     let mut prompt = String::new();
 
     let header = format!(
-        r#"Time range: {start_time} to {end_time}
+        r#"Default run lookback: {start_time} to {end_time}
+Structured output targets may declare an authoritative time range that overrides this default for that target.
 Date: {date}
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
@@ -6982,10 +7151,45 @@ mod tests {
         )
     }
 
+    #[test]
+    fn explicitly_installs_only_known_bundled_pipes() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(dir.path().join("time-breakdown/pipe.md").exists());
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(install_bundled_pipe(dir.path(), "not-a-builtin").is_err());
+    }
+
+    #[test]
+    fn explicit_install_preserves_custom_pipe_and_clears_tombstone() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe_dir = dir.path().join("time-breakdown");
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(pipe_dir.join("pipe.md"), "custom prompt").unwrap();
+        add_tombstone(dir.path(), "time-breakdown", Some("old".into())).unwrap();
+
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(pipe_dir.join("pipe.md")).unwrap(),
+            "custom prompt"
+        );
+        assert!(!read_tombstones(dir.path()).contains_key("time-breakdown"));
+    }
+
     fn write_pipe_source(dir: &Path, name: &str, template: bool) -> PathBuf {
         let path = dir.join(format!("{}.md", name));
         std::fs::write(&path, pipe_source(template, name)).unwrap();
         path
+    }
+
+    #[test]
+    fn unchanged_pipe_limit_does_not_require_catalog_reload() {
+        let mut manager = test_pipe_manager();
+
+        assert!(manager.set_max_non_template_pipes(Some(2)));
+        assert!(!manager.set_max_non_template_pipes(Some(2)));
+        assert!(manager.set_max_non_template_pipes(None));
+        assert!(!manager.set_max_non_template_pipes(None));
     }
 
     #[tokio::test]
@@ -7035,6 +7239,84 @@ mod tests {
         assert!(std::fs::read_to_string(pipes_dir.join("first/pipe.md"))
             .unwrap()
             .contains("updated first"));
+    }
+
+    #[tokio::test]
+    async fn pipe_status_distinguishes_untouched_builtins_from_user_managed_pipes() {
+        let installed = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let manager = PipeManager::new(pipes_dir, HashMap::new(), None, 0);
+        manager.install_builtin_pipes().unwrap();
+        manager.load_pipes().await.unwrap();
+
+        let bundled_manual = manager.get_pipe("day-recap").await.unwrap();
+        assert_eq!(bundled_manual.config.schedule, "manual");
+        assert!(bundled_manual.is_bundled_builtin);
+
+        // `template: true` is public frontmatter. A pipe explicitly installed
+        // by the user must never be mistaken for an untouched app asset.
+        manager
+            .install_pipe_from_store(
+                &pipe_source(true, "user-installed template"),
+                "store-template",
+                1,
+            )
+            .await
+            .unwrap();
+        let installed_manual = manager.get_pipe("store-template").await.unwrap();
+        assert_eq!(installed_manual.config.schedule, "manual");
+        assert!(!installed_manual.is_bundled_builtin);
+
+        // Scheduling an untouched template adopts it, and removing that
+        // schedule later must not turn it back into a hidden bundled template.
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([(
+                    "schedule_config".to_string(),
+                    serde_json::json!({
+                        "frequency": "days",
+                        "interval": 1,
+                        "at_hour": 17,
+                        "at_minute": 0
+                    }),
+                )]),
+            )
+            .await
+            .unwrap();
+        let scheduled = manager.get_pipe("day-recap").await.unwrap();
+        assert!(scheduled.config.schedule_config.is_some());
+        assert!(!scheduled.is_bundled_builtin);
+
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([("schedule_config".to_string(), serde_json::Value::Null)]),
+            )
+            .await
+            .unwrap();
+        let between_triggers = manager.get_pipe("day-recap").await.unwrap();
+        assert_eq!(between_triggers.config.schedule, "manual");
+        assert!(!between_triggers.is_bundled_builtin);
+
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([(
+                    "trigger".to_string(),
+                    serde_json::json!({ "events": ["meeting_ended"] }),
+                )]),
+            )
+            .await
+            .unwrap();
+        let meeting_triggered = manager.get_pipe("day-recap").await.unwrap();
+        assert_eq!(
+            meeting_triggered.config.trigger.unwrap().events,
+            vec!["meeting_ended"]
+        );
+        assert!(!meeting_triggered.is_bundled_builtin);
     }
 
     #[tokio::test]
@@ -8741,8 +9023,9 @@ mod tests {
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
-        // User prompt contains time range and the "Execute" instruction
-        assert!(prompt.contains("Time range:"));
+        // User prompt contains a default lookback and the "Execute" instruction.
+        assert!(prompt.contains("Default run lookback:"));
+        assert!(prompt.contains("authoritative time range"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
         let sys = render_pipe_system_prompt("body text", 3031, None, None, None, false);
@@ -8955,6 +9238,7 @@ mod tests {
             last_run: None,
             last_success: None,
             is_running: false,
+            is_bundled_builtin: false,
             prompt_body: String::new(),
             raw_content: String::new(),
             last_error: None,
@@ -8967,6 +9251,7 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"current_execution_id\":99"));
         assert!(json.contains("\"consecutive_failures\":5"));
+        assert!(json.contains("\"is_bundled_builtin\":false"));
     }
 
     // -- truncate_string ----------------------------------------------------

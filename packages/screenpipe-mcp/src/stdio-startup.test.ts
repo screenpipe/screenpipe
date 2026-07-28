@@ -24,8 +24,26 @@ const CLI = path.join(PKG_ROOT, "dist", "cli.js");
 // on key discovery (which can take many seconds on a cold cache).
 const INIT_DEADLINE_MS = 8000;
 
+/**
+ * Rebuild when dist/ is missing OR older than any input. This used to be a bare
+ * `existsSync(CLI)` check, which meant a stale dist/ from an earlier commit
+ * silently passed the whole suite — including the serverInfo.version assertion
+ * below, whose entire job is to catch a version that does not match this tree.
+ */
 function ensureBuilt(): void {
-  if (fs.existsSync(CLI)) return;
+  const builtAt = fs.existsSync(CLI) ? fs.statSync(CLI).mtimeMs : 0;
+  const inputs = [
+    path.join(PKG_ROOT, "package.json"),
+    path.join(PKG_ROOT, "tsconfig.json"),
+    ...fs
+      .readdirSync(path.join(PKG_ROOT, "src"))
+      .filter((f) => f.endsWith(".ts"))
+      .map((f) => path.join(PKG_ROOT, "src", f)),
+  ];
+  const newestInput = Math.max(
+    ...inputs.filter((f) => fs.existsSync(f)).map((f) => fs.statSync(f).mtimeMs),
+  );
+  if (builtAt > newestInput) return;
   execFileSync("npx", ["tsc"], { cwd: PKG_ROOT, stdio: "inherit", timeout: 120000 });
 }
 
@@ -126,6 +144,21 @@ describe("stdio startup handshake", () => {
     });
     expect(response.result?.serverInfo?.name).toBe("screenpipe");
     expect(ms).toBeLessThan(INIT_DEADLINE_MS);
+  });
+
+  it("reports this tree's package version over the wire (SCR-352)", async () => {
+    // The version in the initialize response is how support tells builds apart.
+    // npm served "0.18.15" from a tree without team-config.ts while the repo
+    // also said "0.18.15", so a customer's reported version proved nothing.
+    // This asserts the BUILT artifact reports package.json's version, read here
+    // independently of src/version.ts so the test is a real oracle.
+    const expected = JSON.parse(
+      fs.readFileSync(path.join(PKG_ROOT, "package.json"), "utf-8"),
+    ).version as string;
+    const { response } = await initializeHandshake({
+      SCREENPIPE_LOCAL_API_KEY: "sp-smoke-test-key",
+    });
+    expect(response.result?.serverInfo?.version).toBe(expected);
   });
 
   it("completes initialize with the API key MISSING (discovery must not block attach)", async () => {

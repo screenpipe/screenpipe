@@ -174,6 +174,14 @@ fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
 /// The replacement gets its own process group: launchd kills a job's whole
 /// process group when the job exits, so an inherited group dies with us.
 pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
+    // Apply a staged update now, at the last moment before this process goes
+    // away — installing any earlier orphans the running bundle and kills TCC
+    // attribution (see staged_update.rs). Idempotent with the RunEvent::Exit
+    // call. The relaunch binary path below was cached at process start, so
+    // the spawn hits the freshly installed bundle.
+    #[cfg(target_os = "macos")]
+    crate::staged_update::install_staged_if_any(&app);
+
     let env = app.env();
     if let Some(binary) = relaunch_binary(&app) {
         let mut command = Command::new(&binary);

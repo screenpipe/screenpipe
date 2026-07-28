@@ -79,6 +79,24 @@ jobs:
           cargo consolidate
           cargo consolidate --path packages/sdk
 
+  lockfiles:
+    name: Cargo.lock freshness
+    # Version bumps (release-app / release-cli) that only touch Cargo.toml leave
+    # the other workspaces' tracked Cargo.lock files stale, which breaks every
+    # `cargo {test,build} --locked` job on main (v0.4.29 CLI bump did exactly
+    # this to sdk.yml). Pure dependency resolution — no build, ~1 min.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Check all tracked Cargo.lock files are fresh
+        run: ./scripts/regenerate-locks.sh --check
+
   knip:
     name: Knip (frontend dead code)
     runs-on: ubuntu-latest

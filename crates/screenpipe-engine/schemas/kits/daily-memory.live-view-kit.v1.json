@@ -1,0 +1,104 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "daily-memory",
+  "title": "Daily memory",
+  "description": "Remember what changed, recover loose ends, and know exactly where to resume tomorrow.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "day-recap",
+      "distribution": "bundled"
+    },
+    {
+      "name": "missed-todos",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "daily-memory",
+    "title": "Daily memory",
+    "revision": 1,
+    "timeRange": "today",
+    "periodPolicy": {
+      "type": "fixed.v1",
+      "value": "today"
+    },
+    "blocks": [
+      {
+        "id": "today-in-brief",
+        "title": "Today in brief",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 0,
+        "intent": "Summarize the most important work, decisions, and context from the current local calendar day. Stay source-backed and say when activity is sparse.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "day-recap"
+        }
+      },
+      {
+        "id": "accomplishments",
+        "title": "What I finished",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 1,
+        "intent": "List concrete outcomes completed during the current local calendar day, using specific evidence rather than inferred progress.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "day-recap"
+        }
+      },
+      {
+        "id": "key-moments",
+        "title": "Key moments",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 2,
+        "intent": "Show the most consequential timestamped moments from the current local calendar day in chronological order.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "day-recap"
+        }
+      },
+      {
+        "id": "unfinished-work",
+        "title": "Where I stopped",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 3,
+        "intent": "List work that was active but unfinished at the end of the current local calendar day, including enough context to resume it.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "day-recap"
+        }
+      },
+      {
+        "id": "loose-ends",
+        "title": "Loose ends I may have missed",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 4,
+        "intent": "Find explicit commitments, follow-ups, or unresolved tasks from the current local calendar day that may otherwise be missed.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "missed-todos"
+        }
+      },
+      {
+        "id": "resume-here",
+        "title": "Start here tomorrow",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 5,
+        "intent": "Write a short, concrete starting point for the next work session based only on unfinished work and explicit loose ends from today.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "missed-todos"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

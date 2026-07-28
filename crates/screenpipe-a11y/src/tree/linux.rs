@@ -16,8 +16,9 @@
 //! - Enable with: `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
 
 use super::{
-    AccessibilityTreeNode, LineBudget, LineSpan, NodeBounds, SkipReason, TreeSnapshot,
-    TreeWalkResult, TreeWalkerConfig, TreeWalkerPlatform, TruncationReason,
+    apply_focused_window_filters, AccessibilityTreeNode, FocusedWindowFilterResult, LineBudget,
+    LineSpan, NodeBounds, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    TreeWalkerPlatform, TruncationReason,
 };
 use crate::tree::linux_lines::{self, AtspiRef, NormalizeRefs};
 use anyhow::{Context, Result};
@@ -996,6 +997,28 @@ pub struct LinuxTreeWalker {
 /// walker thread. After the move, all access is single-threaded. The `Send`
 /// bound is required by `TreeWalkerPlatform` (for `Box<dyn ...>` transfer).
 unsafe impl Send for LinuxTreeWalker {}
+
+pub(super) fn check_focused_window_filters(
+    config: &TreeWalkerConfig,
+) -> Result<FocusedWindowFilterResult> {
+    let (app_name, window_name, _pid) = match crate::platform::linux::get_active_window_info_fresh()
+    {
+        Some(metadata) => metadata,
+        None => return Ok(FocusedWindowFilterResult::NotFound),
+    };
+    let app_lower = app_name.to_lowercase();
+    let excluded = EXCLUDED_APPS
+        .iter()
+        .any(|excluded| app_lower.contains(excluded));
+
+    Ok(apply_focused_window_filters(
+        config,
+        app_name,
+        window_name,
+        false,
+        excluded,
+    ))
+}
 
 impl LinuxTreeWalker {
     pub fn new(mut config: TreeWalkerConfig) -> Self {

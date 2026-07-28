@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "VENDORED from the website repo — see VENDORED_FROM. screenpipe/screenpipe is",
+    "PUBLIC and screenpipe/website is PRIVATE, so this repo's CI cannot check the",
+    "spec out and the suite has to travel with it. The drift guard therefore runs",
+    "on the website side (it CAN check this public repo out): .github/workflows/ci.yml",
+    "job `spec-drift`.",
+    "",
+    "Its own package.json rather than a workspace member: this directory is run",
+    "from inside crates/screenpipe-gateway/e2e/run.sh against a live container and",
+    "must not perturb packages/screenpipe-mcp or the tauri app's dependency trees.",
+    "",
+    "targets/hosted-inproc.ts is deliberately NOT vendored — it imports the",
+    "website's route modules, which do not exist here. Only CONFORMANCE_TARGET=http",
+    "works from this copy."
+  ],
+  "name": "screenpipe-gateway-conformance",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "vitest": "2.1.9",
+    "yaml": "2.8.2"
+  }
+}

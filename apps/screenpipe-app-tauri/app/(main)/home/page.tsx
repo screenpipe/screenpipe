@@ -52,6 +52,7 @@ import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
 import { shouldAcceptTitleSource } from "@/lib/utils/chat-title";
@@ -83,6 +84,7 @@ import {
 } from "@/components/ui/tooltip";
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
+import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 
 type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
@@ -138,12 +140,19 @@ function HomeContent() {
   // reuses an already-open Home window (show, not reload), so a Home created
   // before onboarding finished would otherwise never see the handoff.
   const [firstRunGuidePending, setFirstRunGuidePendingState] = useState(false);
+  // Event-driven arrivals (help → replay intro, onboarding completing on an
+  // already-open Home) are deliberate requests — they bypass the e2e seed
+  // suppression that only guards the boot-time auto-popup.
+  const [firstRunGuideExplicit, setFirstRunGuideExplicit] = useState(false);
   useEffect(() => {
     if (consumeFirstRunGuidePending()) setFirstRunGuidePendingState(true);
     let unlisten: (() => void) | undefined;
     let unmounted = false;
     void listen("first-run-guide-pending", () => {
-      if (consumeFirstRunGuidePending()) setFirstRunGuidePendingState(true);
+      if (consumeFirstRunGuidePending()) {
+        setFirstRunGuidePendingState(true);
+        setFirstRunGuideExplicit(true);
+      }
     })
       .then((fn) => {
         if (unmounted) fn();
@@ -176,11 +185,20 @@ function HomeContent() {
   // `onboarding` E2E seed represents an app that has already completed every
   // first-run surface; showing this click-blocking guide breaks otherwise
   // unrelated regression specs that start from the seeded home screen.
+  // Don't start the guide on top of a broken capture state — permission
+  // recovery and the first-run guide must never compete (#5407). The guide
+  // isn't lost: `firstRunGuidePending` is React state, so it appears once
+  // health recovers.
+  const { health, isServerDown } = useHealthCheck();
+  const captureUnhealthy =
+    isServerDown || health?.status === "unhealthy" || health?.status === "error";
   const showFirstRunGuide = shouldShowFirstRunGuide({
     isSettingsLoaded,
     e2eSeedFlags,
     firstRunGuideDone: settings.firstRunGuideDone,
     firstRunGuidePending,
+    captureUnhealthy,
+    explicitlyRequested: firstRunGuideExplicit,
   });
   const markFirstRunGuideDone = useCallback(() => {
     setFirstRunGuidePending(false);
@@ -570,6 +588,23 @@ function HomeContent() {
         }
       }
 
+      // When globally paused the device APIs may return empty (session torn
+      // down). Preserve the last known device list so the user can still see
+      // what was recording and hit "resume". Use the functional updater to
+      // avoid a stale-closure over recordingDevices.
+      if (capturePaused && devices.length === 0) {
+        setRecordingDevices((prev) => {
+          const updated = prev.map((d) => ({ ...d, active: false }));
+          const snap = JSON.stringify(updated);
+          if (snap !== recordingDevicesSnapshotRef.current) {
+            recordingDevicesSnapshotRef.current = snap;
+            return updated;
+          }
+          return prev;
+        });
+        return;
+      }
+
       const effective = capturePaused
         ? devices.map((d) => ({ ...d, active: false }))
         : devices;
@@ -953,7 +988,12 @@ function HomeContent() {
       router.push(`/settings?section=${mapped}`);
     } else {
       const mapped = section === "feedback" ? "help" : section;
-      if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
+      if (ALL_SECTIONS.includes(mapped)) {
+        setActiveSection(mapped);
+        if (mapped === "brain") {
+          window.dispatchEvent(new Event(ONBOARDING_BRAIN_HANDOFF_EVENT));
+        }
+      }
     }
   });
 
@@ -1049,14 +1089,13 @@ function HomeContent() {
               devices={recordingDevices}
               onDevicesChange={setRecordingDevices}
               meetingActive={meetingState.active ?? false}
-              meetingApp={meetingState.meetingApp}
-              meetingLoading={meetingLoading}
-              onToggleMeeting={() => void toggleMeeting()}
               onPauseRecording={pauseRecording}
               onResumeRecording={resumeRecording}
               isGloballyPaused={isCapturePaused}
               isTranslucent={isTranslucent}
               floatingOverMedia={sidebarCollapsed && activeSection === "timeline"}
+              allCaptureDisabled={!!(settings.disableAudio && settings.disableVision)}
+              onOpenRecordingSettings={() => router.push("/settings?section=recording")}
             />
           </div>
 

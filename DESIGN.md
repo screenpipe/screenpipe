@@ -3,9 +3,17 @@
 
 ## Philosophy
 
-**"Black & White Geometric Minimalism"**
+**"Escher monochrome with phosphor intelligence"**
 
-No color. Sharp corners. Clean typography. Escher-inspired mathematical abstractions. Unique animations and shapes.
+Screenpipe turns the trace of human work into memory, models, and agents. The
+visual system should feel like a mathematical print becoming executable:
+precise, recursive, slightly uncanny, and still controlled by the person whose
+work created it.
+
+Black and warm bone are the substrate. Phosphor is the learned signal. It
+appears only where captured work becomes useful model context or an agent takes
+an explicit action. Sharp corners, clean typography, and Escher-inspired
+mathematical abstractions remain the core identity.
 
 ---
 
@@ -14,6 +22,7 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 | Value | Description |
 |-------|-------------|
 | **Privacy First** | Local-first execution and data by default, cloud optional |
+| **Human Agency** | Preserve ownership, control, and a visible path back to source material |
 | **Open Source** | Inspect, modify, own, clean abstractions and readable codebase |
 | **Simplicity** | Clean, minimal interface, powerful abstractions |
 | **Radical optimism** | There is no such thing as impossible |
@@ -41,36 +50,61 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 
 ---
 
+## Narrative model
+
+| Visual role | Meaning |
+| --- | --- |
+| Bone | Human experience and source material |
+| Trace grey | Captured evidence and intermediate structure |
+| Phosphor | Learned or executable intelligence |
+| Ink | The local system, recursion, and durable infrastructure |
+
+The public story is preserving, multiplying, and executing human intelligence.
+Do not frame the product as erasing people. Screenpipe handles intimate context,
+so agency, ownership, and a visible path back to source material are part of the
+interface, not legal footnotes.
+
 ## Colors
 
-### Palette: Grayscale Only
+### Palette
 
-**Light Mode:**
-- Background: #FFFFFF (pure white)
-- Foreground: #000000 (pure black)
-- Muted: #666666 (40% gray)
-- Border: #CCCCCC (80% gray)
+| Token | Hex | Use |
+| --- | --- | --- |
+| Ink | `#050505` | Foreground, structure, dark background |
+| Bone | `#F2EFE6` | Main light background and human/source state |
+| Trace | `#78786F` | Secondary evidence and inactive structure |
+| Phosphor | `#C7FF3E` | Active transformation and primary action |
+| Phosphor strong | `#4A6B00` | Small phosphor text and borders on bone |
 
-**Dark Mode:**
-- Background: #000000 (pure black)
-- Foreground: #FFFFFF (pure white)
-- Muted: #999999 (60% gray)
-- Border: #333333 (20% gray)
+The default ratio is roughly 70 percent ink/bone, 20 percent trace neutrals,
+and no more than 10 percent phosphor. Existing app surfaces can adopt this
+incrementally. Do not perform a global color sweep without checking every state
+in light and dark mode.
 
-### Text Hierarchy
+### Accessibility
 
-| Level | Light Mode | Dark Mode |
-|-------|------------|-----------|
-| Primary | #000000 | #FFFFFF |
-| Secondary | #666666 | #999999 |
-| Tertiary | #999999 | #666666 |
-| Disabled | #B3B3B3 | #4D4D4D |
+- Use ink text on phosphor fills.
+- Do not use bright phosphor for small text on bone. Use phosphor strong.
+- Pair color with a label, icon, shape, or state change. Meaning must never rely
+  on color alone.
+- Keep error, warning, success, privacy, and billing states explicit in text.
+  Phosphor is not a generic success color.
 
-### Rule: NO COLOR
+### Where phosphor belongs
 
-- No accent colors (no blue, red, green, etc.)
-- Status indicators use grayscale only
-- Success/warning/error differentiated by icons, shapes, not color
+- The boundary where capture becomes memory or model context
+- The active step in an agent or automation pipeline
+- A user-triggered primary action that starts that transformation
+- A cursor, selection, or focus state inside an otherwise monochrome system
+- A single focal point in a recursive or tessellated composition
+
+### Where phosphor does not belong
+
+- Every button, icon, link, or heading
+- Large decorative backgrounds
+- Generic badges or marketing emphasis
+- Status decoration without a meaningful transformation
+- Rainbow, aurora, or generic AI gradients
 
 ---
 
@@ -88,7 +122,8 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 
 - Width: 1px solid
 - Style: Sharp, binary (on/off)
-- No gradients
+- No decorative gradients. A restrained transition may be used only when it
+  communicates metamorphosis or state progression.
 
 ### Shadows
 
@@ -106,6 +141,8 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 - Corners: Sharp (0px radius)
 - Transition: 150ms
 - Hover: Color inversion
+- Phosphor fill: reserved for a primary action that starts capture-to-model or
+  model-to-agent transformation
 ```
 
 ### Cards
@@ -144,7 +181,7 @@ No color. Sharp corners. Clean typography. Escher-inspired mathematical abstract
 
 - **Fast**: 150ms standard duration
 - **Minimal**: Only essential state changes
-- **Binary**: On/off, no elaborate easing
+- **Causal**: Motion should show what changed, what triggered it, and where it went
 
 ### Timing
 
@@ -170,6 +207,8 @@ Take screenshots of modern apps with great design you find on internet and use i
 - Lowercase, casual, direct
 - Minimal technical details but power users can go deep
 - No marketing fluff
+- Show source, trigger, action, destination, and user control where relevant
+- Avoid surveillance language and claims that remove human agency
 
 ---
 
@@ -182,7 +221,11 @@ When creating new UI components:
 - [ ] 1px solid border
 - [ ] Flat by default; subtle shadows OK only to lift floating/elevated surfaces
 - [ ] 0px border radius (sharp corners) — always, even on shadowed surfaces
-- [ ] Black, white, or gray only
+- [ ] Composition remains mostly ink, bone, and trace grey
+- [ ] Every phosphor use marks transformation, execution, or focus
+- [ ] Bright phosphor uses ink foreground
+- [ ] Small colored text on bone uses phosphor strong
+- [ ] State is understandable without color
 - [ ] 150ms transitions
 - [ ] UPPERCASE for buttons, lowercase for titles
 - [ ] Hover state: color inversion
@@ -195,10 +238,9 @@ When creating new UI components:
 
 | Purpose | Location |
 |---------|----------|
-| Design tokens | `screenpipe-app-tauri/app/globals.css` |
-| Tailwind config | `screenpipe-app-tauri/tailwind.config.ts` |
-| Color constants | `screenpipe-app-tauri/lib/constants/colors.ts` |
-| UI components | `screenpipe-app-tauri/components/ui/*.tsx` |
+| Design tokens | `apps/screenpipe-app-tauri/app/globals.css` |
+| Tailwind config | `apps/screenpipe-app-tauri/tailwind.config.ts` |
+| Color constants | `apps/screenpipe-app-tauri/lib/constants/colors.ts` |
+| UI components | `apps/screenpipe-app-tauri/components/ui/*.tsx` |
 
 ---
-

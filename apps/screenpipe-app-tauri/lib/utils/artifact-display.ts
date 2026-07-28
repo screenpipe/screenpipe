@@ -44,6 +44,13 @@ function stripHtmlTags(text: string): string {
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<style\b[\s\S]*?<\/style>/gi, "")
     .replace(/<script\b[\s\S]*?<\/script>/gi, "")
+    // <head><title> is almost always the same string the card already shows as
+    // its title, so leaving it in makes every summary open by repeating itself.
+    .replace(/<title\b[\s\S]*?<\/title>/gi, "")
+    // Previews are a truncated prefix of the file, so an opening <style> or
+    // <script> often has no closing tag to pair with. Without this, the tag
+    // itself is stripped below and the raw CSS/JS survives as "body{margin:0…".
+    .replace(/<(style|script)\b[\s\S]*$/i, "")
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
     .trim();

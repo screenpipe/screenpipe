@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.132"
+version = "2.5.147"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -41,6 +41,8 @@ tauri-utils = { version = "=2.9.2", features = [] }
 tauri-plugin-fs = "=2.4.5"
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-updater = "=2.10.0"
+# staged-update signature re-verification (same crate/version the updater plugin uses)
+minisign-verify = "0.2"
 tauri-plugin-dialog = "=2.6.0"
 tauri-plugin-os = "=2.3.2"
 tauri-plugin-process = "=2.3.1"
@@ -162,6 +164,11 @@ thiserror = { version = "1.0", optional = true }
 # as thiserror — `#[path = ...]` imports aren't followed by cargo-machete.
 screenpipe-sync = { path = "../../../crates/screenpipe-sync", optional = true }
 
+# Telemetry wire contract (JSONL record schema + direct-upload manifest +
+# object-key layout) shared with the customer query gateway. Gated behind
+# enterprise-build like the crates above.
+screenpipe-telemetry-wire = { path = "../../../crates/screenpipe-telemetry-wire", optional = true }
+
 # jemalloc — aggressively returns freed pages to OS, reducing RSS bloat
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
@@ -269,7 +276,7 @@ official-build = []
 # Source for the sync lives under `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs` (EE-licensed).
 # Consumer builds never compile this code.
 # Do NOT add official-build here — enterprise has its own policy-gated updater.
-enterprise-build = ["dep:thiserror", "dep:screenpipe-sync"]
+enterprise-build = ["dep:thiserror", "dep:screenpipe-sync", "dep:screenpipe-telemetry-wire"]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]
@@ -301,6 +308,8 @@ serial_test = "3"
 # MockRuntime for store.rs recovery tests that must exercise the real
 # tauri-plugin-store registry (state + resources table).
 tauri = { version = "=2.11.2", features = ["test"] }
+# staged_update tests: sign fake update archives with a throwaway key
+minisign = "0.7"
 
 
 [package.metadata.cargo-machete]
@@ -310,7 +319,7 @@ tauri = { version = "=2.11.2", features = ["test"] }
 # can't follow `#[path = ...]` imports into apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs.
 # eventkit-rs: lib crate is imported as `eventkit` (calendar.rs, permissions.rs);
 # cargo-machete matches the package name `eventkit_rs` so it can't see the use.
-ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync", "eventkit-rs"]
+ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync", "screenpipe-telemetry-wire", "eventkit-rs"]
 
 [patch.crates-io]
 # macOS tray menus can outlive the Rust `Menu` that created them while the

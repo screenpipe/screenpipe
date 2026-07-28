@@ -8,10 +8,12 @@
 //! Recording (capture) can be toggled independently via [`CaptureSession`].
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::FutureExt;
 use screenpipe_audio::core::device::resolve_audio_devices_for_capture;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::transcription::stt::{
@@ -627,6 +629,15 @@ impl ServerCore {
         let mcp_session_access =
             screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
         pipe_manager.set_mcp_session_access(mcp_session_access.clone());
+        // Keep the desktop's embedded PipeManager and HTTP auth middleware on
+        // the same scoped-token registry. Without this bridge Pi pipes receive
+        // an sp_pipe_* token, but every authenticated API call is rejected as
+        // unknown before endpoint permissions can be evaluated.
+        pipe_manager.set_token_registry(Arc::new(
+            screenpipe_engine::pipe_permissions_middleware::DashMapTokenRegistry::new(
+                server.pipe_permissions.clone(),
+            ),
+        ));
         if let Some(cb) = on_pipe_output {
             pipe_manager.set_on_output_line(cb);
         }
@@ -662,15 +673,19 @@ impl ServerCore {
             let screenpipe_dir_for_cb = config.data_dir.clone();
             let pm_for_cb = shared_pipe_manager.clone();
             shared_pipe_manager.lock().await.set_on_run_complete(Arc::new(
-                move |pipe_name, execution_id, success, duration_secs, error_type| {
+                move |pipe_name, execution_id, trigger_type, success, duration_secs, error_type| {
                     let mut props = serde_json::json!({
                         "pipe": pipe_name,
+                        "execution_id": execution_id,
+                        "trigger_type": trigger_type,
+                        "telemetry_schema_version": 2,
                         "success": success,
                         "duration_secs": duration_secs,
                     });
                     if let Some(et) = error_type {
                         props["error_type"] = serde_json::Value::String(et.to_string());
                     }
+                    // Keep the legacy event name so existing dashboards continue to work.
                     analytics::capture_event_nonblocking("pipe_scheduled_run", props);
 
                     // Auto-register pipe artifacts to ~/.screenpipe/outputs/
@@ -854,18 +869,45 @@ impl ServerCore {
 
         info!("HTTP server bound to port {}", config.port);
 
+        // Build and validate every OpenAPI + Axum route before publishing the
+        // ready phase or starting capture. oasgen panics on schema/handler
+        // mismatches; the engine converts that panic to an error so the Tauri
+        // shell (and updater) remains available instead of losing the process.
+        let router = match server.try_create_router().await {
+            Ok(router) => router,
+            Err(error) => {
+                let msg = format!("failed to construct local API router: {error}");
+                crate::health::set_boot_error(&msg);
+                crate::health::set_recording_status(crate::health::RecordingStatus::Error);
+                return Err(msg);
+            }
+        };
+
         let vision_manager_handle = server.vision_manager.clone();
 
         // Start serving in background. The handle is kept on Self and aborted
-        // in `shutdown()`: the `Server` moved into this task owns a `db` clone
-        // + the secret store, so a task that outlives the engine restart keeps
-        // old SQLite connections (and the shared -shm WAL-index) alive — the
-        // core of the 2026-07-02 unrecoverable-522 wedge. Aborting also frees
-        // the listener so the next spawn can rebind the port.
+        // in `shutdown()`: the Router state owns a `db` clone + the secret
+        // store, so a task that outlives the engine restart keeps old SQLite
+        // connections (and the shared -shm WAL-index) alive — the core of the
+        // 2026-07-02 unrecoverable-522 wedge. Aborting also frees the listener
+        // so the next spawn can rebind the port.
+        let server_addr = SocketAddr::new(IpAddr::V4(config.listen_address), config.port);
         owned_tasks.push(tokio::spawn(async move {
-            if let Err(e) = server.start_with_listener(listener).await {
-                error!("Server error: {:?}", e);
-            }
+            let outcome = AssertUnwindSafe(SCServer::serve_router_with_listener(
+                server_addr,
+                listener,
+                router,
+            ))
+            .catch_unwind()
+            .await;
+            let message = match outcome {
+                Ok(Ok(())) => "local API server stopped unexpectedly".to_string(),
+                Ok(Err(error)) => format!("local API server failed: {error}"),
+                Err(_) => "local API server task panicked".to_string(),
+            };
+            error!("{message}");
+            crate::health::set_boot_error(&message);
+            crate::health::set_recording_status(crate::health::RecordingStatus::Error);
         }));
 
         info!("Server core started successfully");
