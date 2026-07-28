@@ -406,7 +406,7 @@ describe("BrainSection type filter", () => {
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
 
     openDetailMenu();
-    fireEvent.click(await screen.findByText("open chat"));
+    fireEvent.click(await screen.findByText("go to chat"));
 
     expect(emit).toHaveBeenCalledWith("chat-load-conversation", {
       conversationId: "chat-b",
@@ -448,20 +448,21 @@ describe("BrainSection type filter", () => {
     fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
-    // Grid mode: each card carries a hover "open viewer" button.
-    expect(screen.queryAllByTestId(/^brain-open-viewer-/).length).toBe(5);
+    const variants = () => artifactRows().map((row) => row.dataset.variant);
+
+    // Grid mode: full cards with previews.
+    expect(variants()).toEqual(Array(5).fill("card"));
 
     fireEvent.click(artifactRows()[0]);
 
     // Rail mode: same five items, but as compact rows — the card chrome is
     // gone and the content lives in the pane instead.
-    expect(artifactRows().length).toBe(5);
-    expect(screen.queryAllByTestId(/^brain-open-viewer-/).length).toBe(0);
+    expect(variants()).toEqual(Array(5).fill("rail"));
     expect(screen.queryAllByTestId(/^brain-checkbox-artifact-/).length).toBe(5);
 
     // Closing restores the cards.
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryAllByTestId(/^brain-open-viewer-/).length).toBe(5);
+    expect(variants()).toEqual(Array(5).fill("card"));
   });
 
   it("closes the artifact detail panel on Escape", async () => {

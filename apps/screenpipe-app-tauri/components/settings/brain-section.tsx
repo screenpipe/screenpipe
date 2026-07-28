@@ -1973,6 +1973,7 @@ export function BrainSection() {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7"
+                      data-testid={`brain-artifact-menu-${artTestId}`}
                       onClick={(e) => e.stopPropagation()}
                     >
                       <MoreVertical className="h-4 w-4 text-foreground" />
@@ -1986,16 +1987,15 @@ export function BrainSection() {
                         }
                       >
                         <MessageSquare className="mr-2 h-3.5 w-3.5" />
-                        {target.mode === "pipe-run" ? "open pipe run" : "open chat"}
+                        {target.mode === "pipe-run" ? "go to pipe run" : "go to chat"}
                       </DropdownMenuItem>
                     )}
-                    {/* The card also surfaces this as a hover button; the
-                        testid stays there so it resolves uniquely. */}
                     <DropdownMenuItem
+                      data-testid={`brain-open-viewer-${artTestId}`}
                       onClick={() => openArtifactViewer(artItem, "card_action")}
                     >
                       <Eye className="mr-2 h-3.5 w-3.5" />
-                      open viewer
+                      new window
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
@@ -2032,6 +2032,7 @@ export function BrainSection() {
                   <div
                     key={artKey}
                     data-testid={`brain-item-artifact-${artTestId}`}
+                    data-variant="rail"
                     className={`group relative cursor-pointer border bg-background px-3 py-2.5 transition-colors hover:bg-muted/20 ${
                       isSelected
                         ? "border-foreground/30 bg-muted/40"
@@ -2091,6 +2092,7 @@ export function BrainSection() {
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
+                  data-variant="card"
                   className={`group relative cursor-pointer overflow-hidden border border-border bg-background transition-colors duration-150 hover:bg-muted/20 ${
                     isChecked ? "bg-muted/30 ring-1 ring-border" : ""
                   } ${
@@ -2115,21 +2117,10 @@ export function BrainSection() {
                     openArtifact(artItem, artKey, "card");
                   }}
                 >
-                  {/* floating action buttons — top right with blurred backdrop */}
+                  {/* Single overflow menu — clicking the card opens the detail
+                      pane, so popping out a window is secondary and lives in
+                      the menu rather than as a second hover button. */}
                   <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-sm bg-background/60 backdrop-blur-md opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7"
-                      data-testid={`brain-open-viewer-${artTestId}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openArtifactViewer(artItem, "card_action");
-                      }}
-                      title="open viewer"
-                    >
-                      <Eye className="h-4 w-4 text-foreground" />
-                    </Button>
                     {artifactMenu}
                   </div>
 
@@ -2561,15 +2552,15 @@ export function BrainSection() {
                               >
                                 <MessageSquare className="mr-2 h-3.5 w-3.5" />
                                 {target.mode === "pipe-run"
-                                  ? "open pipe run"
-                                  : "open chat"}
+                                  ? "go to pipe run"
+                                  : "go to chat"}
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuItem
                               onClick={() => openArtifactViewer(artifact, "detail")}
                             >
                               <Eye className="mr-2 h-3.5 w-3.5" />
-                              open viewer
+                              new window
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() =>
