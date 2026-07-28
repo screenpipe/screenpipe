@@ -44,7 +44,7 @@ describe("getArtifactCardDisplay", () => {
     const display = getArtifactCardDisplay(
       artifact({
         kind: "text",
-        title: "landing-page-20.html",
+        title: "Landing Page 20 — The Last Little Star",
         path: "/tmp/landing-page-20.html",
         preview:
           "<!doctype html><html><head><title>The Last Little Star</title>" +
@@ -54,7 +54,25 @@ describe("getArtifactCardDisplay", () => {
 
     expect(display.summary).not.toContain("margin:0");
     expect(display.summary).not.toContain("100vh");
-    expect(display.summary).toContain("The Last Little Star");
+    // <title> repeats the card title, so it is stripped too.
+    expect(display.summary).not.toContain("The Last Little Star");
+  });
+
+  it("summarises html body copy rather than the document title", () => {
+    const display = getArtifactCardDisplay(
+      artifact({
+        kind: "text",
+        title: "Landing Page 20 — The Last Little Star",
+        path: "/tmp/landing-page-20.html",
+        preview:
+          "<!doctype html><html><head><title>The Last Little Star</title>" +
+          "<style>body{margin:0}</style></head><body>" +
+          "<h1>The Last Little Star</h1><p>The smallest star learns to shine.</p>",
+      }),
+    );
+
+    expect(display.summary).toContain("The smallest star learns to shine.");
+    expect(display.summary).not.toContain("margin:0");
   });
 
   it("keeps explicit human titles", () => {

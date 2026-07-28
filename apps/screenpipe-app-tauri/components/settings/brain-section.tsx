@@ -195,15 +195,19 @@ function unifiedItemSelection(item: UnifiedItem): SelectedBrainItem {
     : { kind: "artifact", key };
 }
 
+// Registered artifacts are addressed by id so testids stay stable across
+// re-registration; the rest fall back to their dedup key.
+function artifactTestIdSuffix(artifact: UnifiedArtifact): string {
+  return artifact.registered ? String(artifact.id) : artifactItemKey(artifact);
+}
+
 // Mirrors the data-testid each row renders, so keyboard navigation can find
-// the newly selected card in the DOM and scroll it into view.
+// the newly selected card in the DOM and scroll it into view. Both callers
+// share artifactTestIdSuffix so the two can never drift apart.
 function unifiedItemTestId(item: UnifiedItem): string {
-  if (item.kind === "memory") return `brain-item-memory-${item.data.id}`;
-  const artifact = item.data;
-  const suffix = artifact.registered
-    ? String(artifact.id)
-    : artifactItemKey(artifact);
-  return `brain-item-artifact-${suffix}`;
+  return item.kind === "memory"
+    ? `brain-item-memory-${item.data.id}`
+    : `brain-item-artifact-${artifactTestIdSuffix(item.data)}`;
 }
 
 type BrainViewState = {
@@ -450,17 +454,28 @@ export function BrainSection() {
     return () => window.clearInterval(interval);
   }, [refreshTabCounts]);
 
-  const loadArtifactContent = async (key: string, path: string) => {
-    if (!artifactContents.has(key)) {
+  // Keyed by artifact, not by the `artifactContents` snapshot: this is called
+  // from render and from the keydown handler, both of which can fire again
+  // before setArtifactContents lands. A ref makes the guard stable so the
+  // callback identity never changes and the same file is read once.
+  const artifactReadsRef = useRef<Set<string>>(new Set());
+
+  const loadArtifactContent = useCallback(async (key: string, path: string) => {
+    if (!artifactReadsRef.current.has(key)) {
+      artifactReadsRef.current.add(key);
       try {
         const res = await commands.readViewerFile(path);
         if (res.status === "ok" && res.data.kind === "text") {
           const text = res.data.text;
           setArtifactContents((prev) => new Map(prev).set(key, text));
         }
-      } catch {}
+      } catch {
+        // Allow a later attempt — a transient read failure shouldn't
+        // permanently blank the preview.
+        artifactReadsRef.current.delete(key);
+      }
     }
-  };
+  }, []);
 
   const artifactOpenTarget = useCallback(
     (artifact: UnifiedArtifact, key: string): ArtifactOpenTarget =>
@@ -1102,12 +1117,17 @@ export function BrainSection() {
   useEffect(() => {
     const testId = pendingKeyboardScrollRef.current;
     if (!testId) return;
-    const node = scrollRef.current?.querySelector(
-      `[data-testid="${testId}"]`,
-    );
-    if (!node) return;
+    // Cleared unconditionally: a stale pending id would otherwise fire on an
+    // unrelated later render (a filter change, another page loading in).
     pendingKeyboardScrollRef.current = null;
-    node.scrollIntoView({ block: "nearest" });
+    // Unregistered artifacts derive their testid from the file path, which can
+    // contain quotes or backslashes. Interpolating that into an attribute
+    // selector risks a SyntaxError, so match on a constant selector and
+    // compare the value in JS instead.
+    const node = Array.from(
+      scrollRef.current?.querySelectorAll<HTMLElement>("[data-testid]") ?? [],
+    ).find((element) => element.dataset.testid === testId);
+    node?.scrollIntoView({ block: "nearest" });
   }, [selectedItem, visibleCount, unifiedItems]);
   const normalizedFilterSearch = filterSearch.trim().toLowerCase();
   const filterTags = React.useMemo(() => {
@@ -1926,10 +1946,12 @@ export function BrainSection() {
             brainViewState.scrollTopByType[typeFilter] =
               event.currentTarget.scrollTop;
           }}
-          className={`min-h-0 overflow-y-auto overscroll-contain pr-1 ${scrollbarClass} ${
+          className={`min-h-0 overflow-y-auto overscroll-contain ${
+            artifactRailMode ? "pr-3" : "pr-1"
+          } ${scrollbarClass} ${
             typeFilter === "artifacts"
               ? artifactRailMode
-                ? "w-[30%] min-w-[240px] max-w-[340px] shrink-0 space-y-2 pr-3"
+                ? "w-[30%] min-w-[240px] max-w-[340px] shrink-0 space-y-2"
                 : "grid flex-1 auto-rows-max grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3"
               : selectedDetail
                 ? "w-[52%] shrink-0"
@@ -1944,7 +1966,7 @@ export function BrainSection() {
               const artDate = artItem.modified_at;
 
               const artKey = artifactItemKey(artItem);
-              const artTestId = artItem.registered ? String(artItem.id) : artKey;
+              const artTestId = artifactTestIdSuffix(artItem);
               const display = getArtifactCardDisplay(artItem);
               const isChecked = selectedIds.has(artKey);
               const isSelected =
@@ -1956,7 +1978,10 @@ export function BrainSection() {
               if (isHtml && !artifactRailMode && !artifactContents.has(artKey)) {
                 void loadArtifactContent(artKey, artPath);
               }
-              const htmlContent = isHtml ? artifactContents.get(artKey) : undefined;
+              const htmlContent =
+                isHtml && !artifactRailMode
+                  ? artifactContents.get(artKey)
+                  : undefined;
 
               const openThisArtifact = () => {
                 if (selectionMode) {
