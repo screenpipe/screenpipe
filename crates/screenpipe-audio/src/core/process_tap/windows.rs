@@ -27,12 +27,13 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashSet;
 use std::mem::size_of;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex, OnceLock,
 };
 use std::time::Duration;
-use sysinfo::{Pid, PidExt, ProcessExt, System, SystemExt};
+use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use windows::core::{implement, IUnknown, Interface, HRESULT, PCWSTR, PWSTR};
@@ -47,8 +48,9 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
     AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX, WAVE_FORMAT_PCM,
+    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+    WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IAgileObject,
@@ -66,6 +68,7 @@ const PROCESS_LOOPBACK_MIN_BUILD: u32 = 20_348;
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(5);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
 const CAPTURE_WAIT_MS: u32 = 250;
+const EXCLUSION_TARGET_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const REBUILD_COOLDOWN_SECS: u64 = 60;
 const REBUILD_BACKOFF_CAP: u32 = 4;
 const MAX_CONSECUTIVE_REBUILD_FAILURES: u32 = 3;
@@ -73,6 +76,8 @@ const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
 const BITS_PER_SAMPLE: u16 = 16;
 const BYTES_PER_SAMPLE: u16 = BITS_PER_SAMPLE / 8;
+const AUDIO_EXCLUSIONS_ENV: &str = "SCREENPIPE_AUDIO_EXCLUSIONS_PATH";
+const AUDIO_EXCLUSIONS_PATH: &str = ".screenpipe/audio-exclusions.json";
 
 static WINDOWS_BUILD: OnceLock<Option<u32>> = OnceLock::new();
 
@@ -122,7 +127,7 @@ pub fn spawn_process_tap_capture(
     _is_running: Arc<AtomicBool>,
     is_disconnected: Arc<AtomicBool>,
 ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
-    spawn_wasapi_loopback(tx, is_disconnected, LoopbackTarget::DefaultEndpoint)
+    spawn_wasapi_loopback(tx, is_disconnected, LoopbackSource::ConfiguredExclusion)
 }
 
 /// Create a Windows far-end tap for the target meeting process tree.
@@ -152,12 +157,17 @@ pub fn spawn_process_tap_capture_for_pids(
             root_pid
         ));
     }
-    spawn_wasapi_loopback(tx, is_disconnected, LoopbackTarget::ProcessTree(root_pid))
+    spawn_wasapi_loopback(
+        tx,
+        is_disconnected,
+        LoopbackSource::Fixed(LoopbackTarget::ProcessTree(root_pid)),
+    )
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LoopbackTarget {
     ProcessTree(u32),
+    ExcludeProcessTree(u32),
     DefaultEndpoint,
 }
 
@@ -165,9 +175,99 @@ impl LoopbackTarget {
     fn label(self) -> String {
         match self {
             LoopbackTarget::ProcessTree(pid) => format!("process-tree:{pid}"),
+            LoopbackTarget::ExcludeProcessTree(pid) => format!("exclude-process-tree:{pid}"),
             LoopbackTarget::DefaultEndpoint => "default-render-endpoint".to_string(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LoopbackSource {
+    Fixed(LoopbackTarget),
+    ConfiguredExclusion,
+}
+
+impl LoopbackSource {
+    fn current_target(self) -> LoopbackTarget {
+        match self {
+            Self::Fixed(target) => target,
+            Self::ConfiguredExclusion => configured_exclusion_target(),
+        }
+    }
+}
+
+fn exclusions_path() -> PathBuf {
+    std::env::var(AUDIO_EXCLUSIONS_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(AUDIO_EXCLUSIONS_PATH)
+        })
+}
+
+fn configured_executable_path() -> Option<PathBuf> {
+    let body = std::fs::read_to_string(exclusions_path()).ok()?;
+    parse_exclusions_body(&body)
+}
+
+/// Parse the exclusions JSON body, tolerating a UTF-8 BOM. The file is
+/// documented as hand-editable and Notepad saves "UTF-8 with BOM", which
+/// serde_json rejects — without the strip the exclusion would be silently
+/// dropped and the app the user excluded would keep being recorded.
+fn parse_exclusions_body(body: &str) -> Option<PathBuf> {
+    let value: serde_json::Value =
+        serde_json::from_str(body.trim_start_matches('\u{feff}')).ok()?;
+    parse_configured_executable_path(&value)
+}
+
+fn parse_configured_executable_path(value: &serde_json::Value) -> Option<PathBuf> {
+    value
+        .get("excluded_apps")?
+        .as_array()?
+        .iter()
+        .filter_map(|app| app.get("bundle_id")?.as_str())
+        .map(PathBuf::from)
+        .find(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        })
+}
+
+pub fn has_configured_audio_exclusion() -> bool {
+    configured_executable_path().is_some()
+}
+
+fn normalized_windows_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .replace('/', r"\")
+        .to_ascii_lowercase()
+}
+
+// Runs on the capture thread every EXCLUSION_TARGET_POLL_INTERVAL, so it must
+// stay cheap: refresh process info only (no CPU/disk/user extras — the
+// `System::new_all` variant cost ~65ms per scan and stalled the WASAPI drain
+// for ~125ms per poll) and reuse one snapshot for both the path match and the
+// root walk.
+fn find_excluded_process_root(executable: &Path) -> Option<u32> {
+    let expected = normalized_windows_path(executable);
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessRefreshKind::new());
+    system
+        .processes()
+        .values()
+        .filter(|process| normalized_windows_path(process.exe()) == expected)
+        .min_by_key(|process| process.start_time())
+        .map(|process| resolve_root_pid_in(&system, process.pid().as_u32()))
+}
+
+fn configured_exclusion_target() -> LoopbackTarget {
+    configured_executable_path()
+        .and_then(|path| find_excluded_process_root(&path))
+        .map(LoopbackTarget::ExcludeProcessTree)
+        .unwrap_or(LoopbackTarget::DefaultEndpoint)
 }
 
 struct AudioClientSend(IAudioClient);
@@ -202,11 +302,12 @@ struct WasapiLoopbackCapture {
 fn spawn_wasapi_loopback(
     tx: broadcast::Sender<Vec<f32>>,
     is_disconnected: Arc<AtomicBool>,
-    target: LoopbackTarget,
+    source: LoopbackSource,
 ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<AudioStreamConfig>>(1);
-    let label = target.label();
-    let thread_label = label.clone();
+    let initial_target = source.current_target();
+    let label = initial_target.label();
+    let mut thread_label = label.clone();
 
     let handle = tokio::task::spawn_blocking(move || {
         let _com = match ComApartment::enter() {
@@ -217,6 +318,7 @@ fn spawn_wasapi_loopback(
             }
         };
 
+        let mut target = initial_target;
         let mut capture = match unsafe { build_wasapi_capture(target) } {
             Ok(built) => built,
             Err(error) => {
@@ -233,17 +335,19 @@ fn spawn_wasapi_loopback(
             capture.channels
         );
 
-        let target_watch = match target {
-            LoopbackTarget::ProcessTree(pid) => TargetProcessWatch::open(pid),
-            LoopbackTarget::DefaultEndpoint => None,
-        };
         let mut rebuild_streak = 0u32;
         let mut rebuild_failures = 0u32;
 
         loop {
+            let target_watch = match target {
+                LoopbackTarget::ProcessTree(pid) | LoopbackTarget::ExcludeProcessTree(pid) => {
+                    TargetProcessWatch::open(pid)
+                }
+                LoopbackTarget::DefaultEndpoint => None,
+            };
             let endpoint_baseline = match target {
                 LoopbackTarget::DefaultEndpoint => current_default_render_endpoint_id(),
-                LoopbackTarget::ProcessTree(_) => None,
+                LoopbackTarget::ProcessTree(_) | LoopbackTarget::ExcludeProcessTree(_) => None,
             };
             let exit = run_capture_loop(
                 &mut capture,
@@ -252,15 +356,26 @@ fn spawn_wasapi_loopback(
                 &thread_label,
                 target_watch.as_ref(),
                 endpoint_baseline.as_deref(),
+                source,
+                target,
             );
             unsafe {
                 let _ = capture.audio_client.0.Stop();
             }
 
-            let step = supervisor_policy(exit);
+            let step = if matches!(source, LoopbackSource::ConfiguredExclusion)
+                && exit == CaptureExit::TargetExited
+            {
+                SupervisorStep::RebuildNow
+            } else {
+                supervisor_policy(exit)
+            };
             if step == SupervisorStep::Stop {
                 break;
             }
+
+            target = source.current_target();
+            thread_label = target.label();
 
             drop(capture);
             let mut cooldown = if step == SupervisorStep::RebuildNow {
@@ -285,6 +400,7 @@ fn spawn_wasapi_loopback(
                 match unsafe { build_wasapi_capture(target) } {
                     Ok(new_capture) => {
                         capture = new_capture;
+                        info!("Windows WASAPI loopback rebuilt ({thread_label})");
                         rebuild_failures = 0;
                         if step == SupervisorStep::RebuildNow {
                             rebuild_streak = 0;
@@ -334,7 +450,8 @@ fn spawn_wasapi_loopback(
 
 unsafe fn build_wasapi_capture(target: LoopbackTarget) -> Result<WasapiLoopbackCapture> {
     let audio_client = match target {
-        LoopbackTarget::ProcessTree(pid) => activate_process_loopback_client(pid)?,
+        LoopbackTarget::ProcessTree(pid) => activate_process_loopback_client(pid, false)?,
+        LoopbackTarget::ExcludeProcessTree(pid) => activate_process_loopback_client(pid, true)?,
         LoopbackTarget::DefaultEndpoint => activate_default_endpoint_loopback_client()?,
     };
 
@@ -386,13 +503,20 @@ unsafe fn activate_default_endpoint_loopback_client() -> Result<AudioClientSend>
     Ok(AudioClientSend(client))
 }
 
-unsafe fn activate_process_loopback_client(root_pid: u32) -> Result<AudioClientSend> {
+unsafe fn activate_process_loopback_client(
+    root_pid: u32,
+    exclude: bool,
+) -> Result<AudioClientSend> {
     let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
             ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
                 TargetProcessId: root_pid,
-                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                ProcessLoopbackMode: if exclude {
+                    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE
+                } else {
+                    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+                },
             },
         },
     };
@@ -424,6 +548,7 @@ unsafe fn activate_process_loopback_client(root_pid: u32) -> Result<AudioClientS
 enum CaptureExit {
     Disconnected,
     TargetExited,
+    TargetChanged,
     EndpointChanged,
     WaitFailed,
     DrainFailed,
@@ -439,7 +564,7 @@ enum SupervisorStep {
 fn supervisor_policy(exit: CaptureExit) -> SupervisorStep {
     match exit {
         CaptureExit::Disconnected | CaptureExit::TargetExited => SupervisorStep::Stop,
-        CaptureExit::EndpointChanged => SupervisorStep::RebuildNow,
+        CaptureExit::EndpointChanged | CaptureExit::TargetChanged => SupervisorStep::RebuildNow,
         CaptureExit::WaitFailed | CaptureExit::DrainFailed => SupervisorStep::RebuildAfterCooldown,
     }
 }
@@ -473,6 +598,8 @@ fn run_capture_loop(
     label: &str,
     target_watch: Option<&TargetProcessWatch>,
     endpoint_baseline: Option<&str>,
+    source: LoopbackSource,
+    active_target: LoopbackTarget,
 ) -> CaptureExit {
     // Insulates this capture thread from the process's BELOW_NORMAL priority
     // class (and foreground contention generally) the same way cpal's WASAPI
@@ -481,7 +608,15 @@ fn run_capture_loop(
         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     }
 
+    let mut last_target_poll = std::time::Instant::now();
     while !is_disconnected.load(Ordering::Relaxed) {
+        if last_target_poll.elapsed() >= EXCLUSION_TARGET_POLL_INTERVAL {
+            last_target_poll = std::time::Instant::now();
+            if source.current_target() != active_target {
+                info!("Windows audio exclusion target changed; rebuilding loopback ({label})");
+                return CaptureExit::TargetChanged;
+            }
+        }
         if target_watch.is_some_and(TargetProcessWatch::has_exited) {
             info!("Windows WASAPI loopback target exited ({label})");
             return CaptureExit::TargetExited;
@@ -776,9 +911,12 @@ fn select_target_root_pid(pids: &[i32]) -> Result<u32> {
 }
 
 pub(crate) fn resolve_target_root_pid(pid: u32) -> u32 {
-    let mut sys = System::new_all();
-    sys.refresh_processes();
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessRefreshKind::new());
+    resolve_root_pid_in(&sys, pid)
+}
 
+fn resolve_root_pid_in(sys: &System, pid: u32) -> u32 {
     let mut current = Pid::from_u32(pid);
     let mut root = pid;
     let mut seen = HashSet::new();
@@ -898,6 +1036,10 @@ mod tests {
             SupervisorStep::RebuildNow
         );
         assert_eq!(
+            supervisor_policy(CaptureExit::TargetChanged),
+            SupervisorStep::RebuildNow
+        );
+        assert_eq!(
             supervisor_policy(CaptureExit::WaitFailed),
             SupervisorStep::RebuildAfterCooldown
         );
@@ -913,5 +1055,41 @@ mod tests {
         assert_eq!(rebuild_cooldown(1).as_secs(), 120);
         assert_eq!(rebuild_cooldown(4).as_secs(), 960);
         assert_eq!(rebuild_cooldown(9).as_secs(), 960, "cap at 2^4");
+    }
+
+    #[test]
+    fn windows_exclusion_config_accepts_only_executables() {
+        let value = serde_json::json!({
+            "excluded_apps": [
+                { "bundle_id": "com.example.mac" },
+                { "bundle_id": "C:\\Program Files\\Spotify\\Spotify.EXE" }
+            ]
+        });
+        assert_eq!(
+            parse_configured_executable_path(&value),
+            Some(PathBuf::from(r"C:\Program Files\Spotify\Spotify.EXE"))
+        );
+
+        let mac_only = serde_json::json!({
+            "excluded_apps": [{ "bundle_id": "com.example.mac" }]
+        });
+        assert_eq!(parse_configured_executable_path(&mac_only), None);
+    }
+
+    #[test]
+    fn windows_exclusion_config_tolerates_utf8_bom() {
+        let body = "\u{feff}{\"excluded_apps\":[{\"bundle_id\":\"C:\\\\Apps\\\\Player.exe\"}]}";
+        assert_eq!(
+            parse_exclusions_body(body),
+            Some(PathBuf::from(r"C:\Apps\Player.exe"))
+        );
+    }
+
+    #[test]
+    fn windows_paths_compare_case_insensitively_and_ignore_verbatim_prefix() {
+        assert_eq!(
+            normalized_windows_path(Path::new(r"\\?\C:\Apps\Player.EXE")),
+            normalized_windows_path(Path::new(r"c:\apps\player.exe"))
+        );
     }
 }

@@ -627,6 +627,15 @@ impl ServerCore {
         let mcp_session_access =
             screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
         pipe_manager.set_mcp_session_access(mcp_session_access.clone());
+        // Keep the desktop's embedded PipeManager and HTTP auth middleware on
+        // the same scoped-token registry. Without this bridge Pi pipes receive
+        // an sp_pipe_* token, but every authenticated API call is rejected as
+        // unknown before endpoint permissions can be evaluated.
+        pipe_manager.set_token_registry(Arc::new(
+            screenpipe_engine::pipe_permissions_middleware::DashMapTokenRegistry::new(
+                server.pipe_permissions.clone(),
+            ),
+        ));
         if let Some(cb) = on_pipe_output {
             pipe_manager.set_on_output_line(cb);
         }
@@ -662,15 +671,19 @@ impl ServerCore {
             let screenpipe_dir_for_cb = config.data_dir.clone();
             let pm_for_cb = shared_pipe_manager.clone();
             shared_pipe_manager.lock().await.set_on_run_complete(Arc::new(
-                move |pipe_name, execution_id, success, duration_secs, error_type| {
+                move |pipe_name, execution_id, trigger_type, success, duration_secs, error_type| {
                     let mut props = serde_json::json!({
                         "pipe": pipe_name,
+                        "execution_id": execution_id,
+                        "trigger_type": trigger_type,
+                        "telemetry_schema_version": 2,
                         "success": success,
                         "duration_secs": duration_secs,
                     });
                     if let Some(et) = error_type {
                         props["error_type"] = serde_json::Value::String(et.to_string());
                     }
+                    // Keep the legacy event name so existing dashboards continue to work.
                     analytics::capture_event_nonblocking("pipe_scheduled_run", props);
 
                     // Auto-register pipe artifacts to ~/.screenpipe/outputs/

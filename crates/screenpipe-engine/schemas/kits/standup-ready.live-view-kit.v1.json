@@ -1,0 +1,88 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "standup-ready",
+  "title": "Standup ready",
+  "description": "Walk into standup with specific progress, today's priorities, blockers, and supporting context.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "standup-update",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "standup-ready",
+    "title": "Standup ready",
+    "revision": 1,
+    "timeRange": "24h",
+    "periodPolicy": {
+      "type": "fixed.v1",
+      "value": "24h"
+    },
+    "blocks": [
+      {
+        "id": "standup-note",
+        "title": "Standup note",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 0,
+        "intent": "Write a concise standup update from the last 24 hours with completed progress, current work, next priorities, and blockers. Keep claims source-backed.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "progress",
+        "title": "What I worked on",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 1,
+        "intent": "List concrete work and outcomes observed in the last 24 hours, prioritizing finished or meaningfully advanced items.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "today",
+        "title": "What is next",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 2,
+        "intent": "List the most likely next work items based on explicit plans, unfinished work, and upcoming commitments from the last 24 hours.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "blockers",
+        "title": "Blockers",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 3,
+        "intent": "List explicit blockers or repeated friction from the last 24 hours. Do not label ordinary unfinished work as blocked without evidence.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "supporting-context",
+        "title": "Supporting context",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 4,
+        "intent": "Show timestamped events from the last 24 hours that provide useful supporting context for the standup update.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

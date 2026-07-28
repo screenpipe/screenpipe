@@ -112,6 +112,8 @@ pub struct RecordingConfig {
     pub ignored_urls: Vec<String>,
     /// Automatically detect and skip incognito / private browsing windows.
     pub ignore_incognito_windows: bool,
+    /// Use browser-native APIs for more reliable incognito detection on macOS.
+    pub enhanced_incognito_detection: bool,
     /// Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
     pub pause_on_drm_content: bool,
     /// Skip persisting clipboard rows/content in the UI recorder. Clipboard
@@ -349,6 +351,7 @@ impl RecordingConfig {
             included_windows: settings.included_windows.clone(),
             ignored_urls: settings.ignored_urls.clone(),
             ignore_incognito_windows: settings.ignore_incognito_windows,
+            enhanced_incognito_detection: settings.enhanced_incognito_detection,
             pause_on_drm_content: settings.pause_on_drm_content,
             disable_clipboard_capture: settings.disable_clipboard_capture,
             disable_keyboard_capture: settings.disable_keyboard_capture,
@@ -535,6 +538,7 @@ impl RecordingConfig {
             monitor_ids: self.monitor_ids.clone(),
             use_all_monitors: self.use_all_monitors,
             ignore_incognito_windows: self.ignore_incognito_windows,
+            enhanced_incognito_detection: self.enhanced_incognito_detection,
             pause_on_drm_content: self.pause_on_drm_content,
             languages: self.languages.clone(),
             video_quality: self.video_quality.clone(),
@@ -757,6 +761,7 @@ mod tests {
             included_windows: vec!["Editor".to_string()],
             ignored_urls: vec!["https://private.example".to_string()],
             ignore_incognito_windows: true,
+            enhanced_incognito_detection: true,
             pause_on_drm_content: true,
             monitor_ids: vec!["MONITOR-1".to_string()],
             use_all_monitors: false,
@@ -783,6 +788,7 @@ mod tests {
         assert_eq!(vision.monitor_ids, settings.monitor_ids);
         assert!(!vision.use_all_monitors);
         assert!(vision.ignore_incognito_windows);
+        assert!(vision.enhanced_incognito_detection);
         assert!(vision.pause_on_drm_content);
         assert_eq!(vision.video_quality, "high");
         assert!(!vision.disable_screenshots);

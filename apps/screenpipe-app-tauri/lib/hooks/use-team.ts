@@ -13,8 +13,9 @@ import {
   unwrapKeyWithPassphrase,
 } from "../team-crypto";
 import { encodePlainConfig, parsePlainConfigValue } from "../team-pipes";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
-const API = "https://screenpipe.com/api/team";
+const API = screenpipeWebUrl("/api/team", "https://screenpipe.com");
 
 // key stored under "team_key_<team_id>" in ~/.screenpipe/store.bin
 // this is the same Tauri secure store used for settings, auth tokens, etc.
@@ -147,7 +148,7 @@ export function useTeam() {
       }
       const tokenData = await tokenRes.json();
       const base64Key = await exportTeamKey(key);
-      return `https://screenpipe.com/join/${tokenData.invite_token}#key=${encodeURIComponent(base64Key)}`;
+      return screenpipeWebUrl(`/join/${tokenData.invite_token}#key=${encodeURIComponent(base64Key)}`, "https://screenpipe.com");
     },
     [headers]
   );

@@ -5,7 +5,7 @@
 "use client";
 
 import React from "react";
-import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Phone, Pause, Play } from "lucide-react";
+import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Pause, Play } from "lucide-react";
 import posthog from "posthog-js";
 import {
   Popover,
@@ -35,9 +35,6 @@ interface RecordingStatusProps {
   devices: RecordingDevice[];
   onDevicesChange: React.Dispatch<React.SetStateAction<RecordingDevice[]>>;
   meetingActive: boolean;
-  meetingApp?: string | null;
-  meetingLoading: boolean;
-  onToggleMeeting: () => void;
   onPauseRecording?: () => void | Promise<void>;
   onResumeRecording?: () => void | Promise<void>;
   /** true when the capture session itself is stopped (global pause via
@@ -74,9 +71,6 @@ export function RecordingStatus({
   devices,
   onDevicesChange,
   meetingActive,
-  meetingApp,
-  meetingLoading,
-  onToggleMeeting,
   onPauseRecording,
   onResumeRecording,
   isGloballyPaused,
@@ -333,29 +327,6 @@ export function RecordingStatus({
             );
           })}
         </div>
-        {(!allCaptureDisabled || meetingActive) && (
-          <div className="flex items-center gap-2 px-3 py-1.5 border-t border-border">
-            <Phone
-              aria-hidden="true"
-              className={cn(
-                "h-3 w-3 shrink-0",
-                meetingActive ? "text-foreground" : "text-muted-foreground"
-              )}
-            />
-            <span className="flex-1 min-w-0 truncate text-[11px] text-foreground">
-              {meetingActive ? `meeting notes${meetingApp ? ` · ${meetingApp}` : ""}` : "meeting notes"}
-            </span>
-            <button
-              onClick={onToggleMeeting}
-              disabled={meetingLoading}
-              data-testid="recording-status-meeting-toggle"
-              title={meetingActive ? "stop the meeting note only" : "start meeting notes"}
-              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors shrink-0 disabled:opacity-50 whitespace-nowrap"
-            >
-              {meetingActive ? "stop notes" : "start notes"}
-            </button>
-          </div>
-        )}
       </PopoverContent>
     </Popover>
   );

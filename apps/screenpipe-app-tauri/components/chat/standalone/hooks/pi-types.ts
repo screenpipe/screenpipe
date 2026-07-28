@@ -13,6 +13,7 @@ import type {
 import type { ExtractedDoc } from "@/lib/pi/extract-document";
 import type {
   ChatAttachment,
+  ChatSendOptions,
   ContentBlock,
   Message,
   OptimisticSteerPayload,
@@ -81,6 +82,7 @@ type PiTransportRefs = {
     message: string,
     displayLabel?: string,
     imageDataUrls?: string[],
+    options?: ChatSendOptions,
   ) => Promise<void>) | undefined>;
 };
 
@@ -282,4 +284,5 @@ export type PiSendCommand = (
   message: string,
   displayLabel?: string,
   imageDataUrls?: string[],
+  options?: ChatSendOptions,
 ) => Promise<void>;

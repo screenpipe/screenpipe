@@ -22,7 +22,8 @@ use screenpipe_a11y::config::UiCaptureConfig;
 use screenpipe_a11y::events::{EventData, UiEvent};
 use screenpipe_a11y::platform::UiRecorder;
 use screenpipe_a11y::tree::{
-    create_tree_walker, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    check_focused_window_filters, create_tree_walker, FocusedWindowFilterResult, SkipReason,
+    TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
 };
 use screenpipe_capture::paired_capture::{paired_capture, CaptureContext};
 use screenpipe_config::DbConfig;
@@ -48,8 +49,9 @@ const TARGET_FPS: f64 = 15.0;
 const VIDEO_QUALITY: &str = "balanced";
 /// How often the focus-watcher task re-evaluates the filter against the
 /// currently focused window. 1 Hz is the slowest cadence that still feels
-/// "responsive" when a user alt-tabs into a banking site — and walking the
-/// AX tree more often than that would compete with the capture thread.
+/// "responsive" when a user alt-tabs into a banking site. The default path
+/// reads focused app/window metadata only; a full accessibility walk is used
+/// only when URL filters require the browser URL.
 const FILTER_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 /// Minimum gap between two captures. Matches the engine's
 /// `min_capture_interval_ms` default (200-1500ms depending on power profile);
@@ -147,11 +149,14 @@ struct FilterConfig {
     ignored_windows: Vec<String>,
     included_windows: Vec<String>,
     ignored_urls: Vec<String>,
+    ignore_incognito_windows: bool,
+    enhanced_incognito_detection: bool,
 }
 
 impl FilterConfig {
     fn is_empty(&self) -> bool {
-        self.ignored_windows.is_empty()
+        !self.ignore_incognito_windows
+            && self.ignored_windows.is_empty()
             && self.included_windows.is_empty()
             && self.ignored_urls.is_empty()
     }
@@ -215,12 +220,10 @@ impl Recorder {
         ignored_urls: Vec<String>,
     ) {
         if let Ok(mut cfg) = self.filter.config.write() {
-            *cfg = FilterConfig {
-                filters: WindowFilters::new(&ignored_windows, &included_windows, &ignored_urls),
-                ignored_windows,
-                included_windows,
-                ignored_urls,
-            };
+            cfg.filters = WindowFilters::new(&ignored_windows, &included_windows, &ignored_urls);
+            cfg.ignored_windows = ignored_windows;
+            cfg.included_windows = included_windows;
+            cfg.ignored_urls = ignored_urls;
         }
     }
 
@@ -332,6 +335,8 @@ impl Recorder {
                 monitors,
                 ui_config,
                 use_pii,
+                self.options.ignore_incognito_windows.unwrap_or(true),
+                self.options.enhanced_incognito_detection.unwrap_or(false),
                 Arc::clone(&self.stop_flag),
                 &mut self.paired_handles,
                 &mut self.paired_recording,
@@ -699,6 +704,8 @@ fn build_filter_state(options: &RecorderOptions) -> Arc<FilterState> {
     let ignored = options.ignored_windows.clone().unwrap_or_default();
     let included = options.included_windows.clone().unwrap_or_default();
     let urls = options.ignored_urls.clone().unwrap_or_default();
+    let ignore_incognito_windows = options.ignore_incognito_windows.unwrap_or(true);
+    let enhanced_incognito_detection = options.enhanced_incognito_detection.unwrap_or(false);
 
     Arc::new(FilterState {
         config: StdRwLock::new(FilterConfig {
@@ -706,6 +713,8 @@ fn build_filter_state(options: &RecorderOptions) -> Arc<FilterState> {
             ignored_windows: ignored,
             included_windows: included,
             ignored_urls: urls,
+            ignore_incognito_windows,
+            enhanced_incognito_detection,
         }),
         paused: AtomicBool::new(false),
         last_reason: StdRwLock::new(None),
@@ -713,13 +722,12 @@ fn build_filter_state(options: &RecorderOptions) -> Arc<FilterState> {
 }
 
 /// Background task that re-evaluates the filter against the focused window
-/// at `FILTER_POLL_INTERVAL` and flips `paused` accordingly. The tree walker
-/// applies `ignored_windows` / `included_windows` itself (short-circuiting
-/// the expensive AX walk on a match); URL matching runs on the snapshot we
-/// get back for non-ignored windows.
+/// at `FILTER_POLL_INTERVAL` and flips `paused` accordingly. App/title and
+/// incognito filters use the lightweight focused-window API. URL matching
+/// falls back to a tree snapshot because browser URLs are not available from
+/// cross-platform focused-window metadata.
 ///
-/// Short-circuits when the filter config is empty so the recorder pays
-/// near-zero overhead for the common "no filter" case while still leaving
+/// Short-circuits when every privacy filter is disabled while still leaving
 /// `set_filters()` viable at runtime.
 async fn focus_watch_loop(filter: Arc<FilterState>, stop_flag: Arc<AtomicBool>) {
     let mut ticker = interval(FILTER_POLL_INTERVAL);
@@ -767,29 +775,43 @@ async fn focus_watch_loop(filter: Arc<FilterState>, stop_flag: Arc<AtomicBool>) 
 /// not, and `None` if we couldn't determine — caller keeps the previous
 /// verdict.
 fn evaluate_focus(filter: &FilterState) -> Option<(bool, Option<String>)> {
-    let (ignored_windows, included_windows) = {
+    let (
+        ignored_windows,
+        included_windows,
+        ignored_urls,
+        ignore_incognito_windows,
+        enhanced_incognito_detection,
+    ) = {
         let cfg = filter.config.read().ok()?;
-        (cfg.ignored_windows.clone(), cfg.included_windows.clone())
+        (
+            cfg.ignored_windows.clone(),
+            cfg.included_windows.clone(),
+            cfg.ignored_urls.clone(),
+            cfg.ignore_incognito_windows,
+            cfg.enhanced_incognito_detection,
+        )
     };
 
     let mut config = TreeWalkerConfig::default();
     config.ignored_windows = ignored_windows;
     config.included_windows = included_windows;
+    config.ignore_incognito_windows = ignore_incognito_windows;
+    config.enhanced_incognito_detection = enhanced_incognito_detection;
+
+    if !focus_filter_needs_tree(&ignored_urls) {
+        let result = check_focused_window_filters(config).ok()?;
+        return match result {
+            FocusedWindowFilterResult::Skipped(reason) => Some(skip_verdict(reason)),
+            FocusedWindowFilterResult::Allowed { .. } => Some((false, None)),
+            FocusedWindowFilterResult::NotFound => None,
+        };
+    }
 
     let walker = create_tree_walker(config);
     let result = walker.walk_focused_window().ok()?;
 
     match result {
-        TreeWalkResult::Skipped(reason) => {
-            let tag = match reason {
-                SkipReason::Incognito => "incognito",
-                SkipReason::ExcludedApp => "excluded_app",
-                SkipReason::UserIgnored => "ignored_window",
-                SkipReason::NotInIncludeList => "included_window_mismatch",
-                SkipReason::BlockedUrl => "blocked_url",
-            };
-            Some((true, Some(tag.to_string())))
-        }
+        TreeWalkResult::Skipped(reason) => Some(skip_verdict(reason)),
         TreeWalkResult::Found(snap) => {
             let cfg = filter.config.read().ok()?;
             let url = snap.browser_url.as_deref().unwrap_or("");
@@ -803,6 +825,21 @@ fn evaluate_focus(filter: &FilterState) -> Option<(bool, Option<String>)> {
         }
         TreeWalkResult::NotFound => None,
     }
+}
+
+fn focus_filter_needs_tree(ignored_urls: &[String]) -> bool {
+    !ignored_urls.is_empty()
+}
+
+fn skip_verdict(reason: SkipReason) -> (bool, Option<String>) {
+    let tag = match reason {
+        SkipReason::Incognito => "incognito",
+        SkipReason::ExcludedApp => "excluded_app",
+        SkipReason::UserIgnored => "ignored_window",
+        SkipReason::NotInIncludeList => "included_window_mismatch",
+        SkipReason::BlockedUrl => "blocked_url",
+    };
+    (true, Some(tag.to_string()))
 }
 
 /// Top-level setup for the paired-capture pipeline (called once per
@@ -824,6 +861,8 @@ async fn start_paired_captures(
     monitors: Vec<SafeMonitor>,
     ui_config: UiCaptureConfig,
     use_pii_removal: bool,
+    ignore_incognito_windows: bool,
+    enhanced_incognito_detection: bool,
     stop_flag: Arc<AtomicBool>,
     out_handles: &mut Vec<JoinHandle<()>>,
     out_recording: &mut Option<RecordingHandle>,
@@ -911,6 +950,8 @@ async fn start_paired_captures(
             sw_clone,
             stop,
             use_pii_removal,
+            ignore_incognito_windows,
+            enhanced_incognito_detection,
         ));
         out_handles.push(handle);
     }
@@ -931,6 +972,8 @@ async fn paired_capture_loop_for_monitor(
     snapshot_writer: Arc<SnapshotWriter>,
     stop_flag: Arc<AtomicBool>,
     use_pii_removal: bool,
+    ignore_incognito_windows: bool,
+    enhanced_incognito_detection: bool,
 ) {
     let monitor_id = monitor.id();
     let device_name = monitor.name().to_string();
@@ -1034,6 +1077,8 @@ async fn paired_capture_loop_for_monitor(
             let mut config = TreeWalkerConfig::default();
             config.monitor_x = monitor_x;
             config.monitor_y = monitor_y;
+            config.ignore_incognito_windows = ignore_incognito_windows;
+            config.enhanced_incognito_detection = enhanced_incognito_detection;
             create_tree_walker(config).walk_focused_window()
         })
         .await;
@@ -1517,6 +1562,8 @@ mod tests {
             ignored_windows,
             included_windows,
             ignored_urls,
+            ignore_incognito_windows: Some(false),
+            enhanced_incognito_detection: Some(false),
             data_dir: None,
             paired_monitors: None,
             ui_capture: None,
@@ -1561,5 +1608,29 @@ mod tests {
         let st = build_filter_state(&opts_with_filters(None, None, None));
         let cfg = st.config.read().unwrap();
         assert!(cfg.is_empty());
+    }
+
+    #[test]
+    fn incognito_filter_defaults_on_and_enhanced_detection_defaults_off() {
+        let options = RecorderOptions {
+            ignore_incognito_windows: None,
+            enhanced_incognito_detection: None,
+            ..opts_with_filters(None, None, None)
+        };
+        let st = build_filter_state(&options);
+        let cfg = st.config.read().unwrap();
+
+        assert!(cfg.ignore_incognito_windows);
+        assert!(!cfg.enhanced_incognito_detection);
+        assert!(!cfg.is_empty(), "default incognito filtering requires focus checks");
+        assert!(
+            !focus_filter_needs_tree(&cfg.ignored_urls),
+            "default incognito protection must use focused-window metadata, not a full tree walk"
+        );
+    }
+
+    #[test]
+    fn url_filters_require_tree_metadata() {
+        assert!(focus_filter_needs_tree(&["bank.example".to_string()]));
     }
 }

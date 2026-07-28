@@ -321,10 +321,31 @@ impl DatabaseManager {
         limit: u32,
         offset: u32,
     ) -> Result<(Vec<crate::types::OutputRecord>, i64), SqlxError> {
+        // Preserve the existing database API as an unfiltered registry query.
+        // User-facing artifact surfaces use the explicit visibility method.
+        self.search_outputs_for_artifacts(query, source, saf_kind, true, limit, offset)
+            .await
+    }
+
+    pub async fn search_outputs_for_artifacts(
+        &self,
+        query: &str,
+        source: Option<&str>,
+        saf_kind: Option<&str>,
+        include_internal: bool,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<crate::types::OutputRecord>, i64), SqlxError> {
         let fts_query = crate::sanitize_fts5_query(query);
         if fts_query.is_empty() {
             return self
-                .list_outputs_for_artifacts(source, saf_kind, limit, offset)
+                .list_outputs_for_artifacts_with_internal(
+                    source,
+                    saf_kind,
+                    include_internal,
+                    limit,
+                    offset,
+                )
                 .await;
         }
 
@@ -337,7 +358,7 @@ impl DatabaseManager {
              WHERE output_search_fts MATCH ?1",
         );
         let mut binds: Vec<String> = vec![fts_query.clone()];
-        append_artifact_output_filters(&mut sql, &mut binds, source, saf_kind);
+        append_artifact_output_filters(&mut sql, &mut binds, source, saf_kind, include_internal);
         sql.push_str(&format!(
             " ORDER BY bm25(output_search_fts), o.updated_at DESC LIMIT ?{} OFFSET ?{}",
             binds.len() + 1,
@@ -362,7 +383,13 @@ impl DatabaseManager {
              WHERE output_search_fts MATCH ?1",
         );
         let mut count_binds: Vec<String> = vec![fts_query];
-        append_artifact_output_filters(&mut count_sql, &mut count_binds, source, saf_kind);
+        append_artifact_output_filters(
+            &mut count_sql,
+            &mut count_binds,
+            source,
+            saf_kind,
+            include_internal,
+        );
         let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
         for b in &count_binds {
             count_query = count_query.bind(b);
@@ -379,6 +406,20 @@ impl DatabaseManager {
         limit: u32,
         offset: u32,
     ) -> Result<(Vec<crate::types::OutputRecord>, i64), SqlxError> {
+        // Preserve compatibility for callers that use this as a raw output
+        // registry. The Artifacts route passes its visibility explicitly.
+        self.list_outputs_for_artifacts_with_internal(source, saf_kind, true, limit, offset)
+            .await
+    }
+
+    pub async fn list_outputs_for_artifacts_with_internal(
+        &self,
+        source: Option<&str>,
+        saf_kind: Option<&str>,
+        include_internal: bool,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<crate::types::OutputRecord>, i64), SqlxError> {
         let mut sql = String::from(
             "SELECT id, source, source_type, title, kind, original_path, output_path, \
              size_bytes, preview, metadata, saf_kind, artifact_id, saf_version, \
@@ -386,7 +427,7 @@ impl DatabaseManager {
              FROM outputs o WHERE 1=1",
         );
         let mut binds: Vec<String> = Vec::new();
-        append_artifact_output_filters(&mut sql, &mut binds, source, saf_kind);
+        append_artifact_output_filters(&mut sql, &mut binds, source, saf_kind, include_internal);
         sql.push_str(&format!(
             " ORDER BY updated_at DESC LIMIT ?{} OFFSET ?{}",
             binds.len() + 1,
@@ -405,7 +446,13 @@ impl DatabaseManager {
 
         let mut count_sql = String::from("SELECT COUNT(*) FROM outputs o WHERE 1=1");
         let mut count_binds: Vec<String> = Vec::new();
-        append_artifact_output_filters(&mut count_sql, &mut count_binds, source, saf_kind);
+        append_artifact_output_filters(
+            &mut count_sql,
+            &mut count_binds,
+            source,
+            saf_kind,
+            include_internal,
+        );
         let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
         for b in &count_binds {
             count_query = count_query.bind(b);
@@ -416,13 +463,27 @@ impl DatabaseManager {
     }
 
     pub async fn list_output_sources_for_artifacts(&self) -> Result<Vec<String>, SqlxError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
+        // Preserve the historical unfiltered source inventory for direct DB
+        // callers. The Artifacts route excludes internal sources by default.
+        self.list_output_sources_for_artifacts_with_internal(true)
+            .await
+    }
+
+    pub async fn list_output_sources_for_artifacts_with_internal(
+        &self,
+        include_internal: bool,
+    ) -> Result<Vec<String>, SqlxError> {
+        let mut sql = String::from(
             "SELECT DISTINCT CASE WHEN source_type = 'chat' THEN 'chat' ELSE source END AS display_source \
-             FROM outputs \
-             ORDER BY display_source ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+             FROM outputs o WHERE 1=1",
+        );
+        if !include_internal {
+            sql.push_str(" AND COALESCE(o.saf_kind, '') != 'structured-output'");
+        }
+        sql.push_str(" ORDER BY display_source ASC");
+        let rows: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
@@ -451,7 +512,11 @@ fn append_artifact_output_filters(
     binds: &mut Vec<String>,
     source: Option<&str>,
     saf_kind: Option<&str>,
+    include_internal: bool,
 ) {
+    if !include_internal {
+        sql.push_str(" AND COALESCE(o.saf_kind, '') != 'structured-output'");
+    }
     if let Some(src) = source.filter(|s| !s.is_empty()) {
         binds.push(src.to_string());
         let idx = binds.len();

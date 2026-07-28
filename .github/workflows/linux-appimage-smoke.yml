@@ -10,6 +10,7 @@ on:
     branches: [main]
     paths:
       - ".github/scripts/linux/bundle-appimage-runtime-deps.sh"
+      - ".github/scripts/linux/pipewire-loop-smoke.c"
       - ".github/workflows/linux-appimage-smoke.yml"
       - "apps/screenpipe-app-tauri/scripts/pre_build.js"
       - "apps/screenpipe-app-tauri/src-tauri/**"
@@ -331,6 +332,7 @@ jobs:
           # must launch here.
           mkdir -p /tmp/screenpipe-appimage-arch
           cp "apps/screenpipe-app-tauri/${APPIMAGE}" /tmp/screenpipe-appimage-arch/screenpipe.AppImage
+          cp .github/scripts/linux/pipewire-loop-smoke.c /tmp/screenpipe-appimage-arch/
 
           docker run --rm \
             -v /tmp/screenpipe-appimage-arch:/smoke \
@@ -348,6 +350,9 @@ jobs:
                 libayatana-appindicator \
                 libxtst \
                 xdotool \
+                pipewire \
+                gcc \
+                pkgconf \
                 dbus \
                 xorg-server-xvfb \
                 xorg-xauth \
@@ -363,6 +368,24 @@ jobs:
               cd /smoke
               chmod +x screenpipe.AppImage
               ./screenpipe.AppImage --appimage-extract >/dev/null
+
+              # The Ubuntu-built libpipewire uses a Debian multiarch SPA plugin
+              # path that does not exist on Arch. The AppImage must carry the
+              # matching support.system implementation and configure AppRun to
+              # use it before the Rust PipeWire main loop is created.
+              spa_dir=/smoke/squashfs-root/usr/lib/spa-0.2
+              spa_support="${spa_dir}/support/libspa-support.so"
+              test -f "${spa_support}"
+              grep -q "screenpipe bundled SPA runtime" squashfs-root/AppRun
+              grep -q "SPA_PLUGIN_DIR" squashfs-root/AppRun
+
+              cc $(pkg-config --cflags libpipewire-0.3) \
+                /smoke/pipewire-loop-smoke.c \
+                -o /tmp/pipewire-loop-smoke \
+                $(pkg-config --libs libpipewire-0.3)
+              LD_LIBRARY_PATH=/smoke/squashfs-root/usr/lib \
+                SPA_PLUGIN_DIR="${spa_dir}" \
+                /tmp/pipewire-loop-smoke
 
               # The fix strips these from the bundle; they must NOT be back.
               if ls squashfs-root/usr/lib/libsharpyuv.so* squashfs-root/usr/lib/libavif.so* 2>/dev/null; then

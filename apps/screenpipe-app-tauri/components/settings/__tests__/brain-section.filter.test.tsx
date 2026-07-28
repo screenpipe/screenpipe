@@ -107,6 +107,10 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
+    listBrainViews: vi.fn(async () => ({
+      status: "ok",
+      data: [{ id: "daily" }, { id: "meetings" }, { id: "processes" }],
+    })),
     readViewerFile: vi.fn(async () => ({ status: "ok", data: { kind: "text", text: "full" } })),
     openViewerWindow: vi.fn(async () => undefined),
   },
@@ -162,6 +166,16 @@ const artifactRows = () =>
   screen.queryAllByTestId(/^brain-item-artifact-/);
 
 describe("BrainSection type filter", () => {
+  it("loads all tab totals before the user opens each tab", async () => {
+    render(<BrainSection />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("brain-filter-overview")).toHaveTextContent("Live Views3");
+      expect(screen.getByTestId("brain-filter-memories")).toHaveTextContent("Memories8");
+      expect(screen.getByTestId("brain-filter-artifacts")).toHaveTextContent("Artifacts5");
+    });
+  });
+
   it("shows memories by default", async () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));

@@ -181,6 +181,8 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
   public var ignoredWindows: [String]?
   public var includedWindows: [String]?
   public var ignoredUrls: [String]?
+  public var ignoreIncognitoWindows: Bool?
+  public var enhancedIncognitoDetection: Bool?
 
   public init(
     output: String? = nil,
@@ -192,7 +194,9 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     systemAudio: Bool? = nil,
     ignoredWindows: [String]? = nil,
     includedWindows: [String]? = nil,
-    ignoredUrls: [String]? = nil
+    ignoredUrls: [String]? = nil,
+    ignoreIncognitoWindows: Bool? = nil,
+    enhancedIncognitoDetection: Bool? = nil
   ) {
     self.output = output
     self.outputDir = outputDir
@@ -204,6 +208,8 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     self.ignoredWindows = ignoredWindows
     self.includedWindows = includedWindows
     self.ignoredUrls = ignoredUrls
+    self.ignoreIncognitoWindows = ignoreIncognitoWindows
+    self.enhancedIncognitoDetection = enhancedIncognitoDetection
   }
 
   public init(
@@ -215,7 +221,9 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     systemAudio: Bool? = nil,
     ignoredWindows: [String]? = nil,
     includedWindows: [String]? = nil,
-    ignoredUrls: [String]? = nil
+    ignoredUrls: [String]? = nil,
+    ignoreIncognitoWindows: Bool? = nil,
+    enhancedIncognitoDetection: Bool? = nil
   ) {
     self.init(
       output: outputURL.path,
@@ -226,7 +234,9 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
       systemAudio: systemAudio,
       ignoredWindows: ignoredWindows,
       includedWindows: includedWindows,
-      ignoredUrls: ignoredUrls
+      ignoredUrls: ignoredUrls,
+      ignoreIncognitoWindows: ignoreIncognitoWindows,
+      enhancedIncognitoDetection: enhancedIncognitoDetection
     )
   }
 
@@ -239,7 +249,9 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     systemAudio: Bool? = nil,
     ignoredWindows: [String]? = nil,
     includedWindows: [String]? = nil,
-    ignoredUrls: [String]? = nil
+    ignoredUrls: [String]? = nil,
+    ignoreIncognitoWindows: Bool? = nil,
+    enhancedIncognitoDetection: Bool? = nil
   ) {
     self.init(
       outputDir: outputDirectoryURL.path,
@@ -250,7 +262,9 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
       systemAudio: systemAudio,
       ignoredWindows: ignoredWindows,
       includedWindows: includedWindows,
-      ignoredUrls: ignoredUrls
+      ignoredUrls: ignoredUrls,
+      ignoreIncognitoWindows: ignoreIncognitoWindows,
+      enhancedIncognitoDetection: enhancedIncognitoDetection
     )
   }
 

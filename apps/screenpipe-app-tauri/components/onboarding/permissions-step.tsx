@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Monitor, Mic, Keyboard, Globe, Check } from "lucide-react";
+import { Monitor, Mic, Keyboard, Check } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
@@ -26,7 +26,6 @@ interface PermissionDef {
   check: () => Promise<string | boolean>;
   request: () => Promise<void>;
   macOnly?: boolean;
-  optional?: boolean;
 }
 
 // The wheel turns on detected grants — pull the user back from System
@@ -55,7 +54,6 @@ function PermissionRow({
   title,
   subtitle,
   granted,
-  skipped,
   focused,
   distance,
   onGrant,
@@ -64,12 +62,11 @@ function PermissionRow({
   title: string;
   subtitle: React.ReactNode;
   granted: boolean;
-  skipped: boolean;
   focused: boolean;
   distance: number;
   onGrant: () => void;
 }) {
-  const interactive = focused && !granted && !skipped;
+  const interactive = focused && !granted;
 
   return (
     <button
@@ -121,10 +118,6 @@ function PermissionRow({
           <span className="font-mono text-[10px] text-muted-foreground">
             granted
           </span>
-        ) : skipped ? (
-          <span className="font-mono text-[10px] text-muted-foreground">
-            skipped
-          </span>
         ) : interactive ? (
           <span className="font-mono text-[10px] text-muted-foreground group-hover:text-background/70">
             grant →
@@ -141,17 +134,12 @@ export default function PermissionsStep({
 }: PermissionsStepProps) {
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   const [statuses, setStatuses] = useState<Record<string, boolean>>({});
-  const [skippedIds, setSkippedIds] = useState<string[]>([]);
-  // Browsers that are installed AND running at mount. Only running browsers
-  // can be prompted for Automation (we never force-launch, #2510), so a row
-  // for a closed browser would be a dead click. Resolved once so the wheel
-  // doesn't reshuffle mid-flow.
-  const [promptableBrowsers, setPromptableBrowsers] = useState<string[]>([]);
   const [requesting, setRequesting] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const hasAdvancedRef = useRef(false);
   const mountTimeRef = useRef(Date.now());
   const statusesRef = useRef<Record<string, boolean>>({});
+  const requestStartedAtRef = useRef<Record<string, number>>({});
   const pollInFlightRef = useRef(false);
   const pollAgainRef = useRef(false);
   // Accessibility is polled silently (AXIsProcessTrusted) until the user
@@ -169,39 +157,6 @@ export default function PermissionsStep({
       subtitle: "Lets Screenpipe transcribe your voice in meetings and calls",
       check: () => commands.checkMicrophonePermission(),
       request: () => commands.requestPermission("microphone"),
-    },
-    {
-      id: "browsers",
-      icon: <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture browser URLs",
-      subtitle: "So Screenpipe knows what you were reading, not just what the pixels say",
-      // Scoped to RUNNING browsers: installed-but-closed ones can't be
-      // prompted, so counting them would leave this row permanently denied.
-      check: async () => {
-        const browsers = await commands.getBrowsersAutomationStatus();
-        const running = browsers.filter((b) => b.running);
-        if (running.length === 0) return "granted";
-        return running.every((b) => b.status === "granted")
-          ? "granted"
-          : "denied";
-      },
-      request: async () => {
-        await commands.requestBrowsersAutomationPermission();
-        // macOS never re-prompts after a deny, and unsigned/adhoc dev builds
-        // can have the prompt swallowed by tccd entirely — either way the
-        // click would be a silent no-op, so if the running browsers still
-        // aren't granted, escalate to the Automation settings pane.
-        const browsers = await commands.getBrowsersAutomationStatus();
-        const running = browsers.filter((b) => b.running);
-        if (
-          running.length > 0 &&
-          !running.every((b) => b.status === "granted")
-        ) {
-          await commands.openPermissionSettings("automation");
-        }
-      },
-      macOnly: true,
-      optional: true,
     },
     {
       id: "accessibility",
@@ -241,24 +196,18 @@ export default function PermissionsStep({
   ];
 
   // Filter permissions for this platform
-  const activePermissions = permissions.filter((p) => {
-    if (p.macOnly && !isMac) return false;
-    if (p.id === "browsers" && promptableBrowsers.length === 0) return false;
-    return true;
-  });
+  const activePermissions = permissions.filter((p) => !p.macOnly || isMac);
   const activePermissionsRef = useRef(activePermissions);
   activePermissionsRef.current = activePermissions;
 
-  const requiredPermissions = activePermissions.filter((p) => !p.optional);
-  const allRequiredGranted = requiredPermissions.every(
+  const allRequiredGranted = activePermissions.every(
     (p) => statuses[p.id] === true
   );
 
-  // The wheel's focused step: first permission neither granted nor skipped.
-  // Focus only moves when the poller confirms a grant landed (or an optional
-  // row is skipped) — a failed or abandoned grant keeps the row in focus.
+  // The wheel's focused step is the first permission not yet granted. Focus
+  // only moves when the poller confirms a grant landed.
   const focusIndex = activePermissions.findIndex(
-    (p) => statuses[p.id] !== true && !skippedIds.includes(p.id)
+    (p) => statuses[p.id] !== true
   );
   const focusedPerm = focusIndex >= 0 ? activePermissions[focusIndex] : null;
 
@@ -303,6 +252,20 @@ export default function PermissionsStep({
         const newlyGranted = Object.keys(results).some(
           (k) => results[k] === true && statusesRef.current[k] === false
         );
+        for (const id of Object.keys(results)) {
+          if (
+            results[id] === true &&
+            statusesRef.current[id] === false &&
+            requestStartedAtRef.current[id]
+          ) {
+            posthog.capture("onboarding_permission_grant_confirmed", {
+              permission: id,
+              confirmation_latency_ms:
+                Date.now() - requestStartedAtRef.current[id],
+            });
+            delete requestStartedAtRef.current[id];
+          }
+        }
         statusesRef.current = { ...statusesRef.current, ...results };
         if (newlyGranted && !hasAdvancedRef.current) {
           void refocusAppWindow();
@@ -320,20 +283,7 @@ export default function PermissionsStep({
       pollInFlightRef.current = false;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMac, promptableBrowsers.length]);
-
-  // Resolve promptable (running) browsers once
-  useEffect(() => {
-    if (isPlatformLoading || !isMac) return;
-    commands
-      .getBrowsersAutomationStatus()
-      .then((browsers) =>
-        setPromptableBrowsers(
-          browsers.filter((b) => b.running).map((b) => b.name)
-        )
-      )
-      .catch(() => {});
-  }, [isPlatformLoading, isMac]);
+  }, [isMac]);
 
   useEffect(() => {
     if (isPlatformLoading) return;
@@ -380,12 +330,20 @@ export default function PermissionsStep({
   // Handle grant click with immediate refresh
   const handleGrant = async (perm: PermissionDef) => {
     if (requesting || perm.id !== focusedPerm?.id) return;
+    requestStartedAtRef.current[perm.id] = Date.now();
+    posthog.capture("onboarding_permission_grant_clicked", {
+      permission: perm.id,
+    });
     setRequesting(true);
     try {
       await perm.request();
       // Immediate recheck after requesting
       await pollPermissions();
     } catch (err) {
+      delete requestStartedAtRef.current[perm.id];
+      posthog.capture("onboarding_permission_grant_request_failed", {
+        permission: perm.id,
+      });
       console.error("failed to request permission:", err);
     } finally {
       setRequesting(false);
@@ -409,7 +367,7 @@ export default function PermissionsStep({
           Unlock the full experience
         </h1>
         <p className="font-mono text-[10px] text-muted-foreground mt-1 text-center max-w-xs">
-          Enable these permissions to get the most out of Screenpipe
+          Three permissions unlock recording. Optional access can wait.
         </p>
       </div>
 
@@ -423,31 +381,12 @@ export default function PermissionsStep({
             title={perm.title}
             subtitle={perm.subtitle}
             granted={statuses[perm.id] === true}
-            skipped={skippedIds.includes(perm.id)}
             focused={focusIndex === i}
             distance={focusIndex === -1 ? 0 : Math.abs(i - focusIndex)}
             onGrant={() => handleGrant(perm)}
           />
         ))}
       </div>
-
-      {/* Optional permissions can be passed without granting, otherwise a
-          denied optional grant would deadlock the wheel */}
-      {focusedPerm?.optional && (
-        <motion.button
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          onClick={() => {
-            posthog.capture("onboarding_optional_permission_skipped", {
-              permission: focusedPerm.id,
-            });
-            setSkippedIds((prev) => [...prev, focusedPerm.id]);
-          }}
-          className="mt-3 font-mono text-[10px] text-muted-foreground/50 hover:text-foreground transition-colors"
-        >
-          skip — this one&apos;s optional →
-        </motion.button>
-      )}
 
       {/* Skip link */}
       {showSkip && !allRequiredGranted && (
@@ -458,6 +397,9 @@ export default function PermissionsStep({
             posthog.capture("onboarding_permission_skipped", {
               time_spent_ms: Date.now() - mountTimeRef.current,
               statuses,
+              unresolved_permissions: activePermissions
+                .filter((permission) => statuses[permission.id] !== true)
+                .map((permission) => permission.id),
             });
             hasAdvancedRef.current = true;
             handleNextSlide();

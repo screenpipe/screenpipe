@@ -754,6 +754,10 @@ pub(crate) struct ListArtifactsQuery {
     /// declarations (newest by mtime).
     #[serde(default = "default_per_pipe_limit")]
     pub per_pipe_limit: u32,
+    /// Include renderer-facing structured output records. Hidden by default so
+    /// internal Live View JSON does not appear in the user-facing Artifacts UI.
+    #[serde(default)]
+    pub include_internal: bool,
 }
 
 #[derive(OaSchema, Serialize)]
@@ -834,7 +838,14 @@ pub(crate) async fn list_artifacts_handler(
     let (rows, registered_total) = if let Some(q) = q_filter {
         state
             .db
-            .search_outputs(q, source_filter, saf_kind_filter, registered_fetch_limit, 0)
+            .search_outputs_for_artifacts(
+                q,
+                source_filter,
+                saf_kind_filter,
+                params.include_internal,
+                registered_fetch_limit,
+                0,
+            )
             .await
             .map_err(|e| {
                 (
@@ -845,7 +856,13 @@ pub(crate) async fn list_artifacts_handler(
     } else {
         state
             .db
-            .list_outputs_for_artifacts(source_filter, saf_kind_filter, registered_fetch_limit, 0)
+            .list_outputs_for_artifacts_with_internal(
+                source_filter,
+                saf_kind_filter,
+                params.include_internal,
+                registered_fetch_limit,
+                0,
+            )
             .await
             .map_err(|e| {
                 (
@@ -954,7 +971,7 @@ pub(crate) async fn list_artifacts_handler(
     };
     let mut source_set: std::collections::HashSet<String> = state
         .db
-        .list_output_sources_for_artifacts()
+        .list_output_sources_for_artifacts_with_internal(params.include_internal)
         .await
         .map_err(|e| {
             (

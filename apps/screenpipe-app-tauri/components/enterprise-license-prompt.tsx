@@ -6,6 +6,7 @@
 
 import React, { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 interface EnterpriseLicensePromptProps {
   onSubmit: (key: string) => Promise<{ ok: boolean; error?: string }>;
@@ -16,7 +17,7 @@ interface EnterpriseLicensePromptProps {
 
 const ENTERPRISE_KEY_PATTERN = /^ENT-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
 const ENTERPRISE_KEY_FORMAT_ERROR = "enter an enterprise key like ENT-XXXX-XXXX-XXXX-XXXX";
-const ENTERPRISE_WORKSPACE_URL = "https://screenpipe.com/account/workspace";
+const ENTERPRISE_WORKSPACE_URL = screenpipeWebUrl("/account/workspace", "https://screenpipe.com");
 
 function normalizeLicenseKey(value: string): string {
   return value.trim().toUpperCase();

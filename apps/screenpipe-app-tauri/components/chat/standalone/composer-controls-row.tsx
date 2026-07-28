@@ -42,7 +42,10 @@ export function ComposerControlsRow({
   const aiPresets = modelControls.settings.aiPresets;
 
   return (
-    <div className="flex items-center gap-1.5 px-1 pt-2">
+    <div
+      className="flex items-center gap-1.5 px-1 pt-2"
+      data-firstrun-target="composer-controls"
+    >
       <Popover
         open={filters.appFilterOpen}
         onOpenChange={filters.onFilterMenuOpenChange}
@@ -142,6 +145,7 @@ export function ComposerControlsRow({
         size="icon"
         disabled={sendButton.sendDisabled}
         onClick={sendButton.isStopMode ? sendButton.onStop : undefined}
+        data-firstrun-target="send"
         className={cn(
           "h-8 w-8 transition-all duration-200 relative",
           "bg-foreground text-background hover:bg-foreground/80",

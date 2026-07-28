@@ -5,7 +5,8 @@
 # Enterprise build for Windows + macOS + Linux. Manual trigger (workflow_dispatch).
 # Builds with tauri.enterprise.conf.json, uploads to R2.
 # Windows: signs binaries with SSL.com EV cert, creates .intunewin for Intune.
-# macOS: signs with Apple Developer cert, notarizes with Apple notary service.
+# macOS: signs with Apple Developer cert, notarizes/staples fresh-install and
+# updater artifacts, then verifies the exact updater archive before upload.
 # Linux: builds AppImage/deb artifacts and signs updater artifacts.
 # Does not run as part of consumer release — keeps consumer releases fast.
 name: Release Enterprise
@@ -790,6 +791,24 @@ jobs:
             fi
           done
 
+      - name: Verify codesign on .app
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="aarch64-apple-darwin"
+          APP_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle/macos"
+          shopt -s nullglob
+          apps=( "${APP_DIR}"/*.app )
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "::error::no .app bundle in ${APP_DIR} — Tauri build did not produce one"
+            exit 1
+          fi
+          for app in "${apps[@]}"; do
+            echo "Verifying ${app##*/} before notarization"
+            codesign --verify --deep --strict --verbose=2 "$app"
+          done
+          echo "All enterprise .app bundles pass strict codesign verification"
+
       - name: Notarize and staple DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -825,6 +844,132 @@ jobs:
               spctl --assess --type open --context context:primary-signature --verbose "$dmg" 2>&1 || true
               echo "$(basename "$dmg") notarized and stapled"
             fi
+          done
+
+      - name: Staple .app and rebuild updater tarball
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          TARGET="aarch64-apple-darwin"
+          BUNDLE_DIR="${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          MACOS_DIR="${BUNDLE_DIR}/macos"
+          notary_auth=(
+            --apple-id "$APPLE_ID"
+            --password "$APPLE_PASSWORD"
+            --team-id "$APPLE_TEAM_ID"
+          )
+
+          submit_for_notarization() {
+            local artifact="$1"
+            local artifact_name
+            artifact_name="$(basename "$artifact")"
+            local attempt submit_output submission_id wait_seconds
+
+            for attempt in 1 2 3; do
+              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/3)" >&2
+              if submit_output="$(xcrun notarytool submit "$artifact" "${notary_auth[@]}" 2>&1)"; then
+                printf '%s\n' "$submit_output" >&2
+                submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+                if [ -z "$submission_id" ]; then
+                  echo "notarytool submit succeeded but did not print a submission id" >&2
+                  return 1
+                fi
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              printf '%s\n' "$submit_output" >&2
+              submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
+              if [ -n "$submission_id" ]; then
+                echo "notarytool submit exited non-zero after upload; waiting on existing submission ${submission_id}" >&2
+                printf '%s\n' "$submission_id"
+                return 0
+              fi
+
+              if [ "$attempt" -eq 3 ]; then
+                echo "notarytool submit failed after ${attempt} attempts" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool submit failed before a submission id; retrying in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
+
+          wait_for_notarization() {
+            local submission_id="$1"
+            local attempt wait_seconds
+
+            for attempt in 1 2 3 4; do
+              echo "Waiting for notarization ${submission_id} (attempt ${attempt}/4)"
+              if xcrun notarytool wait "$submission_id" "${notary_auth[@]}" --timeout 15m; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq 4 ]; then
+                echo "notarytool wait failed after ${attempt} attempts for ${submission_id}" >&2
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 30))
+              echo "notarytool wait failed; retrying same submission in ${wait_seconds}s" >&2
+              sleep "$wait_seconds"
+            done
+          }
+
+          shopt -s nullglob
+          apps=( "${MACOS_DIR}"/*.app )
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "::error::no .app bundle in ${MACOS_DIR} — refusing to upload an unverified updater"
+            exit 1
+          fi
+
+          for app in "${apps[@]}"; do
+            [ -d "$app" ] || continue
+            APP_NAME="$(basename "$app")"
+            APP_ZIP="${MACOS_DIR}/${APP_NAME}.notarize.zip"
+            TARBALL="${MACOS_DIR}/${APP_NAME}.tar.gz"
+
+            echo "Notarizing and stapling ${APP_NAME}"
+            /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" "$APP_ZIP"
+            submission_id="$(submit_for_notarization "$APP_ZIP")"
+            wait_for_notarization "$submission_id"
+            rm -f "$APP_ZIP"
+
+            xcrun stapler staple "$app"
+            xcrun stapler validate "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose "$app"
+
+            # Tauri generated the original updater archive before the final
+            # notarized app existed. Rebuild it from the stapled app and renew
+            # its updater signature so upgrades receive the same valid bundle
+            # as fresh DMG/PKG installs.
+            echo "Rebuilding ${APP_NAME}.tar.gz from the finalized app"
+            ( cd "$MACOS_DIR" && tar czf "${APP_NAME}.tar.gz" "$APP_NAME" )
+            rm -f "${TARBALL}.sig"
+            ( cd "${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri" && bunx tauri signer sign "$TARBALL" )
+            test -s "${TARBALL}.sig"
+
+            # Validate the exact bytes that the updater will download. This is
+            # the gate that would have rejected enterprise v2.5.145 because its
+            # archive contained an unsigned mlx.metallib.
+            VERIFY_DIR="$(mktemp -d)"
+            tar xzf "$TARBALL" -C "$VERIFY_DIR"
+            EXTRACTED_APP="${VERIFY_DIR}/${APP_NAME}"
+            codesign --verify --deep --strict --verbose=2 "$EXTRACTED_APP"
+            xcrun stapler validate "$EXTRACTED_APP"
+            spctl --assess --type execute --verbose "$EXTRACTED_APP"
+            rm -rf "$VERIFY_DIR"
+
+            echo "${APP_NAME}.tar.gz passes updater archive verification"
           done
 
       - name: Build .pkg for Intune/MDM deployment
@@ -966,6 +1111,8 @@ jobs:
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
             apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/pkg/*.pkg
+            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
 
       - name: Clean up build keychain
         if: always()

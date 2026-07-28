@@ -53,10 +53,13 @@ extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char
     }));
 }
 
-/// Fire-and-forget product analytics for native inbox interactions, tagged
-/// with surface="native_overlay" so PostHog funnels line up with the webview
-/// bell's identically-named events.
-fn track_inbox_event(app: &tauri::AppHandle, event: &'static str, mut props: serde_json::Value) {
+/// Fire-and-forget product analytics for native overlay interactions, tagged
+/// so PostHog funnels line up with the webview's identically-named events.
+pub(crate) fn track_native_overlay_event(
+    app: &tauri::AppHandle,
+    event: &'static str,
+    mut props: serde_json::Value,
+) {
     if let Some(analytics) =
         app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
     {
@@ -124,26 +127,26 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
                 if let Some(id) = id {
                     crate::notifications::store::mark_read_by_id(id);
                 }
-                track_inbox_event(app, "notification_bell_expand", props);
+                track_native_overlay_event(app, "notification_bell_expand", props);
             }
             "remove" => {
                 let props = entry_props(id);
                 if let Some(id) = id {
                     crate::notifications::store::remove_by_id(id);
                 }
-                track_inbox_event(app, "notification_bell_dismiss", props);
+                track_native_overlay_event(app, "notification_bell_dismiss", props);
             }
             "clear_all" => {
                 let count = crate::notifications::store::read_all().len();
                 crate::notifications::store::clear();
-                track_inbox_event(
+                track_native_overlay_event(
                     app,
                     "notification_bell_clear_all",
                     serde_json::json!({ "count": count }),
                 );
             }
             "copy" => {
-                track_inbox_event(app, "notification_bell_copy", entry_props(id));
+                track_native_overlay_event(app, "notification_bell_copy", entry_props(id));
             }
             "action_clicked" => {
                 let mut props = entry_props(id);
@@ -156,7 +159,7 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
                 ) {
                     obj.insert("action_label".into(), serde_json::json!(label));
                 }
-                track_inbox_event(app, "notification_bell_action", props);
+                track_native_overlay_event(app, "notification_bell_action", props);
             }
             _ => {}
         }
@@ -559,21 +562,41 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
             let app_for_show = app_clone.clone();
             match action.as_str() {
                 "open_timeline" => {
+                    track_native_overlay_event(
+                        &app_clone,
+                        "shortcut_reminder_timeline_clicked",
+                        serde_json::json!({}),
+                    );
                     let _ = app_clone.run_on_main_thread(move || {
                         let _ = ShowRewindWindow::Main.show(&app_for_show);
                     });
                 }
                 "open_chat" => {
+                    track_native_overlay_event(
+                        &app_clone,
+                        "shortcut_reminder_chat_clicked",
+                        serde_json::json!({}),
+                    );
                     let _ = app_clone.run_on_main_thread(move || {
                         let _ = ShowRewindWindow::Chat.show(&app_for_show);
                     });
                 }
                 "open_search" => {
+                    track_native_overlay_event(
+                        &app_clone,
+                        "shortcut_reminder_search_clicked",
+                        serde_json::json!({}),
+                    );
                     let _ = app_clone.run_on_main_thread(move || {
                         let _ = (ShowRewindWindow::Search { query: None }).show(&app_for_show);
                     });
                 }
                 "close" => {
+                    track_native_overlay_event(
+                        &app_clone,
+                        "shortcut_reminder_dismissed",
+                        serde_json::json!({}),
+                    );
                     // Emit to JS so it can persist the setting, then hide
                     let _ = app_clone.emit("native-shortcut-close", "");
                     native_shortcut_reminder::hide();
@@ -592,7 +615,7 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                     ));
                 }
                 "open_inbox" => {
-                    track_inbox_event(
+                    track_native_overlay_event(
                         &app_clone,
                         "shortcut_reminder_inbox_clicked",
                         serde_json::json!({}),
@@ -627,6 +650,11 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                                     .body(serde_json::json!({ "id": stoppable_id }).to_string()),
                             );
                             if req.send().is_ok() {
+                                track_native_overlay_event(
+                                    &app_clone,
+                                    "shortcut_reminder_meeting_toggled",
+                                    serde_json::json!({ "active": false }),
+                                );
                                 native_shortcut_reminder::set_meeting_active(false);
                                 let _ = app_clone.emit(
                                     "native-shortcut-toggle-meeting",
@@ -649,6 +677,11 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                                     .body(r#"{"app":"manual"}"#),
                             );
                             if let Ok(res) = req.send() {
+                                track_native_overlay_event(
+                                    &app_clone,
+                                    "shortcut_reminder_meeting_toggled",
+                                    serde_json::json!({ "active": true }),
+                                );
                                 let meeting = res.json::<serde_json::Value>().ok();
                                 native_shortcut_reminder::set_meeting_active(true);
                                 let _ = app_clone.emit(

@@ -1241,6 +1241,25 @@ fn ensure_save_artifact_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Install one compact Live View tool for every normal chat session. The tool
+/// loads a selected definition only when the model calls it, so dashboard
+/// contents never become ambient prompt context.
+fn ensure_live_views_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+
+    let ext_path = ext_dir.join("live-views.ts");
+    let ext_content = include_str!("../assets/extensions/live-views.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write Live Views extension: {}", e))?;
+
+    debug!("Live Views extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir)
@@ -1724,6 +1743,9 @@ pub async fn pi_start_inner(
 
     // Save artifact: lets the agent register deliverables in the Artifacts library.
     ensure_save_artifact_extension(&project_dir)?;
+
+    // Live Views: lazy read/edit access for normal chat and focused composers.
+    ensure_live_views_extension(&project_dir)?;
 
     // Connection gate: lets Pi block on inline app authorization before
     // continuing app-dependent tasks.

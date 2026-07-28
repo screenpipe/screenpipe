@@ -10,15 +10,10 @@ const mocks = vi.hoisted(() => ({
   checkAccessibilityPermissionCmd: vi.fn(async () => "denied"),
   checkAccessibilityPermissionLiveCmd: vi.fn(async () => "denied"),
   checkScreenRecordingPermission: vi.fn(async () => "denied"),
-  getBrowsersAutomationStatus: vi.fn(
-    async (): Promise<{ name: string; status: string; running: boolean }[]> =>
-      []
-  ),
   requestPermission: vi.fn(async () => undefined),
-  requestBrowsersAutomationPermission: vi.fn(async () => false),
-  openPermissionSettings: vi.fn(async () => undefined),
   requestPermissionWithFlow: vi.fn(async () => undefined),
   windowSetFocus: vi.fn(async () => undefined),
+  posthogCapture: vi.fn(),
 }));
 
 vi.mock("@/lib/hooks/use-platform", () => ({
@@ -32,10 +27,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     checkAccessibilityPermissionLiveCmd:
       mocks.checkAccessibilityPermissionLiveCmd,
     checkScreenRecordingPermission: mocks.checkScreenRecordingPermission,
-    getBrowsersAutomationStatus: mocks.getBrowsersAutomationStatus,
     requestPermission: mocks.requestPermission,
-    requestBrowsersAutomationPermission: mocks.requestBrowsersAutomationPermission,
-    openPermissionSettings: mocks.openPermissionSettings,
   },
 }));
 
@@ -51,15 +43,15 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
-vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
+vi.mock("posthog-js", () => ({
+  default: { capture: mocks.posthogCapture },
+}));
 
 import PermissionsStep from "./permissions-step";
 
 const micRow = () => screen.getByRole("button", { name: /capture what you say/i });
 const accessibilityRow = () =>
   screen.getByRole("button", { name: /read on-screen text/i });
-const browsersRow = () =>
-  screen.getByRole("button", { name: /capture browser urls/i });
 const screenRow = () =>
   screen.getByRole("button", { name: /capture your screen/i });
 
@@ -70,7 +62,6 @@ describe("onboarding permission wheel", () => {
     mocks.checkAccessibilityPermissionCmd.mockResolvedValue("denied");
     mocks.checkAccessibilityPermissionLiveCmd.mockResolvedValue("denied");
     mocks.checkScreenRecordingPermission.mockResolvedValue("denied");
-    mocks.getBrowsersAutomationStatus.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -132,6 +123,22 @@ describe("onboarding permission wheel", () => {
     );
   });
 
+  it("keeps onboarding to the three recording permissions", async () => {
+    render(<PermissionsStep handleNextSlide={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(mocks.checkScreenRecordingPermission).toHaveBeenCalled()
+    );
+
+    expect(screen.getAllByRole("button")).toHaveLength(3);
+    expect(
+      screen.queryByRole("button", { name: /capture browser urls/i })
+    ).toBeNull();
+    expect(
+      screen.getByText("Three permissions unlock recording. Optional access can wait.")
+    ).toBeInTheDocument();
+  });
+
   it("advances focus and refocuses the window when the poller detects a grant", async () => {
     // granting mic flips the next status check to granted
     mocks.requestPermission.mockImplementation(async () => {
@@ -148,6 +155,10 @@ describe("onboarding permission wheel", () => {
     await waitFor(() => expect(accessibilityRow()).toBeEnabled());
     expect(micRow()).toBeDisabled();
     expect(mocks.windowSetFocus).toHaveBeenCalled();
+    expect(mocks.posthogCapture).toHaveBeenCalledWith(
+      "onboarding_permission_grant_confirmed",
+      expect.objectContaining({ permission: "mic" })
+    );
 
     fireEvent.click(accessibilityRow());
     await waitFor(() =>
@@ -203,87 +214,4 @@ describe("onboarding permission wheel", () => {
     expect(mocks.requestPermissionWithFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("lets the optional browsers row be skipped so the wheel cannot deadlock", async () => {
-    mocks.getBrowsersAutomationStatus.mockResolvedValue([
-      { name: "Google Chrome", status: "not_asked", running: true },
-    ]);
-    mocks.checkMicrophonePermission.mockResolvedValue("granted");
-    mocks.checkAccessibilityPermissionCmd.mockResolvedValue("granted");
-
-    render(<PermissionsStep handleNextSlide={vi.fn()} />);
-
-    // browsers (optional) is focused; screen recording is still locked
-    await waitFor(() => expect(browsersRow()).toBeEnabled());
-    expect(screenRow()).toBeDisabled();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /skip — this one's optional/i })
-    );
-
-    await waitFor(() => expect(screenRow()).toBeEnabled());
-    expect(browsersRow()).toBeDisabled();
-
-    fireEvent.click(screenRow());
-    await waitFor(() =>
-      expect(mocks.requestPermissionWithFlow).toHaveBeenCalledWith(
-        "screenRecording"
-      )
-    );
-  });
-
-  it("hides the browsers row when no supported browser is running", async () => {
-    // installed but closed — prompting is impossible, so no dead row
-    mocks.getBrowsersAutomationStatus.mockResolvedValue([
-      { name: "Google Chrome", status: "not_asked", running: false },
-    ]);
-
-    render(<PermissionsStep handleNextSlide={vi.fn()} />);
-
-    await waitFor(() =>
-      expect(mocks.getBrowsersAutomationStatus).toHaveBeenCalled()
-    );
-    expect(
-      screen.queryByRole("button", { name: /capture browser urls/i })
-    ).toBeNull();
-  });
-
-  it("shows the browsers row pre-granted when every running browser is already granted", async () => {
-    // e.g. Arc running + granted from daily use, Chrome installed but closed:
-    // closed browsers must not hold the row (or the wheel) hostage
-    mocks.getBrowsersAutomationStatus.mockResolvedValue([
-      { name: "Arc", status: "granted", running: true },
-      { name: "Google Chrome", status: "not_asked", running: false },
-    ]);
-    mocks.checkMicrophonePermission.mockResolvedValue("granted");
-
-    render(<PermissionsStep handleNextSlide={vi.fn()} />);
-
-    // wheel skips straight past browsers to accessibility
-    await waitFor(() => expect(accessibilityRow()).toBeEnabled());
-    expect(browsersRow()).toBeDisabled();
-    expect(browsersRow().textContent).toContain("granted");
-  });
-
-  it("escalates to the Automation settings pane when a running browser stays ungranted", async () => {
-    // macOS never re-prompts after deny, and adhoc dev builds can have the
-    // prompt swallowed by tccd while the status stays not_asked — without
-    // escalation the grant click would be a silent no-op either way
-    mocks.getBrowsersAutomationStatus.mockResolvedValue([
-      { name: "Arc", status: "not_asked", running: true },
-    ]);
-    mocks.checkMicrophonePermission.mockResolvedValue("granted");
-    mocks.checkAccessibilityPermissionCmd.mockResolvedValue("granted");
-
-    render(<PermissionsStep handleNextSlide={vi.fn()} />);
-
-    await waitFor(() => expect(browsersRow()).toBeEnabled());
-    fireEvent.click(browsersRow());
-
-    await waitFor(() =>
-      expect(mocks.requestBrowsersAutomationPermission).toHaveBeenCalled()
-    );
-    await waitFor(() =>
-      expect(mocks.openPermissionSettings).toHaveBeenCalledWith("automation")
-    );
-  });
 });

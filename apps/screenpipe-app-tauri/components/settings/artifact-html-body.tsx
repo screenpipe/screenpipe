@@ -38,8 +38,8 @@ export function ArtifactHtmlBody({
   onToggleExpanded,
   hideTitle = false,
 }: ArtifactHtmlBodyProps) {
-  // Source vs rendered. Initialized once per expansion from the content shape
-  // (full doc / marked → rendered; bare snippet → source), then user-controlled.
+  // Source vs rendered. Every non-empty HTML artifact opens rendered on each
+  // expansion, then stays under the user's control.
   const [showSource, setShowSource] = useState(false);
   const initedRef = useRef(false);
   useEffect(() => {

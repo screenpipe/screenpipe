@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "The enterprise_devices rows the HOSTED target needs, so device_id and",
+    "label line up with what the JSONL batches carry and the gateway derives",
+    "from them (dev-alice/alice-mbp, dev-bob/bob-thinkpad — see",
+    "crates/screenpipe-gateway/src/bin/seed.rs DEVICES).",
+    "",
+    "`platform` and `app_version` are populated here and are ALWAYS null on the",
+    "gateway (divergence DEV-PLATFORM): neither field is in the wire format, so",
+    "there is nothing for a gateway to read them from. `last_seen_at` is",
+    "heartbeat liveness here and MAX(record timestamp) there (DEV-LIVENESS).",
+    "Both are recorded divergences, so the suite asserts their TYPE and not",
+    "their value.",
+    "",
+    "`last_seen_at` sits inside the seeded July-22 window so a hosted /devices",
+    "response is ordered the same way a gateway one is (bob newer than alice)."
+  ],
+  "devices": [
+    {
+      "device_id": "dev-bob",
+      "hostname": "bob-thinkpad",
+      "platform": "windows",
+      "app_version": "2.5.136",
+      "last_seen_at": "2026-07-22T10:08:00+00:00",
+      "enrolled_at": "2026-07-20T08:00:00+00:00"
+    },
+    {
+      "device_id": "dev-alice",
+      "hostname": "alice-mbp",
+      "platform": "macos",
+      "app_version": "2.5.136",
+      "last_seen_at": "2026-07-22T09:08:00+00:00",
+      "enrolled_at": "2026-07-19T08:00:00+00:00"
+    }
+  ]
+}

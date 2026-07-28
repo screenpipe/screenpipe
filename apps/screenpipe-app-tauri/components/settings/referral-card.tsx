@@ -12,6 +12,7 @@ import { Copy, Check, Gift, Send, Loader2 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 interface ReferralData {
   code: string;
@@ -37,7 +38,7 @@ export function ReferralCard() {
       setLoading(true);
       try {
         const res = await fetch(
-          `https://screenpipe.com/api/referral?email=${encodeURIComponent(settings.user!.email!)}`
+          screenpipeWebUrl(`/api/referral?email=${encodeURIComponent(settings.user!.email!)}`, "https://screenpipe.com")
         );
         if (res.status === 404) {
           setNoCode(true);
@@ -79,7 +80,7 @@ export function ReferralCard() {
     if (!email || !referral || sending) return;
     setSending(true);
     try {
-      const res = await fetch("https://screenpipe.com/api/referral/invite", {
+      const res = await fetch(screenpipeWebUrl("/api/referral/invite", "https://screenpipe.com"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

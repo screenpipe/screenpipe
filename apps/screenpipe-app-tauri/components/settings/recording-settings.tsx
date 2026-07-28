@@ -118,7 +118,6 @@ import {
   useSettings,
   Settings,
 } from "@/lib/hooks/use-settings";
-import { hasAppEntitlement } from "@/lib/app-entitlement";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { localFetch } from "@/lib/api";
@@ -143,7 +142,6 @@ import {
 } from "@/lib/language";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ToastAction } from "@/components/ui/toast";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { getMediaFile } from "@/lib/actions/video-actions";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -208,7 +206,6 @@ const TRANSCRIPTION_ENGINE_LABELS: Record<string, string> = {
 
 type AudioEngineFallbackReason =
   | "notLoggedIn"
-  | "notSubscribed"
   | "missingDeepgramKey";
 
 type AudioEngineResolution = {
@@ -282,14 +279,8 @@ const getAudioEngineResolution = (
     };
   }
 
-  if (requested === "screenpipe-cloud" && !hasAppEntitlement(settings.user as any)) {
-    return {
-      requested,
-      active: fallback,
-      fallbackReason: "notSubscribed",
-    };
-  }
-
+  // Signed-in users get cloud transcription on every plan (the free tier
+  // includes an allowance enforced server-side) — never gate on subscription.
   if (requested === "deepgram" && !hasDeepgramKey) {
     return {
       requested,
@@ -309,8 +300,6 @@ const getAudioFallbackMessage = (reason: AudioEngineFallbackReason) => {
   switch (reason) {
     case "notLoggedIn":
       return "You are not logged in, so audio is being transcribed locally.";
-    case "notSubscribed":
-      return "Screenpipe Cloud requires an active subscription, so audio is being transcribed locally.";
     case "missingDeepgramKey":
       return "Deepgram has no API key configured, so audio is being transcribed locally.";
   }
@@ -1813,11 +1802,10 @@ export function RecordingSettings() {
     icon: string | null;
   };
 
-  // Per-app exclusions for the CoreAudio Process Tap. The list is owned by
+  // Per-app exclusions for the platform process tap. The list is owned by
   // the audio engine (file at ~/.screenpipe/audio-exclusions.json); we just
-  // read/write it through Tauri commands. Hot-reload happens engine-side
-  // on the existing 500ms tap-rebuild loop, so a write here propagates in
-  // ~1 tick subject to the 60s REBUILD_COOLDOWN.
+  // read/write it through Tauri commands. The capture engine reloads changes
+  // without requiring the UI to pass platform-specific process identifiers.
   const [audioExclusions, setAudioExclusions] = useState<ExcludedApp[]>([]);
   const [pendingAudioExclusions, setPendingAudioExclusions] = useState<ExcludedApp[] | null>(null);
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
@@ -1842,18 +1830,20 @@ export function RecordingSettings() {
   }, [toast]);
 
   useEffect(() => {
-    if (!isMacOS || !processTapAvailable) return;
+    if ((!isMacOS && !isWindows) || !processTapAvailable) return;
     reloadAudioExclusions();
-  }, [isMacOS, processTapAvailable, reloadAudioExclusions]);
+  }, [isMacOS, isWindows, processTapAvailable, reloadAudioExclusions]);
 
   const addAudioExclusion = useCallback(
     (app: ExcludedApp) => {
       const current = pendingAudioExclusions ?? audioExclusions;
       if (!app.bundleId || current.some((a) => a.bundleId === app.bundleId)) return;
-      setPendingAudioExclusions([...current, app]);
+      // Windows Application Loopback can exclude one process tree. Replacing
+      // the current choice keeps the UI aligned with what the OS can enforce.
+      setPendingAudioExclusions(isWindows ? [app] : [...current, app]);
       setHasUnsavedChanges(true);
     },
-    [pendingAudioExclusions, audioExclusions]
+    [pendingAudioExclusions, audioExclusions, isWindows]
   );
 
   const removeAudioExclusion = useCallback(
@@ -1868,8 +1858,11 @@ export function RecordingSettings() {
 
   const pickAppToExclude = useCallback(async () => {
     const picked = await open({
-      filters: [{ name: "Application", extensions: ["app"] }],
-      defaultPath: "/Applications",
+      filters: [{
+        name: "Application",
+        extensions: isWindows ? ["exe"] : ["app"],
+      }],
+      defaultPath: isWindows ? "C:\\Program Files" : "/Applications",
       multiple: false,
       directory: false,
     });
@@ -1881,12 +1874,12 @@ export function RecordingSettings() {
       addAudioExclusion(meta);
     } catch (e) {
       toast({
-        title: "Couldn't read app bundle",
+        title: "Couldn't read application",
         description: String(e),
         variant: "destructive",
       });
     }
-  }, [addAudioExclusion, toast]);
+  }, [addAudioExclusion, isWindows, toast]);
 
   useEventListener(
     "keydown",
@@ -1954,7 +1947,6 @@ export function RecordingSettings() {
       settings.user?.token,
     ]
   );
-  const hasCloudTranscriptionAccess = hasAppEntitlement(settings.user as any);
   const languageSupportEngine = audioEngineResolution.active;
   const languageSupportKey =
     getTranscriptionEngineLanguageSupportKey(languageSupportEngine);
@@ -2389,33 +2381,9 @@ export function RecordingSettings() {
     realtime = false
   ) => {
     const isLoggedIn = checkLogin(settings.user);
-    // If trying to use cloud but not logged in
+    // Cloud transcription works on every plan (free tier allowance is
+    // enforced server-side) — the only requirement is being logged in.
     if (value === "screenpipe-cloud" && !isLoggedIn) {
-      return;
-    }
-
-    // If trying to use cloud but not subscribed
-    if (value === "screenpipe-cloud" && !hasCloudTranscriptionAccess) {
-      try {
-        const response = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${settings.user?.token}`,
-          },
-          body: JSON.stringify({
-            tier: "pro",
-            billingPeriod: "monthly",
-            userId: settings.user?.id,
-            email: settings.user?.email,
-          }),
-        });
-        const data = await response.json();
-        openUrl(data.url || "https://screenpipe.com/billing");
-      } catch {
-        openUrl("https://screenpipe.com/billing");
-      }
-      // Revert back to previous value in the Select component
       return;
     }
 
@@ -2758,8 +2726,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
-                      <SelectItem value="screenpipe-cloud" disabled={!hasCloudTranscriptionAccess}>
-                        Screenpipe Cloud {!hasCloudTranscriptionAccess && "(Business)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
+                      <SelectItem value="screenpipe-cloud">
+                        Screenpipe Cloud{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
                       </SelectItem>
                       <SelectItem value="deepgram">Deepgram</SelectItem>
                     </SelectGroup>
@@ -2817,18 +2785,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                         onClick={() => checkLogin(settings.user)}
                       >
                         Log in
-                      </Button>
-                    )}
-                    {audioEngineResolution.fallbackReason === "notSubscribed" && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        data-testid="audio-engine-fallback-upgrade"
-                        onClick={() => openUrl("https://screenpipe.com/billing")}
-                      >
-                        Upgrade
                       </Button>
                     )}
                     <Button
@@ -3638,9 +3594,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* Per-app exclusion list for the CoreAudio Process Tap. Only
-            meaningful when the tap is the active backend. */}
-        {!settings.disableAudio && isMacOS && processTapAvailable && settings.experimentalCoreaudioSystemAudio && (
+        {/* Per-app exclusion list for the platform process tap. On macOS it
+            follows the experimental global-tap flag; Windows switches to
+            Application Loopback when an exclusion is configured. */}
+        {!settings.disableAudio && processTapAvailable && ((isMacOS && settings.experimentalCoreaudioSystemAudio) || isWindows) && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5 space-y-2">
             <div className="flex items-center space-x-2.5">
@@ -3651,6 +3608,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   Audio from these apps will be filtered out of system-audio capture.
+                  {isWindows && " Windows supports one excluded app at a time."}
                 </p>
               </div>
             </div>

@@ -116,6 +116,8 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 xcap = { workspace = true }
+ashpd = { version = "0.10.3", default-features = false, features = ["async-std"] }
+pipewire = "0.9"
 libc = { workspace = true }
 atspi = { version = "0.25.0", features = ["tokio","proxies-tokio","zbus"] }
 zbus = { workspace = true, default-features = false }

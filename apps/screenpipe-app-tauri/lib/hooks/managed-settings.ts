@@ -144,6 +144,7 @@ export const MANAGED_SETTING_DEFINITIONS: readonly ManagedSettingDefinition[] = 
   stringArray("includedWindows", []),
   stringArray("ignoredUrls", []),
   bool("ignoreIncognitoWindows", true),
+  bool("enhancedIncognitoDetection", false),
   bool("pauseOnDrmContent", false),
   bool("usePiiRemoval", true),
   bool("asyncPiiRedaction", false),

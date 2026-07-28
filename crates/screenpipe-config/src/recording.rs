@@ -413,6 +413,11 @@ pub struct RecordingSettings {
     #[serde(rename = "ignoreIncognitoWindows")]
     pub ignore_incognito_windows: bool,
 
+    /// Use browser-native APIs for more reliable incognito detection on macOS.
+    /// This requires Automation permission for supported Chromium browsers.
+    #[serde(rename = "enhancedIncognitoDetection", default)]
+    pub enhanced_incognito_detection: bool,
+
     /// Experimental: pause screen capture when a DRM-protected streaming app
     /// (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
     /// Horizon) is focused. These apps blank their windows while screen
@@ -751,6 +756,7 @@ impl Default for RecordingSettings {
             included_windows: vec![],
             ignored_urls: vec![],
             ignore_incognito_windows: true,
+            enhanced_incognito_detection: false,
             pause_on_drm_content: false,
             disable_clipboard_capture: true,
             disable_keyboard_capture: true,
@@ -895,6 +901,7 @@ mod tests {
         assert_eq!(settings.video_quality, "balanced");
         assert!(settings.use_system_default_audio);
         assert!(settings.ignore_incognito_windows);
+        assert!(!settings.enhanced_incognito_detection);
         assert!(!settings.screenpipe_aec_enabled);
         assert!(!settings.windows_input_aec_enabled);
         assert!(!settings.macos_input_vpio_enabled);
@@ -1053,6 +1060,7 @@ mod tests {
         assert_eq!(settings.power_mode, None); // default
         assert!(settings.vocabulary.is_empty()); // default
         assert_eq!(settings.audio_capture_mode, "always"); // backward-compatible default
+        assert!(!settings.enhanced_incognito_detection); // old stores stay permission-free
     }
 
     #[test]
