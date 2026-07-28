@@ -158,12 +158,25 @@ beforeEach(() => {
     disconnect() {}
     unobserve() {}
   };
+  // jsdom has no layout, so scrollIntoView is unimplemented
+  Element.prototype.scrollIntoView = vi.fn();
 });
 
 const memoryRows = () =>
   screen.queryAllByTestId(/^brain-item-memory-/);
 const artifactRows = () =>
   screen.queryAllByTestId(/^brain-item-artifact-/);
+
+// jsdom has no PointerEvent, which Radix needs to process pointerdown.
+globalThis.PointerEvent ||= MouseEvent as typeof PointerEvent;
+
+// Radix opens its menus on pointerdown, not click.
+const openDetailMenu = () =>
+  fireEvent.pointerDown(screen.getByTestId("brain-detail-actions"), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
 
 describe("BrainSection type filter", () => {
   it("loads all tab totals before the user opens each tab", async () => {
@@ -356,7 +369,7 @@ describe("BrainSection type filter", () => {
     );
   });
 
-  it("opens an artifact in its source chat with the preview sidebar", async () => {
+  it("opens an artifact in the side detail panel without leaving the list", async () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
@@ -365,7 +378,36 @@ describe("BrainSection type filter", () => {
 
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
 
-    expect(screen.queryByTestId("brain-detail-panel")).toBeNull();
+    expect(screen.getByTestId("brain-detail-panel")).toBeTruthy();
+    // the list stays mounted beside the detail, so the browsing position holds
+    expect(artifactRows().length).toBe(5);
+    expect(emit).not.toHaveBeenCalledWith(
+      "chat-load-conversation",
+      expect.anything(),
+    );
+    expect(analyticsMocks.capture).toHaveBeenCalledWith(
+      "brain_artifact_opened",
+      {
+        artifact_kind: "markdown",
+        open_mode: "detail",
+        registered: true,
+        surface: "card",
+      },
+    );
+  });
+
+  it("jumps to the origin chat only from the detail panel action", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
+
+    openDetailMenu();
+    fireEvent.click(await screen.findByText("open chat"));
+
     expect(emit).toHaveBeenCalledWith("chat-load-conversation", {
       conversationId: "chat-b",
       targetWindow: "home",
@@ -377,9 +419,131 @@ describe("BrainSection type filter", () => {
         artifact_kind: "markdown",
         open_mode: "chat",
         registered: true,
-        surface: "card",
+        surface: "detail",
       },
     );
+  });
+
+  it("closes the artifact detail panel and keeps the list", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
+    expect(screen.getByTestId("brain-detail-panel")).toBeTruthy();
+
+    openDetailMenu();
+    fireEvent.click(await screen.findByTestId("brain-detail-close"));
+
+    expect(screen.queryByTestId("brain-detail-panel")).toBeNull();
+    expect(artifactRows().length).toBe(5);
+  });
+
+  it("collapses the artifact grid to compact rows when the detail opens", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    // Grid mode: each card carries a hover "open viewer" button.
+    expect(screen.queryAllByTestId(/^brain-open-viewer-/).length).toBe(5);
+
+    fireEvent.click(artifactRows()[0]);
+
+    // Rail mode: same five items, but as compact rows — the card chrome is
+    // gone and the content lives in the pane instead.
+    expect(artifactRows().length).toBe(5);
+    expect(screen.queryAllByTestId(/^brain-open-viewer-/).length).toBe(0);
+    expect(screen.queryAllByTestId(/^brain-checkbox-artifact-/).length).toBe(5);
+
+    // Closing restores the cards.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryAllByTestId(/^brain-open-viewer-/).length).toBe(5);
+  });
+
+  it("closes the artifact detail panel on Escape", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
+    expect(screen.getByTestId("brain-detail-panel")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByTestId("brain-detail-panel")).toBeNull();
+    expect(artifactRows().length).toBe(5);
+  });
+
+  // Row order follows the list's own sort, so assert against the rendered
+  // order rather than hardcoding which fixture lands where.
+  // Cards title themselves from the preview's markdown heading, not the
+  // filename (see getArtifactCardDisplay).
+  const artifactTitleAt = (index: number) =>
+    within(artifactRows()[index]).getByText(/^artifact note \d content$/)
+      .textContent!;
+  const detailShows = (title: string) =>
+    within(screen.getByTestId("brain-detail-panel")).getByText(title);
+
+  it("walks the artifact selection with arrow keys", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    const first = artifactTitleAt(0);
+    const second = artifactTitleAt(1);
+    const last = artifactTitleAt(4);
+
+    fireEvent.click(artifactRows()[0]);
+    expect(detailShows(first)).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(detailShows(second)).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(detailShows(first)).toBeTruthy();
+
+    // At the top edge the selection holds rather than wrapping.
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(detailShows(first)).toBeTruthy();
+
+    // ...and the same at the bottom edge.
+    for (let i = 0; i < 6; i += 1) {
+      fireEvent.keyDown(window, { key: "ArrowDown" });
+    }
+    expect(detailShows(last)).toBeTruthy();
+    expect(artifactRows().length).toBe(5);
+
+    // Scrubbing is not opening — only the initial click is reported.
+    const opens = analyticsMocks.capture.mock.calls.filter(
+      (call: unknown[]) => call[0] === "brain_artifact_opened",
+    );
+    expect(opens.length).toBe(1);
+  });
+
+  it("leaves arrow keys to the search box while typing", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    const first = artifactTitleAt(0);
+    fireEvent.click(artifactRows()[0]);
+
+    const search = screen.getByTestId("brain-search-input");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(detailShows(first)).toBeTruthy();
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(screen.getByTestId("brain-detail-panel")).toBeTruthy();
   });
 
   it("keeps the artifacts tab when Brain remounts", async () => {

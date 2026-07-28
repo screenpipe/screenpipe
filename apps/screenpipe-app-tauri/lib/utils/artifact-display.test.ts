@@ -38,6 +38,25 @@ describe("getArtifactCardDisplay", () => {
     );
   });
 
+  it("drops an unterminated <style> block from a truncated html preview", () => {
+    // A preview is a prefix of the file, so the closing </style> is usually
+    // missing — the CSS must not survive into the card summary.
+    const display = getArtifactCardDisplay(
+      artifact({
+        kind: "text",
+        title: "landing-page-20.html",
+        path: "/tmp/landing-page-20.html",
+        preview:
+          "<!doctype html><html><head><title>The Last Little Star</title>" +
+          "<style>body{margin:0;min-height:100vh;display:grid;place-items:cen",
+      }),
+    );
+
+    expect(display.summary).not.toContain("margin:0");
+    expect(display.summary).not.toContain("100vh");
+    expect(display.summary).toContain("The Last Little Star");
+  });
+
   it("keeps explicit human titles", () => {
     const display = getArtifactCardDisplay(
       artifact({ title: "OAuth Demo Notes" }),

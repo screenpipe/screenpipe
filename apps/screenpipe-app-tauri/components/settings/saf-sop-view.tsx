@@ -167,7 +167,12 @@ interface SafArtifactBodyProps {
   /** Full file content once loaded; null while collapsed or loading. */
   content: string | null;
   expanded: boolean;
-  onToggleExpanded: () => void;
+  /**
+   * Collapses the row back to its title. Omit in surfaces that are always
+   * expanded (the Brain detail pane) — there is nothing to collapse into, so
+   * rendering the toggle there would just look like a stray close button.
+   */
+  onToggleExpanded?: () => void;
   hideTitle?: boolean;
 }
 
@@ -219,24 +224,26 @@ export function SafArtifactBody({
   return (
     <div className="text-sm text-foreground">
       {body}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleExpanded();
-        }}
-        className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
-        data-testid="saf-artifact-toggle"
-      >
-        {expanded ? (
-          <>
-            <ChevronUp className="h-2.5 w-2.5" /> show less
-          </>
-        ) : (
-          <>
-            <ChevronDown className="h-2.5 w-2.5" /> show more
-          </>
-        )}
-      </button>
+      {onToggleExpanded && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExpanded();
+          }}
+          className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
+          data-testid="saf-artifact-toggle"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="h-2.5 w-2.5" /> show less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="h-2.5 w-2.5" /> show more
+            </>
+          )}
+        </button>
+      )}
     </div>
   );
 }
