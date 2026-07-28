@@ -31,7 +31,13 @@ interface BrainView {
 interface CanvasDocument {
   revision: number;
   mode: "dashboard" | "canvas";
-  blocks: Array<{ slotId: string; x: number; y: number }>;
+  blocks: Array<{
+    slotId: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
   notes: Array<{ id: string; text: string }>;
   arrows: Array<{ id: string; fromId: string; toId: string }>;
   strokes: Array<{ id: string }>;
@@ -210,6 +216,106 @@ async function pointerPressTestId(testId: string) {
       new PointerEvent("pointerup", { ...init, buttons: 0 }),
     );
   }, testId);
+}
+
+async function resizeCanvasBlockBottomRight(
+  testId: string,
+  delta: { x: number; y: number },
+) {
+  await pointerPressTestId(testId);
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute((id) => {
+        const block = document.querySelector<HTMLElement>(
+          `[data-testid="${id}"]`,
+        );
+        return Boolean(
+          block?.querySelector(
+            ".react-flow__resize-control.handle.bottom.right",
+          ),
+        );
+      }, testId)) as boolean,
+    {
+      timeout: t(10_000),
+      timeoutMsg: `resize handle did not appear for ${testId}`,
+    },
+  );
+
+  const geometry = (await browser.execute((id) => {
+    const block = document.querySelector<HTMLElement>(
+      `[data-testid="${id}"]`,
+    );
+    const handle = block?.querySelector<HTMLElement>(
+      ".react-flow__resize-control.handle.bottom.right",
+    );
+    if (!block || !handle) return null;
+    const blockRect = block.getBoundingClientRect();
+    const handleRect = handle.getBoundingClientRect();
+    return {
+      block: { width: blockRect.width, height: blockRect.height },
+      handle: {
+        x: handleRect.left + handleRect.width / 2,
+        y: handleRect.top + handleRect.height / 2,
+      },
+    };
+  }, testId)) as {
+    block: { width: number; height: number };
+    handle: { x: number; y: number };
+  } | null;
+  expect(geometry).not.toBeNull();
+
+  const dragError = (await browser.execute(
+    (drag: { startX: number; startY: number; endX: number; endY: number }) => {
+      try {
+        const handle = document.elementFromPoint(drag.startX, drag.startY);
+        if (!(handle instanceof HTMLElement)) {
+          return "resize handle is not available at the drag origin";
+        }
+        handle.dispatchEvent(
+          new MouseEvent("mousedown", {
+            bubbles: true,
+            button: 0,
+            buttons: 1,
+            clientX: drag.startX,
+            clientY: drag.startY,
+            view: window,
+          }),
+        );
+        window.dispatchEvent(
+          new MouseEvent("mousemove", {
+            bubbles: true,
+            button: 0,
+            buttons: 1,
+            clientX: drag.endX,
+            clientY: drag.endY,
+            view: window,
+          }),
+        );
+        window.dispatchEvent(
+          new MouseEvent("mouseup", {
+            bubbles: true,
+            button: 0,
+            buttons: 0,
+            clientX: drag.endX,
+            clientY: drag.endY,
+            view: window,
+          }),
+        );
+        return null;
+      } catch (error) {
+        return String(error);
+      }
+    },
+    {
+      startX: Math.round(geometry!.handle.x),
+      startY: Math.round(geometry!.handle.y),
+      endX: Math.round(geometry!.handle.x + delta.x),
+      endY: Math.round(geometry!.handle.y + delta.y),
+    },
+  )) as string | null;
+  expect(dragError).toBeNull();
+
+  return geometry!.block;
 }
 
 describe("Brain Live Views", function () {
@@ -642,6 +748,66 @@ Refresh the assigned Live View output targets from source-backed activity.
     await waitForTestId("canvas-block-focus-time", 10_000);
     expect(await canvas.getText()).toContain("4.5");
     expect(await canvas.getText()).toContain("Automation opportunities");
+
+    const chartBeforeResize = await resizeCanvasBlockBottomRight(
+      "canvas-block-time-by-app",
+      { x: 96, y: 64 },
+    );
+    let chartAfterResize:
+      | CanvasDocument["blocks"][number]
+      | undefined;
+    await browser.waitUntil(
+      async () => {
+        const saved = await invokeOrThrow<CanvasDocument | null>(
+          "load_brain_view_canvas",
+          { viewId: SELECTABLE_VIEW_ID },
+        );
+        chartAfterResize = saved?.blocks.find(
+          (candidate) => candidate.slotId === "time-by-app",
+        );
+        return Boolean(
+          chartAfterResize &&
+            chartAfterResize.width >= chartBeforeResize.width + 80 &&
+            chartAfterResize.height >= chartBeforeResize.height + 48,
+        );
+      },
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg:
+          "the first Canvas resize drag did not persist the intended chart size",
+      },
+    );
+    const chartDomAfterResize = (await browser.execute(() => {
+      const chart = document.querySelector<HTMLElement>(
+        "[data-testid='canvas-block-time-by-app']",
+      );
+      if (!chart) return null;
+      const rect = chart.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        hasResizeHandle: Boolean(
+          chart.querySelector(
+            ".react-flow__resize-control.handle.bottom.right",
+          ),
+        ),
+      };
+    })) as {
+      width: number;
+      height: number;
+      hasResizeHandle: boolean;
+    } | null;
+    expect(chartDomAfterResize).not.toBeNull();
+    expect(chartDomAfterResize!.width).toBeCloseTo(chartAfterResize!.width, 0);
+    expect(chartDomAfterResize!.height).toBeCloseTo(
+      chartAfterResize!.height,
+      0,
+    );
+    const resizedChartScreenshot = await saveScreenshot(
+      "brain-overview-canvas-chart-resized",
+    );
+    expect(existsSync(resizedChartScreenshot)).toBe(true);
 
     const moveHandle = await $("[data-testid='canvas-move-focus-time']");
     await moveHandle.click();

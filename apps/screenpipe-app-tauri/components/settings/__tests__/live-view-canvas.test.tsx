@@ -179,6 +179,75 @@ describe("LiveViewCanvas", () => {
     expect(onPersist).not.toHaveBeenCalled();
   });
 
+  it("resizes a Block from its current size on the first drag", async () => {
+    const onPersist = vi.fn();
+    render(<CanvasHarness onPersist={onPersist} />);
+
+    const block = screen.getByTestId("canvas-block-focus-time");
+    fireEvent.pointerDown(block, { pointerId: 11 });
+    const resizeHandle = await waitFor(() => {
+      const handle = block.querySelector<HTMLElement>(
+        ".react-flow__resize-control.handle.bottom.right",
+      );
+      expect(handle).toBeTruthy();
+      return handle!;
+    });
+
+    const testWindow = resizeHandle.ownerDocument.defaultView!;
+    const mouseEvent = (
+      type: string,
+      init: ConstructorParameters<typeof MouseEvent>[1],
+    ) => {
+      const event = new testWindow.MouseEvent(type, init);
+      Object.defineProperty(event, "view", { value: testWindow });
+      return event;
+    };
+    fireEvent(
+      resizeHandle,
+      mouseEvent("mousedown", {
+        bubbles: true,
+        button: 0,
+        buttons: 1,
+        clientX: 300,
+        clientY: 260,
+      }),
+    );
+    fireEvent(
+      testWindow,
+      mouseEvent("mousemove", {
+        bubbles: true,
+        button: 0,
+        buttons: 1,
+        clientX: 396,
+        clientY: 324,
+      }),
+    );
+    fireEvent(
+      testWindow,
+      mouseEvent("mouseup", {
+        bubbles: true,
+        button: 0,
+        buttons: 0,
+        clientX: 396,
+        clientY: 324,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onPersist).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          blocks: expect.arrayContaining([
+            expect.objectContaining({
+              slotId: "focus-time",
+              width: 544,
+              height: 352,
+            }),
+          ]),
+        }),
+      );
+    });
+  });
+
   it("adds, edits, persists, and deletes a note", async () => {
     const onPersist = vi.fn();
     render(<CanvasHarness onPersist={onPersist} />);

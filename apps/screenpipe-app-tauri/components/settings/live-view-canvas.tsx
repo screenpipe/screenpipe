@@ -545,6 +545,7 @@ export function LiveViewCanvas({
           position: { x: block.x, y: block.y },
           initialWidth: block.width,
           initialHeight: block.height,
+          measured: { width: block.width, height: block.height },
           style: { width: block.width, height: block.height },
           handles: [
             {
@@ -597,6 +598,7 @@ export function LiveViewCanvas({
         position: { x: note.x, y: note.y },
         initialWidth: note.width,
         initialHeight: note.height,
+        measured: { width: note.width, height: note.height },
         style: { width: note.width, height: note.height },
         handles: [
           {
