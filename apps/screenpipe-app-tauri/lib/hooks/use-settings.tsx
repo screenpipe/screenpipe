@@ -1094,7 +1094,7 @@ function createSettingsStore() {
 		}
 
 		// Post-migration: if user becomes pro and the Chat preset is still on the
-		// non-pro fallback (Sonnet), upgrade it to Opus 4.7.
+		// non-pro fallback (Sonnet), upgrade it to Opus 5.
 		// Guards:
 		//   - only touches the preset with id === "chat" (leaves user-created presets alone)
 		//   - only if provider is still screenpipe-cloud and model is exactly the seeded
@@ -1114,7 +1114,7 @@ function createSettingsStore() {
 					p?.model === "claude-sonnet-4-5"
 				) {
 					upgraded = true;
-					return { ...p, model: "claude-opus-4-8" };
+					return { ...p, model: "claude-opus-5" };
 				}
 				return p;
 			});
@@ -1473,7 +1473,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
 
-	// Upgrade the seeded "chat" preset Sonnet → Opus 4.7 the moment the user
+	// Upgrade the seeded "chat" preset Sonnet → Opus 5 the moment the user
 	// becomes pro (mirrors the on-load migration for same-session transitions).
 	// Guards match the migration: only touch the unmodified seeded chat preset,
 	// never clobber a user override, only fire once.
@@ -1498,7 +1498,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		}
 
 		const nextPresets = settings.aiPresets.map((p: any, i: number) =>
-			i === idx ? { ...p, model: "claude-opus-4-8" } : p
+			i === idx ? { ...p, model: "claude-opus-5" } : p
 		);
 		settingsStore.set({
 			aiPresets: nextPresets,
