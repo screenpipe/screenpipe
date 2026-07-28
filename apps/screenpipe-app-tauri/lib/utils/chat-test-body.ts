@@ -80,3 +80,41 @@ export function shouldRetryWithMaxTokens(errText: string): boolean {
       lower.includes("invalid"))
   );
 }
+
+/**
+ * Some OpenAI-compatible servers (OmniRoute, LiteLLM, vLLM, LM Studio, etc.)
+ * answer the chat probe with a Server-Sent Events stream even when we don't set
+ * `stream: true`. Feeding that stream to JSON.parse throws — and on macOS
+ * (WKWebView / JavaScriptCore) the message is the opaque
+ * "The string did not match the expected pattern." These helpers let the
+ * diagnostics detect the SSE shape and reconstruct the assistant text instead.
+ */
+export function looksLikeSsePayload(text: string): boolean {
+  return /(^|\n)\s*data:/.test(text);
+}
+
+/**
+ * Reconstruct assistant text from an OpenAI-style chat completions SSE stream.
+ * Handles both streamed `choices[].delta.content` chunks and non-streamed
+ * `choices[].message.content` frames, and ignores keep-alive comments and the
+ * terminal `[DONE]` sentinel.
+ */
+export function parseSseChatContent(text: string): string {
+  let content = "";
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      const json = JSON.parse(payload);
+      const delta = json?.choices?.[0]?.delta?.content;
+      const message = json?.choices?.[0]?.message?.content;
+      if (typeof delta === "string") content += delta;
+      else if (typeof message === "string") content += message;
+    } catch {
+      // ignore keep-alive comments / partial frames
+    }
+  }
+  return content;
+}

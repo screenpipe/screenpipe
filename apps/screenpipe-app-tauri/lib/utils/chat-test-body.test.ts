@@ -7,6 +7,8 @@ import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
   shouldRetryWithMaxTokens,
+  looksLikeSsePayload,
+  parseSseChatContent,
 } from "./chat-test-body";
 
 describe("buildChatTestBody", () => {
@@ -154,5 +156,49 @@ describe("integration: retry flow", () => {
     const authError = `{"error":"Invalid API key"}`;
     expect(shouldRetryWithMaxCompletionTokens(authError)).toBe(false);
     expect(shouldRetryWithMaxTokens(authError)).toBe(false);
+  });
+});
+
+describe("looksLikeSsePayload", () => {
+  it("detects an SSE stream body", () => {
+    expect(
+      looksLikeSsePayload(`data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n`),
+    ).toBe(true);
+  });
+
+  it("detects SSE even with a leading blank line", () => {
+    expect(looksLikeSsePayload(`\n\ndata: {"x":1}\n`)).toBe(true);
+  });
+
+  it("returns false for plain JSON", () => {
+    expect(looksLikeSsePayload(`{"choices":[{"message":{"content":"hi"}}]}`)).toBe(false);
+  });
+});
+
+describe("parseSseChatContent", () => {
+  it("concatenates streamed delta chunks", () => {
+    const stream =
+      `data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n` +
+      `data: {"choices":[{"delta":{"content":"lo"}}]}\n\n` +
+      `data: [DONE]\n\n`;
+    expect(parseSseChatContent(stream)).toBe("Hello");
+  });
+
+  it("handles non-streamed message frames", () => {
+    const stream = `data: {"choices":[{"message":{"content":"hi there"}}]}\n\n`;
+    expect(parseSseChatContent(stream)).toBe("hi there");
+  });
+
+  it("ignores keep-alive comments and malformed frames", () => {
+    const stream =
+      `: keep-alive\n` +
+      `data: not-json\n` +
+      `data: {"choices":[{"delta":{"content":"ok"}}]}\n` +
+      `data: [DONE]\n`;
+    expect(parseSseChatContent(stream)).toBe("ok");
+  });
+
+  it("returns empty string when there is no content", () => {
+    expect(parseSseChatContent(`data: [DONE]\n`)).toBe("");
   });
 });

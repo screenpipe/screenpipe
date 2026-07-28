@@ -29,6 +29,8 @@ import {
 import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
+  looksLikeSsePayload,
+  parseSseChatContent,
 } from "@/lib/utils/chat-test-body";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import { Label } from "../ui/label";
@@ -140,9 +142,74 @@ const isLocalhostUrl = (url?: string): boolean => {
   if (!url) return false;
   try {
     const hostname = new URL(url).hostname.toLowerCase();
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return true;
+    // mDNS/Bonjour .local domains resolve to local addresses (RFC 6762)
+    if (hostname.endsWith(".local")) return true;
+    // Private IP ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+    if (/^10\.\d+\.\d+\.\d+$/.test(hostname)) return true;
+    if (/^172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+$/.test(hostname)) return true;
+    if (/^192\.168\.\d+\.\d+$/.test(hostname)) return true;
+    return false;
   } catch {
     return false;
+  }
+};
+
+const tauriBackendFetch = async (
+  url: string,
+  options?: RequestInit
+): Promise<Response> => {
+  try {
+    const headers: Record<string, string> = {};
+    if (options?.headers) {
+      const h = options.headers as Record<string, string>;
+      Object.keys(h).forEach((key) => {
+        headers[key] = h[key];
+      });
+    }
+    const bodyVal = options?.body ? JSON.parse(options.body as string) : null;
+    const res = await commands.testAiEndpoint(
+      url,
+      options?.method || "GET",
+      headers,
+      bodyVal
+    );
+    if (res.status === "error") {
+      throw new Error(res.error);
+    }
+    const resText = res.data;
+    // The Rust backend returns only the body text (no headers). Sniff SSE so
+    // the diagnostics' content-type check can detect a streamed response.
+    const looksLikeSse = /(^|\n)\s*data:/.test(resText);
+    const contentType = looksLikeSse ? "text/event-stream" : "application/json";
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? contentType : null,
+      },
+      json: async () => JSON.parse(resText),
+      text: async () => resText,
+      clone: function () {
+        return this;
+      },
+    } as unknown as Response;
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 500,
+      headers: {
+        get: (_name: string) => null,
+      },
+      text: async () => String(err?.message || err),
+      json: async () => {
+        throw new Error(String(err?.message || err));
+      },
+      clone: function () {
+        return this;
+      },
+    } as unknown as Response;
   }
 };
 
@@ -685,15 +752,16 @@ const AISection = ({
         chat: { status: "running", message: "Sending test message..." },
       }));
     } else {
-      // Local providers (Ollama, custom localhost) must go through native HTTP —
-      // a browser fetch from the tauri://localhost webview to a local http server
-      // is blocked by WKWebView (mixed-content / cross-origin CORS). The
-      // wrapper composes `abort.signal` (cancel-on-restart) with its own
-      // deadline, so a wedged local server can no longer hang diagnostics.
+      // native-ollama goes through native HTTP (tauriFetchWithDeadline) to bypass
+      // WKWebView mixed-content/CORS blocking against a local http server. Custom
+      // local providers (loopback, private IP, .local) route through the Rust
+      // backend (tauriBackendFetch), which enforces the URL-safety allowlist and
+      // reaches servers that don't implement browser CORS preflight on /models.
       const modelsFetchFn =
-        settingsPreset?.provider === "native-ollama" ||
-        (settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url))
+        settingsPreset?.provider === "native-ollama"
           ? tauriFetchWithDeadline
+          : settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url)
+          ? tauriBackendFetch
           : fetch;
       try {
         modelsResponse = await modelsFetchFn(modelsUrl, {
@@ -828,17 +896,22 @@ const AISection = ({
       chatHeaders["OpenAI-Beta"] = "responses=experimental";
     }
 
-    // Use native HTTP for chatgpt.com, Anthropic, and local Ollama to bypass
-    // CORS / WKWebView mixed-content blocking (localhost:11434 over http).
-    //
-    // The wrapper's deadline covers the response body, not just the headers, and
-    // it is flat rather than idle-based. That is fine for every arm here: the
-    // isChatGpt arm is an SSE stream whose body this probe deliberately never
-    // reads (it only asserts the stream started), so capping it just drops a
-    // body nobody wanted — and drops the Rust body resource with it. A caller
-    // that genuinely needs to consume a long-lived stream must pass
+    // Use native HTTP (tauriFetchWithDeadline) for chatgpt.com, Anthropic, and
+    // local Ollama to bypass CORS / WKWebView mixed-content blocking. Custom
+    // local URLs route through the Rust backend (tauriBackendFetch) for the
+    // URL-safety allowlist. The wrapper's deadline covers the response body, not
+    // just the headers, and it is flat rather than idle-based. That is fine for
+    // every arm here: the isChatGpt arm is an SSE stream whose body this probe
+    // deliberately never reads (it only asserts the stream started), so capping
+    // it just drops a body nobody wanted — and drops the Rust body resource with
+    // it. A caller that genuinely needs to consume a long-lived stream must pass
     // `{ timeoutMs: Number.POSITIVE_INFINITY }`.
-    const fetchFn = (isChatGpt || isAnthropic || settingsPreset?.provider === "native-ollama") ? tauriFetchWithDeadline : fetch;
+    const fetchFn =
+      (isChatGpt || isAnthropic || settingsPreset?.provider === "native-ollama")
+        ? tauriFetchWithDeadline
+        : isLocalhostUrl(chatUrl)
+        ? tauriBackendFetch
+        : fetch;
 
     const chatStart = performance.now();
     try {
@@ -894,8 +967,16 @@ const AISection = ({
         const chatData = await chatResponse.json();
         reply = chatData.content?.[0]?.text?.slice(0, 100) || "No response";
       } else {
-        const chatData = await chatResponse.json();
-        reply = chatData.choices?.[0]?.message?.content?.slice(0, 100) || "No response";
+        const rawText = await chatResponse.text();
+        const isSse =
+          chatResponse.headers.get("content-type")?.includes("text/event-stream") ||
+          looksLikeSsePayload(rawText);
+        if (isSse) {
+          reply = parseSseChatContent(rawText).slice(0, 100) || "Stream started OK";
+        } else {
+          const chatData = JSON.parse(rawText);
+          reply = chatData.choices?.[0]?.message?.content?.slice(0, 100) || "No response";
+        }
       }
 
       if (abort.signal.aborted) return;
@@ -979,7 +1060,7 @@ const AISection = ({
           break;
         case "custom":
           try {
-            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriFetchWithDeadline : fetch;
+            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriBackendFetch : fetch;
             const customResponse = await customFetchFn(
               aiEndpointUrl(settingsPreset?.url, "models"),
               {
