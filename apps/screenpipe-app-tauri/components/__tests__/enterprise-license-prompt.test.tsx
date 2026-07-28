@@ -27,7 +27,7 @@ describe("EnterpriseLicensePrompt", () => {
     render(<EnterpriseLicensePrompt onSubmit={onSubmit} />);
 
     fireEvent.change(screen.getByPlaceholderText("ENT-XXXX-XXXX-XXXX-XXXX"), {
-      target: { value: "ENT-GWXX-RNUB-LW9F-3YA6" },
+      target: { value: "ENT-TEST-ONLY-PROM-0001" },
     });
     fireEvent.click(screen.getByRole("button", { name: /activate/i }));
 
@@ -44,7 +44,7 @@ describe("EnterpriseLicensePrompt", () => {
     render(<EnterpriseLicensePrompt onSubmit={onSubmit} />);
 
     fireEvent.change(screen.getByPlaceholderText("ENT-XXXX-XXXX-XXXX-XXXX"), {
-      target: { value: "ENT-GWXX-RNUB-LW9F-3YA6" },
+      target: { value: "ENT-TEST-ONLY-PROM-0001" },
     });
     fireEvent.click(screen.getByRole("button", { name: /activate/i }));
 
@@ -64,11 +64,11 @@ describe("EnterpriseLicensePrompt", () => {
     );
 
     fireEvent.change(screen.getByPlaceholderText("ENT-XXXX-XXXX-XXXX-XXXX"), {
-      target: { value: "  ent-gwxx-rnub-lw9f-3ya6  " },
+      target: { value: "  ent-test-only-prom-0001  " },
     });
     fireEvent.click(screen.getByRole("button", { name: /activate/i }));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("ENT-GWXX-RNUB-LW9F-3YA6"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("ENT-TEST-ONLY-PROM-0001"));
     expect(onActivated).toHaveBeenCalledOnce();
     expect(screen.getByText("no employee account is required for managed devices")).toBeInTheDocument();
   });

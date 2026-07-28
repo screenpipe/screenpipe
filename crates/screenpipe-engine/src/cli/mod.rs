@@ -582,6 +582,16 @@ pub struct RecordArgs {
     #[arg(long)]
     pub ignored_urls: Vec<String>,
 
+    /// Automatically detect and skip incognito / private browsing windows.
+    /// Pass `--ignore-incognito-windows=false` to record them.
+    #[arg(long, action = ArgAction::Set, num_args = 0..=1, default_value_t = true, default_missing_value = "true")]
+    pub ignore_incognito_windows: bool,
+
+    /// Use browser-native incognito detection on macOS. This can require
+    /// Automation permission for supported Chromium browsers.
+    #[arg(long, action = ArgAction::Set, num_args = 0..=1, default_value_t = false, default_missing_value = "true")]
+    pub enhanced_incognito_detection: bool,
+
     /// Apps / meeting services to exclude from automatic meeting detection
     /// (case-insensitive contains). Matches the running app's name/process or
     /// the matched detection profile's identifiers, so an entry can be the app
@@ -831,6 +841,8 @@ pub struct RecordArgSources {
     pub ignored_windows: bool,
     pub included_windows: bool,
     pub ignored_urls: bool,
+    pub ignore_incognito_windows: bool,
+    pub enhanced_incognito_detection: bool,
     pub ignored_meeting_apps: bool,
     pub deepgram_api_key: bool,
     pub transcription_mode: bool,
@@ -891,6 +903,8 @@ impl RecordArgSources {
             ignored_windows: from_command_line(record, "ignored_windows"),
             included_windows: from_command_line(record, "included_windows"),
             ignored_urls: from_command_line(record, "ignored_urls"),
+            ignore_incognito_windows: from_command_line(record, "ignore_incognito_windows"),
+            enhanced_incognito_detection: from_command_line(record, "enhanced_incognito_detection"),
             ignored_meeting_apps: from_command_line(record, "ignored_meeting_apps"),
             deepgram_api_key: from_command_line(record, "deepgram_api_key"),
             transcription_mode: from_command_line(record, "transcription_mode"),
@@ -940,6 +954,8 @@ impl RecordArgSources {
             || self.ignored_windows
             || self.included_windows
             || self.ignored_urls
+            || self.ignore_incognito_windows
+            || self.enhanced_incognito_detection
             || self.ignored_meeting_apps
             || self.deepgram_api_key
             || self.transcription_mode
@@ -1134,7 +1150,8 @@ impl RecordArgs {
             pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
             analytics_enabled: !self.disable_telemetry,
             keep_computer_awake: self.keep_computer_awake,
-            ignore_incognito_windows: true,
+            ignore_incognito_windows: self.ignore_incognito_windows,
+            enhanced_incognito_detection: self.enhanced_incognito_detection,
             pause_on_drm_content: self.pause_on_drm_content,
             disable_clipboard_capture: self.disable_clipboard_capture,
             disable_keyboard_capture: self.disable_keyboard_capture,
@@ -1422,6 +1439,12 @@ impl RecordArgs {
         }
         if sources.ignored_urls {
             settings.ignored_urls = self.ignored_urls.clone();
+        }
+        if sources.ignore_incognito_windows {
+            settings.ignore_incognito_windows = self.ignore_incognito_windows;
+        }
+        if sources.enhanced_incognito_detection {
+            settings.enhanced_incognito_detection = self.enhanced_incognito_detection;
         }
         if sources.ignored_meeting_apps {
             settings.ignored_meeting_apps = self.ignored_meeting_apps.clone();
@@ -2250,6 +2273,49 @@ mod tests {
     fn record_sources<const N: usize>(args: [&str; N]) -> RecordArgSources {
         let matches = Cli::command().try_get_matches_from(args).unwrap();
         RecordArgSources::from_cli_matches(&matches)
+    }
+
+    #[test]
+    fn test_incognito_flags_default_to_basic_filtering() {
+        let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert!(args.ignore_incognito_windows);
+                assert!(!args.enhanced_incognito_detection);
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_incognito_filter_can_be_disabled() {
+        let cli = Cli::try_parse_from(["screenpipe", "record", "--ignore-incognito-windows=false"])
+            .unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                let settings = args.to_recording_settings();
+                assert!(!settings.ignore_incognito_windows);
+                assert!(
+                    record_sources(["screenpipe", "record", "--ignore-incognito-windows=false",])
+                        .ignore_incognito_windows
+                );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_enhanced_incognito_detection_is_explicit() {
+        let cli = Cli::try_parse_from(["screenpipe", "record", "--enhanced-incognito-detection"])
+            .unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                let settings = args.to_recording_settings();
+                assert!(settings.ignore_incognito_windows);
+                assert!(settings.enhanced_incognito_detection);
+            }
+            _ => panic!("expected Record command"),
+        }
     }
 
     #[test]

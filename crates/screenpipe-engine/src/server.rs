@@ -907,6 +907,14 @@ impl SCServer {
             // Renderer-agnostic structured outputs are deliberately outside
             // the public OpenAPI surface for now. Consumers define targets;
             // authenticated pipes can discover and fill only their bindings.
+            // Private MCP transport adapter (not in OpenAPI spec — a plain
+            // axum handler; registering an un-#[oasgen] handler on the oasgen
+            // Server panics at startup with "Operation ... not found in
+            // OpenAPI spec", which broke the engine test suite on main).
+            .route(
+                "/internal/telemetry/mcp-value",
+                axum::routing::post(crate::routes::internal_telemetry::record_mcp_value),
+            )
             .route(
                 "/outputs/targets",
                 get(crate::routes::structured_outputs::assigned_targets_handler),
@@ -935,9 +943,17 @@ impl SCServer {
                 get(crate::routes::live_views::live_view_schema_handler),
             )
             .route(
+                "/live-views/catalog",
+                get(crate::routes::live_views::live_view_catalog_handler),
+            )
+            .route(
                 "/live-views/:id",
                 axum::routing::put(crate::routes::live_views::save_live_view_handler)
                     .delete(crate::routes::live_views::delete_live_view_handler),
+            )
+            .route(
+                "/live-views/:id/template",
+                get(crate::routes::live_views::get_live_view_template_handler),
             )
             .route(
                 "/speakers/sample/:audio_chunk_id",

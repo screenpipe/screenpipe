@@ -7,3 +7,6 @@ pub mod policy;
 
 #[cfg(feature = "enterprise-build")]
 pub mod sync;
+
+#[cfg(feature = "enterprise-build")]
+pub mod device_config;

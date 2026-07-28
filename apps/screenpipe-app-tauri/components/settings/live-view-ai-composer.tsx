@@ -41,39 +41,22 @@ type LiveViewAiComposerProps = {
 };
 
 export type LiveViewGenerationIntent =
-  "new-dashboard" | "add-section" | "replace-dashboard";
+  "new-dashboard" | "replace-dashboard" | "pipe-agent";
 
-const REPLACE_DASHBOARD_PATTERNS = [
-  /\b(replace|rebuild|redo|reset)\b/i,
-  /\bstart\s+over\b/i,
-  /^\s*(remove|delete|drop)\b/i,
-  /\b(change|update|edit|simplify|reorganize|reorder|remove|delete|drop)\b.*\b(this|current|my|dashboard|view|overview|section|block|card|chart|metric)\b/i,
-  /\bmake\b.*\b(this|current|my)\b.*\b(dashboard|view|overview)?\b/i,
-];
+const PIPE_NOUN = /\b(?:pipe|pipes|piep|pieps)\b/i;
+const PIPE_AUTHORING_ACTION =
+  /\b(?:create|make|build|add|new|edit|change|modify|update|fix|improve|optimi[sz]e|customi[sz]e|fork|remix)\b/i;
 
-const NEW_DASHBOARD_PATTERN =
-  /\b(add|create|build|make|generate|new|another)\b.{0,32}\b(dashboard|overview|view)\b/i;
-
-const ADD_SECTION_PATTERNS = [
-  /^\s*(add|include)\b/i,
-  /\b(also\s+(show|include|track)|show\s+.+\s+too|include\s+.+\s+too)\b/i,
-  /\b(a|one|another|new)\s+(section|block|card|chart|metric|table|timeline)\b/i,
-];
+export function isPipeAuthoringRequest(prompt: string): boolean {
+  return PIPE_NOUN.test(prompt) && PIPE_AUTHORING_ACTION.test(prompt);
+}
 
 export function inferLiveViewGenerationIntent(
   prompt: string,
   hasCurrentView: boolean,
 ): LiveViewGenerationIntent {
-  if (!hasCurrentView) return "new-dashboard";
-  const request = prompt.trim();
-  if (REPLACE_DASHBOARD_PATTERNS.some((pattern) => pattern.test(request))) {
-    return "replace-dashboard";
-  }
-  if (NEW_DASHBOARD_PATTERN.test(request)) return "new-dashboard";
-  if (ADD_SECTION_PATTERNS.some((pattern) => pattern.test(request))) {
-    return "add-section";
-  }
-  return "new-dashboard";
+  if (isPipeAuthoringRequest(prompt)) return "pipe-agent";
+  return hasCurrentView ? "replace-dashboard" : "new-dashboard";
 }
 
 export function LiveViewAiComposer({
@@ -111,13 +94,14 @@ export function LiveViewAiComposer({
     prompt,
     Boolean(currentViewTitle),
   );
-  const scope: LiveViewGenerationScope =
-    intent === "add-section" ? "block" : "dashboard";
+  const scope: LiveViewGenerationScope = "dashboard";
   const intentLabel =
-    intent === "add-section"
-      ? `will add one section to “${currentViewTitle}”`
+    intent === "pipe-agent"
+      ? currentViewTitle
+        ? `will open the agent for “${currentViewTitle}”`
+        : "will open the Pipe agent"
       : intent === "replace-dashboard"
-        ? `will preview changes to “${currentViewTitle}”`
+        ? `will edit “${currentViewTitle}”`
         : "will create a new dashboard";
 
   const submit = () => {
@@ -153,7 +137,7 @@ export function LiveViewAiComposer({
         className="min-h-16 resize-none rounded-none border-0 px-4 py-3 text-sm shadow-none focus-visible:ring-0"
         placeholder={
           compact
-            ? "Ask AI to create a dashboard or add something to this one..."
+            ? "Ask AI to change this Live View..."
             : "For example: show how I spend my time and what changed this week"
         }
         onChange={(event) => setPrompt(event.target.value)}
@@ -199,7 +183,9 @@ export function LiveViewAiComposer({
             </>
           ) : (
             <>
-              <span className="mr-1.5">generate</span>
+              <span className="mr-1.5">
+                {intent === "pipe-agent" ? "open agent" : "generate"}
+              </span>
               <ArrowUp className="h-3.5 w-3.5" />
             </>
           )}

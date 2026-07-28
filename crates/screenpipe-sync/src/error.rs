@@ -37,6 +37,15 @@ pub enum SyncError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// The control plane's ticket pointed the upload at a host that is not
+    /// on the caller's pinned-destination list. Permanent and loud by
+    /// design: this is the tamper signal the destination pin exists to
+    /// raise (a compromised control plane redirecting plaintext uploads),
+    /// never a retry case. The payload is the offending host only — never
+    /// the full presigned URL, which carries signature material.
+    #[error("upload destination not pinned: {0}")]
+    DestinationNotPinned(String),
+
     /// Encryption / decryption / key wrap failure.
     #[error("crypto: {0}")]
     Crypto(String),

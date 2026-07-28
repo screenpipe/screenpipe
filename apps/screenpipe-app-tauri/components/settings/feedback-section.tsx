@@ -10,6 +10,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { emit } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { setFirstRunGuidePending } from "@/lib/first-run-guide";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 function DiscordIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -114,7 +115,7 @@ export function FeedbackSection() {
         <button
           type="button"
           data-testid="help-survey-link"
-          onClick={() => open("https://screenpipe.com/survey?utm_source=app&utm_medium=help")}
+          onClick={() => open(screenpipeWebUrl("/survey?utm_source=app&utm_medium=help", "https://screenpipe.com"))}
           className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
         >
           <div className="flex items-center justify-between">
@@ -177,7 +178,7 @@ export function FeedbackSection() {
               </div>
             </div>
             <button
-              onClick={() => open("https://screenpipe.com/ideas")}
+              onClick={() => open(screenpipeWebUrl("/ideas", "https://screenpipe.com"))}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
             >
               screenpipe.com/ideas →
@@ -232,7 +233,7 @@ export function FeedbackSection() {
               </div>
             </div>
             <button
-              onClick={() => open("https://screenpipe.com/changelog")}
+              onClick={() => open(screenpipeWebUrl("/changelog", "https://screenpipe.com"))}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
             >
               screenpipe.com/changelog →

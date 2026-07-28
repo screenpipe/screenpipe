@@ -30,6 +30,7 @@ import {
   flushMcpTelemetry,
   initMcpTelemetry,
 } from "./telemetry";
+import { PKG_VERSION } from "./version";
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 
@@ -282,8 +283,11 @@ async function handleSearchContent(
 // mapping between Server and transport (reusing a Server across
 // transports throws "Already connected to a transport").
 function createMcpServer(fetchAPI: ReturnType<typeof makeFetchAPI>): Server {
+  // version comes from package.json (see src/version.ts) — this used to be a
+  // hardcoded "0.14.0" and reported that over the wire long after the package
+  // had moved on, which is unusable for support triage.
   const s = new Server(
-    { name: "screenpipe-http", version: "0.14.0" },
+    { name: "screenpipe-http", version: PKG_VERSION },
     { capabilities: { tools: {} } }
   );
 

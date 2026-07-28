@@ -9,6 +9,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { CodeBlock } from "./ui/codeblock";
 import { Sparkles, Wrench, Bug, ExternalLink } from "lucide-react";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 interface ChangelogEntry {
   version: string;
@@ -20,7 +21,7 @@ interface ChangelogEntry {
   commitCount: number;
 }
 
-const CHANGELOG_API = "https://screenpipe.com/api/changelog?limit=50";
+const CHANGELOG_API = screenpipeWebUrl("/api/changelog?limit=50", "https://screenpipe.com");
 
 async function fetchRemote(): Promise<ChangelogEntry[] | null> {
   try {
@@ -117,7 +118,7 @@ export const ChangelogDialog: React.FC = () => {
         <div className="px-6 pt-6 pb-4 border-b border-border flex items-center justify-between">
           <h1 className="text-xl font-semibold">changelog</h1>
           <a
-            href="https://screenpipe.com/changelog"
+            href={screenpipeWebUrl("/changelog", "https://screenpipe.com")}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -200,7 +201,7 @@ export const ChangelogDialog: React.FC = () => {
             <div className="text-sm text-muted-foreground font-mono">
               couldn&apos;t reach the changelog. try again later or visit{" "}
               <a
-                href="https://screenpipe.com/changelog"
+                href={screenpipeWebUrl("/changelog", "https://screenpipe.com")}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline hover:text-foreground"

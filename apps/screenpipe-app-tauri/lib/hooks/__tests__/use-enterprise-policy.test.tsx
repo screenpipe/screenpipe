@@ -6,6 +6,7 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
+  const webBaseOverride = { value: null as string | null };
   const settings: Record<string, unknown> = { deviceId: "device-1" };
   const store = {
     get: vi.fn(async (key: string) => (key === "settings" ? settings : undefined)),
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
+    webBaseOverride,
     settings,
     store,
     isEnterprise: { value: true },
@@ -69,6 +71,17 @@ vi.mock("@tauri-apps/plugin-http", () => ({
   fetch: mocks.tauriFetch,
 }));
 
+// The baked control-plane base is read at module load from a NEXT_PUBLIC env
+// var, so it has to be mocked to be varied per test. Both the hook and the
+// shared fetch wrapper import this module, so overriding it here exercises the
+// real chain: web base -> isLocalControlPlaneBase() -> which deadline applies.
+vi.mock("@/lib/web-url", () => ({
+  PROD_WEB_BASE: "https://screenpipe.com",
+  screenpipeWebBase: (fallbackHost: string) => mocks.webBaseOverride.value ?? fallbackHost,
+  screenpipeWebUrl: (path: string, fallbackHost: string) =>
+    `${mocks.webBaseOverride.value ?? fallbackHost}${path.startsWith("/") ? path : `/${path}`}`,
+}));
+
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: mocks.getVersion,
 }));
@@ -92,7 +105,7 @@ import {
   useManagedPolicy,
 } from "@/lib/hooks/use-managed-policy";
 
-const KEY = "ENT-GWXX-RNUB-LW9F-3YA6";
+const KEY = "ENT-TEST-ONLY-HOOK-0001";
 
 function policyResponse(overrides: Record<string, unknown> = {}) {
   return new Response(
@@ -134,6 +147,56 @@ function mockEnterpriseApi(opts: {
   });
 }
 
+/**
+ * A control plane that accepts the request and never answers — the case the
+ * tauri http plugin does not bound on its own (no reqwest request timeout, and
+ * the OS connect timeout no longer applies once the peer accepts). The mock
+ * mirrors the plugin: an abort rejects the pending request.
+ */
+function hangUntilAborted() {
+  mocks.tauriFetch.mockImplementation((_url: string, init?: RequestInit) => {
+    if (init?.signal?.aborted) return Promise.reject(new Error("Request canceled"));
+    return new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("Request canceled")));
+    });
+  });
+}
+
+/**
+ * A control plane that ANSWERS — 200 with real headers — and then stalls the
+ * body. Distinct from hangUntilAborted and much easier to miss: the plugin
+ * resolves its promise at status+headers and streams the body lazily over
+ * `plugin:http|fetch_read_body`, so a deadline that only bounds the fetch
+ * promise leaves `await res.json()` (the read this hook blocks the gate on)
+ * completely unbounded. An interception proxy, a reverse proxy whose upstream is
+ * dead, and a wedged `next dev` all look like this.
+ */
+function answerHeadersThenStallBody() {
+  mocks.tauriFetch.mockImplementation((_url: string, init?: RequestInit) => {
+    if (init?.signal?.aborted) return Promise.reject(new Error("Request canceled"));
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        init?.signal?.addEventListener("abort", () =>
+          controller.error(new Error("Request canceled"))
+        );
+      },
+      pull: () => new Promise<void>(() => {}),
+    });
+    return Promise.resolve(
+      new Response(body, { status: 200, headers: { "content-type": "application/json" } })
+    );
+  });
+}
+
+/** Deadline the mount-time entitlement check runs under (production base). */
+const INITIAL_CHECK_DEADLINE_MS = 12_000;
+/** Same check when the base points at a control plane on this machine / LAN. */
+const LOCAL_INITIAL_CHECK_DEADLINE_MS = 60_000;
+/** First background retry of the initial check. */
+const FIRST_RETRY_DELAY_MS = 15_000;
+/** withTimeout budget every local Rust command on this path shares. */
+const LOCAL_COMMAND_TIMEOUT_MS = 8_000;
+
 async function renderEnterprisePolicy() {
   const hook = renderHook(() => useEnterprisePolicyRuntime());
   await act(async () => {});
@@ -145,6 +208,7 @@ describe("enterprise policy runtime manual activation", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     localStorage.clear();
+    mocks.webBaseOverride.value = null;
     mocks.isEnterprise.value = true;
     Object.keys(mocks.settings).forEach((k) => delete mocks.settings[k]);
     Object.assign(mocks.settings, { deviceId: "device-1" });
@@ -475,6 +539,49 @@ describe("enterprise policy runtime manual activation", () => {
     expect(accountPolicyCall).toBeDefined();
   });
 
+  it("recovers a rotated saved key through the signed-in account", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    Object.assign(mocks.settings, { user: { token: "account-token" } });
+    mocks.tauriFetch.mockImplementation(async (
+      url: string,
+      init?: { headers?: Record<string, string> }
+    ) => {
+      if (url.includes("/api/enterprise/policy")) {
+        if (init?.headers?.["X-License-Key"] === KEY) {
+          return new Response(JSON.stringify({ error: "bad credential" }), {
+            status: 401,
+          });
+        }
+        return policyResponse();
+      }
+      if (url.includes("/api/enterprise/heartbeat")) return heartbeatResponse();
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.isEnterpriseAuthenticated).toBe(true));
+    expect(
+      mocks.tauriFetch.mock.calls.some(
+        ([url, init]) =>
+          String(url).includes("/api/enterprise/policy") &&
+          init?.headers?.Authorization === "Bearer account-token" &&
+          init?.headers?.["X-License-Key"] === undefined
+      )
+    ).toBe(true);
+  });
+
+  it("prompts for account sign-in when a rotated saved key has no account", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    mockEnterpriseApi({ policyStatus: 401 });
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.authenticationState).toBe("account"));
+    expect(result.current.authenticationError).toMatch(/sign in with your screenpipe account/i);
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+  });
+
   it("signs out a key-authenticated device when the policy flips to require account sign-in", async () => {
     vi.useFakeTimers();
     mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
@@ -494,7 +601,333 @@ describe("enterprise policy runtime manual activation", () => {
     expect(result.current.authenticationState).toBe("account");
     expect(result.current.isEnterpriseAuthenticated).toBe(false);
     expect(result.current.authenticationError).toMatch(/requires signing in/i);
+  }, 20_000);
+
+  it("bounds the initial policy request with a deadline and a connect timeout", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    mockEnterpriseApi({});
+
+    const { result } = await renderEnterprisePolicy();
+    await waitFor(() => expect(result.current.isEnterpriseAuthenticated).toBe(true));
+
+    const policyCall = mocks.tauriFetch.mock.calls.find(([url]) =>
+      String(url).includes("/api/enterprise/policy")
+    );
+    expect(policyCall?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(policyCall?.[1]?.connectTimeout).toBe(10_000);
+
+    await waitFor(() =>
+      expect(
+        mocks.tauriFetch.mock.calls.some(([url]) =>
+          String(url).includes("/api/enterprise/heartbeat")
+        )
+      ).toBe(true)
+    );
+    const heartbeatCall = mocks.tauriFetch.mock.calls.find(([url]) =>
+      String(url).includes("/api/enterprise/heartbeat")
+    );
+    expect(heartbeatCall?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(heartbeatCall?.[1]?.connectTimeout).toBe(10_000);
   });
+
+  it("gives up on a hung policy fetch instead of leaving the gate in checking", async () => {
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    hangUntilAborted();
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The request is in flight and the gate is showing its blank
+    // "checking enterprise access" shell.
+    expect(mocks.tauriFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.authenticationState).toBe("checking");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS - 1);
+    });
+    expect(result.current.authenticationState).toBe("checking");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2);
+    });
+
+    expect(result.current.authenticationState).toBe("license_key");
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(result.current.authenticationError).toMatch(/could not verify enterprise access/i);
+  }, 20_000);
+
+  it("surfaces a thrown policy fetch the same way as a rejected credential", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    mocks.tauriFetch.mockRejectedValue(new Error("error sending request"));
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.authenticationState).toBe("license_key"));
+    expect(result.current.authenticationError).toContain("could not verify enterprise access");
+  });
+
+  it("retries the initial check in the background and clears the prompt when the control plane answers", async () => {
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    hangUntilAborted();
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS + 1);
+    });
+    expect(result.current.authenticationState).toBe("license_key");
+
+    // Control plane comes back before the employee has typed anything.
+    mockEnterpriseApi({});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS + 1);
+    });
+
+    expect(result.current.authenticationState).toBe("authenticated");
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+  }, 20_000);
+
+  it("does not let a background retry that has not started yet undo a manual activation", async () => {
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    hangUntilAborted();
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS + 1);
+    });
+    expect(result.current.authenticationState).toBe("license_key");
+
+    mockEnterpriseApi({});
+    await act(async () => {
+      await result.current.submitLicenseKey(KEY);
+    });
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+
+    // The control plane goes away again. The abandoned initial-check retry must
+    // not fire and knock the employee back to the prompt.
+    hangUntilAborted();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS + INITIAL_CHECK_DEADLINE_MS + 1_000);
+    });
+
+    expect(result.current.authenticationState).toBe("authenticated");
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+  }, 20_000);
+
+  it("does not let a retry that is ALREADY IN FLIGHT undo a manual activation", async () => {
+    // The window a scheduling-only guard leaves open, and the one that actually
+    // bites: the retry is running with its own 12s deadline counting down when
+    // the employee activates. Its failure branch would then set
+    // authenticationState back to "license_key", and the gate stops the recorder
+    // for every state except "checking".
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    hangUntilAborted();
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS + 1);
+    });
+    expect(result.current.authenticationState).toBe("license_key");
+
+    // Let the backoff elapse so attempt 2 is genuinely in flight.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS + 1);
+    });
+    expect(mocks.tauriFetch).toHaveBeenCalledTimes(2);
+    expect(result.current.authenticationState).toBe("license_key");
+
+    // The employee's own submit reaches a control plane that does answer — the
+    // realistic split, because the retry runs on 12s while submitLicenseKey uses
+    // the wrapper's 30s default.
+    mockEnterpriseApi({});
+    await act(async () => {
+      const submitted = await result.current.submitLicenseKey(KEY);
+      expect(submitted.ok).toBe(true);
+    });
+    expect(result.current.authenticationState).toBe("authenticated");
+
+    // Abandoning the run cancelled the in-flight native request AT abandonment.
+    // Asserted HERE, before any timer advance: after the advance below, an
+    // aborted signal is also what "left alive until its own 12s deadline" looks
+    // like, so the assertion could not tell the two apart and could not fail.
+    expect(mocks.tauriFetch.mock.calls[1][1].signal.aborted).toBe(true);
+
+    // Now let the abandoned attempt hit its own deadline (and a further backoff
+    // and the first policy poll) with the control plane gone again.
+    hangUntilAborted();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    });
+
+    expect(result.current.authenticationState).toBe("authenticated");
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+    expect(result.current.authenticationError).toBeNull();
+
+  }, 20_000);
+
+  it("does not let an in-flight license-key retry yank the employee off the sign-in screen", async () => {
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    hangUntilAborted();
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS + 1);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FIRST_RETRY_DELAY_MS + 1);
+    });
+    expect(mocks.tauriFetch).toHaveBeenCalledTimes(2);
+
+    // Employee gives up on the key and picks account sign-in while attempt 2 is
+    // still in flight. No account token is stored, so the screen must stay put.
+    await act(async () => {
+      result.current.selectAuthenticationMethod("account");
+    });
+    expect(result.current.authenticationState).toBe("account");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS + 1_000);
+    });
+    expect(result.current.authenticationState).toBe("account");
+    expect(result.current.authenticationError).toBeNull();
+  }, 20_000);
+
+  it("suppresses an abandoned attempt's writes even when cancelling it does not land", async () => {
+    // ISOLATES THE WRITE GUARD from the abort, which the two tests above do NOT.
+    // They stay green with the `shouldApply` check deleted, because aborting the
+    // abandoned request makes its bad write land BEFORE the good one and get
+    // overwritten — so they only fail against the whole pre-fix shape.
+    //
+    // A real peer can answer after the cancel: `plugin:http|fetch_cancel` races
+    // the in-flight future (commands.rs tokio::select), and a response already on
+    // the wire arrives anyway. This mock therefore ignores the signal entirely
+    // and answers 401 only when told to, which leaves `shouldApply()` as the one
+    // and only thing standing between "invalid enterprise key" and a device that
+    // has since been activated by hand.
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+
+    let answerAbandonedAttempt = () => {};
+    const abandonedAttempt = new Promise<Response>((resolve) => {
+      answerAbandonedAttempt = () =>
+        resolve(new Response(JSON.stringify({ error: "bad credential" }), { status: 401 }));
+    });
+    mocks.tauriFetch.mockImplementationOnce(() => abandonedAttempt);
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // Attempt 1 is in flight and has written nothing yet.
+    expect(mocks.tauriFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.authenticationState).toBe("checking");
+
+    // The employee activates a valid key by hand while it is still open.
+    mockEnterpriseApi({});
+    await act(async () => {
+      expect((await result.current.submitLicenseKey(KEY)).ok).toBe(true);
+    });
+    expect(result.current.authenticationState).toBe("authenticated");
+
+    // Only NOW does the abandoned attempt answer — with a key rejection.
+    await act(async () => {
+      answerAbandonedAttempt();
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(result.current.authenticationState).toBe("authenticated");
+    expect(result.current.authenticationError).toBeNull();
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+  }, 20_000);
+
+  it("gives up when the control plane answers 200 and then stalls the body", async () => {
+    // The other half of the tarpit. A deadline on the fetch promise alone would
+    // let this one straight through: the plugin resolves at status+headers, so
+    // `await res.json()` in fetchPolicy never settles, authenticateCredential
+    // never resolves, and the gate is parked on its blank pulse bar for good.
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    answerHeadersThenStallBody();
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.tauriFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.authenticationState).toBe("checking");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS - 1);
+    });
+    expect(result.current.authenticationState).toBe("checking");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2);
+    });
+    expect(result.current.authenticationState).toBe("license_key");
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(result.current.authenticationError).toMatch(/could not verify enterprise access/i);
+  }, 20_000);
+
+  it("waits longer for a control plane on this machine than for production", async () => {
+    // The highest-consequence behaviour in the change: with
+    // NEXT_PUBLIC_SCREENPIPE_WEB_URL=http://localhost:3000 the first hit on
+    // /api/enterprise/policy pays a cold `next dev` compile, and a flat 12s
+    // deadline would fail the gate on every launch of the one-knob workflow.
+    vi.useFakeTimers();
+    mocks.webBaseOverride.value = "http://localhost:3000";
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    hangUntilAborted();
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(String(mocks.tauriFetch.mock.calls[0][0])).toBe(
+      "http://localhost:3000/api/enterprise/policy"
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INITIAL_CHECK_DEADLINE_MS + 1_000);
+    });
+    expect(result.current.authenticationState).toBe("checking");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LOCAL_INITIAL_CHECK_DEADLINE_MS);
+    });
+    expect(result.current.authenticationState).toBe("license_key");
+  }, 30_000);
+
+  it("does not park the gate on a hung enterprise.json read", async () => {
+    // getEnterpriseLicenseKey sits before the network call on the initial-check
+    // path and produces the identical symptom — a gate stuck in "checking" — if
+    // the Rust side never answers.
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockReturnValue(
+      new Promise(() => undefined) as never
+    );
+    mockEnterpriseApi({});
+
+    const { result } = renderHook(() => useEnterprisePolicyRuntime());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.authenticationState).toBe("checking");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LOCAL_COMMAND_TIMEOUT_MS + 1);
+    });
+
+    // No key readable and no account token: the choice screen, not a dead
+    // spinner.
+    expect(result.current.authenticationState).toBe("choice");
+  }, 20_000);
 
   it("switches a key-authenticated device to its signed-in account when the policy flips", async () => {
     vi.useFakeTimers();
@@ -523,5 +956,5 @@ describe("enterprise policy runtime manual activation", () => {
           init?.headers?.["X-License-Key"] === undefined
       );
     expect(accountPolicyCall).toBeDefined();
-  });
+  }, 20_000);
 });

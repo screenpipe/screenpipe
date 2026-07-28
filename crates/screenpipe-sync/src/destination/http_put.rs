@@ -66,6 +66,10 @@ impl HttpPutDirect {
             url,
             reqwest::Client::builder()
                 .timeout(Duration::from_secs(60))
+                // Callers put per-request auth in `UploadRequest::headers`,
+                // which may be a custom header reqwest does not strip on a
+                // cross-origin redirect. Don't follow them by default.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("default reqwest client builds"),
         )

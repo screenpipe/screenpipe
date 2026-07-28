@@ -41,7 +41,100 @@ fn log_webview_build_failure(label: &str, url_hint: &str, err: &(impl std::fmt::
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{fallback_local_api_config, is_login_callback_scheme, scan_chat_entries_by_mtime};
+    use super::{
+        fallback_local_api_config, is_login_callback_scheme, read_enterprise_config_from_path,
+        save_enterprise_team_config, scan_chat_entries_by_mtime,
+    };
+
+    /// The whole point of SCR-300: `gateway_url` is the ONE name the server,
+    /// this file, and all three readers use, and this is its only writer.
+    /// Assert the writer actually sets the key, that a changed URL overwrites
+    /// (the 5-minute policy poll re-asserts it, so a moved gateway must
+    /// self-heal), and that `None` leaves it alone.
+    #[test]
+    fn team_config_writes_and_updates_gateway_url() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SCREENPIPE_DATA_DIR", dir.path());
+        let path = dir.path().join("enterprise.json");
+        let read = || -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+        };
+
+        save_enterprise_team_config(
+            Some(true),
+            Some(true),
+            None,
+            Some("https://gw.acme.com/api/enterprise/v1/".to_string()),
+        )
+        .unwrap();
+        // Trailing slash trimmed, matching what the three readers expect.
+        assert_eq!(
+            read()["gateway_url"],
+            "https://gw.acme.com/api/enterprise/v1"
+        );
+
+        // Gateway moved: the next poll overwrites it.
+        save_enterprise_team_config(None, None, None, Some("https://gw2.acme.com".to_string()))
+            .unwrap();
+        assert_eq!(read()["gateway_url"], "https://gw2.acme.com");
+
+        // Hosted org / older backend omits the field: leave the key as-is
+        // rather than silently sending clients to the hosted base.
+        save_enterprise_team_config(None, None, Some("sk_ent_abc".to_string()), None).unwrap();
+        assert_eq!(read()["gateway_url"], "https://gw2.acme.com");
+        assert_eq!(read()["team_api_token"], "sk_ent_abc");
+
+        // Junk is refused, not written.
+        save_enterprise_team_config(None, None, None, Some("not a url".to_string())).unwrap();
+        assert_eq!(read()["gateway_url"], "https://gw2.acme.com");
+
+        // Empty string is the explicit "clear it" signal (binding removed).
+        save_enterprise_team_config(None, None, None, Some(String::new())).unwrap();
+        assert!(read()["gateway_url"].is_null());
+
+        std::env::remove_var("SCREENPIPE_DATA_DIR");
+    }
+
+    #[test]
+    fn enterprise_json_parses_license_and_ingest_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("enterprise.json");
+
+        // Both fields (sign-in auto-config or full MDM drop).
+        std::fs::write(
+            &path,
+            r#"{"license_key":"ENT-AAAA-BBBB-CCCC-DDDD","ingest_url":"http://192.168.10.161:3000/api/enterprise/ingest"}"#,
+        )
+        .unwrap();
+        let cfg = read_enterprise_config_from_path(&path).unwrap();
+        assert_eq!(cfg.license_key.as_deref(), Some("ENT-AAAA-BBBB-CCCC-DDDD"));
+        assert_eq!(
+            cfg.ingest_url.as_deref(),
+            Some("http://192.168.10.161:3000/api/enterprise/ingest")
+        );
+
+        // Legacy file: license only — ingest stays None (default base applies).
+        std::fs::write(&path, r#"{"license_key":"ENT-AAAA-BBBB-CCCC-DDDD"}"#).unwrap();
+        let cfg = read_enterprise_config_from_path(&path).unwrap();
+        assert!(cfg.ingest_url.is_none());
+        assert!(!cfg.is_empty());
+
+        // URL-only file: valid "MDM points at the control plane, sign-in
+        // supplies the license" deployment.
+        std::fs::write(&path, r#"{"ingest_url":"https://cp.acme.com/api/enterprise/ingest"}"#)
+            .unwrap();
+        let cfg = read_enterprise_config_from_path(&path).unwrap();
+        assert!(cfg.license_key.is_none());
+        assert_eq!(
+            cfg.ingest_url.as_deref(),
+            Some("https://cp.acme.com/api/enterprise/ingest")
+        );
+
+        // Blank/whitespace values are treated as absent, not empty strings.
+        std::fs::write(&path, r#"{"license_key":"  ","ingest_url":""}"#).unwrap();
+        let cfg = read_enterprise_config_from_path(&path).unwrap();
+        assert!(cfg.is_empty());
+    }
 
     #[test]
     fn chat_entries_missing_dir_is_empty() {
@@ -324,34 +417,55 @@ pub fn set_cloud_media_analysis_skill(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Read the enterprise license key from `enterprise.json`.
-/// Checks in order:
-/// 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
-/// 2. `~/.screenpipe/enterprise.json` (entered manually by employee via in-app prompt)
-/// Returns None if no file is found or is invalid.
-#[tauri::command]
-#[specta::specta]
-pub fn get_enterprise_license_key() -> Option<String> {
-    // Try MDM-deployed location first (next to executable)
-    if let Some(key) = read_enterprise_key_from_exe_dir() {
-        return Some(key);
-    }
+/// Everything `enterprise.json` can carry. `license_key` activates the
+/// telemetry pipeline; `ingest_url` re-bases every enterprise endpoint
+/// (control_plane_base derives the origin), which is how on-prem / staging
+/// control planes work without env vars. Both optional — a file with only
+/// `ingest_url` is a valid "MDM points the device at the control plane,
+/// sign-in supplies the license" deployment.
+#[derive(Debug, Clone, Default)]
+pub struct EnterpriseFileConfig {
+    pub license_key: Option<String>,
+    pub ingest_url: Option<String>,
+}
 
-    // Fallback: ~/.screenpipe/enterprise.json (manually entered by employee)
+impl EnterpriseFileConfig {
+    pub fn is_empty(&self) -> bool {
+        self.license_key.is_none() && self.ingest_url.is_none()
+    }
+}
+
+/// Read the full enterprise device config from `enterprise.json`.
+/// Checks in order (first file found wins entirely):
+/// 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
+/// 2. `~/.screenpipe/enterprise.json` (in-app prompt or sign-in auto-config)
+pub fn get_enterprise_file_config() -> EnterpriseFileConfig {
+    if let Some(cfg) = read_enterprise_config_from_exe_dir() {
+        return cfg;
+    }
     let user_path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
     if user_path.exists() {
         info!(
             "enterprise: checking user config at {}",
             user_path.display()
         );
-        return read_enterprise_key_from_path(&user_path);
+        if let Some(cfg) = read_enterprise_config_from_path(&user_path) {
+            return cfg;
+        }
     }
-
     info!("enterprise: no enterprise.json found in any location");
-    None
+    EnterpriseFileConfig::default()
 }
 
-fn read_enterprise_key_from_exe_dir() -> Option<String> {
+/// Read the enterprise license key from `enterprise.json`.
+/// Returns None if no file is found or is invalid.
+#[tauri::command]
+#[specta::specta]
+pub fn get_enterprise_license_key() -> Option<String> {
+    get_enterprise_file_config().license_key
+}
+
+fn read_enterprise_config_from_exe_dir() -> Option<EnterpriseFileConfig> {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => {
@@ -378,10 +492,10 @@ fn read_enterprise_key_from_exe_dir() -> Option<String> {
         return None;
     }
 
-    read_enterprise_key_from_path(&config_path)
+    read_enterprise_config_from_path(&config_path)
 }
 
-fn read_enterprise_key_from_path(path: &std::path::Path) -> Option<String> {
+fn read_enterprise_config_from_path(path: &std::path::Path) -> Option<EnterpriseFileConfig> {
     info!("enterprise: found enterprise.json at {}", path.display());
 
     let contents = match std::fs::read_to_string(path) {
@@ -398,27 +512,40 @@ fn read_enterprise_key_from_path(path: &std::path::Path) -> Option<String> {
             return None;
         }
     };
-    let key = parsed
-        .get("license_key")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let string_field = |name: &str| {
+        parsed
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let cfg = EnterpriseFileConfig {
+        license_key: string_field("license_key"),
+        ingest_url: string_field("ingest_url"),
+    };
 
-    match &key {
+    match &cfg.license_key {
         Some(k) => info!(
             "enterprise: license key loaded ({}...)",
             &k[..k.len().min(8)]
         ),
-        None => warn!("enterprise: enterprise.json missing 'license_key' field"),
+        None => info!("enterprise: enterprise.json has no 'license_key' field"),
+    }
+    if let Some(url) = &cfg.ingest_url {
+        info!("enterprise: ingest url from enterprise.json: {}", url);
     }
 
-    key
+    Some(cfg)
 }
 
-/// Save the enterprise license key to `~/.screenpipe/enterprise.json`.
-/// Used by the in-app prompt when enterprise.json is not deployed via MDM.
-#[tauri::command]
-#[specta::specta]
-pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
+/// Merge-write device config fields into `~/.screenpipe/enterprise.json`,
+/// preserving any other keys already in the file. Used by the in-app
+/// license prompt and by the sign-in-driven auto-config
+/// (enterprise/device_config.rs).
+pub fn persist_enterprise_device_config(
+    license_key: Option<&str>,
+    ingest_url: Option<&str>,
+) -> Result<(), String> {
     let dir = screenpipe_core::paths::default_screenpipe_data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
 
@@ -427,12 +554,25 @@ pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .unwrap_or_else(|| serde_json::json!({}));
-    json["license_key"] = serde_json::Value::String(license_key);
+    if let Some(key) = license_key {
+        json["license_key"] = serde_json::Value::String(key.to_string());
+    }
+    if let Some(url) = ingest_url {
+        json["ingest_url"] = serde_json::Value::String(url.to_string());
+    }
     std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
         .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
 
-    info!("enterprise: license key saved to {}", path.display());
+    info!("enterprise: device config saved to {}", path.display());
     Ok(())
+}
+
+/// Save the enterprise license key to `~/.screenpipe/enterprise.json`.
+/// Used by the in-app prompt when enterprise.json is not deployed via MDM.
+#[tauri::command]
+#[specta::specta]
+pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
+    persist_enterprise_device_config(Some(&license_key), None)
 }
 
 /// Persist the resolved "hide app UI" decision into `~/.screenpipe/enterprise.json`
@@ -658,8 +798,9 @@ pub async fn set_cloud_token(
     Ok(())
 }
 
-/// Persist the user's enterprise admin status + team API token so the
-/// pi-agent's `screenpipe-team` skill knows whether to install itself.
+/// Persist the user's enterprise admin status, team API token, and the org's
+/// team API base URL so the pi-agent's `screenpipe-team` skill knows whether
+/// to install itself and where to point.
 ///
 /// Called by the frontend right after a policy fetch confirms admin
 /// role. Storing this alongside the license key in `enterprise.json`
@@ -676,6 +817,7 @@ pub fn save_enterprise_team_config(
     is_admin: Option<bool>,
     license_active: Option<bool>,
     team_api_token: Option<String>,
+    gateway_url: Option<String>,
 ) -> Result<(), String> {
     let dir = screenpipe_core::paths::default_screenpipe_data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
@@ -700,16 +842,32 @@ pub fn save_enterprise_team_config(
             serde_json::Value::String(t)
         };
     }
+    // The org's team-API base (a gateway org's `gateway_url`). Every client
+    // reads this key; the 5-minute policy poll re-asserts it, so a changed
+    // gateway URL propagates without user action. Only http(s) values are
+    // written — a junk value would silently redirect all three readers.
+    let url_set = gateway_url.is_some();
+    if let Some(u) = gateway_url {
+        let u = u.trim();
+        if u.is_empty() {
+            json["gateway_url"] = serde_json::Value::Null;
+        } else if u.starts_with("http://") || u.starts_with("https://") {
+            json["gateway_url"] = serde_json::Value::String(u.trim_end_matches('/').to_string());
+        } else {
+            warn!("enterprise: ignoring non-http gateway_url: {}", u);
+        }
+    }
 
     std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
         .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
 
     info!(
-        "enterprise: team config saved to {} (is_admin set: {}, license_active set: {}, token set: {})",
+        "enterprise: team config saved to {} (is_admin set: {}, license_active set: {}, token set: {}, url set: {})",
         path.display(),
         is_admin.is_some(),
         license_active.is_some(),
-        token_set
+        token_set,
+        url_set
     );
     Ok(())
 }
@@ -1536,7 +1694,13 @@ pub async fn get_disk_usage(
     }
 }
 
-const LOGIN_URL: &str = "https://screenpipe.com/login";
+/// Login page on the baked control-plane base (crate::web_base): a build
+/// produced with NEXT_PUBLIC_SCREENPIPE_WEB_URL signs in against that
+/// deployment, so its session token verifies on the same control plane
+/// the rest of the app talks to.
+fn login_url() -> String {
+    crate::web_base::screenpipe_web_url("/login")
+}
 
 /// The custom URL scheme this build registers for deep links. The enterprise
 /// build uses a distinct scheme so it does not collide with the consumer app's
@@ -1577,7 +1741,7 @@ pub async fn open_login_window(
         // with another installed build here (#3890) and stays correct until
         // the website honours `return_scheme`.
         let callback_url = match crate::auth_session::start_session(
-            LOGIN_URL.to_string(),
+            login_url(),
             "screenpipe".to_string(),
             fresh_session,
         )
@@ -1626,7 +1790,7 @@ pub async fn open_login_window(
         let app_for_nav = app_handle.clone();
         let label_for_nav = label.clone();
 
-        let login_url = format!("{}?return_scheme={}", LOGIN_URL, deep_link_scheme());
+        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label.clone(),

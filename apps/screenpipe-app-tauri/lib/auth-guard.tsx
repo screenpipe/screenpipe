@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
-import { screenpipeWebUrl } from "@/lib/web-url";
+import { PROD_WEB_BASE, screenpipeWebBase, screenpipeWebUrl } from "@/lib/web-url";
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const TOAST_COOLDOWN_MS = 5 * 60 * 1000;
@@ -110,10 +110,34 @@ export function isScreenpipeApi(url: string): boolean {
   );
 }
 
-// The subset of screenpipe cloud hosts whose 401 genuinely means the login
-// SESSION died — the website auth surface (screenpipe.com/api/user and the
-// OAuth/session endpoints). This is what the fetch interceptor keys its
-// sign-out on.
+// Full host (hostname:port) of a URL, lowercased. The port matters when the
+// web base is overridden: with a local control plane the website
+// (localhost:3000) and the local engine (localhost:3030) share a hostname and
+// differ only by port — matching on hostname alone would let an engine 401
+// clear the login session.
+function cloudRequestFullHost(url: string): string | null {
+  try {
+    const base =
+      typeof window !== "undefined" && window.location?.href
+        ? window.location.href
+        : "http://localhost";
+    return new URL(url, base).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+// The subset of hosts whose 401 genuinely means the login SESSION died — the
+// website auth surface (screenpipe.com/api/user and the OAuth/session
+// endpoints). This is what the fetch interceptor keys its sign-out on.
+//
+// The session authority is wherever the app actually authenticates. When
+// NEXT_PUBLIC_SCREENPIPE_WEB_URL repoints the app (baked enterprise build,
+// Vercel preview, local control plane), THAT deployment minted the token and
+// only its 401s may clear it — a 401 from prod screenpipe.com then just means
+// "prod doesn't know this token" (it never did) and must not sign the user
+// out. This bit every baked local build: any straggler call site still
+// hardcoding prod got a 401 seconds after onboarding and nuked the session.
 //
 // The AI inference gateway `api.screenpipe.com` is EXCLUDED: it is fail-open on
 // auth (a bad/expired token silently degrades to the anonymous tier) and returns
@@ -122,7 +146,19 @@ export function isScreenpipeApi(url: string): boolean {
 // sign-out nulled the whole user and looped enterprise users through onboarding
 // after an auto-update (SCR-132). Session validity lives on the website, not the
 // inference subdomain.
-export function isScreenpipeAuthApi(url: string): boolean {
+export function isScreenpipeAuthApi(
+  url: string,
+  webBase: string = screenpipeWebBase(PROD_WEB_BASE)
+): boolean {
+  if (webBase !== PROD_WEB_BASE) {
+    let overrideHost: string;
+    try {
+      overrideHost = new URL(webBase).host.toLowerCase();
+    } catch {
+      return false;
+    }
+    return cloudRequestFullHost(url) === overrideHost;
+  }
   if (!isScreenpipeApi(url)) return false;
   const host = cloudRequestHost(url);
   return host !== "api.screenpipe.com" && host !== "api.screenpi.pe";

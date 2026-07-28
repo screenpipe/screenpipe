@@ -20,6 +20,9 @@
  * Unset = production behavior. The override is read at build time (NEXT_PUBLIC),
  * so it is baked into `next dev` / `next build`.
  */
+/** The production website origin — the fallback base when no override is set. */
+export const PROD_WEB_BASE = "https://screenpipe.com";
+
 const WEB_URL_OVERRIDE =
   process.env.NEXT_PUBLIC_SCREENPIPE_WEB_URL?.replace(/\/+$/, "") || null;
 

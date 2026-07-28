@@ -7,6 +7,7 @@ import {
   commands,
   type AIPreset,
   type BrainViewComponent,
+  type BrainViewPeriodPolicy,
   type BrainViewTimeRange,
   type PiProviderConfig,
 } from "@/lib/utils/tauri";
@@ -60,6 +61,7 @@ export type GeneratedLiveViewBlock = {
 export type GeneratedLiveView = {
   title: string;
   timeRange: BrainViewTimeRange;
+  periodPolicy?: BrainViewPeriodPolicy;
   blocks: GeneratedLiveViewBlock[];
   note: string;
 };
@@ -77,6 +79,10 @@ type GenerateLiveViewOptions = {
     title: string;
     timeRange: BrainViewTimeRange;
     blocks: GeneratedLiveViewBlock[];
+  } | null;
+  currentViewRef?: {
+    id: string;
+    revision: number;
   } | null;
 };
 
@@ -111,6 +117,14 @@ function componentValue(value: unknown): BrainViewComponent | null {
   return COMPONENT_ALIASES[value.toLowerCase()] ?? null;
 }
 
+function nestedPipeName(block: Record<string, unknown>): string | null {
+  for (const value of [block.source, block.binding]) {
+    const source = asRecord(value);
+    if (typeof source?.pipeName === "string") return source.pipeName;
+  }
+  return null;
+}
+
 function widthValue(value: unknown): 3 | 6 | 12 {
   if (value === 3 || value === "3" || value === "quarter") return 3;
   if (value === 12 || value === "12" || value === "full") return 12;
@@ -132,12 +146,31 @@ function timeRangeValue(value: unknown): BrainViewTimeRange {
   return "today";
 }
 
+function periodPolicyValue(
+  value: unknown,
+  timeRange: BrainViewTimeRange,
+): BrainViewPeriodPolicy {
+  if (
+    typeof value === "string" &&
+    value.trim().toLowerCase() === "fixed"
+  ) {
+    return { type: "fixed.v1", value: timeRange };
+  }
+  return {
+    type: "selectable.v1",
+    values: ["today", "24h", "7d", "30d"],
+  };
+}
+
 export function parseGeneratedLiveView(
   raw: string,
   allowedPipeNames: string[],
   scope: LiveViewGenerationScope,
 ): GeneratedLiveView {
-  const parsed = firstJsonObject(raw);
+  const response = firstJsonObject(raw);
+  const wrappedView = asRecord(response.view);
+  const parsed =
+    wrappedView && Array.isArray(wrappedView.blocks) ? wrappedView : response;
   const rawBlocks = Array.isArray(parsed.blocks)
     ? parsed.blocks
     : parsed.block
@@ -150,7 +183,9 @@ export function parseGeneratedLiveView(
     .map(asRecord)
     .filter((block): block is Record<string, unknown> => Boolean(block))
     .map((block) => {
-      const component = componentValue(block.component ?? block.type);
+      const component = componentValue(
+        block.component ?? block.kind ?? block.type,
+      );
       const title = typeof block.title === "string" ? block.title.trim() : "";
       if (!component || !title) return null;
       const intent =
@@ -162,7 +197,7 @@ export function parseGeneratedLiveView(
           ? block.pipeName
           : typeof block.pipe === "string"
             ? block.pipe
-            : null;
+            : nestedPipeName(block);
       return {
         title: title.slice(0, 120),
         intent,
@@ -193,9 +228,14 @@ export function parseGeneratedLiveView(
         ? `Created ${blocks[0].title}.`
         : `Created ${blocks.length} sections.`;
 
+  const timeRange = timeRangeValue(parsed.timeRange ?? parsed.time_range);
   return {
     title,
-    timeRange: timeRangeValue(parsed.timeRange ?? parsed.time_range),
+    timeRange,
+    periodPolicy: periodPolicyValue(
+      parsed.timeRangeBehavior ?? parsed.time_range_behavior,
+      timeRange,
+    ),
     blocks,
     note,
   };
@@ -204,7 +244,9 @@ export function parseGeneratedLiveView(
 function generationSystemPrompt(): string {
   return `You design Screenpipe Live Views. A Live View is a safe dashboard made from a fixed component palette.
 
-Return exactly one JSON object. Do not use markdown fences, prose outside JSON, HTML, JavaScript, SQL, or tool calls.
+Return exactly one JSON object. Do not use markdown fences, prose outside JSON, HTML, JavaScript, or SQL.
+When the request names a current Live View reference, first call screenpipe_live_view with action "get" and that exact id. Use no other tools and never call action "save"; the app validates and previews your proposed edit before it persists anything.
+The get tool returns native Blocks with kind and source.pipeName. In your final JSON, convert kind to component and source.pipeName to pipeName. Do not wrap the final dashboard in a view property.
 
 Allowed components:
 - metric.v1: one important number
@@ -218,19 +260,23 @@ Allowed components:
 Allowed widths are 3, 6, or 12. Prefer 6 for most sections, 12 for timelines or detailed briefs, and 3 only for compact metrics.
 Only use a pipeName from the available pipes supplied by the user. Use null when none fits. Do not invent pipes.
 Every section must include an intent: one precise, self-contained sentence describing what the Pipe should calculate, classify, or summarize. The intent is data logic, not display copy. Define percentages and scores explicitly, name the selected-period denominator, require source evidence, and say how to handle unclassified or missing evidence. Never use a vague intent such as "show this metric".
-For a whole dashboard, create 4 to 7 distinct sections. Prefer a useful mix with at least one metric, one bar chart, and one list or timeline when the request supports them. Never return placeholder titles such as "test", duplicate sections, or multiple metrics that show the same number.
-Choose one timeRange for the whole dashboard: "today", "24h", "7d", or "30d". Infer it from the request. Use "today" when the request does not specify a period. Prefer line-chart.v1 over bar-chart.v1 when the user asks how something changed over time.
+For a new dashboard, create 4 to 7 distinct sections. When editing a current Live View, preserve its useful existing sections and change only what the user requested; the complete result may contain 1 to 8 sections. Prefer a useful mix with at least one metric, one bar chart, and one list or timeline when the request supports them. Never return placeholder titles such as "test", duplicate sections, or multiple metrics that show the same number.
+Choose one timeRange for the whole dashboard: "today", "24h", "7d", or "30d". Infer it from the request. Use "today" when the request does not specify a period. Also choose timeRangeBehavior. Use "fixed" only when the dashboard's identity is inherently tied to that exact period, such as a daily memory or a standup for the last 24 hours. Use "selectable" when the same analysis remains useful across different periods. If unsure, use "selectable". This choice is automatic and is never presented to the user as a setup decision. Prefer line-chart.v1 over bar-chart.v1 when the user asks how something changed over time.
 For one section, return exactly one focused section.
 
 Required JSON shape:
-{"title":"View title","timeRange":"today","blocks":[{"title":"Section title","intent":"Precise source-backed question or calculation for this section and selected period.","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
+{"title":"View title","timeRange":"today","timeRangeBehavior":"selectable","blocks":[{"title":"Section title","intent":"Precise source-backed question or calculation for this section and selected period.","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
 }
 
-function generationPrompt(options: GenerateLiveViewOptions): string {
+export function buildLiveViewGenerationPrompt(
+  options: GenerateLiveViewOptions,
+): string {
   const scopeInstruction =
     options.scope === "block"
       ? "Create exactly one new section to add to the existing Live View."
-      : "Create a complete Live View with 4 to 7 useful, visually varied sections. Return the full dashboard.";
+      : options.currentViewRef
+        ? "Edit the referenced current Live View. Preserve every existing section the user did not ask to change, apply the request, and return the complete revised dashboard. Do not create a separate dashboard."
+        : "Create a complete Live View with 4 to 7 useful, visually varied sections. Return the full dashboard.";
   const pipes = relevantPipes(options.prompt, options.pipes).map((pipe) => ({
     name: pipe.name,
     description: pipe.description.slice(0, 500),
@@ -257,7 +303,10 @@ ${options.prompt.trim()}
 Available pipes:
 ${JSON.stringify(pipes)}
 
-Current Live View:
+Current Live View reference:
+${options.currentViewRef ? JSON.stringify(options.currentViewRef) : "null"}
+
+Focused section context:
 ${options.currentView ? JSON.stringify(options.currentView) : "null"}
 
 Choose the simplest useful layout. Reply with only the required JSON object.`;
@@ -388,7 +437,7 @@ async function rawGeneration(
     }
     const prompted = await commands.piPrompt(
       sessionId,
-      generationPrompt(options),
+      buildLiveViewGenerationPrompt(options),
       null,
       null,
     );

@@ -9,16 +9,27 @@ use axum::{
     Extension,
 };
 use screenpipe_core::pipes::permissions::PipePermissions;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
 use crate::live_views::{
-    delete_live_view, list_live_views, live_view_template_json_schema, save_live_view, LiveView,
-    LiveViewError, LiveViewErrorKind, SaveLiveViewRequest,
+    delete_live_view, get_live_view_template, list_live_view_templates, list_live_views,
+    live_view_template_json_schema, save_live_view, LiveView, LiveViewError, LiveViewErrorKind,
+    LiveViewTemplate, SaveLiveViewRequest,
 };
 use crate::server::AppState;
 
 type ApiError = (StatusCode, Json<Value>);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LiveViewCatalogEntry {
+    id: String,
+    title: String,
+    revision: u64,
+    block_count: usize,
+}
 
 fn api_error(error: LiveViewError) -> ApiError {
     let status = match error.kind {
@@ -59,6 +70,38 @@ pub(crate) async fn live_view_schema_handler(
 ) -> Result<Json<Value>, ApiError> {
     reject_pipe_token(&permissions)?;
     Ok(Json(live_view_template_json_schema()))
+}
+
+pub(crate) async fn live_view_catalog_handler(
+    State(state): State<Arc<AppState>>,
+    permissions: Option<Extension<Arc<PipePermissions>>>,
+) -> Result<Json<Vec<LiveViewCatalogEntry>>, ApiError> {
+    reject_pipe_token(&permissions)?;
+    list_live_view_templates(&state.screenpipe_dir)
+        .map(|templates| {
+            templates
+                .into_iter()
+                .map(|template| LiveViewCatalogEntry {
+                    id: template.id,
+                    title: template.title,
+                    revision: template.revision,
+                    block_count: template.blocks.len(),
+                })
+                .collect()
+        })
+        .map(Json)
+        .map_err(api_error)
+}
+
+pub(crate) async fn get_live_view_template_handler(
+    State(state): State<Arc<AppState>>,
+    permissions: Option<Extension<Arc<PipePermissions>>>,
+    Path(id): Path<String>,
+) -> Result<Json<LiveViewTemplate>, ApiError> {
+    reject_pipe_token(&permissions)?;
+    get_live_view_template(&state.screenpipe_dir, &id)
+        .map(Json)
+        .map_err(api_error)
 }
 
 pub(crate) async fn save_live_view_handler(

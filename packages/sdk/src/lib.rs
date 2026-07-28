@@ -76,6 +76,11 @@ pub struct RecorderOptions {
     /// When the focused window is a browser navigated to a matching URL,
     /// the recorder skips writing frames.
     pub ignored_urls: Option<Vec<String>>,
+    /// Detect and skip incognito/private browser windows. Default: true.
+    pub ignore_incognito_windows: Option<bool>,
+    /// Use browser-native incognito detection on macOS. Default: false.
+    /// May require Automation permission for supported Chromium browsers.
+    pub enhanced_incognito_detection: Option<bool>,
     /// When set, the recorder runs the engine's event-driven paired-capture
     /// pipeline in parallel with the MP4 writer: typed UI events (click,
     /// typing pause, app switch, etc.) + visual-change detection + idle
@@ -191,6 +196,8 @@ impl From<RecorderOptions> for screenpipe_recorder::RecorderOptions {
             ignored_windows: v.ignored_windows,
             included_windows: v.included_windows,
             ignored_urls: v.ignored_urls,
+            ignore_incognito_windows: v.ignore_incognito_windows,
+            enhanced_incognito_detection: v.enhanced_incognito_detection,
             data_dir: v.data_dir,
             mp4_monitors: v.mp4_monitors,
             paired_monitors: v.paired_monitors,

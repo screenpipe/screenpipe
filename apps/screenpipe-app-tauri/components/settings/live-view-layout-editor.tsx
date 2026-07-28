@@ -136,6 +136,7 @@ export function LiveViewLayoutEditor({
   const slots = useMemo(() => normalizedSlots(draft.slots), [draft.slots]);
   const selectedSlot = slots.find((slot) => slot.id === selectedSlotId) ?? null;
   const allowedTimeRangeOptions = allowedLiveViewTimeRanges(draft.periodPolicy);
+  const hasSelectableTimeRange = draft.periodPolicy.type !== "fixed.v1";
   const canSave =
     Boolean(draft.title.trim()) && slots.every((slot) => slot.title.trim());
 
@@ -260,8 +261,20 @@ export function LiveViewLayoutEditor({
         </div>
       </div>
 
-      <div className="mb-4 grid border border-border md:grid-cols-[minmax(0,1fr)_12rem]">
-        <label className="space-y-1.5 border-b border-border p-3 md:border-b-0 md:border-r">
+      <div
+        className={`mb-4 grid border border-border ${
+          hasSelectableTimeRange
+            ? "md:grid-cols-[minmax(0,1fr)_12rem]"
+            : ""
+        }`}
+      >
+        <label
+          className={`space-y-1.5 p-3 ${
+            hasSelectableTimeRange
+              ? "border-b border-border md:border-b-0 md:border-r"
+              : ""
+          }`}
+        >
           <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
             Live View name
           </span>
@@ -275,15 +288,11 @@ export function LiveViewLayoutEditor({
             maxLength={120}
           />
         </label>
-        <label className="space-y-1.5 p-3">
-          <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">
-            Time window
-          </span>
-          {draft.periodPolicy.type === "fixed.v1" ? (
-            <div className="flex h-9 w-full items-center border border-border bg-muted/20 px-2 text-xs">
-              {allowedTimeRangeOptions[0]?.label ?? "Fixed"}
-            </div>
-          ) : (
+        {hasSelectableTimeRange && (
+          <label className="space-y-1.5 p-3">
+            <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">
+              Time window
+            </span>
             <select
               aria-label="template time range"
               value={draft.timeRange}
@@ -301,8 +310,8 @@ export function LiveViewLayoutEditor({
                 </option>
               ))}
             </select>
-          )}
-        </label>
+          </label>
+        )}
       </div>
 
       {selectedSlot && (

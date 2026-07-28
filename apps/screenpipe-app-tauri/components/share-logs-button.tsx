@@ -44,6 +44,7 @@ import {
   mimeFromName,
   type VideoExt,
 } from "@/lib/utils/feedback-attachments";
+import { screenpipeWebBase } from "@/lib/web-url";
 
 // Read an image File and return a compressed JPEG data URL (max 1920px wide).
 // Shared by the file-picker, clipboard paste, and drag-drop entry points.
@@ -527,7 +528,7 @@ export const ShareLogsButton = ({
         "log listing",
       ).catch(() => [] as Awaited<ReturnType<typeof getLogFiles>>);
 
-      const BASE_URL = "https://screenpipe.com";
+      const BASE_URL = screenpipeWebBase("https://screenpipe.com");
       const identifier = settings.user?.id || machineId;
       const type = settings.user?.id ? "user" : "machine";
 

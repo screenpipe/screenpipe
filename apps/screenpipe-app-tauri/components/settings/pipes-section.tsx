@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -1177,7 +1178,7 @@ export function PipesSection() {
   const sharePipePublic = async (pipe: PipeStatus) => {
     setSharingPublic(pipe.config.name);
     try {
-      const res = await fetch("https://screenpipe.com/api/pipes/share", {
+      const res = await fetch(screenpipeWebUrl("/api/pipes/share", "https://screenpipe.com"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

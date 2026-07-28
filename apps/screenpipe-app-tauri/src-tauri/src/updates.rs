@@ -547,6 +547,9 @@ impl UpdatesManager {
             if let Some(license_key) = crate::commands::get_enterprise_license_key() {
                 builder = builder.header("X-License-Key", license_key)?;
             }
+            if let Some(token) = crate::commands::get_cloud_token() {
+                builder = builder.header("Authorization", format!("Bearer {token}"))?;
+            }
         } else if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
             if let Some(token) = settings
                 .user

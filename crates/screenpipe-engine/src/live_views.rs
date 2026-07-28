@@ -960,6 +960,17 @@ pub fn list_live_view_templates(
     with_store(screenpipe_dir, |store| Ok((store.templates.clone(), false)))
 }
 
+pub fn get_live_view_template(
+    screenpipe_dir: &Path,
+    id: &str,
+) -> Result<LiveViewTemplate, LiveViewError> {
+    validate_slug(id, "Live View id")?;
+    list_live_view_templates(screenpipe_dir)?
+        .into_iter()
+        .find(|template| template.id == id)
+        .ok_or_else(|| LiveViewError::not_found(format!("Live View '{id}' not found")))
+}
+
 pub fn list_live_views(screenpipe_dir: &Path) -> Result<Vec<LiveView>, LiveViewError> {
     let templates = with_store(screenpipe_dir, |store| Ok((store.templates.clone(), false)))?;
     hydrate(screenpipe_dir, templates)
@@ -1184,6 +1195,34 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind, LiveViewErrorKind::Conflict);
+    }
+
+    #[test]
+    fn agent_reads_one_editable_template_without_hydrated_values() {
+        let dir = tempfile::tempdir().unwrap();
+        save_live_view(
+            dir.path(),
+            SaveLiveViewRequest {
+                id: "agent-view".to_string(),
+                title: "Agent view".to_string(),
+                expected_revision: None,
+                time_range: LiveViewTimeRange::Today,
+                period_policy: None,
+                blocks: vec![block(Some("daily-summary"))],
+            },
+        )
+        .unwrap();
+
+        let template = get_live_view_template(dir.path(), "agent-view").unwrap();
+        let serialized = serde_json::to_value(template).unwrap();
+        assert_eq!(serialized["id"], "agent-view");
+        assert_eq!(serialized["revision"], 1);
+        assert_eq!(
+            serialized["blocks"][0]["source"]["pipeName"],
+            "daily-summary"
+        );
+        assert!(serialized["blocks"][0].get("value").is_none());
+        assert!(serialized["blocks"][0].get("feedback").is_none());
     }
 
     #[test]

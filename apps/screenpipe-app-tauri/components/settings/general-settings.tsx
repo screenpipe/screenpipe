@@ -28,8 +28,8 @@ import { UpdateBanner } from "@/components/update-banner";
 import type { SettingsField } from "./settings-search";
 import { ONBOARDING_GOALS } from "@/lib/live-views/onboarding-goals";
 import {
-  getUserGoalCategory,
-  setUserGoalCategory,
+  DEFAULT_USER_GOAL_CATEGORY,
+  normalizeUserGoalCategory,
   type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
 import posthog from "posthog-js";
@@ -46,6 +46,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Record only", keywords: ["headless", "pipes", "scheduler", "automation"] },
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import {
   DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
@@ -61,17 +62,25 @@ export default function GeneralSettings() {
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
   const [isResettingOnboarding, setIsResettingOnboarding] = useState(false);
-  const [userGoal, setUserGoal] = useState<UserGoalCategory>(() =>
-    getUserGoalCategory(),
-  );
+  const userGoal =
+    normalizeUserGoalCategory(settings.userGoalCategory) ??
+    DEFAULT_USER_GOAL_CATEGORY;
 
-  const handleUserGoalChange = (category: UserGoalCategory) => {
-    setUserGoal(category);
-    setUserGoalCategory(category);
-    posthog.capture("user_goal_changed", {
-      goal_category: category,
-      source: "general_settings",
-    });
+  const handleUserGoalChange = async (category: UserGoalCategory) => {
+    try {
+      await updateSettings({ userGoalCategory: category });
+      posthog.capture("user_goal_changed", {
+        goal_category: category,
+        source: "general_settings",
+      });
+    } catch (error) {
+      console.error("failed to save user goal:", error);
+      toast({
+        title: "couldn't save your goal",
+        description: "please try again",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleResetOnboarding = async () => {
@@ -197,7 +206,7 @@ export default function GeneralSettings() {
 
     const path = isManagedDeployment ? "/enterprise" : "/account/versions";
     if (isManagedDeployment) params.set("tab", "builds");
-    const url = `https://screenpipe.com${path}?${params.toString()}`;
+    const url = screenpipeWebUrl(`${path}?${params.toString()}`, "https://screenpipe.com");
 
     try {
       await openUrl(url);
@@ -393,7 +402,7 @@ export default function GeneralSettings() {
             <Select
               value={userGoal}
               onValueChange={(value) =>
-                handleUserGoalChange(value as UserGoalCategory)
+                void handleUserGoalChange(value as UserGoalCategory)
               }
             >
               <SelectTrigger className="h-8 w-[230px] text-xs">

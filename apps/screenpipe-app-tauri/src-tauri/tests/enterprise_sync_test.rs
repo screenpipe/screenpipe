@@ -21,6 +21,31 @@
 #[path = "../src/enterprise/policy.rs"]
 mod enterprise_policy;
 
+// `sync.rs` derives its default ingest URL from the baked control-plane base
+// (`crate::web_base`). The module has no dependencies on the Tauri binary
+// tree, so pull in the real source rather than shimming it — otherwise this
+// target silently stops compiling whenever the binary grows a new leaf module
+// that sync.rs reaches for, and every EE test here quietly stops running.
+#[path = "../src/web_base.rs"]
+mod web_base;
+
+// Credential recovery reads the signed-in account token and persists the
+// refreshed device key through the desktop command boundary. This isolated
+// test target has no Tauri command tree, so keep that boundary inert here;
+// device-config parsing and the key-swap state transition remain real.
+mod commands {
+    pub(crate) fn get_cloud_token() -> Option<String> {
+        None
+    }
+
+    pub(crate) fn persist_enterprise_device_config(
+        _license_key: Option<&str>,
+        _ingest_url: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 // The production binary wires the shared bounded collector from
 // `src/diagnostic_logs.rs`. This isolated EE test target deliberately avoids
 // the Tauri binary tree, so provide the narrow boundary the sync module needs.
@@ -50,7 +75,10 @@ mod diagnostic_logs {
 }
 
 #[path = "../src/enterprise/sync.rs"]
-mod ee_sync;
+mod sync;
+
+#[path = "../src/enterprise/device_config.rs"]
+mod device_config;
 
 // Re-export so type names appear under one module path in test output.
-pub use ee_sync::*;
+pub use sync::*;

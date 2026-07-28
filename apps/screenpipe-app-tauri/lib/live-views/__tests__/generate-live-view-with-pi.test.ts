@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildLiveViewGenerationPrompt,
   parseGeneratedLiveView,
   relevantPipes,
 } from "../generate-live-view-with-pi";
@@ -14,6 +15,7 @@ describe("parseGeneratedLiveView", () => {
       JSON.stringify({
         title: "How I worked",
         timeRange: "7d",
+        timeRangeBehavior: "selectable",
         note: "A useful overview.",
         blocks: [
           {
@@ -53,6 +55,10 @@ describe("parseGeneratedLiveView", () => {
     expect(result).toEqual({
       title: "How I worked",
       timeRange: "7d",
+      periodPolicy: {
+        type: "selectable.v1",
+        values: ["today", "24h", "7d", "30d"],
+      },
       note: "A useful overview.",
       blocks: [
         {
@@ -87,6 +93,29 @@ describe("parseGeneratedLiveView", () => {
     });
   });
 
+  it("automatically fixes the period only when the generated view requires it", () => {
+    const result = parseGeneratedLiveView(
+      JSON.stringify({
+        title: "Daily memory",
+        timeRange: "today",
+        timeRangeBehavior: "fixed",
+        blocks: [
+          {
+            title: "Daily brief",
+            component: "markdown.v1",
+          },
+        ],
+      }),
+      [],
+      "dashboard",
+    );
+
+    expect(result.periodPolicy).toEqual({
+      type: "fixed.v1",
+      value: "today",
+    });
+  });
+
   it("strips JSON fences and refuses invented Pipe bindings", () => {
     const result = parseGeneratedLiveView(
       '```json\n{"title":"Today","blocks":[{"title":"Tasks","type":"list","width":12,"pipe":"invented-pipe"}]}\n```',
@@ -100,6 +129,46 @@ describe("parseGeneratedLiveView", () => {
         component: "list.v1",
         width: 12,
         pipeName: null,
+      }),
+    );
+  });
+
+  it("accepts the native Live View shape returned by the agent tool", () => {
+    const result = parseGeneratedLiveView(
+      JSON.stringify({
+        view: {
+          title: "Work Patterns Dashboard 2",
+          timeRange: "today",
+          blocks: [
+            {
+              id: "time-by-app",
+              title: "Time by application",
+              kind: "bar-chart.v1",
+              width: 6,
+              intent: "Group captured active minutes by application.",
+              source: {
+                type: "pipe.v1",
+                pipeName: "chronos-time-tracker",
+              },
+            },
+          ],
+        },
+      }),
+      ["chronos-time-tracker"],
+      "dashboard",
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        title: "Work Patterns Dashboard 2",
+        timeRange: "today",
+        blocks: [
+          expect.objectContaining({
+            title: "Time by application",
+            component: "bar-chart.v1",
+            pipeName: "chronos-time-tracker",
+          }),
+        ],
       }),
     );
   });
@@ -141,5 +210,21 @@ describe("parseGeneratedLiveView", () => {
 
     expect(selected).toHaveLength(16);
     expect(selected[0].name).toBe("chronos-time-tracker");
+  });
+
+  it("references an existing Live View lazily instead of injecting its Blocks", () => {
+    const prompt = buildLiveViewGenerationPrompt({
+      prompt: "add meetings and keep everything else",
+      scope: "dashboard",
+      preset: {} as any,
+      userToken: null,
+      pipes: [],
+      currentViewRef: { id: "daily", revision: 7 },
+    });
+
+    expect(prompt).toContain('"id":"daily","revision":7');
+    expect(prompt).toContain("Preserve every existing section");
+    expect(prompt).not.toContain("Current Live View:\n{");
+    expect(prompt).not.toContain("Focus time");
   });
 });
