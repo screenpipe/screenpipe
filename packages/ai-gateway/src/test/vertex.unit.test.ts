@@ -162,47 +162,41 @@ describe('mapModelToVertex', () => {
 			expect(mapModelToVertex('claude-opus-4-5-20251101')).toBe('claude-opus-4-5@20251101');
 		});
 
-		// Sonnet models are aliased to haiku (sonnet is outdated)
-		it('should alias claude-sonnet-4-5-20250929 to claude-haiku-4-5@20251001', () => {
-			expect(mapModelToVertex('claude-sonnet-4-5-20250929')).toBe('claude-haiku-4-5@20251001');
+		it('should normalize Sonnet 4.5 to the supported Vertex ID', () => {
+			expect(mapModelToVertex('claude-sonnet-4-5-20250929')).toBe('claude-sonnet-4-5@20250929');
 		});
 
-		it('should convert claude-haiku-4-5-20251001 to claude-haiku-4-5@20251001', () => {
-			expect(mapModelToVertex('claude-haiku-4-5-20251001')).toBe('claude-haiku-4-5@20251001');
+		it('should upgrade retired Haiku requests to Sonnet', () => {
+			expect(mapModelToVertex('claude-haiku-4-5-20251001')).toBe('claude-sonnet-4-5@20250929');
 		});
 
-		// Sonnet models are aliased to haiku
-		it('should alias claude-sonnet-4-20250514 to claude-haiku-4-5@20251001', () => {
-			expect(mapModelToVertex('claude-sonnet-4-20250514')).toBe('claude-haiku-4-5@20251001');
+		it('should upgrade older Sonnet requests to Sonnet 4.5', () => {
+			expect(mapModelToVertex('claude-sonnet-4-20250514')).toBe('claude-sonnet-4-5@20250929');
 		});
 
-		// Old sonnet 3.5 is converted but not aliased (no specific alias defined)
-		it('should convert claude-3-5-sonnet-20241022 to claude-3-5-sonnet@20241022', () => {
-			expect(mapModelToVertex('claude-3-5-sonnet-20241022')).toBe('claude-3-5-sonnet@20241022');
+		it('should upgrade Sonnet 3.5 to Sonnet 4.5', () => {
+			expect(mapModelToVertex('claude-3-5-sonnet-20241022')).toBe('claude-sonnet-4-5@20250929');
 		});
 	});
 
 	describe('applies aliases for known models', () => {
-		// Models with @ that aren't in aliases fall back to haiku
-		it('should fallback claude-opus-4-5@20251101 to haiku (not in aliases)', () => {
-			expect(mapModelToVertex('claude-opus-4-5@20251101')).toBe('claude-haiku-4-5@20251001');
+		it('should preserve an exact supported Opus request', () => {
+			expect(mapModelToVertex('claude-opus-4-5@20251101')).toBe('claude-opus-4-5@20251101');
 		});
 
-		// Any claude model without specific alias falls back to haiku
-		it('should alias unknown claude models to haiku', () => {
-			expect(mapModelToVertex('claude-3-5-sonnet-v2@20241022')).toBe('claude-haiku-4-5@20251001');
+		it('should alias old Claude models to Sonnet', () => {
+			expect(mapModelToVertex('claude-3-5-sonnet-v2@20241022')).toBe('claude-sonnet-4-5@20250929');
 		});
 	});
 
 	describe('handles edge cases', () => {
-		// Any claude model defaults to haiku
-		it('should alias claude-3-5-sonnet to haiku', () => {
-			expect(mapModelToVertex('claude-3-5-sonnet')).toBe('claude-haiku-4-5@20251001');
+		it('should alias unknown Claude IDs to Sonnet', () => {
+			expect(mapModelToVertex('claude-3-5-sonnet')).toBe('claude-sonnet-4-5@20250929');
 		});
 
 		// Short date suffix doesn't trigger date conversion
-		it('should alias claude-3-5-sonnet-2024 to haiku', () => {
-			expect(mapModelToVertex('claude-3-5-sonnet-2024')).toBe('claude-haiku-4-5@20251001');
+		it('should alias a short-date Claude ID to Sonnet', () => {
+			expect(mapModelToVertex('claude-3-5-sonnet-2024')).toBe('claude-sonnet-4-5@20250929');
 		});
 
 		it('should not modify empty string', () => {

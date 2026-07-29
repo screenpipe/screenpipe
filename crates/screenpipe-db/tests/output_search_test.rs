@@ -463,3 +463,116 @@ async fn sentinel_search_document_marks_non_searchable_output_processed() {
         .expect("missing after");
     assert!(missing_after.is_empty());
 }
+
+#[tokio::test]
+async fn artifact_visibility_hides_structured_output_state_unless_requested() {
+    let db = setup_test_db().await;
+    let token = "SHARED_INTERNAL_OUTPUT_TOKEN";
+
+    let visible_id = db
+        .insert_output(
+            "report-pipe",
+            "pipe",
+            "Weekly Report",
+            "saf",
+            None,
+            "/tmp/screenpipe/outputs/pipe/report/weekly.saf.json",
+            128,
+            Some("visible report"),
+            None,
+            Some("sop"),
+            Some("weekly-report"),
+            Some(1),
+        )
+        .await
+        .expect("insert visible output");
+    let internal_id = db
+        .insert_output(
+            "time-pipe",
+            "pipe",
+            "Time breakdown block",
+            "saf",
+            None,
+            "/tmp/screenpipe/outputs/pipe/time/structured-output.saf.json",
+            128,
+            Some("internal Live View state"),
+            None,
+            Some("structured-output"),
+            Some("structured-output-time"),
+            Some(1),
+        )
+        .await
+        .expect("insert internal output");
+
+    for (id, title, source, body, hash) in [
+        (
+            visible_id,
+            "Weekly Report",
+            "report-pipe",
+            format!("visible {token}"),
+            "visible-hash",
+        ),
+        (
+            internal_id,
+            "Time breakdown block",
+            "time-pipe",
+            format!("internal {token}"),
+            "internal-hash",
+        ),
+    ] {
+        db.upsert_output_search_document(
+            id,
+            title,
+            &body,
+            source,
+            "pipe",
+            "saf",
+            hash,
+            body.len() as i64,
+        )
+        .await
+        .expect("index output");
+    }
+
+    let (visible, visible_total) = db
+        .list_outputs_for_artifacts_with_internal(None, None, false, 20, 0)
+        .await
+        .expect("list visible artifacts");
+    assert_eq!(visible_total, 1);
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].id, visible_id);
+
+    let (all, all_total) = db
+        .list_outputs_for_artifacts_with_internal(None, None, true, 20, 0)
+        .await
+        .expect("list artifacts including internal state");
+    assert_eq!(all_total, 2);
+    assert_eq!(all.len(), 2);
+
+    let (search_visible, search_total) = db
+        .search_outputs_for_artifacts(token, None, None, false, 20, 0)
+        .await
+        .expect("search visible artifacts");
+    assert_eq!(search_total, 1);
+    assert_eq!(search_visible[0].id, visible_id);
+
+    let (search_all, search_all_total) = db
+        .search_outputs_for_artifacts(token, None, None, true, 20, 0)
+        .await
+        .expect("search artifacts including internal state");
+    assert_eq!(search_all_total, 2);
+    assert_eq!(search_all.len(), 2);
+
+    assert_eq!(
+        db.list_output_sources_for_artifacts_with_internal(false)
+            .await
+            .expect("list visible sources"),
+        vec!["report-pipe"]
+    );
+    assert_eq!(
+        db.list_output_sources_for_artifacts_with_internal(true)
+            .await
+            .expect("list all sources"),
+        vec!["report-pipe", "time-pipe"]
+    );
+}

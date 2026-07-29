@@ -66,7 +66,7 @@
 //! the image SHA, and self-hosted records a git commit SHA or whatever
 //! the customer's audit story expects.
 //!
-//! DirectEncrypted telemetry (see `ee/desktop-rust/enterprise_upload.rs`)
+//! DirectEncrypted telemetry (see `apps/screenpipe-app-tauri/src-tauri/src/enterprise/upload.rs`)
 //! is only readable by `tinfoil` and `self-hosted` workers; if a memory
 //! produced from encrypted telemetry shows `provenance.worker == cloud`,
 //! that's an audit-trail violation worth investigating.

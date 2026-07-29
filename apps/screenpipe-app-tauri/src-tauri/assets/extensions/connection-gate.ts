@@ -104,6 +104,10 @@ async function findMcpProviderServer(
 }
 
 async function enrichConnection(connection: ConnectionItem, signal?: AbortSignal): Promise<ConnectionItem> {
+  if (!shouldSkipComposioEnrichment(connection)) {
+    const composio = await composioEnrichment(connection.id, signal);
+    if (composio) return { ...connection, ...composio };
+  }
   const server = await findMcpProviderServer(connection.id, signal);
   if (!server) return connection;
   return {
@@ -111,6 +115,72 @@ async function enrichConnection(connection: ConnectionItem, signal?: AbortSignal
     connected: true,
     mcp: true,
     mcp_server_id: server.id,
+  };
+}
+
+// Gmail and Zoom connect through Composio's managed auth: the desktop app
+// registers one shared MCP server whose URL points at screenpipe.com's
+// passthrough. That server only exists after a successful connect, so its
+// presence IS the connected signal. Gmail has no /connections entry at all
+// (it is a frontend-only tile), so without this the gate tells the model
+// Gmail doesn't exist even though the tools are one sp_mcp_call away.
+// Connection id → display metadata for every Composio-backed connection.
+// Ids match the app's tile/connection ids (kebab-case), not Composio's
+// toolkit slugs — the agent only needs the MCP server id to act.
+const COMPOSIO_CONNECTIONS: Record<
+  string,
+  { name: string; category: string }
+> = {
+  gmail: { name: "Gmail", category: "Communication" },
+  zoom: { name: "Zoom", category: "Meetings" },
+  "google-drive": { name: "Google Drive", category: "Documents" },
+  "google-docs": { name: "Google Docs", category: "Documents" },
+  "google-sheets": { name: "Google Sheets", category: "Documents" },
+};
+const COMPOSIO_TOOLKIT_IDS = new Set(Object.keys(COMPOSIO_CONNECTIONS));
+const COMPOSIO_URL_RE = /^https:\/\/(www\.)?(screenpipe\.com|screenpi\.pe)\/api\/composio\/mcp\/?$/;
+
+async function findComposioServer(signal?: AbortSignal): Promise<McpServerItem | null> {
+  const servers = await fetchMcpServers(signal).catch(() => []);
+  return (
+    servers.find(
+      (item) => item.enabled !== false && COMPOSIO_URL_RE.test(normalizeUrl(item.url || ""))
+    ) ?? null
+  );
+}
+
+async function composioEnrichment(
+  connectionId: string,
+  signal?: AbortSignal
+): Promise<Partial<ConnectionItem> | null> {
+  if (!COMPOSIO_TOOLKIT_IDS.has(connectionId)) return null;
+  const server = await findComposioServer(signal);
+  if (!server) return null;
+  return {
+    connected: true,
+    mcp: true,
+    mcp_server_id: server.id,
+  };
+}
+
+// Native connections that overlap a Composio toolkit (google-docs). When the
+// native one is already connected, keep its proxy path authoritative and
+// don't rewrite it to MCP — the user may never have connected the Composio
+// variant, and the native proxy is free and local.
+function shouldSkipComposioEnrichment(connection: ConnectionItem): boolean {
+  return connection.connected === true && !connection.mcp;
+}
+
+function composioSyntheticConnection(id: string, serverId: string): ConnectionItem {
+  const meta = COMPOSIO_CONNECTIONS[id] ?? { name: id, category: "Productivity" };
+  return {
+    id,
+    name: meta.name,
+    connected: true,
+    mcp: true,
+    mcp_server_id: serverId,
+    category: meta.category,
+    description: `${meta.name} via Composio managed auth. Discover tools with sp_mcp_list_tools (server_id "${serverId}"), then call them with sp_mcp_call — e.g. GMAIL_* / GOOGLEDRIVE_* / GOOGLEDOCS_* / GOOGLESHEETS_* / ZOOM_* tools through COMPOSIO_SEARCH_TOOLS and COMPOSIO_MULTI_EXECUTE_TOOL. The user may have connected multiple ${meta.name} accounts (labeled with aliases like "work" or "personal"); tool calls default to the most recently connected account, and when the user names a specific one (e.g. "my work gmail"), pass the account parameter with that alias.`,
   };
 }
 
@@ -179,6 +249,17 @@ export default function (pi: ExtensionAPI) {
         const enrichedConnections = await Promise.all(
           connections.map((connection) => enrichConnection(connection, signal))
         );
+        // Gmail (and Zoom, if its legacy integration ever goes away) exists
+        // only as a Composio-backed frontend tile — synthesize entries so the
+        // model learns they are reachable through the Composio MCP server.
+        const composioServer = await findComposioServer(signal);
+        if (composioServer) {
+          for (const id of COMPOSIO_TOOLKIT_IDS) {
+            if (!enrichedConnections.some((connection) => connection.id === id)) {
+              enrichedConnections.push(composioSyntheticConnection(id, composioServer.id));
+            }
+          }
+        }
         const visible = enrichedConnections
           .filter((connection) => connection.id !== "owned-default")
           .map((connection) => connectionPayload(connection, connection.id));
@@ -239,9 +320,16 @@ export default function (pi: ExtensionAPI) {
       try {
         const connections = await fetchConnections(signal).catch(() => []);
         const rawConnection = connections.find((item) => item.id === connectionId);
-        const connection = rawConnection
+        let connection = rawConnection
           ? await enrichConnection(rawConnection, signal)
           : undefined;
+        // Gmail has no /connections entry — resolve it via the Composio server.
+        if (!connection && COMPOSIO_TOOLKIT_IDS.has(connectionId)) {
+          const composioServer = await findComposioServer(signal);
+          if (composioServer) {
+            connection = composioSyntheticConnection(connectionId, composioServer.id);
+          }
+        }
         name = connectionLabel(connection, connectionId);
         if (connection?.connected === true) {
           const payload = connectionPayload(connection, connectionId);

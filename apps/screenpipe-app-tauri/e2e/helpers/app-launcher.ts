@@ -74,6 +74,8 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // src-tauri/src/e2e_seed.rs) so the search-bugs spec runs inside the normal
 // `test:e2e` job instead of needing a separate CI step. Harmless for other
 // specs (namespaced "vector" frames; the empty-state spec uses its own query).
+// `sck-enumeration-hang-once` is a debug-only macOS fault injection used by the
+// opt-in SCK startup recovery spec; the first monitor callback never returns.
 export const E2E_SEED_FLAGS =
   process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording,search-fixture';
 

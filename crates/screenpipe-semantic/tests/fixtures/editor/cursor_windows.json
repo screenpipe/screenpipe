@@ -1,0 +1,20 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "C:\\Program Files\\Cursor\\Cursor.exe",
+    "display_name": "Cursor",
+    "version": "2.4.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "Window", "title": "screenpipe - Cursor" },
+    { "parent": 0, "role": "Pane" },
+    {
+      "parent": 1,
+      "role": "Edit",
+      "description": "lib.rs, preview, Editor Group 2",
+      "value": "pub fn answer() -> u8 { 42 }"
+    }
+  ]
+}

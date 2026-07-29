@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SDK semver version already committed in ee/sdk/package.json"
+        description: "SDK semver version already committed in packages/sdk/package.json"
         required: true
         default: "0.1.0"
       npm_tag:
@@ -52,7 +52,7 @@ jobs:
         with:
           node-version: 22
       - name: Validate requested version
-        working-directory: ee/sdk
+        working-directory: packages/sdk
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -119,7 +119,7 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        working-directory: ee/sdk
+        working-directory: packages/sdk
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -136,7 +136,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: sdk-release-${{ matrix.settings.target }}
-          workspaces: ee/sdk -> target
+          workspaces: packages/sdk -> target
           cache-bin: false
       - name: Install deps
         run: bun install --frozen-lockfile
@@ -146,7 +146,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sdk-bindings-${{ matrix.settings.target }}
-          path: ee/sdk/*.node
+          path: packages/sdk/*.node
           if-no-files-found: error
           retention-days: 7
 
@@ -156,7 +156,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: ee/sdk
+        working-directory: packages/sdk
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -172,7 +172,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: sdk-bindings-*
-          path: ee/sdk
+          path: packages/sdk
           merge-multiple: true
       - name: Create platform npm dirs
         run: bun x napi create-npm-dir -t .
@@ -249,7 +249,7 @@ jobs:
           fi
 
           if [[ ! -d npm ]]; then
-            echo "::error::napi prepublish did not create platform package directories under ee/sdk/npm"
+            echo "::error::napi prepublish did not create platform package directories under packages/sdk/npm"
             exit 1
           fi
 
@@ -285,7 +285,7 @@ jobs:
           npm publish --access public --tag "$NPM_TAG" --provenance --ignore-scripts
 
   swift-mirror:
-    # SPM cannot consume `ee/sdk/Package.swift` from a subdirectory of a
+    # SPM cannot consume `packages/sdk/Package.swift` from a subdirectory of a
     # repo, so the Swift SDK ships from a separate mirror repo
     # (`screenpipe/screenpipe-sdk-swift`) where `Package.swift` is at the
     # root. This job keeps the mirror in lockstep with npm: every time we
@@ -322,9 +322,9 @@ jobs:
           # Per-directory rsync (not a root mirror) so the mirror's
           # Swift-specific README.md / LICENSE.md aren't clobbered by the
           # monorepo-wide README that documents Electron + Tauri + Node.
-          rsync -a --delete ee/sdk/Sources/ "$work/mirror/Sources/"
-          rsync -a --delete ee/sdk/Tests/   "$work/mirror/Tests/"
-          cp ee/sdk/Package.swift "$work/mirror/Package.swift"
+          rsync -a --delete packages/sdk/Sources/ "$work/mirror/Sources/"
+          rsync -a --delete packages/sdk/Tests/   "$work/mirror/Tests/"
+          cp packages/sdk/Package.swift "$work/mirror/Package.swift"
 
           cd "$work/mirror"
           git config user.name  "screenpipe-bot"

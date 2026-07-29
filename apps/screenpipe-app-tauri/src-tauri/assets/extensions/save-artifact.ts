@@ -60,9 +60,14 @@ export default function (pi: ExtensionAPI) {
 
       // Text-based artifacts only (binary/image registration is a follow-up)
       const ext = extname(filename).toLowerCase();
+      // Keep in sync with the pipe-artifact mapping in
+      // crates/screenpipe-core/src/pipes/mod.rs — the same file saved from a
+      // chat and produced by a pipe must report the same kind.
       const kindMap: Record<string, string> = {
         ".md": "markdown",
         ".markdown": "markdown",
+        ".html": "html",
+        ".htm": "html",
         ".json": "json",
         ".txt": "text",
         ".csv": "text",

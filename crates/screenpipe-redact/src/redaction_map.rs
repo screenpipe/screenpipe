@@ -31,6 +31,9 @@ use aho_corasick::{AhoCorasick, MatchKind};
 /// A set of `detected value → replacement` rules, compiled into a single
 /// aho-corasick automaton for cheap application to many strings.
 pub struct RedactionMap {
+    /// Values compiled into `ac`. Retained so accessibility-derived pairs
+    /// can be merged into the model map without a second matcher pass.
+    values: Vec<String>,
     /// `None` when there are no rules (the map is an identity transform).
     ac: Option<AhoCorasick>,
     /// Replacement strings, indexed by aho-corasick pattern id (parallel
@@ -70,7 +73,37 @@ impl RedactionMap {
                     .expect("aho-corasick build over owned strings is infallible"),
             )
         };
-        Self { ac, replacements }
+        Self {
+            values,
+            ac,
+            replacements,
+        }
+    }
+
+    /// Add more exact-value replacement pairs and rebuild the matcher.
+    /// Existing pairs win on duplicate values so model/pseudonym output is
+    /// preserved when accessibility context confirms the same detection.
+    pub fn extend_pairs<I>(&mut self, pairs: I)
+    where
+        I: IntoIterator<Item = (String, String)>,
+    {
+        let mut seen: std::collections::HashSet<String> = self.values.iter().cloned().collect();
+        for (value, replacement) in pairs {
+            if !value.is_empty() && seen.insert(value.clone()) {
+                self.values.push(value);
+                self.replacements.push(replacement);
+            }
+        }
+        self.ac = if self.values.is_empty() {
+            None
+        } else {
+            Some(
+                AhoCorasick::builder()
+                    .match_kind(MatchKind::LeftmostLongest)
+                    .build(&self.values)
+                    .expect("aho-corasick build over owned strings is infallible"),
+            )
+        };
     }
 
     /// True when there are no rules — [`apply`](Self::apply) is then a
@@ -236,6 +269,16 @@ mod tests {
                 .map(|(v, r)| (v.to_string(), r.to_string())),
         );
         assert_eq!(m.apply("k"), "[FIRST]");
+    }
+
+    #[test]
+    fn extend_pairs_preserves_existing_replacement_and_adds_new_value() {
+        let mut m = map(&[("alpha", "[MODEL]")]);
+        m.extend_pairs([
+            ("alpha".to_string(), "[A11Y]".to_string()),
+            ("beta".to_string(), "[SECRET]".to_string()),
+        ]);
+        assert_eq!(m.apply("alpha beta"), "[MODEL] [SECRET]");
     }
 
     #[test]

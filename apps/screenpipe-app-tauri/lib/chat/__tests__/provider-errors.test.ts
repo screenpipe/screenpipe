@@ -56,6 +56,44 @@ describe("provider error copy", () => {
     }
   });
 
+  it("maps the daily free-chat wall to tomorrow-or-BYOK copy", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_chat_limit_exceeded","limit":2}',
+      { provider: "screenpipe-cloud", model: "auto" },
+    );
+    expect(msg).toContain("2 free hosted AI messages");
+    expect(msg).toContain("tomorrow");
+    expect(msg).toContain("upgrade");
+    expect(msg).toContain("Ollama");
+    expect(msg).toContain("Claude");
+    expect(msg).toContain("Codex");
+  });
+
+  it("maps the per-message tool-loop cap separately", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_chat_turn_request_limit_exceeded"}',
+      { provider: "pi", model: "auto" },
+    );
+    expect(msg).toContain("8-step agent limit");
+  });
+
+  it("explains the free background-pipe provider options", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_plan_hosted_background_disabled"}',
+      { provider: "screenpipe-cloud", model: "auto" },
+    );
+    expect(msg).toContain("background pipes");
+    expect(msg).toContain("Ollama");
+  });
+
+  it("asks old clients to update before using the allowance", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_chat_client_update_required"}',
+      { provider: "screenpipe-cloud", model: "auto" },
+    );
+    expect(msg).toContain("Update screenpipe");
+  });
+
   it("gives a generic connectivity message for other remote providers", () => {
     expect(
       buildProviderErrorMessage("Connection error.", { provider: "anthropic", model: "claude-opus-4-8" })

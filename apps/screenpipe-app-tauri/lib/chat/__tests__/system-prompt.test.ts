@@ -13,7 +13,7 @@ describe("buildSystemPrompt", () => {
   const prompt = buildSystemPrompt();
 
   it("opens by establishing the Screenpipe assistant role", () => {
-    expect(prompt.startsWith("You are the user's Screenpipe assistant.")).toBe(true);
+    expect(prompt.startsWith("You are the user's screenpipe assistant.")).toBe(true);
   });
 
   it("includes the key behavioral sections", () => {
@@ -30,7 +30,7 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toContain("# Connection gating");
     expect(prompt).toContain("# Local server auth");
     expect(prompt).toContain("# Search rules");
-    expect(prompt).toContain("# Speakers");
+    expect(prompt).not.toContain("# Speakers");
     expect(prompt).toContain("# Full API reference");
   });
 

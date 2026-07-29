@@ -1,0 +1,21 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.microsoft.VSCode",
+    "executable": null,
+    "display_name": "Visual Studio Code",
+    "version": "1.120.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "screenpipe - Visual Studio Code" },
+    { "parent": 0, "role": "AXGroup", "classes": ["monaco-workbench"] },
+    { "parent": 1, "role": "AXGroup", "classes": ["editor-instance"] },
+    {
+      "parent": 2,
+      "role": "AXTextArea",
+      "description": "main.rs, Editor Group 1",
+      "value": "The editor is not accessible at this time. To enable screen reader optimized mode, use the accessibility help command."
+    }
+  ]
+}

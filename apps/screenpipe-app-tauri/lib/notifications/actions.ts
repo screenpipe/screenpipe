@@ -4,7 +4,7 @@
 
 import { emit } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
-import { localFetch } from "@/lib/api";
+import { localFetch, isLocalApiUrl } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 
 const GENERIC_DEEPLINK_MOUNT_DELAY_MS = 150;
@@ -213,6 +213,16 @@ export async function executeNotificationAction(
     }
     case "api": {
       if (action.url) {
+        // An `api` action calls back into the local screenpipe API with the
+        // user's bearer key attached. A notification is attacker-controllable,
+        // so an absolute URL pointing off-box would exfiltrate that key or turn
+        // the app into a confused deputy. Only same-origin relative paths and
+        // explicit local-API URLs are allowed.
+        if (!isLocalApiUrl(action.url)) {
+          throw new Error(
+            `refused api action to non-local url: ${action.url}`,
+          );
+        }
         const res = await localFetch(action.url, {
           method: action.method || "POST",
           headers: { "Content-Type": "application/json" },

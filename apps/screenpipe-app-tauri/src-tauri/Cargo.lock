@@ -591,6 +591,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compression"
+version = "0.4.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e79b3f8a79cccc2898f31920fc69f304859b3bd567490f75ebf51ae1c792a9ac"
+dependencies = [
+ "compression-codecs",
+ "compression-core",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "async-executor"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -628,6 +640,29 @@ dependencies = [
  "blocking",
  "futures-lite",
  "once_cell",
+]
+
+[[package]]
+name = "async-imap"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a6728e0f7931b36d725ac234fcb02539e9f7888dbeaaa8a18d9ea5792181570"
+dependencies = [
+ "async-channel 2.5.0",
+ "async-compression",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "imap-proto",
+ "log",
+ "nom 7.1.3",
+ "pin-project",
+ "pin-utils",
+ "self_cell",
+ "stop-token",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
@@ -2165,7 +2200,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2192,6 +2227,22 @@ dependencies = [
  "serde",
  "static_assertions",
 ]
+
+[[package]]
+name = "compression-codecs"
+version = "0.4.38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce2548391e9c1929c21bf6aa2680af86fe4c1b33e6cea9ac1cfeec0bd11218cf"
+dependencies = [
+ "compression-core",
+ "flate2",
+]
+
+[[package]]
+name = "compression-core"
+version = "0.4.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
 name = "concurrent-queue"
@@ -2826,6 +2877,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "ct-codecs"
+version = "1.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49fb0c6640b4507ebd99ff67677009e381ba5eee1d14df78de4a3d16eb123c39"
 
 [[package]]
 name = "ctor"
@@ -5341,6 +5398,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashify"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd1246c0e5493286aeb2dde35b1f4eb9c4ce00e628641210a5e553fc001a1f26"
+dependencies = [
+ "indexmap 2.13.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "hashlink"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5707,7 +5776,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tokio",
  "tower-service",
  "tracing",
@@ -5725,7 +5794,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -5947,6 +6016,15 @@ name = "imagesize"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
+
+[[package]]
+name = "imap-proto"
+version = "0.16.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f6af35c6a517aea5c72314abe90134980d2ae6a763809b50c208b3e429d71f"
+dependencies = [
+ "nom 7.1.3",
+]
 
 [[package]]
 name = "imgref"
@@ -6946,6 +7024,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
+name = "mail-parser"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47785d444be4d32c1709171c6219a90f667c0ad0ffe68b4b179e794f31f4f9e8"
+dependencies = [
+ "hashify",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7212,6 +7299,18 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
+name = "minisign"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26541387415a1e829df5d532aad019fb11bc723e2b5bc99edefa4cf5bfad0de7"
+dependencies = [
+ "ct-codecs",
+ "getrandom 0.2.17",
+ "rpassword 7.5.4",
+ "scrypt 0.11.0",
+]
 
 [[package]]
 name = "minisign-verify"
@@ -8637,7 +8736,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8878,7 +8977,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "permission-flow"
 version = "0.1.40"
-source = "git+https://github.com/EzraEllette/permission-flow?rev=1a114ff3e9526d815b98201cd2ba35e91f2b4bd3#1a114ff3e9526d815b98201cd2ba35e91f2b4bd3"
+source = "git+https://github.com/EzraEllette/permission-flow?rev=d0a4b78a0599b926bfc59e7e272b742aa07fcebb#d0a4b78a0599b926bfc59e7e272b742aa07fcebb"
 dependencies = [
  "swift-rs",
 ]
@@ -9184,7 +9283,7 @@ dependencies = [
  "der 0.8.0",
  "pbkdf2 0.13.0",
  "rand_core 0.10.1",
- "scrypt",
+ "scrypt 0.12.0",
  "sha2 0.11.0",
  "spki 0.8.0-rc.4",
 ]
@@ -9671,7 +9770,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9709,7 +9808,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -10318,6 +10417,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpassword"
+version = "7.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da316a15f47e3d053de9cb2c439650bd8fa4aaeb9365f2e5f27f492ff73c196"
+dependencies = [
+ "libc",
+ "rtoolbox",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10363,6 +10473,16 @@ checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rtoolbox"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50a0e551c1e27e1731aba276dbeaeac73f53c7cd34d1bda485d02bd1e0f36844"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10454,7 +10574,7 @@ dependencies = [
  "russh-cryptovec",
  "russh-util",
  "salsa20 0.11.0",
- "scrypt",
+ "scrypt 0.12.0",
  "sec1 0.8.1",
  "sha1 0.10.6",
  "sha1 0.11.0",
@@ -10939,7 +11059,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.120"
+version = "2.5.148"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -10975,6 +11095,8 @@ dependencies = [
  "ini",
  "lazy_static",
  "log",
+ "minisign",
+ "minisign-verify",
  "muda",
  "nokhwa-bindings-macos",
  "notify",
@@ -11003,6 +11125,7 @@ dependencies = [
  "screenpipe-screen",
  "screenpipe-secrets",
  "screenpipe-sync",
+ "screenpipe-telemetry-wire",
  "screenpipe-vault",
  "security-framework",
  "sentry 0.42.0",
@@ -11043,6 +11166,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-tungstenite",
+ "tower 0.4.13",
  "tower-http 0.4.4",
  "tracing",
  "tracing-appender",
@@ -11062,7 +11186,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11139,7 +11263,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11151,9 +11275,10 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "anyhow",
+ "async-imap",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -11161,12 +11286,14 @@ dependencies = [
  "crypto_box",
  "dirs 6.0.0",
  "eventkit-rs",
+ "futures",
  "getrandom 0.2.17",
  "icalendar",
  "image 0.25.10",
  "lettre",
  "libsqlite3-sys",
  "log",
+ "mail-parser",
  "mdns-sd",
  "objc2 0.6.4",
  "objc2-event-kit",
@@ -11175,6 +11302,7 @@ dependencies = [
  "reqwest 0.13.3",
  "russh",
  "russh-sftp",
+ "rustls-native-certs",
  "screenpipe-core",
  "screenpipe-secrets",
  "screenpipe-vault",
@@ -11185,6 +11313,7 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "uuid",
  "windows 0.58.0",
@@ -11192,7 +11321,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11243,7 +11372,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11256,6 +11385,7 @@ dependencies = [
  "rand 0.9.2",
  "regex",
  "screenpipe-config",
+ "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -11270,7 +11400,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11299,7 +11429,7 @@ dependencies = [
  "port_check",
  "regex",
  "reqwest 0.13.3",
- "rpassword",
+ "rpassword 5.0.1",
  "screenpipe-a11y",
  "screenpipe-audio",
  "screenpipe-capture",
@@ -11312,6 +11442,7 @@ dependencies = [
  "screenpipe-resource",
  "screenpipe-screen",
  "screenpipe-secrets",
+ "screenpipe-semantic",
  "screenpipe-vault",
  "sentry 0.36.0",
  "serde",
@@ -11337,7 +11468,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11353,7 +11484,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11389,7 +11520,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "serde",
  "sysinfo",
@@ -11409,10 +11540,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "accessibility-sys",
  "anyhow",
+ "ashpd",
  "atspi",
  "atspi-common",
  "atspi-proxies",
@@ -11425,6 +11557,7 @@ dependencies = [
  "image-compare",
  "libc",
  "once_cell",
+ "pipewire",
  "reqwest 0.13.3",
  "rusty-tesseract",
  "sck-rs",
@@ -11463,8 +11596,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-semantic"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "libsqlite3-sys",
  "tokio",
@@ -11473,7 +11617,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11492,8 +11636,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-telemetry-wire"
+version = "0.4.32"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tracing",
+]
+
+[[package]]
 name = "screenpipe-vault"
-version = "0.4.25"
+version = "0.4.32"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -11525,6 +11679,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "scrypt"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0516a385866c09368f0b5bcd1caff3366aace790fcd46e2bb032697bb172fd1f"
+dependencies = [
+ "pbkdf2 0.12.2",
+ "salsa20 0.10.2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -11648,6 +11813,12 @@ dependencies = [
  "servo_arc 0.4.3",
  "smallvec",
 ]
+
+[[package]]
+name = "self_cell"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ab42ca02749e120097e328d91d415325bdf43b1c72c4c8badf37375fe40a813"
 
 [[package]]
 name = "semver"
@@ -12875,6 +13046,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stop-token"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af91f480ee899ab2d9f8435bfdfc14d08a5754bd9d3fef1f1a1c23336aad6c8b"
+dependencies = [
+ "async-channel 1.9.0",
+ "cfg-if 1.0.4",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "strength_reduce"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13786,7 +13969,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-permission-flow"
 version = "0.1.40"
-source = "git+https://github.com/EzraEllette/permission-flow?rev=1a114ff3e9526d815b98201cd2ba35e91f2b4bd3#1a114ff3e9526d815b98201cd2ba35e91f2b4bd3"
+source = "git+https://github.com/EzraEllette/permission-flow?rev=d0a4b78a0599b926bfc59e7e272b742aa07fcebb#d0a4b78a0599b926bfc59e7e272b742aa07fcebb"
 dependencies = [
  "permission-flow",
  "serde",
@@ -15928,7 +16111,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

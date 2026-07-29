@@ -28,7 +28,7 @@
 //! takes a [`tokio::sync::watch::Receiver<bool>`] — when it flips to
 //! `true`, an in-flight retry sleep aborts and the call returns a
 //! transient error so the caller can move on cleanly. Matches the
-//! shutdown channel shape already used in `ee/desktop-rust/enterprise_sync.rs`.
+//! shutdown channel shape already used in `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs`.
 
 use std::time::Duration;
 
@@ -66,6 +66,10 @@ impl HttpPutDirect {
             url,
             reqwest::Client::builder()
                 .timeout(Duration::from_secs(60))
+                // Callers put per-request auth in `UploadRequest::headers`,
+                // which may be a custom header reqwest does not strip on a
+                // cross-origin redirect. Don't follow them by default.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("default reqwest client builds"),
         )

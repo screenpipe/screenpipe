@@ -88,6 +88,16 @@ impl CaptureSession {
         // check_screen_recording_tauri() skips capture_probe on macOS 15+ (avoids the
         // native TCC dialog CGWindowListCreateImage triggers). Skip vision entirely when not granted;
         // spawn_screenpipe is called again from onboarding after the user grants access.
+        //
+        // This gate deliberately does NOT consult
+        // `permission_monitor::screen_enumeration_denied()`, unlike the UI-facing
+        // permission checks. The enumeration verdict is produced and cleared by the
+        // monitor watcher, which only runs inside the VisionManager this gate
+        // creates — honoring it here would make a latched verdict
+        // self-perpetuating (no watcher → no successful enumeration → never
+        // cleared → no watcher). Starting vision against a possibly-dead SCK is
+        // the cheap, self-correcting option: the watcher either enumerates fine
+        // and lifts the verdict, or re-confirms the loss within ~15s.
         #[cfg(target_os = "macos")]
         let screen_recording_permitted =
             screenpipe_core::permissions::check_screen_recording_tauri().is_granted();

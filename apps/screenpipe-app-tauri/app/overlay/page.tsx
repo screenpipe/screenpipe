@@ -10,10 +10,6 @@ import React, { useEffect, useState, useRef, useCallback, ErrorInfo } from "reac
 import NotificationHandler from "@/components/notification-handler";
 import { useToast } from "@/components/ui/use-toast";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
-import {
-  cancelFirstRunNotification,
-  checkFirstRunNotification,
-} from "@/lib/notifications";
 import { ChangelogDialog } from "@/components/changelog-dialog";
 import { localFetch } from "@/lib/api";
 
@@ -23,7 +19,7 @@ import { commands } from "@/lib/utils/tauri";
 import localforage from "localforage";
 import { LoginDialog } from "@/components/login-dialog";
 import { UpdateBanner } from "@/components/update-banner";
-import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { ModelDownloadTracker } from "@/components/model-download-tracker";
 import Timeline from "@/components/rewind/timeline";
 import { Button } from "@/components/ui/button";
@@ -41,6 +37,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import SplashScreen from "@/components/splash-screen";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { hasCachedData } from "@/lib/hooks/use-timeline-cache";
+import { screenpipeWebBase } from "@/lib/web-url";
 
 function TimelineErrorFallback({
   error,
@@ -107,7 +104,7 @@ export default function OverlayPage() {
   const { toast } = useToast();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
   const { onboardingData } = useOnboarding();
-  const isEnterprise = useIsEnterpriseBuild();
+  const { isManagedDeployment } = useManagedPolicy();
   const { isServerDown, isLoading: isHealthLoading } = useHealthCheck();
   const { isMac } = usePlatform();
   const [isRestarting, setIsRestarting] = useState(false);
@@ -143,12 +140,6 @@ export default function OverlayPage() {
   useEffect(() => {
     const { loadOnboardingStatus } = useOnboarding.getState();
     loadOnboardingStatus();
-  }, []);
-
-  // Check if first-run notification should fire
-  useEffect(() => {
-    void checkFirstRunNotification();
-    return cancelFirstRunNotification;
   }, []);
 
   useEffect(() => {
@@ -261,7 +252,7 @@ export default function OverlayPage() {
   const sendLogs = async () => {
     setIsSendingLogs(true);
     try {
-      const BASE_URL = "https://screenpipe.com";
+      const BASE_URL = screenpipeWebBase("https://screenpipe.com");
       const machineId = localStorage?.getItem("machineId") || crypto.randomUUID();
       try { localStorage?.setItem("machineId", machineId); } catch {}
       const identifier = settings.user?.id || machineId;
@@ -388,7 +379,7 @@ export default function OverlayPage() {
         <>
           <ChangelogDialog />
 
-          {!isEnterprise && <LoginDialog />}
+          {!isManagedDeployment && <LoginDialog />}
           <ModelDownloadTracker />
           <UpdateBanner />
           

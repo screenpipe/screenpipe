@@ -34,6 +34,7 @@ use screenpipe_db::DatabaseManager;
 /// by the per-app / per-window `minutes` SQL and the whole-range
 /// `total_active_minutes` so the three definitions never drift apart.
 const IDLE_CAP_SECS: i64 = 300;
+const MAX_TOP_TRANSCRIPTIONS: u32 = 20;
 
 // ---------- query ----------
 
@@ -156,7 +157,7 @@ pub struct SpeakerSummary {
 pub struct AudioSummary {
     pub segment_count: i64,
     pub speakers: Vec<SpeakerSummary>,
-    /// Top transcriptions with actual text (sorted by length, most substantial first)
+    /// Substantial transcriptions sampled across the requested time range.
     pub top_transcriptions: Vec<AudioSegment>,
 }
 
@@ -544,20 +545,10 @@ async fn collect_summary_core(
          GROUP BY at.speaker_id ORDER BY 2 DESC LIMIT 10"
     );
 
-    // Top transcriptions by length — the AI summary prompt uses these as
-    // "notable quotes." Full transcript is fetched separately via /search.
-    let audio_transcripts_query = format!(
-        "SELECT at.transcription, \
-         COALESCE(s.name, 'Unknown') as speaker, \
-         at.device, \
-         at.timestamp \
-         FROM audio_transcriptions at \
-         LEFT JOIN speakers s ON at.speaker_id = s.id \
-         WHERE at.timestamp BETWEEN '{start}' AND '{end}' \
-         AND TRIM(at.transcription) != '' \
-         AND LENGTH(at.transcription) > 5 \
-         ORDER BY LENGTH(at.transcription) DESC LIMIT 20"
-    );
+    // Keep notable quotes representative of the whole requested range. A
+    // newest-first or global length sort lets one recent meeting consume the
+    // context for a weekly summary.
+    let audio_transcripts_query = balanced_audio_query(start, end, "", MAX_TOP_TRANSCRIPTIONS);
 
     // Cap at 50 paths — a 1000-file workspace would be noise anyway.
     let edited_files_query = format!(
@@ -869,16 +860,7 @@ async fn load_snippets(
         })
         .unwrap_or_default();
 
-    let audio_query = format!(
-        "SELECT at.transcription, COALESCE(s.name, 'Unknown') AS speaker, at.timestamp \
-         FROM audio_transcriptions at \
-         LEFT JOIN speakers s ON at.speaker_id = s.id \
-         WHERE at.timestamp BETWEEN '{start}' AND '{end}'{audio_text_filter} \
-         AND TRIM(at.transcription) != '' \
-         AND LENGTH(at.transcription) > 5 \
-         ORDER BY at.timestamp DESC \
-         LIMIT {audio_limit}"
-    );
+    let audio_query = balanced_audio_query(start, end, &audio_text_filter, audio_limit);
 
     let screen_candidates: Vec<&KeyText> = key_texts
         .iter()
@@ -970,6 +952,49 @@ fn evenly_spaced_indices(len: usize, limit: usize) -> Vec<usize> {
         indices.push(index);
     }
     indices
+}
+
+/// Select useful audio from evenly sized wall-clock buckets across the
+/// requested interval. Rows are selected in rank rounds across occupied
+/// buckets, so the whole range is represented before later ranks backfill any
+/// unused capacity. The selected rows are returned chronologically.
+fn balanced_audio_query(start: &str, end: &str, extra_filter: &str, limit: u32) -> String {
+    let limit = limit.max(1);
+    let last_bucket = limit - 1;
+
+    format!(
+        "WITH bucketed AS ( \
+           SELECT at.transcription, \
+             COALESCE(s.name, 'Unknown') AS speaker, \
+             at.device, \
+             at.timestamp, \
+             MIN({last_bucket}, CAST( \
+               ((JULIANDAY(at.timestamp) - JULIANDAY('{start}')) \
+                / NULLIF(JULIANDAY('{end}') - JULIANDAY('{start}'), 0)) \
+               * {limit} AS INTEGER \
+             )) AS time_bucket \
+           FROM audio_transcriptions at \
+           LEFT JOIN speakers s ON at.speaker_id = s.id \
+           WHERE at.timestamp BETWEEN '{start}' AND '{end}'{extra_filter} \
+           AND TRIM(at.transcription) != '' \
+           AND LENGTH(at.transcription) > 5 \
+         ), ranked AS ( \
+           SELECT transcription, speaker, device, timestamp, time_bucket, \
+             ROW_NUMBER() OVER ( \
+               PARTITION BY time_bucket \
+               ORDER BY LENGTH(transcription) DESC, timestamp DESC \
+             ) AS bucket_rank \
+           FROM bucketed \
+         ), selected AS ( \
+           SELECT transcription, speaker, device, timestamp \
+           FROM ranked \
+           ORDER BY bucket_rank ASC, time_bucket ASC, timestamp ASC \
+           LIMIT {limit} \
+         ) \
+         SELECT transcription, speaker, device, timestamp \
+         FROM selected \
+         ORDER BY timestamp ASC"
+    )
 }
 
 // ---------- status + guidance ----------
@@ -1895,6 +1920,145 @@ mod db_tests {
             .iter()
             .any(|sp| sp.name == "Alice"));
         assert_eq!(core.audio_summary.top_transcriptions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn weekly_audio_context_is_not_consumed_by_the_last_few_minutes() {
+        let (db, _d) = fresh_db().await;
+        db.execute_raw_sql("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
+            .await
+            .unwrap();
+        db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
+            .await
+            .unwrap();
+
+        // One useful segment per day, followed by enough longer segments in
+        // the final minutes to crowd every older row out of the old global
+        // length sort and newest-first snippet query.
+        for day in 1..=7 {
+            db.execute_raw_sql(&format!(
+                "INSERT INTO audio_transcriptions \
+                 (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
+                 VALUES (1, {day}, '2026-06-0{day} 10:00:00', \
+                 'weekly audio day {day} project update with decisions and next steps', 'mic', 1)"
+            ))
+            .await
+            .unwrap();
+        }
+        for second in 0..24 {
+            db.execute_raw_sql(&format!(
+                "INSERT INTO audio_transcriptions \
+                 (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
+                 VALUES (1, {}, '2026-06-07 23:59:{second:02}', \
+                 'recent burst {second:02} with substantially longer detailed discussion that must not replace the rest of the requested week', \
+                 'mic', 1)",
+                100 + second
+            ))
+            .await
+            .unwrap();
+        }
+
+        let start = "2026-06-01 00:00:00";
+        let end = "2026-06-08 00:00:00";
+        let core = collect_summary_core(&db, &query(None), start, end).await;
+        assert_eq!(
+            core.audio_summary.top_transcriptions.len(),
+            MAX_TOP_TRANSCRIPTIONS as usize,
+            "unused slots should be backfilled after every occupied period is represented"
+        );
+        let top_days = core
+            .audio_summary
+            .top_transcriptions
+            .iter()
+            .map(|segment| segment.timestamp.get(..10).unwrap_or(""))
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(
+            top_days.contains("2026-06-01"),
+            "top transcriptions lost early-week audio: {top_days:?}"
+        );
+        assert!(
+            top_days.contains("2026-06-07"),
+            "top transcriptions should still include recent audio: {top_days:?}"
+        );
+        assert_eq!(
+            top_days.len(),
+            7,
+            "weekly audio should cover the full range, got days {top_days:?}"
+        );
+        assert!(
+            core.audio_summary
+                .top_transcriptions
+                .windows(2)
+                .all(|pair| pair[0].timestamp <= pair[1].timestamp),
+            "selected transcriptions should be returned chronologically"
+        );
+
+        let mut snippet_query = query(None);
+        snippet_query.max_snippets = 12;
+        let snippets = load_snippets(&db, &snippet_query, &[], start, end)
+            .await
+            .expect("load weekly snippets");
+        let audio_days = snippets
+            .iter()
+            .filter(|snippet| snippet.source == "audio")
+            .map(|snippet| snippet.timestamp.get(..10).unwrap_or(""))
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(
+            audio_days.contains("2026-06-01"),
+            "audio snippets lost early-week context: {audio_days:?}"
+        );
+        assert!(
+            audio_days.contains("2026-06-07"),
+            "audio snippets should still include recent context: {audio_days:?}"
+        );
+        assert!(
+            audio_days.len() >= 5,
+            "audio snippets should span the week, got days {audio_days:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_context_backfills_capacity_from_one_dense_period() {
+        let (db, _d) = fresh_db().await;
+        db.execute_raw_sql("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
+            .await
+            .unwrap();
+        db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
+            .await
+            .unwrap();
+
+        for second in 0..24 {
+            db.execute_raw_sql(&format!(
+                "INSERT INTO audio_transcriptions \
+                 (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
+                 VALUES (1, {second}, '2026-06-07 23:59:{second:02}', \
+                 'dense meeting transcript {second:02} with enough detail for summary context', \
+                 'mic', 1)"
+            ))
+            .await
+            .unwrap();
+        }
+
+        let core = collect_summary_core(
+            &db,
+            &query(None),
+            "2026-06-01 00:00:00",
+            "2026-06-08 00:00:00",
+        )
+        .await;
+
+        assert_eq!(
+            core.audio_summary.top_transcriptions.len(),
+            MAX_TOP_TRANSCRIPTIONS as usize,
+            "a single occupied bucket should backfill all available slots"
+        );
+        assert!(core
+            .audio_summary
+            .top_transcriptions
+            .iter()
+            .all(|segment| segment.timestamp.starts_with("2026-06-07 23:59")));
     }
 
     #[tokio::test]

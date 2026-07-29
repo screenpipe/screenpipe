@@ -7,6 +7,12 @@
 
 export function buildDailyLimitMessage(errorStr: string): string {
   try {
+    if (errorStr.includes("free_chat_limit_exceeded")) {
+      return "You've used today's 2 free hosted AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
+    }
+    if (errorStr.includes("free_chat_turn_request_limit_exceeded")) {
+      return "This free message reached its 8-step agent limit. Upgrade for longer agent runs, or switch your AI preset to your own provider.";
+    }
     const isCostLimit = errorStr.includes("daily_cost_limit_exceeded");
     const isRateLimit = errorStr.includes("rate limit") || errorStr.includes("Rate limit");
 
@@ -18,27 +24,29 @@ export function buildDailyLimitMessage(errorStr: string): string {
       // Don't leak the raw dollar cap — that's our internal margin. Frame it
       // as an account-wide budget so the user understands why it fired even
       // when they "didn't use much" (background pipes consume it too).
-      return "You've hit today's AI usage limit. This is an account-wide budget — background pipes count too. Switch to a free model (gemini-3-flash, haiku) or check Settings → Pipes for chatty schedules.";
+      return "You've hit today's AI usage limit. This is an account-wide budget — background pipes count too. Check Settings → Pipes for chatty schedules, or use a local model or your own provider key.";
     }
 
     const tierMatch = errorStr.match(/"tier":\s*"([^"]+)"/);
     const tier = tierMatch?.[1];
 
     if (tier === "subscribed") {
-      return "You've hit your daily limit. Switch to a free model (Qwen3 Coder, Gemini Flash) for unlimited usage.";
+      return "You've hit your daily model limit. Switch to Auto, or use a local model or your own provider key.";
     } else if (tier === "logged_in") {
-      return "You've used your free queries for today. Switch to a free model (Qwen3 Coder, Gemini Flash) for unlimited usage, or upgrade to Business.";
+      return "You've used your included model queries for today. Switch to Auto, use your own provider, or upgrade to Business.";
     } else {
-      return "You've used your free queries for today. Sign in for more, or switch to a free model (Qwen3 Coder, Gemini Flash).";
+      return "You've used your included model queries for today. Sign in for more, or switch to Auto.";
     }
   } catch {
-    return "You've reached your daily limit. Try a free model like Qwen3 Coder or Gemini Flash.";
+    return "You've reached your daily limit. Switch to Auto or use your own provider.";
   }
 }
 
 export function classifyQuotaError(errorStr: string): "daily" | "rate" | "none" {
   const normalized = errorStr.toLowerCase();
   const isDailyLimit =
+    normalized.includes("free_chat_limit_exceeded") ||
+    normalized.includes("free_chat_turn_request_limit_exceeded") ||
     normalized.includes("credits_exhausted") ||
     normalized.includes("daily_limit_exceeded") ||
     normalized.includes("daily_cost_limit_exceeded");

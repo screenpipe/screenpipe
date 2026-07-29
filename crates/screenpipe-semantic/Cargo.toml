@@ -1,0 +1,23 @@
+[package]
+name = "screenpipe-semantic"
+version = "0.1.0"
+edition = { workspace = true }
+description = "Deterministic app-semantic parser contracts for screenpipe"
+license-file = { workspace = true }
+
+[dependencies]
+chrono = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+screenpipe-core = { path = "../screenpipe-core" }
+tempfile = { workspace = true }
+tiktoken-rs = "0.11.0"
+tokio = { workspace = true }

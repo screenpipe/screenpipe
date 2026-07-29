@@ -11,6 +11,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useUsageStatus, formatResetTime } from "@/lib/hooks/use-usage-status";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { commands } from "@/lib/utils/tauri";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 /**
  * At-the-cap upgrade prompt (the "intensity" lever). Appears in the composer
@@ -51,7 +52,7 @@ export function UpgradeQuotaBanner() {
         await commands.openLoginWindow(null);
         return;
       }
-      const res = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
+      const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

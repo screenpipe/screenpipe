@@ -1,0 +1,39 @@
+{
+  "schema": "live-view-template.v1",
+  "id": "daily-work",
+  "title": "Daily work",
+  "revision": 1,
+  "timeRange": "today",
+  "periodPolicy": {
+    "type": "selectable.v1",
+    "values": ["today", "24h", "7d"]
+  },
+  "blocks": [
+    {
+      "id": "focus-time",
+      "title": "Focus time",
+      "kind": "metric.v1",
+      "width": 3,
+      "order": 0,
+      "intent": "Calculate total focused work time during the selected period.",
+      "source": {
+        "type": "pipe.v1",
+        "pipeName": "daily-summary"
+      }
+    },
+    {
+      "id": "automation-opportunities",
+      "title": "Automation opportunities",
+      "kind": "list.v1",
+      "width": 6,
+      "order": 1,
+      "intent": "List repeated workflows in the selected period that are promising candidates for automation.",
+      "source": {
+        "type": "pipe.v1",
+        "pipeName": "workflow-opportunities"
+      }
+    }
+  ],
+  "createdAt": "2026-07-24T00:00:00Z",
+  "updatedAt": "2026-07-24T00:00:00Z"
+}

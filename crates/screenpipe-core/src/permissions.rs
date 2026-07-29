@@ -130,9 +130,10 @@ pub fn preflight_check(need_screen: bool, need_audio: bool) -> bool {
 
 /// macOS Screen Recording TCC probes.
 ///
-/// - `preflight`: `CGPreflightScreenCaptureAccess` — fast, no side effects. A `true`
-///   result is always reliable; a `false` can be a false negative (known bug for CLI
-///   binaries on fresh TCC cache paths, e.g. via `npx`).
+/// - `preflight`: `CGPreflightScreenCaptureAccess` — fast, no side effects. A `false`
+///   can be a false negative (known bug for CLI binaries on fresh TCC cache paths,
+///   e.g. via `npx`). A `true` is usually reliable but goes stale in the macOS
+///   15+/26 lapsed-grant state (see `preflight()` docs below).
 /// - `capture_probe`: `CGWindowListCreateImage` — real capture attempt. Reliable on
 ///   macOS ≤ 14 and in CLI. On macOS 15+ inside a Tauri app, Apple changed it to
 ///   return the calling app's own windows even without permission → always non-NULL →
@@ -162,8 +163,22 @@ mod macos_screen_recording {
         fn CGImageRelease(image: CGImageRef);
     }
 
-    /// Cached TCC answer via `CGPreflightScreenCaptureAccess`. May lie
-    /// in the negative direction; never in the positive direction.
+    /// Cached TCC answer via `CGPreflightScreenCaptureAccess`. May lie in the
+    /// negative direction (known false negatives on fresh TCC cache paths).
+    ///
+    /// It can ALSO lie in the positive direction: in the macOS 15+/26
+    /// lapsed-grant state (periodic re-approval missed, or a grant
+    /// invalidated by an app update) preflight keeps answering `true` while
+    /// `SCShareableContent` fails — observed live in a user log where the
+    /// recovery flow's preflight read "granted" one second after display
+    /// enumeration reported `PermissionDenied` at runtime.
+    ///
+    /// This crate cannot see the capture-side verdict (it sits below the engine),
+    /// so the combined answer lives one layer up and every UI-facing check goes
+    /// through it: the app's `permissions::screen_recording_status`, which folds
+    /// this value together with `permission_monitor::screen_enumeration_denied`.
+    /// Reach for that, not for this function, when the answer drives what the
+    /// user is told or whether capture is allowed to start.
     pub fn preflight() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
     }
@@ -247,6 +262,14 @@ pub fn check_screen_recording_tauri() -> PermissionStatus {
     PermissionStatus::NotNeeded
 }
 
+/// Silent, side-effect-free accessibility check.
+///
+/// Uses only `AXIsProcessTrusted()`, which never prompts and never enrolls the
+/// app in the Accessibility list. Safe for launch-time capability gates and
+/// passive snapshots. On a cold process this returns the true current value;
+/// its only weakness is not seeing a grant made *after* the process started
+/// (the in-process cache never refreshes). Use [`check_accessibility_live`]
+/// where detecting an in-flight grant matters.
 #[cfg(target_os = "macos")]
 pub fn check_accessibility() -> PermissionStatus {
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -257,6 +280,103 @@ pub fn check_accessibility() -> PermissionStatus {
         PermissionStatus::Granted
     } else {
         PermissionStatus::Denied
+    }
+}
+
+/// Live accessibility check for the onboarding/settings poll loop.
+///
+/// `AXIsProcessTrusted()` caches its answer in-process (macOS 13+), so a grant
+/// made while the app is running keeps reading as denied until relaunch. The
+/// event-tap probe asks tccd at call time and catches that transition;
+/// `AXIsProcessTrusted()` stays as the cheap first-line check and covers the
+/// probe's own false negatives (LSBackgroundOnly helpers, dev-build signature
+/// churn).
+///
+/// NOT side-effect-free: creating an active event tap while denied enrolls the
+/// app in the Accessibility pane and can surface the system prompt. Only call
+/// this from a context where the user is actively being asked for the
+/// permission (the onboarding/settings grant flow) — never from a passive
+/// launch-time gate.
+#[cfg(target_os = "macos")]
+pub fn check_accessibility_live() -> PermissionStatus {
+    if check_accessibility().is_granted() || macos_accessibility::event_tap_probe() {
+        PermissionStatus::Granted
+    } else {
+        PermissionStatus::Denied
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn check_accessibility_live() -> PermissionStatus {
+    PermissionStatus::NotNeeded
+}
+
+#[cfg(target_os = "macos")]
+mod macos_accessibility {
+    use std::ffi::c_void;
+
+    type CGEventTapProxy = *mut c_void;
+    type CGEventRef = *mut c_void;
+    type CFMachPortRef = *mut c_void;
+
+    extern "C" fn noop_callback(
+        _proxy: CGEventTapProxy,
+        _event_type: u32,
+        event: CGEventRef,
+        _user_info: *mut c_void,
+    ) -> CGEventRef {
+        event
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef,
+            user_info: *mut c_void,
+        ) -> CFMachPortRef;
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: *const c_void);
+        fn CFMachPortInvalidate(port: CFMachPortRef);
+    }
+
+    const K_CG_SESSION_EVENT_TAP: u32 = 1;
+    const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
+    // MUST stay Default (active). Creating an active tap requires
+    // kTCCServiceAccessibility specifically; a listen-only tap succeeds with
+    // Input Monitoring alone and would report a false grant.
+    const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
+    const K_CG_EVENT_KEY_DOWN: u64 = 10;
+
+    /// Live Accessibility check: an active CGEventTap can only be created
+    /// when tccd grants kTCCServiceAccessibility *right now*. The tap is
+    /// disabled and released before it is ever attached to a run loop, so it
+    /// never sits in the event path (no input lag, no prompt).
+    pub(super) fn event_tap_probe() -> bool {
+        unsafe {
+            let tap = CGEventTapCreate(
+                K_CG_SESSION_EVENT_TAP,
+                K_CG_HEAD_INSERT_EVENT_TAP,
+                K_CG_EVENT_TAP_OPTION_DEFAULT,
+                1u64 << K_CG_EVENT_KEY_DOWN,
+                noop_callback,
+                std::ptr::null_mut(),
+            );
+            if tap.is_null() {
+                return false;
+            }
+            CGEventTapEnable(tap, false);
+            CFMachPortInvalidate(tap);
+            CFRelease(tap as *const c_void);
+            true
+        }
     }
 }
 

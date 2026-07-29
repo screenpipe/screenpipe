@@ -34,6 +34,7 @@ use screenpipe_engine::{
         status::handle_status_command,
         sync::{handle_sync_command, start_sync_service},
         team::handle_team_command,
+        view::handle_view_command,
         vision::handle_vision_command,
         Cli, Command, RecordArgSources,
     },
@@ -297,6 +298,10 @@ async fn main() -> anyhow::Result<()> {
             handle_pipe_command(subcommand).await?;
             return Ok(());
         }
+        Command::View { ref subcommand } => {
+            handle_view_command(subcommand)?;
+            return Ok(());
+        }
         Command::Audio { ref subcommand } => {
             handle_audio_command(subcommand).await?;
             return Ok(());
@@ -312,6 +317,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Agent { ref subcommand } => {
             screenpipe_engine::cli::agent::handle_agent_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Setup { ref api_url } => {
+            screenpipe_engine::cli::agent::setup_all_detected(api_url)?;
             return Ok(());
         }
         Command::Service { ref subcommand } => {
@@ -434,6 +443,11 @@ async fn main() -> anyhow::Result<()> {
 
     let local_data_dir = get_base_dir(&record_args.data_dir)?;
     let local_data_dir_clone = local_data_dir.clone();
+
+    // One-time, TTY-only equivalent of the desktop onboarding's "connect all
+    // your AI tools" card. It detects local agents and reuses `agent setup`,
+    // so CLI and app installs share the same MCP + skills layout.
+    screenpipe_engine::cli::agent::maybe_prompt_connect_detected(&local_data_dir);
 
     // Build unified RecordingConfig from shared app settings plus explicit CLI args.
     let mut config = record_args
@@ -1456,9 +1470,12 @@ async fn main() -> anyhow::Result<()> {
     ));
     let (event_runs_active, event_runs_peak) = pipe_manager.event_run_concurrency();
     pipe_manager.set_on_run_complete(std::sync::Arc::new(
-        move |pipe_name, _execution_id, success, duration_secs, error_type| {
+        move |pipe_name, execution_id, trigger_type, success, duration_secs, error_type| {
             let mut props = serde_json::json!({
                 "pipe": pipe_name,
+                "execution_id": execution_id,
+                "trigger_type": trigger_type,
+                "telemetry_schema_version": 2,
                 "success": success,
                 "duration_secs": duration_secs,
                 // Concurrency of event-triggered runs: live count as this run
@@ -1470,6 +1487,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(et) = error_type {
                 props["error_type"] = serde_json::Value::String(et.to_string());
             }
+            // Keep the legacy event name so existing dashboards continue to work.
             analytics::capture_event_nonblocking("pipe_scheduled_run", props);
         },
     ));

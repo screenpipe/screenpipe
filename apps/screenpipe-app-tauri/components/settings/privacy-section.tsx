@@ -9,6 +9,10 @@ import type { SettingsField } from "./settings-search";
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   { label: "Blocklist", keywords: ["ignore", "exclude", "block"] },
+  {
+    label: "Ignore incognito windows",
+    keywords: ["private", "browser", "enhanced", "automation"],
+  },
   { label: "PII masking", keywords: ["mask", "redact", "columns", "url", "fields"] },
   {
     label: "Remote support logs",
@@ -17,7 +21,8 @@ export const searchIndex: SettingsField[] = [
   { label: "Telemetry" },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import {
   Eye,
   EyeOff,
@@ -50,13 +55,13 @@ import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { RemoteSupportLogsCard } from "./remote-support-logs-card";
-import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { useInstalledApps } from "@/lib/hooks/use-installed-apps";
 import { commands } from "@/lib/utils/tauri";
+import { planEnhancedIncognitoPermission } from "@/lib/utils/incognito-permission";
 import posthog from "posthog-js";
 import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
@@ -483,18 +488,17 @@ function RedactionWherePreview({
 
 export function PrivacySection() {
   const { settings, updateSettings } = useSettings();
-  const isEnterprise = useIsEnterpriseBuild();
   // Input Monitoring is a macOS-only TCC permission; the grant card only
   // renders there (alongside the keyboard/click capture toggles it gates).
   const isMacOS = typeof window !== "undefined" && platform() === "macos";
   const { toast } = useToast();
   // when the admin forces the PII backend (local/cloud) we lock the radios so
   // the employee can't override it (the value itself is applied to settings by
-  // useEnterprisePolicy.applyPiiPolicy on every policy poll).
-  const { getManagedValue } = useEnterprisePolicy();
+  // The managed policy runtime reapplies PII policy on every policy poll.
+  const { getManagedValue, isManagedDeployment } = useManagedPolicy();
   const managedPiiBackend = getManagedValue("piiBackend");
   // Same idea for input capture: the admin can force keyboard/click rows on
-  // or off org-wide (applied by useEnterprisePolicy.applyInputCapturePolicy).
+  // or off org-wide (applied by the managed policy runtime).
   // These settings are inverted ("disable…"), so ManagedSwitch — which assumes
   // checked == managed value — doesn't fit; lock the switches manually.
   const managedKeyboardCapture = getManagedValue("disableKeyboardCapture");
@@ -502,6 +506,7 @@ export function PrivacySection() {
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isEnhancingIncognito, setIsEnhancingIncognito] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [picker, setPicker] = useState<"ignored" | "included" | null>(null);
 
@@ -860,7 +865,89 @@ export function PrivacySection() {
   };
 
   const handleIncognitoToggle = (checked: boolean) => {
-    handleSettingsChange({ ignoreIncognitoWindows: checked }, true);
+    handleSettingsChange(
+      checked
+        ? { ignoreIncognitoWindows: true }
+        : {
+            ignoreIncognitoWindows: false,
+            enhancedIncognitoDetection: false,
+          },
+      true,
+    );
+  };
+
+  const enhancedIncognitoDetection = Boolean(
+    settings.enhancedIncognitoDetection ?? false,
+  );
+
+  const handleEnhancedIncognitoDetection = async () => {
+    if (enhancedIncognitoDetection) {
+      handleSettingsChange({ enhancedIncognitoDetection: false }, true);
+      return;
+    }
+
+    setIsEnhancingIncognito(true);
+    try {
+      // Arc exposes private-window state through Accessibility already, so it
+      // never needs Automation access for this feature.
+      let browserStatuses = await commands.getBrowsersAutomationStatus();
+      let permissionPlan = planEnhancedIncognitoPermission(browserStatuses);
+
+      if (permissionPlan.kind === "prompt") {
+        for (const browserName of permissionPlan.browserNames) {
+          await commands.requestSingleBrowserAutomation(browserName);
+        }
+        // Read TCC again instead of trusting an individual prompt result. This
+        // handles browsers closing mid-flow and permission changes made in
+        // System Settings while a prompt is visible.
+        browserStatuses = await commands.getBrowsersAutomationStatus();
+        permissionPlan = planEnhancedIncognitoPermission(browserStatuses);
+      }
+
+      if (permissionPlan.kind === "arc-only") {
+        toast({
+          title: "basic detection is enough",
+          description: "Arc private windows are already detected without extra access",
+        });
+        return;
+      }
+
+      if (permissionPlan.kind === "open-browser") {
+        toast({
+          title: "open a supported browser first",
+          description: "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+        });
+        return;
+      }
+
+      if (
+        permissionPlan.kind === "settings" ||
+        permissionPlan.kind === "prompt"
+      ) {
+        await commands.openPermissionSettings("automation");
+        toast({
+          title: "browser access needed",
+          description: "allow screenpipe to control your browser in macOS Automation settings",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      handleSettingsChange({ enhancedIncognitoDetection: true }, true);
+      toast({
+        title: "enhanced detection ready",
+        description: "apply changes to use browser-native incognito detection",
+      });
+    } catch (error) {
+      console.error("Failed to enable enhanced incognito detection:", error);
+      toast({
+        title: "couldn't enable enhanced detection",
+        description: "check macOS Automation settings and try again",
+        variant: "destructive",
+      });
+    } finally {
+      setIsEnhancingIncognito(false);
+    }
   };
 
   const handleDrmPauseToggle = (checked: boolean) => {
@@ -1189,7 +1276,7 @@ export function PrivacySection() {
         </Card>
         </LockedSetting>
 
-        {isEnterprise && <AdminTeamTokenCard />}
+        {isManagedDeployment && <AdminTeamTokenCard />}
 
         {/* LAN access — off by default. Toggling on force-enables api_auth
             (the backend mirrors this guard in RecordingConfig::from_settings
@@ -1252,18 +1339,39 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Ignore Incognito Windows
-                  <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages. on macos, uses native browser APIs for chromium browsers (chrome, edge, brave, arc)." />
+                  <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages without extra access. on macOS, enhance enables browser-native detection for supported Chromium browsers." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Skip all private browsing sessions
+                  Skip private browsing sessions
                 </p>
               </div>
             </div>
-            <Switch
-              id="ignoreIncognitoWindows"
-              checked={Boolean(settings.ignoreIncognitoWindows ?? true)}
-              onCheckedChange={handleIncognitoToggle}
-            />
+            <div className="flex items-center gap-1.5">
+              {isMacOS && Boolean(settings.ignoreIncognitoWindows ?? true) && (
+                <Button
+                  type="button"
+                  variant={enhancedIncognitoDetection ? "outline" : "ghost"}
+                  size="sm"
+                  className="h-7 px-2 text-[10px] uppercase tracking-wide"
+                  onClick={handleEnhancedIncognitoDetection}
+                  disabled={isEnhancingIncognito}
+                  aria-pressed={enhancedIncognitoDetection}
+                  title="use browser-native detection; requires macOS Automation access"
+                >
+                  {isEnhancingIncognito ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Shield className="mr-1 h-3 w-3" />
+                  )}
+                  {enhancedIncognitoDetection ? "enhanced" : "enhance"}
+                </Button>
+              )}
+              <Switch
+                id="ignoreIncognitoWindows"
+                checked={Boolean(settings.ignoreIncognitoWindows ?? true)}
+                onCheckedChange={handleIncognitoToggle}
+              />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1968,7 +2076,7 @@ function AdminTeamTokenCard() {
     }
     setSaving(true);
     try {
-      const res = await commands.saveEnterpriseTeamConfig(null, null, trimmed);
+      const res = await commands.saveEnterpriseTeamConfig(null, null, trimmed, null);
       if (res.status === "error") throw new Error(res.error);
       setLiveToken(trimmed);
       setPendingToken(null);
@@ -1990,7 +2098,7 @@ function AdminTeamTokenCard() {
   const handleClear = useCallback(async () => {
     setSaving(true);
     try {
-      const res = await commands.saveEnterpriseTeamConfig(null, null, "");
+      const res = await commands.saveEnterpriseTeamConfig(null, null, "", null);
       if (res.status === "error") throw new Error(res.error);
       setLiveToken(null);
       setPendingToken(null);
@@ -2033,7 +2141,7 @@ function AdminTeamTokenCard() {
                 <button
                   className="underline text-foreground hover:text-foreground/80"
                   onClick={() =>
-                    openUrl("https://screenpipe.com/enterprise?tab=tokens")
+                    openUrl(screenpipeWebUrl("/enterprise?tab=tokens", "https://screenpipe.com"))
                   }
                 >
                   screenpipe.com/enterprise → api tokens

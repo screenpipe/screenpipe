@@ -4,6 +4,82 @@
 
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
+export function latestSidebarPipeRunTimes(
+  inventory: Array<{ name: string; lastRun: string | null }>,
+  sessions: SessionRecord[],
+): Record<string, string> {
+  const latest = new Map<string, number>();
+  for (const pipe of inventory) {
+    if (!pipe.lastRun) continue;
+    const timestamp = new Date(pipe.lastRun).getTime();
+    if (Number.isFinite(timestamp)) latest.set(pipe.name, timestamp);
+  }
+  for (const session of sessions) {
+    const pipeName = session.pipeContext?.pipeName;
+    if (session.kind !== "pipe-run" || !pipeName) continue;
+    const current = latest.get(pipeName) ?? Number.NEGATIVE_INFINITY;
+    if (session.updatedAt > current) latest.set(pipeName, session.updatedAt);
+  }
+  return Object.fromEntries(
+    Array.from(latest, ([name, timestamp]) => [
+      name,
+      new Date(timestamp).toISOString(),
+    ]),
+  );
+}
+
+export function visibleSidebarPipeNames(
+  inventory: Array<{
+    name: string;
+    executionCount: number;
+    lastRun?: string | null;
+    latestExecutionId?: number;
+  }>,
+  sessions: SessionRecord[],
+): string[] {
+  const visible = new Map<
+    string,
+    { latestRun: number; latestExecutionId: number }
+  >();
+
+  for (const pipe of inventory) {
+    if (pipe.executionCount <= 0) continue;
+    const timestamp = pipe.lastRun ? new Date(pipe.lastRun).getTime() : 0;
+    visible.set(pipe.name, {
+      latestRun: Number.isFinite(timestamp) ? timestamp : 0,
+      latestExecutionId: pipe.latestExecutionId ?? 0,
+    });
+  }
+
+  // Preserve locally-known history if the activity endpoint is unavailable
+  // or has not paged/refreshed far enough to include the pipe yet. Only
+  // terminal pipe-run sessions count here; live pipe-watch sessions should not
+  // move a group to "now" until that execution actually becomes history.
+  for (const session of sessions) {
+    const name = session.pipeContext?.pipeName;
+    if (session.kind !== "pipe-run" || !name) continue;
+    const current = visible.get(name);
+    if (!current || session.updatedAt > current.latestRun) {
+      visible.set(name, {
+        latestRun: session.updatedAt,
+        latestExecutionId: current?.latestExecutionId ?? 0,
+      });
+    }
+  }
+
+  return Array.from(visible.entries())
+    .sort((a, b) => {
+      const [, left] = a;
+      const [, right] = b;
+      return (
+        right.latestRun - left.latestRun ||
+        right.latestExecutionId - left.latestExecutionId ||
+        a[0].localeCompare(b[0])
+      );
+    })
+    .map(([name]) => name);
+}
+
 // ── Types ────────────────────────────────────────────────────────────
 
 export type SidebarItem =
@@ -149,9 +225,8 @@ function recurringPipeDisplayNames(
 
 /**
  * Group names to offer in the "Move to group" submenu: manual sidebar
- * groups first (insertion order, original casing), then auto pipe-groups
- * (the groups the user actually sees in the sidebar). Deduped
- * case-insensitively so a manual group shadowing a pipe name appears once.
+ * groups only (insertion order, original casing). Auto pipe-groups are
+ * excluded — pipe sessions are managed automatically, not by the user.
  */
 export function listMoveTargetGroups(
   sessions: ReadonlyArray<GroupableSession>,
@@ -165,11 +240,6 @@ export function listMoveTargetGroups(
     if (seen.has(lower)) continue;
     seen.add(lower);
     out.push(g);
-  }
-  for (const [lower, display] of recurringPipeDisplayNames(sessions)) {
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    out.push(display);
   }
   return out;
 }

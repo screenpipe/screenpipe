@@ -1,0 +1,307 @@
+[
+  {
+    "id": "slack_conversation",
+    "question": "Who says notarization is still blocking?",
+    "expected_answer": "Alice",
+    "facts": [
+      "#release",
+      "retry the signing job",
+      "Alice",
+      "notarization is still blocking"
+    ],
+    "offscreen_distractors": ["stale hidden Slack instruction"],
+    "app": {
+      "platform": "macos",
+      "app_id": "com.tinyspeck.slackmacgap",
+      "executable": null,
+      "display_name": "Slack",
+      "version": "4.46",
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "#release - Slack", "depth": 0 },
+      { "role": "AXGroup", "text": "", "depth": 1, "class_name": "conversation-thread" },
+      { "role": "AXGroup", "text": "", "depth": 2, "class_name": "message-item outgoing" },
+      { "role": "AXStaticText", "text": "retry the signing job", "depth": 3 },
+      { "role": "AXGroup", "text": "", "depth": 2, "class_name": "message-item" },
+      { "role": "AXStaticText", "text": "Alice", "depth": 3, "class_name": "sender" },
+      { "role": "AXStaticText", "text": "notarization is still blocking", "depth": 3 },
+      { "role": "AXButton", "text": "Add reaction", "depth": 2 },
+      { "role": "AXStaticText", "text": "stale hidden Slack instruction", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "chatgpt_actor_turns",
+    "question": "What eval should be used for parser coverage?",
+    "expected_answer": "bounded replay eval",
+    "facts": [
+      "Parser evaluation",
+      "Measure parser coverage",
+      "Use a bounded replay eval"
+    ],
+    "offscreen_distractors": ["stale hidden ChatGPT answer"],
+    "app": {
+      "platform": "macos",
+      "app_id": "com.openai.chat",
+      "executable": "ChatGPT",
+      "display_name": "ChatGPT",
+      "version": null,
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "Parser evaluation", "depth": 0 },
+      { "role": "AXGroup", "text": "", "depth": 1 },
+      { "role": "AXHeading", "text": "You said:", "depth": 2 },
+      { "role": "AXStaticText", "text": "You said:", "depth": 3 },
+      { "role": "AXButton", "text": "Edit message", "depth": 2 },
+      { "role": "AXStaticText", "text": "Edit message", "depth": 3 },
+      { "role": "AXStaticText", "text": "Measure parser coverage", "depth": 2 },
+      { "role": "AXHeading", "text": "ChatGPT said:", "depth": 2 },
+      { "role": "AXStaticText", "text": "ChatGPT said:", "depth": 3 },
+      { "role": "AXStaticText", "text": "Use a bounded replay eval", "depth": 2 },
+      { "role": "AXButton", "text": "Copy response", "depth": 2 },
+      { "role": "AXStaticText", "text": "stale hidden ChatGPT answer", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "claude_actor_turns",
+    "question": "What should the Claude parser use?",
+    "expected_answer": "exact DOM message boundaries",
+    "facts": [
+      "Claude parser evaluation",
+      "preserve actor relationships",
+      "exact DOM message boundaries"
+    ],
+    "offscreen_distractors": ["stale hidden Claude answer"],
+    "app": {
+      "platform": "macos",
+      "app_id": "com.anthropic.claudefordesktop",
+      "executable": "Claude",
+      "display_name": "Claude",
+      "version": "0.12",
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "Claude parser evaluation", "depth": 0 },
+      { "role": "AXWebArea", "text": "", "depth": 1 },
+      { "role": "AXGroup", "text": "", "depth": 2, "class_name": "group relative inline-flex bg-bg-300 rounded-xl" },
+      { "role": "AXGroup", "text": "", "depth": 3, "class_name": "flex flex-row" },
+      { "role": "AXGroup", "text": "", "depth": 4, "class_name": "flex-1" },
+      { "role": "AXGroup", "text": "", "depth": 5, "class_name": "font-large !font-user-message py-0.5" },
+      { "role": "AXStaticText", "text": "preserve actor relationships", "depth": 6 },
+      { "role": "AXButton", "text": "Edit", "depth": 3 },
+      { "role": "AXGroup", "text": "", "depth": 2, "class_name": "group relative pb-[var(--msg-assistant-pb,0.75rem)]" },
+      { "role": "AXGroup", "text": "", "depth": 3, "class_name": "font-claude-response relative" },
+      { "role": "AXStaticText", "text": "Use exact DOM message boundaries.", "depth": 4 },
+      { "role": "AXButton", "text": "Copy", "depth": 3 },
+      { "role": "AXStaticText", "text": "stale hidden Claude answer", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "obsidian_active_note",
+    "question": "What should happen after the Obsidian parser ships?",
+    "expected_answer": "replay archived notes",
+    "accepted_answers": ["replay archived notes", "replay the archived notes"],
+    "facts": [
+      "Obsidian parser plan",
+      "extract the active note",
+      "replay archived notes"
+    ],
+    "offscreen_distractors": ["stale hidden Obsidian note"],
+    "app": {
+      "platform": "macos",
+      "app_id": "md.obsidian",
+      "executable": "Obsidian",
+      "display_name": "Obsidian",
+      "version": "1.9",
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "Obsidian parser plan - Obsidian", "depth": 0 },
+      { "role": "AXTextArea", "text": "parser", "depth": 1, "value": "parser", "class_name": "search-input" },
+      { "role": "AXGroup", "text": "", "depth": 1, "class_name": "workspace-leaf mod-active" },
+      { "role": "AXTextArea", "text": "Obsidian parser plan", "depth": 2, "value": "Obsidian parser plan", "class_name": "inline-title" },
+      { "role": "AXGroup", "text": "", "depth": 2, "class_name": "markdown-source-view cm-s-obsidian" },
+      { "role": "AXGroup", "text": "", "depth": 3, "class_name": "cm-editor" },
+      {
+        "role": "AXTextArea",
+        "text": "extract the active note\nreplay archived notes",
+        "depth": 4,
+        "value": "extract the active note\nreplay archived notes",
+        "class_name": "cm-content cm-lineWrapping"
+      },
+      { "role": "AXTextArea", "text": "stale hidden Obsidian note", "depth": 1, "value": "stale hidden Obsidian note", "on_screen": false }
+    ]
+  },
+  {
+    "id": "gmail_thread",
+    "question": "What action does Alice request?",
+    "expected_answer": "retry signing",
+    "accepted_answers": ["retry signing", "try signing again"],
+    "facts": ["Release blocked", "Alice", "Please retry signing"],
+    "offscreen_distractors": ["stale hidden Gmail message"],
+    "app": {
+      "platform": "windows",
+      "app_id": null,
+      "executable": "chrome.exe",
+      "display_name": "Chrome",
+      "version": null,
+      "browser_url": "https://mail.google.com/mail/u/0/#inbox/example"
+    },
+    "nodes": [
+      { "role": "Window", "text": "Release blocked - Gmail", "depth": 0 },
+      { "role": "Document", "text": "", "depth": 1 },
+      { "role": "Heading", "text": "Release blocked", "depth": 2, "class_name": "thread-title" },
+      { "role": "Group", "text": "", "depth": 2, "class_name": "email-message" },
+      { "role": "Text", "text": "Alice", "depth": 3, "class_name": "sender" },
+      { "role": "Group", "text": "", "depth": 3, "class_name": "message-body" },
+      { "role": "Text", "text": "Please retry signing.", "depth": 4 },
+      { "role": "Button", "text": "Archive", "depth": 2 },
+      { "role": "Text", "text": "stale hidden Gmail message", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "notion_document",
+    "question": "What should happen after semantic context ships?",
+    "expected_answer": "Measure token reduction",
+    "facts": ["Launch plan", "Ship semantic context", "Measure token reduction"],
+    "offscreen_distractors": ["stale hidden Notion paragraph"],
+    "app": {
+      "platform": "macos",
+      "app_id": "notion.id",
+      "executable": null,
+      "display_name": "Notion",
+      "version": "4.0",
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "Launch plan - Notion", "depth": 0 },
+      { "role": "AXTextField", "text": "Search", "depth": 1, "value": "semantic", "help_text": "Search" },
+      {
+        "role": "AXTextArea",
+        "text": "Ship semantic context\nMeasure token reduction",
+        "depth": 1,
+        "class_name": "contenteditable-document",
+        "value": "Ship semantic context\nMeasure token reduction",
+        "help_text": "Launch plan"
+      },
+      { "role": "AXStaticText", "text": "stale hidden Notion paragraph", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "todoist_tasks",
+    "question": "Which task is completed?",
+    "expected_answer": "Define schema",
+    "facts": ["Benchmark parser", "Define schema", "completed"],
+    "offscreen_distractors": ["stale hidden Todoist task"],
+    "app": {
+      "platform": "windows",
+      "app_id": null,
+      "executable": "chrome.exe",
+      "display_name": "Chrome",
+      "version": null,
+      "browser_url": "https://app.todoist.com/app/project/example"
+    },
+    "nodes": [
+      { "role": "Window", "text": "Parser project - Todoist", "depth": 0 },
+      { "role": "Group", "text": "", "depth": 1, "class_name": "task-item" },
+      { "role": "Text", "text": "Benchmark parser", "depth": 2, "class_name": "task-title" },
+      { "role": "Group", "text": "", "depth": 1, "class_name": "task-item completed" },
+      { "role": "Text", "text": "Define schema", "depth": 2, "class_name": "task-title" },
+      { "role": "Button", "text": "Add task", "depth": 1 },
+      { "role": "Text", "text": "stale hidden Todoist task", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "calendar_event",
+    "question": "When is the parser review?",
+    "expected_answer": "Jul 24, 10:00 AM to 10:30 AM",
+    "accepted_answers": [
+      "Jul 24, 10:00 AM to 10:30 AM",
+      "Jul 24, at 10:00 AM to 10:30 AM",
+      "July 24, 10:00 AM to 10:30 AM",
+      "July 24, at 10:00 AM to 10:30 AM"
+    ],
+    "facts": ["Parser review", "Jul 24, 10:00 AM to 10:30 AM"],
+    "offscreen_distractors": ["stale hidden Calendar event"],
+    "app": {
+      "platform": "macos",
+      "app_id": "com.apple.iCal",
+      "executable": null,
+      "display_name": "Calendar",
+      "version": "15",
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "Calendar", "depth": 0 },
+      {
+        "role": "AXGroup",
+        "text": "",
+        "depth": 1,
+        "class_name": "calendar-event",
+        "help_text": "Jul 24, 10:00 AM to 10:30 AM"
+      },
+      { "role": "AXStaticText", "text": "Parser review", "depth": 2, "class_name": "event-title" },
+      { "role": "AXButton", "text": "Today", "depth": 1 },
+      { "role": "AXStaticText", "text": "stale hidden Calendar event", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "terminal_session",
+    "question": "How many tests passed?",
+    "expected_answer": "24",
+    "facts": ["cargo test", "24 passed"],
+    "offscreen_distractors": ["stale hidden terminal command"],
+    "app": {
+      "platform": "macos",
+      "app_id": "com.apple.Terminal",
+      "executable": null,
+      "display_name": "Terminal",
+      "version": "2.15",
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "screenpipe - zsh", "depth": 0 },
+      { "role": "AXStaticText", "text": "$ cargo test", "depth": 1 },
+      { "role": "AXStaticText", "text": "$ cargo test", "depth": 1 },
+      { "role": "AXStaticText", "text": "24 passed", "depth": 1 },
+      { "role": "AXButton", "text": "New Tab", "depth": 1 },
+      { "role": "AXStaticText", "text": "stale hidden terminal command", "depth": 1, "on_screen": false }
+    ]
+  },
+  {
+    "id": "vscode_editor",
+    "question": "Which file is open in editor group 1?",
+    "expected_answer": "main.rs",
+    "facts": ["main.rs", "Editor Group 1", "println", "17 passed"],
+    "offscreen_distractors": ["stale hidden editor buffer"],
+    "app": {
+      "platform": "macos",
+      "app_id": "com.microsoft.VSCode",
+      "executable": null,
+      "display_name": "Visual Studio Code",
+      "version": "1.120.0",
+      "browser_url": null
+    },
+    "nodes": [
+      { "role": "AXWindow", "text": "screenpipe - Visual Studio Code", "depth": 0 },
+      { "role": "AXGroup", "text": "", "depth": 1, "class_name": "monaco-workbench" },
+      { "role": "AXGroup", "text": "", "depth": 2, "automation_id": "status.editor.screenReaderMode" },
+      { "role": "AXGroup", "text": "", "depth": 2, "class_name": "editor-instance" },
+      {
+        "role": "AXTextArea",
+        "text": "fn main() {\n    println!(\"hello\");\n}",
+        "depth": 3,
+        "value": "fn main() {\n    println!(\"hello\");\n}",
+        "help_text": "main.rs, Editor Group 1"
+      },
+      { "role": "AXGroup", "text": "", "depth": 2, "class_name": "xterm-accessibility-tree" },
+      { "role": "AXStaticText", "text": "$ cargo test", "depth": 3 },
+      { "role": "AXStaticText", "text": "$ cargo test", "depth": 3 },
+      { "role": "AXStaticText", "text": "17 passed", "depth": 3 },
+      { "role": "AXButton", "text": "Explorer", "depth": 2 },
+      { "role": "AXButton", "text": "Search", "depth": 2 },
+      { "role": "AXStaticText", "text": "stale hidden editor buffer", "depth": 1, "on_screen": false }
+    ]
+  }
+]

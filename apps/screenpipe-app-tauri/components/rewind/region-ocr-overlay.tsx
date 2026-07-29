@@ -152,7 +152,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "claude-haiku-4-5",
+              model: "auto",
               max_tokens: 4096,
               messages: [
                 {

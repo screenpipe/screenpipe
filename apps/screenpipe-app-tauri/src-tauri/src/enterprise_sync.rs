@@ -4,8 +4,8 @@
 
 //! Desktop-side glue for enterprise telemetry sync.
 //!
-//! The actual sync state machine + tests live in `ee/desktop-rust/enterprise_sync.rs`
-//! (kept under `ee/` for clean license separation from the consumer build).
+//! The actual sync state machine + tests live in
+//! `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs`.
 //! This shim only:
 //!   - implements the `LocalApiClient` trait against the running screenpipe
 //!     HTTP server (localhost:{port}/search)
@@ -17,8 +17,7 @@
 //! builds compile this file as a no-op.
 
 #[cfg(feature = "enterprise-build")]
-#[path = "../../../../ee/desktop-rust/enterprise_sync.rs"]
-mod ee_sync;
+use crate::enterprise::sync as ee_sync;
 
 #[cfg(feature = "enterprise-build")]
 mod imp {
@@ -31,6 +30,7 @@ mod imp {
     };
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
     use std::fmt::Write as _;
     use std::sync::Arc;
     use tauri::Manager;
@@ -554,6 +554,132 @@ mod imp {
             .or_else(crate::commands::get_enterprise_license_key)
     }
 
+    /// Default policy endpoint on the baked control-plane base
+    /// (crate::web_base — `NEXT_PUBLIC_SCREENPIPE_WEB_URL` at build time).
+    fn default_policy_url() -> String {
+        crate::web_base::screenpipe_web_url("/api/enterprise/policy")
+    }
+    const HIDDEN_UI_POLICY_POLL_INTERVAL: std::time::Duration =
+        std::time::Duration::from_secs(5 * 60);
+
+    #[derive(Deserialize)]
+    struct HiddenUiPolicyResponse {
+        #[serde(rename = "hiddenSections", default)]
+        hidden_sections: Vec<String>,
+        #[serde(rename = "lockedSettings", default)]
+        locked_settings: HashMap<String, serde_json::Value>,
+    }
+
+    impl HiddenUiPolicyResponse {
+        fn all_hidden_sections(mut self) -> Vec<String> {
+            // Match the frontend policy normalization: locked setting keys also
+            // hide their corresponding settings surface. `referral` is always
+            // hidden in enterprise builds but is irrelevant to UI dormancy.
+            self.hidden_sections.extend(self.locked_settings.into_keys());
+            self.hidden_sections.sort();
+            self.hidden_sections.dedup();
+            self.hidden_sections
+        }
+    }
+
+    enum EnterprisePolicyCredential {
+        LicenseKey(String),
+        AccountToken(String),
+    }
+
+    fn current_policy_credential() -> Option<EnterprisePolicyCredential> {
+        license_key_from_env_or_config()
+            .map(EnterprisePolicyCredential::LicenseKey)
+            .or_else(|| {
+                crate::commands::get_cloud_token().map(EnterprisePolicyCredential::AccountToken)
+            })
+    }
+
+    async fn fetch_hidden_ui_policy(
+        http: &reqwest::Client,
+        policy_url: &str,
+        device_id: &str,
+        credential: EnterprisePolicyCredential,
+    ) -> Result<Vec<String>, String> {
+        let request = http.get(policy_url).header("X-Device-Id", device_id);
+        let request = match credential {
+            EnterprisePolicyCredential::LicenseKey(key) => request.header("X-License-Key", key),
+            EnterprisePolicyCredential::AccountToken(token) => request.bearer_auth(token),
+        };
+        let response = request.send().await.map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("HTTP {}", response.status()));
+        }
+        response
+            .json::<HiddenUiPolicyResponse>()
+            .await
+            .map(HiddenUiPolicyResponse::all_hidden_sections)
+            .map_err(|error| error.to_string())
+    }
+
+    /// The normal enterprise policy poll lives in the Home webview. Hidden UI
+    /// mode destroys that webview, so a tiny native watcher must remain alive
+    /// to observe the one policy change that can bring the UI back. Once Home
+    /// is restored, its full policy fetch applies managed settings and pipes.
+    fn spawn_hidden_ui_policy_watcher(app: &tauri::AppHandle) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let policy_url = std::env::var("SCREENPIPE_ENTERPRISE_POLICY_URL")
+                .ok()
+                .filter(|url| !url.trim().is_empty())
+                .unwrap_or_else(default_policy_url);
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("enterprise policy HTTP client builds");
+
+            // Let startup finish before the first control-plane request. This
+            // still recovers a persisted hidden app far sooner than the normal
+            // five-minute frontend polling cadence.
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            loop {
+                if crate::enterprise_policy::is_app_ui_hidden() {
+                    match current_policy_credential() {
+                        Some(credential) => {
+                            let device_id = settings_device_id(&app)
+                                .unwrap_or_else(|| "unknown".to_string());
+                            match fetch_hidden_ui_policy(
+                                &http,
+                                &policy_url,
+                                &device_id,
+                                credential,
+                            )
+                            .await
+                            {
+                                Ok(hidden_sections) => {
+                                    crate::enterprise_policy::set_enterprise_policy(
+                                        hidden_sections,
+                                    );
+                                    if !crate::commands::apply_enterprise_ui_visibility(
+                                        app.clone(),
+                                    ) {
+                                        info!(
+                                            "enterprise: native policy watcher restored visible UI"
+                                        );
+                                    }
+                                }
+                                Err(error) => warn!(
+                                    "enterprise: hidden-UI policy refresh failed: {error}"
+                                ),
+                            }
+                        }
+                        None => warn!(
+                            "enterprise: hidden UI is active but no policy credential is available"
+                        ),
+                    }
+                }
+
+                tokio::time::sleep(HIDDEN_UI_POLICY_POLL_INTERVAL).await;
+            }
+        });
+    }
+
     fn enterprise_license_hash(license_key: &str) -> Option<String> {
         let trimmed = license_key.trim();
         if trimmed.is_empty() {
@@ -620,6 +746,11 @@ mod imp {
     pub fn spawn(app: &tauri::AppHandle) -> Option<tokio::sync::watch::Sender<bool>> {
         use tauri::Manager;
 
+        // This watcher is independent of telemetry upload configuration. An
+        // account-authenticated enterprise build may have no license key, but
+        // it still needs to recover when the server turns hidden UI off.
+        spawn_hidden_ui_policy_watcher(app);
+
         let app_data_dir = app.path().app_data_dir().ok()?;
         // Use the same device id the heartbeat reports under (settings `deviceId`)
         // so a machine is a single enterprise_devices row, not two.
@@ -630,47 +761,15 @@ mod imp {
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Resolve license key from the canonical file location the
-        // in-app license prompt writes to (~/.screenpipe/enterprise.json,
-        // or the MDM Resources/ copy). Without this the env-var-only
-        // discovery in `from_env` silently no-ops on every standard
-        // install — the telemetry pipeline would never start, even with
-        // the dashboard fully configured.
-        let license_fallback = crate::commands::get_enterprise_license_key();
-
-        let cfg = match EnterpriseSyncConfig::from_env_with_fallback(
-            app_data_dir,
-            device_id.clone(),
-            device_label.clone(),
-            license_fallback,
-        ) {
-            Some(c) => c,
-            None => {
-                info!(
-                    "enterprise sync: no license key in env or ~/.screenpipe/enterprise.json — skipping"
-                );
-                return None;
-            }
-        };
-
-        info!(
-            "enterprise sync: enabled for device={} (label={}) ingest={}",
-            cfg.device_id, cfg.device_label, cfg.ingest_url
-        );
-
         // Point the stalled-upload watchdog at the real app-log dirs. App logs
         // live in the screenpipe data dir (RollingFileAppender), NOT Tauri's
         // app_data_dir — so the from_env default would miss them.
-        let mut cfg = cfg;
         let mut log_dirs = Vec::new();
         if let Ok(d) = crate::log_files::get_screenpipe_data_dir(app) {
             log_dirs.push(d);
         }
         if let Ok(d) = crate::log_files::get_data_dir(app) {
             log_dirs.push(d);
-        }
-        if !log_dirs.is_empty() {
-            cfg.log_dirs = log_dirs;
         }
 
         let api = local_api_context_from_app(app);
@@ -683,22 +782,110 @@ mod imp {
             Arc::new(ScreenpipeLocalClient::new(api_url_base, app.clone()));
 
         let (tx, rx) = tokio::sync::watch::channel(false);
+        let mut shutdown_rx = rx.clone();
         tauri::async_runtime::spawn(async move {
-            // Small startup delay so the local screenpipe server is up before
-            // we hammer it. Mirrors calendar publisher's `sleep(10)`.
-            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            // Wait until a device config exists. Config sources, checked
+            // every tick until one lands (previously this was a boot-time
+            // check that returned None forever — pasting a license in the
+            // in-app prompt or signing in required a full app restart):
+            //   1. env / enterprise.json (MDM, in-app prompt) — as before
+            //   2. sign-in auto-config: a signed-in enterprise MEMBER's
+            //      cloud session fetches /api/enterprise/device-config and
+            //      persists license_key + ingest_url to enterprise.json,
+            //      so the next tick starts sync with zero manual config.
+            const CONFIG_POLL_SECS: u64 = 60;
+            let cfg = loop {
+                let file_cfg = crate::commands::get_enterprise_file_config();
+                if let Some(cfg) = EnterpriseSyncConfig::from_env_with_fallback(
+                    app_data_dir.clone(),
+                    device_id.clone(),
+                    device_label.clone(),
+                    file_cfg.license_key.clone(),
+                    file_cfg.ingest_url.clone(),
+                ) {
+                    break cfg;
+                }
+
+                if let Some(token) = crate::commands::get_cloud_token() {
+                    let url = crate::enterprise::device_config::device_config_url(
+                        file_cfg.ingest_url.as_deref(),
+                    );
+                    match crate::enterprise::device_config::fetch_remote_device_config(
+                        &url, &token,
+                    )
+                    .await
+                    {
+                        Ok(remote) => {
+                            info!(
+                                "enterprise sync: device auto-configured from {} (org={})",
+                                url,
+                                remote.org_name.as_deref().unwrap_or("?")
+                            );
+                            if let Err(e) = crate::commands::persist_enterprise_device_config(
+                                Some(&remote.license_key),
+                                remote.ingest_url.as_deref(),
+                            ) {
+                                warn!("enterprise sync: failed to persist device config: {e}");
+                            }
+                            // Loop around immediately: the file (or the
+                            // in-memory values on persist failure) now
+                            // satisfies from_env_with_fallback.
+                            if let Some(cfg) = EnterpriseSyncConfig::from_env_with_fallback(
+                                app_data_dir.clone(),
+                                device_id.clone(),
+                                device_label.clone(),
+                                Some(remote.license_key.clone()),
+                                remote.ingest_url.clone(),
+                            ) {
+                                break cfg;
+                            }
+                        }
+                        Err(e) => {
+                            // Signed out, consumer account, or control plane
+                            // unreachable — all normal, keep waiting quietly.
+                            tracing::debug!(
+                                "enterprise sync: device-config not available ({e}); retrying"
+                            );
+                        }
+                    }
+                }
+
+                if ee_sync::sleep_or_shutdown(
+                    std::time::Duration::from_secs(CONFIG_POLL_SECS),
+                    &mut shutdown_rx,
+                )
+                .await
+                {
+                    return;
+                }
+            };
+
+            let mut cfg = cfg;
+            if !log_dirs.is_empty() {
+                cfg.log_dirs = log_dirs;
+            }
+
+            info!(
+                "enterprise sync: enabled for device={} (label={}) ingest={}",
+                cfg.device_id, cfg.device_label, cfg.ingest_url
+            );
 
             // Ask the control plane what upload mode this license should run
             // in. Replaces the old "set SCREENPIPE_ENTERPRISE_UPLOAD_MODE on
             // every customer machine" UX — the dashboard binding is now the
             // single source of truth, so a fresh enterprise install just
             // needs the license key and uploads start automatically.
-            let mut cfg = cfg;
             cfg.resolve_upload_mode().await;
             info!(
                 "enterprise sync: resolved upload mode = {}",
                 cfg.upload_mode.label()
             );
+
+            // Small startup delay so the local screenpipe server is up before
+            // we hammer it. Mode resolution runs first so customer root keys
+            // are removed from the process environment before child agents
+            // can inherit them.
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
 
             ee_sync::run(cfg, local, rx).await;
         });
@@ -759,7 +946,9 @@ mod imp {
     mod device_id_tests {
         use super::{
             choose_device_id, enterprise_license_hash, exact_frame_url, image_uploads_allowed,
+            HiddenUiPolicyResponse,
         };
+        use std::collections::HashMap;
 
         #[test]
         fn settings_id_wins_so_sync_matches_heartbeat() {
@@ -812,6 +1001,22 @@ mod imp {
             assert_eq!(
                 exact_frame_url("http://localhost:3030", 42),
                 "http://localhost:3030/frames/42?fallback=false"
+            );
+        }
+
+        #[test]
+        fn hidden_ui_policy_matches_frontend_section_normalization() {
+            let response = HiddenUiPolicyResponse {
+                hidden_sections: vec!["app_ui".to_string(), "app_ui".to_string()],
+                locked_settings: HashMap::from([(
+                    "recording".to_string(),
+                    serde_json::Value::Bool(true),
+                )]),
+            };
+
+            assert_eq!(
+                response.all_hidden_sections(),
+                vec!["app_ui".to_string(), "recording".to_string()]
             );
         }
     }

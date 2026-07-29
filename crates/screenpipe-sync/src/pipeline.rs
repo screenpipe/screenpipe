@@ -57,6 +57,21 @@ pub struct TicketedConfig {
     /// timeout for liveness — they don't wait on `Duration::from_secs(N)`
     /// so cancellation there is less impactful.
     pub shutdown: Option<watch::Receiver<bool>>,
+    /// Destination pin: when non-empty, the ticket's `upload_url` host must
+    /// match one of these entries or the upload is refused with
+    /// [`SyncError::DestinationNotPinned`] **before any byte is PUT**.
+    ///
+    /// This closes the one silent hole in the write-only trust model: the
+    /// control plane mints the presigned URL, i.e. the server chooses the
+    /// destination — a compromised control plane could redirect plaintext
+    /// uploads to a bucket it can read. With the pin (deployed out-of-band,
+    /// e.g. customer MDM), any redirect requires shipping modified client
+    /// code instead.
+    ///
+    /// Entry format: `host` (matches any port) or `host:port` (exact),
+    /// compared case-insensitively against the URL's authority. Empty vec =
+    /// pinning not configured (feature is opt-in per deployment).
+    pub pinned_upload_hosts: Vec<String>,
 }
 
 impl TicketedConfig {
@@ -67,11 +82,18 @@ impl TicketedConfig {
             control_headers: HeaderMap::new(),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
+                // `control_headers` is where callers put custom-header auth
+                // (e.g. X-License-Key). Reqwest only strips a small standard
+                // set of sensitive headers on a cross-origin redirect, so a
+                // redirect-following default client would hand that
+                // credential to whatever host the 3xx names.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("default reqwest client builds"),
             put_max_retries: 3,
             put_initial_backoff: Duration::from_secs(2),
             shutdown: None,
+            pinned_upload_hosts: Vec::new(),
         }
     }
 
@@ -93,6 +115,11 @@ impl TicketedConfig {
 
     pub fn with_shutdown(mut self, rx: watch::Receiver<bool>) -> Self {
         self.shutdown = Some(rx);
+        self
+    }
+
+    pub fn with_pinned_upload_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.pinned_upload_hosts = hosts;
         self
     }
 }
@@ -228,7 +255,45 @@ impl TicketedPipeline {
                 "ticket returned empty upload_url".to_string(),
             ));
         }
+        assert_destination_pinned(&self.config.pinned_upload_hosts, &ticket.upload_url)
+    }
+}
+
+/// Enforce the destination pin against a ticket's `upload_url`. Fail closed:
+/// an unparseable URL or a host missing from a non-empty pin list refuses
+/// the upload before any byte leaves the device.
+fn assert_destination_pinned(pins: &[String], upload_url: &str) -> Result<(), SyncError> {
+    if pins.is_empty() {
+        return Ok(());
+    }
+    let parsed = reqwest::Url::parse(upload_url).map_err(|_| {
+        // Deliberately not echoing the URL — presigned URLs carry signature
+        // material and don't belong in error strings or logs.
+        SyncError::DestinationNotPinned("<unparseable upload_url>".to_string())
+    })?;
+    let host = match parsed.host_str() {
+        Some(h) => h.to_ascii_lowercase(),
+        None => return Err(SyncError::DestinationNotPinned("<no host>".to_string())),
+    };
+    let host_port = match parsed.port() {
+        Some(p) => format!("{host}:{p}"),
+        None => host.clone(),
+    };
+    let matched = pins.iter().any(|pin| {
+        let pin = pin.trim().to_ascii_lowercase();
+        if pin.is_empty() {
+            return false;
+        }
+        if pin.contains(':') {
+            pin == host_port
+        } else {
+            pin == host
+        }
+    });
+    if matched {
         Ok(())
+    } else {
+        Err(SyncError::DestinationNotPinned(host_port))
     }
 }
 
@@ -552,7 +617,7 @@ mod tests {
             .await
             .unwrap_err();
         // 409 is not 5xx and not auth — falls into the generic Network
-        // bucket. The caller (e.g. ee/) maps that to a recoverable error
+        // bucket. The caller (e.g. enterprise desktop sync) maps that to a recoverable error
         // class without advancing its cursor.
         assert!(matches!(err, SyncError::Network(_)));
     }
@@ -593,6 +658,134 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.put.bytes_uploaded, 1);
+    }
+
+    #[tokio::test]
+    async fn pinned_destination_match_allows_upload() {
+        let storage = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/blob"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&storage)
+            .await;
+        let control = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/ticket"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "method": "PUT",
+                "upload_url": format!("{}/blob", storage.uri()),
+            })))
+            .mount(&control)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/complete"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&control)
+            .await;
+
+        // MockServer binds 127.0.0.1:<random port> — pin the bare host so
+        // the port-agnostic form is exercised.
+        let cfg = TicketedConfig::new(
+            format!("{}/ticket", control.uri()),
+            format!("{}/complete", control.uri()),
+        )
+        .with_pinned_upload_hosts(vec!["127.0.0.1".to_string()]);
+        let pipeline = TicketedPipeline::new(cfg);
+        pipeline
+            .upload(b"x", "application/octet-stream", &json!({}), &json!({}))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn pinned_destination_mismatch_refuses_before_any_put() {
+        let storage = MockServer::start().await;
+        // Zero PUTs allowed — the refusal must happen before any byte
+        // leaves the device.
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&storage)
+            .await;
+        let control = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/ticket"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true,
+                "method": "PUT",
+                "upload_url": format!("{}/blob", storage.uri()),
+            })))
+            .mount(&control)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/complete"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&control)
+            .await;
+
+        let cfg = TicketedConfig::new(
+            format!("{}/ticket", control.uri()),
+            format!("{}/complete", control.uri()),
+        )
+        .with_pinned_upload_hosts(vec!["acme-archive.example.com".to_string()]);
+        let pipeline = TicketedPipeline::new(cfg);
+        let err = pipeline
+            .upload(b"x", "application/octet-stream", &json!({}), &json!({}))
+            .await
+            .unwrap_err();
+        match err {
+            SyncError::DestinationNotPinned(host) => {
+                assert!(host.starts_with("127.0.0.1:"), "got host: {host}");
+            }
+            other => panic!("expected DestinationNotPinned, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pin_matching_semantics() {
+        // Bare host pin matches any port.
+        assert!(assert_destination_pinned(
+            &["bucket.s3.eu-central-1.amazonaws.com".to_string()],
+            "https://bucket.s3.eu-central-1.amazonaws.com/k?X-Amz-Signature=x",
+        )
+        .is_ok());
+        // host:port pin is exact.
+        assert!(assert_destination_pinned(
+            &["minio.internal:9000".to_string()],
+            "http://minio.internal:9000/bucket/k",
+        )
+        .is_ok());
+        assert!(assert_destination_pinned(
+            &["minio.internal:9000".to_string()],
+            "http://minio.internal:9001/bucket/k",
+        )
+        .is_err());
+        // Case-insensitive.
+        assert!(assert_destination_pinned(
+            &["Bucket.S3.Amazonaws.COM".to_string()],
+            "https://bucket.s3.amazonaws.com/k",
+        )
+        .is_ok());
+        // Different host refused; error carries the host, never the URL.
+        let err = assert_destination_pinned(
+            &["pinned.example.com".to_string()],
+            "https://evil.example.net/k?X-Amz-Signature=secret",
+        )
+        .unwrap_err();
+        match err {
+            SyncError::DestinationNotPinned(host) => {
+                assert_eq!(host, "evil.example.net");
+                assert!(!host.contains("secret"));
+            }
+            other => panic!("expected DestinationNotPinned, got {other:?}"),
+        }
+        // Unparseable URL fails closed when a pin is set…
+        assert!(assert_destination_pinned(&["h".to_string()], "not a url").is_err());
+        // …and empty pin list means the feature is off.
+        assert!(assert_destination_pinned(&[], "not a url").is_ok());
     }
 
     #[tokio::test]

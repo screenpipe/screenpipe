@@ -30,18 +30,25 @@ keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions`
 
 read the screenpipe skill first so you know the meetings + search endpoints.
 
-step 1 — find the meeting that just ended:
+step 1 — find the meeting that just ended. when the scheduler woke you for an event it wrote `./.trigger-context.json` in this pipe's folder; read it first and use the meeting id it names:
+
+  cat ./.trigger-context.json   # {"event": "meeting_ended", "key": "<MEETING_ID>", ...}
+
+  curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+    "http://localhost:3030/meetings/<MEETING_ID>"
+
+only if that file is missing (a manual run) fall back to the most recent row:
 
   curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
     "http://localhost:3030/meetings?limit=1"
 
-the most recent row is the one that just ended. capture its `id`, `meeting_start`, `meeting_end`, `title`, `note`, `meeting_app`, and `attendees`.
+either way, capture the meeting's `id`, `meeting_start`, `meeting_end`, `title`, `note`, `meeting_app`, and `attendees`. prefer the id from the trigger file — "most recent" picks the wrong meeting when two end close together.
 
 step 2 — search screenpipe for what happened during this meeting and summarize it: key topics, decisions, action items. scope your searches to the meeting's `meeting_start`/`meeting_end` window. prefer `content_type=audio` for transcripts.
 
 step 2b — also query the screen for what was *shown*: `content_type=ocr` over the same window (this returns the frame's on-screen text — accessibility tree + OCR merged, not just OCR) — shared slides, docs, code, demos, and the on-screen name tags video-call apps render for participants. fold anything useful into the summary, and use on-screen names to fill in attendees who never spoke.
 
-step 2c — *if available*, use the cloud media (video/audio) model for what text alone can't capture: the screenpipe-api skill includes a "Cloud media analysis" block (the `gemma4-e4b` multimodal model) only when cloud media analysis is enabled and the user is signed into screenpipe cloud. when it's there, use it for visual-only content the transcript and OCR miss — diagrams, charts, whiteboards, slide figures, UI demos, screen-shared video. export the meeting (`POST /export` with this `meeting_id`) or ffmpeg-sample a few keyframes, then send up to 4 frames per request as `image_url[]` to `POST /v1/chat/completions` with `"model": "gemma4-e4b"` and ask what they show; it can also take `audio_url` directly for hard-to-transcribe spans. this step is optional — if the block isn't in the skill, or the call returns `503 cloud_token_missing` (signed out), just skip it and summarize from transcript + OCR.
+step 2c — *if available*, use the cloud media (video/audio) model only for a concrete visual question that transcript and OCR cannot answer — diagrams, charts, whiteboards, slide figures, UI demos, or screen-shared video. choose up to 4 representative `frame_id` values already returned by the bounded OCR search, fetch those still images with `GET /frames/<frame_id>`, and send them as `image_url[]` to `POST /v1/chat/completions` with `"model": "gemma4-e4b"`. NEVER call `POST /export` or run ffmpeg for a routine meeting summary; a full media export requires an explicit user request. if the cloud-media block is absent or returns `503 cloud_token_missing`, skip visual analysis and summarize from transcript + OCR.
 
 step 2d — name the speakers from the screen (do this every run, don't ask first): video-call apps render each participant's name on their tile, and that text is already in the `content_type=ocr` frames from step 2b. for every speaker still unnamed or generic ("speaker 1", "unknown", "") in the transcript, line up when they were talking with the on-screen name tag showing at that moment and rename them:
 

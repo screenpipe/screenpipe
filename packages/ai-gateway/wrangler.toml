@@ -62,7 +62,7 @@ GEMINI_FLEX_INTERACTIVE = "false"
 #   latency hurts user-facing chat.
 # - MAX_DAILY_COST_PER_USER ("5"): base per-user daily $ cap; ×7 subscribed,
 #   ×0.64 logged_in, ×0.32 anonymous (getTierDailyCostCap). Credits extend 1:1.
-# - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = always glm-5
+# - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = GPT-5.6 Luna
 #   (today's behavior). "heuristic" = regex tiering (0 latency). "embedding" =
 #   bge centroid via Workers AI (best accuracy, +1 embed call). See difficulty-router.ts.
 # - PIPE_FRONTIER_POLICY ("downgrade"): background/pipe traffic on a frontier model

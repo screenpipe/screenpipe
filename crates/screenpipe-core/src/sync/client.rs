@@ -298,7 +298,7 @@ impl SyncClient {
     /// `{supabaseUrl}/storage/v1/object/upload/sign/{bucket}/{path}?token={token}`
     pub async fn upload_to_s3(&self, upload_url: &str, data: &[u8]) -> SyncResult<()> {
         // Delegate to the shared `HttpPutDirect` so the retry / bytes-pool /
-        // cancellation logic is the same one ee/ uses. Wire format is
+        // cancellation logic is the same one enterprise desktop sync uses. Wire format is
         // preserved byte-for-byte — same method (PUT), same Content-Type
         // (`application/octet-stream`), same `x-upsert: true` header, same
         // body — the wire-compat test below is the regression guard.
@@ -1052,6 +1052,13 @@ fn map_transport_error(e: TransportError) -> SyncError {
         TransportError::Io(e) => SyncError::Network(format!("io: {e}")),
         TransportError::Network(msg) => SyncError::Network(msg),
         TransportError::Serde(msg) => SyncError::Server(format!("serde: {msg}")),
+        // Destination pinning guards the enterprise ticketed-upload path;
+        // this crate's callers PUT to URLs they resolved themselves and
+        // never configure a pin, so treat a (theoretical) refusal as a
+        // permanent server-side rejection.
+        TransportError::DestinationNotPinned(host) => {
+            SyncError::Server(format!("upload destination not pinned: {host}"))
+        }
     }
 }
 

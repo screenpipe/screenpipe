@@ -104,6 +104,28 @@ pub struct RetentionConfigureRequest {
     pub mode: Option<RetentionMode>,
 }
 
+fn enforce_product_retention_policy(
+    mut request: RetentionConfigureRequest,
+    enforce_free_plan_retention: bool,
+) -> RetentionConfigureRequest {
+    if enforce_free_plan_retention {
+        request.enabled = Some(true);
+        request.retention_days = Some(7);
+        request.mode = Some(RetentionMode::All);
+    }
+    request
+}
+
+fn retention_policy_changed(
+    current: &RetentionConfig,
+    request: &RetentionConfigureRequest,
+) -> bool {
+    request
+        .retention_days
+        .is_some_and(|days| days != current.retention_days)
+        || request.mode.is_some_and(|mode| mode != current.mode)
+}
+
 #[derive(Debug, Serialize, OaSchema)]
 pub struct RetentionStatusResponse {
     pub enabled: bool,
@@ -124,6 +146,12 @@ pub async fn retention_configure(
     State(state): State<Arc<AppState>>,
     Json(request): Json<RetentionConfigureRequest>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
+    let request = enforce_product_retention_policy(
+        request,
+        state
+            .enforce_free_plan_retention
+            .load(std::sync::atomic::Ordering::SeqCst),
+    );
     let retention_days = request.retention_days.unwrap_or(14);
 
     // Enforce minimum 1 day
@@ -155,6 +183,7 @@ pub async fn retention_configure(
 
     match guard.as_mut() {
         Some(runtime) => {
+            let policy_changed = retention_policy_changed(&runtime.config, &request);
             // Update existing runtime
             if let Some(days) = request.retention_days {
                 runtime.config.retention_days = days;
@@ -168,8 +197,13 @@ pub async fn retention_configure(
                 runtime.task_handle.abort();
                 runtime.config.enabled = false;
                 info!("retention: disabled");
-            } else if wants_enabled && !runtime.config.enabled {
-                // Re-enable: spawn new loop
+            } else if wants_enabled && (!runtime.config.enabled || policy_changed) {
+                // Re-enable or restart on a live policy change. Without the
+                // restart, a free-plan All/7d cleanup already walking batches
+                // could keep deleting after a paid upgrade restored 30d/Media.
+                if runtime.config.enabled {
+                    runtime.task_handle.abort();
+                }
                 runtime.config.enabled = true;
                 let run_now = Arc::new(tokio::sync::Notify::new());
                 runtime.run_now = run_now.clone();
@@ -180,7 +214,7 @@ pub async fn retention_configure(
                     run_now,
                 );
                 info!(
-                    "retention: re-enabled with {}d ({:?})",
+                    "retention: started with {}d ({:?})",
                     runtime.config.retention_days, runtime.config.mode
                 );
             }
@@ -656,6 +690,58 @@ async fn do_local_cleanup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_plan_policy_clamps_direct_retention_api_overrides() {
+        let request = RetentionConfigureRequest {
+            enabled: Some(false),
+            retention_days: Some(365),
+            mode: Some(RetentionMode::Media),
+        };
+
+        let enforced = enforce_product_retention_policy(request, true);
+        assert_eq!(enforced.enabled, Some(true));
+        assert_eq!(enforced.retention_days, Some(7));
+        assert_eq!(enforced.mode, Some(RetentionMode::All));
+    }
+
+    #[test]
+    fn paid_plan_retention_request_is_unchanged() {
+        let request = RetentionConfigureRequest {
+            enabled: Some(false),
+            retention_days: Some(365),
+            mode: Some(RetentionMode::Lean),
+        };
+
+        let unchanged = enforce_product_retention_policy(request, false);
+        assert_eq!(unchanged.enabled, Some(false));
+        assert_eq!(unchanged.retention_days, Some(365));
+        assert_eq!(unchanged.mode, Some(RetentionMode::Lean));
+    }
+
+    #[test]
+    fn enabled_policy_change_restarts_cleanup_before_paid_settings_apply() {
+        let current = RetentionConfig {
+            enabled: true,
+            retention_days: 7,
+            mode: RetentionMode::All,
+        };
+        let paid_restore = RetentionConfigureRequest {
+            enabled: Some(true),
+            retention_days: Some(30),
+            mode: Some(RetentionMode::Media),
+        };
+
+        assert!(retention_policy_changed(&current, &paid_restore));
+        assert!(!retention_policy_changed(
+            &current,
+            &RetentionConfigureRequest {
+                enabled: Some(true),
+                retention_days: Some(7),
+                mode: Some(RetentionMode::All),
+            },
+        ));
+    }
 
     #[test]
     fn retention_cutoff_normal_values() {

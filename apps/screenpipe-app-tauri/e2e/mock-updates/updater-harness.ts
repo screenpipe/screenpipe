@@ -151,7 +151,7 @@ async function discoverBundle(): Promise<string> {
   const root = bundleRoot();
   if (process.platform === 'darwin') return newest(path.join(root, 'macos'),    n => n.endsWith('.app.tar.gz'));
   if (process.platform === 'linux')  return newest(path.join(root, 'appimage'), n => n.endsWith('.AppImage.tar.gz'));
-  if (process.platform === 'win32')  return newest(path.join(root, 'nsis'),     n => n.endsWith('.nsis.zip') || n.endsWith('.exe.zip'));
+  if (process.platform === 'win32')  return newest(path.join(root, 'nsis'),     n => n.endsWith('.nsis.zip') || n.endsWith('.exe.zip') || n.endsWith('-setup.exe'));
   throw new Error(`unsupported platform: ${process.platform}`);
 }
 

@@ -132,7 +132,7 @@ fn store_json_has_presets(data: &[u8]) -> bool {
 /// therefore always either the previous complete file or the new complete one —
 /// never a torn one. Used for store.bin and its recovery snapshots so a single
 /// crash can never destroy both the live file and its backup at once.
-fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".durable.tmp");
@@ -973,8 +973,9 @@ pub struct SettingsStore {
     #[serde(rename = "chatAlwaysOnTop", default = "default_true")]
     pub chat_always_on_top: bool,
 
-    /// Show restart notifications when audio/vision capture stalls.
-    /// Disabled by default for now until the stall detector is more reliable.
+    /// Show recording-health overlay alerts and restart notifications when
+    /// audio/vision capture stalls. Disabled by default for now until the
+    /// detector is more reliable.
     #[serde(rename = "showRestartNotifications", default)]
     pub show_restart_notifications: bool,
 
@@ -1122,6 +1123,7 @@ pub struct User {
     pub app_entitled: Option<bool>,
     pub subscription_plan: Option<String>,
     pub entitlement: Option<serde_json::Value>,
+    pub enterprise_account: Option<serde_json::Value>,
 }
 
 impl Default for User {
@@ -1146,6 +1148,7 @@ impl Default for User {
             app_entitled: None,
             subscription_plan: None,
             entitlement: None,
+            enterprise_account: None,
         }
     }
 }
@@ -1168,6 +1171,13 @@ fn entitlement_checked_recently(entitlement: &serde_json::Value) -> bool {
     checked_at <= now + chrono::Duration::minutes(APP_ENTITLEMENT_CLOCK_SKEW_MINUTES)
         && now.signed_duration_since(checked_at)
             <= chrono::Duration::hours(APP_ENTITLEMENT_MAX_STALE_HOURS)
+}
+
+fn entitlement_was_verified(entitlement: &serde_json::Value) -> bool {
+    parse_entitlement_time(entitlement.get("checked_at")).is_some_and(|checked_at| {
+        checked_at
+            <= chrono::Utc::now() + chrono::Duration::minutes(APP_ENTITLEMENT_CLOCK_SKEW_MINUTES)
+    })
 }
 
 fn entitlement_active(entitlement: &serde_json::Value) -> bool {
@@ -1201,18 +1211,24 @@ fn entitlement_feature(entitlement: &serde_json::Value, feature: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LocalPlanPolicy {
+    VerifiedFree,
+    VerifiedPaid,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioEngineFallbackReason {
     NotLoggedIn,
-    NotSubscribed,
     MissingDeepgramKey,
 }
 
 impl AudioEngineFallbackReason {
     pub fn notification_title(&self) -> &'static str {
         match self {
-            Self::NotLoggedIn | Self::NotSubscribed => "Screenpipe Cloud unavailable",
+            Self::NotLoggedIn => "Screenpipe Cloud unavailable",
             Self::MissingDeepgramKey => "Deepgram unavailable",
         }
     }
@@ -1221,9 +1237,6 @@ impl AudioEngineFallbackReason {
         match self {
             Self::NotLoggedIn => {
                 "You are not logged in, so audio is being transcribed locally with Whisper Turbo (fast). Log in to use Screenpipe Cloud."
-            }
-            Self::NotSubscribed => {
-                "Screenpipe Cloud requires an active subscription, so audio is being transcribed locally with Whisper Turbo (fast)."
             }
             Self::MissingDeepgramKey => {
                 "Deepgram has no API key configured, so audio is being transcribed locally with Whisper Turbo (fast)."
@@ -1598,7 +1611,139 @@ impl SettingsStore {
         {
             config.port = p;
         }
+        match self.local_plan_policy() {
+            LocalPlanPolicy::VerifiedFree => {
+                config.max_non_template_pipes = Some(2);
+                config.enforce_free_plan_retention = true;
+            }
+            LocalPlanPolicy::Unknown => {
+                // Unknown must never inherit paid/unlimited behavior, but it is
+                // not safe evidence for destructive free-plan retention.
+                config.max_non_template_pipes = Some(2);
+            }
+            LocalPlanPolicy::VerifiedPaid => {}
+        }
         config
+    }
+
+    fn has_verified_free_plan(&self) -> bool {
+        if !self.has_account_identity()
+            || self.user.cloud_subscribed == Some(true)
+            || !self
+                .user
+                .subscription_plan
+                .as_deref()
+                .is_some_and(|plan| plan.eq_ignore_ascii_case("none"))
+        {
+            return false;
+        }
+
+        self.user.entitlement.as_ref().is_some_and(|entitlement| {
+            let source_is_paid_override = entitlement
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|source| {
+                    matches!(
+                        source.to_ascii_lowercase().as_str(),
+                        "manual" | "enterprise" | "lifetime" | "dev"
+                    )
+                });
+            !source_is_paid_override
+                && !entitlement_has_future_grace(entitlement)
+                && entitlement
+                .get("plan")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|plan| plan.eq_ignore_ascii_case("none"))
+                // Once a successful account refresh marks this install free,
+                // keep the local policy while offline. A later paid refresh
+                // clears it; merely waiting 72 hours must not unlock limits.
+                && entitlement_was_verified(entitlement)
+        })
+    }
+
+    fn has_verified_paid_plan(&self) -> bool {
+        if !self.has_account_identity() {
+            return false;
+        }
+
+        let Some(account_plan) = self
+            .user
+            .subscription_plan
+            .as_deref()
+            .map(str::trim)
+            .filter(|plan| !plan.is_empty() && !plan.eq_ignore_ascii_case("none"))
+        else {
+            return false;
+        };
+        let account_plan_is_paid = matches!(
+            account_plan.to_ascii_lowercase().as_str(),
+            "standard" | "pro" | "team" | "enterprise" | "lifetime"
+        );
+        if !account_plan_is_paid {
+            return false;
+        }
+        let Some(entitlement) = self.user.entitlement.as_ref() else {
+            return false;
+        };
+        if !entitlement_was_verified(entitlement) {
+            return false;
+        }
+        let Some(entitlement_plan) = entitlement
+            .get("plan")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|plan| !plan.is_empty() && !plan.eq_ignore_ascii_case("none"))
+        else {
+            return false;
+        };
+        let entitlement_plan_is_paid = matches!(
+            entitlement_plan.to_ascii_lowercase().as_str(),
+            "standard" | "pro" | "team" | "enterprise" | "lifetime"
+        );
+        if !entitlement_plan_is_paid {
+            return false;
+        }
+        if !account_plan.eq_ignore_ascii_case(entitlement_plan) {
+            return false;
+        }
+
+        let has_app_feature = self.user.app_entitled != Some(false)
+            && (self.user.app_entitled == Some(true) || entitlement_feature(entitlement, "app"));
+        if !has_app_feature {
+            return false;
+        }
+
+        entitlement_is_lifetime(entitlement)
+            || entitlement_has_future_grace(entitlement)
+            || (entitlement_checked_recently(entitlement) && entitlement_active(entitlement))
+    }
+
+    /// Local paid-only behavior is unlocked only by internally consistent,
+    /// server-verified plan evidence. Missing, conflicting, stale-paid, and
+    /// future-dated evidence remains explicitly unknown.
+    pub(crate) fn local_plan_policy(&self) -> LocalPlanPolicy {
+        if self.has_verified_paid_plan() {
+            LocalPlanPolicy::VerifiedPaid
+        } else if self.has_verified_free_plan() {
+            LocalPlanPolicy::VerifiedFree
+        } else {
+            LocalPlanPolicy::Unknown
+        }
+    }
+
+    pub(crate) fn has_free_plan_policy(&self) -> bool {
+        self.local_plan_policy() == LocalPlanPolicy::VerifiedFree
+    }
+
+    pub(crate) fn restricts_paid_local_features(&self) -> bool {
+        self.local_plan_policy() != LocalPlanPolicy::VerifiedPaid
+    }
+
+    pub(crate) fn has_account_identity(&self) -> bool {
+        [self.user.id.as_deref(), self.user.clerk_id.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|id| !id.trim().is_empty())
     }
 
     pub fn app_entitled_or_dev(&self) -> bool {
@@ -1612,25 +1757,39 @@ impl SettingsStore {
     }
 
     fn has_current_app_entitlement(&self) -> bool {
-        let Some(entitlement) = self.user.entitlement.as_ref() else {
-            return false;
-        };
-
-        let has_app_feature = self.user.app_entitled != Some(false)
-            && (self.user.app_entitled == Some(true) || entitlement_feature(entitlement, "app"));
-        if !has_app_feature {
-            return false;
-        }
-
-        if entitlement_is_lifetime(entitlement) || entitlement_has_future_grace(entitlement) {
-            return true;
-        }
-
-        entitlement_checked_recently(entitlement) && entitlement_active(entitlement)
+        self.has_verified_paid_plan()
     }
 
-    fn cloud_transcription_entitled(&self) -> bool {
-        self.has_current_app_entitlement()
+    /// Consumer binaries must not record behind an org's mandatory-enterprise-
+    /// app screen. A separate consumer subscription remains a valid opt-out,
+    /// matching the frontend account-routing policy.
+    pub(crate) fn requires_enterprise_app_for_consumer(&self) -> bool {
+        let requires_enterprise_app = self
+            .user
+            .enterprise_account
+            .as_ref()
+            .and_then(|account| account.get("requires_enterprise_app"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !requires_enterprise_app {
+            return false;
+        }
+
+        let has_consumer_entitlement = self
+            .user
+            .entitlement
+            .as_ref()
+            .and_then(|entitlement| entitlement.get("source"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|source| {
+                matches!(
+                    source.to_ascii_lowercase().as_str(),
+                    "subscription" | "manual" | "lifetime"
+                )
+            })
+            && self.has_current_app_entitlement();
+
+        !has_consumer_entitlement
     }
 
     pub fn audio_engine_resolution(&self) -> AudioEngineResolution {
@@ -1645,7 +1804,6 @@ impl SettingsStore {
         has_cloud_auth: bool,
     ) -> AudioEngineResolution {
         let engine = self.recording.audio_transcription_engine.clone();
-        let is_subscribed = self.cloud_transcription_entitled();
         let has_deepgram_key = !self.recording.deepgram_api_key.is_empty()
             && self.recording.deepgram_api_key != "default";
         let fallback = "whisper-large-v3-turbo-quantized".to_string();
@@ -1656,15 +1814,13 @@ impl SettingsStore {
         };
 
         match engine.as_str() {
+            // Any signed-in account may use cloud transcription — the free tier
+            // includes a cloud transcription allowance enforced server-side.
+            // Never gate on subscription/entitlement here.
             "screenpipe-cloud" if !has_cloud_auth => {
                 tracing::warn!("screenpipe-cloud selected but user not logged in, falling back to whisper-large-v3-turbo-quantized");
                 resolution.active = fallback;
                 resolution.fallback_reason = Some(AudioEngineFallbackReason::NotLoggedIn);
-            }
-            "screenpipe-cloud" if !is_subscribed => {
-                tracing::warn!("screenpipe-cloud selected but user is not a pro subscriber, falling back to whisper-large-v3-turbo-quantized");
-                resolution.active = fallback;
-                resolution.fallback_reason = Some(AudioEngineFallbackReason::NotSubscribed);
             }
             "deepgram" if !has_deepgram_key => {
                 tracing::warn!("deepgram selected but no API key configured, falling back to whisper-large-v3-turbo-quantized");
@@ -1942,53 +2098,6 @@ impl IcsCalendarSettingsStore {
     }
 }
 
-// ─── Pipe Suggestions Settings ───────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipeSuggestionsSettingsStore {
-    pub enabled: bool,
-    #[serde(default = "default_pipe_suggestion_frequency")]
-    pub frequency_hours: u32,
-    #[serde(default)]
-    pub last_shown_at: Option<String>,
-}
-
-fn default_pipe_suggestion_frequency() -> u32 {
-    24
-}
-
-impl Default for PipeSuggestionsSettingsStore {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            frequency_hours: 24,
-            last_shown_at: None,
-        }
-    }
-}
-
-impl PipeSuggestionsSettingsStore {
-    pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
-        let store = get_store(app, None).map_err(|e| e.to_string())?;
-        if store.is_empty() {
-            return Ok(None);
-        }
-        let settings = serde_json::from_value(store.get("pipe_suggestions").unwrap_or(Value::Null));
-        match settings {
-            Ok(settings) => Ok(settings),
-            Err(_) => Ok(None),
-        }
-    }
-
-    pub fn save(&self, app: &AppHandle) -> Result<(), String> {
-        let store = get_store(app, None).map_err(|e| e.to_string())?;
-        store.set("pipe_suggestions", json!(self));
-        store.save().map_err(|e| e.to_string())?;
-        reencrypt_store_file(app);
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1999,6 +2108,24 @@ mod tests {
     #[test]
     fn auto_update_defaults_to_disabled() {
         assert!(!SettingsStore::default().auto_update);
+    }
+
+    #[test]
+    fn recording_health_alerts_default_to_disabled() {
+        assert!(!SettingsStore::default().show_restart_notifications);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert!(!missing.show_restart_notifications);
+
+        let opted_in: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "showRestartNotifications": true
+        }))
+        .unwrap();
+        assert!(opted_in.show_restart_notifications);
     }
 
     #[test]
@@ -2109,9 +2236,11 @@ mod tests {
     #[test]
     fn fresh_app_entitlement_counts_as_app_entitled() {
         let mut store = SettingsStore::default();
+        store.user.id = Some("user_paid".to_string());
         store.user.token = Some("token".to_string());
         store.user.cloud_subscribed = Some(false);
         store.user.app_entitled = Some(true);
+        store.user.subscription_plan = Some("standard".to_string());
         store.user.entitlement = Some(json!({
             "active": true,
             "plan": "standard",
@@ -2141,6 +2270,139 @@ mod tests {
     }
 
     #[test]
+    fn fresh_explicit_free_plan_applies_pipe_limit() {
+        let mut store = SettingsStore::default();
+        store.user.id = Some("user_free".to_string());
+        store.user.subscription_plan = Some("none".to_string());
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "none",
+            "source": "free",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true, "cloud": false }
+        }));
+
+        assert!(store.has_free_plan_policy());
+        assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
+        let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
+        assert_eq!(config.max_non_template_pipes, Some(2));
+        assert!(config.enforce_free_plan_retention);
+    }
+
+    #[test]
+    fn verified_free_policy_persists_offline_but_paid_plan_stays_unlimited() {
+        let mut stale = SettingsStore::default();
+        stale.user.id = Some("user_stale".to_string());
+        stale.user.subscription_plan = Some("none".to_string());
+        stale.user.entitlement = Some(json!({
+            "plan": "none",
+            "checked_at": (chrono::Utc::now() - chrono::Duration::hours(73)).to_rfc3339()
+        }));
+        assert!(stale.has_free_plan_policy());
+
+        let mut lifetime = SettingsStore::default();
+        lifetime.user.id = Some("user_paid".to_string());
+        lifetime.user.subscription_plan = Some("lifetime".to_string());
+        lifetime.user.app_entitled = Some(true);
+        lifetime.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "lifetime",
+            "source": "lifetime",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true }
+        }));
+        assert!(!lifetime.has_free_plan_policy());
+        assert_eq!(lifetime.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
+        let config = lifetime.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
+        assert_eq!(config.max_non_template_pipes, None);
+        assert!(!config.enforce_free_plan_retention);
+    }
+
+    #[test]
+    fn unknown_plan_is_pipe_limited_without_enabling_destructive_retention() {
+        let mut store = SettingsStore::default();
+        store.user.id = Some("user_unknown".to_string());
+        store.user.subscription_plan = Some("standard".to_string());
+        store.user.app_entitled = Some(true);
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "pro",
+            "source": "subscription",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true }
+        }));
+
+        assert_eq!(store.local_plan_policy(), LocalPlanPolicy::Unknown);
+        assert!(store.restricts_paid_local_features());
+        let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
+        assert_eq!(config.max_non_template_pipes, Some(2));
+        assert!(!config.enforce_free_plan_retention);
+    }
+
+    #[test]
+    fn missing_identity_is_still_pipe_limited_but_cannot_trigger_retention() {
+        let store = SettingsStore::default();
+        assert_eq!(store.local_plan_policy(), LocalPlanPolicy::Unknown);
+        assert!(store.restricts_paid_local_features());
+        let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
+        assert_eq!(config.max_non_template_pipes, Some(2));
+        assert!(!config.enforce_free_plan_retention);
+    }
+
+    #[test]
+    fn arbitrary_matching_plan_names_are_unknown() {
+        let mut store = SettingsStore::default();
+        store.user.id = Some("user_fabricated".to_string());
+        store.user.subscription_plan = Some("banana".to_string());
+        store.user.app_entitled = Some(true);
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "banana",
+            "source": "subscription",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true }
+        }));
+
+        assert_eq!(store.local_plan_policy(), LocalPlanPolicy::Unknown);
+    }
+
+    #[test]
+    fn future_dated_plan_evidence_is_unknown() {
+        let mut store = SettingsStore::default();
+        store.user.id = Some("user_future".to_string());
+        store.user.subscription_plan = Some("standard".to_string());
+        store.user.app_entitled = Some(true);
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "standard",
+            "source": "subscription",
+            "checked_at": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+            "features": { "app": true }
+        }));
+
+        assert_eq!(store.local_plan_policy(), LocalPlanPolicy::Unknown);
+    }
+
+    #[test]
+    fn enterprise_app_requirement_is_available_to_native_recording_guard() {
+        let mut store = SettingsStore::default();
+        store.user.enterprise_account = Some(json!({ "requires_enterprise_app": true }));
+        assert!(store.requires_enterprise_app_for_consumer());
+
+        store.user.app_entitled = Some(true);
+        store.user.id = Some("consumer_paid".to_string());
+        store.user.subscription_plan = Some("standard".to_string());
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "standard",
+            "source": "subscription",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true }
+        }));
+        assert!(!store.requires_enterprise_app_for_consumer());
+    }
+
+    #[test]
     fn screenpipe_cloud_falls_back_when_not_logged_in() {
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
@@ -2148,7 +2410,9 @@ mod tests {
         store.user.token = None;
         store.user.cloud_subscribed = Some(true);
 
-        let resolution = store.audio_engine_resolution();
+        // Keep this assertion independent of the process-global auth-token
+        // cache, which other tests intentionally populate in parallel.
+        let resolution = store.audio_engine_resolution_with_cloud_auth(false);
 
         assert_eq!(resolution.requested, "screenpipe-cloud");
         assert_eq!(resolution.active, FALLBACK_ENGINE);
@@ -2179,25 +2443,26 @@ mod tests {
     }
 
     #[test]
-    fn screenpipe_cloud_falls_back_when_not_subscribed() {
+    fn screenpipe_cloud_stays_active_for_signed_in_free_users() {
+        // Free tier includes cloud transcription; the allowance is enforced
+        // server-side, never by a local subscription gate.
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
         store.user.token = Some("token".to_string());
+        store.user.id = Some("user_free".to_string());
         store.user.cloud_subscribed = Some(false);
 
         let resolution = store.audio_engine_resolution();
 
-        assert_eq!(resolution.active, FALLBACK_ENGINE);
-        assert_eq!(
-            resolution.fallback_reason,
-            Some(AudioEngineFallbackReason::NotSubscribed)
-        );
+        assert_eq!(resolution.active, "screenpipe-cloud");
+        assert_eq!(resolution.fallback_reason, None);
     }
 
     #[test]
     fn screenpipe_cloud_stays_active_for_app_entitled_users() {
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+        store.user.id = Some("user_paid".to_string());
         store.user.token = Some("token".to_string());
         store.user.cloud_subscribed = Some(false);
         store.user.app_entitled = Some(true);
@@ -2217,7 +2482,9 @@ mod tests {
     }
 
     #[test]
-    fn screenpipe_cloud_falls_back_for_stale_legacy_cloud_subscribed_without_entitlement() {
+    fn screenpipe_cloud_stays_active_for_stale_legacy_cloud_subscribed_without_entitlement() {
+        // Even without verified entitlement evidence, a signed-in token is
+        // enough for cloud transcription (free tier allowance, server-enforced).
         let mut store = SettingsStore::default();
         store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
         store.user.token = Some("token".to_string());
@@ -2225,11 +2492,8 @@ mod tests {
 
         let resolution = store.audio_engine_resolution();
 
-        assert_eq!(resolution.active, FALLBACK_ENGINE);
-        assert_eq!(
-            resolution.fallback_reason,
-            Some(AudioEngineFallbackReason::NotSubscribed)
-        );
+        assert_eq!(resolution.active, "screenpipe-cloud");
+        assert_eq!(resolution.fallback_reason, None);
     }
 
     #[test]

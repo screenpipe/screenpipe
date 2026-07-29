@@ -134,11 +134,21 @@ describe.skip("HTML artifact rendering (Brain, sandboxed)", function () {
     await search.setValue(title);
 
     const rowTestId = `brain-item-artifact-${artifactId}`;
-    const row = await waitForTestId(rowTestId, 20_000);
+    await waitForTestId(rowTestId, 20_000);
 
-    // Select it so Brain opens the full artifact in the viewer window.
+    // Clicking the card selects it into Brain's detail pane; popping out a
+    // standalone viewer window is the "new window" item in the card's menu.
     const viewerCount = (await viewerHandles()).length;
-    await row.click();
+    const menu = await waitForTestId(
+      `brain-artifact-menu-${artifactId}`,
+      20_000,
+    );
+    await menu.click();
+    const openViewer = await waitForTestId(
+      `brain-open-viewer-${artifactId}`,
+      20_000,
+    );
+    await openViewer.click();
     await waitForViewerCount(viewerCount + 1, t(12_000));
 
     const opened = (await viewerHandles()).at(-1) as string;

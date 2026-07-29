@@ -1,0 +1,44 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.anthropic.claudefordesktop",
+    "executable": "Claude",
+    "display_name": "Claude",
+    "version": "0.12",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Parser design - Claude" },
+    { "parent": 0, "role": "AXWebArea" },
+    {
+      "parent": 1,
+      "role": "AXGroup",
+      "classes": ["group", "relative", "inline-flex", "bg-bg-300", "rounded-xl"]
+    },
+    { "parent": 2, "role": "AXGroup", "classes": ["flex", "flex-row"] },
+    { "parent": 3, "role": "AXGroup", "classes": ["flex-1"] },
+    {
+      "parent": 4,
+      "role": "AXGroup",
+      "classes": ["font-large", "!font-user-message", "py-0.5"]
+    },
+    { "parent": 5, "role": "AXStaticText", "value": "Summarize the parser coverage." },
+    { "parent": 2, "role": "AXButton", "title": "Edit" },
+    {
+      "parent": 1,
+      "role": "AXGroup",
+      "classes": ["group", "relative", "pb-[var(--msg-assistant-pb,0.75rem)]"]
+    },
+    {
+      "parent": 8,
+      "role": "AXGroup",
+      "classes": ["font-claude-response", "relative"]
+    },
+    {
+      "parent": 9,
+      "role": "AXStaticText",
+      "value": "The replay covers exact and family parsers."
+    },
+    { "parent": 8, "role": "AXButton", "title": "Copy" }
+  ]
+}

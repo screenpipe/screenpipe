@@ -40,6 +40,7 @@ use crate::analytics::start_analytics;
 mod agent_event_emitter;
 mod audio_exclusions;
 mod auth_token;
+mod brain_views;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -51,6 +52,7 @@ mod diagnostic_logs;
 mod disk_usage;
 mod e2e_seed;
 mod embedded_server;
+mod enterprise;
 mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
@@ -66,6 +68,7 @@ mod meeting_export;
 mod meeting_live_notes;
 mod meeting_stall_notifications;
 mod oauth;
+mod overlay_health;
 mod owned_browser;
 mod owned_browser_transport;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
@@ -78,7 +81,6 @@ mod owned_browser_cookies;
 mod permissions;
 mod pi;
 mod pi_command_queue;
-mod pipe_suggestions_scheduler;
 mod power_awake;
 mod process_exit;
 mod recording;
@@ -96,6 +98,8 @@ mod sync;
 mod tray;
 #[cfg(target_os = "macos")]
 mod tray_monitor_preview;
+#[cfg(target_os = "macos")]
+mod staged_update;
 mod updates;
 mod voice_training;
 mod window;
@@ -104,6 +108,8 @@ mod windows_ca_bundle;
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
+#[cfg(target_os = "linux")]
+mod linux_webkit_env;
 
 pub use server::*;
 
@@ -147,6 +153,7 @@ mod skills;
 mod specta_bindings;
 mod vault;
 mod viewer;
+mod web_base;
 
 #[cfg(target_os = "macos")]
 /// Tracks the observed permission transition so repeated focus events cannot
@@ -287,6 +294,9 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    linux_webkit_env::configure();
+
     // Raise the file-descriptor soft limit BEFORE any DB/socket work. The app
     // embeds the engine in-process, so it never ran the engine binary's main()
     // and kept macOS's default soft RLIMIT_NOFILE of 256 — too low for the
@@ -703,7 +713,6 @@ async fn main() {
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
-    let pipe_suggestions_state = pipe_suggestions_scheduler::PipeSuggestionsState::new();
     #[allow(clippy::single_match)]
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -877,7 +886,6 @@ async fn main() {
     let app = app.manage(recording_state)
         .manage(pi_state)
         .manage(suggestions_state)
-        .manage(pipe_suggestions_state)
         .manage(sync_scheduler)
         .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
@@ -1163,6 +1171,33 @@ async fn main() {
             // also propagates the correct dir to child processes (the CLI
             // sidecar inherits this env).
             std::env::set_var("SCREENPIPE_DATA_DIR", &data_dir);
+
+            // The fs-plugin scope in capabilities/main.json only whitelists
+            // static locations ($HOME/.screenpipe, $APPDATA, …). A custom
+            // data dir (e.g. another drive on Windows) matches none of them,
+            // so every webview fs call into it failed with "forbidden path":
+            // chat history was never persisted, pipe-run records and the
+            // feedback log collector broke the same way (#5306). Extend the
+            // fs scope and the asset-protocol scope (media previews) at
+            // runtime to cover the resolved dir. No-op redundant grant when
+            // the dir is the default ~/.screenpipe.
+            {
+                use tauri_plugin_fs::FsExt;
+                if let Err(e) = app.fs_scope().allow_directory(&data_dir, true) {
+                    warn!(
+                        "failed to allow data dir {} in fs scope: {}",
+                        data_dir.display(),
+                        e
+                    );
+                }
+                if let Err(e) = app.asset_protocol_scope().allow_directory(&data_dir, true) {
+                    warn!(
+                        "failed to allow data dir {} in asset protocol scope: {}",
+                        data_dir.display(),
+                        e
+                    );
+                }
+            }
 
             // Enterprise builds can identify org/device health in Sentry and
             // PostHog without sending the raw license key. No-op on consumer
@@ -1510,8 +1545,8 @@ async fn main() {
             'start_server: {
                 let store_clone = store.clone();
                 let data_dir_clone = data_dir.clone();
-                if !store_clone.app_entitled_or_dev() {
-                    info!("Skipping server auto-start: active screenpipe plan required");
+                if !crate::recording::recording_access_allowed(&store_clone) {
+                    info!("Skipping server auto-start: screenpipe account access required");
                     crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
                     let _ = app_handle.emit("app-entitlement-required", ());
                     break 'start_server;
@@ -1566,15 +1601,30 @@ async fn main() {
                     }),
                 );
 
-                std::thread::Builder::new()
+                let is_starting_after_spawn_error = is_starting_clone.clone();
+                let server_thread = std::thread::Builder::new()
                     .name("screenpipe-server".to_string())
                     .spawn(move || {
-                        let server_runtime = tokio::runtime::Builder::new_multi_thread()
+                        let server_runtime = match tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(16)
                             .thread_name("screenpipe-worker")
                             .enable_all()
                             .build()
-                            .expect("Failed to create server runtime");
+                        {
+                            Ok(runtime) => runtime,
+                            Err(error) => {
+                                let message =
+                                    format!("failed to create local API runtime: {error}");
+                                error!("{message}");
+                                crate::health::set_boot_error(&message);
+                                crate::health::set_recording_status(
+                                    crate::health::RecordingStatus::Error,
+                                );
+                                is_starting_clone
+                                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                                return;
+                            }
+                        };
 
                         server_runtime.block_on(async move {
                             // Resolve + seed the shared api_auth_key cache before building
@@ -1760,8 +1810,17 @@ async fn main() {
                                 }
                             }
                         });
-                    })
-                    .expect("Failed to spawn server thread");
+                    });
+                if let Err(error) = server_thread {
+                    let message = format!("failed to spawn local API thread: {error}");
+                    error!("{message}");
+                    crate::health::set_boot_error(&message);
+                    crate::health::set_recording_status(
+                        crate::health::RecordingStatus::Error,
+                    );
+                    is_starting_after_spawn_error
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                }
             }
 
             // Initialize update check
@@ -1936,17 +1995,6 @@ async fn main() {
                 .await;
             });
 
-            // Auto-start pipe suggestions scheduler if enabled
-            let app_handle_clone = app_handle.clone();
-            let pipe_suggestions_state = app_handle.state::<pipe_suggestions_scheduler::PipeSuggestionsState>();
-            let pipe_suggestions_state_clone = pipe_suggestions_scheduler::PipeSuggestionsState {
-                scheduler_handle: pipe_suggestions_state.scheduler_handle.clone(),
-            };
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                pipe_suggestions_scheduler::auto_start_scheduler(app_handle_clone, &pipe_suggestions_state_clone).await;
-            });
-
             // Start calendar events publisher (publishes to event bus for meeting detection)
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
@@ -2088,6 +2136,12 @@ async fn main() {
                     });
 
                     process_exit::run_blocking_pre_exit_teardown(app_handle.app_handle().clone());
+
+                    // Plain-quit path: apply a staged update so the next manual
+                    // launch runs the new version. Restart paths install in
+                    // force_app_relaunch; this call is idempotent with that.
+                    #[cfg(target_os = "macos")]
+                    staged_update::install_staged_if_any(app_handle.app_handle());
 
                     if process_exit::PENDING_RESTART.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("Restart pending — spawning replacement and force-exiting");

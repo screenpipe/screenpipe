@@ -8,7 +8,7 @@ btw, we prefer that you don't contribute if you are not using or will use the pr
 
 before you begin:
 - try to run the [pre-built app](https://docs.screenpi.pe) to get familiar with the project
-- familiarize yourself with the project structure and architecture.
+- familiarize yourself with the repository structure and architecture.
 - new to contributing? the [beginner's onboarding guide](ONBOARDING.md) walks you from zero to a merged pr step by step (this file is the reference; that one is the walkthrough).
 
 ## installation and build guide

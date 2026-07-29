@@ -261,6 +261,9 @@ int notif_show(const char* json) { (void)json; return -2; }
 int notif_hide(void) { return -2; }
 int notif_is_available(void) { return 0; }
 void notif_free_string(char* ptr) { if (ptr) free(ptr); }
+int inbox_toggle(const char* json) { (void)json; return -2; }
+void inbox_update(const char* json) { (void)json; }
+void inbox_hide(void) {}
 "#,
     )
     .expect("failed to write notification panel stub");
@@ -295,8 +298,27 @@ void notif_free_string(char* ptr) { if (ptr) free(ptr); }
     println!("cargo:rustc-link-lib=static=notification_panel");
 }
 
+/// `tauri::generate_context!` resolves `frontendDist` (`../out`) at compile
+/// time, but cargo-only builds (`cargo test`, bindings) never run the Next.js
+/// build. Materialize a placeholder so a fresh clone compiles; a real
+/// `bun run build` replaces the directory wholesale.
+fn ensure_frontend_dist() {
+    let dist = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .parent()
+        .unwrap()
+        .join("out");
+    if dist.join("index.html").exists() {
+        return;
+    }
+    std::fs::create_dir_all(&dist).expect("create frontendDist placeholder");
+    std::fs::write(dist.join("index.html"), b"<!doctype html>\n")
+        .expect("write frontendDist placeholder");
+}
+
 fn main() {
     tauri_helper::generate_command_file(tauri_helper::TauriHelperOptions::default());
+
+    ensure_frontend_dist();
 
     // Stamp the build time so `main.rs` can self-quiesce Sentry reports
     // for ancient builds. This makes the Sentry inbox reflect what's
@@ -525,6 +547,12 @@ void shortcut_set_action_callback(action_callback_t cb) { (void)cb; }
 int shortcut_show(const char* json) { (void)json; return -2; }
 int shortcut_hide(void) { return -2; }
 int shortcut_is_available(void) { return 0; }
+void shortcut_set_meeting_active(int active) { (void)active; }
+void shortcut_set_inbox_unread(int count) { (void)count; }
+int shortcut_set_health_state(const char* state) { (void)state; return -2; }
+int shortcut_get_frame(double* x, double* y, double* w, double* h) {
+    (void)x; (void)y; (void)w; (void)h; return -2;
+}
 "#,
     )
     .expect("failed to write shortcut reminder stub");
@@ -821,34 +849,27 @@ fn copy_permission_flow_bundle() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| panic!("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set"));
 
-    // permission-flow's build.rs predicts the SwiftPM output dir from the
-    // TARGET arch, but swift-rs 1.0.7 always passes `--arch <host>` (codegen
-    // is overridden via `-Xswiftc -target`), so products land in the
-    // HOST-arch-named dir. On cross-compiles (x86_64 app build on arm64 CI)
-    // the predicted path is wrong; probe the host-arch sibling before
-    // concluding the bundle wasn't emitted.
+    // permission-flow predicts `<target arch>-apple-macosx/<PROFILE>/`, but
+    // swift-rs 1.0.7 builds for the HOST arch and picks its configuration from
+    // cargo's DEBUG flag (`[profile.dev] debug = false` here ⇒ `release/`), so
+    // the predicted leaf is wrong for both segments. Search the actual
+    // SwiftPM package root instead of guessing.
     let bundle_src = if bundle_src.exists() {
         bundle_src
     } else {
-        let host_arch = match std::env::consts::ARCH {
-            "aarch64" => "arm64",
-            a => a,
-        };
         bundle_src
-            .parent() // <config>/
-            .and_then(|c| c.parent()) // <arch>-apple-macosx/
-            .and_then(|a| a.parent()) // PermissionFlowShimFFI/
-            .map(|ffi| {
-                ffi.join(format!("{host_arch}-apple-macosx"))
-                    .join(
-                        bundle_src
-                            .parent()
-                            .and_then(|c| c.file_name())
-                            .unwrap_or_default(),
-                    )
-                    .join(bundle_name)
+            .ancestors()
+            .nth(3) // PermissionFlowShimFFI/
+            .and_then(|ffi| {
+                std::fs::read_dir(ffi).ok().and_then(|archs| {
+                    archs
+                        .flatten()
+                        .filter(|a| a.file_name().to_string_lossy().ends_with("-apple-macosx"))
+                        .flat_map(|a| std::fs::read_dir(a.path()).into_iter().flatten().flatten())
+                        .map(|cfg| cfg.path().join(bundle_name))
+                        .find(|p| p.exists())
+                })
             })
-            .filter(|p| p.exists())
             .unwrap_or(bundle_src)
     };
 

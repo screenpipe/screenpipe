@@ -28,7 +28,7 @@
   "tools": [
     {
       "name": "search-content",
-      "description": "Search through recorded screen content, audio transcriptions, and UI elements with speaker filtering"
+      "description": "Search recorded screen content, audio, memories, and parsed app data through one filtering surface"
     },
     {
       "name": "export-video",

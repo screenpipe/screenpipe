@@ -190,7 +190,7 @@ export function lastUserText(messages: { role: string; content: any }[]): string
 
 /**
  * Pick a tier for an interactive `auto` request. DEFAULT (ROUTER_MODE unset/'off')
- * returns 'normal' → glm-5 → identical to today's behavior. ROUTER_MODE ∈
+ * returns 'normal' → GPT-5.6 Luna → identical to today's behavior. ROUTER_MODE ∈
  * 'off' | 'heuristic' | 'embedding'. In 'embedding' mode the heuristic runs first
  * and the embed call fires ONLY on the borderline band (most requests pay 0 added
  * latency); a timeout/error falls back to the heuristic verdict. Fail-safe throughout.

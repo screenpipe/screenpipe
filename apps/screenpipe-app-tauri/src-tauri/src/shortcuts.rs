@@ -18,6 +18,29 @@ use crate::commands::{hide_main_window, show_main_window};
 use crate::store::{get_store, SettingsStore};
 use crate::window::ShowRewindWindow;
 
+/// Record a physical global-shortcut press once, before any app-wide events
+/// are broadcast to webviews. This avoids duplicate analytics from multiple
+/// mounted listeners and covers native-only window paths.
+fn track_shortcut_used(app: &AppHandle, shortcut_name: &'static str) {
+    if let Some(analytics) =
+        app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
+    {
+        let analytics = std::sync::Arc::clone(&analytics);
+        tauri::async_runtime::spawn(async move {
+            let _ = analytics
+                .send_event(
+                    "shortcut_used",
+                    Some(serde_json::json!({
+                        "shortcut_name": shortcut_name,
+                        "source": "global_shortcut",
+                        "telemetry_schema_version": 2,
+                    })),
+                )
+                .await;
+        });
+    }
+}
+
 #[derive(Debug, Default)]
 struct ShortcutConfig {
     show: String,
@@ -152,6 +175,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
 
     // Register show shortcut
     register_shortcut(app, &config.show, config.is_disabled("show"), |app| {
+        track_shortcut_used(app, "show_screenpipe");
         let app_for_closure = app.clone();
         let _ = app.run_on_main_thread(move || {
             let app = &app_for_closure;
@@ -206,6 +230,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         &config.start,
         config.is_disabled("start_recording"),
         |app| {
+            track_shortcut_used(app, "start_recording");
             let _ = app.emit("shortcut-start-recording", ());
             // The frontend listener only shows an in-app toast, which is
             // invisible when the main window is hidden — i.e. exactly when a
@@ -224,6 +249,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         &config.stop,
         config.is_disabled("stop_recording"),
         |app| {
+            track_shortcut_used(app, "stop_recording");
             let _ = app.emit("shortcut-stop-recording", ());
             crate::notifications::client::send(
                 "recording paused",
@@ -238,6 +264,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         &config.start_audio,
         config.is_disabled("start_audio"),
         |app| {
+            track_shortcut_used(app, "start_audio");
             if let Ok(store) = get_store(app, None) {
                 store.set("disableAudio", false);
                 let _ = store.save();
@@ -253,6 +280,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         &config.stop_audio,
         config.is_disabled("stop_audio"),
         |app| {
+            track_shortcut_used(app, "stop_audio");
             if let Ok(store) = get_store(app, None) {
                 store.set("disableAudio", true);
                 let _ = store.save();
@@ -268,6 +296,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         &config.show_chat,
         config.is_disabled("show_chat"),
         |app| {
+            track_shortcut_used(app, "show_chat");
             let app_for_closure = app.clone();
             let _ = app.run_on_main_thread(move || {
                 let app = &app_for_closure;
@@ -299,6 +328,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
     .await?;
 
     register_shortcut(app, &config.search, config.is_disabled("search"), |app| {
+        track_shortcut_used(app, "show_search");
         let app_for_closure = app.clone();
         let _ = app.run_on_main_thread(move || {
             let app = &app_for_closure;

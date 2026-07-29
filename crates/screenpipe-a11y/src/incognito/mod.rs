@@ -4,13 +4,12 @@
 
 //! Incognito / private-browsing window detection.
 //!
-//! This module provides a reliable, cross-platform way to detect whether a
-//! browser window is in incognito (or private) mode. Two detection strategies
-//! are combined:
+//! This module provides a cross-platform way to detect whether a browser window
+//! is in incognito (or private) mode. Two detection strategies are available:
 //!
-//! 1. **Platform-native queries** (macOS only, Chromium browsers): uses
-//!    AppleScript `get mode of window` which is locale-independent and 100 %
-//!    reliable.
+//! 1. **Platform-native queries** (optional, macOS only, Chromium browsers):
+//!    uses AppleScript window properties for locale-independent detection. This
+//!    enhanced mode can require Automation permission.
 //!
 //! 2. **Localized title matching**: a comprehensive set of known incognito /
 //!    private-browsing title strings across 20+ locales, covering Chrome,
@@ -26,8 +25,8 @@
 //! assert!(is_title_private("Neuer Tab — Firefox (Privater Modus)"));
 //! assert!(!is_title_private("GitHub - Google Chrome"));
 //!
-//! // Full detection (title + platform-native query)
-//! let detector = create_detector();
+//! // Basic detection (title + permission-free platform signals)
+//! let detector = create_detector(false);
 //! let is_private = detector.is_incognito("Google Chrome", 12345, "New Tab");
 //! ```
 
@@ -41,6 +40,97 @@ mod windows;
 mod titles;
 
 pub use titles::is_title_private;
+
+/// One macOS browser Screenpipe knows how to address through Automation.
+/// This catalog is shared by detection and the desktop permission UI so a
+/// browser cannot silently be supported by one side but omitted by the other.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy)]
+pub struct MacOSBrowserAutomationTarget {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub bundle_id: &'static str,
+    pub app_path: &'static str,
+    pub process_name: &'static str,
+    pub applescript_name: Option<&'static str>,
+}
+
+#[cfg(target_os = "macos")]
+pub const MACOS_BROWSER_AUTOMATION_TARGETS: &[MacOSBrowserAutomationTarget] = &[
+    MacOSBrowserAutomationTarget {
+        name: "Arc",
+        aliases: &["arc"],
+        bundle_id: "company.thebrowser.Browser",
+        app_path: "/Applications/Arc.app",
+        process_name: "Arc",
+        // Arc private windows use AXIdentifier; its AppleScript bridge is not reliable.
+        applescript_name: None,
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Google Chrome",
+        aliases: &["google chrome", "chrome"],
+        bundle_id: "com.google.Chrome",
+        app_path: "/Applications/Google Chrome.app",
+        process_name: "Google Chrome",
+        applescript_name: Some("Google Chrome"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Brave Browser",
+        aliases: &["brave browser", "brave"],
+        bundle_id: "com.brave.Browser",
+        app_path: "/Applications/Brave Browser.app",
+        process_name: "Brave Browser",
+        applescript_name: Some("Brave Browser"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Microsoft Edge",
+        aliases: &["microsoft edge", "edge"],
+        bundle_id: "com.microsoft.edgemac",
+        app_path: "/Applications/Microsoft Edge.app",
+        process_name: "Microsoft Edge",
+        applescript_name: Some("Microsoft Edge"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Vivaldi",
+        aliases: &["vivaldi"],
+        bundle_id: "com.vivaldi.Vivaldi",
+        app_path: "/Applications/Vivaldi.app",
+        process_name: "Vivaldi",
+        applescript_name: Some("Vivaldi"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Opera",
+        aliases: &["opera"],
+        bundle_id: "com.operasoftware.Opera",
+        app_path: "/Applications/Opera.app",
+        process_name: "Opera",
+        applescript_name: Some("Opera"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Chromium",
+        aliases: &["chromium"],
+        bundle_id: "org.chromium.Chromium",
+        app_path: "/Applications/Chromium.app",
+        process_name: "Chromium",
+        applescript_name: Some("Chromium"),
+    },
+];
+
+#[cfg(target_os = "macos")]
+pub fn macos_automation_target_for_app(
+    app_name: &str,
+) -> Option<&'static MacOSBrowserAutomationTarget> {
+    let lower = app_name.to_lowercase();
+    MACOS_BROWSER_AUTOMATION_TARGETS.iter().find(|target| {
+        target.aliases.iter().any(|alias| {
+            let alias = *alias;
+            lower == alias
+                || lower
+                    .strip_prefix(alias)
+                    .is_some_and(|suffix| suffix.starts_with(' '))
+        })
+    })
+}
 
 /// Trait for platform-specific incognito detection.
 ///
@@ -56,15 +146,24 @@ pub trait IncognitoDetector: Send + Sync {
 }
 
 /// Create the platform-appropriate incognito detector.
-pub fn create_detector() -> Box<dyn IncognitoDetector> {
+///
+/// `enhanced_detection` opts into browser-native APIs where available. Basic
+/// detection never requests extra OS permissions.
+pub fn create_detector(enhanced_detection: bool) -> Box<dyn IncognitoDetector> {
     #[cfg(target_os = "macos")]
-    return Box::new(macos::MacOSIncognitoDetector::new());
+    return Box::new(macos::MacOSIncognitoDetector::new(enhanced_detection));
 
     #[cfg(target_os = "windows")]
-    return Box::new(windows::WindowsIncognitoDetector);
+    {
+        let _ = enhanced_detection;
+        return Box::new(windows::WindowsIncognitoDetector);
+    }
 
     #[cfg(target_os = "linux")]
-    return Box::new(linux::LinuxIncognitoDetector);
+    {
+        let _ = enhanced_detection;
+        return Box::new(linux::LinuxIncognitoDetector);
+    }
 }
 
 #[cfg(test)]
@@ -73,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_create_detector_returns_something() {
-        let _ = create_detector();
+        let _ = create_detector(false);
     }
 
     // These tests use `is_title_private` directly to avoid platform-specific

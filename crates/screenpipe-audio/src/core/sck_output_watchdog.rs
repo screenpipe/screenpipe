@@ -130,71 +130,11 @@ pub fn decide_sck_output_dead(d: &SckOutputDecision) -> bool {
     no_usable || a_healthy_display_went_away
 }
 
-/// Pure filter for the CG predicate, factored out so it is unit-testable
-/// without calling CoreGraphics. Input tuples are `(id, is_builtin, active, asleep)`.
-///
-/// Mirrors `crates/screenpipe-screen/src/monitor.rs` `is_clamshell_inactive_builtin`:
-/// only the BUILT-IN counts as unusable when inactive/asleep (the clamshell
-/// signal). An EXTERNAL display that merely went to sleep on the Energy-Saver
-/// idle timer is still enumerated and stays usable — otherwise a routine
-/// display-off during a silent stretch would read as "a display departed" and
-/// trigger a needless rebuild. A genuinely unplugged external leaves
-/// `CGGetActiveDisplayList` entirely, so it is already absent from the input.
-/// Only referenced by the macOS CG shim and by tests.
-#[cfg(any(target_os = "macos", test))]
-fn filter_usable<I: IntoIterator<Item = (u32, bool, bool, bool)>>(displays: I) -> BTreeSet<u32> {
-    displays
-        .into_iter()
-        .filter(|&(_, is_builtin, active, asleep)| !(is_builtin && (!active || asleep)))
-        .map(|(id, _, _, _)| id)
-        .collect()
-}
-
-/// The set of currently usable display ids, or `None` if the topology could
-/// not be read.
-///
-/// `None` means "unknown" — a `CGGetActiveDisplayList` error — and callers MUST
-/// NOT infer "all displays gone / stream dead" from it (a CG error must not read
-/// as a degraded topology). On macOS this queries CoreGraphics; everywhere else
-/// it returns `None` (the watchdog is only ever *invoked* on macOS, but keeping
-/// the symbol cross-platform avoids `cfg` noise in the struct methods).
-#[cfg(target_os = "macos")]
-pub fn usable_display_ids() -> Option<BTreeSet<u32>> {
-    // Same CG entry points the monitor code uses for clamshell detection
-    // (crates/screenpipe-screen/src/monitor.rs:813).
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGGetActiveDisplayList(max_displays: u32, active: *mut u32, count: *mut u32) -> i32;
-        fn CGDisplayIsBuiltin(display: u32) -> i32;
-        fn CGDisplayIsActive(display: u32) -> i32;
-        fn CGDisplayIsAsleep(display: u32) -> i32;
-    }
-    // 16 displays is far beyond any realistic Mac setup; the count is clamped
-    // to the buffer length so an over-large report can never read past the end.
-    const MAX: usize = 16;
-    unsafe {
-        let mut ids = [0u32; MAX];
-        let mut count: u32 = 0;
-        // kCGErrorSuccess == 0. On error, return None ("unknown"), never empty.
-        if CGGetActiveDisplayList(MAX as u32, ids.as_mut_ptr(), &mut count) != 0 {
-            return None;
-        }
-        let n = (count as usize).min(MAX);
-        Some(filter_usable(ids[..n].iter().map(|&id| {
-            (
-                id,
-                CGDisplayIsBuiltin(id) != 0,
-                CGDisplayIsActive(id) != 0,
-                CGDisplayIsAsleep(id) != 0,
-            )
-        })))
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn usable_display_ids() -> Option<BTreeSet<u32>> {
-    None
-}
+// The CG topology reader now lives in screenpipe-core so the vision monitor
+// watcher can key off the same "which displays are usable right now" answer
+// instead of keeping a second partial reader. Re-exported here so existing
+// call sites and tests keep working unchanged.
+pub use screenpipe_core::display_topology::{filter_usable, usable_display_ids};
 
 /// Per-stream state for the System Audio output watchdog. One instance lives for
 /// the lifetime of a single `run_record_and_transcribe` invocation; a rebuild

@@ -30,6 +30,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Users, ExternalLink } from "lucide-react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
@@ -37,7 +38,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Team", keywords: ["org", "organization", "members", "workspace", "seats"] },
 ];
 
-const TEAM_MARKETING_URL = "https://screenpipe.com/team";
+const TEAM_MARKETING_URL = screenpipeWebUrl("/team", "https://screenpipe.com");
 
 export function TeamSection() {
   return (

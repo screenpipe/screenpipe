@@ -1,0 +1,17 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.apple.Terminal",
+    "executable": null,
+    "display_name": "Terminal",
+    "version": "2.15",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "screenpipe — zsh" },
+    { "parent": 0, "role": "AXStaticText", "value": "$ cargo test" },
+    { "parent": 0, "role": "AXStaticText", "value": "$ cargo test" },
+    { "parent": 0, "role": "AXStaticText", "value": "24 passed" },
+    { "parent": 0, "role": "AXButton", "title": "New Tab" }
+  ]
+}

@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import { createProvider } from './index';
+import { OpenAIProvider } from './openai';
 import type { Env } from '../types';
 
 // Regression test for SCREENPIPE-AI-PROXY-1R: createProvider was called with an
@@ -32,13 +33,10 @@ describe('createProvider — model guard (SCREENPIPE-AI-PROXY-1R)', () => {
     expect(message).not.toContain('toLowerCase');
   });
 
-  it('blocks DeepSeek before any provider can receive the request', () => {
-    try {
-      createProvider('deepseek/deepseek-chat', env);
-      throw new Error('expected provider creation to fail');
-    } catch (error: any) {
-      expect(error.message).toContain('Google API user data');
-      expect(error.status).toBe(400);
-    }
+  it('routes a removed DeepSeek ID to the current fallback provider', () => {
+    const provider = createProvider('deepseek/deepseek-chat', {
+      OPENAI_API_KEY: 'sk-test',
+    } as Env);
+    expect(provider).toBeInstanceOf(OpenAIProvider);
   });
 });

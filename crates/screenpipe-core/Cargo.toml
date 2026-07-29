@@ -50,7 +50,7 @@ screenpipe-secrets = { path = "../screenpipe-secrets", optional = true }
 screenpipe-vault = { path = "../screenpipe-vault", optional = true }
 # Shared sync primitives. `upload_to_s3` delegates to
 # `screenpipe_sync::HttpPutDirect` so the retry / bytes-pool / cancellation
-# code path is the same one ee/ uses. Gated to the cloud-sync feature so
+# code path is the same one enterprise desktop sync uses. Gated to the cloud-sync feature so
 # consumer builds without sync don't pay the dep cost.
 screenpipe-sync = { path = "../screenpipe-sync", optional = true }
 

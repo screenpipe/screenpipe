@@ -1,0 +1,88 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "ai-work-patterns",
+  "title": "AI work patterns",
+  "description": "See which AI tools helped, what you used them for, and where your workflow could improve.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "ai-habits",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "ai-work-patterns",
+    "title": "AI work patterns",
+    "revision": 1,
+    "timeRange": "24h",
+    "periodPolicy": {
+      "type": "selectable.v1",
+      "values": ["today", "24h", "7d", "30d"]
+    },
+    "blocks": [
+      {
+        "id": "ai-time-by-tool",
+        "title": "AI time by tool",
+        "kind": "bar-chart.v1",
+        "width": 6,
+        "order": 0,
+        "intent": "Group active AI-assisted work in the selected period by AI application or tool and return evidence-backed durations in minutes.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "ai-jobs",
+        "title": "What I used AI for",
+        "kind": "table.v1",
+        "width": 6,
+        "order": 1,
+        "intent": "List the distinct jobs the user used AI to accomplish in the selected period, with the tool, outcome, and specific supporting context.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "usage-pattern",
+        "title": "My usage pattern",
+        "kind": "markdown.v1",
+        "width": 6,
+        "order": 2,
+        "intent": "Describe the user's recurring AI usage pattern in the selected period, including when AI was invoked and how it fit into the surrounding workflow.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "effective-work",
+        "title": "Where AI helped",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 3,
+        "intent": "List specific moments in the selected period where AI appears to have accelerated, clarified, or completed useful work. Avoid claiming impact without evidence.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "next-improvement",
+        "title": "One improvement for tomorrow",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 4,
+        "intent": "Recommend one small, concrete improvement to the user's AI workflow based on repeated friction or missed leverage observed in the selected period.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

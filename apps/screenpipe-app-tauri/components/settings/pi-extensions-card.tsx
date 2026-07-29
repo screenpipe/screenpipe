@@ -155,31 +155,66 @@ function PiExtensionRow({
   );
 }
 
-function PiExtensionRecentCard({ item }: { item: PiExtensionCatalogItem }) {
+function PiExtensionRecentCard({
+  item,
+  enabled,
+  stale,
+  busy,
+  disabled,
+  onToggle,
+}: {
+  item: PiExtensionCatalogItem;
+  enabled: boolean;
+  stale: boolean;
+  busy: boolean;
+  disabled: boolean;
+  onToggle: (checked: boolean) => void;
+}) {
   const published = relativeDate(item.publishedAt);
+  const packageName = item.source.replace(/^npm:/, "");
+  const action = stale ? "repair" : enabled ? "remove" : "add";
 
   return (
-    <button
-      type="button"
-      onClick={() => openUrl(item.npmUrl)}
-      className="min-w-0 border border-border bg-card p-3 text-left transition-colors hover:border-foreground/30 hover:bg-muted/30"
-    >
+    <article className="flex min-h-[132px] min-w-0 flex-col border border-border bg-card p-3 transition-colors hover:border-foreground/30">
       <div className="flex items-start justify-between gap-2">
         <span className="min-w-0 truncate font-mono text-xs font-medium text-foreground">
-          {item.source.replace(/^npm:/, "")}
+          {packageName}
         </span>
-        <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <button
+          type="button"
+          onClick={() => openUrl(item.npmUrl)}
+          aria-label={`Open ${item.name} on npm`}
+          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ExternalLink className="h-3 w-3" />
+        </button>
       </div>
       <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
         {item.summary}
       </p>
-      {published && (
-        <span className="mt-2 inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-          <Clock3 className="h-3 w-3" />
-          {published}
-        </span>
-      )}
-    </button>
+      <div className="mt-auto flex items-end justify-between gap-2 pt-2">
+        {published ? (
+          <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+            <Clock3 className="h-3 w-3" />
+            {published}
+          </span>
+        ) : (
+          <span />
+        )}
+        <Button
+          type="button"
+          variant={enabled && !stale ? "ghost" : "outline"}
+          size="sm"
+          disabled={disabled || busy}
+          onClick={() => onToggle(stale || !enabled)}
+          aria-label={`${action.charAt(0).toUpperCase()}${action.slice(1)} ${item.name}`}
+          className="h-6 px-2 text-[10px] uppercase tracking-[0.12em]"
+        >
+          {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+          {action}
+        </Button>
+      </div>
+    </article>
   );
 }
 
@@ -467,9 +502,20 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
                 </span>
               </div>
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-                {recentRegistryItems.map((item) => (
-                  <PiExtensionRecentCard key={`recent-${item.id}`} item={item} />
-                ))}
+                {recentRegistryItems.map((item) => {
+                  const normalized = normalizePiPackageSource(item.source);
+                  return (
+                    <PiExtensionRecentCard
+                      key={`recent-${item.id}`}
+                      item={item}
+                      enabled={configuredSources.has(normalized)}
+                      stale={missingSources.has(normalized)}
+                      busy={busySource === item.source}
+                      disabled={changingPackage && busySource !== item.source}
+                      onToggle={(checked) => togglePackage(item, checked)}
+                    />
+                  );
+                })}
               </div>
             </div>
           )}

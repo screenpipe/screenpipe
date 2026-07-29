@@ -21,7 +21,7 @@
 //!
 //! Why this lives at the choke point and not just at `/notify`: several
 //! notifications skip the HTTP route and call `show_notification_panel`
-//! directly (pipe suggestions, audio device/health toasts, capture-stall).
+//! directly (audio device/health toasts and capture-stall).
 //! Gating only at `/notify` would leak all of those.
 
 use crate::store::SettingsStore;

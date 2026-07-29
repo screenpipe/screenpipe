@@ -2,6 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+.live-view-process-canvas .react-flow__node {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.live-view-process-canvas .react-flow__node:focus,
+.live-view-process-canvas .react-flow__edge:focus {
+  outline: none;
+}
+
+.live-view-process-canvas .react-flow__selection,
+.live-view-process-canvas .react-flow__nodesselection-rect {
+  border: 1px solid hsl(var(--foreground));
+  border-radius: 0;
+  background: hsl(var(--foreground) / 0.04);
+}
+
+.live-view-process-canvas .react-flow__edge-textbg {
+  fill: hsl(var(--background));
+}
+
+.live-view-process-canvas .react-flow__edge-text {
+  fill: hsl(var(--foreground));
+  font-size: 11px;
+}
+
 @layer base {
   :root {
     /* Tell the engine the UI is light by default so native scrollbars and form
@@ -617,6 +645,93 @@
       animation: none;
       left: 50%;
       opacity: 1;
+    }
+  }
+
+  /* Onboarding: captured context travels through screenpipe and assembles
+     into a Live View. Discrete motion keeps the monochrome geometry crisp. */
+  @keyframes sp-onboarding-packet {
+    0% {
+      left: 0;
+      opacity: 0;
+    }
+    12% {
+      opacity: 1;
+    }
+    88% {
+      opacity: 1;
+    }
+    100% {
+      left: calc(100% - 7px);
+      opacity: 0;
+    }
+  }
+
+  @keyframes sp-onboarding-scan {
+    0% {
+      transform: translateY(0);
+      opacity: 0;
+    }
+    20% {
+      opacity: 1;
+    }
+    80% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(25px);
+      opacity: 0;
+    }
+  }
+
+  @keyframes sp-onboarding-core {
+    0%,
+    100% {
+      opacity: 0.18;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  @keyframes sp-onboarding-cursor {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    46%,
+    100% {
+      opacity: 0;
+    }
+  }
+
+  .sp-onboarding-packet {
+    animation: sp-onboarding-packet 1.2s steps(8, end) infinite;
+  }
+
+  .sp-onboarding-scan {
+    animation: sp-onboarding-scan 1.5s steps(6, end) infinite;
+  }
+
+  .sp-onboarding-core-cell {
+    animation: sp-onboarding-core 600ms steps(2, end) infinite;
+  }
+
+  .sp-onboarding-cursor {
+    animation: sp-onboarding-cursor 800ms steps(1, end) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sp-onboarding-packet,
+    .sp-onboarding-scan,
+    .sp-onboarding-core-cell,
+    .sp-onboarding-cursor {
+      animation: none;
+      opacity: 1;
+    }
+
+    .sp-onboarding-packet {
+      left: 50%;
     }
   }
 

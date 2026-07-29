@@ -9,7 +9,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 /**
  * Daily quota snapshot from the ai-proxy worker's /v1/usage endpoint.
  * The worker uses a weighted counter (Opus costs more per message than
- * Haiku) — `remaining` is in the same weighted units. Divide by a model's
+ * Luna) — `remaining` is in the same weighted units. Divide by a model's
  * `query_weight` (exposed on /v1/models) to get "messages left" for that
  * specific model.
  *

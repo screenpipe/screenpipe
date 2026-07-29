@@ -1,0 +1,16 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.microsoft.VSCode",
+    "executable": null,
+    "display_name": "Visual Studio Code",
+    "version": "1.120.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Settings - Visual Studio Code" },
+    { "parent": 0, "role": "AXGroup", "classes": ["monaco-workbench"] },
+    { "parent": 1, "role": "AXTextField", "description": "Search settings", "value": "editor font" },
+    { "parent": 1, "role": "AXStaticText", "value": "Editor: Font Size" }
+  ]
+}

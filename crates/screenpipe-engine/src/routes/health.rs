@@ -128,6 +128,7 @@ const STREAM_TIMEOUT_RECENCY_SECS: u64 = 90;
 #[allow(clippy::too_many_arguments)]
 fn classify_audio_status(
     audio_disabled: bool,
+    audio_paused_for_screen_lock: bool,
     audio_never_captured: bool,
     has_input_device: bool,
     stream_timeout_recent: bool,
@@ -138,6 +139,12 @@ fn classify_audio_status(
 ) -> &'static str {
     if audio_disabled {
         "disabled"
+    } else if audio_paused_for_screen_lock {
+        // The audio manager deliberately owns no streams in this state so
+        // CoreAudio cannot keep macOS awake. Treat it like vision's existing
+        // screen-lock exemption, not as a stalled recorder. Keep the stable
+        // top-level status contract; capture_status carries the specific state.
+        "ok"
     } else if audio_never_captured && !has_input_device {
         // Audio is on but there is no microphone to capture from — expected
         // idle, not a failure. Distinct from "not_started" so /health stays 200
@@ -161,8 +168,10 @@ fn classify_audio_status(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture_status(
     audio_disabled: bool,
+    audio_paused_for_screen_lock: bool,
     audio_status: &str,
     active_audio_devices: usize,
     active_input_devices: usize,
@@ -181,6 +190,12 @@ fn capture_status(
             "disabled",
             "warning",
             "audio capture is disabled for this recorder",
+        )
+    } else if audio_paused_for_screen_lock {
+        (
+            "screen_locked",
+            "waiting",
+            "audio capture is paused while the screen is locked",
         )
     } else if paused_input_devices > 0 && active_input_devices == 0 {
         (
@@ -982,8 +997,15 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let stream_timeout_recent = audio_snap.last_stream_timeout_at > 0
         && now_ts.saturating_sub(audio_snap.last_stream_timeout_at) < STREAM_TIMEOUT_RECENCY_SECS;
 
+    // Only report the intentional pause after the manager has actually
+    // released every stream. During the short teardown transition (or if a
+    // stop unexpectedly fails), health must not claim capture is suspended.
+    let audio_paused_for_screen_lock =
+        screenpipe_config::should_pause_audio_for_lock() && audio_devices.is_empty();
+
     let audio_status = classify_audio_status(
         state.audio_disabled,
+        audio_paused_for_screen_lock,
         audio_never_captured,
         has_input_device,
         stream_timeout_recent,
@@ -1014,6 +1036,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         .count();
     let capture_status = capture_status(
         state.audio_disabled,
+        audio_paused_for_screen_lock,
         &audio_status,
         active_audio_devices,
         active_input_devices,
@@ -1609,6 +1632,7 @@ mod tests {
     fn capture_status_does_not_show_stalled_for_recovered_active_no_data() {
         let state = capture_status(
             false,
+            false,
             "active_no_data",
             1,
             1,
@@ -1630,6 +1654,7 @@ mod tests {
     fn capture_status_still_warns_for_active_no_data_without_fresh_audio() {
         let state = capture_status(
             false,
+            false,
             "active_no_data",
             1,
             1,
@@ -1645,6 +1670,20 @@ mod tests {
 
         assert_eq!(state.status, "audio_stalled");
         assert_eq!(state.severity, "warning");
+    }
+
+    #[test]
+    fn capture_status_reports_intentional_screen_lock_pause() {
+        let state = capture_status(
+            false, true, "ok", 0, 0, 0, 0, false, None, 0.0, 0, 0, 10_000,
+        );
+
+        assert_eq!(state.status, "screen_locked");
+        assert_eq!(state.severity, "waiting");
+        assert_eq!(
+            state.reason,
+            "audio capture is paused while the screen is locked"
+        );
     }
 
     #[tokio::test]
@@ -1834,6 +1873,7 @@ mod tests {
     fn audio_status_for(stream_timeout_recent: bool, global_audio_active: bool) -> &'static str {
         classify_audio_status(
             false, // audio_disabled
+            false, // audio_paused_for_screen_lock
             false, // audio_never_captured
             true,  // has_input_device
             stream_timeout_recent,
@@ -1891,27 +1931,32 @@ mod tests {
     fn audio_status_non_timeout_branches_unchanged() {
         // Guard the unrelated branches against accidental regressions.
         assert_eq!(
-            classify_audio_status(true, false, true, true, true, 1000, 1010, 60),
+            classify_audio_status(true, true, false, true, true, true, 1000, 1010, 60),
             "disabled"
+        );
+        // intentional lock pause wins over stale/not-started signals
+        assert_eq!(
+            classify_audio_status(false, true, true, true, false, false, 0, 1010, 60),
+            "ok"
         );
         // never captured + no mic -> benign no_input_device (stays 200)
         assert_eq!(
-            classify_audio_status(false, true, false, false, false, 0, 1010, 60),
+            classify_audio_status(false, false, true, false, false, false, 0, 1010, 60),
             "no_input_device"
         );
         // never captured but a mic exists -> not_started
         assert_eq!(
-            classify_audio_status(false, true, true, false, false, 0, 1010, 60),
+            classify_audio_status(false, false, true, true, false, false, 0, 1010, 60),
             "not_started"
         );
         // not active, last audio within threshold -> ok
         assert_eq!(
-            classify_audio_status(false, false, true, false, false, 1000, 1030, 60),
+            classify_audio_status(false, false, false, true, false, false, 1000, 1030, 60),
             "ok"
         );
         // not active, last audio stale -> stale
         assert_eq!(
-            classify_audio_status(false, false, true, false, false, 1000, 2000, 60),
+            classify_audio_status(false, false, false, true, false, false, 1000, 2000, 60),
             "stale"
         );
     }

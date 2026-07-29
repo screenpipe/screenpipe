@@ -1,9 +1,8 @@
 # screenpipe - AI that knows everything you've seen, said, or heard
 # https://screenpi.pe
 #
-# CI for the enterprise SDK in ee/sdk. The SDK is source-available under the
-# Screenpipe Enterprise License and intentionally kept outside the root Cargo
-# workspace so the core build stays unchanged.
+# CI for the standalone SDK in packages/sdk. It intentionally stays outside the root
+# Cargo workspace so SDK releases and the core build remain independent.
 
 name: SDK
 
@@ -11,7 +10,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "ee/sdk/**"
+      - "packages/sdk/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/screenpipe-a11y/**"
@@ -28,7 +27,7 @@ on:
       - ".github/workflows/sdk.yml"
   pull_request:
     paths:
-      - "ee/sdk/**"
+      - "packages/sdk/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/screenpipe-a11y/**"
@@ -71,7 +70,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: ee/sdk
+        working-directory: packages/sdk
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -82,7 +81,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: sdk-cargo-test-${{ matrix.settings.target }}
-          workspaces: ee/sdk -> target
+          workspaces: packages/sdk -> target
           cache-bin: false
       - name: Test Rust library
         run: cargo test --locked --workspace --lib --target ${{ matrix.settings.target }}
@@ -107,7 +106,7 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        working-directory: ee/sdk
+        working-directory: packages/sdk
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -124,7 +123,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: sdk-build-${{ matrix.settings.target }}
-          workspaces: ee/sdk -> target
+          workspaces: packages/sdk -> target
           cache-bin: false
       - name: Install deps
         run: bun install --frozen-lockfile
@@ -135,9 +134,9 @@ jobs:
         with:
           name: sdk-bindings-${{ matrix.settings.target }}
           path: |
-            ee/sdk/*.node
-            ee/sdk/index.js
-            ee/sdk/index.d.ts
+            packages/sdk/*.node
+            packages/sdk/index.js
+            packages/sdk/index.d.ts
           if-no-files-found: error
           retention-days: 7
 
@@ -152,7 +151,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: ee/sdk
+        working-directory: packages/sdk
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -180,7 +179,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sdk-bindings-${{ runner.os == 'macOS' && 'aarch64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
-          path: ee/sdk
+          path: packages/sdk
       - name: Show downloaded bindings
         shell: bash
         run: ls *.node
@@ -195,7 +194,7 @@ jobs:
           echo "running: $files"
           node --test --test-concurrency=1 $files
 
-  # Validate the Swift package surface in the monorepo so `ee/sdk` stays the
+  # Validate the Swift package surface in the monorepo so `packages/sdk` stays the
   # single source of truth: it must build + test green here BEFORE the
   # `swift-mirror` job in sdk-release.yml ever rsyncs it to the
   # screenpipe/screenpipe-sdk-swift publish repo. node is needed because the
@@ -206,7 +205,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: ee/sdk
+        working-directory: packages/sdk
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

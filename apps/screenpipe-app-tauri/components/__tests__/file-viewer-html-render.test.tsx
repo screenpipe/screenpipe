@@ -82,14 +82,14 @@ describe("file viewer — html render", () => {
     expect(iframe?.getAttribute("srcdoc") ?? "").toContain("1a1a2e");
   });
 
-  it("shows an UNMARKED bare snippet as source first, but offers a render toggle", () => {
+  it("renders an unmarked bare snippet by default with source one click away", () => {
     const content = htmlContent("<h1>just a heading</h1>");
-    render(<ViewerFileContent path={content.path} content={content} />);
-    // toggle present (rendering is always available)…
+    const { container } = render(
+      <ViewerFileContent path={content.path} content={content} />,
+    );
     const toggle = screen.getByTestId("html-render-toggle");
-    expect(toggle.textContent).toContain("preview rendered");
-    // …but a bare snippet defaults to source — nothing rendered yet
-    expect(document.querySelector("iframe")).toBeNull();
+    expect(toggle.textContent).toContain("view source");
+    expect(container.querySelector("iframe")).not.toBeNull();
   });
 
   it("renders a marked snippet by default", () => {
@@ -105,12 +105,12 @@ describe("file viewer — html render", () => {
     const { container } = render(
       <ViewerFileContent path={content.path} content={content} />,
     );
-    // starts as source
-    expect(container.querySelector("iframe")).toBeNull();
-    fireEvent.click(screen.getByTestId("html-render-toggle")); // → rendered
+    // starts rendered
     expect(container.querySelector("iframe")).not.toBeNull();
     fireEvent.click(screen.getByTestId("html-render-toggle")); // → source
     expect(container.querySelector("iframe")).toBeNull();
+    fireEvent.click(screen.getByTestId("html-render-toggle")); // → rendered
+    expect(container.querySelector("iframe")).not.toBeNull();
   });
 
   it("offers NO render for a truncated (>10MB) document — could be cut mid-tag", () => {
