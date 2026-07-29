@@ -18,6 +18,7 @@ import {
   screenpipeViewerPathFromHref,
 } from "@/components/markdown";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
+import { isBusinessSubscriptionPurchaseDeepLink } from "@/lib/utils/purchase-deep-link";
 import posthog from "posthog-js";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
@@ -109,15 +110,9 @@ export function DeeplinkHandler() {
       // screenpipe" button opens this link. Refresh the authenticated account
       // against Stripe-backed entitlement immediately instead of relying only
       // on AccountSection's background poll.
-      if (
-        parsedUrl.host === "purchase-successful" ||
-        parsedUrl.pathname?.includes("purchase-successful")
-      ) {
+      if (isBusinessSubscriptionPurchaseDeepLink(parsedUrl)) {
         await commands.showWindowActivated({ Home: { page: "account" } });
-        posthog.capture("desktop_upgrade_returned_to_app", {
-          subscription:
-            parsedUrl.searchParams.get("subscription") === "true",
-        });
+        posthog.capture("desktop_upgrade_returned_to_app");
         if (userToken) {
           try {
             await loadUser(userToken, true);
