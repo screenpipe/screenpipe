@@ -25,6 +25,7 @@ import {
   shouldRenderHtmlByDefault,
 } from "@/lib/utils/html-sandbox";
 import { HtmlPreviewFrame } from "./file-viewer-html-frame";
+import { usePlatform } from "@/lib/hooks/use-platform";
 
 export type ViewerContent =
   | {
@@ -250,6 +251,8 @@ export function ViewerFileContent({
     return viewerDisplayText(content);
   }, [content]);
 
+  const { isMac } = usePlatform();
+
   const handleLinkOpen = useCallback(
     async (href: string) => {
       const viewerPath = screenpipeViewerPathFromHref(href);
@@ -268,8 +271,25 @@ export function ViewerFileContent({
   const isMarkdown = detection?.kind === "markdown";
   const isCode = detection?.kind === "code" || detection?.kind === "json";
 
+  // A rendered HTML document gets the window as its viewport and scrolls
+  // inside its own frame. The page must not scroll too, or the document ends
+  // up with two nested scrollbars — and the frame must not auto-size, or a
+  // `100vh` layout ratchets its own height upward without ever settling.
+  const htmlFillsViewer =
+    content?.kind === "text" && canRenderHtml && showRendered;
+
   return (
-    <div className={cn("flex-1 overflow-auto px-6 py-5", className)}>
+    <div
+      className={cn(
+        "flex-1 px-6 py-5",
+        htmlFillsViewer
+          ? "flex min-h-0 flex-col overflow-hidden"
+          : `overflow-auto overscroll-contain ${
+              isMac ? "scrollbar-minimal" : "scrollbar-hide"
+            }`,
+        className,
+      )}
+    >
       {!content && <LoadingSkeleton />}
 
       {content?.kind === "error" && (
@@ -362,8 +382,13 @@ export function ViewerFileContent({
       )}
 
       {content?.kind === "text" && canRenderHtml && (
-        <div className="space-y-3">
-          <div className="font-mono text-[10px] tracking-wide uppercase text-foreground/50 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
+        <div
+          className={cn(
+            "space-y-3",
+            htmlFillsViewer && "flex min-h-0 flex-1 flex-col",
+          )}
+        >
+          <div className="shrink-0 font-mono text-[10px] tracking-wide uppercase text-foreground/50 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
             <span>
               html document · sandboxed{showRendered ? " · rendered" : " · source"}
             </span>
@@ -376,7 +401,11 @@ export function ViewerFileContent({
             </button>
           </div>
           {showRendered ? (
-            <HtmlPreviewFrame html={content.text} onOpenExternal={handleLinkOpen} />
+            <HtmlPreviewFrame
+              html={content.text}
+              onOpenExternal={handleLinkOpen}
+              fillHeight
+            />
           ) : (
             <SyntaxHighlighter
               language="html"

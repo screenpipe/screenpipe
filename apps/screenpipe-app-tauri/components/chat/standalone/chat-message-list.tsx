@@ -501,7 +501,9 @@ export function ChatMessageList({
                                 <button
                                   onClick={() => {
                                     onCloseMessageMenu();
-                                    branchConversation(message.id);
+                                    Promise.resolve(branchConversation(message.id)).catch((e) =>
+                                      console.error("[chat] branch failed:", e),
+                                    );
                                   }}
                                   className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
                                 >

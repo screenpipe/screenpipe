@@ -6,6 +6,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { HtmlPreviewFrame } from "@/components/file-viewer-html-frame";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { shouldRenderHtmlByDefault } from "@/lib/utils/html-sandbox";
 
 interface ArtifactHtmlBodyProps {
@@ -14,8 +15,20 @@ interface ArtifactHtmlBodyProps {
   /** Full file content once loaded; null while collapsed or loading. */
   content: string | null;
   expanded: boolean;
-  onToggleExpanded: () => void;
+  /**
+   * Collapses the row back to its title. Omit in surfaces that are always
+   * expanded (the Brain detail pane) — there is nothing to collapse into, so
+   * rendering the toggle there would just look like a stray close button.
+   */
+  onToggleExpanded?: () => void;
   hideTitle?: boolean;
+  /**
+   * Size the sandbox frame to its container instead of to the artifact's own
+   * document height. Required wherever the frame sits in a scrollable pane:
+   * auto-sizing a document that uses viewport units feeds back on itself
+   * (taller frame → taller 100vh → taller report → …) and ratchets forever.
+   */
+  fillHeight?: boolean;
 }
 
 /**
@@ -37,10 +50,12 @@ export function ArtifactHtmlBody({
   expanded,
   onToggleExpanded,
   hideTitle = false,
+  fillHeight = false,
 }: ArtifactHtmlBodyProps) {
   // Source vs rendered. Every non-empty HTML artifact opens rendered on each
   // expansion, then stays under the user's control.
   const [showSource, setShowSource] = useState(false);
+  const { isMac } = usePlatform();
   const initedRef = useRef(false);
   useEffect(() => {
     if (!expanded || content == null) {
@@ -59,8 +74,8 @@ export function ArtifactHtmlBody({
     body = <p className="text-xs text-muted-foreground">loading artifact…</p>;
   } else {
     body = (
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+      <div className={`space-y-2 ${fillHeight ? "flex h-full flex-col" : ""}`}>
+        <div className="flex shrink-0 items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
           <span>html · sandboxed{showSource ? " · source" : " · rendered"}</span>
           <button
             data-testid="brain-html-render-toggle"
@@ -74,37 +89,45 @@ export function ArtifactHtmlBody({
           </button>
         </div>
         {showSource ? (
-          <pre className="text-xs bg-muted/30 rounded p-2 whitespace-pre-wrap break-words font-mono max-h-96 overflow-y-auto">
+          <pre
+            className={`text-xs bg-muted/30 rounded p-2 whitespace-pre-wrap break-words font-mono overflow-y-auto overscroll-contain ${
+              isMac ? "scrollbar-minimal" : "scrollbar-hide"
+            } ${fillHeight ? "min-h-0 flex-1" : "max-h-96"}`}
+          >
             {content}
           </pre>
         ) : (
-          <HtmlPreviewFrame html={content} />
+          <HtmlPreviewFrame html={content} fillHeight={fillHeight} />
         )}
       </div>
     );
   }
 
   return (
-    <div className="text-sm text-foreground">
+    <div
+      className={`text-sm text-foreground ${fillHeight ? "flex h-full flex-col" : ""}`}
+    >
       {body}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleExpanded();
-        }}
-        className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
-        data-testid="artifact-html-toggle"
-      >
-        {expanded ? (
-          <>
-            <ChevronUp className="h-2.5 w-2.5" /> show less
-          </>
-        ) : (
-          <>
-            <ChevronDown className="h-2.5 w-2.5" /> show more
-          </>
-        )}
-      </button>
+      {onToggleExpanded && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExpanded();
+          }}
+          className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
+          data-testid="artifact-html-toggle"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="h-2.5 w-2.5" /> show less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="h-2.5 w-2.5" /> show more
+            </>
+          )}
+        </button>
+      )}
     </div>
   );
 }

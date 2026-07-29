@@ -92,10 +92,9 @@ export function shouldShowFirstRunGuide({
   captureUnhealthy?: boolean;
   /**
    * True when the pending handoff arrived via the `first-run-guide-pending`
-   * event in this session (help → replay intro, or onboarding completing on
-   * an already-open Home). The `onboarding` e2e seed suppression only
-   * guards against the boot-time auto-popup breaking unrelated seeded
-   * specs — a deliberate in-session request bypasses it.
+   * event in this session. The `onboarding` e2e seed suppression only guards
+   * against the boot-time auto-popup breaking unrelated seeded specs — a
+   * deliberate in-session request bypasses it.
    */
   explicitlyRequested?: boolean;
 }): boolean {

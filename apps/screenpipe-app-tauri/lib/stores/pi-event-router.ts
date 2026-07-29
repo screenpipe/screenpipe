@@ -844,6 +844,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         ...(session.kind ? { kind: session.kind } : existing?.kind ? { kind: existing.kind } : {}),
         ...(session.pipeContext ? { pipeContext: session.pipeContext } : existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
         ...(existing?.sidebarGroup ? { sidebarGroup: existing.sidebarGroup } : {}),
+        ...(session.branchedFrom ? { branchedFrom: session.branchedFrom } : existing?.branchedFrom ? { branchedFrom: existing.branchedFrom } : {}),
         ...(browserState ? { browserState } : {}),
       };
 

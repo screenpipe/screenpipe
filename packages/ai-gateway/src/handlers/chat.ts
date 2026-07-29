@@ -57,6 +57,7 @@ function isGeminiModel(model: string): boolean {
 // Per-model fallback chains — when a current user-selected model fails with a
 // transient/upstream error, try a comparable model from another provider.
 export const MODEL_FALLBACKS: Record<string, string[]> = {
+  'claude-opus-5': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'gpt-5.6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-sonnet-5': ['gpt-5.4-mini'],
   'gpt-5.4-mini': ['claude-sonnet-5'],

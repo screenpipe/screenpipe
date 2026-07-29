@@ -1032,6 +1032,7 @@ const AISection = ({
             } else {
               // Fallback to hardcoded models
               setModels([
+                { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
                 { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
                 { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
                 { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
@@ -1039,6 +1040,7 @@ const AISection = ({
             }
           } catch {
             setModels([
+              { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
               { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
               { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
               { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
@@ -1135,8 +1137,9 @@ const AISection = ({
             { id: "gpt-5.6-terra", name: "GPT-5.6 Terra (balanced)", provider: "screenpipe" },
             { id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "screenpipe" },
             { id: "claude-sonnet-5", name: "Sonnet 5 (high intelligence)", provider: "screenpipe" },
+            { id: "claude-opus-5", name: "Opus 5 (frontier, Business)", provider: "screenpipe" },
             { id: "claude-opus-4-8", name: "Opus 4.8 (powerful, Business)", provider: "screenpipe" },
-            { id: "claude-fable-5", name: "Fable 5 (most capable, Business)", provider: "screenpipe" },
+            { id: "claude-fable-5", name: "Fable 5 (premium, Business)", provider: "screenpipe" },
           ]);
           break;
         }

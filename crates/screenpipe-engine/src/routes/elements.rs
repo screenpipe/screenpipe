@@ -12,6 +12,7 @@ use oasgen::{oasgen, OaSchema};
 
 use chrono::{DateTime, Utc};
 use screenpipe_db::{Element, ElementSource};
+use sha2::{Digest, Sha256};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -57,8 +58,9 @@ pub(crate) struct ElementsQuery {
     limit: u32,
     #[serde(default)]
     offset: u32,
-    /// Output format: `json` (default), `csv`, `tsv`/`table`, or
-    /// `outline`/`tree`. CSV/TSV write each column name once instead of
+    /// Output format: `json` (default), `csv`, `tsv`/`table`, `outline`/`tree`,
+    /// `automation`/`computer-use`, or `preferred` (the configured AI context
+    /// mode). CSV/TSV write each column name once instead of
     /// repeating keys per row. `outline` goes further for an LLM "what's on
     /// screen?" read: a deduped, indented tree of just the text-bearing nodes
     /// (drops empty structural nodes, bounds, and ids-other-than-`#id`).
@@ -226,6 +228,34 @@ pub(crate) fn wants_outline(format: &Option<String>) -> bool {
     )
 }
 
+/// True when the caller wants an action-oriented accessibility snapshot.
+/// Unlike `outline`, this retains unnamed interactive controls, bounds, state,
+/// allowed actions, snapshot-local refs, and best-effort stable keys.
+pub(crate) fn wants_automation(format: &Option<String>) -> bool {
+    matches!(
+        format
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("automation") | Some("computer-use") | Some("computer_use")
+    )
+}
+
+fn wants_preferred(format: &Option<String>) -> bool {
+    format
+        .as_deref()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("preferred"))
+}
+
+fn prefers_automation(state: &AppState) -> bool {
+    state
+        .vision_manager
+        .load_full()
+        .as_ref()
+        .as_ref()
+        .is_some_and(|manager| manager.prefers_computer_use_context())
+}
+
 /// Collapse internal whitespace and clip to `n` chars (char-safe, not byte).
 fn outline_clip(s: &str, n: usize) -> String {
     let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -365,6 +395,380 @@ fn elements_outline_response(elements: &[ElementResponse], total: i64) -> Respon
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+// ---------------------------------------------------------------------------
+// `format=automation` — targeting context for downstream automation agents
+//
+// The database id is historical evidence, not a safe live UI handle. This view
+// therefore emits a short response-local `ref=eN` and a separate best-effort
+// `key=k_*`. Agents must refresh before every action and validate role/name/
+// bounds. The key helps match controls across nearby captures, but ambiguity is
+// explicit and never silently turns a stale ref into an action target.
+// ---------------------------------------------------------------------------
+
+const AUTOMATION_MAX_LINES: usize = 250;
+const AUTOMATION_TEXT_CLIP: usize = 100;
+
+fn property_value(
+    properties: &std::collections::HashMap<i64, Value>,
+    id: i64,
+    key: &str,
+) -> Option<String> {
+    properties
+        .get(&id)
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn property_bool(
+    properties: &std::collections::HashMap<i64, Value>,
+    id: i64,
+    key: &str,
+) -> Option<bool> {
+    properties
+        .get(&id)
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+}
+
+fn normalized_key_part(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn automation_name(
+    element: &Element,
+    properties: &std::collections::HashMap<i64, Value>,
+) -> Option<String> {
+    let password = property_bool(properties, element.id, "is_password") == Some(true);
+    if password {
+        return property_value(properties, element.id, "placeholder")
+            .or_else(|| Some("password field".to_string()));
+    }
+
+    element
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| property_value(properties, element.id, "placeholder"))
+        .or_else(|| property_value(properties, element.id, "value"))
+        .or_else(|| property_value(properties, element.id, "help_text"))
+        .or_else(|| property_value(properties, element.id, "role_description"))
+}
+
+fn automation_actions(
+    element: &Element,
+    properties: &std::collections::HashMap<i64, Value>,
+) -> Vec<&'static str> {
+    if property_bool(properties, element.id, "is_enabled") == Some(false) {
+        return Vec::new();
+    }
+
+    let role = element.role.to_ascii_lowercase();
+    let mut actions = Vec::new();
+    if [
+        "button",
+        "link",
+        "checkbox",
+        "check_box",
+        "radio",
+        "switch",
+        "tab",
+        "menuitem",
+        "menu_item",
+        "disclosure",
+        "cell",
+        "row",
+        "listitem",
+        "list_item",
+        "treeitem",
+        "tree_item",
+    ]
+    .iter()
+    .any(|candidate| role.contains(candidate))
+    {
+        actions.push("click");
+    }
+    if [
+        "textfield",
+        "text_field",
+        "textbox",
+        "text_box",
+        "textarea",
+        "edit",
+        "entry",
+        "input",
+        "passwordtext",
+        "password_text",
+    ]
+    .iter()
+    .any(|candidate| role.contains(candidate))
+    {
+        if !actions.contains(&"click") {
+            actions.push("click");
+        }
+        actions.push("type");
+        actions.push("set_value");
+    }
+    if [
+        "combobox",
+        "combo_box",
+        "listbox",
+        "list_box",
+        "popupbutton",
+        "popup_button",
+    ]
+    .iter()
+    .any(|candidate| role.contains(candidate))
+    {
+        if !actions.contains(&"click") {
+            actions.push("click");
+        }
+        actions.push("select");
+    }
+    if ["slider", "spinbutton", "spin_button", "spinner"]
+        .iter()
+        .any(|candidate| role.contains(candidate))
+    {
+        if !actions.contains(&"click") {
+            actions.push("click");
+        }
+        actions.push("set_value");
+        actions.push("press_key");
+    }
+    if [
+        "scrollarea",
+        "scroll_area",
+        "scrollbar",
+        "scroll_bar",
+        "webarea",
+        "web_area",
+    ]
+    .iter()
+    .any(|candidate| role.contains(candidate))
+    {
+        actions.push("scroll");
+    }
+    if actions.is_empty()
+        && property_bool(properties, element.id, "is_keyboard_focusable") == Some(true)
+    {
+        actions.extend(["click", "press_key"]);
+    }
+    actions
+}
+
+fn key_material(
+    element: &Element,
+    by_id: &std::collections::HashMap<i64, &Element>,
+    properties: &std::collections::HashMap<i64, Value>,
+) -> (String, bool) {
+    let own_identifier = property_value(properties, element.id, "automation_id");
+    let mut ancestor_identifiers = Vec::new();
+    let mut current = element.parent_id;
+    for _ in 0..8 {
+        let Some(parent) = current.and_then(|id| by_id.get(&id).copied()) else {
+            break;
+        };
+        if let Some(identifier) = property_value(properties, parent.id, "automation_id") {
+            ancestor_identifiers.push(format!(
+                "{}:{}",
+                normalized_key_part(&parent.role),
+                normalized_key_part(&identifier)
+            ));
+        }
+        current = parent.parent_id;
+    }
+    ancestor_identifiers.reverse();
+
+    if let Some(identifier) = own_identifier {
+        ancestor_identifiers.push(format!(
+            "{}:{}",
+            normalized_key_part(&element.role),
+            normalized_key_part(&identifier)
+        ));
+        return (ancestor_identifiers.join("/"), true);
+    }
+
+    let name = automation_name(element, properties).unwrap_or_default();
+    ancestor_identifiers.push(format!(
+        "{}:{}",
+        normalized_key_part(&element.role),
+        normalized_key_part(&name)
+    ));
+    (ancestor_identifiers.join("/"), false)
+}
+
+fn short_sha256(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    digest[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn automation_context_text(elements: &[Element], total: i64) -> String {
+    let by_id: std::collections::HashMap<i64, &Element> = elements
+        .iter()
+        .map(|element| (element.id, element))
+        .collect();
+    let properties: std::collections::HashMap<i64, Value> = elements
+        .iter()
+        .filter_map(|element| {
+            serde_json::from_str::<Value>(element.properties.as_deref()?)
+                .ok()
+                .map(|value| (element.id, value))
+        })
+        .collect();
+
+    struct Candidate<'a> {
+        element: &'a Element,
+        name: Option<String>,
+        actions: Vec<&'static str>,
+        material: String,
+        strong: bool,
+    }
+
+    let mut candidates = Vec::new();
+    for element in elements {
+        if element.source != ElementSource::Accessibility || element.on_screen == Some(false) {
+            continue;
+        }
+        let name = automation_name(element, &properties);
+        let actions = automation_actions(element, &properties);
+        let has_identifier = property_value(&properties, element.id, "automation_id").is_some();
+        if name.is_none() && actions.is_empty() && !has_identifier {
+            continue;
+        }
+        let (material, strong) = key_material(element, &by_id, &properties);
+        candidates.push(Candidate {
+            element,
+            name,
+            actions,
+            material,
+            strong,
+        });
+    }
+
+    if candidates.is_empty() {
+        return "no automation accessibility targets (try format=outline for readable text)"
+            .to_string();
+    }
+
+    let mut material_counts = std::collections::HashMap::<&str, usize>::new();
+    for candidate in &candidates {
+        *material_counts
+            .entry(candidate.material.as_str())
+            .or_default() += 1;
+    }
+
+    let mut revision_hasher = Sha256::new();
+    for element in elements {
+        revision_hasher.update(element.frame_id.to_le_bytes());
+        revision_hasher.update(element.id.to_le_bytes());
+        revision_hasher.update(element.role.as_bytes());
+        revision_hasher.update(element.text.as_deref().unwrap_or("").as_bytes());
+        revision_hasher.update(element.properties.as_deref().unwrap_or("").as_bytes());
+    }
+    let revision = revision_hasher.finalize();
+    let revision = revision[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    let frame_ids = candidates
+        .iter()
+        .map(|candidate| candidate.element.frame_id.to_string())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut out = format!(
+        "automation snapshot · frame {frame_ids} · revision=r_{revision}\nrefs are response-local; refresh before every action and verify key + role + name + bounds\n"
+    );
+
+    let shown = candidates.len().min(AUTOMATION_MAX_LINES);
+    for (index, candidate) in candidates.iter().take(shown).enumerate() {
+        let duplicate = material_counts
+            .get(candidate.material.as_str())
+            .copied()
+            .unwrap_or(0)
+            > 1;
+        let quality = if duplicate {
+            "ambiguous"
+        } else if candidate.strong {
+            "strong"
+        } else {
+            "derived"
+        };
+        let key = short_sha256(&candidate.material);
+        let indent = "  ".repeat((candidate.element.depth.max(0) as usize).min(6));
+        let mut line = format!(
+            "{indent}[ref=e{} key=k_{key} key_quality={quality}] {}",
+            index + 1,
+            candidate.element.role
+        );
+        if let Some(name) = &candidate.name {
+            let safe = outline_clip(name, AUTOMATION_TEXT_CLIP).replace('"', "\\\"");
+            line.push_str(&format!(" \"{safe}\""));
+        }
+        if !candidate.actions.is_empty() {
+            line.push_str(&format!(" actions={}", candidate.actions.join(",")));
+        }
+        let mut states = Vec::new();
+        if property_bool(&properties, candidate.element.id, "is_enabled") == Some(false) {
+            states.push("disabled");
+        }
+        if property_bool(&properties, candidate.element.id, "is_focused") == Some(true) {
+            states.push("focused");
+        }
+        if property_bool(&properties, candidate.element.id, "is_selected") == Some(true) {
+            states.push("selected");
+        }
+        match property_bool(&properties, candidate.element.id, "is_expanded") {
+            Some(true) => states.push("expanded"),
+            Some(false) => states.push("collapsed"),
+            None => {}
+        }
+        if !states.is_empty() {
+            line.push_str(&format!(" state={}", states.join(",")));
+        }
+        if let Some(bounds) = &candidate.element.bounds {
+            line.push_str(&format!(
+                " bounds={:.3},{:.3},{:.3},{:.3}",
+                bounds.left, bounds.top, bounds.width, bounds.height
+            ));
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    if candidates.len() > shown || total as usize > elements.len() {
+        out.push_str(&format!(
+            "… showing {shown} automation targets; narrow to one frame or app before acting\n"
+        ));
+    }
+    out
+}
+
+fn automation_context_response(elements: &[Element], total: i64) -> Response {
+    let body = automation_context_text(elements, total);
+    Response::builder()
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )
+        .header("x-total-count", total.to_string())
+        .header("cache-control", "no-store")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 /// Search elements across all frames with optional FTS, time, and app filters.
 #[oasgen]
 pub(crate) async fn search_elements(
@@ -373,8 +777,10 @@ pub(crate) async fn search_elements(
 ) -> Result<Response<Body>, (StatusCode, JsonResponse<Value>)> {
     // `outline`/`tree` is element-specific and handled below; everything else
     // goes through the generic json|csv|tsv negotiation.
-    let outline = wants_outline(&query.format);
-    let format = if outline {
+    let preferred = wants_preferred(&query.format);
+    let automation = wants_automation(&query.format) || (preferred && prefers_automation(&state));
+    let outline = wants_outline(&query.format) || (preferred && !automation);
+    let format = if outline || automation {
         OutputFormat::Json
     } else {
         parse_format(&query.format)?
@@ -409,6 +815,9 @@ pub(crate) async fn search_elements(
             )
         })?;
 
+    if automation {
+        return Ok(automation_context_response(&elements, total));
+    }
     let list = ElementsListResponse {
         data: elements.into_iter().map(ElementResponse::from).collect(),
         pagination: PaginationResponse {
@@ -439,8 +848,10 @@ pub(crate) async fn get_frame_elements(
     Path(frame_id): Path<i64>,
     Query(query): Query<FrameElementsQuery>,
 ) -> Result<Response<Body>, (StatusCode, JsonResponse<Value>)> {
-    let outline = wants_outline(&query.format);
-    let format = if outline {
+    let preferred = wants_preferred(&query.format);
+    let automation = wants_automation(&query.format) || (preferred && prefers_automation(&state));
+    let outline = wants_outline(&query.format) || (preferred && !automation);
+    let format = if outline || automation {
         OutputFormat::Json
     } else {
         parse_format(&query.format)?
@@ -464,6 +875,9 @@ pub(crate) async fn get_frame_elements(
         })?;
 
     let total = elements.len() as i64;
+    if automation {
+        return Ok(automation_context_response(&elements, total));
+    }
     let list = ElementsListResponse {
         data: elements.into_iter().map(ElementResponse::from).collect(),
         pagination: PaginationResponse {
@@ -518,6 +932,46 @@ mod tests {
             on_screen,
             state: None,
         }
+    }
+
+    fn automation_el(
+        id: i64,
+        parent_id: Option<i64>,
+        role: &str,
+        text: Option<&str>,
+        properties: Option<&str>,
+    ) -> Element {
+        Element {
+            id,
+            frame_id: 77,
+            source: ElementSource::Accessibility,
+            role: role.to_string(),
+            text: text.map(ToOwned::to_owned),
+            parent_id,
+            depth: i32::from(parent_id.is_some()),
+            bounds: Some(screenpipe_db::ElementBounds {
+                left: 0.1,
+                top: 0.2,
+                width: 0.3,
+                height: 0.4,
+            }),
+            confidence: None,
+            sort_order: id as i32,
+            on_screen: Some(true),
+            properties: properties.map(ToOwned::to_owned),
+        }
+    }
+
+    fn key_for(output: &str, name: &str) -> String {
+        let line = output
+            .lines()
+            .find(|line| line.contains(name))
+            .expect("named automation line");
+        line.split("key=")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("stable key")
+            .to_string()
     }
 
     #[test]
@@ -582,6 +1036,193 @@ mod tests {
         assert!(!wants_outline(&Some("json".into())));
         assert!(!wants_outline(&Some("csv".into())));
         assert!(!wants_outline(&None));
+    }
+
+    #[test]
+    fn wants_automation_accepts_explicit_computer_use_aliases() {
+        assert!(wants_automation(&Some("automation".into())));
+        assert!(wants_automation(&Some(" COMPUTER-USE ".into())));
+        assert!(wants_automation(&Some("computer_use".into())));
+        assert!(!wants_automation(&Some("outline".into())));
+        assert!(!wants_automation(&None));
+        assert!(wants_preferred(&Some(" Preferred ".into())));
+        assert!(!wants_preferred(&Some("automation".into())));
+    }
+
+    #[test]
+    fn automation_view_uses_response_local_refs_and_action_metadata() {
+        let elements = vec![automation_el(
+            98_765,
+            None,
+            "AXButton",
+            Some("Save"),
+            Some(r#"{"automation_id":"save-button","is_enabled":true,"is_focused":true}"#),
+        )];
+        let output = automation_context_text(&elements, 1);
+        assert!(output.starts_with("automation snapshot"), "got:\n{output}");
+        assert!(!output.contains("computer-use"), "got:\n{output}");
+        assert!(output.contains("revision=r_"), "got:\n{output}");
+        assert!(output.contains("ref=e1"), "got:\n{output}");
+        assert!(output.contains("key_quality=strong"), "got:\n{output}");
+        assert!(output.contains("actions=click"), "got:\n{output}");
+        assert!(output.contains("state=focused"), "got:\n{output}");
+        assert!(output.contains("bounds=0.100,0.200,0.300,0.400"));
+        assert!(!output.contains("98765"), "database ids are not live refs");
+    }
+
+    #[test]
+    fn strong_stable_key_survives_sibling_insertion_and_database_id_changes() {
+        let before = vec![
+            automation_el(
+                10,
+                None,
+                "AXGroup",
+                None,
+                Some(r#"{"automation_id":"toolbar"}"#),
+            ),
+            automation_el(
+                11,
+                Some(10),
+                "AXButton",
+                Some("Save"),
+                Some(r#"{"automation_id":"save"}"#),
+            ),
+        ];
+        let after = vec![
+            automation_el(
+                100,
+                None,
+                "AXGroup",
+                None,
+                Some(r#"{"automation_id":"toolbar"}"#),
+            ),
+            automation_el(101, Some(100), "AXButton", Some("New sibling"), None),
+            automation_el(
+                102,
+                Some(100),
+                "AXButton",
+                Some("Save"),
+                Some(r#"{"automation_id":"save"}"#),
+            ),
+        ];
+        assert_eq!(
+            key_for(&automation_context_text(&before, 2), "Save"),
+            key_for(&automation_context_text(&after, 3), "Save")
+        );
+    }
+
+    #[test]
+    fn duplicate_weak_keys_are_marked_ambiguous() {
+        let elements = vec![
+            automation_el(1, None, "AXButton", Some("Open"), None),
+            automation_el(2, None, "AXButton", Some("Open"), None),
+        ];
+        let output = automation_context_text(&elements, 2);
+        assert_eq!(output.matches("key_quality=ambiguous").count(), 2);
+    }
+
+    #[test]
+    fn automation_view_redacts_password_text_and_value() {
+        let elements = vec![automation_el(
+            1,
+            None,
+            "AXTextField",
+            Some("hunter2"),
+            Some(
+                r#"{"automation_id":"password","is_password":true,"value":"hunter2","placeholder":"Password"}"#,
+            ),
+        )];
+        let output = automation_context_text(&elements, 1);
+        assert!(!output.contains("hunter2"), "got:\n{output}");
+        assert!(output.contains("\"Password\""), "got:\n{output}");
+        assert!(output.contains("actions=click,type,set_value"));
+    }
+
+    #[test]
+    fn automation_actions_cover_native_windows_and_linux_control_roles() {
+        let elements = vec![
+            automation_el(1, None, "Entry", Some("Query"), None),
+            automation_el(2, None, "Slider", Some("Volume"), None),
+            automation_el(3, None, "TreeItem", Some("Downloads"), None),
+            automation_el(4, None, "ScrollBar", None, None),
+        ];
+        let output = automation_context_text(&elements, 4);
+        assert!(
+            output.contains("Entry \"Query\" actions=click,type,set_value"),
+            "got:\n{output}"
+        );
+        assert!(
+            output.contains("Slider \"Volume\" actions=click,set_value,press_key"),
+            "got:\n{output}"
+        );
+        assert!(
+            output.contains("TreeItem \"Downloads\" actions=click"),
+            "got:\n{output}"
+        );
+        assert!(
+            output.contains("ScrollBar actions=scroll"),
+            "got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn automation_view_is_bounded_and_smaller_than_raw_rows() {
+        let elements = (0..300)
+            .map(|index| {
+                automation_el(
+                    index + 1,
+                    None,
+                    "AXButton",
+                    Some(&format!("Action {index}")),
+                    Some(r#"{"is_enabled":true,"is_keyboard_focusable":true}"#),
+                )
+            })
+            .collect::<Vec<_>>();
+        let output = automation_context_text(&elements, elements.len() as i64);
+        let raw = serde_json::to_string(&elements).unwrap();
+        assert!(output.lines().count() <= AUTOMATION_MAX_LINES + 3);
+        assert!(
+            output.len() < raw.len() / 2,
+            "{} vs {}",
+            output.len(),
+            raw.len()
+        );
+        assert!(output.contains("showing 250"));
+    }
+
+    #[test]
+    fn automation_view_exact_token_eval_preserves_actions_with_major_savings() {
+        let elements = (0..80)
+            .map(|index| {
+                automation_el(
+                    index + 1,
+                    None,
+                    "AXButton",
+                    Some(&format!("Workflow action {index}")),
+                    Some(&format!(
+                        r#"{{"automation_id":"workflow-action-{index}","is_enabled":true,"is_keyboard_focusable":true}}"#
+                    )),
+                )
+            })
+            .collect::<Vec<_>>();
+        let output = automation_context_text(&elements, elements.len() as i64);
+        let raw = serde_json::to_string(&elements).unwrap();
+        let tokenizer = tiktoken_rs::o200k_base_singleton();
+        let output_tokens = tokenizer.encode_ordinary(&output).len();
+        let raw_tokens = tokenizer.encode_ordinary(&raw).len();
+        eprintln!(
+            "automation token eval: raw={raw_tokens}, automation={output_tokens}, reduction={:.1}%",
+            (1.0 - output_tokens as f64 / raw_tokens as f64) * 100.0
+        );
+
+        assert_eq!(output.matches("actions=click").count(), 80);
+        assert!(output.contains("Workflow action 0"));
+        assert!(output.contains("Workflow action 79"));
+        assert_eq!(output.matches("ref=e").count(), 80);
+        assert!(
+            output_tokens * 100 <= raw_tokens * 60,
+            "expected >=40% exact-token reduction, got {output_tokens} vs {raw_tokens}"
+        );
     }
 
     #[test]
@@ -944,8 +1585,9 @@ mod tests {
 pub(crate) struct FrameElementsQuery {
     #[serde(default)]
     source: Option<String>,
-    /// Output format: `json` (default), `csv`, `tsv`/`table`, or
-    /// `outline`/`tree` (compact text tree — the cheapest full-frame read).
+    /// Output format: `json` (default), `csv`, `tsv`/`table`, `outline`/`tree`
+    /// (compact readable tree), `automation`/`computer-use` (targeting context), or
+    /// `preferred` (the configured AI context mode).
     #[serde(default)]
     format: Option<String>,
     /// Comma-separated column allowlist, e.g. `fields=role,text,bounds.left`.

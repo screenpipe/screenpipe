@@ -237,12 +237,17 @@ impl DatabaseManager {
     }
 
     /// Create a pipe execution via the write queue. Returns the new row ID.
+    ///
+    /// `trigger_event` / `trigger_key` record which event instance started the
+    /// run (e.g. `meeting_ended` / meeting id); both None for scheduled runs.
     pub async fn pipe_create_execution_queued(
         &self,
         pipe_name: &str,
         trigger_type: &str,
         model: &str,
         provider: Option<&str>,
+        trigger_event: Option<&str>,
+        trigger_key: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
         let result = self
@@ -253,12 +258,72 @@ impl DatabaseManager {
                 model: model.to_string(),
                 provider: provider.map(|s| s.to_string()),
                 started_at: chrono::Utc::now().to_rfc3339(),
+                trigger_event: trigger_event.map(|s| s.to_string()),
+                trigger_key: trigger_key.map(|s| s.to_string()),
             })
             .await?;
         match result {
             WriteResult::Id(id) => Ok(id),
             _ => unreachable!(),
         }
+    }
+
+    /// Claim `(pipe, event, key)` for an event-triggered run.
+    ///
+    /// Returns true if this caller won the claim, false if it was already held —
+    /// i.e. a duplicate delivery of the same logical event.
+    pub async fn pipe_claim_event_run_queued(
+        &self,
+        pipe_name: &str,
+        event_name: &str,
+        event_key: &str,
+    ) -> Result<bool, sqlx::Error> {
+        use crate::write_queue::{WriteOp, WriteResult};
+        let result = self
+            .write_queue
+            .submit(WriteOp::PipeClaimEventRun {
+                pipe_name: pipe_name.to_string(),
+                event_name: event_name.to_string(),
+                event_key: event_key.to_string(),
+                claimed_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .await?;
+        match result {
+            WriteResult::Id(rows) => Ok(rows > 0),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Release a claim so the event can trigger the pipe again.
+    pub async fn pipe_release_event_run_queued(
+        &self,
+        pipe_name: &str,
+        event_name: &str,
+        event_key: &str,
+    ) -> Result<(), sqlx::Error> {
+        use crate::write_queue::WriteOp;
+        self.write_queue
+            .submit(WriteOp::PipeReleaseEventRun {
+                pipe_name: pipe_name.to_string(),
+                event_name: event_name.to_string(),
+                event_key: event_key.to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Drop claims older than `before`.
+    pub async fn pipe_prune_event_runs_queued(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), sqlx::Error> {
+        use crate::write_queue::WriteOp;
+        self.write_queue
+            .submit(WriteOp::PipePruneEventRuns {
+                before: before.to_rfc3339(),
+            })
+            .await?;
+        Ok(())
     }
 
     /// Execute a pipe UPDATE/INSERT/DELETE via the write queue.

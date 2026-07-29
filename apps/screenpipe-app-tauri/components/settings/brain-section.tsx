@@ -59,6 +59,7 @@ import { ArtifactHtmlBody } from "@/components/settings/artifact-html-body";
 import { ConfirmDeleteDialog } from "@/components/settings/confirm-delete-dialog";
 import { BrainOverview } from "@/components/settings/brain-overview";
 import { isHtmlFileName } from "@/lib/utils/html-sandbox";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { localFetch } from "@/lib/api";
 import {
   useUnifiedArtifacts,
@@ -180,6 +181,34 @@ type TypeFilter = "overview" | "memories" | "artifacts";
 type SelectedBrainItem =
   | { kind: "memory"; key: string }
   | { kind: "artifact"; key: string };
+
+function unifiedItemKey(item: UnifiedItem): string {
+  return item.kind === "memory"
+    ? `mem:${item.data.id}`
+    : artifactItemKey(item.data);
+}
+
+function unifiedItemSelection(item: UnifiedItem): SelectedBrainItem {
+  const key = unifiedItemKey(item);
+  return item.kind === "memory"
+    ? { kind: "memory", key }
+    : { kind: "artifact", key };
+}
+
+// Registered artifacts are addressed by id so testids stay stable across
+// re-registration; the rest fall back to their dedup key.
+function artifactTestIdSuffix(artifact: UnifiedArtifact): string {
+  return artifact.registered ? String(artifact.id) : artifactItemKey(artifact);
+}
+
+// Mirrors the data-testid each row renders, so keyboard navigation can find
+// the newly selected card in the DOM and scroll it into view. Both callers
+// share artifactTestIdSuffix so the two can never drift apart.
+function unifiedItemTestId(item: UnifiedItem): string {
+  return item.kind === "memory"
+    ? `brain-item-memory-${item.data.id}`
+    : `brain-item-artifact-${artifactTestIdSuffix(item.data)}`;
+}
 
 type BrainViewState = {
   typeFilter: TypeFilter;
@@ -344,6 +373,11 @@ type SortDir = "desc" | "asc";
 
 export function BrainSection() {
   const { toast } = useToast();
+  const { isMac } = usePlatform();
+  // App-wide convention (chat sidebar, chat history, recent-chat switcher):
+  // thin styled scrollbars on macOS where they overlay, hidden elsewhere
+  // because Windows/Linux reserve a chunky always-on track.
+  const scrollbarClass = isMac ? "scrollbar-minimal" : "scrollbar-hide";
   const chatSessions = useChatStore((state) => state.sessions);
   const initialTypeFilterRef = useRef<TypeFilter>(brainViewState.typeFilter);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
@@ -420,17 +454,28 @@ export function BrainSection() {
     return () => window.clearInterval(interval);
   }, [refreshTabCounts]);
 
-  const loadArtifactContent = async (key: string, path: string) => {
-    if (!artifactContents.has(key)) {
+  // Keyed by artifact, not by the `artifactContents` snapshot: this is called
+  // from render and from the keydown handler, both of which can fire again
+  // before setArtifactContents lands. A ref makes the guard stable so the
+  // callback identity never changes and the same file is read once.
+  const artifactReadsRef = useRef<Set<string>>(new Set());
+
+  const loadArtifactContent = useCallback(async (key: string, path: string) => {
+    if (!artifactReadsRef.current.has(key)) {
+      artifactReadsRef.current.add(key);
       try {
         const res = await commands.readViewerFile(path);
         if (res.status === "ok" && res.data.kind === "text") {
           const text = res.data.text;
           setArtifactContents((prev) => new Map(prev).set(key, text));
         }
-      } catch {}
+      } catch {
+        // Allow a later attempt — a transient read failure shouldn't
+        // permanently blank the preview.
+        artifactReadsRef.current.delete(key);
+      }
     }
-  };
+  }, []);
 
   const artifactOpenTarget = useCallback(
     (artifact: UnifiedArtifact, key: string): ArtifactOpenTarget =>
@@ -482,6 +527,28 @@ export function BrainSection() {
     },
     [],
   );
+
+  // Opening an artifact selects it into the side-by-side detail pane instead
+  // of navigating away. Jumping to the origin chat/run or a viewer window
+  // unmounts the list and loses the browsing position, so those stay behind
+  // explicit actions in the detail header.
+  const openArtifact = (
+    artifact: UnifiedArtifact,
+    key: string,
+    surface: ArtifactOpenSurface,
+  ) => {
+    posthog.capture("brain_artifact_opened", {
+      artifact_kind: analyticsArtifactKind(artifact.kind),
+      open_mode: "detail",
+      registered: artifact.registered,
+      surface,
+    });
+    qualifiedValue.artifactOpened(
+      artifact.source_type === "pipe" || artifact.source_type === "pipe-run",
+    );
+    void loadArtifactContent(key, artifact.path);
+    setSelectedItem({ kind: "artifact", key });
+  };
 
   const openMemory = useCallback(
     (memory: MemoryRecord, key: string) => {
@@ -960,15 +1027,108 @@ export function BrainSection() {
   const allVisibleSelected =
     unifiedItems.length > 0 && selectedIds.size === unifiedItems.length;
   const selectedDetail = React.useMemo(() => {
-    if (!selectedItem || selectedItem.kind !== "memory") return null;
-    const item = unifiedItems.find((entry) => {
-      if (entry.kind === "memory") {
-        return `mem:${entry.data.id}` === selectedItem.key;
-      }
-      return false;
-    });
+    if (!selectedItem) return null;
+    const item = unifiedItems.find(
+      (entry) =>
+        entry.kind === selectedItem.kind &&
+        unifiedItemKey(entry) === selectedItem.key,
+    );
     return item ?? null;
   }, [selectedItem, unifiedItems]);
+
+  // With the detail pane open the artifact grid becomes a narrow rail, and a
+  // rail is for scanning identity, not for previewing content — the preview
+  // now lives in the pane, so repeating it in a squeezed card just wastes the
+  // column (two visible items instead of ten). Switch to compact rows, the
+  // same move a photo grid makes when it collapses into a filmstrip.
+  const artifactRailMode = typeFilter === "artifacts" && selectedDetail !== null;
+
+  // Quick Look-style browsing: with the detail pane open, Esc closes it and
+  // ↑/↓ walk the selection so you can scan a run of artifacts without
+  // round-tripping through the grid. Selection stays in the list; the pane
+  // just re-renders around whatever is selected.
+  const pendingKeyboardScrollRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedItem) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" &&
+        event.key !== "ArrowUp" &&
+        event.key !== "ArrowDown"
+      ) {
+        return;
+      }
+      // Never steal keys from the search box, the memory editor, or any
+      // dialog/menu layered above the list. The target is window/document
+      // when nothing is focused, which has no closest().
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(
+          "input, textarea, [contenteditable='true'], [role='dialog'], [role='menu']",
+        )
+      ) {
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSelectedItem(null);
+        return;
+      }
+
+      const index = unifiedItems.findIndex(
+        (entry) =>
+          entry.kind === selectedItem.kind &&
+          unifiedItemKey(entry) === selectedItem.key,
+      );
+      if (index === -1) return;
+
+      const nextIndex = index + (event.key === "ArrowDown" ? 1 : -1);
+      const next = unifiedItems[nextIndex];
+      if (!next) return;
+
+      event.preventDefault();
+      // Stepping past the render window grows it, so ↓ keeps working into the
+      // not-yet-mounted tail instead of dead-ending at the window edge.
+      if (nextIndex >= visibleCount) setVisibleCount(nextIndex + 1);
+
+      // Deliberately no analytics here: arrowing is scrubbing, not opening.
+      // Holding ↓ through a long list would flood brain_artifact_opened and
+      // inflate the qualified-value counter.
+      const nextKey = unifiedItemKey(next);
+      if (next.kind === "artifact") {
+        void loadArtifactContent(nextKey, next.data.path);
+      }
+      pendingKeyboardScrollRef.current = unifiedItemTestId(next);
+      setSelectedItem(unifiedItemSelection(next));
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedItem, unifiedItems, visibleCount]);
+
+  // Keep the keyboard-selected card in view. Runs after the render that mounts
+  // it, which matters when ↓ just grew the render window.
+  useEffect(() => {
+    const testId = pendingKeyboardScrollRef.current;
+    if (!testId) return;
+    // Cleared unconditionally: a stale pending id would otherwise fire on an
+    // unrelated later render (a filter change, another page loading in).
+    pendingKeyboardScrollRef.current = null;
+    // Unregistered artifacts derive their testid from the file path, which can
+    // contain quotes or backslashes. Interpolating that into an attribute
+    // selector risks a SyntaxError, so match on a constant selector and
+    // compare the value in JS instead.
+    const node = Array.from(
+      scrollRef.current?.querySelectorAll<HTMLElement>("[data-testid]") ?? [],
+    ).find((element) => element.dataset.testid === testId);
+    node?.scrollIntoView({ block: "nearest" });
+  }, [selectedItem, visibleCount, unifiedItems]);
   const normalizedFilterSearch = filterSearch.trim().toLowerCase();
   const filterTags = React.useMemo(() => {
     if (typeFilter === "artifacts") {
@@ -1345,7 +1505,9 @@ export function BrainSection() {
                   />
                 </div>
               </div>
-              <div className="max-h-[360px] overflow-y-auto p-2">
+              <div
+                className={`max-h-[360px] overflow-y-auto overscroll-contain p-2 ${scrollbarClass}`}
+              >
                 {memoryFilterLoading && typeFilter === "memories" && (
                   <div className="px-2 py-3 text-xs text-muted-foreground">
                     loading filters...
@@ -1784,10 +1946,12 @@ export function BrainSection() {
             brainViewState.scrollTopByType[typeFilter] =
               event.currentTarget.scrollTop;
           }}
-          className={`min-h-0 overflow-y-auto pr-1 ${
+          className={`min-h-0 overflow-y-auto overscroll-contain ${
+            artifactRailMode ? "pr-3" : "pr-1"
+          } ${scrollbarClass} ${
             typeFilter === "artifacts"
-              ? selectedDetail
-                ? "w-[38%] shrink-0 space-y-3"
+              ? artifactRailMode
+                ? "w-[30%] min-w-[240px] max-w-[340px] shrink-0 space-y-2"
                 : "grid flex-1 auto-rows-max grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3"
               : selectedDetail
                 ? "w-[52%] shrink-0"
@@ -1802,28 +1966,169 @@ export function BrainSection() {
               const artDate = artItem.modified_at;
 
               const artKey = artifactItemKey(artItem);
-              const artTestId = artItem.registered ? String(artItem.id) : artKey;
+              const artTestId = artifactTestIdSuffix(artItem);
               const display = getArtifactCardDisplay(artItem);
               const isChecked = selectedIds.has(artKey);
+              const isSelected =
+                selectedItem?.kind === "artifact" && selectedItem.key === artKey;
               const target = artifactOpenTarget(artItem, artKey);
               const isHtml = isHtmlFileName(artItem.path);
-              if (isHtml && !artifactContents.has(artKey)) {
+              // Rail rows have no thumbnail, so skip the file read and the
+              // per-row sandboxed iframe that only the card preview needs.
+              if (isHtml && !artifactRailMode && !artifactContents.has(artKey)) {
                 void loadArtifactContent(artKey, artPath);
               }
-              const htmlContent = isHtml ? artifactContents.get(artKey) : undefined;
+              const htmlContent =
+                isHtml && !artifactRailMode
+                  ? artifactContents.get(artKey)
+                  : undefined;
+
+              const openThisArtifact = () => {
+                if (selectionMode) {
+                  toggleSelected(artKey);
+                  return;
+                }
+                openArtifact(artItem, artKey, "card");
+              };
+
+              const artifactMenu = (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      data-testid={`brain-artifact-menu-${artTestId}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreVertical className="h-4 w-4 text-foreground" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    {target.mode !== "artifact-only" && (
+                      <DropdownMenuItem
+                        onClick={() =>
+                          openArtifactOrigin(artItem, target, artPath, "card_action")
+                        }
+                      >
+                        <MessageSquare className="mr-2 h-3.5 w-3.5" />
+                        {target.mode === "pipe-run" ? "go to pipe run" : "go to chat"}
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      data-testid={`brain-open-viewer-${artTestId}`}
+                      onClick={() => openArtifactViewer(artItem, "card_action")}
+                    >
+                      <Eye className="mr-2 h-3.5 w-3.5" />
+                      new window
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
+                    >
+                      <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                      reveal in finder
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => commands.copyTextToClipboard(artPath)}
+                    >
+                      <Copy className="mr-2 h-3.5 w-3.5" />
+                      copy path
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => toggleSelected(artKey)}>
+                      <Check className="mr-2 h-3.5 w-3.5" />
+                      {isChecked ? "deselect" : "select"}
+                    </DropdownMenuItem>
+                    {artItem.registered && (
+                      <DropdownMenuItem
+                        data-testid={`brain-delete-artifact-${artTestId}`}
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => void handleDeleteArtifact(artItem)}
+                      >
+                        <Trash2 className="mr-2 h-3.5 w-3.5" />
+                        delete
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              );
+
+              if (artifactRailMode) {
+                return (
+                  <div
+                    key={artKey}
+                    data-testid={`brain-item-artifact-${artTestId}`}
+                    data-variant="rail"
+                    className={`group relative cursor-pointer border bg-background px-3 py-2.5 transition-colors hover:bg-muted/20 ${
+                      isSelected
+                        ? "border-foreground/30 bg-muted/40"
+                        : "border-border"
+                    } ${isChecked ? "bg-muted/30" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={openThisArtifact}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      e.preventDefault();
+                      openThisArtifact();
+                    }}
+                  >
+                    <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-sm bg-background/70 opacity-0 backdrop-blur-md transition-opacity group-hover:opacity-100">
+                      {artifactMenu}
+                    </div>
+                    <div className="space-y-1.5">
+                      {/* Two lines of title: rail titles are long and near
+                          identical up front ("Landing Page 20 — …"), so
+                          truncating to one line hides what tells them apart. */}
+                      <h3 className="line-clamp-2 pr-7 text-[13px] font-medium leading-snug text-foreground">
+                        {display.title}
+                      </h3>
+                      {display.summary && (
+                        <p className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
+                          {display.summary}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                        <Badge
+                          variant="outline"
+                          className="shrink-0 px-1 py-0 text-[10px] font-normal"
+                        >
+                          {artifactKindLabel(artItem.kind)}
+                        </Badge>
+                        {artDate && <span>{timeAgo(artDate)}</span>}
+                        {artSize != null && <span>{formatBytes(artSize)}</span>}
+                        <Checkbox
+                          data-testid={`brain-checkbox-artifact-${artTestId}`}
+                          checked={isChecked}
+                          onClick={(e) => e.stopPropagation()}
+                          onCheckedChange={() => toggleSelected(artKey)}
+                          className={`ml-auto h-3.5 w-3.5 shrink-0 transition-opacity ${
+                            selectionMode || isChecked
+                              ? "opacity-100"
+                              : "opacity-0 group-hover:opacity-100"
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <div
                   key={artKey}
                   data-testid={`brain-item-artifact-${artTestId}`}
+                  data-variant="card"
                   className={`group relative cursor-pointer overflow-hidden border border-border bg-background transition-colors duration-150 hover:bg-muted/20 ${
                     isChecked ? "bg-muted/30 ring-1 ring-border" : ""
+                  } ${
+                    isSelected ? "bg-muted/50 ring-1 ring-foreground/20" : ""
                   }`}
                   onClick={() => {
                     if (selectionMode) {
                       toggleSelected(artKey);
                       return;
                     }
-                    openArtifactOrigin(artItem, target, artPath, "card");
+                    openArtifact(artItem, artKey, "card");
                   }}
                   role="button"
                   tabIndex={0}
@@ -1834,80 +2139,14 @@ export function BrainSection() {
                       toggleSelected(artKey);
                       return;
                     }
-                    openArtifactOrigin(artItem, target, artPath, "card");
+                    openArtifact(artItem, artKey, "card");
                   }}
                 >
-                  {/* floating action buttons — top right with blurred backdrop */}
+                  {/* Single overflow menu — clicking the card opens the detail
+                      pane, so popping out a window is secondary and lives in
+                      the menu rather than as a second hover button. */}
                   <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-sm bg-background/60 backdrop-blur-md opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openArtifactViewer(artItem, "card_action");
-                      }}
-                      title="open viewer"
-                    >
-                      <Eye className="h-4 w-4 text-foreground" />
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <MoreVertical className="h-4 w-4 text-foreground" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                        {target.mode !== "artifact-only" && (
-                          <DropdownMenuItem
-                            onClick={() =>
-                              openArtifactOrigin(
-                                artItem,
-                                target,
-                                artPath,
-                                "card_action",
-                              )
-                            }
-                          >
-                            <MessageSquare className="mr-2 h-3.5 w-3.5" />
-                            {target.mode === "pipe-run" ? "open pipe run" : "open chat"}
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
-                          onClick={() => void invoke("reveal_in_default_browser", { path: artPath })}
-                        >
-                          <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                          reveal in finder
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => commands.copyTextToClipboard(artPath)}
-                        >
-                          <Copy className="mr-2 h-3.5 w-3.5" />
-                          copy path
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => toggleSelected(artKey)}
-                        >
-                          <Check className="mr-2 h-3.5 w-3.5" />
-                          {isChecked ? "deselect" : "select"}
-                        </DropdownMenuItem>
-                        {artItem.registered && (
-                          <DropdownMenuItem
-                            data-testid={`brain-delete-artifact-${artTestId}`}
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => void handleDeleteArtifact(artItem)}
-                          >
-                            <Trash2 className="mr-2 h-3.5 w-3.5" />
-                            delete
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {artifactMenu}
                   </div>
 
                   {/* preview area */}
@@ -2204,9 +2443,7 @@ export function BrainSection() {
         {selectedDetail && (
           <aside
             data-testid="brain-detail-panel"
-            className={`flex min-w-0 flex-1 flex-col border-l border-border ${
-              selectedDetail.kind === "artifact" ? "pl-5" : "pl-3"
-            }`}
+            className="flex min-w-0 flex-1 flex-col border-l border-border pl-3"
           >
             {selectedDetail.kind === "memory" ? (
               (() => {
@@ -2253,7 +2490,9 @@ export function BrainSection() {
                         <X className="h-3.5 w-3.5" />
                       </Button>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto py-3 pr-1">
+                    <div
+                      className={`min-h-0 flex-1 overflow-y-auto overscroll-contain py-3 pr-1 ${scrollbarClass}`}
+                    >
                       <CompactMarkdown expanded>
                         {memory.content}
                       </CompactMarkdown>
@@ -2308,66 +2547,92 @@ export function BrainSection() {
                           )}
                         </div>
                       </div>
+                      {/* Every detail action lives behind the overflow menu so
+                          the header stays out of the artifact's way. Esc also
+                          closes the pane. */}
                       <div className="flex shrink-0 items-center gap-1">
-                        {target.mode !== "artifact-only" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-[10px] px-2"
-                            onClick={() =>
-                              openArtifactOrigin(
-                                artifact,
-                                target,
-                                artifact.path,
-                                "detail",
-                              )
-                            }
-                          >
-                            {target.mode === "pipe-run" ? "open run" : "open chat"}
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-[10px] px-2"
-                          onClick={() => openArtifactViewer(artifact, "detail")}
-                        >
-                          open
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-[10px] px-2"
-                          onClick={() => void invoke("reveal_in_default_browser", { path: artifact.path })}
-                        >
-                          reveal
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-[10px] px-2"
-                          onClick={() => commands.copyTextToClipboard(detailContent)}
-                        >
-                          copy
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          onClick={() => setSelectedItem(null)}
-                          title="close artifact"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              data-testid="brain-detail-actions"
+                              title="artifact actions"
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {target.mode !== "artifact-only" && (
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  openArtifactOrigin(
+                                    artifact,
+                                    target,
+                                    artifact.path,
+                                    "detail",
+                                  )
+                                }
+                              >
+                                <MessageSquare className="mr-2 h-3.5 w-3.5" />
+                                {target.mode === "pipe-run"
+                                  ? "go to pipe run"
+                                  : "go to chat"}
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem
+                              onClick={() => openArtifactViewer(artifact, "detail")}
+                            >
+                              <Eye className="mr-2 h-3.5 w-3.5" />
+                              new window
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() =>
+                                void invoke("reveal_in_default_browser", {
+                                  path: artifact.path,
+                                })
+                              }
+                            >
+                              <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                              reveal in finder
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() =>
+                                commands.copyTextToClipboard(detailContent)
+                              }
+                            >
+                              <Copy className="mr-2 h-3.5 w-3.5" />
+                              copy content
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              data-testid="brain-detail-close"
+                              onClick={() => setSelectedItem(null)}
+                            >
+                              <X className="mr-2 h-3.5 w-3.5" />
+                              close
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto border border-border border-t-0 bg-background px-5 py-5">
+                    {/* HTML fills the pane and scrolls inside its own frame,
+                        so the pane itself must not scroll too — otherwise the
+                        artifact gets a second, outer scrollbar. */}
+                    {/* No frame around the body — the memory pane doesn't have
+                        one either, and HTML artifacts bring their own. */}
+                    <div
+                      className={`min-h-0 flex-1 bg-background py-3 pr-1 ${
+                        isHtmlArtifact
+                          ? "flex flex-col overflow-hidden"
+                          : `overflow-y-auto overscroll-contain ${scrollbarClass}`
+                      }`}
+                    >
                       {artifact.saf_kind ? (
                         <SafArtifactBody
                           title={display.title}
                           content={fullContent ?? null}
                           expanded
-                          onToggleExpanded={() => setSelectedItem(null)}
                           hideTitle
                         />
                       ) : isHtmlArtifact ? (
@@ -2375,8 +2640,8 @@ export function BrainSection() {
                           title={display.title}
                           content={fullContent ?? null}
                           expanded
-                          onToggleExpanded={() => setSelectedItem(null)}
                           hideTitle
+                          fillHeight
                         />
                       ) : (
                         <CompactMarkdown expanded>

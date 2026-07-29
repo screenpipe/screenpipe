@@ -410,6 +410,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             kind: meta.kind,
             pipeContext: meta.pipeContext,
             dedupKey: meta.dedupKey,
+            branchedFrom: meta.branchedFrom,
             draft: false,
           });
           return;
@@ -933,6 +934,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
   const recentsLoading = !diskHydrated && recents.length === 0 && pipes.length === 0;
+  // "view all" opens the history view (chats / pipes / archived tabs) — pointless
+  // to offer when there is nothing anywhere to look at.
+  const hasAnythingToView =
+    recents.length > 0 || pinned.length > 0 || pipes.length > 0 || archived.length > 0;
 
   const recentsCap = SIDEBAR_CAP;
   const visibleGroupedSections = useMemo(
@@ -1253,7 +1258,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     "ml-auto inline-flex items-center gap-0.5 select-none",
                     "text-[10px] uppercase tracking-wider transition-colors",
                     "opacity-0 group-hover/recents:opacity-100",
-                    recentsCollapsed && "hidden",
+                    (recentsCollapsed || !hasAnythingToView) && "hidden",
                     onViewAll
                       ? "text-muted-foreground/70 hover:text-muted-foreground cursor-pointer"
                       : "text-muted-foreground/30 cursor-default"
@@ -1284,9 +1289,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <Skeleton key={i} className="h-6 w-full rounded-md" />
                   ))}
                 </div>
-              ) : recents.length === 0 && pipes.length === 0 ? (
+              ) : recents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                  {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
+                  {pinned.length === 0 && pipes.length === 0
+                    ? "no chats yet — click + to start"
+                    : "no recent chats"}
                 </div>
               ) : (
                 <RecentsBody

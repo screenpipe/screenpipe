@@ -30,12 +30,19 @@ keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions`
 
 read the screenpipe skill first so you know the meetings + search endpoints.
 
-step 1 — find the meeting that just ended:
+step 1 — find the meeting that just ended. when the scheduler woke you for an event it wrote `./.trigger-context.json` in this pipe's folder; read it first and use the meeting id it names:
+
+  cat ./.trigger-context.json   # {"event": "meeting_ended", "key": "<MEETING_ID>", ...}
+
+  curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+    "http://localhost:3030/meetings/<MEETING_ID>"
+
+only if that file is missing (a manual run) fall back to the most recent row:
 
   curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
     "http://localhost:3030/meetings?limit=1"
 
-the most recent row is the one that just ended. capture its `id`, `meeting_start`, `meeting_end`, `title`, `note`, `meeting_app`, and `attendees`.
+either way, capture the meeting's `id`, `meeting_start`, `meeting_end`, `title`, `note`, `meeting_app`, and `attendees`. prefer the id from the trigger file — "most recent" picks the wrong meeting when two end close together.
 
 step 2 — search screenpipe for what happened during this meeting and summarize it: key topics, decisions, action items. scope your searches to the meeting's `meeting_start`/`meeting_end` window. prefer `content_type=audio` for transcripts.
 

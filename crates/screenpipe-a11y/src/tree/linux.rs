@@ -50,6 +50,31 @@ fn should_skip_role(role: u32) -> bool {
     )
 }
 
+/// Interactive AT-SPI roles worth retaining for computer-use targeting even
+/// when they have no accessible name or text. The role/state/bounds calls are
+/// made inside the existing bounded walk, not by a second recorder.
+fn is_automation_structure_role(role: u32) -> bool {
+    matches!(
+        role,
+        7   // ROLE_CHECK_BOX
+        | 11 // ROLE_COMBO_BOX
+        | 32 // ROLE_LIST_ITEM
+        | 35 // ROLE_MENU_ITEM
+        | 37 // ROLE_PAGE_TAB
+        | 40 // ROLE_PASSWORD_TEXT
+        | 43 // ROLE_PUSH_BUTTON
+        | 44 // ROLE_RADIO_BUTTON
+        | 45 // ROLE_RADIO_MENU_ITEM
+        | 48 // ROLE_SCROLL_BAR
+        | 51 // ROLE_SLIDER
+        | 52 // ROLE_SPIN_BUTTON
+        | 62 // ROLE_TOGGLE_BUTTON
+        | 79 // ROLE_ENTRY
+        | 88 // ROLE_LINK
+        | 91 // ROLE_TREE_ITEM
+    )
+}
+
 /// Roles that carry user-visible text in their name, description, or Text interface.
 /// Values from: https://docs.rs/atspi/latest/atspi/enum.Role.html
 fn should_extract_text(role: u32) -> bool {
@@ -92,6 +117,7 @@ fn role_name(role: u32) -> &'static str {
         43 => "Button",
         62 => "ToggleButton",
         44 => "RadioButton",
+        45 => "RadioMenuItem",
         7 => "CheckBox",
         29 => "Label",
         61 => "Text",
@@ -111,8 +137,10 @@ fn role_name(role: u32) -> &'static str {
         94 => "DocumentText",
         71 => "Header",
         39 => "Panel",
+        48 => "ScrollBar",
         51 => "Slider",
         52 => "SpinButton",
+        91 => "TreeItem",
         60 => "Terminal",
         55 => "Table",
         63 => "ToolBar",
@@ -494,6 +522,8 @@ struct WalkState {
     line_budget: Option<LineBudget>,
     line_max_calls_per_node: usize,
     line_min_height_ratio: f32,
+    /// Retain unnamed interactive controls in the same bounded tree walk.
+    capture_automation_structure: bool,
 }
 
 impl WalkState {
@@ -535,6 +565,7 @@ impl WalkState {
             },
             line_max_calls_per_node: config.line_bounds_max_calls_per_node,
             line_min_height_ratio: config.line_bounds_min_height_ratio,
+            capture_automation_structure: config.capture_automation_structure,
         }
     }
 
@@ -589,7 +620,9 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
     };
 
     // Skip decorative roles
-    if should_skip_role(role) {
+    if should_skip_role(role)
+        && !(state.capture_automation_structure && is_automation_structure_role(role))
+    {
         return;
     }
 
@@ -608,7 +641,9 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
     }
 
     // Extract text from text-bearing elements
-    if should_extract_text(role) {
+    if should_extract_text(role)
+        || (state.capture_automation_structure && is_automation_structure_role(role))
+    {
         extract_text(conn, aref, role, depth, state);
     } else if role == 39 /* Panel */ || role == 85 /* Section */ || role == 23
     /* Frame */
@@ -634,16 +669,20 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
     }
 }
 
-/// Fill automation state properties from AT-SPI state set (single D-Bus call).
+/// Fill automation state properties from a state set already fetched over D-Bus.
+fn fill_atspi_state_from_set(node: &mut AccessibilityTreeNode, state_set: &[u32]) {
+    if !state_set.is_empty() {
+        node.is_enabled = Some(has_state(state_set, STATE_ENABLED));
+        node.is_focused = Some(has_state(state_set, STATE_FOCUSED));
+        node.is_selected = Some(has_state(state_set, STATE_SELECTED));
+        node.is_expanded = Some(has_state(state_set, STATE_EXPANDED));
+        node.is_keyboard_focusable = Some(has_state(state_set, STATE_FOCUSABLE));
+    }
+}
+
 fn fill_atspi_state(node: &mut AccessibilityTreeNode, conn: &Connection, aref: &AccessibleRef) {
     let state_set = get_accessible_state(conn, aref);
-    if !state_set.is_empty() {
-        node.is_enabled = Some(has_state(&state_set, STATE_ENABLED));
-        node.is_focused = Some(has_state(&state_set, STATE_FOCUSED));
-        node.is_selected = Some(has_state(&state_set, STATE_SELECTED));
-        node.is_expanded = Some(has_state(&state_set, STATE_EXPANDED));
-        node.is_keyboard_focusable = Some(has_state(&state_set, STATE_FOCUSABLE));
-    }
+    fill_atspi_state_from_set(node, &state_set);
     // Description doubles as help_text on Linux
     let desc = get_accessible_description(conn, aref);
     if !desc.is_empty() {
@@ -672,9 +711,22 @@ fn extract_text(
 
     // For editable text (Entry, Text, ComboBox), prefer Text interface content
     // Never extract the value of password fields
-    if matches!(role, 79 | 61 | 11) {
+    if matches!(role, 40 | 79 | 61 | 11) {
         let state_set = get_accessible_state(conn, aref);
-        if has_state(&state_set, STATE_PASSWORD_TEXT) {
+        if role == 40 || has_state(&state_set, STATE_PASSWORD_TEXT) {
+            if state.capture_automation_structure {
+                let mut node = AccessibilityTreeNode::new(
+                    role_str.to_string(),
+                    String::new(),
+                    depth.min(255) as u8,
+                    bounds.clone(),
+                );
+                node.on_screen = on_screen;
+                node.is_password = Some(true);
+                node.automation_relevant = true;
+                fill_atspi_state_from_set(&mut node, &state_set);
+                state.nodes.push(node);
+            }
             return;
         }
         if let Some(text) = get_text_content(conn, aref) {
@@ -745,6 +797,21 @@ fn extract_text(
         );
         node.on_screen = on_screen;
         fill_atspi_state(&mut node, conn, aref);
+        state.nodes.push(node);
+        return;
+    }
+
+    if state.capture_automation_structure && is_automation_structure_role(role) {
+        let mut node = AccessibilityTreeNode::new(
+            role_str.to_string(),
+            String::new(),
+            depth.min(255) as u8,
+            bounds,
+        );
+        node.on_screen = on_screen;
+        node.automation_relevant = true;
+        let state_set = get_accessible_state(conn, aref);
+        fill_atspi_state_from_set(&mut node, &state_set);
         state.nodes.push(node);
     }
 }
@@ -1065,7 +1132,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
         let conn = unsafe { self.ensure_init()? };
 
         // Find the focused window
-        let (app_name, window_title, window_ref, _pid) = match find_focused_window(conn) {
+        let (app_name, window_title, window_ref, pid) = match find_focused_window(conn) {
             Some(result) => result,
             None => return Ok(TreeWalkResult::NotFound),
         };
@@ -1160,11 +1227,19 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
         // file, or read error — never panics. AT-SPI's Document
         // interface is too uneven across toolkits to rely on.
         let document_path = super::electron_docs::resolve_electron_doc_path(&app_lower);
+        let executable = (self.config.capture_app_identity && pid > 0)
+            .then(|| crate::platform::linux::get_process_name(pid))
+            .flatten()
+            .or_else(|| self.config.capture_app_identity.then(|| app_name.clone()));
         Ok(TreeWalkResult::Found(TreeSnapshot {
             app_name,
+            app_id: None,
+            executable,
+            app_version: None,
             window_name: window_title,
             text_content,
             nodes: state.nodes,
+            semantic_nodes: Vec::new(),
             browser_url,
             document_path,
             timestamp: Utc::now(),
@@ -1207,10 +1282,22 @@ mod tests {
     }
 
     #[test]
+    fn test_automation_structure_roles_are_bounded_to_controls() {
+        assert!(is_automation_structure_role(43)); // PUSH_BUTTON
+        assert!(is_automation_structure_role(48)); // SCROLL_BAR
+        assert!(is_automation_structure_role(91)); // TREE_ITEM
+        assert!(!is_automation_structure_role(29)); // LABEL
+        assert!(!is_automation_structure_role(39)); // PANEL
+        assert!(!is_automation_structure_role(55)); // TABLE
+    }
+
+    #[test]
     fn test_role_name() {
         assert_eq!(role_name(43), "Button");
         assert_eq!(role_name(79), "Entry");
         assert_eq!(role_name(29), "Label");
+        assert_eq!(role_name(48), "ScrollBar");
+        assert_eq!(role_name(91), "TreeItem");
         assert_eq!(role_name(999), "Other");
     }
 

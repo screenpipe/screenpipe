@@ -16,7 +16,9 @@ import { useSearchFocus } from "./hooks/use-search-focus";
 import { listen, emit } from "@tauri-apps/api/event";
 import {
   CHAT_HISTORY_INITIAL_LIMIT,
+  getCachedRecentChats,
   listConversations,
+  prefetchRecentChats,
   searchConversations,
   type ConversationMeta,
 } from "@/lib/chat-storage";
@@ -408,42 +410,118 @@ function formatRelativeTime(timestamp: string): string {
   return format(date, "MMM d") + " " + time;
 }
 
+/**
+ * Every dead end in the palette goes through here. An empty panel tells the
+ * user nothing — say what was looked for, in which scope, and offer the next
+ * move (usually: widen the scope) so the state is never a cul-de-sac.
+ */
+function EmptyMessage({ title, hint, action }: {
+  title: React.ReactNode;
+  hint?: React.ReactNode;
+  action?: { label: string; onClick: () => void };
+}) {
+  return (
+    <div className="flex flex-col items-center gap-1 py-10 text-center">
+      <p className="text-sm text-foreground">{title}</p>
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {action && (
+        <button
+          onClick={action.onClick}
+          className="mt-2 text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+        >
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "See all" link that closes a capped section in the blended view. One
+ * component so both sections read the same and line up with the rows above
+ * them — they were "see all 7 chats →" and "show all 6 results", at different
+ * left edges, both in muted 12px that disappeared under the list.
+ */
+function SeeAllRow({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-center gap-1 rounded-[6px] px-2 py-2 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted/50 hover:text-foreground"
+    >
+      {label}
+      <span aria-hidden>→</span>
+    </button>
+  );
+}
+
+/** Shortest query that searches anything — every scope honours this one value */
+const MIN_QUERY_CHARS = 3;
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    // One treatment for every group label. No icon — the rows carry their own,
+    // and a glyph on the label only repeated them. Capitalized and set in
+    // full-contrast semibold so the group headings actually announce
+    // themselves instead of fading into the rows they introduce: the earlier
+    // 10px at 50% opacity measured ~2.3:1, well under the 4.5:1 WCAG AA wants
+    // for anything below 24px.
+    <p className="px-2 pt-3 pb-1.5 text-[13px] font-semibold capitalize text-foreground">
+      {children}
+    </p>
+  );
+}
+
 /** Compact keyboard/clipboard result item — shows 1 line by default, expands on click */
-function UiEventItem({ evt, onNavigate }: { evt: UiEventResult; onNavigate: () => void }) {
-  const [expanded, setExpanded] = useState(false);
+function UiEventItem({ evt, onNavigate, selected = false, navIndex, onHover }: {
+  evt: UiEventResult;
+  onNavigate: () => void;
+  selected?: boolean;
+  navIndex?: number;
+  onHover?: () => void;
+}) {
   const EvtIcon = evt.event_type === "clipboard" ? ClipboardCopy
     : evt.event_type === "app_switch" ? AppWindow
     : Keyboard;
 
+  // Browser rows capture the tab title, so window_title is usually the same
+  // string as the text itself — printing both gave every row a second line
+  // that just repeated the first. Only keep what the title doesn't say.
+  const source = [
+    evt.app_name,
+    evt.window_title && evt.window_title !== evt.text_content ? evt.window_title : null,
+  ].filter(Boolean).join(" — ");
+
   return (
+    // Same row shape as the chat rows above: borderless, selection is a filled
+    // row, not an outlined card. Bordered cards made peer results look like a
+    // different kind of object.
     <div
-      className="cursor-pointer border border-border rounded p-2 hover:border-foreground/50 transition-colors"
+      data-nav-index={navIndex}
+      onMouseEnter={onHover}
+      // Clicking the row opens the timeline, the same thing Enter does and the
+      // same thing chat and frame rows do. It used to toggle a line-clamp —
+      // invisible for short text — while only the timestamp navigated, so the
+      // footer promised "go to timeline" and clicking appeared to do nothing.
+      onClick={onNavigate}
+      title={evt.text_content ?? undefined}
+      className={cn(
+        "w-full flex items-start gap-2.5 px-2 py-2 rounded-[6px] cursor-pointer transition-colors",
+        selected ? "bg-muted" : "hover:bg-muted/50",
+      )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div
-          className="flex items-start gap-2 min-w-0 flex-1"
-          onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-        >
-          <EvtIcon className="w-3.5 h-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
-          <div className="min-w-0">
-            <p className={cn("text-xs text-foreground", !expanded && "line-clamp-1")}>
-              {evt.text_content}
-            </p>
-            {(evt.app_name || evt.window_title) && (
-              <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
-                {[evt.app_name, evt.window_title].filter(Boolean).join(" — ")}
-              </p>
-            )}
-          </div>
-        </div>
-        <span
-          className="text-[11px] text-muted-foreground font-mono flex-shrink-0 hover:text-foreground hover:underline"
-          onClick={onNavigate}
-          title="Go to timestamp"
-        >
-          {formatRelativeTime(evt.timestamp)}
-        </span>
+      <EvtIcon className="w-3.5 h-3.5 text-muted-foreground/40 mt-0.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        {/* Two lines rather than one: clipboard entries are often long, and
+            expanding them is no longer an interaction. Full text is in the
+            row's tooltip. */}
+        <p className="text-sm text-foreground line-clamp-2">{evt.text_content}</p>
+        {source && (
+          <p className="text-xs text-muted-foreground truncate">{source}</p>
+        )}
       </div>
+      <span className="text-[11px] text-muted-foreground font-mono shrink-0">
+        {formatRelativeTime(evt.timestamp)}
+      </span>
     </div>
   );
 }
@@ -455,10 +533,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       ? "embedded"
       : "modal";
   const [query, setQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  // Index into `navItems` — the single selection shared by every section
+  const [navIndex, setNavIndex] = useState(0);
   const { inputRef, inputElRef, focusInput } = useSearchFocus(isOpen);
   const gridRef = useRef<HTMLDivElement>(null);
+  // Standalone card root — measured to drive the Tauri window height
+  const cardRef = useRef<HTMLDivElement>(null);
   const settledSearchKeysRef = useRef(new Set<string>());
   const searchAnalyticsIdsRef = useRef(new Map<string, string>());
   const searchSessionIdRef = useRef("");
@@ -553,21 +633,49 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   type ContentFilter = "all" | "screen" | "input" | "chats";
   const [contentFilter, setContentFilter] = useState<ContentFilter>("all");
 
-  // Chat search state
-  const [chatResults, setChatResults] = useState<ConversationMeta[]>([]);
-  const [isLoadingChats, setIsLoadingChats] = useState(false);
-  const [selectedChatIndex, setSelectedChatIndex] = useState(0);
+  // A selectable row, identified so selection survives lists being re-sorted
+  type NavItem =
+    | { kind: "chat"; id: string }
+    | { kind: "uievent"; id: string }
+    | { kind: "frame"; index: number };
+
+  // Chat search state. Seed from the prewarm cache so a reopened search window
+  // paints its recent chats on the first frame instead of after a disk scan.
+  const cachedChats = getCachedRecentChats();
+  const [chatResults, setChatResults] = useState<ConversationMeta[]>(cachedChats ?? []);
+  const [isLoadingChats, setIsLoadingChats] = useState(!cachedChats);
+  // Which query `chatResults` actually belongs to. Without this the list held
+  // whatever loaded when the palette opened, so a fresh query briefly painted
+  // the previous (non-matching) chats before its own search returned.
+  const [chatsQuery, setChatsQuery] = useState("");
+  // Owned by the chat-loading effect below: true only while a pass is owed for
+  // the current query and not yet started. It used to be derived from
+  // `chatsQuery !== query`, which meant anything that stopped the pass from
+  // ever running — a failed keyword search never updates `searchQuery`, so the
+  // effect's gate never opens — left the panel loading forever. A flag the
+  // effect itself sets and clears in the same tick it dispatches cannot stick.
+  const [chatsPassPending, setChatsPassPending] = useState(false);
   const chatSearchRequestRef = useRef(0);
   const recentChatRequestRef = useRef(0);
+  // The query a chat load has already been dispatched for. Guards against
+  // refetching the same query when only the scope changed. Seeded from the
+  // prewarm cache, which holds the no-query list the Chats scope would ask for.
+  const dispatchedChatQueryRef = useRef<string | null>(cachedChats ? "" : null);
   // Recent chats shown in the suggestions area (loaded on open, independent of chats tab)
-  const [recentChats, setRecentChats] = useState<ConversationMeta[]>([]);
+  const [recentChats, setRecentChats] = useState<ConversationMeta[]>(
+    cachedChats ? cachedChats.slice(0, 5) : [],
+  );
   const visibleRecentChats = contentFilter === "all" ? recentChats : [];
 
   // App filter (for screen results and speaker drill-down)
   const [appFilter, setAppFilter] = useState<string | null>(null);
   const [speakerAppFilter, setSpeakerAppFilter] = useState<string | null>(null);
   const [domainFilter, setDomainFilter] = useState<string | null>(null);
-  // Time filter — stores the date string (YYYY-MM-DD) from a time range chip
+  // Date filter for screen results. Unlike the app/domain chips this one is not
+  // purely client-side: selecting a day re-queries the backend with
+  // start_time/end_time so pagination can reach older frames for that day. The
+  // day headings in the Screen scope group what is already loaded and do not
+  // replace it.
   const [timeFilter, setTimeFilter] = useState<string | null>(null);
   const [speakerTimeFilter, setSpeakerTimeFilter] = useState<string | null>(null);
 
@@ -603,12 +711,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         : await listConversations(options);
       if (chatSearchRequestRef.current === requestId) {
         setChatResults(chats);
-        setSelectedChatIndex(0);
+        setChatsQuery(q.trim());
+        setNavIndex(0);
       }
     } catch {
       if (chatSearchRequestRef.current === requestId) {
         setChatResults([]);
-        setSelectedChatIndex(0);
+        setChatsQuery(q.trim());
+        setNavIndex(0);
       }
     } finally {
       if (chatSearchRequestRef.current === requestId) {
@@ -624,6 +734,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     isSearchingUiEvents,
     isSearching,
     searchQuery,
+    error: searchError,
     searchKeywords,
     resetSearch,
     setCurrentResultIndex,
@@ -804,11 +915,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return localDate === timeFilter;
   }, [timeFilter]);
 
-  // Derive app chips from time-filtered results so they stay consistent
-  // when a date chip is active. Uses actual search result app_names to
-  // guarantee the client-side filter (r.app_name === appFilter) matches.
-  // Use facet data (aggregated over ALL matches) when available,
-  // fall back to client-side counts from loaded results when facets haven't loaded yet
+  // App chips: use facet data (aggregated over ALL matches) when available, and
+  // fall back to client-side counts from loaded results until facets land. With
+  // a date chip active the facet counts span every day, so derive from the
+  // time-filtered results instead to keep the chip counts honest.
   const appCounts = useMemo(() => {
     if (facetApps.length > 0 && !timeFilter) return facetApps;
     const source = timeFilter
@@ -839,14 +949,37 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   // Load chats in the chats tab immediately. In "All", wait until the keyword
   // pass has settled so chat archive search does not compete with first paint.
+  // "Settled" has to include failure: a keyword search that errors leaves
+  // `searchQuery` on the previous query forever, and gating only on success
+  // meant the chat pass never ran and the panel never stopped loading.
   useEffect(() => {
-    if (!isOpen || isTagSearch || isPeopleSearch) return;
-    const q = debouncedQuery.trim();
-    const keywordPassSettled = q.length >= 3 && searchQuery === q && !isSearching;
-    if (contentFilter === "chats" || (q && keywordPassSettled)) {
-      void loadChats(q);
+    if (!isOpen || isTagSearch || isPeopleSearch) {
+      setChatsPassPending(false);
+      return;
     }
-  }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isPeopleSearch, loadChats, searchQuery, isSearching]);
+    const q = debouncedQuery.trim();
+    const wantsChats = contentFilter === "chats" || q.length >= MIN_QUERY_CHARS;
+    if (!wantsChats) {
+      setChatsPassPending(false);
+      return;
+    }
+    const keywordPassSettled = !isSearching && (searchQuery === q || Boolean(searchError));
+    if (contentFilter === "chats" || keywordPassSettled) {
+      // Cleared in the same commit that starts the pass — `isLoadingChats`
+      // carries the loading state from here, so the panel never blinks.
+      setChatsPassPending(false);
+      // `contentFilter` is a dep, so switching scope re-entered here and
+      // refetched a query that was already loaded — and because loadChats flips
+      // isLoadingChats, the Chats scope hid the rows it already had and painted
+      // a skeleton. loadChats doesn't read contentFilter, so All and Chats get
+      // identical rows for the same query and the second fetch is pure waste.
+      if (dispatchedChatQueryRef.current === q) return;
+      dispatchedChatQueryRef.current = q;
+      void loadChats(q);
+      return;
+    }
+    setChatsPassPending(true);
+  }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isPeopleSearch, loadChats, searchQuery, searchError, isSearching]);
 
   // Chat results are already bounded / searched in chat-storage.
   const filteredChats = useMemo(() => {
@@ -854,12 +987,116 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   }, [chatResults]);
 
   // Refs for chat keyboard navigation (avoids re-registering the keydown effect)
-  const filteredChatsRef = useRef(filteredChats);
-  filteredChatsRef.current = filteredChats;
   const contentFilterRef = useRef<ContentFilter>(contentFilter);
   contentFilterRef.current = contentFilter;
-  const selectedChatIndexRef = useRef(selectedChatIndex);
-  selectedChatIndexRef.current = selectedChatIndex;
+
+  // ── Unified selection ───────────────────────────────────────────────────
+  // One flat, ordered list of every selectable row currently rendered, in the
+  // same order the sections paint. A single index into it drives highlighting
+  // and Enter for all content types, so selection is always defined — including
+  // on open, over the recent chats, where nothing used to be selectable.
+  const navItems = useMemo<NavItem[]>(() => {
+    if (selectedSpeaker || isTagSearch || isPeopleSearch) return [];
+    const items: NavItem[] = [];
+    const q = debouncedQuery.trim();
+
+    // A query shorter than the minimum searches nothing anywhere — chats used
+    // to match from the first character while the panel said "needs at least 3
+    // characters", so one box ran on two thresholds.
+    const belowMinimum = q.length > 0 && q.length < MIN_QUERY_CHARS;
+    // Chat rows only count once they belong to the query being typed
+    const chatsFresh = chatsQuery === q;
+
+    if (contentFilter === "chats") {
+      // This scope hides its rows while reloading, so they must leave navItems
+      // too — everything downstream (skeleton, empty message, footer hints)
+      // treats navItems as "what the list is painting". Counting rows that
+      // aren't on screen suppressed the skeleton and left the panel blank.
+      if (belowMinimum || isLoadingChats || !chatsFresh) return items;
+      for (const chat of filteredChats) items.push({ kind: "chat", id: chat.id });
+      return items;
+    }
+
+    // Empty state: the recent chats strip is the only content, so it owns
+    // selection — this is what makes Enter work the moment search opens.
+    if (contentFilter === "all" && !query.trim()) {
+      for (const chat of recentChats) items.push({ kind: "chat", id: chat.id });
+      return items;
+    }
+
+    if (contentFilter === "all" && q.length >= MIN_QUERY_CHARS && chatsFresh) {
+      for (const chat of filteredChats.slice(0, 5)) items.push({ kind: "chat", id: chat.id });
+    }
+    if (uiEventResults.length > 0 && contentFilter !== "screen") {
+      const shown = contentFilter === "all" ? uiEventResults.slice(0, 5) : uiEventResults;
+      for (const evt of shown) items.push({ kind: "uievent", id: String(evt.id) });
+    }
+    if (searchResults.length > 0 && contentFilter !== "input") {
+      filteredResults.forEach((_, index) => items.push({ kind: "frame", index }));
+    }
+    return items;
+  }, [
+    chatsQuery,
+    contentFilter,
+    debouncedQuery,
+    filteredChats,
+    filteredResults,
+    isLoadingChats,
+    isPeopleSearch,
+    isTagSearch,
+    query,
+    recentChats,
+    searchResults.length,
+    selectedSpeaker,
+    uiEventResults,
+  ]);
+
+  // How many frame cards the grid is actually painting per row. The track is
+  // `auto-fit, minmax(200px, 1fr)`, so the count changes with the window — a
+  // hardcoded 3 made ArrowDown skip a row at some widths and drift diagonally
+  // at others. Read off the
+  // resolved style rather than tracked in state: it's only needed inside the
+  // keydown handler, and asking the browser stays correct if the track changes.
+  const frameColumns = useCallback(() => {
+    const grid = gridRef.current?.querySelector<HTMLElement>("[data-frame-grid]");
+    if (!grid) return 1;
+    const tracks = getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length;
+    return Math.max(1, tracks);
+  }, []);
+
+  // True once ↑/↓ has moved the selection into the results. While it holds,
+  // ←/→ steer the grid instead of the text caret — otherwise every press is
+  // eaten walking the caret to the end of the query first, so ← took one press
+  // per character before it moved a card. Typing clears it (below), which is
+  // what keeps the query editable.
+  const gridNavModeRef = useRef(false);
+  useEffect(() => {
+    gridNavModeRef.current = false;
+  }, [query]);
+
+  const navItemsRef = useRef(navItems);
+  navItemsRef.current = navItems;
+  const navIndexRef = useRef(navIndex);
+  navIndexRef.current = navIndex;
+  const uiEventResultsRef = useRef(uiEventResults);
+  uiEventResultsRef.current = uiEventResults;
+
+  // Keep the selection in range as results stream in and sections appear.
+  useEffect(() => {
+    setNavIndex((i) => (i < navItems.length ? i : 0));
+  }, [navItems.length]);
+
+  // Rows look themselves up by key rather than tracking their own index, so a
+  // section can render in any order without knowing what came before it.
+  const navPositions = useMemo(() => {
+    const map = new Map<string, number>();
+    navItems.forEach((item, i) => {
+      map.set(item.kind === "frame" ? `frame:${item.index}` : `${item.kind}:${item.id}`, i);
+    });
+    return map;
+  }, [navItems]);
+  const isNavActive = (key: string) => navPositions.get(key) === navIndex;
+  const activeNavItem = navItems[navIndex];
 
   const filteredGroups = useMemo(() => {
     let groups = searchGroups;
@@ -869,7 +1106,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     });
     if (timeFilter) groups = groups.filter(g => matchesTimeFilter(g.representative.timestamp));
     return groups;
-  }, [searchGroups, appFilter, domainFilter]);
+    // timeFilter/matchesTimeFilter belong here: without them the groups kept the
+    // previous day's set while `filteredResults` re-filtered, so `filteredGroups[i]`
+    // stopped lining up with `filteredResults[i]` and cards showed another frame's
+    // time range. (This dep list was incomplete before the facet was restored.)
+  }, [searchGroups, appFilter, domainFilter, timeFilter, matchesTimeFilter]);
 
   // Tokenize query for thumbnail highlights (split on spaces, filter empty)
   const queryTokens = useMemo(() => {
@@ -884,26 +1125,29 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   useEffect(() => {
     if (!isOpen) return;
     const requestId = ++recentChatRequestRef.current;
-    if (!queryRef.current.trim()) {
+    // Only show the loading state when we have nothing cached to paint; with a
+    // cache this refresh is silent and simply replaces the list when it lands.
+    if (!queryRef.current.trim() && !getCachedRecentChats()) {
       setIsLoadingChats(true);
     }
-    listConversations({
-      limit: CHAT_HISTORY_INITIAL_LIMIT,
-      includeHidden: false,
-      kind: "chat",
-    })
+    prefetchRecentChats()
       .then((all) => {
         if (recentChatRequestRef.current !== requestId) return;
         setRecentChats(all.slice(0, 5));
         if (!queryRef.current.trim()) {
           setChatResults(all);
-          setSelectedChatIndex(0);
+          setChatsQuery("");
+          // Same list the Chats scope would fetch for an empty query, so mark
+          // it dispatched and let entering that scope reuse it.
+          dispatchedChatQueryRef.current = "";
+          setNavIndex(0);
         }
       })
       .catch(() => {
         if (recentChatRequestRef.current === requestId && !queryRef.current.trim()) {
           setChatResults([]);
-          setSelectedChatIndex(0);
+          setChatsQuery("");
+          setNavIndex(0);
         }
       })
       .finally(() => {
@@ -915,7 +1159,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   useEffect(() => {
     if (isOpen) {
-      setSelectedIndex(0);
+      setNavIndex(0);
       const initialQuery = standalone
         ? new URLSearchParams(window.location.search).get("q") ?? ""
         : "";
@@ -974,7 +1218,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setAppFilter(null);
     setDomainFilter(null);
     setTimeFilter(null);
-    if (contentFilterRef.current !== "chats") setContentFilter("all");
+    // The scope is the user's explicit choice and survives editing the query.
+    // This used to snap back to "all" on every keystroke past 3 characters,
+    // with "chats" specially exempted — so Screen and Keys silently dropped the
+    // scope mid-typing while Chats kept it. App/domain/time facets above are
+    // different: those are narrowed from the previous result set, so a new
+    // query genuinely invalidates them.
     setTagResults([]);
     setOcrOffset(0);
     setHasMoreOcr(true);
@@ -1255,9 +1504,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     [onClose, trackSearchResultSelected],
   );
 
-  // Send to AI handler
+  // Send to AI handler — acts on the selected frame only. The footer hides the
+  // ⌘⏎ hint whenever the selection is a chat or keyboard row, so the shortcut
+  // has to be inert there too; it used to silently send the first screen result
+  // instead of the row you were looking at.
   const handleSendToAI = useCallback(async () => {
-    const result = filteredResults[selectedIndex];
+    const active = navItemsRef.current[navIndexRef.current];
+    if (!active || active.kind !== "frame") return;
+    const result = filteredResults[active.index];
     if (!result) return;
 
     posthog.capture("search_ui_ask_ai", {
@@ -1297,7 +1551,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     onClose,
     query,
     searchEpoch,
-    selectedIndex,
     timeFilter,
   ]);
 
@@ -1330,12 +1583,47 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       offset: newOffset,
       analytics_surface: analyticsSurface,
     };
+    // Paginate within the selected day — this is what makes the date chip reach
+    // frames the first page never returned, rather than just hiding rows.
     if (timeFilter) {
       opts.start_time = new Date(timeFilter + "T00:00:00");
       opts.end_time = new Date(timeFilter + "T23:59:59.999");
     }
     searchKeywords(debouncedQuery, opts).finally(() => setIsLoadingMore(false));
   }, [analyticsSurface, isLoadingMore, hasMoreOcr, debouncedQuery, ocrOffset, searchKeywords, timeFilter]);
+
+  // Selecting (or clearing) a day is a backend change, not a client-side filter:
+  // the page has to be refetched with the new bounds so pagination walks that
+  // day instead of the whole result set. Both the date chips and "clear filters"
+  // go through here so clearing can never leave the day-scoped page on screen.
+  const applyTimeFilter = useCallback((nextFilter: string | null) => {
+    setTimeFilter(nextFilter);
+    setNavIndex(0);
+    setOcrOffset(0);
+    setHasMoreOcr(true);
+    searchKeywords(debouncedQuery, {
+      limit: OCR_PAGE_SIZE,
+      offset: 0,
+      ...(nextFilter
+        ? {
+          start_time: new Date(nextFilter + "T00:00:00"),
+          end_time: new Date(nextFilter + "T23:59:59.999"),
+        }
+        : {}),
+      analytics_surface: analyticsSurface,
+      analytics_search_id: getSearchAnalyticsId(
+        buildSearchAnalyticsKey(
+          searchEpoch,
+          debouncedQuery.trim(),
+          contentFilter,
+          appFilter,
+          domainFilter,
+          nextFilter,
+        ),
+      ),
+      analytics_session_id: searchSessionIdRef.current,
+    });
+  }, [analyticsSurface, appFilter, contentFilter, debouncedQuery, domainFilter, getSearchAnalyticsId, searchEpoch, searchKeywords]);
 
   // Track if we got fewer results than page size (= no more pages).
   // The server may filter results after fetching (e.g. app_name filter),
@@ -1462,74 +1750,91 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         return;
       }
 
-      // Chats mode — list navigation
-      if (contentFilterRef.current === "chats") {
-        const chats = filteredChatsRef.current;
-        switch (e.key) {
-          case "Escape":
-            onClose();
-            break;
-          case "ArrowDown":
-            e.preventDefault();
-            setSelectedChatIndex(i => Math.min(i + 1, chats.length - 1));
-            break;
-          case "ArrowUp":
-            e.preventDefault();
-            setSelectedChatIndex(i => Math.max(i - 1, 0));
-            break;
-          case "Enter":
-            e.preventDefault();
-            {
-              const chat = chats[selectedChatIndexRef.current];
-              if (chat) {
-                handleOpenChatResult(chat.id, "keyboard");
-              }
-            }
-            break;
-        }
+      // Unified list navigation over every rendered row (chats, keyboard &
+      // clipboard, screen frames). Screen frames paint as a grid, so vertical
+      // movement steps a whole row of them while ←→ walks them one at a time.
+      const items = navItemsRef.current;
+      const cols = frameColumns();
+      const step = (delta: number) => {
+        setNavIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(items.length - 1, 0)));
+      };
+      const isFrameAt = (i: number) => items[i]?.kind === "frame";
+
+      // When the input has focus the caret comes first: ←/→ only reach the frame
+      // grid once the caret can't move any further in that direction (or there
+      // is no text to move through). Handing every ←/→ to the grid whenever the
+      // selection was a frame made the caret unusable in the Screen scope, where
+      // a frame is selected from the first result onward — you could only fix a
+      // typo with Backspace.
+      const caretOwnsHorizontal = (key: string) => {
+        const el = inputElRef.current;
+        if (!inputFocused || !el) return false;
+        // Already navigating the grid — the caret stops competing until the
+        // next keystroke edits the query.
+        if (gridNavModeRef.current) return false;
+        const start = el.selectionStart ?? 0;
+        const end = el.selectionEnd ?? start;
+        // A selection is always the caret's to collapse.
+        if (start !== end) return true;
+        return key === "ArrowLeft" ? start > 0 : end < el.value.length;
+      };
+      const framesOwnHorizontal = isFrameAt(navIndexRef.current);
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight")
+        && (!framesOwnHorizontal || caretOwnsHorizontal(e.key))) {
         return;
       }
-
-      // When input is focused, let left/right arrows move the cursor
-      if (inputFocused && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        return;
-      }
-
-      const cols = 3;
-      const results = filteredResultsRef.current;
 
       switch (e.key) {
         case "Escape":
           onClose();
           break;
         case "ArrowRight":
+          if (!framesOwnHorizontal) return;
           e.preventDefault();
-          setSelectedIndex(i => Math.min(i + 1, results.length - 1));
+          step(1);
           break;
         case "ArrowLeft":
+          if (!framesOwnHorizontal) return;
           e.preventDefault();
-          setSelectedIndex(i => Math.max(i - 1, 0));
+          step(-1);
           break;
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex(i => Math.min(i + cols, results.length - 1));
+          // ↑/↓ are unambiguous — the caret has nowhere vertical to go — so they
+          // are what hands ←/→ over to the grid.
+          gridNavModeRef.current = true;
+          // Inside the grid a "row" is `cols` items — but only when that lands
+          // on another frame, so leaving the grid still moves one step.
+          step(isFrameAt(navIndexRef.current) && isFrameAt(navIndexRef.current + cols) ? cols : 1);
           break;
         case "ArrowUp":
           e.preventDefault();
-          setSelectedIndex(i => Math.max(i - cols, 0));
+          gridNavModeRef.current = true;
+          step(isFrameAt(navIndexRef.current) && isFrameAt(navIndexRef.current - cols) ? -cols : -1);
           break;
-        case "Enter":
+        case "Enter": {
           e.preventDefault();
           if (e.metaKey || e.ctrlKey) {
             handleSendToAI();
+            break;
+          }
+          const item = items[navIndexRef.current];
+          if (!item) break;
+          if (item.kind === "chat") {
+            handleOpenChatResult(item.id, "keyboard");
+          } else if (item.kind === "uievent") {
+            const evt = uiEventResultsRef.current.find((u) => String(u.id) === item.id);
+            if (evt) {
+              trackSearchResultSelected("input", "keyboard", "timeline");
+              onNavigateToTimestamp(evt.timestamp);
+              if (!embedded) onClose();
+            }
           } else {
-            setSelectedIndex(i => {
-              const r = filteredResultsRef.current[i];
-              if (r) handleSelectResult(r, "keyboard");
-              return i;
-            });
+            const r = filteredResultsRef.current[item.index];
+            if (r) handleSelectResult(r, "keyboard");
           }
           break;
+        }
       }
     };
 
@@ -1542,29 +1847,57 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected]);
+  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected, embedded, frameColumns]);
 
-  // Scroll selected item into view (only on arrow-key navigation, not on new page load)
-  const prevSelectedIndex = useRef(selectedIndex);
+  // Scroll selected row into view (only on arrow-key navigation, not on new page load)
+  const prevNavIndex = useRef(navIndex);
   useEffect(() => {
-    if (prevSelectedIndex.current !== selectedIndex && gridRef.current && filteredResults.length > 0) {
-      const selectedEl = gridRef.current.querySelector(`[data-index="${selectedIndex}"]`);
+    if (prevNavIndex.current !== navIndex && gridRef.current) {
+      const selectedEl = gridRef.current.querySelector(`[data-nav-index="${navIndex}"]`);
       selectedEl?.scrollIntoView({ block: "nearest" });
     }
-    prevSelectedIndex.current = selectedIndex;
-  }, [selectedIndex, filteredResults.length]);
+    prevNavIndex.current = navIndex;
+  }, [navIndex]);
 
-  // Standalone: resize Tauri window based on content state.
-  // DOM measurement fails because the small window viewport constrains layout.
-  const hasAnyResults = searchResults.length > 0 || speakerResults.length > 0 || tagResults.length > 0 || uiEventResults.length > 0 || filteredChats.length > 0;
-  const hasVisibleContent = hasAnyResults || contentFilter === "chats" || (debouncedQuery && debouncedQuery.trim().length >= 2) || isSearching || isSearchingSpeakers || isSearchingTags || isSearchingUiEvents;
-  // input ~52px; footer ~28px; results up to ~380px
-  const standaloneTargetH = hasVisibleContent ? 580 : 80;
+  // Standalone: the search window is a transparent NSPanel created 80px tall
+  // (window/show.rs) that expects JS to resize it to fit its content, keeping
+  // the top edge pinned. The card sizes to its content (h-fit), so measuring the
+  // card itself is exact — no chrome constants to drift — and any window height
+  // we haven't caught up to yet is transparent rather than white dead space.
+  const STANDALONE_MIN_H = 80; // matches the window's initial input-row height
+  const STANDALONE_MAX_H = 620; // input + footer + the results area's max-h-[500px]
+  // Mirrors SEARCH_BAR_MIN_W in window/show.rs — the width below which the
+  // input and the scope switcher stop fitting on one line.
+  const SEARCH_WINDOW_MIN_W = 600;
+  const lastStandaloneH = useRef(0);
 
   useEffect(() => {
-    if (!standalone || !isOpen) return;
-    commands.resizeSearchWindow(680, standaloneTargetH).catch(() => {});
-  }, [standalone, isOpen, standaloneTargetH]);
+    if (!standalone || !isOpen) {
+      lastStandaloneH.current = 0;
+      return;
+    }
+    const el = cardRef.current;
+    if (!el) return;
+
+    const applyHeight = () => {
+      const target = Math.round(
+        Math.min(STANDALONE_MAX_H, Math.max(STANDALONE_MIN_H, el.getBoundingClientRect().height)),
+      );
+      // Ignore sub-pixel churn so measuring never ping-pongs with the resize.
+      if (Math.abs(target - lastStandaloneH.current) < 4) return;
+      lastStandaloneH.current = target;
+      // Pass the panel's *current* width, never a constant: the Rust side
+      // applies width unconditionally and keeps origin.x, so hardcoding 680
+      // snapped a user-widened window back from the right edge mid-layout and
+      // clipped the result grid. Only the height is ours to drive.
+      const width = Math.max(SEARCH_WINDOW_MIN_W, Math.round(window.innerWidth));
+      commands.resizeSearchWindow(width, target).catch(() => {});
+    };
+
+    const observer = new ResizeObserver(applyHeight);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [standalone, isOpen]);
 
   useEffect(() => {
     if (!isOpen || selectedSpeaker) return;
@@ -1659,9 +1992,159 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   if (!isOpen) return null;
 
-  const hasResults = searchResults.length > 0 || speakerResults.length > 0 || tagResults.length > 0 || uiEventResults.length > 0;
-  const showEmpty = !isSearching && !isSearchingSpeakers && !isSearchingTags && !isSearchingUiEvents && debouncedQuery && debouncedQuery.trim().length >= 3 && !hasResults && !selectedSpeaker && !isTagSearch && !isPeopleSearch && contentFilter !== "chats";
-  const activeIndex = hoveredIndex ?? selectedIndex;
+  // Chats count as results: they render in the same list, so leaving them out
+  // printed "no results for X" directly above a populated chats section. Chats
+  // also arrive on their own schedule, so wait for that pass before claiming
+  // the search found nothing.
+  // Only speak for a query the user has stopped typing: mid-keystroke the
+  // debounced value trails the input, so the message quoted a different string
+  // than the box showed ("no results for code" while the field read "cod").
+  const querySettled = debouncedQuery.trim() === query.trim();
+
+  // One dead-end check for every scope. navItems is exactly the set of rows the
+  // list is about to paint, so "nothing rendered" is measured rather than
+  // re-derived per content type — which is how the Screen scope ended up
+  // painting a blank panel.
+  const trimmedQuery = debouncedQuery.trim();
+  // Chats are searched on their own schedule (after the keyword pass settles),
+  // so between "query changed" and "chat search ran" the old results are stale.
+  // That gap counts as loading — otherwise the panel declared "no results"
+  // while the chat search hadn't even started. `chatsPassPending` is set and
+  // cleared by the effect that owns the pass, so no upstream failure can leave
+  // it hanging; `chatsFreshForQuery` still decides which rows are safe to show.
+  const chatsFreshForQuery = chatsQuery === trimmedQuery;
+  const chatsPending = contentFilter !== "screen" && chatsPassPending;
+  const anyLoading = isSearching || isSearchingSpeakers || isSearchingTags || isSearchingUiEvents || isLoadingChats || chatsPending;
+  const nothingRendered = navItems.length === 0 && speakerResults.length === 0 && tagResults.length === 0;
+  const liveQuery = query.trim();
+  // Measured off the live input, not the debounced copy: the moment you type a
+  // character the recents are stale, so they go immediately rather than 250ms
+  // later. Every scope reads this same flag.
+  const queryBelowMinimum = liveQuery.length > 0 && liveQuery.length < MIN_QUERY_CHARS;
+  const emptyEligible = !selectedSpeaker && !isTagSearch && !isPeopleSearch && nothingRendered;
+  const showMinChars = emptyEligible && queryBelowMinimum;
+  // In flight — including the debounce gap before the request even starts.
+  // Without this the panel was simply blank until results landed, and blank
+  // reads as "no matches" rather than "still looking".
+  // Any pending load with nothing on screen gets the skeleton — not just
+  // queries. Clearing the box in the Chats scope reloads the full history, and
+  // that reload used to paint a blank panel because the old rule required a
+  // query of 3+ characters to show placeholders at all.
+  const showSkeleton = emptyEligible && !queryBelowMinimum && (anyLoading || !querySettled);
+  // The query found screen results but the applied facets filtered them all
+  // out. Blaming the query ("no screen matches for X") is wrong — the results
+  // exist, a chip is hiding them — and the fix is to clear the chip.
+  const facetsHidEverything = searchResults.length > 0 && filteredResults.length === 0
+    && (contentFilter === "screen" || contentFilter === "all");
+  // A search that failed is not a search that found nothing. Without its own
+  // branch the panel said "No results for X" for a backend that never answered,
+  // which sends the user off rewording a query that was never run.
+  const showSearchError = emptyEligible && Boolean(searchError) && !anyLoading && querySettled
+    && trimmedQuery.length >= MIN_QUERY_CHARS;
+  const showEmpty = emptyEligible && !anyLoading && querySettled && !showSearchError
+    && trimmedQuery.length >= MIN_QUERY_CHARS && !facetsHidEverything;
+  // One machine-readable name for what the results area is showing, published
+  // as data-search-state on that container. E2E used to sniff utility classes
+  // and the empty-state wording to decide a search had settled, so restyling
+  // the palette broke the Windows journey test; this survives redesigns.
+  // Loading wins over everything: rows from the previous query are still on
+  // screen mid-search, and calling that "results" lets a waiter pass early.
+  const resultsState = !querySettled || anyLoading
+    ? "searching"
+    : showMinChars
+      ? "min-chars"
+      : showSearchError
+        ? "error"
+        : showEmpty
+          ? "empty"
+          : nothingRendered
+            ? "idle"
+            : "results";
+  const SCOPE_NOUNS: Record<ContentFilter, string> = {
+    all: "results",
+    screen: "screen matches",
+    input: "keyboard or clipboard matches",
+    chats: "chats",
+  };
+
+  // Scope lives in the search bar rather than as a row of chips above the
+  // results: filters only mean something once there are results, and a row that
+  // appears on the first keystroke would shove the whole list down. Rendered as
+  // a segmented control instead of a dropdown because the search window is
+  // sized to its card — a popup menu would be clipped by the window frame.
+  const renderScopeSwitcher = () => {
+    if (isTagSearch || isPeopleSearch) return null;
+    // Nothing to scope until there's a query: the list is recent chats only,
+    // and "screen"/"keys" would filter an empty search down to nothing. The
+    // control appears on the first keystroke. It stays visible while a
+    // non-default scope is active so you can never get stranded in one.
+    if (!query.trim() && contentFilter === "all") return null;
+    return (
+      // Icon + label on every scope that has an honest glyph; "all" stays
+      // text-only because no single icon reads as "everything". Selection
+      // changes colour only — never size or content — so the row never
+      // reflows as you switch.
+      // Explicit radii: the theme sets --radius: 0, so rounded-md/lg both
+      // compute to 0 and render as bare rectangles. ~25% of the control's
+      // height — softened, not pill-shaped.
+      <div className="flex items-center gap-0.5 shrink-0 rounded-[8px] bg-muted/60 p-0.5">
+        {([
+          { key: "all" as ContentFilter, label: "all", icon: null },
+          { key: "screen" as ContentFilter, label: "screen", icon: Monitor },
+          { key: "input" as ContentFilter, label: "keys", icon: Keyboard },
+          { key: "chats" as ContentFilter, label: "chats", icon: MessageSquare },
+        ] as const).map(({ key, label, icon: Icon }) => {
+          const isActive = contentFilter === key;
+          return (
+            <button
+              key={key}
+              title={key === "input" ? "keyboard & clipboard" : label}
+              aria-pressed={isActive}
+              onClick={() => { setContentFilter(key); setNavIndex(0); }}
+              className={cn(
+                "inline-flex h-7 min-w-[58px] items-center justify-center gap-1.5 rounded-[6px] px-2.5 text-xs capitalize transition-colors",
+                isActive
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {Icon && <Icon className="h-3.5 w-3.5 shrink-0" />}
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // Hints describe what Enter will actually do to the selected row, so they
+  // can't advertise "go to timeline" while the selection sits on a chat.
+  const renderFooterHints = () => {
+    if (selectedSpeaker) {
+      return (
+        <>
+          <span>↑↓ navigate</span>
+          <span>⏎ go to timeline</span>
+          <span>esc back</span>
+        </>
+      );
+    }
+    if (!activeNavItem) return <span>type to search</span>;
+    return (
+      <>
+        <span>{activeNavItem.kind === "frame" ? "←→↑↓ navigate" : "↑↓ navigate"}</span>
+        {/* Every non-chat row resolves to a moment — a frame, or the instant a
+            line was typed or copied — and Enter opens the main timeline there. */}
+        <span>{activeNavItem.kind === "chat" ? "⏎ open chat" : "⏎ go to timeline"}</span>
+        {activeNavItem.kind === "frame" && (
+          <span className="flex items-center gap-1">
+            <MessageSquare className="w-2.5 h-2.5" />
+            ⌘⏎ ask AI
+          </span>
+        )}
+      </>
+    );
+  };
 
   const renderResults = () => (
     <>
@@ -1698,7 +2181,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               <button
                 onClick={() => { setSpeakerAppFilter(null); setSelectedTranscriptionIndex(0); }}
                 className={cn(
-                  "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                  "inline-flex h-7 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-[6px] border px-2.5 text-[11px] transition-colors",
                   !speakerAppFilter
                     ? "bg-foreground text-background border-foreground"
                     : "border-border text-muted-foreground hover:border-foreground/40"
@@ -1711,7 +2194,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   key={app}
                   onClick={() => { setSpeakerAppFilter(speakerAppFilter === app ? null : app); setSelectedTranscriptionIndex(0); }}
                   className={cn(
-                    "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                    "inline-flex h-7 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-[6px] border px-2.5 text-[11px] transition-colors",
                     speakerAppFilter === app
                       ? "bg-foreground text-background border-foreground"
                       : "border-border text-muted-foreground hover:border-foreground/40"
@@ -1736,7 +2219,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               <button
                 onClick={() => { setSpeakerTimeFilter(null); setSelectedTranscriptionIndex(0); }}
                 className={cn(
-                  "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                  "inline-flex h-7 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-[6px] border px-2.5 text-[11px] transition-colors",
                   !speakerTimeFilter
                     ? "bg-foreground text-background border-foreground"
                     : "border-border text-muted-foreground hover:border-foreground/40"
@@ -1750,7 +2233,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   key={range.dateKey}
                   onClick={() => { setSpeakerTimeFilter(speakerTimeFilter === range.dateKey ? null : range.dateKey); setSelectedTranscriptionIndex(0); }}
                   className={cn(
-                    "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1 whitespace-nowrap shrink-0",
+                    "inline-flex h-7 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-[6px] border px-2.5 text-[11px] transition-colors",
                     speakerTimeFilter === range.dateKey
                       ? "bg-foreground text-background border-foreground"
                       : "border-border text-muted-foreground hover:border-foreground/40"
@@ -1765,9 +2248,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
           {filteredSpeakerTranscriptions.length > 0 && (
             <div
-                className="grid gap-3"
+                className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  // Matches the screen and tag grids — see the note there.
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
               {filteredSpeakerTranscriptions.map((t, index) => {
@@ -1839,46 +2323,70 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         </div>
       ) : (
         <>
-          {/* Content type filter chips — always at the top */}
-          {!isTagSearch && !isPeopleSearch && (
-            <div className="flex gap-2 mb-3">
-              {([
-                { key: "all" as ContentFilter, label: "All", icon: null },
-                { key: "screen" as ContentFilter, label: "Screen", icon: Monitor },
-                { key: "input" as ContentFilter, label: "Keyboard & Clipboard", icon: Keyboard },
-                { key: "chats" as ContentFilter, label: "Chats", icon: MessageSquare },
-              ] as const).map(({ key, label, icon: Icon }) => (
-                <button
-                  key={key}
-                  onClick={() => { setContentFilter(key); setSelectedIndex(0); setSelectedChatIndex(0); setHoveredIndex(null); }}
+          {/* Empty state */}
+          {showMinChars && (
+            <EmptyMessage
+              title="Keep typing"
+              hint={`Search needs at least ${MIN_QUERY_CHARS} characters`}
+            />
+          )}
+
+          {/* Searching — one skeleton for every scope, with rows the same
+              height as the real ones that replace them (keyboard rows are two
+              lines, chat rows one), so the card doesn't resize when results
+              land. Five rows everywhere: a different count per scope was the
+              other half of the height jump. */}
+          {showSkeleton && (
+            <div className="space-y-2 py-1" aria-busy="true" aria-label="searching">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div
+                  key={i}
                   className={cn(
-                    "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-full border transition-colors",
-                    contentFilter === key
-                      ? "bg-foreground text-background border-foreground"
-                      : "border-border text-muted-foreground hover:border-foreground/40"
+                    "rounded-[6px] bg-muted animate-pulse",
+                    contentFilter === "input" ? "h-14" : "h-9",
                   )}
-                >
-                  {Icon && <Icon className="w-3 h-3" />}
-                  {label}
-                </button>
+                />
               ))}
             </div>
           )}
 
-          {/* Empty state */}
+          {showSearchError && (
+            <EmptyMessage
+              title="Search failed"
+              hint={searchError ?? "Something went wrong reaching your history"}
+              action={{
+                label: "Try again",
+                onClick: () => {
+                  resetSearch();
+                  // The keyword effect keys off the epoch, so bumping it reruns
+                  // the same query rather than making the user retype it.
+                  setSearchEpoch((e) => e + 1);
+                  setNavIndex(0);
+                },
+              }}
+            />
+          )}
+
           {showEmpty && (
-            <div className="py-12 text-center text-sm text-muted-foreground">
-              no results for &quot;{debouncedQuery}&quot;
-            </div>
+            <EmptyMessage
+              title={<>No {SCOPE_NOUNS[contentFilter]} for &ldquo;{trimmedQuery}&rdquo;</>}
+              hint={
+                contentFilter === "all"
+                  ? "Try a different word, or check the spelling"
+                  : "This scope only searches part of your history"
+              }
+              action={
+                contentFilter === "all"
+                  ? undefined
+                  : { label: "Search everything instead", onClick: () => { setContentFilter("all"); setNavIndex(0); } }
+              }
+            />
           )}
 
           {/* Tag autocomplete pills */}
           {isTagSearch && allTags.length > 0 && (
             <div className="mb-4">
-              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                <Tag className="w-3 h-3" />
-                tags
-              </p>
+              <SectionLabel>tags</SectionLabel>
               <div className="flex flex-wrap gap-1.5 mb-3">
                 {allTags.map((t) => {
                   const tagQuery = query.slice(1).trim().toLowerCase();
@@ -1891,7 +2399,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                         setSearchEpoch((epoch) => epoch + 1);
                       }}
                       className={cn(
-                        "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors cursor-pointer",
+                        // rounded-[6px], not rounded-full: the scope switcher
+                        // and every result row use the same softened corner,
+                        // and the theme's --radius: 0 makes rounded-md a no-op.
+                        "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-[6px] border transition-colors cursor-pointer",
                         isActive
                           ? "bg-foreground text-background border-foreground"
                           : "border-border text-foreground/70 hover:bg-muted hover:border-foreground/30"
@@ -1909,9 +2420,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Tag timeline entries — thumbnail grid */}
           {isTagSearch && tagResults.length > 0 && (
             <div
-                className="grid gap-3"
+                className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  // Same track as the screen results — see the note there.
+                  // Was a 180px floor, which packed in columns small enough
+                  // that the frames stopped being readable.
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
               {tagResults.map((frame) => (
@@ -1927,33 +2441,29 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     onNavigateToTimestamp(frame.timestamp, frame.frame_id, queryTokens, resultsJson, query);
                     if (!embedded) onClose();
                   }}
-                  className="cursor-pointer rounded overflow-hidden border border-border hover:border-foreground/50 transition-all duration-150"
+                  className="cursor-pointer rounded-[6px] overflow-hidden border border-border hover:border-foreground/50 transition-colors"
                 >
                   <FrameThumbnail
                     key={frame.frame_id}
                     frameId={frame.frame_id}
                     alt={frame.tag_names.join(", ")}
                   />
-                  <div className="p-2 bg-card">
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                      <Clock className="w-3 h-3" />
-                      <span className="font-mono">
-                        {formatRelativeTime(frame.timestamp)}
-                      </span>
-                    </div>
-                    <p className="text-xs font-medium text-foreground truncate">
+                  {/* Fixed one-line caption, same as the screen results. The
+                      old block stacked time over app over a wrapping row of
+                      tag chips, so a frame with three tags was taller than one
+                      with one and every grid row came out ragged. The tags go
+                      to the tooltip — you already know them, you searched for
+                      one. */}
+                  <div
+                    className="flex items-center gap-2 px-2 py-1.5 bg-card"
+                    title={frame.tag_names.join(", ")}
+                  >
+                    <span className="text-[11px] font-mono text-muted-foreground shrink-0">
+                      {formatRelativeTime(frame.timestamp)}
+                    </span>
+                    <p className="text-xs text-foreground truncate">
                       {frame.app_name || frame.tag_names[0]}
                     </p>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {frame.tag_names.map((t) => (
-                        <span
-                          key={t}
-                          className="px-1.5 py-0.5 text-[10px] rounded-full bg-foreground/8 text-foreground/60"
-                        >
-                          {t}
-                        </span>
-                      ))}
-                    </div>
                   </div>
                 </div>
               ))}
@@ -2002,23 +2512,23 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {/* Skeleton filter chips */}
               <div className="flex gap-1.5 mb-2 overflow-hidden">
                 {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-6 bg-muted animate-pulse rounded-full shrink-0" style={{ width: `${60 + i * 12}px` }} />
+                  <div key={i} className="h-6 bg-muted animate-pulse rounded-[6px] shrink-0" style={{ width: `${60 + i * 12}px` }} />
                 ))}
               </div>
               <div className="flex gap-1.5 mb-3 overflow-hidden">
                 {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="h-6 bg-muted animate-pulse rounded-full shrink-0" style={{ width: `${50 + i * 15}px` }} />
+                  <div key={i} className="h-6 bg-muted animate-pulse rounded-[6px] shrink-0" style={{ width: `${50 + i * 15}px` }} />
                 ))}
               </div>
-              {/* Skeleton thumbnail grid */}
+              {/* Skeleton thumbnail grid — same cell size as the real one */}
               <div
-                className="grid gap-3"
+                className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">
+                  <div key={i} className="bg-muted animate-pulse rounded-[6px] overflow-hidden">
                     <div className="aspect-video" />
                     <div className="p-2 space-y-1">
                       <div className="h-3 bg-muted-foreground/20 rounded w-16" />
@@ -2033,10 +2543,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* People section */}
           {speakerResults.length > 0 && (
             <div className="mb-4">
-              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                <User className="w-3 h-3" />
-                people
-              </p>
+              <SectionLabel>people</SectionLabel>
               <div className="flex gap-2 flex-wrap">
                 {speakerResults.map((speaker) => (
                   <button
@@ -2062,20 +2569,24 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           )}
 
           {/* Inline chat section in "All" view — appears instantly (in-memory filter) while screen results load */}
-          {contentFilter === "all" && debouncedQuery.trim().length >= 1 && filteredChats.length > 0 && !isTagSearch && !isPeopleSearch && (
+          {contentFilter === "all" && debouncedQuery.trim().length >= MIN_QUERY_CHARS && chatsFreshForQuery && filteredChats.length > 0 && !isTagSearch && !isPeopleSearch && (
             <div className="mb-4">
-              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                <MessageSquare className="w-3 h-3" />
-                chats
-              </p>
+              <SectionLabel>chats</SectionLabel>
               <div className="flex flex-col">
                 {filteredChats.slice(0, 5).map((chat) => {
                   const ts = new Date(chat.lastUserMessageAt ?? chat.updatedAt).toISOString();
+                  const navKey = `chat:${chat.id}`;
+                  const pos = navPositions.get(navKey);
                   return (
                     <button
                       key={chat.id}
+                      data-nav-index={pos}
                       onClick={() => handleOpenChatResult(chat.id, "click")}
-                      className="w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors hover:bg-muted/50"
+                      onMouseEnter={() => pos !== undefined && setNavIndex(pos)}
+                      className={cn(
+                        "w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors",
+                        isNavActive(navKey) ? "bg-muted" : "hover:bg-muted/50",
+                      )}
                     >
                       <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
                       <span className="text-sm truncate">{chat.title}</span>
@@ -2087,12 +2598,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 })}
               </div>
               {filteredChats.length > 5 && (
-                <button
-                  onClick={() => setContentFilter("chats")}
-                  className="mt-1 px-2 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                >
-                  see all {filteredChats.length} chats →
-                </button>
+                <SeeAllRow
+                  label={`See all ${filteredChats.length} chats`}
+                  onClick={() => { setContentFilter("chats"); setNavIndex(0); }}
+                />
               )}
             </div>
           )}
@@ -2100,21 +2609,21 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Chat results */}
           {contentFilter === "chats" && (
             <>
-              {isLoadingChats && (
-                <div className="space-y-2">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className="bg-muted animate-pulse rounded p-3 h-10" />
-                  ))}
-                </div>
+              {/* Loading rows come from the one shared skeleton above — this
+                  scope used to render its own on top of it, which is why the
+                  chats scope showed twice as many placeholder rows. */}
+              {/* Only the "no chats at all" case lives here — a query that
+                  matches nothing is handled by the shared scope message above,
+                  so the two can't both fire. */}
+              {!isLoadingChats && filteredChats.length === 0 && !debouncedQuery.trim() && (
+                <EmptyMessage
+                  title="No chats yet"
+                  hint="Ask about anything you've seen, said, or heard to start one"
+                />
               )}
-              {!isLoadingChats && filteredChats.length === 0 && (
-                <div className="py-12 text-center text-sm text-muted-foreground">
-                  {debouncedQuery.trim()
-                    ? <>no chats matching &quot;{debouncedQuery.trim()}&quot;</>
-                    : "no chats yet"}
-                </div>
-              )}
-              {!isLoadingChats && filteredChats.length > 0 && (() => {
+              {/* Below the minimum this scope shows the "keep typing" state
+                  like every other one, instead of listing stale chats. */}
+              {!isLoadingChats && chatsFreshForQuery && filteredChats.length > 0 && !queryBelowMinimum && (() => {
                 const buckets: Record<string, ConversationMeta[]> = { today: [], yesterday: [], week: [], older: [] };
                 for (const c of filteredChats) {
                   buckets[getChatTimeBucket(c.lastUserMessageAt ?? c.updatedAt)].push(c);
@@ -2124,23 +2633,21 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   if (!items?.length) return null;
                   return (
                     <div key={bucket} className="mb-1">
-                      <p className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wider font-mono text-muted-foreground/50">
-                        {CHAT_BUCKET_LABELS[bucket]}
-                      </p>
-                      {items.map((chat, idx) => {
-                        const absoluteIdx = filteredChats.indexOf(chat);
-                        const isSelected = absoluteIdx === selectedChatIndex;
+                      <SectionLabel>{CHAT_BUCKET_LABELS[bucket]}</SectionLabel>
+                      {items.map((chat) => {
+                        const navKey = `chat:${chat.id}`;
+                        const pos = navPositions.get(navKey);
                         return (
                           <button
                             key={chat.id}
-                            data-chat-index={absoluteIdx}
+                            data-nav-index={pos}
                             onClick={() => {
                               handleOpenChatResult(chat.id, "click");
                             }}
-                            onMouseEnter={() => setSelectedChatIndex(absoluteIdx)}
+                            onMouseEnter={() => pos !== undefined && setNavIndex(pos)}
                             className={cn(
                               "w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors",
-                              isSelected ? "bg-muted" : "hover:bg-muted/50"
+                              isNavActive(navKey) ? "bg-muted" : "hover:bg-muted/50"
                             )}
                           >
                             <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
@@ -2158,18 +2665,15 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Screen results skeleton — keyword search still in flight but UI events already loaded */}
           {contentFilter !== "chats" && isSearching && searchResults.length === 0 && contentFilter !== "input" && uiEventResults.length > 0 && (
             <div className="mb-4">
-              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                <Monitor className="w-3 h-3" />
-                screen
-              </p>
+              <SectionLabel>screen</SectionLabel>
               <div
-                className="grid gap-3"
+                className="grid gap-2.5"
                 style={{
-                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
                 }}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">
+                  <div key={i} className="bg-muted animate-pulse rounded-[6px] overflow-hidden">
                     <div className="aspect-video" />
                     <div className="p-2 space-y-1">
                       <div className="h-3 bg-muted-foreground/20 rounded w-16" />
@@ -2185,31 +2689,56 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {uiEventResults.length > 0 && contentFilter !== "screen" && contentFilter !== "chats" && (
             <div className={cn(contentFilter === "all" && "mb-4")}>
               {contentFilter === "all" && (
-                <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Keyboard className="w-3 h-3" />
-                  keyboard & clipboard
-                </p>
+                <SectionLabel>keyboard &amp; clipboard</SectionLabel>
               )}
-              <div className="flex flex-col gap-2">
-                {(contentFilter === "all" ? uiEventResults.slice(0, 5) : uiEventResults).map((evt) => (
-                  <UiEventItem
-                    key={evt.id}
-                    evt={evt}
-                    onNavigate={() => {
-                      trackSearchResultSelected("input", "click", "timeline");
-                      onNavigateToTimestamp(evt.timestamp);
-                      if (!embedded) onClose();
-                    }}
-                  />
-                ))}
-              </div>
+              {/* In its own scope these group by day like the chats list does;
+                  in "All" the five-row preview stays flat so the section reads
+                  as one block among several. */}
+              {(() => {
+                const shown = contentFilter === "all" ? uiEventResults.slice(0, 5) : uiEventResults;
+                const renderRow = (evt: UiEventResult) => {
+                  const navKey = `uievent:${evt.id}`;
+                  const pos = navPositions.get(navKey);
+                  return (
+                    <UiEventItem
+                      key={evt.id}
+                      evt={evt}
+                      selected={isNavActive(navKey)}
+                      navIndex={pos}
+                      onHover={() => pos !== undefined && setNavIndex(pos)}
+                      onNavigate={() => {
+                        trackSearchResultSelected("input", "click", "timeline");
+                        onNavigateToTimestamp(evt.timestamp);
+                        if (!embedded) onClose();
+                      }}
+                    />
+                  );
+                };
+
+                if (contentFilter === "all") {
+                  return <div className="flex flex-col">{shown.map(renderRow)}</div>;
+                }
+
+                const buckets: Record<string, UiEventResult[]> = { today: [], yesterday: [], week: [], older: [] };
+                for (const evt of shown) {
+                  buckets[getChatTimeBucket(new Date(evt.timestamp).getTime())].push(evt);
+                }
+                return CHAT_BUCKET_ORDER.map((bucket) => {
+                  const items = buckets[bucket];
+                  if (!items?.length) return null;
+                  return (
+                    <div key={bucket} className="mb-1">
+                      <SectionLabel>{CHAT_BUCKET_LABELS[bucket]}</SectionLabel>
+                      <div className="flex flex-col">{items.map(renderRow)}</div>
+                    </div>
+                  );
+                });
+              })()}
               {contentFilter === "all" && uiEventResults.length > 5 && (
-                <button
-                  onClick={() => setContentFilter("input")}
-                  className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                >
-                  show all {uiEventResults.length} results
-                </button>
+                <SeeAllRow
+                  label={`See all ${uiEventResults.length} keyboard & clipboard`}
+                  onClick={() => { setContentFilter("input"); setNavIndex(0); }}
+                />
               )}
             </div>
           )}
@@ -2217,35 +2746,27 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Screen results grid */}
           {searchResults.length > 0 && contentFilter !== "input" && contentFilter !== "chats" && (
             <>
-              {(speakerResults.length > 0 || (contentFilter === "all" && uiEventResults.length > 0)) && (
-                <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Monitor className="w-3 h-3" />
-                  screen
-                </p>
-              )}
+              {/* Always labelled in the blended view. The facets below refine
+                  only this section, so the heading is what scopes them — it
+                  used to appear only when speaker or keyboard results happened
+                  to exist, leaving the chips looking like global filters. */}
+              {contentFilter === "all" && <SectionLabel>screen</SectionLabel>}
 
+              {/* Facets on one scrollable row. Apps, sites and dates each had
+                  their own full-width row before, so up to three rows of chips
+                  pushed the actual results below the fold. */}
+              <div className="flex items-center gap-2 mt-1 mb-3 overflow-x-auto scrollbar-hide pb-1 empty:hidden">
               {/* App filter chips */}
               {appCounts.length > 1 && (
-                <div className="flex gap-1.5 mb-2 overflow-x-auto scrollbar-hide pb-0.5">
-                  <button
-                    onClick={() => { setAppFilter(null); setSelectedIndex(0); }}
-                    className={cn(
-                      "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
-                      !appFilter
-                        ? "bg-foreground text-background border-foreground"
-                        : "border-border text-muted-foreground hover:border-foreground/40"
-                    )}
-                  >
-                    all ({searchResults.length})
-                  </button>
+                <div className="flex gap-2 shrink-0">
                   {appCounts.map(([app, count]) => (
                     <button
                       key={app}
-                      onClick={() => { const newApp = appFilter === app ? null : app; setAppFilter(newApp); if (newApp) setDomainFilter(null); setSelectedIndex(0); }}
+                      onClick={() => { const newApp = appFilter === app ? null : app; setAppFilter(newApp); if (newApp) setDomainFilter(null); setNavIndex(0); }}
                       className={cn(
-                        "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                        "inline-flex h-7 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-[6px] border px-2.5 text-[11px] transition-colors",
                         appFilter === app
-                          ? "bg-foreground text-background border-foreground"
+                          ? "border-foreground bg-muted text-foreground"
                           : "border-border text-muted-foreground hover:border-foreground/40"
                       )}
                     >
@@ -2257,6 +2778,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                       />
                       {app} ({count})
+                      {appFilter === app && <X className="w-3 h-3" />}
                     </button>
                   ))}
                 </div>
@@ -2265,143 +2787,82 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {/* Domain filter chips — hide when a non-browser app is selected
                   (non-browser apps don't have URLs so domain chips are irrelevant) */}
               {domainCounts.length > 1 && (!appFilter || filteredResults.some(r => r.url)) && (
-                <div className="flex gap-1.5 mb-2 overflow-x-auto scrollbar-hide pb-0.5">
-                  <button
-                    onClick={() => { setDomainFilter(null); setSelectedIndex(0); }}
-                    className={cn(
-                      "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
-                      !domainFilter
-                        ? "bg-foreground text-background border-foreground"
-                        : "border-border text-muted-foreground hover:border-foreground/40"
-                    )}
-                  >
-                    all sites
-                  </button>
+                <div className="flex gap-2 shrink-0">
                   {domainCounts.map(([domain, count]) => (
                     <button
                       key={domain}
-                      onClick={() => { setDomainFilter(domainFilter === domain ? null : domain); setSelectedIndex(0); }}
+                      onClick={() => { setDomainFilter(domainFilter === domain ? null : domain); setNavIndex(0); }}
                       className={cn(
-                        "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                        "inline-flex h-7 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-[6px] border px-2.5 text-[11px] transition-colors",
                         domainFilter === domain
-                          ? "bg-foreground text-background border-foreground"
+                          ? "border-foreground bg-muted text-foreground"
                           : "border-border text-muted-foreground hover:border-foreground/40"
                       )}
                     >
                       {domain} ({count})
+                      {domainFilter === domain && <X className="w-3 h-3" />}
                     </button>
                   ))}
                 </div>
               )}
 
-              {/* Time range filter chips */}
+              {/* Date filter chips. These share the one scrollable facet row
+                  with apps and sites instead of owning a third row, but they
+                  are not the same kind of control: selecting a day re-queries
+                  the backend with start_time/end_time so pagination reaches
+                  older frames for that day. The day headings in this scope only
+                  group what is already loaded, so they don't replace this. */}
               {timeRanges.length > 1 && (
-                <div className="flex gap-1.5 mb-3 overflow-x-auto scrollbar-hide pb-0.5">
-                  <button
-                    onClick={() => {
-                      setTimeFilter(null);
-                      setSelectedIndex(0);
-                      setOcrOffset(0);
-                      setHasMoreOcr(true);
-                      searchKeywords(debouncedQuery, {
-                        limit: OCR_PAGE_SIZE,
-                        offset: 0,
-                        analytics_surface: analyticsSurface,
-                        analytics_search_id: getSearchAnalyticsId(
-                          buildSearchAnalyticsKey(
-                            searchEpoch,
-                            debouncedQuery.trim(),
-                            contentFilter,
-                            appFilter,
-                            domainFilter,
-                            null,
-                          ),
-                        ),
-                        analytics_session_id: searchSessionIdRef.current,
-                      });
-                    }}
-                    className={cn(
-                      "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
-                      !timeFilter
-                        ? "bg-foreground text-background border-foreground"
-                        : "border-border text-muted-foreground hover:border-foreground/40"
-                    )}
-                  >
-                    <Clock className="w-3 h-3" />
-                    all dates
-                  </button>
+                <div className="flex gap-2 shrink-0">
                   {timeRanges.map((range) => (
                     <button
                       key={range.dateKey}
-                      onClick={() => {
-                        const newFilter = timeFilter === range.dateKey ? null : range.dateKey;
-                        setTimeFilter(newFilter);
-                        setSelectedIndex(0);
-                        // Re-query backend with date range for proper pagination
-                        setOcrOffset(0);
-                        setHasMoreOcr(true);
-                        if (newFilter) {
-                          const start = new Date(newFilter + "T00:00:00");
-                          const end = new Date(newFilter + "T23:59:59.999");
-                          searchKeywords(debouncedQuery, {
-                            limit: OCR_PAGE_SIZE,
-                            offset: 0,
-                            start_time: start,
-                            end_time: end,
-                            analytics_surface: analyticsSurface,
-                            analytics_search_id: getSearchAnalyticsId(
-                              buildSearchAnalyticsKey(
-                                searchEpoch,
-                                debouncedQuery.trim(),
-                                contentFilter,
-                                appFilter,
-                                domainFilter,
-                                newFilter,
-                              ),
-                            ),
-                            analytics_session_id: searchSessionIdRef.current,
-                          });
-                        } else {
-                          searchKeywords(debouncedQuery, {
-                            limit: OCR_PAGE_SIZE,
-                            offset: 0,
-                            analytics_surface: analyticsSurface,
-                            analytics_search_id: getSearchAnalyticsId(
-                              buildSearchAnalyticsKey(
-                                searchEpoch,
-                                debouncedQuery.trim(),
-                                contentFilter,
-                                appFilter,
-                                domainFilter,
-                                null,
-                              ),
-                            ),
-                            analytics_session_id: searchSessionIdRef.current,
-                          });
-                        }
-                      }}
+                      onClick={() => applyTimeFilter(timeFilter === range.dateKey ? null : range.dateKey)}
                       className={cn(
-                        "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1 whitespace-nowrap shrink-0",
+                        "inline-flex h-7 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-[6px] border px-2.5 text-[11px] transition-colors",
                         timeFilter === range.dateKey
-                          ? "bg-foreground text-background border-foreground"
+                          ? "border-foreground bg-muted text-foreground"
                           : "border-border text-muted-foreground hover:border-foreground/40"
                       )}
                     >
                       <Clock className="w-3 h-3" />
                       {range.label} ({range.count})
+                      {timeFilter === range.dateKey && <X className="w-3 h-3" />}
                     </button>
                   ))}
                 </div>
               )}
 
-              <div
-                className="grid gap-3"
-                style={{
-                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-                }}
-              >
-                {filteredResults.map((result, index) => {
-                  const isActive = index === activeIndex;
+              </div>
+
+              {/* Sits under the chips, because the chips are the cause: the
+                  query has results, an applied facet is hiding them. */}
+              {facetsHidEverything && (
+                <EmptyMessage
+                  title="No results with these filters"
+                  hint={`${searchResults.length} screen results for "${trimmedQuery}" are hidden`}
+                  action={{
+                    label: "Clear filters",
+                    onClick: () => {
+                      setAppFilter(null);
+                      setDomainFilter(null);
+                      // Refetches without the date bounds when one was applied.
+                      if (timeFilter) applyTimeFilter(null);
+                      setNavIndex(0);
+                    },
+                  }}
+                />
+              )}
+
+              {/* Grouped by day in its own scope, exactly like the chats and
+                  keyboard lists. Results come back newest-first, so buckets are
+                  contiguous — grouping doesn't reorder anything. In "All" the
+                  grid stays flat: it's a section of a blended list there. */}
+              {(() => {
+                const renderCard = (result: (typeof filteredResults)[number], index: number) => {
+                  const navKey = `frame:${index}`;
+                  const pos = navPositions.get(navKey);
+                  const isActive = isNavActive(navKey);
                   const group = filteredGroups[index];
                   const groupSize = group?.group_size ?? 1;
 
@@ -2409,13 +2870,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     <div
                       key={result.frame_id}
                       data-index={index}
+                      data-nav-index={pos}
                       onClick={() => handleSelectResult(result)}
-                      onMouseEnter={() => setHoveredIndex(index)}
-                      onMouseLeave={() => setHoveredIndex(null)}
+                      onMouseEnter={() => pos !== undefined && setNavIndex(pos)}
+                      // No scale/shadow on selection: transforming the active
+                      // card nudged its neighbours and made arrow-key movement
+                      // feel like the grid was breathing. Colour only.
                       className={cn(
-                        "cursor-pointer rounded overflow-hidden border transition-all duration-150",
+                        "cursor-pointer rounded-[6px] overflow-hidden border transition-colors",
                         isActive
-                          ? "ring-2 ring-foreground border-foreground scale-[1.02] shadow-lg z-10"
+                          ? "border-foreground bg-muted"
                           : "border-border hover:border-foreground/50"
                       )}
                     >
@@ -2443,35 +2907,61 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                           </span>
                         )}
                       </div>
-                      <div className="p-2 bg-card">
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                          <Clock className="w-3 h-3" />
-                          <span className="font-mono">
-                            {groupSize > 1 && group
-                              ? `${formatRelativeTime(group.start_time)} – ${formatRelativeTime(group.end_time)}`
-                              : formatRelativeTime(result.timestamp)}
-                          </span>
-                        </div>
-                        <p className="text-xs font-medium text-foreground truncate">
+                      {/* Fixed one-line caption. The old block stacked time
+                          over app and grew a third line when selected, so the
+                          whole row of cards reflowed as you arrowed through.
+                          Window title and URL moved to the tooltip. */}
+                      <div
+                        className="flex items-center gap-2 px-2 py-1.5 bg-card"
+                        title={[result.window_name, result.url].filter(Boolean).join(" — ")}
+                      >
+                        <span className="text-[11px] font-mono text-muted-foreground shrink-0">
+                          {groupSize > 1 && group
+                            ? `${formatRelativeTime(group.start_time)} – ${formatRelativeTime(group.end_time)}`
+                            : formatRelativeTime(result.timestamp)}
+                        </span>
+                        <p className="text-xs text-foreground truncate">
                           {result.app_name}
                         </p>
-                        {isActive && (
-                          <div className="mt-1 pt-1 border-t border-border space-y-1">
-                            <p className="text-xs text-muted-foreground line-clamp-2">
-                              {result.window_name}
-                            </p>
-                            {result.url && (
-                              <p className="text-xs text-muted-foreground/70 truncate">
-                                {result.url}
-                              </p>
-                            )}
-                          </div>
-                        )}
                       </div>
                     </div>
                   );
-                })}
-              </div>
+                };
+
+                // Flat 200px floor, deliberately not a percentage. A `30%`
+                // floor caps the grid at three columns and spends extra width
+                // enlarging cards; users asked for the opposite — a wider
+                // window should show *more* results, and the grid should break
+                // into columns early rather than sitting at two oversized
+                // cards. auto-fit (not auto-fill) collapses empty tracks so a
+                // lone result has no gap beside it.
+                const cellStyle = { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" } as const;
+
+                if (contentFilter !== "screen") {
+                  return (
+                    <div data-frame-grid className="grid gap-2.5" style={cellStyle}>
+                      {filteredResults.map(renderCard)}
+                    </div>
+                  );
+                }
+
+                const buckets: Record<string, { result: (typeof filteredResults)[number]; index: number }[]> =
+                  { today: [], yesterday: [], week: [], older: [] };
+                filteredResults.forEach((result, index) => {
+                  buckets[getChatTimeBucket(new Date(result.timestamp).getTime())].push({ result, index });
+                });
+                // A day heading only earns its place when there are days to
+                // tell apart. One bucket means the label separates nothing.
+                const filled = CHAT_BUCKET_ORDER.filter((b) => buckets[b]?.length);
+                return filled.map((bucket) => (
+                  <div key={bucket} className="mb-1">
+                    {filled.length > 1 && <SectionLabel>{CHAT_BUCKET_LABELS[bucket]}</SectionLabel>}
+                    <div data-frame-grid className="grid gap-2.5" style={cellStyle}>
+                      {buckets[bucket].map(({ result, index }) => renderCard(result, index))}
+                    </div>
+                  </div>
+                ));
+              })()}
 
               {/* Load more indicator */}
               {(isLoadingMore || (hasMoreOcr && filteredResults.length > 0 && searchResults.length >= OCR_PAGE_SIZE)) && (
@@ -2488,26 +2978,32 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
 
           {/* Suggestions when no query */}
-          {!debouncedQuery && !isSearching && contentFilter !== "chats" && (
-            <div className="py-4 px-2 space-y-4">
+          {!query.trim() && !isSearching && contentFilter !== "chats" && (
+            <div className="pb-2 space-y-2">
               {/* Recent chats — list with timestamps */}
               {visibleRecentChats.length > 0 && (
                 <div>
-                  <p className="text-xs text-muted-foreground/60 mb-1 flex items-center gap-1.5">
-                    <MessageSquare className="w-3 h-3" />
-                    recent chats
-                  </p>
+                  {/* No icon here — the chip in the search bar already names
+                      this list as chats, and each row carries its own icon. */}
+                  <SectionLabel>recent</SectionLabel>
                   <div className="flex flex-col">
                     {visibleRecentChats.map((chat) => {
                       const ts = new Date(chat.lastUserMessageAt ?? chat.updatedAt).toISOString();
+                      const navKey = `chat:${chat.id}`;
+                      const pos = navPositions.get(navKey);
                       return (
                         <button
                           key={chat.id}
+                          data-nav-index={pos}
                           onClick={() => handleOpenChatResult(chat.id, "click")}
-                          className="w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors hover:bg-muted/50"
+                          onMouseEnter={() => pos !== undefined && setNavIndex(pos)}
+                          className={cn(
+                            "w-full flex items-center gap-2.5 px-2 py-2 rounded text-left transition-colors",
+                            isNavActive(navKey) ? "bg-muted" : "hover:bg-muted/50",
+                          )}
                         >
                           <MessageSquare className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-                          <span className="text-sm text-foreground/80 truncate">{chat.title}</span>
+                          <span className="text-sm truncate">{chat.title}</span>
                           <span className="ml-auto text-[11px] text-muted-foreground font-mono shrink-0">
                             {formatRelativeTime(ts)}
                           </span>
@@ -2520,7 +3016,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {/* Suggestion chips from recent screen activity */}
               {suggestions.length > 0 && (
                 <div>
-                  <p className="text-xs text-muted-foreground/60 mb-2">from your recent activity</p>
+                  <SectionLabel>from your recent activity</SectionLabel>
                   <div className="flex flex-wrap gap-2">
                     {suggestions.map((suggestion) => (
                       <button
@@ -2539,10 +3035,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   </div>
                 </div>
               )}
-              {!visibleRecentChats.length && !suggestionsLoading && (
-                <div className="text-center text-sm text-muted-foreground py-4">
-                  type to search your screen history
-                </div>
+              {/* Nothing recent to show yet — orient rather than sit blank:
+                  name what this searches and what typing will do. */}
+              {!visibleRecentChats.length && !suggestionsLoading && !isLoadingChats && (
+                <EmptyMessage
+                  title="Nothing recent yet"
+                  hint="Start typing to search everything you've seen, said, or heard"
+                />
               )}
             </div>
           )}
@@ -2552,12 +3051,17 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   );
 
   if (standalone || embedded) {
-    const hasContent = hasResults || (debouncedQuery && debouncedQuery.trim().length >= 2) || isSearching || isSearchingSpeakers || isSearchingTags || isSearchingUiEvents;
     return (
-      <div className={cn(
-        "flex flex-col bg-card/95 backdrop-blur-xl",
-        standalone ? "h-full rounded-xl border border-border/50 shadow-2xl overflow-hidden" : "h-full",
-      )}>
+      <div
+        ref={cardRef}
+        className={cn(
+          "flex flex-col bg-card/95 backdrop-blur-xl",
+          // Standalone hugs its content: the window resizes to match, so a
+          // stretched card would just paint white space under short lists.
+          // Deliberately not max-h-full: the card must be free to exceed the
+          // current (80px) window height, or measuring it could never grow it.
+          standalone ? "h-fit rounded-xl border border-border/50 shadow-2xl overflow-hidden" : "h-full",
+        )}>
         {/* Search Input — Raycast-style large input */}
         <div className={cn(
           "flex items-center gap-3 px-5 border-b border-border/50",
@@ -2565,7 +3069,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         )}
         data-tauri-drag-region={standalone ? true : undefined}
         >
-          <Search className="w-4.5 h-4.5 text-muted-foreground flex-shrink-0" />
+          {/* Decoration, not a control — it sits below the chip on the right in
+              visual weight: 18px and lightened, so it marks the field without
+              competing with the button beside it. */}
+          <Search className={cn("text-muted-foreground/70 flex-shrink-0", standalone ? "size-[18px]" : "w-4 h-4")} />
           <input
             ref={inputRef}
             type="text"
@@ -2583,7 +3090,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             }}
             placeholder="search memory & chats... (# tags, @ people)"
             className={cn(
-              "flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/60 outline-none",
+              "min-w-[120px] flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/60 outline-none",
               standalone ? "text-base" : "text-sm",
             )}
             {...searchInputBehaviorProps}
@@ -2597,33 +3104,38 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               }}
               className="p-1 hover:bg-muted rounded"
             >
-              <X className="w-3.5 h-3.5 text-muted-foreground" />
+              <X className="w-4 h-4 text-muted-foreground" />
             </button>
           )}
+          {renderScopeSwitcher()}
         </div>
 
-        {/* Results area — only shown when there's content */}
-        {hasContent && (
-          <div
-            key={contentFilter}
-            ref={gridRef}
-            className={cn(
-              "flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y",
-              standalone ? "p-3 max-h-[500px] scrollbar-hide" : "p-4",
-            )}
-            onWheel={(e) => {
-              e.stopPropagation();
-              const target = e.currentTarget;
-              const isAtTop = target.scrollTop === 0 && e.deltaY < 0;
-              const isAtBottom = target.scrollTop + target.clientHeight >= target.scrollHeight && e.deltaY > 0;
-              if (isAtTop || isAtBottom) e.preventDefault();
-            }}
-            onTouchMove={(e) => e.stopPropagation()}
-            onScroll={handleScroll}
-          >
-            {renderResults()}
-          </div>
-        )}
+        {/* Results area — also hosts the empty state (recent chats + suggestions) */}
+        <div
+          key={contentFilter}
+          ref={gridRef}
+          data-testid="search-results"
+          data-search-state={resultsState}
+          className={cn(
+            "min-h-0 overflow-y-auto overscroll-contain touch-pan-y",
+            // Standalone: height follows content up to the cap, so the card (and
+            // therefore the window) hugs short lists. Embedded fills its parent.
+            // Little top padding: the first SectionLabel brings its own, and
+            // stacking both left a visible dead gap under the search bar.
+            standalone ? "px-3 pb-3 pt-1 max-h-[500px] scrollbar-hide" : "flex-1 px-4 pb-4 pt-1",
+          )}
+          onWheel={(e) => {
+            e.stopPropagation();
+            const target = e.currentTarget;
+            const isAtTop = target.scrollTop === 0 && e.deltaY < 0;
+            const isAtBottom = target.scrollTop + target.clientHeight >= target.scrollHeight && e.deltaY > 0;
+            if (isAtTop || isAtBottom) e.preventDefault();
+          }}
+          onTouchMove={(e) => e.stopPropagation()}
+          onScroll={handleScroll}
+        >
+          {renderResults()}
+        </div>
 
         {/* Footer — compact keyboard hints */}
         <div className={cn(
@@ -2631,27 +3143,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           standalone ? "bg-muted/20" : "bg-muted/30 py-2",
         )}>
           <div className="flex items-center gap-4">
-            {selectedSpeaker ? (
-              <>
-                <span>↑↓ navigate</span>
-                <span>⏎ go to timeline</span>
-                <span>esc back</span>
-              </>
-            ) : contentFilter === "chats" ? (
-              <>
-                <span>↑↓ navigate</span>
-                <span>⏎ open chat</span>
-              </>
-            ) : (
-              <>
-                <span>←→↑↓ navigate</span>
-                <span>⏎ go to timeline</span>
-                <span className="flex items-center gap-1">
-                  <MessageSquare className="w-2.5 h-2.5" />
-                  ⌘⏎ ask AI
-                </span>
-              </>
-            )}
+            {renderFooterHints()}
           </div>
           <span>esc close</span>
         </div>
@@ -2697,7 +3189,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               }
             }}
             placeholder="Search memory & chats... (# tags, @ people)"
-            className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground text-sm outline-none"
+            className="min-w-[120px] flex-1 bg-transparent text-foreground placeholder:text-muted-foreground text-sm outline-none"
             {...searchInputBehaviorProps}
           />
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
@@ -2709,17 +3201,20 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               }}
               className="p-1 hover:bg-muted rounded"
             >
-              <X className="w-3 h-3 text-muted-foreground" />
+              <X className="w-4 h-4 text-muted-foreground" />
             </button>
           )}
+          {renderScopeSwitcher()}
         </div>
 
         {/* Results area - isolate scroll to prevent timeline from scrolling */}
         <div
           key={contentFilter}
           ref={gridRef}
+          data-testid="search-results"
+          data-search-state={resultsState}
           className={cn(
-            "overflow-y-auto p-4 overscroll-contain touch-pan-y",
+            "overflow-y-auto px-4 pb-4 pt-1 overscroll-contain touch-pan-y",
             // Standalone search window: fill the window instead of leaving
             // ~40vh of dead space below the list. Embedded dialog keeps a cap.
             standalone ? "flex-1 min-h-0" : "max-h-[60vh]",
@@ -2740,27 +3235,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         {/* Footer with keyboard hints */}
         <div className="px-4 py-2 border-t border-border bg-muted/30 flex items-center justify-between text-[10px] text-muted-foreground font-mono">
           <div className="flex items-center gap-4">
-            {selectedSpeaker ? (
-              <>
-                <span>↑↓ navigate</span>
-                <span>⏎ go to timeline</span>
-                <span>esc back</span>
-              </>
-            ) : contentFilter === "chats" ? (
-              <>
-                <span>↑↓ navigate</span>
-                <span>⏎ open chat</span>
-              </>
-            ) : (
-              <>
-                <span>←→↑↓ navigate</span>
-                <span>⏎ go to timeline</span>
-                <span className="flex items-center gap-1">
-                  <MessageSquare className="w-3 h-3" />
-                  ⌘⏎ ask AI
-                </span>
-              </>
-            )}
+            {renderFooterHints()}
           </div>
           <span>esc {selectedSpeaker ? "back" : "close"}</span>
         </div>

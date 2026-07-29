@@ -417,6 +417,24 @@ mod tests {
             .await
             .expect("write succeeds before the wedge");
 
+        // Make the failure boundary deterministic. The pre-wedge write warms
+        // whichever pooled connection handled it; without clearing every pool
+        // member's page cache, the first armed batch can occasionally commit
+        // entirely from cached pages before any xRead observes the failpoint.
+        // Hold both max_connections slots at once so both caches are emptied.
+        let mut cold_connection_a = write_pool.acquire().await.unwrap();
+        let mut cold_connection_b = write_pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA shrink_memory")
+            .execute(&mut *cold_connection_a)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA shrink_memory")
+            .execute(&mut *cold_connection_b)
+            .await
+            .unwrap();
+        drop(cold_connection_a);
+        drop(cold_connection_b);
+
         // --- ARM the wedge: every write now hits a hard disk I/O error.
         arm();
 

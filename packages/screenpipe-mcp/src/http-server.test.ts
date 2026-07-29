@@ -253,7 +253,11 @@ describe("buildHttpServer", () => {
       });
 
       expect(toolsResponse.status).toBe(200);
-      expect(await toolsResponse.text()).toContain('"name":"search_content"');
+      const toolsBody = await toolsResponse.text();
+      expect(toolsBody).toContain('"name":"search_content"');
+      expect(toolsBody).toContain('"parsed"');
+      expect(toolsBody).toContain('"frame_id"');
+      expect(toolsBody).toContain('"actor_id"');
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => {

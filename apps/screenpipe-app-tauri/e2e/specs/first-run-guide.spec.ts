@@ -9,9 +9,9 @@
  * lifts the composer above it with CSS. When the lift fails (missing target,
  * ancestor stacking context), the chat is visible but completely dead.
  *
- * What we assert, driving the REAL guide via help → replay intro (an
- * explicit replay bypasses the `onboarding` seed suppression, so this runs
- * under the default e2e seed):
+ * What we assert, driving the REAL guide through its internal handoff event
+ * (an explicit request bypasses the `onboarding` seed suppression, so this
+ * runs under the default e2e seed):
  *
  *  1. Accepting the invite leads to a genuinely interactive composer:
  *     hit-testing (elementFromPoint) at the textarea's center resolves
@@ -42,21 +42,32 @@ import { saveScreenshot } from "../helpers/screenshot-utils.js";
 const PROMPT = "create a pipe that tracks what i do every hour";
 const COMPOSER_TA = '[data-firstrun-target="composer"] textarea';
 
-/** Navigate help → replay intro and wait for the step-0 invite card. */
-async function startGuideViaReplay(): Promise<void> {
+/** Request the guide through its internal handoff and wait for the invite. */
+async function requestGuide(): Promise<void> {
   // Start from a clean slate: a guide left standing by a previous (possibly
-  // failed) test still owns a click-blocking scrim, and the nav click below
-  // would land on it instead of the sidebar. Escape is a no-op otherwise.
+  // failed) test still owns a click-blocking scrim. Escape is a no-op otherwise.
   await browser.keys(["Escape"]);
   await browser.pause(500);
 
-  const navHelp = await $('[data-testid="nav-help"]');
-  await navHelp.waitForExist({ timeout: t(10000) });
-  await navHelp.click();
-
-  const replay = await $('[data-testid="help-replay-intro"]');
-  await replay.waitForExist({ timeout: t(10000) });
-  await replay.click();
+  const emitError = (await browser.executeAsync(
+    (done: (value: string | null) => void) => {
+      localStorage.setItem("screenpipe:first-run-guide-pending", "true");
+      const tauri = globalThis as unknown as {
+        __TAURI__?: {
+          event?: { emit: (name: string) => Promise<unknown> };
+        };
+      };
+      const emit = tauri.__TAURI__?.event?.emit;
+      if (!emit) {
+        done("global __TAURI__.event.emit unavailable");
+        return;
+      }
+      void emit("first-run-guide-pending")
+        .then(() => done(null))
+        .catch((error) => done(String(error)));
+    },
+  )) as string | null;
+  expect(emitError).toBeNull();
 
   const invite = await $('[data-testid="firstrun-invite"]');
   await invite.waitForExist({ timeout: t(10000) });
@@ -96,7 +107,7 @@ describe("First-run guide (#5407)", function () {
   });
 
   it("accepting the invite leaves the composer focused, prefilled, and clickable", async () => {
-    await startGuideViaReplay();
+    await requestGuide();
 
     const accept = await $('[data-testid="firstrun-accept"]');
     await accept.click();
@@ -141,7 +152,7 @@ describe("First-run guide (#5407)", function () {
   });
 
   it("fails open instead of trapping when the composer lift is defeated", async () => {
-    await startGuideViaReplay();
+    await requestGuide();
     await (await $('[data-testid="firstrun-accept"]')).click();
     await browser.waitUntil(scrimVisible, {
       timeout: t(10000),
@@ -178,7 +189,7 @@ describe("First-run guide (#5407)", function () {
   });
 
   it("declining the invite is remembered across reloads", async () => {
-    await startGuideViaReplay();
+    await requestGuide();
     await (await $('[data-testid="firstrun-decline"]')).click();
 
     const invite = await $('[data-testid="firstrun-invite"]');

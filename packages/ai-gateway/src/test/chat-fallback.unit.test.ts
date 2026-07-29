@@ -112,6 +112,7 @@ describe('chat handler — client payload classification (SCREENPIPE-AI-PROXY-1A
 
 describe('chat handler — current hosted fallback chains', () => {
 	it('crosses providers through Sonnet 5 when Luna fails', () => {
+		expect(MODEL_FALLBACKS['claude-opus-5']).toEqual(['claude-sonnet-5', 'gpt-5.4-mini']);
 		expect(MODEL_FALLBACKS['gpt-5.6-luna']).toEqual(['claude-sonnet-5', 'gpt-5.4-mini']);
 		expect(MODEL_FALLBACKS['claude-sonnet-5']).toEqual(['gpt-5.4-mini']);
 	});

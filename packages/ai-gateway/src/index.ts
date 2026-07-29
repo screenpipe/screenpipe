@@ -188,7 +188,10 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// body. Otherwise an anonymous or unverifiable-plan request could make
 			// the Worker parse an arbitrarily large JSON payload just to return the
 			// same 401/503 policy decision.
-			if (authResult.tier === 'anonymous' || !authResult.userId) {
+			if (
+				authResult.tier === 'anonymous' ||
+				(!authResult.userId && authResult.service !== true)
+			) {
 				return freeChatErrorResponse({
 					status: 401,
 					code: 'authentication_required',

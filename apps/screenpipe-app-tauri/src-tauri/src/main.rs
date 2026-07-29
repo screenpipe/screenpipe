@@ -1601,15 +1601,30 @@ async fn main() {
                     }),
                 );
 
-                std::thread::Builder::new()
+                let is_starting_after_spawn_error = is_starting_clone.clone();
+                let server_thread = std::thread::Builder::new()
                     .name("screenpipe-server".to_string())
                     .spawn(move || {
-                        let server_runtime = tokio::runtime::Builder::new_multi_thread()
+                        let server_runtime = match tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(16)
                             .thread_name("screenpipe-worker")
                             .enable_all()
                             .build()
-                            .expect("Failed to create server runtime");
+                        {
+                            Ok(runtime) => runtime,
+                            Err(error) => {
+                                let message =
+                                    format!("failed to create local API runtime: {error}");
+                                error!("{message}");
+                                crate::health::set_boot_error(&message);
+                                crate::health::set_recording_status(
+                                    crate::health::RecordingStatus::Error,
+                                );
+                                is_starting_clone
+                                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                                return;
+                            }
+                        };
 
                         server_runtime.block_on(async move {
                             // Resolve + seed the shared api_auth_key cache before building
@@ -1795,8 +1810,17 @@ async fn main() {
                                 }
                             }
                         });
-                    })
-                    .expect("Failed to spawn server thread");
+                    });
+                if let Err(error) = server_thread {
+                    let message = format!("failed to spawn local API thread: {error}");
+                    error!("{message}");
+                    crate::health::set_boot_error(&message);
+                    crate::health::set_recording_status(
+                        crate::health::RecordingStatus::Error,
+                    );
+                    is_starting_after_spawn_error
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                }
             }
 
             // Initialize update check

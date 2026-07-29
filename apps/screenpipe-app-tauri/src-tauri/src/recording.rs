@@ -1222,6 +1222,7 @@ async fn spawn_screenpipe_inner(
     match result_rx.await {
         Ok(Ok(())) => {
             info!("Screenpipe started successfully");
+            crate::db_relaunch::reset_db_boot_failures();
             state.is_starting.store(false, Ordering::SeqCst);
             state.is_starting_capture.store(false, Ordering::SeqCst);
             let spawn_epoch = std::time::SystemTime::now()

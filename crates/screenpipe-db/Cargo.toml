@@ -21,6 +21,7 @@ serde_json = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 
 screenpipe-config = { path = "../screenpipe-config" }
+screenpipe-semantic = { path = "../screenpipe-semantic" }
 screenpipe-sqlite-coordinator = { path = "../screenpipe-sqlite-coordinator" }
 zerocopy = { version = "0.7.32" }
 

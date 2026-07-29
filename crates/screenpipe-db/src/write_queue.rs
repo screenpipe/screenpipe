@@ -517,6 +517,10 @@ pub(crate) enum WriteOp {
         model: String,
         provider: Option<String>,
         started_at: String,
+        /// Event that triggered the run, and the event's identity (e.g. a
+        /// meeting id). Both None for scheduled and manual runs.
+        trigger_event: Option<String>,
+        trigger_key: Option<String>,
     },
     PipeUpdateExecution {
         sql: String,
@@ -524,6 +528,24 @@ pub(crate) enum WriteOp {
     },
     PipeDeleteOldExecutions {
         keep_per_pipe: i32,
+    },
+    /// Claim a (pipe, event, key) tuple for an event-triggered run. Returns the
+    /// number of rows inserted: 1 on a fresh claim, 0 if already claimed.
+    PipeClaimEventRun {
+        pipe_name: String,
+        event_name: String,
+        event_key: String,
+        claimed_at: String,
+    },
+    /// Drop a claim so the event can be retried (used when the run fails).
+    PipeReleaseEventRun {
+        pipe_name: String,
+        event_name: String,
+        event_key: String,
+    },
+    /// Prune claims older than `before`, bounding the table's growth.
+    PipePruneEventRuns {
+        before: String,
     },
     /// Insert a synced frame (video_chunk + frame row) from cloud sync import.
     SyncInsertFrame {
@@ -2000,10 +2022,12 @@ async fn execute_single_write(
             model,
             provider,
             started_at,
+            trigger_event,
+            trigger_key,
         } => {
             let row = sqlx::query_scalar::<_, i64>(
-                r#"INSERT INTO pipe_executions (pipe_name, status, trigger_type, model, provider, started_at)
-                   VALUES (?, 'queued', ?, ?, ?, ?)
+                r#"INSERT INTO pipe_executions (pipe_name, status, trigger_type, model, provider, started_at, trigger_event, trigger_key)
+                   VALUES (?, 'queued', ?, ?, ?, ?, ?, ?)
                    RETURNING id"#,
             )
             .bind(pipe_name)
@@ -2011,9 +2035,58 @@ async fn execute_single_write(
             .bind(model)
             .bind(provider)
             .bind(started_at)
+            .bind(trigger_event)
+            .bind(trigger_key)
             .fetch_one(&mut **conn)
             .await?;
             Ok(WriteResult::Id(row))
+        }
+
+        WriteOp::PipeClaimEventRun {
+            pipe_name,
+            event_name,
+            event_key,
+            claimed_at,
+        } => {
+            // OR IGNORE + the primary key is the whole idempotency guarantee:
+            // a duplicate claim inserts 0 rows instead of erroring.
+            let result = sqlx::query(
+                r#"INSERT OR IGNORE INTO pipe_event_runs
+                       (pipe_name, event_name, event_key, claimed_at)
+                   VALUES (?, ?, ?, ?)"#,
+            )
+            .bind(pipe_name)
+            .bind(event_name)
+            .bind(event_key)
+            .bind(claimed_at)
+            .execute(&mut **conn)
+            .await?;
+            Ok(WriteResult::Id(result.rows_affected() as i64))
+        }
+
+        WriteOp::PipeReleaseEventRun {
+            pipe_name,
+            event_name,
+            event_key,
+        } => {
+            sqlx::query(
+                r#"DELETE FROM pipe_event_runs
+                   WHERE pipe_name = ? AND event_name = ? AND event_key = ?"#,
+            )
+            .bind(pipe_name)
+            .bind(event_name)
+            .bind(event_key)
+            .execute(&mut **conn)
+            .await?;
+            Ok(WriteResult::Unit)
+        }
+
+        WriteOp::PipePruneEventRuns { before } => {
+            sqlx::query("DELETE FROM pipe_event_runs WHERE claimed_at < ?")
+                .bind(before)
+                .execute(&mut **conn)
+                .await?;
+            Ok(WriteResult::Unit)
         }
 
         WriteOp::PipeUpdateExecution { sql, binds } => {

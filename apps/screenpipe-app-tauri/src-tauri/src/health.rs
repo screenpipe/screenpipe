@@ -682,6 +682,9 @@ struct EngineRespawnCheck {
     recently_woke: bool,
     /// A start/respawn is already in flight.
     start_in_progress: bool,
+    /// DB recovery was surfaced; automatic retries must stop to preserve the
+    /// quarantined generation until a deliberate repair succeeds.
+    manual_recovery_required: bool,
     /// Consecutive connection failures, vs `down_threshold`.
     consecutive_failures: u32,
     down_threshold: u32,
@@ -708,6 +711,7 @@ impl EngineRespawnCheck {
             && !self.in_restart_grace
             && !self.recently_woke
             && !self.start_in_progress
+            && !self.manual_recovery_required
             && self.consecutive_failures >= self.down_threshold
             && self.respawns_in_window < self.max_respawns
     }
@@ -749,6 +753,15 @@ fn respawn_engine_if_crashed(
     // fresh respawn attempts. (Nothing to respawn while it's up.)
     if health_ok {
         server_respawns.clear();
+        return;
+    }
+
+    // Once DB recovery has been surfaced, preserve the quarantined database
+    // and stop every automatic restart path (including the port-conflict
+    // shortcut below). A deliberate start that proves the server healthy
+    // clears this gate via `reset_db_boot_failures`.
+    let manual_recovery_required = crate::db_relaunch::manual_recovery_required();
+    if manual_recovery_required {
         return;
     }
 
@@ -849,6 +862,7 @@ fn respawn_engine_if_crashed(
             .unwrap_or(false),
         recently_woke: screenpipe_engine::sleep_monitor::recently_woke_from_sleep(),
         start_in_progress,
+        manual_recovery_required,
         consecutive_failures,
         down_threshold: SERVER_DOWN_THRESHOLD,
         respawns_in_window: server_respawns.len() as u32,
@@ -3388,6 +3402,7 @@ mod tests {
             in_restart_grace: false,
             recently_woke: false,
             start_in_progress: false,
+            manual_recovery_required: false,
             consecutive_failures: SERVER_DOWN_THRESHOLD,
             down_threshold: SERVER_DOWN_THRESHOLD,
             respawns_in_window: 0,
@@ -3466,6 +3481,15 @@ mod tests {
     fn never_respawns_while_a_start_is_in_flight() {
         assert!(!EngineRespawnCheck {
             start_in_progress: true,
+            ..crash_baseline()
+        }
+        .should_respawn());
+    }
+
+    #[test]
+    fn never_respawns_after_manual_db_recovery_is_required() {
+        assert!(!EngineRespawnCheck {
+            manual_recovery_required: true,
             ..crash_baseline()
         }
         .should_respawn());

@@ -19,6 +19,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 	const originalFetch = globalThis.fetch;
 	const env = {
 		NODE_ENV: 'production',
+		AI_GATEWAY_SERVICE_TOKEN: 'runner-service-secret',
 		CLERK_SECRET_KEY: 'clerk-test-secret',
 		SUPABASE_URL: 'https://supabase.test',
 		SUPABASE_ANON_KEY: 'supabase-test-key',
@@ -92,6 +93,22 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(401);
 		expect(await errorCode(response)).toBe('authentication_required');
 		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	it('lets the trusted runner bearer reach hosted background inference without a human user id', async () => {
+		const response = await handleRequest(
+			request({
+				Authorization: 'Bearer runner-service-secret',
+				'x-screenpipe-latency': 'background',
+			}, '/v1/chat/completions', 'gpt-5.6-sol'),
+			env,
+			ctx,
+		);
+
+		// The unit env has no provider credential. Reaching provider setup proves
+		// the machine identity cleared both human-user guards and paid-model gates.
+		expect(response.status).toBe(503);
+		expect(await response.text()).not.toContain('authentication_required');
 	});
 
 	it('blocks a free hosted background request instead of trusting its header', async () => {

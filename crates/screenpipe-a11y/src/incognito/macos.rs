@@ -227,10 +227,15 @@ impl IncognitoDetector for MacOSIncognitoDetector {
         // Strategy 1: explicit opt-in AppleScript query for Chromium browsers
         // (not Arc). This is the only path that can require Automation access.
         if self.enhanced_detection && Self::is_chromium_browser(app_name) {
-            if let Some(is_private) = self.check_with_cache(app_name, window_title) {
-                return is_private;
+            if let Some(true) = self.check_with_cache(app_name, window_title) {
+                return true;
             }
-            // AppleScript failed — fall through to title check.
+            // A negative answer is not final: the AppleScript query returns
+            // tab titles, while the AX title carries a " - App (Incognito)"
+            // suffix, so the exact-match lookup misses windows that really
+            // are private. Let the localized title check have the last word;
+            // a false positive skips one window, a false negative records
+            // private browsing.
         }
 
         // Strategy 2: Localized title matching (all browsers).
@@ -285,6 +290,27 @@ mod tests {
                 .and_then(|target| target.applescript_name),
             None
         );
+    }
+
+    /// Chrome answers the AppleScript query with tab titles, while the AX
+    /// window title the tree walk passes in carries a " - Google Chrome
+    /// (Incognito)" suffix. The exact-match lookup therefore says "not
+    /// private" for a window that is, and the localized title check has to
+    /// catch it.
+    #[test]
+    fn test_incognito_window_with_browser_suffix_is_detected() {
+        let detector = isolated_detector(true);
+        detector.cache.store(
+            "com.google.Chrome".to_ascii_lowercase(),
+            Some(HashSet::from(["Privacy - Wikipedia".to_string()])),
+        );
+
+        assert!(detector.is_incognito(
+            "Google Chrome",
+            0,
+            "Privacy - Wikipedia - Google Chrome (Incognito)"
+        ));
+        assert!(!detector.is_incognito("Google Chrome", 0, "Privacy - Wikipedia - Google Chrome"));
     }
 
     #[test]

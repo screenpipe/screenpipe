@@ -77,6 +77,29 @@ impl DatabaseManager {
         .await
     }
 
+    /// Return the newest registered snapshot for one producer-owned file.
+    ///
+    /// Pipe-run output paths include the execution id, so they cannot be used
+    /// to recognize an unchanged file across runs. `original_path` is the
+    /// stable producer path used for that comparison instead.
+    pub async fn get_latest_output_by_original_path(
+        &self,
+        original_path: &str,
+        source_type: &str,
+    ) -> Result<Option<crate::types::OutputRecord>, SqlxError> {
+        sqlx::query_as::<_, crate::types::OutputRecord>(
+            "SELECT id, source, source_type, title, kind, original_path, output_path, \
+             size_bytes, preview, metadata, saf_kind, artifact_id, saf_version, \
+             created_at, updated_at \
+             FROM outputs WHERE original_path = ?1 AND source_type = ?2 \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(original_path)
+        .bind(source_type)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     /// Look up a SAF artifact row by its stable identity. Artifact ids are
     /// scoped per (source, source_type) so two pipes can reuse the same
     /// artifact_id without colliding. Newest row wins if duplicates exist.

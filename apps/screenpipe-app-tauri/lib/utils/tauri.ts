@@ -3075,6 +3075,15 @@ disableVision: boolean;
  */
 disableScreenshots?: boolean;
 /**
+ * Enable experimental normalized semantic context parsing. Off by default.
+ */
+enableSemanticContext?: boolean;
+/**
+ * AI projection derived from the shared accessibility capture. `computerUse`
+ * skips semantic parser storage; `both` reuses the same captured tree.
+ */
+semanticContextMode?: "memory" | "computerUse" | "both";
+/**
  * Disable the timeline / rewind feature. When true, the engine skips
  * timeline-only work: warming the hot frame cache from the DB at startup
  * and buffering captured frames/audio into the in-memory hot cache that

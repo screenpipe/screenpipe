@@ -17,9 +17,15 @@ mod tests {
     use screenpipe_engine::SCServer;
     use screenpipe_engine::{ContentItem, PaginatedResponse};
     use screenpipe_screen::OcrEngine; // Adjust this import based on your actual module structure
+    use screenpipe_semantic::{
+        AppIdentity, AppVersionRequirement, IdentityQuality, OutputBudget, ParserManifest,
+        ParserScope, Platform, SemanticItem, SemanticKind, SemanticNodeInput, SemanticTreeBuilder,
+        TreeBudget, ValidatedProjection,
+    };
     use serde::Deserialize;
     use std::net::SocketAddr;
     use std::sync::Arc;
+    use std::time::Duration as StdDuration;
     use tower::ServiceExt; // for `oneshot` and `ready`
 
     // Before the test function, add:
@@ -281,6 +287,133 @@ mod tests {
             }
             other => panic!("expected OCR search result, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_search_route_returns_parsed_data_without_a_second_read_endpoint() {
+        let (app, db) = setup_test_app().await;
+        let timestamp = Utc::now();
+        db.insert_video_chunk("endpoint-parsed-search.mp4", "parsed-test-device")
+            .await
+            .unwrap();
+        let frame_id = db
+            .insert_frame(
+                "parsed-test-device",
+                Some(timestamp),
+                None,
+                Some("Slack"),
+                Some("release"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+
+        let mut tree_builder = SemanticTreeBuilder::new(TreeBudget::default());
+        let source_node = tree_builder
+            .push(
+                None,
+                SemanticNodeInput {
+                    role: "AXStaticText",
+                    text: Some("parsed endpoint sentinel"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let tree = tree_builder.finish();
+        let mut item = SemanticItem::new(
+            "message-1",
+            SemanticKind::Message,
+            "slack:release:message-1",
+            IdentityQuality::Stable,
+        );
+        item.actor = Some("Alice".into());
+        item.body = Some("parsed endpoint sentinel".into());
+        item.source_nodes = vec![source_node];
+        let projection =
+            ValidatedProjection::new(vec![item], &tree, OutputBudget::default()).unwrap();
+        let manifest = ParserManifest {
+            id: "conversation-family".into(),
+            parser_version: "1.0.0".into(),
+            schema_version: 1,
+            scope: ParserScope::Family,
+            platforms: vec![Platform::Macos],
+            app_ids: vec!["com.tinyspeck.slackmacgap".into()],
+            executables: Vec::new(),
+            url_patterns: Vec::new(),
+            required_attributes: Vec::new(),
+            app_version: AppVersionRequirement::Any,
+            supported_kinds: vec![SemanticKind::Message],
+            priority: 0,
+        };
+        let app_identity = AppIdentity {
+            platform: Platform::Macos,
+            app_id: Some("com.tinyspeck.slackmacgap".into()),
+            executable: None,
+            display_name: "Slack".into(),
+            version: Some("4.44".into()),
+            browser_url: None,
+        };
+        db.store_semantic_projection(
+            frame_id,
+            &manifest,
+            &app_identity,
+            1,
+            StdDuration::from_micros(500),
+            &projection,
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/search?q=parsed%20endpoint%20sentinel&content_type=parsed&limit=5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let search_response: SearchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(search_response.pagination.total, 1);
+        match &search_response.data[0] {
+            ContentItem::Parsed(parsed) => {
+                assert_eq!(parsed.frame_id, frame_id);
+                assert_eq!(parsed.app_name, "Slack");
+                assert!(parsed.text.contains("parsed endpoint sentinel"));
+                assert_eq!(
+                    parsed.items[0].body.as_deref(),
+                    Some("parsed endpoint sentinel")
+                );
+            }
+            other => panic!("expected parsed search result, got {other:?}"),
+        }
+
+        let alias_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/search?content_type=semantic&frame_id={frame_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(alias_response.status(), StatusCode::OK);
+
+        let removed_endpoint = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/semantic/context?frame_id={frame_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed_endpoint.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

@@ -360,6 +360,10 @@ export async function prepareFreeChatTurn(
 	auth: AuthResult,
 	rawRequestBytes?: number,
 ): Promise<FreeChatPreflight> {
+	// Trusted backend runners are paid machine identities, not human accounts.
+	// They intentionally have no userId and must bypass Free chat metering.
+	if (auth.service === true && hasPaidHostedAiPlan(auth)) return { mode: 'bypass' };
+
 	if (auth.tier === 'anonymous' || !auth.userId) {
 		return blocked(
 			401,

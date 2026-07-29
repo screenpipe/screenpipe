@@ -133,6 +133,78 @@ function initializeHandshake(
   });
 }
 
+function listToolsHandshake(): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI], {
+      env: {
+        HOME: process.env.HOME || os.homedir(),
+        PATH: process.env.PATH || "",
+        SCREENPIPE_DISABLE_TELEMETRY: "1",
+        SCREENPIPE_LOCAL_API_KEY: "sp-smoke-test-key",
+        SCREENPIPE_API_URL: "http://127.0.0.1:59999",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let buf = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new Error(`tools/list did not complete within ${INIT_DEADLINE_MS}ms`));
+    }, INIT_DEADLINE_MS);
+
+    child.stdout.on("data", (chunk) => {
+      buf += chunk.toString();
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let msg: any;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (msg.id === 1 && msg.result) {
+          child.stdin.write(
+            JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
+          );
+          child.stdin.write(
+            JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n",
+          );
+        } else if (msg.id === 2 && (msg.result || msg.error)) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          child.kill("SIGKILL");
+          if (msg.error) reject(new Error(JSON.stringify(msg.error)));
+          else resolve(msg.result?.tools || []);
+        }
+      }
+    });
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.stdin.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "tool-surface-test", version: "0.0.0" },
+        },
+      }) + "\n",
+    );
+  });
+}
+
 describe("stdio startup handshake", () => {
   beforeAll(() => {
     ensureBuilt();
@@ -159,6 +231,15 @@ describe("stdio startup handshake", () => {
       SCREENPIPE_LOCAL_API_KEY: "sp-smoke-test-key",
     });
     expect(response.result?.serverInfo?.version).toBe(expected);
+  });
+
+  it("exposes parsed data through search-content without a second read tool", async () => {
+    const tools = await listToolsHandshake();
+    const search = tools.find((tool) => tool.name === "search-content");
+    expect(search?.inputSchema?.properties?.content_type?.enum).toContain("parsed");
+    expect(search?.inputSchema?.properties?.frame_id).toBeDefined();
+    expect(search?.inputSchema?.properties?.actor_id).toBeDefined();
+    expect(tools.some((tool) => tool.name === "semantic-context")).toBe(false);
   });
 
   it("completes initialize with the API key MISSING (discovery must not block attach)", async () => {

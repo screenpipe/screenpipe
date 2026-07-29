@@ -29,6 +29,7 @@ const MAX_INDEXED_TEXT_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
 const SEARCH_BACKFILL_BATCH: u32 = 100;
 const SEARCH_BACKFILL_PAUSE: Duration = Duration::from_millis(250);
 const PREVIEW_BYTES: usize = 256;
+const FILE_COMPARE_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Fallback discovery cap: pipes without explicit `artifacts:` declarations
 /// contribute at most this many files (newest by mtime) to listings.
@@ -154,6 +155,34 @@ async fn read_preview(path: &std::path::Path, kind: &str) -> Option<String> {
     let mut buf = vec![0u8; PREVIEW_BYTES];
     let n = reader.read(&mut buf).await.ok()?;
     std::str::from_utf8(&buf[..n]).ok().map(|s| s.to_string())
+}
+
+/// Compare two artifact files without loading either one fully into memory.
+async fn files_have_same_content(
+    left: &std::path::Path,
+    right: &std::path::Path,
+) -> std::io::Result<bool> {
+    let left_meta = tokio::fs::metadata(left).await?;
+    let right_meta = tokio::fs::metadata(right).await?;
+    if left_meta.len() != right_meta.len() {
+        return Ok(false);
+    }
+
+    let mut left_file = tokio::fs::File::open(left).await?;
+    let mut right_file = tokio::fs::File::open(right).await?;
+    let mut left_buf = vec![0u8; FILE_COMPARE_BUFFER_BYTES];
+    let mut right_buf = vec![0u8; FILE_COMPARE_BUFFER_BYTES];
+
+    loop {
+        let left_read = left_file.read(&mut left_buf).await?;
+        let right_read = right_file.read(&mut right_buf).await?;
+        if left_read != right_read || left_buf[..left_read] != right_buf[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 fn is_text_searchable_kind(kind: &str) -> bool {
@@ -1061,10 +1090,65 @@ pub async fn auto_register_pipe_artifacts(
             continue;
         }
 
+        let original = abs_path.to_string_lossy().to_string();
         let filename = abs_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("output");
+        let declared_kind = decl.kind.as_deref().unwrap_or("text");
+        let title = decl.title.as_deref().unwrap_or(filename);
+
+        // A successful scheduled run does not necessarily produce a new
+        // artifact. Fallback discovery sees every file still present in the
+        // pipe's output directory, so compare it with the last run-owned
+        // snapshot before assigning this execution a fresh path/timestamp.
+        // Keep same-run refreshes intact so a failed search-index write can be
+        // repaired by a retry.
+        if execution_id.is_some() {
+            match db
+                .get_latest_output_by_original_path(&original, artifact_source_type)
+                .await
+            {
+                Ok(Some(previous))
+                    if previous.source != artifact_source
+                        && previous.title == title
+                        && (previous.kind == declared_kind || previous.kind == "saf") =>
+                {
+                    match files_have_same_content(
+                        &abs_path,
+                        std::path::Path::new(&previous.output_path),
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            tracing::debug!(
+                                "auto-register: unchanged artifact '{}' for pipe '{}'; keeping output {} from {}",
+                                original,
+                                pipe_name,
+                                previous.id,
+                                previous.source,
+                            );
+                            continue;
+                        }
+                        Ok(false) => {}
+                        Err(e) => tracing::debug!(
+                            "auto-register: could not compare '{}' with prior output {} for pipe '{}': {}",
+                            original,
+                            previous.id,
+                            pipe_name,
+                            e,
+                        ),
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    "auto-register: failed to find prior output for pipe '{}': {}",
+                    pipe_name,
+                    e,
+                ),
+            }
+        }
+
         let dest = match build_output_path(
             screenpipe_dir,
             artifact_source_type,
@@ -1100,10 +1184,7 @@ pub async fn auto_register_pipe_artifacts(
             .await
             .map(|m| m.len() as i64)
             .unwrap_or(0);
-        let declared_kind = decl.kind.as_deref().unwrap_or("text");
-        let title = decl.title.as_deref().unwrap_or(filename);
         let preview = read_preview(&dest, declared_kind).await;
-        let original = abs_path.to_string_lossy().to_string();
 
         // SAF detection — a valid envelope upgrades the row to kind="saf";
         // anything else keeps the declared kind (plain file, unchanged).
@@ -1775,6 +1856,155 @@ mod tests {
             rows[0].output_path.contains("my-pipe-42"),
             "output path should use a filesystem-safe run key, got {}",
             rows[0].output_path
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_register_outputs_unchanged_across_pipe_runs_is_noop() {
+        let db = setup_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_out = tmp.path().join("pipes/my-pipe/out");
+        std::fs::create_dir_all(&pipe_out).unwrap();
+        let sp_dir = tmp.path().join("sp");
+
+        let f = pipe_out.join("notes.md");
+        let items = || vec![(decl("out/notes.md"), f.clone())];
+        std::fs::write(&f, "# unchanged\nplain markdown output").unwrap();
+
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", Some(41), &sp_dir).await;
+        let first = db
+            .list_outputs(Some("pipe:my-pipe:41"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 1);
+
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", Some(42), &sp_dir).await;
+
+        assert_eq!(
+            db.count_outputs(None, Some("pipe-run"), None)
+                .await
+                .unwrap(),
+            1,
+            "an unchanged producer file must not become a new run artifact"
+        );
+        assert!(db
+            .list_outputs(Some("pipe:my-pipe:42"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&first[0].output_path).unwrap(),
+            "# unchanged\nplain markdown output"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_register_outputs_changed_across_pipe_runs_keeps_both_versions() {
+        let db = setup_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_out = tmp.path().join("pipes/my-pipe/out");
+        std::fs::create_dir_all(&pipe_out).unwrap();
+        let sp_dir = tmp.path().join("sp");
+
+        let f = pipe_out.join("notes.md");
+        let items = || vec![(decl("out/notes.md"), f.clone())];
+        std::fs::write(&f, "version one").unwrap();
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", Some(41), &sp_dir).await;
+
+        // Same length ensures the comparison is content-aware, not size-only.
+        std::fs::write(&f, "version two").unwrap();
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", Some(42), &sp_dir).await;
+
+        assert_eq!(
+            db.count_outputs(None, Some("pipe-run"), None)
+                .await
+                .unwrap(),
+            2,
+            "a changed producer file must keep a snapshot for each producing run"
+        );
+        let first = db
+            .list_outputs(Some("pipe:my-pipe:41"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap();
+        let second = db
+            .list_outputs(Some("pipe:my-pipe:42"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&first[0].output_path).unwrap(),
+            "version one"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&second[0].output_path).unwrap(),
+            "version two"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_register_outputs_changed_declaration_creates_new_run_artifact() {
+        let db = setup_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_out = tmp.path().join("pipes/my-pipe/out");
+        std::fs::create_dir_all(&pipe_out).unwrap();
+        let sp_dir = tmp.path().join("sp");
+
+        let f = pipe_out.join("notes.md");
+        std::fs::write(&f, "same content").unwrap();
+        auto_register_pipe_artifacts(
+            &db,
+            vec![(decl("out/notes.md"), f.clone())],
+            "my-pipe",
+            Some(41),
+            &sp_dir,
+        )
+        .await;
+
+        let mut renamed = decl("out/notes.md");
+        renamed.title = Some("Renamed notes".to_string());
+        auto_register_pipe_artifacts(&db, vec![(renamed, f)], "my-pipe", Some(42), &sp_dir).await;
+
+        assert_eq!(
+            db.count_outputs(None, Some("pipe-run"), None)
+                .await
+                .unwrap(),
+            2,
+            "display metadata changes must not be hidden by content deduplication"
+        );
+        let second = db
+            .list_outputs(Some("pipe:my-pipe:42"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(second[0].title, "Renamed notes");
+    }
+
+    #[tokio::test]
+    async fn auto_register_outputs_missing_prior_copy_self_heals() {
+        let db = setup_db().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_out = tmp.path().join("pipes/my-pipe/out");
+        std::fs::create_dir_all(&pipe_out).unwrap();
+        let sp_dir = tmp.path().join("sp");
+
+        let f = pipe_out.join("notes.md");
+        let items = || vec![(decl("out/notes.md"), f.clone())];
+        std::fs::write(&f, "same content").unwrap();
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", Some(41), &sp_dir).await;
+        let first = db
+            .list_outputs(Some("pipe:my-pipe:41"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap();
+        std::fs::remove_file(&first[0].output_path).unwrap();
+
+        auto_register_pipe_artifacts(&db, items(), "my-pipe", Some(42), &sp_dir).await;
+
+        let second = db
+            .list_outputs(Some("pipe:my-pipe:42"), Some("pipe-run"), None, 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(second.len(), 1, "a missing prior copy must be recreated");
+        assert_eq!(
+            std::fs::read_to_string(&second[0].output_path).unwrap(),
+            "same content"
         );
     }
 

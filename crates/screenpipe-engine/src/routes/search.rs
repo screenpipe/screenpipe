@@ -46,7 +46,10 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalPipePerms {
 impl oasgen::OaParameter for OptionalPipePerms {}
 
 use chrono::{DateTime, Utc};
-use screenpipe_db::{ContentType, DatabaseManager, Order, SearchResult};
+use screenpipe_db::{
+    ContentType, DatabaseManager, Order, SearchResult, SemanticContextQuery, SemanticFrameContext,
+};
+use screenpipe_semantic::{IdentityQuality, SemanticKind};
 
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -70,17 +73,47 @@ use crate::server::AppState;
 use crate::video_utils::extract_frame;
 
 use super::content::{
-    AudioContent, ContentItem, InputContent, MemoryContent, OCRContent, PaginationInfo, UiContent,
+    AudioContent, ContentItem, InputContent, MemoryContent, OCRContent, PaginationInfo,
+    ParsedActorReference, ParsedContent, ParsedItem, UiContent,
 };
 
-// Update the SearchQuery struct
+#[derive(OaSchema, Debug, Deserialize, PartialEq, Default, Clone)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SearchContentType {
+    #[default]
+    #[serde(alias = "All")]
+    All,
+    OCR,
+    Audio,
+    Input,
+    Accessibility,
+    Memory,
+    /// App-specific records parsed from accessibility frames.
+    #[serde(alias = "semantic", alias = "Semantic", alias = "Parsed")]
+    Parsed,
+}
+
+impl SearchContentType {
+    fn database_type(&self) -> Option<ContentType> {
+        match self {
+            Self::All => Some(ContentType::All),
+            Self::OCR => Some(ContentType::OCR),
+            Self::Audio => Some(ContentType::Audio),
+            Self::Input => Some(ContentType::Input),
+            Self::Accessibility => Some(ContentType::Accessibility),
+            Self::Memory => Some(ContentType::Memory),
+            Self::Parsed => None,
+        }
+    }
+}
+
 #[derive(OaSchema, Deserialize)]
 pub(crate) struct SearchQuery {
     q: Option<String>,
     #[serde(flatten)]
     pagination: PaginationQuery,
     #[serde(default)]
-    content_type: ContentType,
+    content_type: SearchContentType,
     /// Result ordering. Defaults to newest-first for existing callers; sync
     /// consumers use ascending order so a bounded page cannot skip backlog.
     #[serde(default)]
@@ -103,6 +136,12 @@ pub(crate) struct SearchQuery {
     app_name: Option<String>,
     #[serde(default)]
     window_name: Option<String>,
+    /// Exact source frame. Only valid with `content_type=parsed`.
+    #[serde(default)]
+    frame_id: Option<i64>,
+    /// Corrected parsed actor identity. Only valid with `content_type=parsed`.
+    #[serde(default)]
+    actor_id: Option<i64>,
     #[serde(default)]
     frame_name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_flexible_bool")]
@@ -145,7 +184,8 @@ pub(crate) struct SearchQuery {
     #[serde(default)]
     machine_id: Option<String>,
     /// Redact PII from text-bearing fields (ocr `text`, audio `transcription`,
-    /// ui `text`, input `text_content`, memory `content`) before returning.
+    /// ui `text`, input `text_content`, memory `content`, parsed text/items/actors)
+    /// before returning.
     /// Routed through the attested Tinfoil enclave; adds latency so leave it
     /// off unless the caller will forward these results to an LLM.
     #[serde(default, deserialize_with = "deserialize_flexible_bool")]
@@ -531,6 +571,88 @@ pub fn search_result_to_content_item(
     }
 }
 
+fn semantic_kind_name(kind: SemanticKind) -> &'static str {
+    match kind {
+        SemanticKind::Conversation => "conversation",
+        SemanticKind::Message => "message",
+        SemanticKind::Document => "document",
+        SemanticKind::Task => "task",
+        SemanticKind::CalendarEvent => "calendar_event",
+        SemanticKind::Page => "page",
+    }
+}
+
+fn identity_quality_name(quality: IdentityQuality) -> &'static str {
+    match quality {
+        IdentityQuality::Stable => "stable",
+        IdentityQuality::Derived => "derived",
+        IdentityQuality::Ephemeral => "ephemeral",
+    }
+}
+
+fn semantic_context_to_parsed_content(
+    context: SemanticFrameContext,
+    max_content_length: Option<usize>,
+) -> ParsedContent {
+    let truncate = |text: String| match max_content_length {
+        Some(max) => truncate_middle(&text, max),
+        None => text,
+    };
+    let text = truncate(context.render_compact());
+    let items = context
+        .items
+        .into_iter()
+        .map(|item| ParsedItem {
+            local_id: item.local_id,
+            parent_local_id: item.parent_local_id,
+            kind: semantic_kind_name(item.kind).to_string(),
+            item_key: item.item_key,
+            identity_quality: identity_quality_name(item.identity_quality).to_string(),
+            title: item.title.map(&truncate),
+            body: item.body.map(&truncate),
+            actor: item.actor,
+            occurred_at: item.occurred_at,
+            timestamp_precision: item.timestamp_precision,
+            status: item.status,
+            metadata: item.metadata.into_iter().collect(),
+            source_nodes: item.source_nodes.into_iter().map(|node| node.0).collect(),
+        })
+        .collect();
+    let actors = context
+        .actors
+        .into_iter()
+        .map(|actor| ParsedActorReference {
+            item_id: actor.item_id,
+            local_id: actor.local_id,
+            actor_id: actor.actor_id,
+            name: actor.name,
+            observed_name: actor.observed_name,
+            assignment_source: actor.assignment_source,
+        })
+        .collect();
+
+    ParsedContent {
+        frame_id: context.frame_id,
+        timestamp: context.timestamp,
+        app_name: context.app_name,
+        window_name: context.window_name,
+        browser_url: context.browser_url,
+        text,
+        run_id: context.run_id,
+        parser_id: context.parser_id,
+        parser_version: context.parser_version,
+        schema_version: context.schema_version,
+        app_platform: format!("{:?}", context.app_platform).to_ascii_lowercase(),
+        app_id: context.app_id,
+        app_executable: context.app_executable,
+        app_version: context.app_version,
+        parse_duration_us: context.parse_duration_us,
+        text_bytes: context.text_bytes,
+        items,
+        actors,
+    }
+}
+
 /// Collapse accessibility (`UI`) duplicates into their matching OCR row.
 ///
 /// The accessibility leg cannot simply be removed from `content_type=all`:
@@ -595,6 +717,8 @@ pub(crate) fn compute_search_cache_key(query: &SearchQuery) -> u64 {
     query.end_time.map(|t| t.timestamp()).hash(&mut hasher);
     query.app_name.hash(&mut hasher);
     query.window_name.hash(&mut hasher);
+    query.frame_id.hash(&mut hasher);
+    query.actor_id.hash(&mut hasher);
     query.frame_name.hash(&mut hasher);
     query.min_length.hash(&mut hasher);
     query.max_length.hash(&mut hasher);
@@ -760,14 +884,57 @@ pub(crate) async fn search(
 
     let query_str = query.q.as_deref().unwrap_or("");
 
-    let content_type = query.content_type.clone();
     let tags = query.tags.as_deref().unwrap_or(&[]);
+    let parsed_search = query.content_type == SearchContentType::Parsed;
+    if !parsed_search && (query.frame_id.is_some() || query.actor_id.is_some()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({
+                "error": "frame_id and actor_id require content_type=parsed",
+            })),
+        ));
+    }
+    if parsed_search && !tags.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({
+                "error": "tags are not supported for content_type=parsed",
+            })),
+        ));
+    }
+
+    enum SearchPage {
+        Standard(Vec<SearchResult>),
+        Parsed(Vec<SemanticFrameContext>),
+    }
 
     // Keep the exact `pagination.total` contract, but do not launch another
     // unbounded scan beside the page query. Serial execution halves the number
     // of simultaneous SQLite statements per admitted request while the outer
     // deadline still covers the complete operation.
     let search_and_count = async {
+        if parsed_search {
+            let parsed_query = SemanticContextQuery {
+                frame_id: query.frame_id,
+                q: query.q.clone(),
+                start_time: query.start_time,
+                end_time: query.end_time,
+                app_name: query.app_name.clone(),
+                window_name: query.window_name.clone(),
+                actor_id: query.actor_id,
+                limit: query.pagination.limit,
+                offset: query.pagination.offset,
+                order: query.order,
+            };
+            let results = state.db.search_semantic_context(&parsed_query).await?;
+            let total = state.db.count_semantic_context(&parsed_query).await?;
+            return Ok::<_, sqlx::Error>((SearchPage::Parsed(results), total));
+        }
+
+        let content_type = query
+            .content_type
+            .database_type()
+            .expect("non-parsed search type must map to a database content type");
         let results = state
             .db
             .search_with_tags_ordered_lightweight(
@@ -815,7 +982,7 @@ pub(crate) async fn search(
                 tags,
             )
             .await?;
-        Ok::<_, sqlx::Error>((results, total))
+        Ok::<_, sqlx::Error>((SearchPage::Standard(results), total))
     };
 
     let database_result = match timeout(Duration::from_secs(30), search_and_count).await {
@@ -880,21 +1047,33 @@ pub(crate) async fn search(
     // cloud metadata lookup, and response shaping.
     drop(search_permit);
 
-    let mut content_items: Vec<ContentItem> = results
-        .iter()
-        // Filter out screenpipe results at display time
-        .filter(|result| match result {
-            SearchResult::OCR(ocr) => !is_screenpipe_app(&ocr.app_name),
-            SearchResult::Audio(_) => true, // Audio doesn't have app_name
-            SearchResult::UI(ui) => !is_screenpipe_app(&ui.app_name),
-            SearchResult::Input(input) => input
-                .app_name
-                .as_ref()
-                .is_none_or(|app| !is_screenpipe_app(app)),
-            SearchResult::Memory(_) => true,
-        })
-        .map(|result| search_result_to_content_item(result, query.max_content_length))
-        .collect();
+    let mut content_items: Vec<ContentItem> = match results {
+        SearchPage::Standard(results) => results
+            .iter()
+            // Filter out screenpipe results at display time
+            .filter(|result| match result {
+                SearchResult::OCR(ocr) => !is_screenpipe_app(&ocr.app_name),
+                SearchResult::Audio(_) => true, // Audio doesn't have app_name
+                SearchResult::UI(ui) => !is_screenpipe_app(&ui.app_name),
+                SearchResult::Input(input) => input
+                    .app_name
+                    .as_ref()
+                    .is_none_or(|app| !is_screenpipe_app(app)),
+                SearchResult::Memory(_) => true,
+            })
+            .map(|result| search_result_to_content_item(result, query.max_content_length))
+            .collect(),
+        SearchPage::Parsed(contexts) => contexts
+            .into_iter()
+            .filter(|context| !is_screenpipe_app(&context.app_name))
+            .map(|context| {
+                ContentItem::Parsed(semantic_context_to_parsed_content(
+                    context,
+                    query.max_content_length,
+                ))
+            })
+            .collect(),
+    };
 
     deduplicate_ocr_and_ui(&mut content_items);
 
@@ -906,13 +1085,19 @@ pub(crate) async fn search(
 
         // Collect the text to filter, along with (index, kind) back-pointers
         // so we can splice the redacted strings into the right fields.
-        #[derive(Clone, Copy)]
         enum Field {
             Ocr,
             Audio,
             Ui,
             Input,
             Memory,
+            ParsedText,
+            ParsedItemTitle(usize),
+            ParsedItemBody(usize),
+            ParsedItemActor(usize),
+            ParsedItemMetadata { item: usize, key: String },
+            ParsedActorName(usize),
+            ParsedActorObservedName(usize),
         }
         let mut targets: Vec<(usize, Field)> = Vec::with_capacity(content_items.len());
         let mut texts: Vec<String> = Vec::with_capacity(content_items.len());
@@ -940,6 +1125,40 @@ pub(crate) async fn search(
                     targets.push((i, Field::Memory));
                     texts.push(c.content.clone());
                 }
+                ContentItem::Parsed(c) => {
+                    targets.push((i, Field::ParsedText));
+                    texts.push(c.text.clone());
+                    for (item_index, item) in c.items.iter().enumerate() {
+                        if let Some(value) = &item.title {
+                            targets.push((i, Field::ParsedItemTitle(item_index)));
+                            texts.push(value.clone());
+                        }
+                        if let Some(value) = &item.body {
+                            targets.push((i, Field::ParsedItemBody(item_index)));
+                            texts.push(value.clone());
+                        }
+                        if let Some(value) = &item.actor {
+                            targets.push((i, Field::ParsedItemActor(item_index)));
+                            texts.push(value.clone());
+                        }
+                        for (key, value) in &item.metadata {
+                            targets.push((
+                                i,
+                                Field::ParsedItemMetadata {
+                                    item: item_index,
+                                    key: key.clone(),
+                                },
+                            ));
+                            texts.push(value.clone());
+                        }
+                    }
+                    for (actor_index, actor) in c.actors.iter().enumerate() {
+                        targets.push((i, Field::ParsedActorName(actor_index)));
+                        texts.push(actor.name.clone());
+                        targets.push((i, Field::ParsedActorObservedName(actor_index)));
+                        texts.push(actor.observed_name.clone());
+                    }
+                }
             }
         }
 
@@ -961,6 +1180,27 @@ pub(crate) async fn search(
                 (Field::Ui, ContentItem::UI(c)) => c.text = new_text,
                 (Field::Input, ContentItem::Input(c)) => c.text_content = Some(new_text),
                 (Field::Memory, ContentItem::Memory(c)) => c.content = new_text,
+                (Field::ParsedText, ContentItem::Parsed(c)) => c.text = new_text,
+                (Field::ParsedItemTitle(item), ContentItem::Parsed(c)) => {
+                    c.items[item].title = Some(new_text)
+                }
+                (Field::ParsedItemBody(item), ContentItem::Parsed(c)) => {
+                    c.items[item].body = Some(new_text)
+                }
+                (Field::ParsedItemActor(item), ContentItem::Parsed(c)) => {
+                    c.items[item].actor = Some(new_text)
+                }
+                (Field::ParsedItemMetadata { item, key }, ContentItem::Parsed(c)) => {
+                    if let Some(value) = c.items[item].metadata.get_mut(&key) {
+                        *value = new_text;
+                    }
+                }
+                (Field::ParsedActorName(actor), ContentItem::Parsed(c)) => {
+                    c.actors[actor].name = new_text
+                }
+                (Field::ParsedActorObservedName(actor), ContentItem::Parsed(c)) => {
+                    c.actors[actor].observed_name = new_text
+                }
                 _ => {}
             }
         }
@@ -1555,13 +1795,15 @@ mod tests {
                 limit: 10,
                 offset: 0,
             },
-            content_type: ContentType::All,
+            content_type: SearchContentType::All,
             order: Order::Descending,
             input_context_only: false,
             start_time: None,
             end_time: None,
             app_name: Some("chrome".to_string()),
             window_name: None,
+            frame_id: None,
+            actor_id: None,
             frame_name: None,
             include_frames: false,
             min_length: None,
@@ -1588,13 +1830,15 @@ mod tests {
                 limit: 10,
                 offset: 0,
             },
-            content_type: ContentType::All,
+            content_type: SearchContentType::All,
             order: Order::Descending,
             input_context_only: false,
             start_time: None,
             end_time: None,
             app_name: Some("chrome".to_string()),
             window_name: None,
+            frame_id: None,
+            actor_id: None,
             frame_name: None,
             include_frames: false,
             min_length: None,
@@ -1629,13 +1873,15 @@ mod tests {
                 limit: 10,
                 offset: 0,
             },
-            content_type: ContentType::All,
+            content_type: SearchContentType::All,
             order: Order::Descending,
             input_context_only: false,
             start_time: None,
             end_time: None,
             app_name: None,
             window_name: None,
+            frame_id: None,
+            actor_id: None,
             frame_name: None,
             include_frames: false,
             min_length: None,
@@ -1662,13 +1908,15 @@ mod tests {
                 limit: 10,
                 offset: 0,
             },
-            content_type: ContentType::All,
+            content_type: SearchContentType::All,
             order: Order::Descending,
             input_context_only: false,
             start_time: None,
             end_time: None,
             app_name: None,
             window_name: None,
+            frame_id: None,
+            actor_id: None,
             frame_name: None,
             include_frames: false,
             min_length: None,
@@ -1710,13 +1958,15 @@ mod tests {
                 limit: 10,
                 offset: 0,
             },
-            content_type: ContentType::All,
+            content_type: SearchContentType::All,
             order: Order::Descending,
             input_context_only: false,
             start_time: None,
             end_time: None,
             app_name: None,
             window_name: None,
+            frame_id: None,
+            actor_id: None,
             frame_name: None,
             include_frames: false,
             min_length: None,
@@ -1754,13 +2004,15 @@ mod tests {
                 limit: 10,
                 offset: 0,
             },
-            content_type: ContentType::All,
+            content_type: SearchContentType::All,
             order: Order::Descending,
             input_context_only: false,
             start_time: None,
             end_time: None,
             app_name: None,
             window_name: None,
+            frame_id: None,
+            actor_id: None,
             frame_name: None,
             include_frames: false,
             min_length: None,

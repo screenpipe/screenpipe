@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   piUpdateConfig: vi.fn().mockResolvedValue(undefined),
   platform: vi.fn(() => "windows"),
   arch: vi.fn(() => "x86_64"),
-  windowLabel: "main",
+  windowLabel: "home",
   loadUser: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
   state: { isSettingsLoaded: true, user: null as any },
@@ -81,7 +81,7 @@ vi.mock("@tauri-apps/plugin-os", () => ({
 }));
 
 // The resume effect only restarts the engine from the primary window, which it
-// detects via getCurrentWindow().label. Stand in as the primary "main" window so
+// detects via getCurrentWindow().label. Stand in as the primary "home" window so
 // the sequenced stop -> settle -> spawn actually runs under test.
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: mocks.windowLabel }),
@@ -126,7 +126,7 @@ describe("AppEntitlementGate", () => {
     vi.stubEnv("TAURI_ENV_DEBUG", "false");
     vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_DEV_BILLING_BYPASS", "false");
     mocks.state = { isSettingsLoaded: true, user: null };
-    mocks.windowLabel = "main";
+    mocks.windowLabel = "home";
     mocks.enterprise = {
       isManagedDeployment: false,
       isManagedDeploymentResolved: true,
@@ -218,22 +218,25 @@ describe("AppEntitlementGate", () => {
     expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
   });
 
-  it("never lets a secondary enterprise webview stop the shared recorder", async () => {
-    mocks.windowLabel = "search";
-    mocks.enterprise = {
-      isManagedDeployment: true,
-      isManagedDeploymentResolved: true,
-      authenticationState: "account",
-      authenticationError: null,
-      isManagedAuthenticated: false,
-    };
+  it.each(["main", "main-window", "search"])(
+    "never lets the %s webview stop the shared recorder",
+    async (windowLabel) => {
+      mocks.windowLabel = windowLabel;
+      mocks.enterprise = {
+        isManagedDeployment: true,
+        isManagedDeploymentResolved: true,
+        authenticationState: "account",
+        authenticationError: null,
+        isManagedAuthenticated: false,
+      };
 
-    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
 
-    expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
-  });
+      expect(screen.queryByTestId("protected-app")).not.toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    },
+  );
 
   it("resumes recording when a real enterprise gate authenticates", async () => {
     mocks.enterprise = {
@@ -271,6 +274,26 @@ describe("AppEntitlementGate", () => {
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
     expect(mocks.openLoginWindow).toHaveBeenCalled();
   });
+
+  it.each(["main", "main-window", "search"])(
+    "never lets the %s webview own consumer recorder recovery",
+    async (windowLabel) => {
+      mocks.windowLabel = windowLabel;
+      mocks.state.user = null;
+      const { rerender } = render(
+        <AppEntitlementGate>{protectedApp}</AppEntitlementGate>,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+
+      mocks.state.user = baseUser();
+      rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
+    },
+  );
 
   it("offers account and enterprise-key routes in the fallback gate", () => {
     mocks.enterprise = {

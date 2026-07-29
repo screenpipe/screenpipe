@@ -1,0 +1,20 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.tinyspeck.slackmacgap",
+    "executable": null,
+    "display_name": "Slack",
+    "version": "4.46",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "#release - Slack" },
+    { "parent": 0, "role": "AXGroup", "classes": ["conversation-thread"] },
+    { "parent": 1, "role": "AXGroup", "classes": ["message-item", "outgoing"] },
+    { "parent": 2, "role": "AXStaticText", "value": "retry the signing job" },
+    { "parent": 1, "role": "AXGroup", "classes": ["message-item"] },
+    { "parent": 4, "role": "AXStaticText", "classes": ["sender"], "value": "Alice" },
+    { "parent": 4, "role": "AXStaticText", "value": "notarization is still blocking" },
+    { "parent": 1, "role": "AXButton", "title": "Add reaction" }
+  ]
+}

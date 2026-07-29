@@ -1321,7 +1321,8 @@ fn model_supports_reasoning(provider: &str, model: &str) -> bool {
 /// config because they do not inherit Pi's built-in Anthropic model metadata.
 fn anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
-    model.contains("claude-fable-5")
+    model.contains("claude-opus-5")
+        || model.contains("claude-fable-5")
         || model.contains("claude-sonnet-5")
         || model.contains("claude-sonnet-4-6")
         || model.contains("claude-opus-4-6")
@@ -4988,13 +4989,15 @@ error: InstallFailed extracting tarball"#;
     }
 
     #[tokio::test]
-    async fn test_build_models_json_fable_uses_adaptive_thinking() {
-        let pc = make_provider_config("anthropic", "claude-fable-5");
-        let config = build_models_json(None, Some(&pc)).await;
-        let model = &config["providers"]["anthropic-byok"]["models"][0];
+    async fn test_build_models_json_current_claude_uses_adaptive_thinking() {
+        for model_id in ["claude-opus-5", "claude-fable-5", "claude-sonnet-5"] {
+            let pc = make_provider_config("anthropic", model_id);
+            let config = build_models_json(None, Some(&pc)).await;
+            let model = &config["providers"]["anthropic-byok"]["models"][0];
 
-        assert_eq!(model["reasoning"], true);
-        assert_eq!(model["compat"]["forceAdaptiveThinking"], true);
+            assert_eq!(model["reasoning"], true, "{model_id}");
+            assert_eq!(model["compat"]["forceAdaptiveThinking"], true, "{model_id}");
+        }
     }
 
     #[tokio::test]

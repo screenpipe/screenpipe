@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.5.147"
+version = "2.5.149"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -305,6 +305,7 @@ jemalloc = ["tikv-jemallocator"]
 tempfile = "3"
 wiremock = "0.6"
 serial_test = "3"
+tower = { version = "0.4", features = ["util"] }
 # MockRuntime for store.rs recovery tests that must exercise the real
 # tauri-plugin-store registry (state + resources table).
 tauri = { version = "=2.11.2", features = ["test"] }
