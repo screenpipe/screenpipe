@@ -1,0 +1,21 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.apple.iCal",
+    "executable": null,
+    "display_name": "Calendar",
+    "version": "15",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Calendar" },
+    {
+      "parent": 0,
+      "role": "AXGroup",
+      "classes": ["calendar-event"],
+      "description": "Jul 24, 10:00 AM to 10:30 AM"
+    },
+    { "parent": 1, "role": "AXStaticText", "classes": ["event-title"], "value": "Parser review" },
+    { "parent": 0, "role": "AXButton", "title": "Today" }
+  ]
+}

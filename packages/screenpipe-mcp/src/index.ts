@@ -29,6 +29,7 @@ import {
 import { createMcpQualifiedValueReporter } from "./qualified-value";
 import { discoverTeamApiBase, discoverTeamToken } from "./team-config";
 import { PKG_VERSION } from "./version";
+import { formatForElementPurpose } from "./element-format";
 
 initMcpTelemetry({ transport: "stdio" });
 
@@ -374,6 +375,28 @@ const server = new Server(
 // ---------------------------------------------------------------------------
 const TOOLS: Tool[] = [
   {
+    name: "semantic-context",
+    description:
+      "Read compact app-specific context parsed from supported apps, such as conversations, emails, tasks, documents, and code review. " +
+      "USE WHEN: structured app context is enabled and you want higher-signal, lower-token output than raw accessibility text. " +
+      "This experimental capture path is off by default. If it returns no data, use search-content or activity-summary for the unchanged historical behavior.",
+    annotations: { title: "Semantic Context", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        frame_id: { type: "integer", description: "Return semantic context attached to one frame." },
+        q: { type: "string", description: "Filter compact semantic items by text." },
+        start_time: {
+          type: "string",
+          description: "ISO 8601 UTC or relative time such as '2h ago'. Always provide unless frame_id is set.",
+        },
+        end_time: { type: "string", description: "ISO 8601 UTC or relative time. Defaults to now." },
+        app_name: { type: "string", description: "Filter by app display name." },
+        limit: { type: "integer", description: "Maximum frame contexts (default 10, max 100).", default: 10 },
+      },
+    },
+  },
+  {
     name: "search-content",
     description:
       "Search screen text, audio transcriptions, input events, and memories. Returns timestamped results with app context. " +
@@ -495,6 +518,12 @@ const TOOLS: Tool[] = [
         start_time: { type: "string", description: "ISO 8601 UTC or relative" },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
         app_name: { type: "string", description: "Filter by app name" },
+        purpose: {
+          type: "string",
+          enum: ["read", "automation"],
+          description:
+            "read returns the compact memory outline; automation returns fresh refs, best-effort keys, state, bounds, and allowed actions. Omit to follow the desktop capture profile.",
+        },
         limit: { type: "integer", description: "Max results (default 50). Start with 10-20.", default: 50 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
       },
@@ -781,6 +810,12 @@ const TOOLS: Tool[] = [
       type: "object",
       properties: {
         frame_id: { type: "integer", description: "Frame ID" },
+        purpose: {
+          type: "string",
+          enum: ["read", "automation"],
+          description:
+            "read returns the memory outline; automation returns targeting context for a downstream automation tool. Omit to follow the desktop capture profile. Refresh before each action.",
+        },
       },
       required: ["frame_id"],
     },
@@ -1058,9 +1093,10 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 | Step | Tool | When to use |
 |------|------|-------------|
 | 1 | activity-summary | Broad questions: "what was I doing?", "which apps?", "how long on X?" |
-| 2 | search-content | Need specific text, transcriptions, or content |
-| 3 | search-elements | Need UI structure — buttons, links, form fields |
-| 4 | frame-context | Need full detail for a specific moment (use frame_id from step 2) |
+| 2 | semantic-context | Need compact messages, emails, tasks, docs, or code context when experimental structured context is enabled |
+| 3 | search-content | Need specific text, transcriptions, or content, or semantic-context returned no data |
+| 4 | search-elements | Need UI structure: buttons, links, form fields |
+| 5 | frame-context | Need full detail for a specific moment (use frame_id from step 3) |
 
 ## Search Strategy
 
@@ -1587,6 +1623,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: contentItems };
       }
 
+      case "semantic-context": {
+        const normalized = normalizeTimeFields(args);
+        const params = new URLSearchParams();
+        for (const key of ["frame_id", "q", "start_time", "end_time", "app_name", "limit"] as const) {
+          const value = normalized[key];
+          if (value !== null && value !== undefined && value !== "") {
+            params.append(key, String(value));
+          }
+        }
+        const response = await callAPI(`/semantic/context?${params.toString()}`);
+        const text = (await response.text()).trim();
+        return {
+          content: [
+            {
+              type: "text",
+              text: text ||
+                "No structured app context found. The experimental parser may be disabled, the time range may contain no supported apps, or the parser may have abstained. Use search-content or activity-summary for the unchanged capture data.",
+            },
+          ],
+        };
+      }
+
       case "list-meetings": {
         const normalized = normalizeTimeFields(args);
         const params = new URLSearchParams();
@@ -1729,16 +1787,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const normalized = normalizeTimeFields(args);
         const params = new URLSearchParams();
         for (const [key, value] of Object.entries(normalized)) {
+          if (key === "purpose") continue;
           if (value !== null && value !== undefined) {
             params.append(key, String(value));
           }
         }
 
-        // Default to the server's compact `outline` view — a deduped, indented
-        // tree of just the text-bearing nodes, far cheaper for the model to read
-        // than the raw JSON rows (and the dedup/cap/footer replace the old
-        // hand-rolled header). Callers can still override with format=json|csv|tsv.
-        if (!params.has("format")) params.append("format", "outline");
+        // An explicit purpose selects one view. Otherwise let the server follow
+        // the user's desktop capture profile. Callers can still override with
+        // format=json|csv|tsv when this tool schema is extended to expose it.
+        if (!params.has("format")) {
+          params.append("format", formatForElementPurpose(args.purpose));
+        }
 
         const response = await callAPI(`/elements?${params.toString()}`);
         const text = (await response.text()).trim();
@@ -2233,7 +2293,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // rows, caps the body. Also avoids the old bug here that parsed the
         // `{data,pagination}` envelope as a bare array and always reported
         // "no elements".
-        const response = await callAPI(`/frames/${frameId}/elements?format=outline`);
+        const format = formatForElementPurpose(args.purpose);
+        const response = await callAPI(`/frames/${frameId}/elements?format=${format}`);
         const text = (await response.text()).trim();
         if (text.length && !text.startsWith("No elements")) {
           qualifiedValue.searchResult();

@@ -1,0 +1,97 @@
+[
+  {
+    "id": "slack_native_document",
+    "app_id": "com.tinyspeck.slackmacgap",
+    "app_version": "4.39.95",
+    "expected_parser": "app.macos.slack.content_list",
+    "expected_actor": "Alice",
+    "expected_body": "The build is ready.",
+    "expected_raw_time": "Today at 18:20",
+    "expected_time": "2025-07-27T18:20:00-07:00",
+    "expected_identity": "stable",
+    "nodes": [
+      { "parent": null, "role": "AXWindow", "text": "#release - Slack" },
+      { "parent": 0, "role": "AXList", "value": "release", "subrole": "AXContentList" },
+      { "parent": 0, "role": "AXGroup", "subrole": "AXDocument", "dom_identifier": "message-1720000000001" },
+      { "parent": 2, "role": "AXStaticText", "text": "Alice", "identifier": "message-sender" },
+      { "parent": 2, "role": "AXStaticText", "text": "Today at 18:20", "identifier": "message-time-label" },
+      { "parent": 2, "role": "AXStaticText", "text": "The build is ready." }
+    ]
+  },
+  {
+    "id": "slack_redesigned_family_fallback",
+    "app_id": "com.tinyspeck.slackmacgap",
+    "app_version": "5.0.0",
+    "expected_parser": "family.conversation",
+    "expected_actor": "Alice",
+    "expected_body": "The redesigned view still works.",
+    "expected_raw_time": "Today at 18:20",
+    "expected_time": "2025-07-27T18:20:00-07:00",
+    "expected_identity": "derived",
+    "nodes": [
+      { "parent": null, "role": "AXWindow", "text": "#release - Slack" },
+      { "parent": 0, "role": "AXGroup", "classes": ["message-item"] },
+      { "parent": 1, "role": "AXStaticText", "text": "Alice", "classes": ["sender"] },
+      { "parent": 1, "role": "AXStaticText", "text": "Today at 18:20", "classes": ["timestamp"] },
+      { "parent": 1, "role": "AXStaticText", "text": "The redesigned view still works." }
+    ]
+  },
+  {
+    "id": "discord_french_article",
+    "app_id": "com.hnc.Discord",
+    "app_version": "0.0.345",
+    "expected_parser": "app.macos.discord.content_list",
+    "expected_actor": "Camille",
+    "expected_body": "Le déploiement est prêt.",
+    "expected_raw_time": "Aujourd’hui à 18:20",
+    "expected_time": "2025-07-27T18:20:00-07:00",
+    "expected_identity": "stable",
+    "nodes": [
+      { "parent": null, "role": "AXWindow", "text": "#release - Discord" },
+      { "parent": 0, "role": "AXList", "subrole": "AXContentList" },
+      { "parent": 1, "role": "AXDocumentArticle", "dom_identifier": "chat-messages-987654321" },
+      { "parent": 2, "role": "AXStaticText", "text": "Camille" },
+      { "parent": 2, "role": "AXStaticText", "text": "Aujourd’hui à 18:20", "identifier": "message-time-label" },
+      { "parent": 2, "role": "AXStaticText", "text": "Le déploiement est prêt." }
+    ]
+  },
+  {
+    "id": "whatsapp_spanish_group",
+    "app_id": "net.whatsapp.WhatsApp",
+    "app_version": "25.14.79",
+    "expected_parser": "app.macos.whatsapp.message_table",
+    "expected_actor": "Lucía",
+    "expected_body": "Ya está listo.",
+    "expected_raw_time": "Hoy a las 18:19",
+    "expected_time": "2025-07-27T18:19:00-07:00",
+    "expected_identity": "stable",
+    "nodes": [
+      { "parent": null, "role": "AXWindow", "text": "WhatsApp" },
+      { "parent": 0, "role": "AXHeading", "text": "Equipo", "identifier": "NavigationBar_HeaderViewButton" },
+      { "parent": 0, "role": "AXTable", "identifier": "ChatMessagesTableView" },
+      { "parent": 2, "role": "AXCell", "identifier": "WAMessageBubbleTableViewCell", "dom_identifier": "message-ABCD1234" },
+      { "parent": 3, "role": "AXStaticText", "text": "Lucía", "identifier": "message-sender" },
+      { "parent": 3, "role": "AXStaticText", "text": "Hoy a las 18:19", "identifier": "message-time-label" },
+      { "parent": 3, "role": "AXStaticText", "text": "Ya está listo." }
+    ]
+  },
+  {
+    "id": "messages_german_balloon",
+    "app_id": "com.apple.MobileSMS",
+    "app_version": "17.0",
+    "expected_parser": "app.macos.messages.transcript",
+    "expected_actor": "[user]",
+    "expected_body": "Ich sende es jetzt.",
+    "expected_raw_time": "Heute um 18:18",
+    "expected_time": "2025-07-27T18:18:00-07:00",
+    "expected_identity": "derived",
+    "nodes": [
+      { "parent": null, "role": "AXWindow", "text": "Messages" },
+      { "parent": 0, "role": "AXStaticText", "text": "Projektteam", "identifier": "ConversationTitle" },
+      { "parent": 0, "role": "AXGroup", "identifier": "TranscriptCollectionView", "bounds": [0.2, 0.1, 0.6, 0.8] },
+      { "parent": 2, "role": "AXGroup" },
+      { "parent": 3, "role": "AXStaticText", "text": "Heute um 18:18", "identifier": "message-time-label" },
+      { "parent": 3, "role": "AXTextArea", "value": "Ich sende es jetzt.", "identifier": "CKBalloonTextView", "bounds": [0.6, 0.3, 0.15, 0.05] }
+    ]
+  }
+]

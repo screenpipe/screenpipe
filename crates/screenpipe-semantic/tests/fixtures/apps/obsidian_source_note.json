@@ -1,0 +1,24 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "md.obsidian",
+    "executable": "Obsidian",
+    "display_name": "Obsidian",
+    "version": "1.9",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Parser design - Obsidian" },
+    { "parent": 0, "role": "AXTextArea", "classes": ["search-input"], "value": "context" },
+    { "parent": 0, "role": "AXGroup", "classes": ["workspace-leaf", "mod-active"] },
+    { "parent": 2, "role": "AXTextArea", "classes": ["inline-title"], "value": "Parser design" },
+    { "parent": 2, "role": "AXGroup", "classes": ["markdown-source-view", "cm-s-obsidian"] },
+    { "parent": 4, "role": "AXGroup", "classes": ["cm-editor"] },
+    {
+      "parent": 5,
+      "role": "AXTextArea",
+      "classes": ["cm-content", "cm-lineWrapping"],
+      "value": "# Parser design\n\nMeasure context reduction without storing another raw tree."
+    }
+  ]
+}

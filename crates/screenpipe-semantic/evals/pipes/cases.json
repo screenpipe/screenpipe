@@ -1,0 +1,70 @@
+[
+  {
+    "id": "ai_prompt_journal_actor_precision",
+    "pipe": "ai-prompt-journal",
+    "instruction": "Extract only messages written by the user. In semantic context, actor=user means user-written and actor=Claude means assistant-written. In raw Claude data, !font-user-message marks user text and font-claude-response marks assistant text. Return one JSON object with a prompts array. Preserve exact wording and do not include assistant responses.",
+    "capture_ids": ["claude_actor_turns"],
+    "required_output_keys": ["prompts"],
+    "required_groups": [
+      ["preserve actor relationships"]
+    ],
+    "forbidden_groups": [
+      ["exact DOM message boundaries"]
+    ],
+    "ordered_groups": []
+  },
+  {
+    "id": "workflow_discovery_repeated_release_recovery",
+    "pipe": "workflow-discovery",
+    "instruction": "Identify the one repeated workflow supported by both captures. Return one JSON object with workflow, occurrences, apps, current_pattern, and best_next_step. Do not invent a third occurrence.",
+    "capture_ids": ["slack_conversation", "gmail_thread"],
+    "required_output_keys": ["workflow", "occurrences", "apps", "current_pattern", "best_next_step"],
+    "required_groups": [
+      ["signing", "notarization"],
+      ["retry", "re-run", "rerun"],
+      ["2", "two"],
+      ["Slack"],
+      ["Chrome"]
+    ],
+    "forbidden_groups": [
+      ["3 occurrences", "three occurrences", "\"occurrences\": 3"]
+    ],
+    "ordered_groups": []
+  },
+  {
+    "id": "sop_generator_ordered_launch_steps",
+    "pipe": "sop-generator",
+    "instruction": "Create the shortest source-backed draft procedure. Return one JSON object with status, steps, and completion_check. Keep the observed step order and add no unsupported steps.",
+    "capture_ids": ["release_retry_procedure"],
+    "required_output_keys": ["status", "steps", "completion_check"],
+    "required_groups": [
+      ["open release dashboard"],
+      ["select pending build"],
+      ["retry signing"],
+      ["verify status changes to notarizing"]
+    ],
+    "forbidden_groups": [],
+    "ordered_groups": [
+      ["open release dashboard"],
+      ["select pending build"],
+      ["retry signing"],
+      ["verify status changes to notarizing"]
+    ]
+  },
+  {
+    "id": "chronos_time_tracker_activity_digest",
+    "pipe": "chronos-time-tracker",
+    "instruction": "Produce a compact activity digest from all three captures. Return one JSON object with entries containing app and activity. Include every supported activity once, preserve exact event titles, file names, and test counts, and do not infer durations.",
+    "capture_ids": ["calendar_event", "vscode_editor", "terminal_session"],
+    "required_output_keys": ["entries"],
+    "required_groups": [
+      ["parser review"],
+      ["main.rs"],
+      ["24 passed", "24 tests passed"]
+    ],
+    "forbidden_groups": [
+      ["duration_minutes", "minutes spent", "hours spent", "30 minutes", "30m"]
+    ],
+    "ordered_groups": []
+  }
+]

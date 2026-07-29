@@ -1,0 +1,19 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "md.obsidian",
+    "executable": "Obsidian",
+    "display_name": "Obsidian",
+    "version": "1.9",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Parser results - Obsidian" },
+    { "parent": 0, "role": "AXGroup", "classes": ["workspace-leaf", "mod-active"] },
+    { "parent": 1, "role": "AXTextArea", "classes": ["view-header-title"], "value": "Parser results" },
+    { "parent": 1, "role": "AXGroup", "classes": ["markdown-preview-view", "markdown-rendered"] },
+    { "parent": 3, "role": "AXHeading", "value": "Parser results" },
+    { "parent": 3, "role": "AXStaticText", "value": "The semantic context keeps the active note body." },
+    { "parent": 3, "role": "AXButton", "title": "Copy" }
+  ]
+}

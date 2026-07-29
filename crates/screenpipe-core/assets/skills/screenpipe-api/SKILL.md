@@ -93,6 +93,18 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 
 Params: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`, `format`, `fields`.
 
+Use `format=outline` for token-efficient reading. Use `format=automation` only
+for automation planning: it keeps interactive controls and returns a snapshot
+revision, short response-local refs, best-effort stable keys, state, bounds, and
+allowed actions. Refresh before each action and verify key + role + name + bounds.
+Database element ids and response refs are not durable live UI handles.
+`format=preferred` follows the desktop AI context setting; its default is the
+read/memory outline.
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/frames/12345/elements?format=automation"
+```
+
 Frame context (accessibility text, parsed nodes, extracted URLs): `GET /frames/{id}/context`.
 
 **Roles are not normalized across platforms** — use the right one for the user's OS:
@@ -281,7 +293,29 @@ All POST with `Content-Type: application/json` unless noted:
 
 ---
 
-## 11. Memories — High-Signal Persistent Knowledge
+## 11. Semantic actors — `GET/POST /semantic/*`
+
+Semantic parsing is optional and disabled by default. When enabled, parser actor
+labels are heuristic observations. The API exposes a separate durable identity
+that a user or Pipe can correct without overwriting source evidence.
+
+- `GET /semantic/actors/search?q=Alice&limit=20` — canonical and observed names
+- `GET /semantic/context?actor_id=12&format=json&limit=20` — context assigned to an actor
+- `POST /semantic/actors/create` `{"name":"Alice Smith"}` — create a separate identity
+- `POST /semantic/actors/update` `{"id":12,"name":"Alice Smith"}` — rename
+- `POST /semantic/actors/merge` `{"actor_to_keep_id":12,"actor_to_merge_id":31}` — merge current and future aliases
+- `POST /semantic/actors/reassign` `{"item_id":902,"actor_id":12}` — correct one semantic item
+- `POST /semantic/actors/aliases/reassign` `{"alias_id":44,"actor_id":12}` — move one alias, its heuristic history, and future observations
+
+In `format=json`, `items[*].actor` is always the original parser label. The
+parallel `actors` array contains `item_id`, canonical `actor_id`/`name`, observed
+name, and assignment source. Use actor IDs for edits; never merge by display
+name alone. Prefer moving a specific alias when a full actor merge would be too
+broad; explicit item corrections are preserved.
+
+---
+
+## 12. Memories — High-Signal Persistent Knowledge
 
 **Memories are the highest-signal source** — curated facts, preferences, decisions, project context distilled from hours of data. **If you're calling `/search`, also query `/memories`**: search gives you what happened, memories give you what matters and why. Query memories first when answering about preferences/decisions/past context, building background on a project/person/workflow, or generating any summary/recommendation/plan.
 
@@ -298,7 +332,7 @@ curl -X DELETE http://localhost:3030/memories/1                                 
 
 ---
 
-## 12. Notifications — `POST http://localhost:11435/notify`
+## 13. Notifications — `POST http://localhost:11435/notify`
 
 Notify the desktop UI. This is the Tauri sidecar (port **11435**), not the main API. `body` supports markdown (`**bold**`, `` `code` ``, `[text](url)`).
 
@@ -328,7 +362,7 @@ Action types: `link` (web URL), `deeplink` (`screenpipe://`), `pipe` (run an ins
 
 ---
 
-## 13. Other Endpoints
+## 14. Other Endpoints
 
 ```bash
 curl http://localhost:3030/health        # health check

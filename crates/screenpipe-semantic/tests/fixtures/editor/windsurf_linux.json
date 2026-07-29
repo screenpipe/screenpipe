@@ -1,0 +1,22 @@
+{
+  "app": {
+    "platform": "linux",
+    "app_id": "com.exafunction.windsurf",
+    "executable": "windsurf",
+    "display_name": "Windsurf",
+    "version": "1.12.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "Window", "title": "screenpipe - Windsurf" },
+    { "parent": 0, "role": "Section", "classes": ["monaco-workbench"] },
+    { "parent": 1, "role": "Section", "classes": ["editor-instance"] },
+    {
+      "parent": 2,
+      "role": "Text",
+      "description": "agent.py, Editor Group 1",
+      "value": "def run():\n    return 'done'"
+    },
+    { "parent": 1, "role": "Terminal", "text": "$ python agent.py\ndone" }
+  ]
+}

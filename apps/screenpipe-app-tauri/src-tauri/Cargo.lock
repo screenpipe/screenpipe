@@ -11059,7 +11059,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.147"
+version = "2.5.148"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11384,6 +11384,7 @@ dependencies = [
  "rand 0.9.2",
  "regex",
  "screenpipe-config",
+ "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -11440,6 +11441,7 @@ dependencies = [
  "screenpipe-resource",
  "screenpipe-screen",
  "screenpipe-secrets",
+ "screenpipe-semantic",
  "screenpipe-vault",
  "sentry 0.36.0",
  "serde",
@@ -11590,6 +11592,17 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "screenpipe-semantic"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

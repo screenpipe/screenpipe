@@ -1,0 +1,15 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.anthropic.claudefordesktop",
+    "executable": "Claude",
+    "display_name": "Claude",
+    "version": "0.12",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Claude" },
+    { "parent": 0, "role": "AXGroup", "classes": ["settings-card"] },
+    { "parent": 1, "role": "AXStaticText", "classes": ["font-claude-response"], "value": "A styled card is not a conversation message." }
+  ]
+}

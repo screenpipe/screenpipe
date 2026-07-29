@@ -8574,6 +8574,7 @@ dependencies = [
  "screenpipe-config",
  "screenpipe-core",
  "screenpipe-secrets",
+ "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -8636,6 +8637,7 @@ dependencies = [
  "screenpipe-resource",
  "screenpipe-screen",
  "screenpipe-secrets",
+ "screenpipe-semantic",
  "screenpipe-vault",
  "sentry",
  "serde",
@@ -8645,6 +8647,7 @@ dependencies = [
  "sqlx",
  "sysinfo",
  "tempfile",
+ "tiktoken-rs",
  "tikv-jemallocator",
  "tinfoil",
  "tokio",
@@ -8841,6 +8844,25 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "screenpipe-semantic"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "regex",
+ "reqwest 0.13.3",
+ "screenpipe-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tiktoken-rs",
+ "tokio",
 ]
 
 [[package]]
