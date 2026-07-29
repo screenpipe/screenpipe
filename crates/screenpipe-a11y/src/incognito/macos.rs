@@ -292,6 +292,27 @@ mod tests {
         );
     }
 
+    /// Chrome answers the AppleScript query with tab titles, while the AX
+    /// window title the tree walk passes in carries a " - Google Chrome
+    /// (Incognito)" suffix. The exact-match lookup therefore says "not
+    /// private" for a window that is, and the localized title check has to
+    /// catch it.
+    #[test]
+    fn test_incognito_window_with_browser_suffix_is_detected() {
+        let detector = isolated_detector(true);
+        detector.cache.store(
+            "com.google.Chrome".to_ascii_lowercase(),
+            Some(HashSet::from(["Privacy - Wikipedia".to_string()])),
+        );
+
+        assert!(detector.is_incognito(
+            "Google Chrome",
+            0,
+            "Privacy - Wikipedia - Google Chrome (Incognito)"
+        ));
+        assert!(!detector.is_incognito("Google Chrome", 0, "Privacy - Wikipedia - Google Chrome"));
+    }
+
     #[test]
     fn test_fallback_to_title_for_firefox() {
         let detector = MacOSIncognitoDetector::new(false);
