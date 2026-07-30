@@ -511,6 +511,11 @@ export function planDisplayName(
 }
 
 export function normalizeAppUser(rawUser: any, token: string): AppUser {
+  // Always stamp "now". This runs only after a successful `/api/user` response,
+  // which *is* a local verification event. Preserving a server-supplied
+  // `checked_at` (often the last Stripe write, days old) left Pro accounts
+  // looking stale after APP_ENTITLEMENT_MAX_STALE_MS even though AuthGuard had
+  // just verified them — native then skipped capture with no recovery path.
   const checkedAt = new Date().toISOString();
   const rawEntitlement = asEntitlement(rawUser?.entitlement);
   const cloudSubscribed = rawUser?.cloud_subscribed === true;
@@ -541,7 +546,7 @@ export function normalizeAppUser(rawUser: any, token: string): AppUser {
         },
       }
     : rawEntitlement
-      ? { ...rawEntitlement, checked_at: rawEntitlement.checked_at ?? checkedAt }
+      ? { ...rawEntitlement, checked_at: checkedAt }
       : typeof rawUser?.app_entitled === "boolean" || cloudSubscribed
         ? {
             active: appEntitled,

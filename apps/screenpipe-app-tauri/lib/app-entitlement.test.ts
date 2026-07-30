@@ -305,6 +305,43 @@ describe("app entitlement", () => {
     expect(hasAppEntitlement(normalized)).toBe(true);
   });
 
+  it("refreshes stale server checked_at on every successful verify", () => {
+    // `/api/user` often echoes the last Stripe entitlement write as checked_at.
+    // That timestamp can be days old while the session itself is still valid.
+    // Keeping it made Pro users trip the 72h staleness gate after AuthGuard
+    // had just verified them — capture stayed paused while UI said logged in.
+    const staleCheckedAt = new Date(
+      NOW.getTime() - APP_ENTITLEMENT_MAX_STALE_MS - 60_000,
+    ).toISOString();
+    const normalized = normalizeAppUser(
+      {
+        id: "user_pro",
+        clerk_id: "clerk_pro",
+        app_entitled: true,
+        subscription_plan: "pro",
+        cloud_subscribed: true,
+        entitlement: {
+          active: true,
+          plan: "pro",
+          source: "manual",
+          checked_at: staleCheckedAt,
+          expires_at: "2026-08-05T07:37:15.921Z",
+          features: { app: true, local_recording: true, cloud: true },
+        },
+      },
+      "fresh-session-token",
+    );
+
+    expect(normalized.entitlement).toMatchObject({
+      active: true,
+      plan: "pro",
+      checked_at: NOW.toISOString(),
+    });
+    expect(normalized.entitlement?.checked_at).not.toBe(staleCheckedAt);
+    expect(hasVerifiedPaidPlan(normalized)).toBe(true);
+    expect(getLocalPlanPolicy(normalized)).toBe("verified-paid");
+  });
+
   it("normalizes fresh legacy cloud subscribers into checked app entitlements", () => {
     const normalized = normalizeAppUser(
       {

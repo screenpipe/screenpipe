@@ -33,6 +33,9 @@ vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
 
 vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
 vi.mock("@/components/ui/toast", () => ({ ToastAction: () => null }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
 vi.mock("@/lib/web-url", () => ({
   PROD_WEB_BASE: "https://screenpipe.com",
   screenpipeWebUrl: () => "https://screenpipe.com/login",

@@ -5,11 +5,13 @@
 "use client";
 
 import React, { useEffect, useRef, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { toast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
+import { needsAppEntitlementRefresh } from "@/lib/app-entitlement";
 import { PROD_WEB_BASE, screenpipeWebBase, screenpipeWebUrl } from "@/lib/web-url";
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
@@ -55,6 +57,25 @@ function showSignedOutToast() {
   toast({
     title: "session expired",
     description: "sign in again before recording can continue.",
+    variant: "destructive",
+    duration: 30000,
+    action: (
+      <ToastAction altText="Sign in to screenpipe" onClick={openLogin}>
+        sign in
+      </ToastAction>
+    ),
+  });
+}
+
+function showAccountAccessToast() {
+  const now = Date.now();
+  if (now - lastToastTime < TOAST_COOLDOWN_MS) return;
+  lastToastTime = now;
+
+  toast({
+    title: "recording paused — account check needed",
+    description:
+      "your plan couldn't be verified yet. stay online or sign in again so capture can resume.",
     variant: "destructive",
     duration: 30000,
     action: (
@@ -168,6 +189,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { settings, updateSettings, loadUser } = useSettings();
   const tokenRef = useRef(settings.user?.token);
   tokenRef.current = settings.user?.token;
+  const userRef = useRef(settings.user);
+  userRef.current = settings.user;
 
   const handleSessionExpired = useCallback(
     async (context?: { source?: string; status?: number | null }) => {
@@ -222,7 +245,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   }, [loadUser, handleSessionExpired]);
 
   useEffect(() => {
-    const initial = setTimeout(verifyToken, 5000);
+    // Stale paid evidence blocks native auto-start on boot. Don't wait 5s —
+    // re-verify immediately so checked_at refreshes and the entitlement gate
+    // can resume capture.
+    const initialDelayMs = needsAppEntitlementRefresh(userRef.current as any)
+      ? 0
+      : 5000;
+    const initial = setTimeout(() => void verifyToken(), initialDelayMs);
     const interval = setInterval(verifyToken, CHECK_INTERVAL_MS);
 
     // Eagerly re-verify entitlement when the user returns to the app — e.g.
@@ -247,6 +276,26 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       clearInterval(interval);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [verifyToken]);
+
+  // Native emits this when recording auto-start is skipped because plan truth
+  // is unknown/stale. Surface it — previously the UI stayed "logged in" with
+  // capture paused and no recovery cue.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("app-entitlement-required", () => {
+      showAccountAccessToast();
+      void verifyToken();
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        // jsdom / non-tauri hosts have no event IPC — skip quietly.
+      });
+    return () => {
+      unlisten?.();
     };
   }, [verifyToken]);
 
