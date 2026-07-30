@@ -476,7 +476,8 @@ impl AudioStream {
                     .build_input_stream(
                         &config.into(),
                         move |data: &[i16], _: &_| {
-                            let mono = audio_to_mono(bytemuck::cast_slice(data), channels);
+                            let float_data: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                            let mono = audio_to_mono(&float_data, channels);
                             let _ = tx.send(mono);
                         },
                         error_callback,
@@ -487,7 +488,8 @@ impl AudioStream {
                     .build_input_stream(
                         &config.into(),
                         move |data: &[i32], _: &_| {
-                            let mono = audio_to_mono(bytemuck::cast_slice(data), channels);
+                            let float_data: Vec<f32> = data.iter().map(|&s| s as f32 / i32::MAX as f32).collect();
+                            let mono = audio_to_mono(&float_data, channels);
                             let _ = tx.send(mono);
                         },
                         error_callback,
