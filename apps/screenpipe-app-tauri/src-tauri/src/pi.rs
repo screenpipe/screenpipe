@@ -50,6 +50,41 @@ const TEXT_DELTA_EMIT_BATCH_CHARS: usize = 1_200;
 /// Keep in sync with TypeScript: lib/utils/internal-session.ts → INTERNAL_TITLE_PREFIX
 const TITLE_SESSION_PREFIX: &str = "__title:";
 const REQUIRED_PI_EXTENSION_PACKAGE: &str = "npm:pi-subagents";
+const CONVERSATION_HISTORY_OPEN: &str = "<conversation_history>";
+const CONVERSATION_HISTORY_CLOSE: &str = "</conversation_history>";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PiConversationSyncState {
+    NeedsRecovery,
+    Synced,
+}
+
+/// The frontend always supplies a bounded history snapshot as a recovery
+/// fallback. A live Pi RPC process already owns the canonical threaded
+/// conversation, so replaying that snapshot on every healthy turn duplicates
+/// user, assistant, and tool messages in the model context. Strip only the
+/// exact generated wrapper once this process has accepted an earlier prompt.
+///
+/// Keeping the decision beside the subprocess fixes the old frontend race:
+/// every new PiManager starts cold, while compaction keeps the same manager and
+/// therefore the same threaded context.
+fn prompt_for_pi_session(message: String, sync_state: PiConversationSyncState) -> String {
+    if sync_state == PiConversationSyncState::NeedsRecovery {
+        return message;
+    }
+
+    let trimmed = message.trim_start();
+    if !trimmed.starts_with(CONVERSATION_HISTORY_OPEN) {
+        return message;
+    }
+    let Some(close_index) = trimmed.find(CONVERSATION_HISTORY_CLOSE) else {
+        return message;
+    };
+    let user_message = &trimmed[close_index + CONVERSATION_HISTORY_CLOSE.len()..];
+    user_message
+        .trim_start_matches(|c| c == '\r' || c == '\n')
+        .to_string()
+}
 
 struct PendingAgentTextDelta {
     event: Value,
@@ -111,7 +146,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::{AppHandle, State};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tracing::{debug, error, info, warn};
 
 /// Signals that the background Pi install has finished (success or failure).
@@ -526,6 +561,53 @@ fn sync_queue_state_from_event(
     }
 }
 
+/// Process-scoped conversation synchronization state.
+///
+/// Replacing this value when Pi stops gives each subprocess a distinct
+/// identity and resets recovery without blocking from synchronous cleanup.
+#[derive(Clone)]
+struct PiConversationSync {
+    state: Arc<Mutex<PiConversationSyncState>>,
+}
+
+impl PiConversationSync {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PiConversationSyncState::NeedsRecovery)),
+        }
+    }
+
+    async fn lock(&self) -> OwnedMutexGuard<PiConversationSyncState> {
+        self.state.clone().lock_owned().await
+    }
+
+    fn is_same_process(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+}
+
+/// Exclusive access to prompt normalization for one live Pi subprocess.
+/// Holding the lease until Pi acknowledges the prompt prevents an immediate
+/// queued follow-up from observing stale synchronization state.
+struct PiConversationLease {
+    state: OwnedMutexGuard<PiConversationSyncState>,
+    queue: crate::pi_command_queue::PiQueueHandle,
+}
+
+impl PiConversationLease {
+    fn prepare_prompt(&self, message: String) -> String {
+        prompt_for_pi_session(message, *self.state)
+    }
+
+    fn mark_synced(&mut self) {
+        *self.state = PiConversationSyncState::Synced;
+    }
+
+    fn mark_needs_recovery(&mut self) {
+        *self.state = PiConversationSyncState::NeedsRecovery;
+    }
+}
+
 #[allow(dead_code)]
 pub struct PiManager {
     child: Option<Child>,
@@ -544,6 +626,7 @@ pub struct PiManager {
     queue_state: Option<Arc<crate::pi_command_queue::PiQueueState>>,
     /// Join handle for the queue drain task (for cleanup).
     queue_task: Option<tokio::task::JoinHandle<()>>,
+    conversation_sync: PiConversationSync,
 }
 
 impl PiManager {
@@ -559,6 +642,7 @@ impl PiManager {
             queue_handle: None,
             queue_state: None,
             queue_task: None,
+            conversation_sync: PiConversationSync::new(),
         }
     }
 
@@ -627,6 +711,7 @@ impl PiManager {
         }
         self.stdin = None;
         self.project_dir = None;
+        self.conversation_sync = PiConversationSync::new();
         // Drop all pending response channels so waiting callers get an error
         self.pending_responses.lock().unwrap().clear();
     }
@@ -2669,6 +2754,51 @@ async fn attach_foreground_connections_context(
     )
 }
 
+async fn acquire_pi_conversation_lease(
+    state: &PiState,
+    sid: &str,
+) -> Result<PiConversationLease, String> {
+    let sync = {
+        let mut pool = state.0.lock().await;
+        let manager = pool.sessions.get_mut(sid).ok_or("Pi not initialized")?;
+        if !manager.is_running() {
+            return Err("Pi is not running".to_string());
+        }
+        manager.conversation_sync.clone()
+    };
+    let sync_state = sync.lock().await;
+
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let manager = pool.sessions.get_mut(sid).ok_or("Pi not initialized")?;
+        if !manager.conversation_sync.is_same_process(&sync) || !manager.is_running() {
+            return Err("Pi session restarted while preparing prompt".to_string());
+        }
+        manager.last_activity = std::time::Instant::now();
+        manager
+            .queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+
+    Ok(PiConversationLease {
+        state: sync_state,
+        queue,
+    })
+}
+
+#[cfg(feature = "e2e")]
+fn emit_e2e_pi_wire_prompt(app: &AppHandle, sid: &str, kind: &str, message: &str) {
+    let _ = app.emit(
+        "e2e_pi_wire_prompt",
+        json!({
+            "sessionId": sid,
+            "kind": kind,
+            "message": message,
+        }),
+    );
+}
+
 fn queued_payload_to_steer_command(payload: Value) -> Result<Value, String> {
     let message = payload
         .get("message")
@@ -2700,22 +2830,16 @@ pub async fn pi_prompt(
     display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    let queue = {
-        let mut pool = state.0.lock().await;
-        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
-        if !m.is_running() {
-            return Err("Pi is not running".to_string());
-        }
-        m.last_activity = std::time::Instant::now();
-        m.queue_handle
-            .clone()
-            .ok_or("Pi command queue not initialized")?
-    };
+    let mut conversation = acquire_pi_conversation_lease(state.inner(), &sid).await?;
+    let message = conversation.prepare_prompt(message);
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
     let message = attach_foreground_connections_context(&app, &sid, message).await;
+    #[cfg(feature = "e2e")]
+    emit_e2e_pi_wire_prompt(&app, &sid, "prompt", &message);
     let cmd = build_prompt_command(message, images)?;
-    let (queue_id, rx) = queue
+    let (queue_id, rx) = conversation
+        .queue
         .send_prompt(
             cmd,
             crate::pi_command_queue::WaitMode::Prompt,
@@ -2724,6 +2848,7 @@ pub async fn pi_prompt(
         )
         .await?;
     await_prompt_start(state.inner(), &sid, rx).await?;
+    conversation.mark_synced();
     Ok(queue_id)
 }
 
@@ -2741,22 +2866,16 @@ pub async fn pi_queue_prompt(
     display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    let queue = {
-        let mut pool = state.0.lock().await;
-        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
-        if !m.is_running() {
-            return Err("Pi is not running".to_string());
-        }
-        m.last_activity = std::time::Instant::now();
-        m.queue_handle
-            .clone()
-            .ok_or("Pi command queue not initialized")?
-    };
+    let mut conversation = acquire_pi_conversation_lease(state.inner(), &sid).await?;
+    let message = conversation.prepare_prompt(message);
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
     let message = attach_foreground_connections_context(&app, &sid, message).await;
+    #[cfg(feature = "e2e")]
+    emit_e2e_pi_wire_prompt(&app, &sid, "queue", &message);
     let cmd = build_prompt_command(message, images)?;
-    let (queue_id, rx) = queue
+    let (queue_id, rx) = conversation
+        .queue
         .send_prompt(
             cmd,
             crate::pi_command_queue::WaitMode::Prompt,
@@ -2767,11 +2886,14 @@ pub async fn pi_queue_prompt(
     let state_for_watchdog = state.inner().clone();
     let sid_for_watchdog = sid.clone();
     tokio::spawn(async move {
-        if let Err(error) = await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await {
-            warn!(
-                "queued Pi prompt failed before it started for session {}: {}",
-                sid_for_watchdog, error
-            );
+        match await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await {
+            Ok(()) => conversation.mark_synced(),
+            Err(error) => {
+                warn!(
+                    "queued Pi prompt failed before it started for session {}: {}",
+                    sid_for_watchdog, error
+                );
+            }
         }
     });
     Ok(queue_id)
@@ -2980,25 +3102,21 @@ pub async fn pi_new_session(
     session_id: Option<String>,
 ) -> Result<(), String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    let queue = {
-        let mut pool = state.0.lock().await;
-        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
-        if !m.is_running() {
-            return Err("Pi is not running".to_string());
-        }
-        m.last_activity = std::time::Instant::now();
-        m.queue_handle
-            .clone()
-            .ok_or("Pi command queue not initialized")?
-    };
-    let rx = queue
+    let mut conversation = acquire_pi_conversation_lease(state.inner(), &sid).await?;
+    let rx = conversation
+        .queue
         .send(
             json!({"type": "new_session"}),
             crate::pi_command_queue::WaitMode::WaitDone,
         )
         .await?;
-    rx.await
-        .map_err(|_| "Pi command queue dropped".to_string())?
+    let result = rx
+        .await
+        .map_err(|_| "Pi command queue dropped".to_string())?;
+    if result.is_ok() {
+        conversation.mark_needs_recovery();
+    }
+    result
 }
 
 /// Check if pi is available
@@ -3984,6 +4102,71 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    const REPLAYED_HISTORY: &str =
+        "<conversation_history>\nuser: hello\nassistant: hi\n</conversation_history>\n\nwhat next?";
+
+    #[test]
+    fn prepares_prompt_for_pi_conversation_state() {
+        use super::PiConversationSyncState::{NeedsRecovery, Synced};
+
+        let cases = [
+            (
+                "cold snapshot",
+                REPLAYED_HISTORY,
+                NeedsRecovery,
+                REPLAYED_HISTORY,
+            ),
+            ("warm snapshot", REPLAYED_HISTORY, Synced, "what next?"),
+            ("bare prompt", "plain question", Synced, "plain question"),
+            (
+                "malformed snapshot",
+                "<conversation_history>not closed\nplain question",
+                Synced,
+                "<conversation_history>not closed\nplain question",
+            ),
+            (
+                "leading whitespace",
+                "  \n<conversation_history>history</conversation_history>\nquestion",
+                Synced,
+                "question",
+            ),
+            (
+                "windows newlines",
+                "<conversation_history>history</conversation_history>\r\n\r\nquestion",
+                Synced,
+                "question",
+            ),
+        ];
+
+        for (name, input, state, expected) in cases {
+            assert_eq!(
+                super::prompt_for_pi_session(input.to_string(), state),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conversation_sync_state_is_scoped_to_one_pi_process() {
+        use super::PiConversationSyncState::{NeedsRecovery, Synced};
+
+        let running_process = super::PiConversationSync::new();
+        let same_process = running_process.clone();
+        assert!(running_process.is_same_process(&same_process));
+
+        {
+            let mut state = running_process.lock().await;
+            assert_eq!(*state, NeedsRecovery);
+            *state = Synced;
+        }
+        assert_eq!(*same_process.lock().await, Synced);
+
+        let restarted_process = super::PiConversationSync::new();
+        assert!(!running_process.is_same_process(&restarted_process));
+        assert_eq!(*restarted_process.lock().await, NeedsRecovery);
+    }
 
     #[test]
     fn parses_tool_call_ids_from_pi_events() {

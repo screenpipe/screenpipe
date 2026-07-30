@@ -461,44 +461,15 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         { id: assistantMessageId, role: "assistant", content: "Processing...", timestamp: Date.now(), model: getActivePreset()?.model, provider: getActivePreset()?.provider },
       ]);
 
-      // Always re-inject the recent conversation history into every prompt
-      // when the chat has prior turns (issue #3636).
-      //
-      // The previous contract gated injection on `piSessionSyncedRef.current`
-      // — a local boolean that tracked "we believe Pi has the conversation
-      // in its own in-memory session." The ref was reset on explicit Pi
-      // restarts (piStart paths), but Pi can also lose state silently —
-      // pi-agent runs context compaction by default (default settings:
-      // reserveTokens 16384, keepRecentTokens 20000), pi can crash and
-      // be auto-restarted before our termination handler observes the
-      // exit, and a queued / steer follow-up can race with a fresh
-      // sendPiMessage in ways the ref can't track. When the ref says
-      // "synced" but Pi has actually dropped everything, the next turn
-      // is sent as a bare user message — the model sees no prior context
-      // and answers as if the conversation just started. That's the
-      // user-visible symptom in issue #3636: "chat suddenly loses prior
-      // conversation context, but if I explicitly ask it to read the
-      // previous conversation, it can."
-      //
-      // The frontend's `messages` array is the durable source of truth
-      // (it's what gets persisted to disk on every save). Sending the
-      // last ~40 turns every time costs a small amount of tokens against
-      // the model's context window, but eliminates the entire class of
-      // "pi state silently diverged from messages" bugs. Pi appends the
-      // prompt verbatim to its own session; in the steady-state path the
-      // model sees a small amount of duplication between Pi's accumulated
-      // state and the injected block, which it handles fine. In the
-      // failure path (Pi just restarted, compacted, or never had this
-      // turn at all), the injected block IS the conversation and the
-      // model has what it needs.
-      //
-      // `piSessionSyncedRef` is kept around because other code paths
-      // (preset change, reauth, the conversation-load handler) still
-      // toggle it for diagnostics, but it no longer gates injection.
+      // Always attach the bounded frontend snapshot used to recover issue
+      // #3636. Rust knows the exact Pi subprocess state: a cold/new process
+      // keeps this snapshot once, while a warm process strips it before RPC
+      // so Pi's own threaded history is not duplicated.
       const promptMessage = promptWithConversationHistory(userMessage, messages);
       piSessionSyncedRef.current = true;
 
-      // E2E test hook — write to __e2ePiPromptCaptures when the recorder is installed
+      // E2E test hook: capture the frontend recovery payload before Rust decides
+      // whether the Pi subprocess still needs it.
       {
         const g = window as any;
         if (Array.isArray(g.__e2ePiPromptCaptures)) {
