@@ -126,6 +126,11 @@ import {
   isEnterpriseManagedPreset,
 } from "@/lib/enterprise-ai-preset-policy";
 
+// Helper function to check for valid non-empty API keys across UI and runtime logic
+function hasValidApiKey(key?: string | null): boolean {
+  return typeof key === "string" && key.trim().length > 0;
+}
+
 // Helper to detect UUID-like strings and format preset names nicely
 const formatPresetName = (name: string): string => {
   // Check if the name looks like a UUID (8-4-4-4-12 format)
@@ -329,7 +334,7 @@ const AISection = ({
       }
       
       // Validate API key
-      if (presetData.apiKey && presetData.provider) {
+      if (presetData.apiKey !== undefined && presetData.provider) {
         const apiKeyValidation = validateApiKey(presetData.apiKey, presetData.provider);
         if (!apiKeyValidation.isValid && apiKeyValidation.error) {
           errors.apiKey = apiKeyValidation.error;
@@ -660,12 +665,12 @@ const AISection = ({
         skipRemaining("auth", `Could not get ChatGPT token: ${err}. You may need to rebuild the app.`);
         return;
       }
-    } else if (isAnthropic && settingsPreset?.apiKey) {
-      headers["x-api-key"] = settingsPreset.apiKey;
+    } else if (isAnthropic && hasValidApiKey(settingsPreset?.apiKey)) {
+      headers["x-api-key"] = settingsPreset!.apiKey!;
       headers["anthropic-version"] = "2023-06-01";
       headers["anthropic-dangerous-direct-browser-access"] = "true";
-    } else if (settingsPreset?.apiKey) {
-      headers["Authorization"] = `Bearer ${settingsPreset.apiKey}`;
+    } else if (hasValidApiKey(settingsPreset?.apiKey)) {
+      headers["Authorization"] = `Bearer ${settingsPreset!.apiKey!}`;
     }
 
     // Step 1+2+3: Fetch models endpoint (tests endpoint, auth, and models in one call)
@@ -764,9 +769,9 @@ const AISection = ({
           } else {
             const apiModels = (data.data || [])
               .map((m: any) => ({
-              id: m.id,
-              name: m.id,
-              provider: settingsPreset?.provider || "custom",
+                id: m.id,
+                name: m.id,
+                provider: settingsPreset?.provider || "custom",
               }))
               .filter((m: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === m.id) === idx);
             modelCount = apiModels.length;
@@ -983,7 +988,7 @@ const AISection = ({
             const customResponse = await customFetchFn(
               aiEndpointUrl(settingsPreset?.url, "models"),
               {
-                headers: settingsPreset.apiKey
+                headers: hasValidApiKey(settingsPreset?.apiKey)
                   ? { Authorization: `Bearer ${settingsPreset?.apiKey}` }
                   : {},
               }
@@ -1171,7 +1176,7 @@ const AISection = ({
       (settingsPreset?.provider === "openai" ||
         settingsPreset?.provider === "anthropic" ||
         settingsPreset?.provider === "custom") &&
-      !settingsPreset?.apiKey
+      !hasValidApiKey(settingsPreset?.apiKey)
     )
       return;
     fetchModels();
@@ -1185,7 +1190,7 @@ const AISection = ({
 
     const needsApiKey =
       settingsPreset.provider === "openai" || settingsPreset.provider === "anthropic" || settingsPreset.provider === "custom";
-    if (needsApiKey && !settingsPreset.apiKey) return;
+    if (needsApiKey && !hasValidApiKey(settingsPreset.apiKey)) return;
 
     if (settingsPreset.provider === "openai-chatgpt" || settingsPreset.provider === "native-ollama" || settingsPreset.url) {
       const timer = setTimeout(() => {
@@ -1455,11 +1460,11 @@ const AISection = ({
                 )}
                 disabled={
                   settingsPreset?.provider === "openai" &&
-                  !settingsPreset?.apiKey
+                  !hasValidApiKey(settingsPreset?.apiKey)
                 }
               >
                 {settingsPreset?.provider === "openai" &&
-                !settingsPreset?.apiKey
+                !hasValidApiKey(settingsPreset?.apiKey)
                   ? "API key required to fetch models"
                   : settingsPreset?.model || "Select model..."}
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -1556,323 +1561,324 @@ const AISection = ({
                                     console.error("checkout failed:", e);
                                   }
                                 }
-                                return;
                               }
-                              updateSettingsPreset({ model: model.id });
-                              setIsModelPickerOpen(false);
-                            }}
-                          >
-                            <div className="flex flex-col gap-0.5 w-full">
-                              <div className="flex items-center justify-between">
-                                <span className="font-medium">{model.name}</span>
-                                <div className="flex items-center gap-1 ml-2">
-                                  {locked && (
-                                    <Badge variant="outline" className="text-[10px] gap-0.5 border-foreground/40 text-foreground/80">
-                                      <Lock className="h-2.5 w-2.5" />
-                                      Business
-                                    </Badge>
-                                  )}
-                                  {!locked && costLabel && <Badge variant="outline" className="text-[10px]">{costLabel}</Badge>}
-                                  {!locked && model.speed === "fast" && <Badge variant="outline" className="text-[10px]">fast</Badge>}
-                                  {/* Low-quota warning — only renders when the user is within
-                                      ~30% of exhausting their daily cap for this specific model.
-                                      Silent otherwise (normal state = no extra clutter). Never on a
-                                      locked model — the Business lock already says "not available",
-                                      so a "N left" count on top would be contradictory. */}
-                                  {!locked && shouldWarnLowQuota(usage, model.query_weight) && (
-                                    <Badge
-                                      variant="outline"
-                                      className="text-[10px] bg-yellow-500/10 text-yellow-700 border-yellow-500/40 dark:text-yellow-400"
-                                      title={`approaching daily limit${usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : ""}`}
-                                    >
-                                      ≈ {messagesLeftForModel(usage, model.query_weight)} left
-                                    </Badge>
-                                  )}
-                                </div>
+                              return;
+                            }
+                            updateSettingsPreset({ model: model.id });
+                            setIsModelPickerOpen(false);
+                          }}
+                        >
+                          <div className="flex flex-col gap-0.5 w-full">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium">{model.name}</span>
+                              <div className="flex items-center gap-1 ml-2">
+                                {locked && (
+                                  <Badge variant="outline" className="text-[10px] gap-0.5 border-foreground/40 text-foreground/80">
+                                    <Lock className="h-2.5 w-2.5" />
+                                    Business
+                                  </Badge>
+                                )}
+                                {!locked && costLabel && <Badge variant="outline" className="text-[10px]">{costLabel}</Badge>}
+                                {!locked && model.speed === "fast" && <Badge variant="outline" className="text-[10px]">fast</Badge>}
+                                {/* Low-quota warning — only renders when the user is within
+                                    ~30% of exhausting their daily cap for this specific model.
+                                    Silent otherwise (normal state = no extra clutter). Never on a
+                                    locked model — the Business lock already says "not available",
+                                    so a "N left" count on top would be contradictory. */}
+                                {!locked && shouldWarnLowQuota(usage, model.query_weight) && (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] bg-yellow-500/10 text-yellow-700 border-yellow-500/40 dark:text-yellow-400"
+                                    title={`approaching daily limit${usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : ""}`}
+                                  >
+                                    ≈ {messagesLeftForModel(usage, model.query_weight)} left
+                                  </Badge>
+                                )}
                               </div>
-                              <span className="text-xs text-muted-foreground">
-                                {model.description}{model.context_window ? ` · ${Math.round(model.context_window / 1000)}K ctx` : ""}
-                              </span>
-                              {model.recommended_for && model.recommended_for.length > 0 && (
-                                <div className="flex items-center gap-1 mt-0.5">
-                                  {model.recommended_for.map((use) => (
-                                    <span key={use} className="text-[9px] rounded bg-muted px-1 py-0.5 text-muted-foreground">{use}</span>
-                                  ))}
-                                </div>
-                              )}
                             </div>
-                          </CommandItem>
-                          );
-                        })}
-                      </CommandGroup>
-                    </>
-                  )}
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-          {(() => {
-            const selectedModel = models?.find((m) => m.id === settingsPreset?.model);
-            if (selectedModel?.warning) {
-              return (
-                <div className="flex items-start gap-2 rounded-md border p-3 text-xs text-muted-foreground">
-                  <span className="shrink-0 text-sm">!</span>
-                  <div className="space-y-1">
-                    <p>{selectedModel.warning}</p>
-                    {models?.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 2).length > 0 && (
-                      <p className="text-muted-foreground">
-                        recommended for pipes:{" "}
-                        {models.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 3).map((m) => (
-                          <button
-                            key={m.id}
-                            type="button"
-                            className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 mr-1 font-medium hover:bg-accent cursor-pointer"
-                            onClick={() => updateSettingsPreset({ model: m.id })}
-                          >
-                            {m.name} {m.free ? "(free)" : ""}
-                          </button>
-                        ))}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              );
-            }
-            return null;
-          })()}
-          {settingsPreset?.provider === "native-ollama" && (
-            <div className="text-xs text-muted-foreground space-y-1">
-              <p>
-                <span className="font-medium">recommended:</span>{" "}
-                <code className="bg-secondary/50 px-1 rounded">qwen3.5:9b</code>{" "}
-                <code className="bg-secondary/50 px-1 rounded">glm-4.7:9b</code>{" "}
-                <code className="bg-secondary/50 px-1 rounded">qwen3.5:4b</code>{" "}
-                (all support tool calling)
-              </p>
-              <p>
-                GPU strongly recommended. without a dedicated GPU, local models will be very slow and pipes may time out.
-                for best results consider screenpipe cloud or groq as custom provider.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <ValidatedTextarea
-        id="customPrompt"
-        label="Custom Prompt"
-        value={settingsPreset?.prompt || DEFAULT_PROMPT}
-        onChange={handleCustomPromptChange}
-        validation={(value) => {
-          if (value.length < 10) {
-            return { isValid: false, error: "Prompt must be at least 10 characters" };
-          }
-          return { isValid: true };
-        }}
-        placeholder="Enter your custom prompt here"
-        required={true}
-        minLength={10}
-        maxLength={5000}
-        className="min-h-[100px] resize-none"
-        helperText="This prompt will be used to guide the AI's responses"
-      />
-
-      {settingsPreset?.provider !== "screenpipe-cloud" && (
-        <div className="w-full">
-          <Label htmlFor="maxTokens" className="text-sm font-medium">
-            Max Output Tokens
-          </Label>
-          <p className="text-xs text-muted-foreground mb-2">
-            Maximum tokens the model can generate per response.
-          </p>
-          <Input
-            id="maxTokens"
-            type="number"
-            min={256}
-            max={128000}
-            step={256}
-            value={(settingsPreset as any)?.maxTokens ?? 4096}
-            onChange={(e) => updateSettingsPreset({ maxTokens: parseInt(e.target.value) || 4096 } as any)}
-            className="w-full"
-          />
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {[
-              { label: "8k", value: 8192, hint: "haiku / qwen" },
-              { label: "32k", value: 32768, hint: "gpt-4.1" },
-              { label: "64k", value: 64000, hint: "opus / sonnet" },
-              { label: "65k", value: 65536, hint: "long responses" },
-              { label: "100k", value: 100000, hint: "o3 / o4" },
-              { label: "128k", value: 128000, hint: "gpt-5" },
-            ].map((preset) => (
-              <button
-                key={preset.value}
-                type="button"
-                className={`px-2 py-1 text-xs rounded-md border transition-colors ${
-                  (settingsPreset as any)?.maxTokens === preset.value
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-muted/50 hover:bg-muted border-border"
-                }`}
-                onClick={() => updateSettingsPreset({ maxTokens: preset.value } as any)}
-              >
-                {preset.label}
-                <span className="text-[10px] ml-1 opacity-60">{preset.hint}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {settingsPreset?.provider !== "screenpipe-cloud" && (
-        <div className="w-full border rounded-lg">
-          <button
-            type="button"
-            className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-left hover:bg-accent/50 transition-colors rounded-lg"
-            onClick={() => setDiagnosticsOpen(!diagnosticsOpen)}
-          >
-            <div className="flex items-center gap-2">
-              <Zap className="h-4 w-4" />
-              <span>Connection Test</span>
-              {testStatus === "done" && (
-                <span className="text-xs text-muted-foreground">
-                  {testResults.chat.status === "pass"
-                    ? "All checks passed"
-                    : testResults.endpoint.status === "fail"
-                    ? "Connection failed"
-                    : testResults.auth.status === "fail"
-                    ? "Auth failed"
-                    : testResults.models.status === "fail"
-                    ? "Models failed"
-                    : testResults.chat.status === "fail"
-                    ? "Chat failed"
-                    : ""}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {testStatus === "testing" && (
-                <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-              )}
-              {diagnosticsOpen ? (
-                <ChevronUp className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              )}
-            </div>
-          </button>
-
-          {diagnosticsOpen && (
-            <div className="px-4 pb-4 space-y-3">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={runDiagnostics}
-                disabled={testStatus === "testing"}
-                className="flex items-center gap-2"
-              >
-                {testStatus === "testing" ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Zap className="h-3 w-3" />
+                            <span className="text-xs text-muted-foreground">
+                              {model.description}{model.context_window ? ` · ${Math.round(model.context_window / 1000)}K ctx` : ""}
+                            </span>
+                            {model.recommended_for && model.recommended_for.length > 0 && (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                {model.recommended_for.map((use) => (
+                                  <span key={use} className="text-[9px] rounded bg-muted px-1 py-0.5 text-muted-foreground">{use}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </CommandItem>
+                        );
+                      })}
+                    </CommandGroup>
+                  </>
                 )}
-                {testStatus === "testing" ? "Testing..." : "Run diagnostics"}
-              </Button>
-
-              <div className="space-y-2 text-sm">
-                {(
-                  [
-                    ["endpoint", "1", "Endpoint reachable"],
-                    ["auth", "2", "Auth valid"],
-                    ["models", "3", "Models loaded"],
-                    ["chat", "4", "Test message"],
-                  ] as const
-                ).map(([key, num, label]) => {
-                  const result = testResults[key];
-                  return (
-                    <div key={key} className="flex items-start gap-2">
-                      <div className="flex items-center gap-2 min-w-[180px]">
-                        {result.status === "pass" ? (
-                          <CheckCircle2 className="h-4 w-4 text-foreground shrink-0" />
-                        ) : result.status === "fail" ? (
-                          <XCircle className="h-4 w-4 text-destructive shrink-0" />
-                        ) : result.status === "running" ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
-                        ) : (
-                          <Circle className="h-4 w-4 text-muted-foreground/40 shrink-0" />
-                        )}
-                        <span
-                          className={cn(
-                            result.status === "skip" || result.status === "pending"
-                              ? "text-muted-foreground/40"
-                              : result.status === "fail"
-                              ? "text-destructive"
-                              : ""
-                          )}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        {(() => {
+          const selectedModel = models?.find((m) => m.id === settingsPreset?.model);
+          if (selectedModel?.warning) {
+            return (
+              <div className="flex items-start gap-2 rounded-md border p-3 text-xs text-muted-foreground">
+                <span className="shrink-0 text-sm">!</span>
+                <div className="space-y-1">
+                  <p>{selectedModel.warning}</p>
+                  {models?.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 2).length > 0 && (
+                    <p className="text-muted-foreground">
+                      recommended for pipes:{" "}
+                      {models.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 3).map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 mr-1 font-medium hover:bg-accent cursor-pointer"
+                          onClick={() => updateSettingsPreset({ model: m.id })}
                         >
-                          {num}. {label}
-                        </span>
-                      </div>
-                      {result.message && (
-                        <span
-                          className={cn(
-                            "text-xs",
-                            result.status === "fail"
-                              ? "text-destructive"
-                              : "text-muted-foreground"
-                          )}
-                        >
-                          {result.message}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="flex justify-end gap-2">
-        <Button 
-          variant="outline" 
-          onClick={() => setDialog(false)}
-          disabled={isLoading}
-        >
-          Cancel
-        </Button>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button
-                  onClick={updateStoreSettings}
-                  disabled={isLoading || !isFormValid}
-                  className="flex items-center gap-2"
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : isFormValid ? (
-                    <CheckCircle2 className="w-4 h-4" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4" />
+                          {m.name} {m.free ? "(free)" : ""}
+                        </button>
+                      ))}
+                    </p>
                   )}
-                  {preset ? "Update preset" : "Create preset"}
-                </Button>
-              </span>
-            </TooltipTrigger>
-            {!isFormValid && !isLoading && (
-              <TooltipContent>
-                {!settingsPreset?.id
-                  ? "Enter a preset name to continue"
-                  : !settingsPreset?.model
-                  ? "Select a model to continue"
-                  : "Fix validation errors to continue"}
-              </TooltipContent>
-            )}
-          </Tooltip>
-        </TooltipProvider>
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
+        {settingsPreset?.provider === "native-ollama" && (
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p>
+              <span className="font-medium">recommended:</span>{" "}
+              <code className="bg-secondary/50 px-1 rounded">qwen3.5:9b</code>{" "}
+              <code className="bg-secondary/50 px-1 rounded">glm-4.7:9b</code>{" "}
+              <code className="bg-secondary/50 px-1 rounded">qwen3.5:4b</code>{" "}
+              (all support tool calling)
+            </p>
+            <p>
+              GPU strongly recommended. without a dedicated GPU, local models will be very slow and pipes may time out.
+              for best results consider screenpipe cloud or groq as custom provider.
+            </p>
+          </div>
+        )}
       </div>
     </div>
+
+    <ValidatedTextarea
+      id="customPrompt"
+      label="Custom Prompt"
+      value={settingsPreset?.prompt || DEFAULT_PROMPT}
+      onChange={handleCustomPromptChange}
+      validation={(value) => {
+        if (value.length < 10) {
+          return { isValid: false, error: "Prompt must be at least 10 characters" };
+        }
+        return { isValid: true };
+      }}
+      placeholder="Enter your custom prompt here"
+      required={true}
+      minLength={10}
+      maxLength={5000}
+      className="min-h-[100px] resize-none"
+      helperText="This prompt will be used to guide the AI's responses"
+    />
+
+    {settingsPreset?.provider !== "screenpipe-cloud" && (
+      <div className="w-full">
+        <Label htmlFor="maxTokens" className="text-sm font-medium">
+          Max Output Tokens
+        </Label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Maximum tokens the model can generate per response.
+        </p>
+        <Input
+          id="maxTokens"
+          type="number"
+          min={256}
+          max={128000}
+          step={256}
+          value={(settingsPreset as any)?.maxTokens ?? 4096}
+          onChange={(e) => updateSettingsPreset({ maxTokens: parseInt(e.target.value) || 4096 } as any)}
+          className="w-full"
+        />
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {[
+            { label: "8k", value: 8192, hint: "haiku / qwen" },
+            { label: "32k", value: 32768, hint: "gpt-4.1" },
+            { label: "64k", value: 64000, hint: "opus / sonnet" },
+            { label: "65k", value: 65536, hint: "long responses" },
+            { label: "100k", value: 100000, hint: "o3 / o4" },
+            { label: "128k", value: 128000, hint: "gpt-5" },
+          ].map((preset) => (
+            <button
+              key={preset.value}
+              type="button"
+              className={`px-2 py-1 text-xs rounded-md border transition-colors ${
+                (settingsPreset as any)?.maxTokens === preset.value
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-muted/50 hover:bg-muted border-border"
+              }`}
+              onClick={() => updateSettingsPreset({ maxTokens: preset.value } as any)}
+            >
+              {preset.label}
+              <span className="text-[10px] ml-1 opacity-60">{preset.hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    )}
+
+    {settingsPreset?.provider !== "screenpipe-cloud" && (
+      <div className="w-full border rounded-lg">
+        <button
+          type="button"
+          className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-left hover:bg-accent/50 transition-colors rounded-lg"
+          onClick={() => setDiagnosticsOpen(!diagnosticsOpen)}
+        >
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4" />
+            <span>Connection Test</span>
+            {testStatus === "done" && (
+              <span className="text-xs text-muted-foreground">
+                {testResults.chat.status === "pass"
+                  ? "All checks passed"
+                  : testResults.endpoint.status === "fail"
+                  ? "Connection failed"
+                  : testResults.auth.status === "fail"
+                  ? "Auth failed"
+                  : testResults.models.status === "fail"
+                  ? "Models failed"
+                  : testResults.chat.status === "fail"
+                  ? "Chat failed"
+                  : ""}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {testStatus === "testing" && (
+              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+            )}
+            {diagnosticsOpen ? (
+              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            )}
+          </div>
+        </button>
+
+        {diagnosticsOpen && (
+          <div className="px-4 pb-4 space-y-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={runDiagnostics}
+              disabled={testStatus === "testing"}
+              className="flex items-center gap-2"
+            >
+              {testStatus === "testing" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Zap className="h-3 w-3" />
+              )}
+              {testStatus === "testing" ? "Testing..." : "Run diagnostics"}
+            </Button>
+
+            <div className="space-y-2 text-sm">
+              {(
+                [
+                  ["endpoint", "1", "Endpoint reachable"],
+                  ["auth", "2", "Auth valid"],
+                  ["models", "3", "Models loaded"],
+                  ["chat", "4", "Test message"],
+                ] as const
+              ).map(([key, num, label]) => {
+                const result = testResults[key];
+                return (
+                  <div key={key} className="flex items-start gap-2">
+                    <div className="flex items-center gap-2 min-w-[180px]">
+                      {result.status === "pass" ? (
+                        <CheckCircle2 className="h-4 w-4 text-foreground shrink-0" />
+                      ) : result.status === "fail" ? (
+                        <XCircle className="h-4 w-4 text-destructive shrink-0" />
+                      ) : result.status === "running" ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+                      ) : (
+                        <Circle className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+                      )}
+                      <span
+                        className={cn(
+                          result.status === "skip" || result.status === "pending"
+                            ? "text-muted-foreground/40"
+                            : result.status === "fail"
+                            ? "text-destructive"
+                            : ""
+                        )}
+                      >
+                        {num}. {label}
+                      </span>
+                    </div>
+                    {result.message && (
+                      <span
+                        className={cn(
+                          "text-xs",
+                          result.status === "fail"
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        )}
+                      >
+                        {result.message}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    )}
+
+    <div className="flex justify-end gap-2">
+      <Button 
+        variant="outline" 
+        onClick={() => setDialog(false)}
+        disabled={isLoading}
+      >
+        Cancel
+      </Button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span>
+              <Button
+                onClick={updateStoreSettings}
+                disabled={isLoading || !isFormValid}
+                className="flex items-center gap-2"
+              >
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : isFormValid ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <AlertCircle className="w-4 h-4" />
+                )}
+                {preset ? "Update preset" : "Create preset"}
+              </Button>
+            </span>
+          </TooltipTrigger>
+          {!isFormValid && !isLoading && (
+            <TooltipContent>
+              {!settingsPreset?.id
+                ? "Enter a preset name to continue"
+                : !settingsPreset?.model
+                ? "Select a model to continue"
+                : "Fix validation errors to continue"}
+            </TooltipContent>
+          )}
+        </Tooltip>
+      </TooltipProvider>
+    </div>
+  </div>
   );
 };
 
@@ -1974,9 +1980,6 @@ function SortablePresetCard({
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
                 managed
               </Badge>
-            )}
-            {!hasValidation && (
-              <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
             )}
             {!hasValidation && (
               <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
