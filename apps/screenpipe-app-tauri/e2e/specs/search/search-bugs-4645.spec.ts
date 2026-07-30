@@ -161,10 +161,10 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
 
     await $("[data-index='0']").click();
     await browser.waitUntil(
-      async () => (await browser.getWindowHandles()).includes("home"),
+      async () => (await browser.getWindowHandles()).includes("main"),
       { timeout: t(10_000) },
     );
-    await browser.switchToWindow("home");
+    await browser.switchToWindow("main");
     await browser.waitUntil(
       async () =>
         (await browser.execute(
