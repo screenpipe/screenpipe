@@ -69,7 +69,7 @@ export function ComposerInputBox({
               ? input.disabledReason
               : input.isLoading || input.isStreaming
                 ? "Message will be queued..."
-                : "Ask... (@ chats, $ skills, ~ time, # tags)"
+                : "Ask about your screen... (@ chats, $ skills, ~ time, # tags)"
           }
           disabled={!input.canChat}
           spellCheck={false}
