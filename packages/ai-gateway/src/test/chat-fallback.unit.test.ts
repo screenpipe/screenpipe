@@ -83,9 +83,14 @@ describe('chat handler — geo-block detection (SCREENPIPE-AI-PROXY-1C)', () => 
 		expect(isGeoBlocked(403, '403 Country, region, or territory not supported')).toBe(true);
 	});
 
+	it('detects the Anthropic geo/policy 403 (SCREENPIPE-AI-PROXY-2S/-1W, 3k+ events)', () => {
+		expect(isGeoBlocked(403, '403 {"error":{"type":"forbidden","message":"Request not allowed"}}')).toBe(true);
+	});
+
 	it('keeps other 403s loud (IAM regressions must still reach Sentry)', () => {
 		expect(isGeoBlocked(403, 'The caller does not have permission')).toBe(false);
 		expect(isGeoBlocked(401, 'Country, region, or territory not supported')).toBe(false);
+		expect(isGeoBlocked(401, 'Request not allowed')).toBe(false);
 	});
 });
 
