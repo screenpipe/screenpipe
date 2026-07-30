@@ -148,6 +148,7 @@ export const ThumbnailHighlightOverlay = memo(function ThumbnailHighlightOverlay
 	return (
 		<div
 			ref={overlayRef}
+			data-thumbnail-highlight-overlay
 			className="absolute inset-0 pointer-events-none overflow-hidden z-[1]"
 		>
 			{imageRect && highlights.map((pos, i) => {
@@ -156,6 +157,7 @@ export const ThumbnailHighlightOverlay = memo(function ThumbnailHighlightOverlay
 				return (
 					<div
 						key={i}
+						data-search-highlight
 						className="absolute"
 						style={{
 							left:

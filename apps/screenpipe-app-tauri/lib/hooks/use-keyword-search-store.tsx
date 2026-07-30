@@ -71,6 +71,7 @@ export interface KeywordSearchState {
 	searchQuery: string;
 	error: string | null;
 	lastCandidatePageSize: number;
+	unavailableFrameIds: Set<number>;
 	lastRequest: SearchRequest | null;
 	activeRequestId: string | null;
 	currentAbortController: AbortController | null;
@@ -101,7 +102,12 @@ export interface KeywordSearchState {
 
 const fuzzy_default = true;
 const offset_default = 0;
-const visibleMatchVerificationConcurrency = 3;
+export const visibleMatchVerificationConcurrency = 3;
+const visibleMatchVerificationCacheLimit = 500;
+const visibleMatchVerificationCache = new Map<
+	string,
+	SearchMatch["text_positions"]
+>();
 
 interface FrameTextResponse {
 	text_positions?: SearchMatch["text_positions"];
@@ -153,52 +159,94 @@ async function verifyVisibleSearchMatches(
 	results: SearchMatch[],
 	query: string,
 	signal: AbortSignal,
+	onVerifiedBatch?: (batch: SearchMatch[]) => void,
 ): Promise<SearchMatch[]> {
 	if (results.length === 0) return [];
 
 	const verified = new Array<SearchMatch | null>(results.length).fill(null);
-	let nextIndex = 0;
+	const pendingAccessibility: Array<{
+		index: number;
+		result: SearchMatch;
+	}> = [];
+	const immediate: SearchMatch[] = [];
 
-	const verifyNext = async () => {
-		while (nextIndex < results.length) {
-			const index = nextIndex++;
-			const result = results[index];
-
-			// OCR-backed search positions already came from screenshot pixels.
-			// Accessibility and legacy candidates need an explicit screenshot
-			// OCR pass before they are allowed into Search or timeline navigation.
-			let positions = result.text_positions;
-			if (result.text_source !== "ocr") {
-				try {
-					const response = await localFetch(`/frames/${result.frame_id}/text`, {
-						method: "POST",
-						signal,
-					});
-					if (!response.ok) continue;
-					const data = (await response.json()) as FrameTextResponse;
-					positions = data.text_positions ?? [];
-				} catch (error) {
-					if (signal.aborted) throw error;
-					continue;
-				}
-			}
-
-			const matchingPositions = visibleMatchingPositions(positions, query);
-			if (matchingPositions.length === 0) continue;
-			verified[index] = {
-				...result,
-				text_positions: matchingPositions,
-			};
+	for (const [index, result] of results.entries()) {
+		if (result.text_source !== "ocr") {
+			pendingAccessibility.push({ index, result });
+			continue;
 		}
-	};
 
-	const workerCount = Math.min(
-		visibleMatchVerificationConcurrency,
-		results.length,
-	);
-	await Promise.all(
-		Array.from({ length: workerCount }, () => verifyNext()),
-	);
+		const matchingPositions = visibleMatchingPositions(
+			result.text_positions,
+			query,
+		);
+		if (matchingPositions.length === 0) continue;
+		const match = { ...result, text_positions: matchingPositions };
+		verified[index] = match;
+		immediate.push(match);
+	}
+	if (immediate.length > 0) onVerifiedBatch?.(immediate);
+
+	const tokens = queryHighlightTokens(query);
+	for (
+		let start = 0;
+		start < pendingAccessibility.length;
+		start += visibleMatchVerificationConcurrency
+	) {
+		if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+
+		const slice = pendingAccessibility.slice(
+			start,
+			start + visibleMatchVerificationConcurrency,
+		);
+		const batch = await Promise.all(
+			slice.map(async ({ index, result }) => {
+				const cacheKey = `${result.frame_id}:${tokens.join("\u0000")}`;
+				let matchingPositions = visibleMatchVerificationCache.get(cacheKey);
+
+				if (matchingPositions) {
+					visibleMatchVerificationCache.delete(cacheKey);
+					visibleMatchVerificationCache.set(cacheKey, matchingPositions);
+				} else {
+					try {
+						const response = await localFetch(
+							`/frames/${result.frame_id}/text`,
+							{ method: "POST", signal },
+						);
+						if (!response.ok) return null;
+						const data = (await response.json()) as FrameTextResponse;
+						matchingPositions = visibleMatchingPositions(
+							data.text_positions ?? [],
+							query,
+						);
+						visibleMatchVerificationCache.set(cacheKey, matchingPositions);
+						if (
+							visibleMatchVerificationCache.size >
+							visibleMatchVerificationCacheLimit
+						) {
+							const oldestKey =
+								visibleMatchVerificationCache.keys().next().value;
+							if (oldestKey !== undefined) {
+								visibleMatchVerificationCache.delete(oldestKey);
+							}
+						}
+					} catch (error) {
+						if (signal.aborted) throw error;
+						return null;
+					}
+				}
+
+				if (matchingPositions.length === 0) return null;
+				const match = { ...result, text_positions: matchingPositions };
+				verified[index] = match;
+				return match;
+			}),
+		);
+		const visibleBatch = batch.filter(
+			(match): match is SearchMatch => match !== null,
+		);
+		if (visibleBatch.length > 0) onVerifiedBatch?.(visibleBatch);
+	}
 
 	return verified.filter((result): result is SearchMatch => result !== null);
 }
@@ -213,6 +261,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 	searchQuery: "",
 	error: null,
 	lastCandidatePageSize: 0,
+	unavailableFrameIds: new Set(),
 	lastRequest: null,
 	activeRequestId: null,
 	currentAbortController: null,
@@ -283,6 +332,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 				isSearching: true,
 				error: null,
 				lastCandidatePageSize: 0,
+				unavailableFrameIds: new Set(),
 			});
 		} else {
 			set((state) => ({
@@ -293,7 +343,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			}));
 		}
 
-		const { searchResults } = get();
+		const { searchResults: searchResultsBeforeRequest } = get();
 
 		const searchRequest: SearchRequest = {
 			query,
@@ -412,63 +462,97 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			}
 
 			const rawResults: SearchMatch[] = await response.json();
+			loadUiEventsAfterKeyword();
+			const publishVerifiedBatch = (batch: SearchMatch[]) => {
+				if (get().activeRequestId !== requestId) return;
+				set((state) => {
+					const existingFrameIds = new Set(
+						state.searchResults.map((result) => result.frame_id),
+					);
+					const visibleBatch = batch.filter(
+						(result) =>
+							!existingFrameIds.has(result.frame_id) &&
+							!state.unavailableFrameIds.has(result.frame_id),
+					);
+					if (visibleBatch.length === 0) return state;
+
+					const searchResults = [
+						...state.searchResults,
+						...visibleBatch,
+					];
+					return {
+						searchResults,
+						searchGroups: searchResults.map((match) => ({
+							representative: match,
+							group_size: 1,
+							start_time: match.timestamp,
+							end_time: match.timestamp,
+							frame_ids: [match.frame_id],
+						})),
+						currentResultIndex:
+							state.currentResultIndex >= 0
+								? state.currentResultIndex
+								: 0,
+						searchQuery: query,
+					};
+				});
+			};
 			const results = await verifyVisibleSearchMatches(
 				rawResults,
 				query,
 				combinedSignal,
+				publishVerifiedBatch,
 			);
-			// Wrap each flat result as a single-item group for UI compatibility
-			const groups: SearchMatchGroup[] = results.map((m) => ({
-				representative: m,
-				group_size: 1,
-				start_time: m.timestamp,
-				end_time: m.timestamp,
-				frame_ids: [m.frame_id],
-			}));
 
 			if (get().activeRequestId === requestId) {
+				const { unavailableFrameIds } = get();
+				const baseResults = isInitialSearch
+					? []
+					: searchResultsBeforeRequest.filter(
+							(result) => !unavailableFrameIds.has(result.frame_id),
+						);
+				const existingFrameIds = new Set(
+					baseResults.map((result) => result.frame_id),
+				);
+				const finalPageResults = results.filter(
+					(result) =>
+						!existingFrameIds.has(result.frame_id) &&
+						!unavailableFrameIds.has(result.frame_id),
+				);
+				const finalResults = [...baseResults, ...finalPageResults];
+				const finalGroups: SearchMatchGroup[] = finalResults.map((match) => ({
+					representative: match,
+					group_size: 1,
+					start_time: match.timestamp,
+					end_time: match.timestamp,
+					frame_ids: [match.frame_id],
+				}));
 				if (isInitialSearch) {
 					posthog.capture("search_ui_keyword_completed", {
 						...analyticsProperties,
 						duration_ms: Date.now() - analyticsStartedAt,
-						screen_result_count: results.length,
-						has_screen_results: results.length > 0,
+						screen_result_count: finalResults.length,
+						has_screen_results: finalResults.length > 0,
 					});
 				}
-				if (!isInitialSearch) {
-					const existingFrameIds = new Set(
-						searchResults.map((r) => r.frame_id),
-					);
-					const uniqueNewResults = results.filter(
-						(result: SearchMatch) => !existingFrameIds.has(result.frame_id),
-					);
-					const { searchGroups: existingGroups } = get();
-
-					set({
-						searchResults: [...searchResults, ...uniqueNewResults],
-						searchGroups: [...existingGroups, ...groups.filter(
-							(g: SearchMatchGroup) => !existingFrameIds.has(g.representative.frame_id),
-						)],
-						currentResultIndex: get().currentResultIndex,
-						searchQuery: query,
-						isSearching: false,
-						lastCandidatePageSize: rawResults.length,
-						lastRequest: searchRequest,
-						currentAbortController: null,
-					});
-				} else {
-					set({
-						searchResults: results,
-						searchGroups: groups,
-						currentResultIndex: results.length > 0 ? 0 : -1,
-						searchQuery: query,
-						isSearching: false,
-						lastCandidatePageSize: rawResults.length,
-						lastRequest: searchRequest,
-						currentAbortController: null,
-					});
-					loadUiEventsAfterKeyword();
-				}
+				set({
+					searchResults: finalResults,
+					searchGroups: finalGroups,
+					currentResultIndex:
+						finalResults.length === 0
+							? -1
+							: isInitialSearch
+								? 0
+								: Math.min(
+										Math.max(get().currentResultIndex, 0),
+										finalResults.length - 1,
+									),
+					searchQuery: query,
+					isSearching: false,
+					lastCandidatePageSize: rawResults.length,
+					lastRequest: searchRequest,
+					currentAbortController: null,
+				});
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === "AbortError") {
@@ -522,6 +606,10 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 					(group) => group.representative.frame_id !== frameId,
 				),
 				currentResultIndex,
+				unavailableFrameIds: new Set([
+					...state.unavailableFrameIds,
+					frameId,
+				]),
 			};
 		});
 	},
@@ -542,6 +630,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			searchQuery: "",
 			error: null,
 			lastCandidatePageSize: 0,
+			unavailableFrameIds: new Set(),
 			lastRequest: null,
 			activeRequestId: null,
 			currentAbortController: null,

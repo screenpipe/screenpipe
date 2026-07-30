@@ -7,6 +7,7 @@
 //! is inert in normal builds/runs.
 
 use chrono::{Duration, Utc};
+use image::{ImageBuffer, Rgb};
 use screenpipe_db::DatabaseManager;
 use tracing::{info, warn};
 
@@ -25,6 +26,25 @@ use tracing::{info, warn};
 /// normalized 0–1, matching `parse_all_text_positions`.
 pub async fn seed_search_fixture(db: &DatabaseManager) {
     let now = Utc::now();
+    let fixture_dir = std::env::var_os("SCREENPIPE_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("e2e-fixtures");
+    if let Err(error) = std::fs::create_dir_all(&fixture_dir) {
+        warn!("e2e search-fixture: failed to create fixture directory: {error}");
+    }
+    let fixture_path = fixture_dir.join("screenpipe-e2e-search-fixture.jpg");
+    let fixture_image = ImageBuffer::from_fn(1600, 1000, |x, y| {
+        if (300..1300).contains(&x) && (180..240).contains(&y) {
+            Rgb([230_u8, 230_u8, 230_u8])
+        } else {
+            Rgb([18_u8, 22_u8, 30_u8])
+        }
+    });
+    if let Err(error) = fixture_image.save(&fixture_path) {
+        warn!("e2e search-fixture: failed to create snapshot fixture: {error}");
+    }
+    let fixture_path = fixture_path.to_string_lossy().into_owned();
 
     // Single "vector" word box per frame (normalized 0–1, area well under the
     // overlay's 15% skip threshold).
@@ -43,7 +63,7 @@ pub async fn seed_search_fixture(db: &DatabaseManager) {
             .insert_snapshot_frame_with_ocr(
                 "e2e-search",
                 ts,
-                "e2e-search-fixture.jpg",
+                &fixture_path,
                 Some(app),
                 Some(&window),
                 url,
@@ -78,7 +98,7 @@ pub async fn seed_search_fixture(db: &DatabaseManager) {
         .insert_snapshot_frame_with_ocr(
             "e2e-search",
             now,
-            "e2e-search-fixture.jpg",
+            &fixture_path,
             Some("Code"),
             Some("highlight overmatch"),
             None,
@@ -98,5 +118,50 @@ pub async fn seed_search_fixture(db: &DatabaseManager) {
         warn!("e2e search-fixture: failed to insert highlight frame: {e}");
     }
 
-    info!("e2e search-fixture: seeded searchable frames (vector x12 + highlight)");
+    // Five accessibility candidates for visibility verification. Only two
+    // have matching screenshot OCR; the other three contain the query solely
+    // in hidden accessibility text and must never reach the result grid.
+    let visibility_query = "retentionverify";
+    let visible_json = r#"[
+        {"text":"retentionverify","conf":"97","left":"0.20","top":"0.20","width":"0.22","height":"0.04"}
+    ]"#;
+    let hidden_json = r#"[
+        {"text":"pixels contain something else","conf":"97","left":"0.20","top":"0.20","width":"0.30","height":"0.04"}
+    ]"#;
+    for i in 0..5 {
+        let visible = i == 1 || i == 4;
+        let ts = now - Duration::minutes(i64::from(i) + 60);
+        let app = if visible { "e2e-visible" } else { "e2e-hidden" };
+        let ocr_text = if visible {
+            visibility_query
+        } else {
+            "pixels contain something else"
+        };
+        let ocr_json = if visible { visible_json } else { hidden_json };
+        if let Err(error) = db
+            .insert_snapshot_frame_with_ocr(
+                "e2e-search",
+                ts,
+                &fixture_path,
+                Some(app),
+                Some("visibility verification fixture"),
+                None,
+                None,
+                true,
+                None,
+                Some(visibility_query),
+                Some("accessibility"),
+                None,
+                None,
+                None,
+                Some((ocr_text, ocr_json, "e2e")),
+                None,
+            )
+            .await
+        {
+            warn!("e2e search-fixture: failed to insert visibility frame {i}: {error}");
+        }
+    }
+
+    info!("e2e search-fixture: seeded searchable frames (vector x12 + highlight + visibility x5)");
 }

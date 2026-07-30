@@ -698,6 +698,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [isLoadingMoreTranscriptions, setIsLoadingMoreTranscriptions] = useState(false);
 
   const OCR_PAGE_SIZE = 24;
+  const MAX_AUTOMATIC_OCR_PAGES = 2;
   const TRANSCRIPTION_PAGE_SIZE = 30;
 
   const debouncedQuery = useDebounce(query, 250);
@@ -1646,14 +1647,15 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     }
   }, [isSearching, lastCandidatePageSize]);
 
-  // A filtered page may be too short to scroll. Keep scanning raw candidate
-  // pages until the visible page fills or the backend reports exhaustion.
+  // A filtered first page may be too short to scroll. Scan at most one extra
+  // page automatically; further OCR work requires scroll or an explicit click.
   useEffect(() => {
     if (
       !isSearching &&
       !isLoadingMore &&
       hasMoreOcr &&
       lastCandidatePageSize === OCR_PAGE_SIZE &&
+      ocrOffset < OCR_PAGE_SIZE * (MAX_AUTOMATIC_OCR_PAGES - 1) &&
       searchResults.length < OCR_PAGE_SIZE
     ) {
       loadMoreOcr();
@@ -1664,6 +1666,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     isSearching,
     lastCandidatePageSize,
     loadMoreOcr,
+    ocrOffset,
     searchResults.length,
   ]);
 
@@ -2998,12 +3001,36 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   {isLoadingMore ? (
                     <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
                   ) : (
-                    <span className="text-xs text-muted-foreground">scroll for more</span>
+                    <button
+                      type="button"
+                      onClick={loadMoreOcr}
+                      className="rounded-[6px] border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground/50 hover:text-foreground"
+                    >
+                      load more
+                    </button>
                   )}
                 </div>
               )}
             </>
           )}
+
+          {!isSearching &&
+            !isLoadingMore &&
+            hasMoreOcr &&
+            lastCandidatePageSize === OCR_PAGE_SIZE &&
+            searchResults.length === 0 &&
+            contentFilter !== "input" &&
+            contentFilter !== "chats" && (
+              <div className="flex justify-center py-4">
+                <button
+                  type="button"
+                  onClick={loadMoreOcr}
+                  className="rounded-[6px] border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground/50 hover:text-foreground"
+                >
+                  search more frames
+                </button>
+              </div>
+            )}
 
 
           {/* Suggestions when no query */}

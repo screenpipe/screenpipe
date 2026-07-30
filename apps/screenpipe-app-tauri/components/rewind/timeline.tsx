@@ -1449,6 +1449,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				    so it sits above the z-40 timeline slider and receives clicks */}
 				{inSearchReviewMode && (
 					<div
+						data-search-result-navigation
+						data-results-length={searchResults.length}
+						data-active-result-index={searchResultIndex}
 						className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[45] flex items-center gap-3 px-4 py-2 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 text-white text-sm shadow-lg"
 						onWheel={(e) => {
 							e.preventDefault();

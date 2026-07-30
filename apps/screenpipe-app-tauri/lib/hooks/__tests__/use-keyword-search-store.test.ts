@@ -321,6 +321,151 @@ describe("useKeywordSearchStore search scheduling", () => {
 			useKeywordSearchStore.getState().searchResults.map((result) => result.frame_id),
 		).toEqual([2]);
 	});
+
+	it("publishes OCR matches before bounded accessibility verification finishes", async () => {
+		let activeFrameRequests = 0;
+		let maxConcurrentFrameRequests = 0;
+		let releaseVerification!: () => void;
+		const verificationGate = new Promise<void>((resolve) => {
+			releaseVerification = resolve;
+		});
+		const candidate = (
+			frameId: number,
+			textSource: "accessibility" | "ocr",
+		) => ({
+			frame_id: frameId,
+			timestamp: "2026-07-30T09:00:00.000Z",
+			text_positions:
+				textSource === "ocr"
+					? [{
+							text: "visible offset",
+							confidence: 1,
+							bounds: {
+								left: 0.1,
+								top: 0.1,
+								width: 0.1,
+								height: 0.04,
+							},
+						}]
+					: [],
+			app_name: "Safari",
+			window_name: `candidate ${frameId}`,
+			confidence: 1,
+			text: "offset",
+			url: "",
+			text_source: textSource,
+		});
+		const candidates = [
+			candidate(50_100, "ocr"),
+			...Array.from(
+				{ length: 6 },
+				(_, index) => candidate(50_101 + index, "accessibility"),
+			),
+		];
+
+		vi.mocked(localFetch).mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return jsonResponse(candidates);
+			}
+			if (url.startsWith("/frames/")) {
+				activeFrameRequests += 1;
+				maxConcurrentFrameRequests = Math.max(
+					maxConcurrentFrameRequests,
+					activeFrameRequests,
+				);
+				await verificationGate;
+				activeFrameRequests -= 1;
+				return jsonResponse({
+					text_positions: [{
+						text: "visible offset",
+						confidence: 0.98,
+						bounds: {
+							left: 0.2,
+							top: 0.2,
+							width: 0.1,
+							height: 0.04,
+						},
+					}],
+				});
+			}
+			if (url.startsWith("/search?")) {
+				return jsonResponse({ data: [] });
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		const search = useKeywordSearchStore
+			.getState()
+			.searchKeywords("offset");
+
+		await waitFor(() => {
+			expect(
+				useKeywordSearchStore
+					.getState()
+					.searchResults.map((result) => result.frame_id),
+			).toEqual([50_100]);
+		});
+		expect(useKeywordSearchStore.getState().isSearching).toBe(true);
+
+		releaseVerification();
+		await search;
+
+		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(7);
+		expect(maxConcurrentFrameRequests).toBeLessThanOrEqual(3);
+	});
+
+	it("reuses screenshot verification for the same frame and query", async () => {
+		let frameTextRequests = 0;
+		const candidate = {
+			frame_id: 12_001,
+			timestamp: "2026-07-30T09:00:00.000Z",
+			text_positions: [],
+			app_name: "Safari",
+			window_name: "cached candidate",
+			confidence: 1,
+			text: "retentionverify",
+			url: "",
+			text_source: "accessibility" as const,
+		};
+
+		vi.mocked(localFetch).mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return jsonResponse([candidate]);
+			}
+			if (url === "/frames/12001/text") {
+				frameTextRequests += 1;
+				return jsonResponse({
+					text_positions: [{
+						text: "visible retentionverify",
+						confidence: 0.98,
+						bounds: {
+							left: 0.2,
+							top: 0.2,
+							width: 0.2,
+							height: 0.04,
+						},
+					}],
+				});
+			}
+			if (url.startsWith("/search?")) {
+				return jsonResponse({ data: [] });
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		await useKeywordSearchStore
+			.getState()
+			.searchKeywords("retentionverify");
+		useKeywordSearchStore.getState().resetSearch();
+		await useKeywordSearchStore
+			.getState()
+			.searchKeywords("retentionverify");
+
+		expect(frameTextRequests).toBe(1);
+		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(1);
+	});
 });
 
 describe("visibleMatchingPositions", () => {
