@@ -145,6 +145,7 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
         captions: cards.map((card) => card.textContent ?? ""),
         highlightCount: document.querySelectorAll("[data-search-highlight]").length,
         placementErrors,
+        bodyText: document.body?.innerText ?? "",
       };
     });
 
@@ -153,6 +154,9 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
     expect(audit.captions.some((caption) => caption.includes("e2e-hidden"))).toBe(false);
     expect(audit.highlightCount).toBe(2);
     expect(Math.max(...audit.placementErrors)).toBeLessThan(2);
+    expect(audit.bodyText).not.toContain("e2e-hidden");
+    expect(audit.bodyText).toContain("e2e-visible-a (1)");
+    expect(audit.bodyText).toContain("e2e-visible-b (1)");
 
     const screenshot = await saveScreenshot(
       "search-4645-visible-results-and-highlights",

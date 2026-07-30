@@ -754,8 +754,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   } = useKeywordSearchStore();
 
   // --- Facet state (loaded async, independent of paginated results) ---
-  const [facetApps, setFacetApps] = useState<[string, number][]>([]);
-  const [facetDomains, setFacetDomains] = useState<[string, number][]>([]);
   const [facetTimeRanges, setFacetTimeRanges] = useState<{ label: string; dateKey: string; timestamp: string; count: number }[]>([]);
   const [facetsLoading, setFacetsLoading] = useState(false);
   const hasKeywordResults = searchResults.length > 0;
@@ -793,8 +791,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   useEffect(() => {
     const q = debouncedQuery.trim();
     if (query.trim() !== q || !q || q.length < 3 || q.startsWith("#") || q.startsWith("@") || searchQuery.trim() !== q || !hasKeywordResults) {
-      setFacetApps([]);
-      setFacetDomains([]);
       setFacetTimeRanges([]);
       setFacetsLoading(false);
       return;
@@ -805,8 +801,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setFacetsLoading(true);
     const ftsQuery = sanitizeFts5Query(q);
     if (!ftsQuery) {
-      setFacetApps([]);
-      setFacetDomains([]);
       setFacetTimeRanges([]);
       setFacetsLoading(false);
       return;
@@ -825,20 +819,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
         const rows: { facet: "app" | "domain" | "time"; value: string; timestamp: string | null; cnt: number }[] = await resp.json();
         if (cancelled) return;
-
-        setFacetApps(rows
-          .filter((row) => row.facet === "app")
-          .map((row) => [row.value, row.cnt]));
-
-        const domainMap = new Map<string, number>();
-        for (const row of rows) {
-          if (row.facet !== "domain") continue;
-          try {
-            const domain = new URL(row.value).hostname.replace(/^www\./, "");
-            if (domain) domainMap.set(domain, (domainMap.get(domain) || 0) + row.cnt);
-          } catch { /* skip */ }
-        }
-        setFacetDomains([...domainMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8));
 
         setFacetTimeRanges(buildTimeRanges(rows
           .filter((row) => row.facet === "time" && row.timestamp)
@@ -895,7 +875,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       .slice(0, 10);
   }, [speakerTranscriptions]);
 
-  const domainCounts = facetDomains;
   const timeRanges = facetTimeRanges;
 
   // Compute app distribution from speaker transcription frames
@@ -928,12 +907,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return localDate === timeFilter;
   }, [timeFilter]);
 
-  // App chips: use facet data (aggregated over ALL matches) when available, and
-  // fall back to client-side counts from loaded results until facets land. With
-  // a date chip active the facet counts span every day, so derive from the
-  // time-filtered results instead to keep the chip counts honest.
+  // Facet chips must describe the verified results that the grid can actually
+  // show. Raw FTS facets include accessibility-only candidates that screenshot
+  // verification intentionally removes.
   const appCounts = useMemo(() => {
-    if (facetApps.length > 0 && !timeFilter) return facetApps;
     const source = timeFilter
       ? searchResults.filter(r => matchesTimeFilter(r.timestamp))
       : searchResults;
@@ -942,7 +919,24 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       counts.set(r.app_name, (counts.get(r.app_name) || 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [facetApps, searchResults, timeFilter, matchesTimeFilter]);
+  }, [searchResults, timeFilter, matchesTimeFilter]);
+
+  const domainCounts = useMemo(() => {
+    let source = searchResults;
+    if (appFilter) source = source.filter(r => r.app_name === appFilter);
+    if (timeFilter) source = source.filter(r => matchesTimeFilter(r.timestamp));
+
+    const counts = new Map<string, number>();
+    for (const result of source) {
+      try {
+        const domain = new URL(result.url).hostname.replace(/^www\./, "");
+        if (domain) counts.set(domain, (counts.get(domain) || 0) + 1);
+      } catch { /* skip results without a valid URL */ }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8);
+  }, [appFilter, matchesTimeFilter, searchResults, timeFilter]);
 
   const filteredResults = useMemo(() => {
     let results = searchResults;

@@ -131,7 +131,13 @@ pub async fn seed_search_fixture(db: &DatabaseManager) {
     for i in 0..5 {
         let visible = i == 1 || i == 4;
         let ts = now - Duration::minutes(i64::from(i) + 60);
-        let app = if visible { "e2e-visible" } else { "e2e-hidden" };
+        let app = if i == 1 {
+            "e2e-visible-a"
+        } else if i == 4 {
+            "e2e-visible-b"
+        } else {
+            "e2e-hidden"
+        };
         let ocr_text = if visible {
             visibility_query
         } else {
