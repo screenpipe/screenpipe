@@ -1,5 +1,4 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
   "productName": "screenpipe - Development",
   "identifier": "screenpi.pe.dev",
   "build": {

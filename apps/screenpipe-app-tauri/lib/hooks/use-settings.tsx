@@ -7,6 +7,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
+import { isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
@@ -1363,11 +1364,15 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	// in-flight loadUser here also aborts instead of writing the user back
 	// into the shared store. Pairs with the emit() in updateSettings.
 	useEffect(() => {
+		// Guard against running outside Tauri (SSR/browser/tests).
+		if (!isTauri()) return;
+
 		const unlistenPromise = listen("screenpipe-auth-signout", () => {
 			authGenerationRef.current += 1;
 		});
+
 		return () => {
-			unlistenPromise.then((un) => un()).catch(() => {});
+			unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
 		};
 	}, []);
 

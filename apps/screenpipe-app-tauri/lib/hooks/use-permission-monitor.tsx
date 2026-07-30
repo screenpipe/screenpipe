@@ -37,7 +37,13 @@ export function usePermissionMonitor() {
   const pathname = usePathname();
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    // Guard against SSR or browser dev mode where Tauri internals are not available
+    if (
+      typeof window === "undefined" ||
+      !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+    ) {
+      return;
+    }
 
     const skipPaths = ["/shortcut-reminder", "/onboarding", "/permission-recovery"];
     if (skipPaths.some((p) => pathname?.startsWith(p))) return;

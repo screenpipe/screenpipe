@@ -29,6 +29,15 @@ function isE2eEnterpriseForced(): boolean {
 }
 
 async function resolveEnterpriseBuild(): Promise<boolean> {
+  // Return false in browser dev mode where Tauri runtime is absent
+  if (
+    typeof window === "undefined" ||
+    !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  ) {
+    cachedResult = false;
+    return false;
+  }
+
   if (isE2eEnterpriseForced()) {
     cachedResult = true;
     return true;
@@ -82,6 +91,15 @@ export function useEnterpriseBuildStatus(): EnterpriseBuildStatus {
   useEffect(() => {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
+
+    // Guard against standard web browser mode where Tauri runtime is absent
+    if (
+      typeof window === "undefined" ||
+      !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+    ) {
+      setStatus({ isEnterprise: false, resolved: true, error: false });
+      return;
+    }
 
     const check = () => {
       if (cachedResult !== null) {
