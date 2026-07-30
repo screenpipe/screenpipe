@@ -69,6 +69,12 @@
       "layers": ["audio-device"]
     },
     {
+      "id": "meetings-only-audio-lifecycle",
+      "label": "Meetings-only audio device ownership",
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device", "local-api", "real-ui-e2e"]
+    },
+    {
       "id": "window-lifecycle",
       "label": "Window lifecycle, focus, and dedupe",
       "platforms": ["windows", "macos", "linux"],
@@ -553,6 +559,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
+    },
+    {
+      "spec": "meetings-only-audio-lifecycle.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device", "local-api", "real-ui-e2e"],
+      "features": ["meetings-only-audio-lifecycle", "audio-device-health"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge."
     },
     {
       "spec": "notification-viewer-link.spec.ts",

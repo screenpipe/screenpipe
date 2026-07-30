@@ -88,6 +88,10 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // `hd-writer-stall-once` is a debug-only macOS fault injection used by the HD
 // duration spec; the writer pauses once so artifact time can be checked against
 // wall time after a missed timer window.
+// `meetings-only-audio` is an opt-in macOS/Windows real-audio lane. It disables
+// vision and transcription, selects meetings-only capture, and lets the lifecycle
+// spec prove configured OS devices are closed -> open -> closed around a manual
+// meeting without touching the developer's normal data directory or API port.
 export const E2E_SEED_FLAGS =
   process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording,search-fixture';
 

@@ -398,7 +398,9 @@ impl AnalyticsManager {
 
         // Consider healthy if all enabled systems are "ok"
         let is_healthy = (frame_status == "ok" || frame_status == "disabled")
-            && (audio_status == "ok" || audio_status == "disabled")
+            && (audio_status == "ok"
+                || audio_status == "disabled"
+                || audio_status == "waiting_for_meeting")
             && (ui_status == "ok" || ui_status == "disabled");
 
         // Extract pipeline quality metrics (no private data — only counts/rates/latencies)

@@ -16,7 +16,7 @@ use std::sync::{
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
-use screenpipe_audio::audio_manager::builder::TranscriptionMode;
+use screenpipe_audio::audio_manager::builder::{AudioCaptureMode, TranscriptionMode};
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 
 use crate::recording_coverage::{coverage_snapshot, CoverageSnapshot};
@@ -129,6 +129,7 @@ const STREAM_TIMEOUT_RECENCY_SECS: u64 = 90;
 fn classify_audio_status(
     audio_disabled: bool,
     audio_paused_for_screen_lock: bool,
+    audio_waiting_for_meeting: bool,
     audio_never_captured: bool,
     has_input_device: bool,
     stream_timeout_recent: bool,
@@ -145,6 +146,8 @@ fn classify_audio_status(
         // screen-lock exemption, not as a stalled recorder. Keep the stable
         // top-level status contract; capture_status carries the specific state.
         "ok"
+    } else if audio_waiting_for_meeting {
+        "waiting_for_meeting"
     } else if audio_never_captured && !has_input_device {
         // Audio is on but there is no microphone to capture from — expected
         // idle, not a failure. Distinct from "not_started" so /health stays 200
@@ -172,6 +175,7 @@ fn classify_audio_status(
 fn capture_status(
     audio_disabled: bool,
     audio_paused_for_screen_lock: bool,
+    audio_waiting_for_meeting: bool,
     audio_status: &str,
     active_audio_devices: usize,
     active_input_devices: usize,
@@ -196,6 +200,12 @@ fn capture_status(
             "screen_locked",
             "waiting",
             "audio capture is paused while the screen is locked",
+        )
+    } else if audio_waiting_for_meeting {
+        (
+            "waiting_for_meeting",
+            "waiting",
+            "configured audio devices are released until a meeting is detected",
         )
     } else if paused_input_devices > 0 && active_input_devices == 0 {
         (
@@ -815,6 +825,16 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // suppress false-positive stall warnings — see comments at the
     // audio_db_write_stalled and audio_degraded gates below.
     let intentionally_deferring = meeting_detected.unwrap_or(false);
+    // Report intentional meetings-only idleness only after every configured
+    // stream has actually been released. During teardown, health continues to
+    // describe the observed active streams instead of claiming an early pause.
+    let audio_waiting_for_meeting = cfg!(any(target_os = "macos", target_os = "windows"))
+        && matches!(
+            state.audio_manager.configured_audio_capture_mode(),
+            Some(AudioCaptureMode::MeetingsOnly)
+        )
+        && meeting_detected == Some(false)
+        && audio_devices.is_empty();
 
     // 60 seconds — tight enough to detect real stalls, loose enough to
     // tolerate adaptive FPS (0.1-0.5 fps) and brief DB contention spikes.
@@ -1006,6 +1026,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let audio_status = classify_audio_status(
         state.audio_disabled,
         audio_paused_for_screen_lock,
+        audio_waiting_for_meeting,
         audio_never_captured,
         has_input_device,
         stream_timeout_recent,
@@ -1037,6 +1058,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let capture_status = capture_status(
         state.audio_disabled,
         audio_paused_for_screen_lock,
+        audio_waiting_for_meeting,
         &audio_status,
         active_audio_devices,
         active_input_devices,
@@ -1138,7 +1160,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     let (overall_status, message, verbose_instructions, status_code) = if (frame_status == "ok"
         || frame_status == "disabled")
-        && (audio_status == "ok" || audio_status == "disabled" || audio_status == "no_input_device")
+        && (audio_status == "ok"
+            || audio_status == "disabled"
+            || audio_status == "no_input_device"
+            || audio_status == "waiting_for_meeting")
         && !vision_degraded
         && !audio_degraded
     {
@@ -1156,7 +1181,11 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         if vision_degraded && !unhealthy_systems.contains(&"vision") {
             unhealthy_systems.push("vision");
         }
-        if audio_status != "ok" && audio_status != "disabled" && audio_status != "no_input_device" {
+        if audio_status != "ok"
+            && audio_status != "disabled"
+            && audio_status != "no_input_device"
+            && audio_status != "waiting_for_meeting"
+        {
             // active_no_data is a degraded state (device hijacked but watchdog recovering).
             // no_input_device is benign (no mic present) and stays out of this list.
             unhealthy_systems.push("audio");
@@ -1633,6 +1662,7 @@ mod tests {
         let state = capture_status(
             false,
             false,
+            false,
             "active_no_data",
             1,
             1,
@@ -1655,6 +1685,7 @@ mod tests {
         let state = capture_status(
             false,
             false,
+            false,
             "active_no_data",
             1,
             1,
@@ -1675,7 +1706,7 @@ mod tests {
     #[test]
     fn capture_status_reports_intentional_screen_lock_pause() {
         let state = capture_status(
-            false, true, "ok", 0, 0, 0, 0, false, None, 0.0, 0, 0, 10_000,
+            false, true, false, "ok", 0, 0, 0, 0, false, None, 0.0, 0, 0, 10_000,
         );
 
         assert_eq!(state.status, "screen_locked");
@@ -1683,6 +1714,33 @@ mod tests {
         assert_eq!(
             state.reason,
             "audio capture is paused while the screen is locked"
+        );
+    }
+
+    #[test]
+    fn capture_status_reports_intentional_meetings_only_idle() {
+        let state = capture_status(
+            false,
+            false,
+            true,
+            "waiting_for_meeting",
+            0,
+            0,
+            0,
+            0,
+            false,
+            None,
+            0.0,
+            0,
+            0,
+            10_000,
+        );
+
+        assert_eq!(state.status, "waiting_for_meeting");
+        assert_eq!(state.severity, "waiting");
+        assert_eq!(
+            state.reason,
+            "configured audio devices are released until a meeting is detected"
         );
     }
 
@@ -1874,6 +1932,7 @@ mod tests {
         classify_audio_status(
             false, // audio_disabled
             false, // audio_paused_for_screen_lock
+            false, // audio_waiting_for_meeting
             false, // audio_never_captured
             true,  // has_input_device
             stream_timeout_recent,
@@ -1931,32 +1990,37 @@ mod tests {
     fn audio_status_non_timeout_branches_unchanged() {
         // Guard the unrelated branches against accidental regressions.
         assert_eq!(
-            classify_audio_status(true, true, false, true, true, true, 1000, 1010, 60),
+            classify_audio_status(true, true, false, false, true, true, true, 1000, 1010, 60),
             "disabled"
         );
         // intentional lock pause wins over stale/not-started signals
         assert_eq!(
-            classify_audio_status(false, true, true, true, false, false, 0, 1010, 60),
+            classify_audio_status(false, true, false, true, true, false, false, 0, 1010, 60),
             "ok"
+        );
+        // intentional meetings-only idle is distinct and benign
+        assert_eq!(
+            classify_audio_status(false, false, true, true, true, false, false, 0, 1010, 60),
+            "waiting_for_meeting"
         );
         // never captured + no mic -> benign no_input_device (stays 200)
         assert_eq!(
-            classify_audio_status(false, false, true, false, false, false, 0, 1010, 60),
+            classify_audio_status(false, false, false, true, false, false, false, 0, 1010, 60),
             "no_input_device"
         );
         // never captured but a mic exists -> not_started
         assert_eq!(
-            classify_audio_status(false, false, true, true, false, false, 0, 1010, 60),
+            classify_audio_status(false, false, false, true, true, false, false, 0, 1010, 60),
             "not_started"
         );
         // not active, last audio within threshold -> ok
         assert_eq!(
-            classify_audio_status(false, false, false, true, false, false, 1000, 1030, 60),
+            classify_audio_status(false, false, false, false, true, false, false, 1000, 1030, 60),
             "ok"
         );
         // not active, last audio stale -> stale
         assert_eq!(
-            classify_audio_status(false, false, false, true, false, false, 1000, 2000, 60),
+            classify_audio_status(false, false, false, false, true, false, false, 1000, 2000, 60),
             "stale"
         );
     }

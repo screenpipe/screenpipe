@@ -124,6 +124,13 @@ const MEETING_AUDIO_FRAME_BUFFER: usize = 512;
 const RECONCILIATION_IDLE_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_IMMEDIATE_RECONCILIATION_SWEEPS: usize = 4;
 
+fn meetings_only_capture_waiting(
+    capture_mode: &AudioCaptureMode,
+    meeting_state: Option<bool>,
+) -> bool {
+    matches!(capture_mode, AudioCaptureMode::MeetingsOnly) && meeting_state == Some(false)
+}
+
 /// Wall-clock milliseconds since the Unix epoch (0 if the clock predates it).
 /// Local to the audio manager so the receiver-loop stamping and the piggyback
 /// sweep share one monotonic-enough source without a cross-module dependency.
@@ -861,6 +868,20 @@ impl AudioManager {
             return Ok(());
         }
 
+        // Meetings-only is a device-ownership contract, not merely a
+        // persistence filter. The OS meeting watcher does not depend on these
+        // streams on macOS/Windows, so release normal configured devices while
+        // idle and let the monitor reopen them at the next meeting edge.
+        // A missing detector deliberately falls back to Always, matching the
+        // documented safety behavior so this mode cannot silently lose audio.
+        if self.meetings_only_capture_waiting().await {
+            debug!(
+                "skipping start of audio device while meetings-only capture waits for a meeting: {}",
+                device
+            );
+            return Ok(());
+        }
+
         // Bluetooth mics always force the paired device's audio link out of
         // A2DP into SCO, degrading the user's headphone/speaker output — a
         // macOS/OS-level tradeoff with no external workaround (issue #3750).
@@ -882,6 +903,18 @@ impl AudioManager {
             } else if !err_str.contains("already running") {
                 return Err(e);
             }
+        }
+
+        // The meeting may end while the OS backend is opening the stream. The
+        // pre-start gate cannot close that race, and the monitor cannot see the
+        // stream until its recording handle is registered.
+        if self.meetings_only_capture_waiting().await {
+            self.stop_device_recording(device).await?;
+            debug!(
+                "stopped newly-opened audio device after meeting ended during startup: {}",
+                device
+            );
+            return Ok(());
         }
 
         // The lock flag can change while CoreAudio is opening the stream. The
@@ -1606,8 +1639,17 @@ impl AudioManager {
     /// that only hold an `AudioManager` (the piggyback sweep) can distinguish a
     /// registered-but-dead stream from one actually delivering audio — without
     /// reaching into the private `device_manager` or duplicating the check.
-    pub(crate) fn is_device_actively_streaming(&self, device: &AudioDevice) -> bool {
+    pub fn is_device_actively_streaming(&self, device: &AudioDevice) -> bool {
         super::is_device_actively_streaming(&self.device_manager, device)
+    }
+
+    /// Non-blocking read of the configured capture mode. Returns `None` if the
+    /// options lock is momentarily contended so `/health` never blocks on it.
+    pub fn configured_audio_capture_mode(&self) -> Option<AudioCaptureMode> {
+        self.options
+            .try_read()
+            .ok()
+            .map(|o| o.audio_capture_mode.clone())
     }
 
     /// Non-blocking read of the *configured* transcription mode. Returns `None`
@@ -1711,6 +1753,24 @@ impl AudioManager {
     /// Returns the current capture-owned meeting detector, if enabled.
     pub async fn meeting_detector(&self) -> Option<Arc<MeetingDetector>> {
         self.meeting_detector.read().await.clone()
+    }
+
+    /// Whether normal configured streams must stay closed until a meeting is
+    /// detected. Session streams intentionally bypass this gate because their
+    /// lifetime is already scoped to a meeting.
+    pub async fn meetings_only_capture_waiting(&self) -> bool {
+        // macOS and Windows use OS process ownership signals for meeting
+        // detection. Linux still relies on captured audio onset to accelerate
+        // its UI scanner, so retain its documented detector stream for now.
+        if !cfg!(any(target_os = "macos", target_os = "windows")) {
+            return false;
+        }
+        let capture_mode = self.options.read().await.audio_capture_mode.clone();
+        let meeting_state = self
+            .meeting_detector()
+            .await
+            .map(|detector| detector.is_in_meeting());
+        meetings_only_capture_waiting(&capture_mode, meeting_state)
     }
 
     /// Whether the meeting piggyback ("smart recording") flag is on. Consumed
@@ -2248,6 +2308,26 @@ mod tests {
         Arc,
     };
     use tokio::sync::{Barrier, Notify, Semaphore};
+
+    #[test]
+    fn meetings_only_waits_only_with_a_present_idle_detector() {
+        assert!(meetings_only_capture_waiting(
+            &AudioCaptureMode::MeetingsOnly,
+            Some(false)
+        ));
+        assert!(!meetings_only_capture_waiting(
+            &AudioCaptureMode::MeetingsOnly,
+            Some(true)
+        ));
+        assert!(!meetings_only_capture_waiting(
+            &AudioCaptureMode::MeetingsOnly,
+            None
+        ));
+        assert!(!meetings_only_capture_waiting(
+            &AudioCaptureMode::Always,
+            Some(false)
+        ));
+    }
 
     #[derive(Clone)]
     struct FakeEngine {

@@ -130,6 +130,42 @@ impl ScreenLockAudioGate {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct MeetingsOnlyAudioGate {
+    waiting: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MeetingsOnlyAudioAction {
+    None,
+    EnterWaiting,
+    EnforceWaiting,
+    Resume,
+}
+
+impl MeetingsOnlyAudioAction {
+    fn enforces_stream_shutdown(self) -> bool {
+        matches!(self, Self::EnterWaiting | Self::EnforceWaiting)
+    }
+}
+
+impl MeetingsOnlyAudioGate {
+    fn update(&mut self, should_wait: bool) -> MeetingsOnlyAudioAction {
+        match (self.waiting, should_wait) {
+            (false, true) => {
+                self.waiting = true;
+                MeetingsOnlyAudioAction::EnterWaiting
+            }
+            (true, false) => {
+                self.waiting = false;
+                MeetingsOnlyAudioAction::Resume
+            }
+            (true, true) => MeetingsOnlyAudioAction::EnforceWaiting,
+            (false, false) => MeetingsOnlyAudioAction::None,
+        }
+    }
+}
+
 /// Exponential backoff for device recovery.
 ///
 /// Transient errors (e.g., ScreenCaptureKit not yet initialized) use a short
@@ -577,6 +613,55 @@ impl SystemDefaultTracker {
     }
 }
 
+/// Release every audio stream without changing configured device intent.
+/// Repeated on every meetings-only idle tick so a stream whose open raced the
+/// meeting edge, or whose first stop failed transiently, cannot remain owned.
+async fn release_devices_while_waiting_for_meeting(audio_manager: &AudioManager) -> (usize, usize) {
+    let session_devices = audio_manager.session_devices();
+    let mut observed_device_names = session_devices.clone();
+    for device_name in &session_devices {
+        match parse_audio_device(device_name) {
+            Ok(device) => {
+                if let Err(error) = audio_manager.stop_session_device(&device).await {
+                    warn!(
+                        "failed to stop meeting-session audio device {} after meeting ended: {}",
+                        device, error
+                    );
+                }
+            }
+            Err(error) => warn!(
+                "failed to parse meeting-session audio device '{}' during meetings-only cleanup: {}",
+                device_name, error
+            ),
+        }
+    }
+
+    let current_devices = audio_manager.current_devices();
+    observed_device_names.extend(current_devices.iter().map(ToString::to_string));
+    for device in &current_devices {
+        if let Err(error) = audio_manager.stop_device_recording(device).await {
+            warn!(
+                "failed to release audio device {} while waiting for a meeting: {}",
+                device, error
+            );
+        }
+    }
+
+    let mut remaining_device_names = audio_manager.session_devices();
+    remaining_device_names.extend(
+        audio_manager
+            .current_devices()
+            .iter()
+            .map(ToString::to_string),
+    );
+    (
+        observed_device_names
+            .len()
+            .saturating_sub(remaining_device_names.len()),
+        remaining_device_names.len(),
+    )
+}
+
 pub async fn start_device_monitor(
     audio_manager: Arc<AudioManager>,
     device_manager: Arc<DeviceManager>,
@@ -624,6 +709,7 @@ pub async fn start_device_monitor(
         // tap + resolved-mic capture during meetings, with total fallback to
         // the stable path on any gap. Pure decider in `meeting_piggyback.rs`.
         let mut piggyback_state = super::meeting_piggyback::PiggybackState::default();
+        let mut meetings_only_audio_gate = MeetingsOnlyAudioGate::default();
 
         // macOS CoreAudio keeps a PreventUserIdleSystemSleep assertion for as
         // long as an input/output stream remains open. Merely skipping samples
@@ -762,6 +848,59 @@ pub async fn start_device_monitor(
                         }
                         continue;
                     }
+                }
+
+                let meetings_only_action = meetings_only_audio_gate
+                    .update(audio_manager.meetings_only_capture_waiting().await);
+                if meetings_only_action == MeetingsOnlyAudioAction::Resume {
+                    // Re-resolve system defaults on every meeting edge. Devices
+                    // may have changed while Screenpipe intentionally owned no
+                    // streams.
+                    needs_initial_sync = true;
+                    info!("meeting detected: scheduling configured audio stream recovery");
+                }
+                if meetings_only_action.enforces_stream_shutdown() {
+                    if meetings_only_action == MeetingsOnlyAudioAction::EnterWaiting {
+                        // Drop monitor-owned transient state along with streams.
+                        // User configuration remains in enabled_devices.
+                        for device_name in audio_manager.suspended_devices() {
+                            audio_manager.unsuspend_device(&device_name);
+                        }
+                        piggyback_state = super::meeting_piggyback::PiggybackState::default();
+                        pinned_missing_since.clear();
+                        active_pinned_fallback = None;
+                        logged_pinned_fallback_default_disabled.clear();
+                        pinned_input_unavailable_notified = false;
+                        output_follow_state = super::windows_output_follow::FollowState::new();
+                        speaker_watchdog_state = super::windows_output_follow::WatchdogState::new();
+                    }
+
+                    let (released_streams, remaining_streams) =
+                        release_devices_while_waiting_for_meeting(&audio_manager).await;
+                    if meetings_only_action == MeetingsOnlyAudioAction::EnterWaiting {
+                        if remaining_streams == 0 {
+                            info!(
+                                "meetings-only capture idle: released {} audio stream(s); waiting for a meeting",
+                                released_streams
+                            );
+                        } else {
+                            warn!(
+                                "meetings-only capture idle: released {} audio stream(s), but {} remain and will be retried",
+                                released_streams, remaining_streams
+                            );
+                        }
+                    } else if released_streams > 0 || remaining_streams > 0 {
+                        debug!(
+                            "meetings-only idle cleanup released {} late stream(s); {} remain",
+                            released_streams, remaining_streams
+                        );
+                    }
+
+                    tokio::select! {
+                        _ = sleep(Duration::from_secs(1)) => {}
+                        _ = super::piggyback_listeners::sweep_wake_notified() => {}
+                    }
+                    continue;
                 }
 
                 // Check if sleep/wake or display reconfiguration requested
@@ -2409,6 +2548,44 @@ mod tests {
                     "mask={mask:08b}, tick={tick}"
                 );
                 previously_locked = locked;
+            }
+        }
+    }
+
+    #[test]
+    fn meetings_only_audio_gate_opens_and_closes_once_per_edge() {
+        let mut gate = MeetingsOnlyAudioGate::default();
+
+        assert_eq!(gate.update(false), MeetingsOnlyAudioAction::None);
+        assert_eq!(gate.update(true), MeetingsOnlyAudioAction::EnterWaiting);
+        assert_eq!(gate.update(true), MeetingsOnlyAudioAction::EnforceWaiting);
+        assert_eq!(gate.update(false), MeetingsOnlyAudioAction::Resume);
+        assert_eq!(gate.update(false), MeetingsOnlyAudioAction::None);
+    }
+
+    #[test]
+    fn meetings_only_audio_gate_matches_all_short_meeting_sequences() {
+        for mask in 0u16..=u8::MAX as u16 {
+            let mut gate = MeetingsOnlyAudioGate::default();
+            let mut previously_waiting = false;
+
+            for tick in 0..8 {
+                let waiting = mask & (1 << tick) != 0;
+                let expected = match (previously_waiting, waiting) {
+                    (false, false) => MeetingsOnlyAudioAction::None,
+                    (false, true) => MeetingsOnlyAudioAction::EnterWaiting,
+                    (true, true) => MeetingsOnlyAudioAction::EnforceWaiting,
+                    (true, false) => MeetingsOnlyAudioAction::Resume,
+                };
+                let action = gate.update(waiting);
+
+                assert_eq!(action, expected, "mask={mask:08b}, tick={tick}");
+                assert_eq!(
+                    action.enforces_stream_shutdown(),
+                    waiting,
+                    "mask={mask:08b}, tick={tick}"
+                );
+                previously_waiting = waiting;
             }
         }
     }

@@ -107,6 +107,7 @@ commits: `28e5c247`
 
 ### 4. audio device handling
 
+- [ ] **meetings-only releases configured audio devices outside meetings** — Run `bun run test:e2e:meetings-only-audio` on macOS and Windows. The isolated real-audio lane must observe `0` running devices before a manual meeting, `>=1` while it is active, then `0` within one monitor tick after stop. `/health` must report `waiting_for_meeting` rather than a capture fault while idle. (#5611)
 - [ ] **CoreAudio Process Tap (experimental)** — with `experimentalCoreaudioSystemAudio` ON on macOS 14.4+, System Audio uses the CoreAudio Process Tap and rebuilds if silence is detected; with the flag OFF (default) System Audio uses SCK. (`75a52603b`, `5634664da`)
 - [ ] **meeting piggyback OFF (default)** — with `experimentalMeetingPiggyback` off, a meeting starts/ends with zero device-set changes: no "Meeting Tap" device, no suspensions, logs contain no `meeting_piggyback` actions.
 - [ ] **meeting piggyback ON, detected meeting** — flag on ("Smart recording" in settings), ANY capture mode, macOS 14.4+: join a Zoom call with a NON-default mic selected in Zoom → within ~4s a "Meeting Tap (output)" session stream starts, and within ~6s (two confirmation ticks — we never race the app's own device acquisition) the Zoom-selected mic is capturing; the global "System Audio (output)" stream and non-resolved mics are suspended; transcripts attribute to "Meeting Tap"/the resolved mic; on meeting end everything reverts and the resolved mic is NOT left in enabled devices (settings unchanged).

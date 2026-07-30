@@ -1163,6 +1163,17 @@ async fn main() {
                     .insert("_proCloudMigrationDone".to_string(), json!(true));
                 info!("E2E seed: screenpipe cloud audio fallback");
             }
+            if e2e_flags.iter().any(|f| f == "meetings-only-audio") {
+                // Real audio lifecycle lane for meetings-only capture. Keep
+                // vision and transcription disabled so the spec isolates OS
+                // device ownership without loading OCR/STT models.
+                store.recording.disable_audio = false;
+                store.recording.disable_vision = true;
+                store.recording.audio_capture_mode = "meetings-only".to_string();
+                store.recording.audio_transcription_engine = "disabled".to_string();
+                store.recording.experimental_meeting_piggyback = false;
+                info!("E2E seed: meetings-only audio device lifecycle");
+            }
 
             // The frontend reads settings from the Tauri store rather than the
             // managed Rust copy below. Persist E2E mutations so both sides see

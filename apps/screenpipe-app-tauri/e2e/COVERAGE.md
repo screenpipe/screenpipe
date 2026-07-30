@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 80
-- Declared test blocks: 234
-- Weighted coverage points: 180.0
+- Mapped specs: 81
+- Declared test blocks: 235
+- Weighted coverage points: 180.4
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,8 +19,8 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 68 | 214 | 172.7 | 15 | 69 | 93% |
-| macos | 76 | 198 | 151.2 | 17 | 70 | 89% |
+| windows | 69 | 215 | 173.1 | 15 | 70 | 90% |
+| macos | 77 | 199 | 151.6 | 17 | 71 | 88% |
 | linux | 59 | 176 | 143.3 | 13 | 65 | 87% |
 
 ## Runtime Results
@@ -33,19 +33,19 @@ pass/fail/skip counts.
 
 | Layer | windows | macos | linux |
 | --- | --- | --- | --- |
-| audio-device | 2 specs / 27 tests / 19.8 pts | 2 specs / 2 tests / 1.3 pts | - |
+| audio-device | 3 specs / 28 tests / 20.2 pts | 3 specs / 3 tests / 1.7 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 15 tests / 6.0 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 22 specs / 35 tests / 26.1 pts | 25 specs / 43 tests / 28.5 pts | 21 specs / 34 tests / 25.6 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 16 specs / 97 tests / 81.0 pts | 17 specs / 73 tests / 62.4 pts | 13 specs / 70 tests / 61.2 pts |
+| local-api | 17 specs / 98 tests / 81.4 pts | 18 specs / 74 tests / 62.8 pts | 13 specs / 70 tests / 61.2 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts |
 | os-integration | 5 specs / 17 tests / 16.1 pts | 6 specs / 5 tests / 1.7 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts |
-| real-ui-e2e | 46 specs / 132 tests / 106.5 pts | 48 specs / 119 tests / 96.0 pts | 43 specs / 112 tests / 93.7 pts |
+| real-ui-e2e | 47 specs / 133 tests / 106.9 pts | 49 specs / 120 tests / 96.4 pts | 43 specs / 112 tests / 93.7 pts |
 | settings | 13 specs / 33 tests / 30.6 pts | 15 specs / 28 tests / 24.3 pts | 12 specs / 25 tests / 22.6 pts |
 | storage-privacy | 7 specs / 22 tests / 21.1 pts | 6 specs / 14 tests / 13.1 pts | 5 specs / 14 tests / 13.1 pts |
 | tauri-command | 10 specs / 19 tests / 12.3 pts | 10 specs / 20 tests / 11.8 pts | 9 specs / 18 tests / 11.3 pts |
@@ -65,7 +65,8 @@ pass/fail/skip counts.
 | AI presets and preferences UX | settings | covered (strong; settings-sections) | covered (strong; settings-sections) | covered (strong; settings-sections) |
 | Privacy API auth settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, privacy-api-auth) | covered (strong; settings-sections, privacy-api-auth) |
 | Notification history and viewer paths | notifications | covered (strong; windows-user-journey, notification-viewer-link) | covered (partial; notification-viewer-link, audio-fallback) | covered (partial; notification-viewer-link) |
-| Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; audio-fallback) | gap |
+| Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; meetings-only-audio-lifecycle, audio-fallback) | gap |
+| Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
 | Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) |
 | Pipes discover, install, and play | pipes | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) |
@@ -78,8 +79,8 @@ pass/fail/skip counts.
 
 ## Critical Gaps
 
-- windows: Real capture, OCR, and indexing (weak); Updater install and rollback safety (gap).
-- macos: Real capture, OCR, and indexing (weak); Audio device health (weak); Updater install and rollback safety (gap).
+- windows: Real capture, OCR, and indexing (weak); Meetings-only audio device ownership (weak); Updater install and rollback safety (gap).
+- macos: Real capture, OCR, and indexing (weak); Audio device health (weak); Meetings-only audio device ownership (weak); Updater install and rollback safety (gap).
 - linux: Real capture, OCR, and indexing (weak); Audio device health (gap); Updater install and rollback safety (gap).
 
 ## Execution Integrity
@@ -141,6 +142,7 @@ pass/fail/skip counts.
 | main-window.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | window-lifecycle, main-window | medium | partial | command | 2 | Main window show/hide dedupe. |
 | meeting-apps-picker.spec.ts | windows, macos, linux | settings, real-ui-e2e | settings-recording, meeting-detector-ignored-apps | medium | strong | real-user-flow | 3 | Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847). |
 | meeting-note-bottom-click.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | real-user-flow | 3 | Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line. |
+| meetings-only-audio-lifecycle.spec.ts | windows, macos | audio-device, local-api, real-ui-e2e | meetings-only-audio-lifecycle, audio-device-health | high | conditional | real-user-flow | 1 | Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge. |
 | notification-viewer-link.spec.ts | windows, macos, linux | notifications, local-api, window-lifecycle | notifications, viewer-deeplink | high | partial | mixed | 3 | Notification local file links rewrite into in-app viewer links. |
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 4 | Opt-in no-onboarding seed verifies onboarding redirect. |
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |

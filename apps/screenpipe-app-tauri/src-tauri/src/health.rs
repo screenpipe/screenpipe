@@ -531,7 +531,7 @@ fn health_confirms_recording(health: &HealthCheckResponse) -> bool {
     );
     let audio_healthy = matches!(
         health.audio_status.as_deref(),
-        Some("ok") | Some("disabled") | Some("no_input_device")
+        Some("ok") | Some("disabled") | Some("no_input_device") | Some("waiting_for_meeting")
     );
 
     vision_healthy && audio_healthy && !health.write_queue_degraded
@@ -2272,7 +2272,7 @@ mod tests {
             );
         }
 
-        for status in ["ok", "disabled", "no_input_device"] {
+        for status in ["ok", "disabled", "no_input_device", "waiting_for_meeting"] {
             let mut health = healthy_health();
             health.audio_status = Some(status.to_string());
             assert!(
@@ -2359,7 +2359,7 @@ mod tests {
     #[test]
     fn only_explicit_good_capture_statuses_confirm_recovery() {
         for frame_status in ["ok", "disabled"] {
-            for audio_status in ["ok", "disabled", "no_input_device"] {
+            for audio_status in ["ok", "disabled", "no_input_device", "waiting_for_meeting"] {
                 let mut health = healthy_health();
                 health.frame_status = Some(frame_status.to_string());
                 health.audio_status = Some(audio_status.to_string());
