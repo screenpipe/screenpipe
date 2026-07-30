@@ -33,6 +33,9 @@ interface HealthStatus {
     status?: string;
     active_audio_devices?: number;
   };
+  audio_pipeline?: {
+    chunks_sent?: number;
+  };
 }
 
 interface MeetingRecord {
@@ -68,8 +71,9 @@ async function waitForRunningDeviceCount(
   cfg: LocalApiConfig,
   expected: (count: number) => boolean,
   label: string,
-): Promise<AudioDeviceStatus[]> {
+): Promise<{ devices: AudioDeviceStatus[]; elapsedMs: number }> {
   let latest: AudioDeviceStatus[] = [];
+  const startedAt = Date.now();
   await browser.waitUntil(
     async () => {
       latest = (
@@ -78,12 +82,52 @@ async function waitForRunningDeviceCount(
       return expected(latest.filter((device) => device.is_running).length);
     },
     {
-      timeout: t(20_000),
-      interval: 500,
+      timeout: t(8_000),
+      interval: 100,
       timeoutMsg: `${label}; latest=${JSON.stringify(latest)}`,
     },
   );
-  return latest;
+  return { devices: latest, elapsedMs: Date.now() - startedAt };
+}
+
+async function waitForChunksAfter(
+  cfg: LocalApiConfig,
+  baseline: number,
+): Promise<{ chunks: number; elapsedMs: number }> {
+  let latest = baseline;
+  const startedAt = Date.now();
+  await browser.waitUntil(
+    async () => {
+      const health = (await apiRequest<HealthStatus>(cfg, "/health")).body;
+      latest = health.audio_pipeline?.chunks_sent ?? 0;
+      return latest > baseline;
+    },
+    {
+      timeout: t(12_000),
+      interval: 100,
+      timeoutMsg: `no first audio chunk after meeting edge; baseline=${baseline}, latest=${latest}`,
+    },
+  );
+  return { chunks: latest, elapsedMs: Date.now() - startedAt };
+}
+
+async function waitForAudioStatus(
+  cfg: LocalApiConfig,
+  expected: string,
+): Promise<HealthStatus> {
+  let latest: HealthStatus | null = null;
+  await browser.waitUntil(
+    async () => {
+      latest = (await apiRequest<HealthStatus>(cfg, "/health")).body;
+      return latest.audio_status === expected;
+    },
+    {
+      timeout: t(5_000),
+      interval: 100,
+      timeoutMsg: `audio health did not become ${expected}; latest=${JSON.stringify(latest)}`,
+    },
+  );
+  return latest!;
 }
 
 async function ensureLocalApi(cfg: LocalApiConfig): Promise<void> {
@@ -141,17 +185,22 @@ describe("meetings-only audio device lifecycle", function () {
   });
 
   it("owns no configured device outside meetings and opens/closes exactly at meeting edges", async () => {
-    const idleDevices = await waitForRunningDeviceCount(
+    const idle = await waitForRunningDeviceCount(
       cfg,
       (count) => count === 0,
       "configured audio devices stayed open before a meeting",
     );
-    expect(idleDevices.length).toBeGreaterThan(0);
+    expect(idle.devices.length).toBeGreaterThan(0);
 
     const idleHealth = (await apiRequest<HealthStatus>(cfg, "/health")).body;
     expect(idleHealth.audio_status).toBe("waiting_for_meeting");
     expect(idleHealth.capture_status?.status).toBe("waiting_for_meeting");
     expect(idleHealth.capture_status?.active_audio_devices).toBe(0);
+    const idleChunks = idleHealth.audio_pipeline?.chunks_sent ?? 0;
+    await browser.pause(t(1_500));
+    const stillIdleHealth = (await apiRequest<HealthStatus>(cfg, "/health"))
+      .body;
+    expect(stillIdleHealth.audio_pipeline?.chunks_sent ?? 0).toBe(idleChunks);
 
     const started = await apiRequest<MeetingRecord>(cfg, "/meetings/start", {
       method: "POST",
@@ -163,11 +212,15 @@ describe("meetings-only audio device lifecycle", function () {
     meetingId = started.body.id;
     expect(meetingId).toBeGreaterThan(0);
 
-    await waitForRunningDeviceCount(
+    const opened = await waitForRunningDeviceCount(
       cfg,
       (count) => count > 0,
       "configured audio devices did not open after the meeting started",
     );
+    expect(opened.elapsedMs).toBeLessThanOrEqual(t(5_000));
+    const firstChunk = await waitForChunksAfter(cfg, idleChunks);
+    expect(firstChunk.chunks).toBeGreaterThan(idleChunks);
+    expect(firstChunk.elapsedMs).toBeLessThanOrEqual(t(10_000));
 
     await apiRequest(cfg, "/meetings/stop", {
       method: "POST",
@@ -175,13 +228,27 @@ describe("meetings-only audio device lifecycle", function () {
     });
     meetingId = null;
 
-    await waitForRunningDeviceCount(
+    const closed = await waitForRunningDeviceCount(
       cfg,
       (count) => count === 0,
       "configured audio devices stayed open after the meeting ended",
     );
-    const endedHealth = (await apiRequest<HealthStatus>(cfg, "/health")).body;
+    expect(closed.elapsedMs).toBeLessThanOrEqual(t(5_000));
+    // Device ownership changes immediately; /health is intentionally cached,
+    // so wait for its next snapshot before asserting the visible state.
+    const endedHealth = await waitForAudioStatus(cfg, "waiting_for_meeting");
     expect(endedHealth.audio_status).toBe("waiting_for_meeting");
     expect(endedHealth.capture_status?.active_audio_devices).toBe(0);
+    // Allow the recorder to flush the final in-meeting partial segment before
+    // measuring the true outside-meeting steady state.
+    await browser.pause(t(1_500));
+    const settledEndedHealth = (await apiRequest<HealthStatus>(cfg, "/health"))
+      .body;
+    await browser.pause(t(2_000));
+    const stillEndedHealth = (await apiRequest<HealthStatus>(cfg, "/health"))
+      .body;
+    expect(stillEndedHealth.audio_pipeline?.chunks_sent ?? 0).toBe(
+      settledEndedHealth.audio_pipeline?.chunks_sent ?? 0,
+    );
   });
 });

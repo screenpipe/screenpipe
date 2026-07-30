@@ -1171,6 +1171,9 @@ async fn main() {
                 store.recording.disable_vision = true;
                 store.recording.audio_capture_mode = "meetings-only".to_string();
                 store.recording.audio_transcription_engine = "disabled".to_string();
+                // Emit a real segment quickly enough for the lifecycle spec to
+                // verify the first capture callback without a 30-second wait.
+                store.recording.audio_chunk_duration = 5;
                 store.recording.experimental_meeting_piggyback = false;
                 info!("E2E seed: meetings-only audio device lifecycle");
             }

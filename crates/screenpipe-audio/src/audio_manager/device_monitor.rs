@@ -613,53 +613,71 @@ impl SystemDefaultTracker {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StreamReleaseOutcome {
+    observed: usize,
+    released: usize,
+    remaining: usize,
+}
+
 /// Release every audio stream without changing configured device intent.
-/// Repeated on every meetings-only idle tick so a stream whose open raced the
-/// meeting edge, or whose first stop failed transiently, cannot remain owned.
-async fn release_devices_while_waiting_for_meeting(audio_manager: &AudioManager) -> (usize, usize) {
+/// Shared by privacy/power gates that need to enforce stream shutdown on every
+/// pass, closing in-flight-open races and retrying transient stop failures.
+async fn release_all_audio_streams_preserving_intent(
+    audio_manager: &AudioManager,
+    reason: &str,
+) -> StreamReleaseOutcome {
     let session_devices = audio_manager.session_devices();
-    let mut observed_device_names = session_devices.clone();
+    let mut observed_device_names: HashSet<String> = session_devices.clone();
     for device_name in &session_devices {
         match parse_audio_device(device_name) {
             Ok(device) => {
                 if let Err(error) = audio_manager.stop_session_device(&device).await {
                     warn!(
-                        "failed to stop meeting-session audio device {} after meeting ended: {}",
-                        device, error
+                        "failed to stop meeting-session audio device {} for {}: {}",
+                        device, reason, error
                     );
                 }
             }
             Err(error) => warn!(
-                "failed to parse meeting-session audio device '{}' during meetings-only cleanup: {}",
-                device_name, error
+                "failed to parse meeting-session audio device '{}' during {} cleanup: {}",
+                device_name, reason, error
             ),
         }
     }
 
     let current_devices = audio_manager.current_devices();
-    observed_device_names.extend(current_devices.iter().map(ToString::to_string));
+    observed_device_names.extend(current_devices.iter().map(std::string::ToString::to_string));
     for device in &current_devices {
         if let Err(error) = audio_manager.stop_device_recording(device).await {
             warn!(
-                "failed to release audio device {} while waiting for a meeting: {}",
-                device, error
+                "failed to release audio device {} for {}: {}",
+                device, reason, error
             );
         }
     }
 
-    let mut remaining_device_names = audio_manager.session_devices();
+    let mut remaining_device_names: HashSet<String> = audio_manager.session_devices();
     remaining_device_names.extend(
         audio_manager
             .current_devices()
             .iter()
-            .map(ToString::to_string),
+            .map(std::string::ToString::to_string),
     );
-    (
-        observed_device_names
+    StreamReleaseOutcome {
+        observed: observed_device_names.len(),
+        released: observed_device_names
             .len()
             .saturating_sub(remaining_device_names.len()),
-        remaining_device_names.len(),
-    )
+        remaining: remaining_device_names.len(),
+    }
+}
+
+async fn meeting_state_change_or_pending(audio_manager: &AudioManager) {
+    match audio_manager.meeting_detector().await {
+        Some(detector) => detector.meeting_state_changed().await,
+        None => std::future::pending::<()>().await,
+    }
 }
 
 pub async fn start_device_monitor(
@@ -773,72 +791,30 @@ pub async fn start_device_monitor(
                         // on the edge. This closes two races: a stream whose
                         // start was already in flight when the lock flag
                         // changed, and a transient CoreAudio stop failure.
-                        let session_devices = audio_manager.session_devices();
-                        let mut observed_device_names = session_devices.clone();
-                        for device_name in &session_devices {
-                            match parse_audio_device(device_name) {
-                                Ok(device) => {
-                                    if let Err(e) =
-                                        audio_manager.stop_session_device(&device).await
-                                    {
-                                        warn!(
-                                            "failed to stop meeting-session audio device {} for screen lock: {}",
-                                            device, e
-                                        );
-                                    }
-                                }
-                                Err(e) => warn!(
-                                    "failed to parse meeting-session audio device '{}' during screen-lock cleanup: {}",
-                                    device_name, e
-                                ),
-                            }
-                        }
-
-                        // Snapshot again after session teardown so a session
-                        // stream is not normally stopped twice. If its first
-                        // stop failed, it remains here and gets an immediate
-                        // retry through the generic path.
-                        let current_devices = audio_manager.current_devices();
-                        observed_device_names
-                            .extend(current_devices.iter().map(std::string::ToString::to_string));
-                        for device in &current_devices {
-                            if let Err(e) = audio_manager.stop_device_recording(device).await {
-                                warn!(
-                                    "failed to stop audio device {} for screen lock: {}",
-                                    device, e
-                                );
-                            }
-                        }
-
-                        let mut remaining_device_names = audio_manager.session_devices();
-                        remaining_device_names.extend(
-                            audio_manager
-                                .current_devices()
-                                .iter()
-                                .map(std::string::ToString::to_string),
-                        );
-                        let released_streams = observed_device_names
-                            .len()
-                            .saturating_sub(remaining_device_names.len());
+                        let release = release_all_audio_streams_preserving_intent(
+                            &audio_manager,
+                            "screen lock",
+                        )
+                        .await;
                         if lock_action == ScreenLockAudioAction::Suspend {
-                            if remaining_device_names.is_empty() {
+                            if release.remaining == 0 {
                                 info!(
                                     "screen locked: released {} audio stream(s) so macOS can idle sleep",
-                                    released_streams
+                                    release.released
                                 );
                             } else {
                                 warn!(
                                     "screen locked: released {} of {} audio stream(s); {} remain and will be retried",
-                                    released_streams,
-                                    observed_device_names.len(),
-                                    remaining_device_names.len()
+                                    release.released,
+                                    release.observed,
+                                    release.remaining
                                 );
                             }
-                        } else if !observed_device_names.is_empty() {
+                        } else if release.observed > 0 {
                             debug!(
                                 "screen-lock cleanup found {} late or retrying audio stream(s); {} remain",
-                                observed_device_names.len(),
-                                remaining_device_names.len()
+                                release.observed,
+                                release.remaining
                             );
                         }
 
@@ -875,30 +851,34 @@ pub async fn start_device_monitor(
                         speaker_watchdog_state = super::windows_output_follow::WatchdogState::new();
                     }
 
-                    let (released_streams, remaining_streams) =
-                        release_devices_while_waiting_for_meeting(&audio_manager).await;
+                    let release = release_all_audio_streams_preserving_intent(
+                        &audio_manager,
+                        "meetings-only idle",
+                    )
+                    .await;
                     if meetings_only_action == MeetingsOnlyAudioAction::EnterWaiting {
-                        if remaining_streams == 0 {
+                        if release.remaining == 0 {
                             info!(
                                 "meetings-only capture idle: released {} audio stream(s); waiting for a meeting",
-                                released_streams
+                                release.released
                             );
                         } else {
                             warn!(
                                 "meetings-only capture idle: released {} audio stream(s), but {} remain and will be retried",
-                                released_streams, remaining_streams
+                                release.released, release.remaining
                             );
                         }
-                    } else if released_streams > 0 || remaining_streams > 0 {
+                    } else if release.released > 0 || release.remaining > 0 {
                         debug!(
                             "meetings-only idle cleanup released {} late stream(s); {} remain",
-                            released_streams, remaining_streams
+                            release.released, release.remaining
                         );
                     }
 
                     tokio::select! {
                         _ = sleep(Duration::from_secs(1)) => {}
                         _ = super::piggyback_listeners::sweep_wake_notified() => {}
+                        _ = meeting_state_change_or_pending(&audio_manager) => {}
                     }
                     continue;
                 }
@@ -2094,7 +2074,11 @@ pub async fn start_device_monitor(
                 )
                 .await;
             }
-            // Event-driven wake (macOS): while the piggyback sweep is engaged
+            // Event-driven wakes: meeting edges must open/close ownership on
+            // the next pass, while macOS piggyback listeners follow device
+            // changes without waiting for the reconciliation tick.
+            //
+            // While the piggyback sweep is engaged
             // it registers CoreAudio property listeners (default input device;
             // the meeting processes' input-device-list / is-running-input)
             // that poke this Notify the instant anything changes — so a mic
@@ -2106,11 +2090,12 @@ pub async fn start_device_monitor(
             // several related property changes for one device transition, and
             // without the floor those events repeatedly run every recovery
             // check plus the expensive process-input enumeration back-to-back.
-            let event_wake = tokio::select! {
-                _ = sleep(Duration::from_secs(2)) => false,
-                _ = super::piggyback_listeners::sweep_wake_notified() => true,
+            let wake = tokio::select! {
+                _ = sleep(Duration::from_secs(2)) => MonitorWake::ReconciliationTick,
+                _ = super::piggyback_listeners::sweep_wake_notified() => MonitorWake::DeviceEvent,
+                _ = meeting_state_change_or_pending(&audio_manager) => MonitorWake::MeetingState,
             };
-            if event_wake {
+            if wake == MonitorWake::DeviceEvent {
                 if let Some(delay) = remaining_event_wake_delay(monitor_pass_started.elapsed()) {
                     sleep(delay).await;
                 }
@@ -2118,6 +2103,13 @@ pub async fn start_device_monitor(
         }
     }));
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MonitorWake {
+    ReconciliationTick,
+    DeviceEvent,
+    MeetingState,
 }
 
 const MIN_EVENT_WAKE_INTERVAL: Duration = Duration::from_millis(500);
