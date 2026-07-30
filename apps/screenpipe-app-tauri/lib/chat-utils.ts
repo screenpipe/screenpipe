@@ -384,6 +384,7 @@ interface TimeRange {
   start: Date;
   end: Date;
   label: string;
+  sourceToken?: string;
 }
 
 export interface ParsedMentions {
@@ -399,6 +400,175 @@ export interface ParsedMentions {
 export interface ParseMentionsOptions {
   selectionRange?: { start: Date; end: Date } | null;
   appTagMap?: Record<string, string>;
+  now?: Date;
+}
+
+const MONTH_NAMES = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+] as const;
+
+const MONTH_PATTERN = MONTH_NAMES.join("|");
+
+function startOfLocalDay(date: Date): Date {
+  const result = new Date(date);
+  result.setHours(0, 0, 0, 0);
+  return result;
+}
+
+function endOfLocalDay(date: Date): Date {
+  const result = new Date(date);
+  result.setHours(23, 59, 59, 999);
+  return result;
+}
+
+function parseDayMonthYear(day: string, month: string, year: string): Date | null {
+  const result = new Date(Number(year), Number(month) - 1, Number(day));
+  if (
+    result.getFullYear() !== Number(year) ||
+    result.getMonth() !== Number(month) - 1 ||
+    result.getDate() !== Number(day)
+  ) {
+    return null;
+  }
+  return result;
+}
+
+function formatRangeDate(date: Date): string {
+  return date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function parseExplicitTimeRanges(input: string, now: Date): {
+  cleanedInput: string;
+  ranges: TimeRange[];
+} {
+  let cleanedInput = input;
+  const ranges: TimeRange[] = [];
+
+  const consume = (
+    pattern: RegExp,
+    getRange: (match: RegExpMatchArray) => Omit<TimeRange, "sourceToken"> | null,
+  ) => {
+    const matches = Array.from(cleanedInput.matchAll(pattern));
+    for (const match of matches) {
+      const range = getRange(match);
+      if (!range) continue;
+      ranges.push({ ...range, sourceToken: match[0] });
+      cleanedInput = cleanedInput.replace(match[0], " ");
+    }
+  };
+
+  consume(
+    /~\(\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*\)/gi,
+    (match) => {
+      const first = parseDayMonthYear(match[1], match[2], match[3]);
+      const second = parseDayMonthYear(match[4], match[5], match[6]);
+      if (!first || !second) return null;
+      const startDate = first <= second ? first : second;
+      const endDate = first <= second ? second : first;
+      return {
+        start: startOfLocalDay(startDate),
+        end: endOfLocalDay(endDate),
+        label: `${formatRangeDate(startDate)} – ${formatRangeDate(endDate)}`,
+      };
+    },
+  );
+
+  consume(
+    /~\(\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*\)/gi,
+    (match) => {
+      const date = parseDayMonthYear(match[1], match[2], match[3]);
+      if (!date) return null;
+      return {
+        start: startOfLocalDay(date),
+        end: endOfLocalDay(date),
+        label: formatRangeDate(date),
+      };
+    },
+  );
+
+  consume(/~(\d+)\s*days?\b/gi, (match) => {
+    const days = Number(match[1]);
+    if (!Number.isSafeInteger(days) || days < 1 || days > 36500) return null;
+    return {
+      start: new Date(now.getTime() - days * 24 * 60 * 60 * 1000),
+      end: new Date(now),
+      label: `past ${days} ${days === 1 ? "day" : "days"}`,
+    };
+  });
+
+  consume(/~lastweek\b/gi, () => {
+    const startOfThisWeek = startOfLocalDay(now);
+    const dayFromMonday = (startOfThisWeek.getDay() + 6) % 7;
+    startOfThisWeek.setDate(startOfThisWeek.getDate() - dayFromMonday);
+    const start = new Date(startOfThisWeek);
+    start.setDate(start.getDate() - 7);
+    return {
+      start,
+      end: new Date(startOfThisWeek.getTime() - 1),
+      label: "previous week",
+    };
+  });
+
+  consume(/~lastmonth\b/gi, () => {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 1);
+    end.setMilliseconds(-1);
+    return { start, end, label: "previous month" };
+  });
+
+  consume(new RegExp(`~(${MONTH_PATTERN})(\\d{4})\\b`, "gi"), (match) => {
+    const monthIndex = MONTH_NAMES.indexOf(
+      match[1].toLowerCase() as (typeof MONTH_NAMES)[number],
+    );
+    const year = Number(match[2]);
+    if (monthIndex < 0 || year < 1) return null;
+    const start = new Date(year, monthIndex, 1);
+    const end = new Date(year, monthIndex + 1, 1);
+    end.setMilliseconds(-1);
+    return {
+      start,
+      end,
+      label: `${MONTH_NAMES[monthIndex][0].toUpperCase()}${MONTH_NAMES[monthIndex].slice(1)} ${year}`,
+    };
+  });
+
+  consume(new RegExp(`~(${MONTH_PATTERN})\\b`, "gi"), (match) => {
+    const monthIndex = MONTH_NAMES.indexOf(
+      match[1].toLowerCase() as (typeof MONTH_NAMES)[number],
+    );
+    if (monthIndex < 0) return null;
+    const year = monthIndex <= now.getMonth()
+      ? now.getFullYear()
+      : now.getFullYear() - 1;
+    const start = new Date(year, monthIndex, 1);
+    const end = new Date(year, monthIndex + 1, 1);
+    end.setMilliseconds(-1);
+    return {
+      start,
+      end,
+      label: `${MONTH_NAMES[monthIndex][0].toUpperCase()}${MONTH_NAMES[monthIndex].slice(1)} ${year}`,
+    };
+  });
+
+  return {
+    cleanedInput: cleanedInput.replace(/\s+/g, " ").trim(),
+    ranges,
+  };
 }
 
 // Common app name mappings (user-friendly -> actual app name patterns)
@@ -432,9 +602,11 @@ const APP_MAPPINGS: Record<string, string[]> = {
 };
 
 export function parseMentions(input: string, options?: ParseMentionsOptions): ParsedMentions {
-  const now = new Date();
+  const now = options?.now ? new Date(options.now) : new Date();
   const timeRanges: TimeRange[] = [];
-  let cleanedInput = input;
+  const explicitTimeRanges = parseExplicitTimeRanges(input, now);
+  let cleanedInput = explicitTimeRanges.cleanedInput;
+  timeRanges.push(...explicitTimeRanges.ranges);
   let contentType: "all" | "ocr" | "audio" | "input" | "accessibility" | "screen" | null = null;
   let appName: string | null = null;
   let usedSelection = false;
@@ -450,6 +622,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
       start: options.selectionRange.start,
       end: options.selectionRange.end,
       label: "selected range",
+      sourceToken: "@selection",
     });
     cleanedInput = cleanedInput.replace(selectionPattern, "").trim();
     usedSelection = true;
@@ -504,8 +677,9 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
   ];
 
   for (const { pattern, getRange } of timePatterns) {
-    if (pattern.test(cleanedInput)) {
-      timeRanges.push(getRange());
+    const match = cleanedInput.match(pattern);
+    if (match) {
+      timeRanges.push({ ...getRange(), sourceToken: match[0] });
       cleanedInput = cleanedInput.replace(pattern, "").trim();
     }
   }
@@ -613,7 +787,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
 export interface MentionSuggestion {
   tag: string;
   description: string;
-  category: "chat" | "time" | "content" | "app" | "speaker" | "tag";
+  category: "chat" | "skill" | "range" | "time" | "content" | "app" | "speaker" | "tag";
   label?: string;
   appName?: string;
   conversationId?: string;
@@ -632,6 +806,12 @@ type ChatMentionItem = {
   title: string;
 };
 
+type SkillMentionItem = {
+  name: string;
+  description: string;
+  path: string;
+};
+
 export function buildChatMentionSuggestions(
   items: ChatMentionItem[],
   currentConversationId: string | null,
@@ -648,6 +828,41 @@ export function buildChatMentionSuggestions(
       conversationId: item.id,
     }));
 }
+
+export function buildSkillMentionSuggestions(
+  items: SkillMentionItem[],
+): MentionSuggestion[] {
+  return items.map((item) => {
+    const pathParts = item.path.split(/[\\/]/).filter(Boolean);
+    const folderName = pathParts.at(-1);
+    const fallbackName = item.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const skillKey = folderName || fallbackName || "skill";
+    return {
+      tag: `$${skillKey}`,
+      label: item.name.trim() || skillKey,
+      description: item.description.trim() || "installed skill",
+      category: "skill" as const,
+    };
+  });
+}
+
+export const TIME_RANGE_MENTION_SUGGESTIONS: MentionSuggestion[] = [
+  { tag: "~7days", description: "rolling past 7 days", category: "range" },
+  { tag: "~lastweek", description: "previous Monday–Sunday", category: "range" },
+  { tag: "~lastmonth", description: "previous calendar month", category: "range" },
+  { tag: "~april", description: "most recent April", category: "range" },
+  { tag: "~april2025", description: "April 2025", category: "range" },
+  { tag: "~(03/04/2025)", description: "one day (DD/MM/YYYY)", category: "range" },
+  {
+    tag: "~(03/04/2025 - 06/07/2025)",
+    description: "inclusive range (DD/MM/YYYY)",
+    category: "range",
+  },
+];
 
 export function normalizeAppTag(name: string) {
   const base = name.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -703,11 +918,28 @@ function formatTagAutocompleteDescription(item: AppAutocompleteItem) {
   return pluralize(item.count, "use");
 }
 
+export type MentionTrigger = "@" | "#" | "$" | "~";
+
+export function findComposerMention(
+  textBeforeCursor: string,
+): { trigger: MentionTrigger; filter: string } | null {
+  const match =
+    textBeforeCursor.match(/([@#$])([\w:.-]*)$/) ??
+    textBeforeCursor.match(/(~)([^~@#$]*)$/);
+  if (!match) return null;
+  return {
+    trigger: match[1] as MentionTrigger,
+    filter: match[2],
+  };
+}
+
 export interface FilterMentionSuggestionsOptions {
-  mentionTrigger: "@" | "#";
+  mentionTrigger: MentionTrigger;
   mentionFilter: string;
   atMentionSuggestions: MentionSuggestion[];
   recentChatSuggestions?: MentionSuggestion[];
+  skillMentionSuggestions?: MentionSuggestion[];
+  timeRangeMentionSuggestions?: MentionSuggestion[];
   tagMentionSuggestions: MentionSuggestion[];
   allTagMentionSuggestions: MentionSuggestion[];
   tagSearchSuggestions: MentionSuggestion[];
@@ -720,6 +952,8 @@ export function filterMentionSuggestions({
   mentionFilter,
   atMentionSuggestions,
   recentChatSuggestions = [],
+  skillMentionSuggestions = [],
+  timeRangeMentionSuggestions = [],
   tagMentionSuggestions,
   allTagMentionSuggestions,
   tagSearchSuggestions,
@@ -736,6 +970,14 @@ export function filterMentionSuggestions({
     if (!filter) return tagMentionSuggestions;
     if (tagSearchSuggestions.length > 0) return tagSearchSuggestions;
     return allTagMentionSuggestions.filter(matchesFilter);
+  }
+
+  if (mentionTrigger === "$") {
+    return skillMentionSuggestions.filter(matchesFilter);
+  }
+
+  if (mentionTrigger === "~") {
+    return timeRangeMentionSuggestions.filter(matchesFilter);
   }
 
   const atMatches = filter

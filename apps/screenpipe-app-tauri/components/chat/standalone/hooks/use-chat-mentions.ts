@@ -6,14 +6,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type * as React from "react";
 import {
   buildChatMentionSuggestions,
+  buildSkillMentionSuggestions,
   buildTagMentionSuggestions,
+  findComposerMention,
   filterMentionSuggestions,
   parseMentions,
+  TIME_RANGE_MENTION_SUGGESTIONS,
   type MentionSuggestion as ChatMentionSuggestion,
+  type MentionTrigger,
 } from "@/lib/chat-utils";
 import { localFetch } from "@/lib/api";
 import { listConversations } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { commands } from "@/lib/utils/tauri";
 
 const TAG_AUTOCOMPLETE_LIMIT = 50;
 const SPEAKER_SUGGESTION_LIMIT = 50;
@@ -22,7 +27,7 @@ const RECENT_CHAT_SUGGESTION_LIMIT = 8;
 export type MentionSuggestion = ChatMentionSuggestion;
 
 type ActiveFilters = {
-  timeRanges: { label: string }[];
+  timeRanges: { label: string; sourceToken?: string }[];
   contentType: string | null;
   appName: string | null;
   speakerName: string | null;
@@ -63,7 +68,7 @@ export function useChatMentions({
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
-  const [mentionTrigger, setMentionTrigger] = useState<"@" | "#">("@");
+  const [mentionTrigger, setMentionTrigger] = useState<MentionTrigger>("@");
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [speakerSuggestions, setSpeakerSuggestions] = useState<MentionSuggestion[]>([]);
   const [isLoadingSpeakers, setIsLoadingSpeakers] = useState(false);
@@ -77,6 +82,7 @@ export function useChatMentions({
   const [selectedFilterResultIndex, setSelectedFilterResultIndex] = useState(0);
   const [recentSpeakers, setRecentSpeakers] = useState<MentionSuggestion[]>([]);
   const [recentChatSuggestions, setRecentChatSuggestions] = useState<MentionSuggestion[]>([]);
+  const [skillMentionSuggestions, setSkillMentionSuggestions] = useState<MentionSuggestion[]>([]);
 
   const activeFilters: ActiveFilters = useMemo(() => {
     if (!input.trim()) {
@@ -181,18 +187,13 @@ export function useChatMentions({
   const removeFilter = useCallback((filterType: FilterType, label?: string) => {
     let newInput = input;
     if (filterType === "time") {
-      if (label) {
-        const timePatterns: Record<string, RegExp> = {
-          today: /@today\b/gi,
-          yesterday: /@yesterday\b/gi,
-          "last week": /@last[- ]?week\b/gi,
-          "last hour": /@last[- ]?hour\b/gi,
-          "this morning": /@this[- ]?morning\b/gi,
-        };
-        const pattern = timePatterns[label];
-        if (pattern) newInput = newInput.replace(pattern, "").trim();
-      } else {
-        newInput = newInput.replace(/@(today|yesterday|last[- ]?week|last[- ]?hour|this[- ]?morning)\b/gi, "").trim();
+      const rangesToRemove = label
+        ? activeFilters.timeRanges.filter((range) => range.label === label)
+        : activeFilters.timeRanges;
+      for (const range of rangesToRemove) {
+        if (range.sourceToken) {
+          newInput = newInput.replace(range.sourceToken, " ").trim();
+        }
       }
     } else if (filterType === "content") {
       newInput = newInput.replace(/@(audio|screen|input)\b/gi, "").trim();
@@ -484,6 +485,8 @@ export function useChatMentions({
       mentionFilter,
       atMentionSuggestions,
       recentChatSuggestions,
+      skillMentionSuggestions,
+      timeRangeMentionSuggestions: TIME_RANGE_MENTION_SUGGESTIONS,
       tagMentionSuggestions,
       allTagMentionSuggestions,
       tagSearchSuggestions,
@@ -495,12 +498,34 @@ export function useChatMentions({
     mentionTrigger,
     atMentionSuggestions,
     recentChatSuggestions,
+    skillMentionSuggestions,
     speakerSuggestions,
     recentSpeakers,
     tagMentionSuggestions,
     allTagMentionSuggestions,
     tagSearchSuggestions,
   ]);
+
+  useEffect(() => {
+    if (!showMentionDropdown || mentionTrigger !== "$") return;
+
+    let cancelled = false;
+    void commands
+      .listImportedSkills()
+      .then((result) => {
+        if (cancelled) return;
+        setSkillMentionSuggestions(
+          result.status === "ok" ? buildSkillMentionSuggestions(result.data) : [],
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setSkillMentionSuggestions([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mentionTrigger, showMentionDropdown]);
 
   useEffect(() => {
     if (!showMentionDropdown || mentionTrigger !== "@") return;
@@ -568,12 +593,12 @@ export function useChatMentions({
 
     const cursorPos = event.target.selectionStart || 0;
     const textBeforeCursor = value.slice(0, cursorPos);
-    const mentionMatch = textBeforeCursor.match(/([@#])([\w:.-]*)$/);
+    const mentionMatch = findComposerMention(textBeforeCursor);
 
     if (mentionMatch) {
       setShowMentionDropdown(true);
-      setMentionTrigger(mentionMatch[1] as "@" | "#");
-      setMentionFilter(mentionMatch[2]);
+      setMentionTrigger(mentionMatch.trigger);
+      setMentionFilter(mentionMatch.filter);
       setSelectedMentionIndex(0);
     } else {
       setShowMentionDropdown(false);
@@ -601,6 +626,8 @@ export function useChatMentions({
     const mentionIndex = Math.max(
       textBeforeCursor.lastIndexOf("@"),
       textBeforeCursor.lastIndexOf("#"),
+      textBeforeCursor.lastIndexOf("$"),
+      textBeforeCursor.lastIndexOf("~"),
     );
     if (mentionIndex !== -1) {
       const newValue = `${textBeforeCursor.slice(0, mentionIndex)}${tag} ${textAfterCursor}`;

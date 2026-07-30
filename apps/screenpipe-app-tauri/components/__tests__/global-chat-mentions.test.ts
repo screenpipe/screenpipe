@@ -7,9 +7,12 @@ import "../../vitest.setup";
 import {
   buildAppMentionSuggestions,
   buildChatMentionSuggestions,
+  buildSkillMentionSuggestions,
   buildTagMentionSuggestions,
+  findComposerMention,
   filterMentionSuggestions,
   parseMentions,
+  TIME_RANGE_MENTION_SUGGESTIONS,
 } from "../../lib/chat-utils";
 
 describe("global chat mentions", () => {
@@ -187,6 +190,139 @@ describe("global chat mentions", () => {
       category: "chat",
       conversationId: "planning",
     });
+  });
+
+  it("builds $ suggestions from installed skill folder keys", () => {
+    const skills = buildSkillMentionSuggestions([
+      {
+        name: "PDF tools",
+        description: "Read and edit PDFs",
+        path: "C:\\screenpipe\\skills\\pdf-tools",
+      },
+      {
+        name: "Weekly Report",
+        description: "",
+        path: "/Users/me/.screenpipe/skills/weekly-report",
+      },
+    ]);
+
+    expect(skills).toEqual([
+      {
+        tag: "$pdf-tools",
+        label: "PDF tools",
+        description: "Read and edit PDFs",
+        category: "skill",
+      },
+      {
+        tag: "$weekly-report",
+        label: "Weekly Report",
+        description: "installed skill",
+        category: "skill",
+      },
+    ]);
+    expect(
+      filterMentionSuggestions({
+        mentionTrigger: "$",
+        mentionFilter: "pdf",
+        atMentionSuggestions: [],
+        skillMentionSuggestions: skills,
+        tagMentionSuggestions: [],
+        allTagMentionSuggestions: [],
+        tagSearchSuggestions: [],
+        speakerSuggestions: [],
+      }),
+    ).toEqual([skills[0]]);
+  });
+
+  it.each([
+    {
+      token: "~7days",
+      label: "past 7 days",
+      start: [2026, 6, 23, 12],
+      end: [2026, 6, 30, 12],
+    },
+    {
+      token: "~lastweek",
+      label: "previous week",
+      start: [2026, 6, 20, 0],
+      end: [2026, 6, 26, 23],
+    },
+    {
+      token: "~lastmonth",
+      label: "previous month",
+      start: [2026, 5, 1, 0],
+      end: [2026, 5, 30, 23],
+    },
+    {
+      token: "~april",
+      label: "April 2026",
+      start: [2026, 3, 1, 0],
+      end: [2026, 3, 30, 23],
+    },
+    {
+      token: "~april2025",
+      label: "April 2025",
+      start: [2025, 3, 1, 0],
+      end: [2025, 3, 30, 23],
+    },
+    {
+      token: "~(03/04/2025)",
+      label: "3 Apr 2025",
+      start: [2025, 3, 3, 0],
+      end: [2025, 3, 3, 23],
+    },
+    {
+      token: "~(03/04/2025 - 06/07/2025)",
+      label: "3 Apr 2025 – 6 Jul 2025",
+      start: [2025, 3, 3, 0],
+      end: [2025, 6, 6, 23],
+    },
+  ])("parses $token as an explicit time range", ({ token, label, start, end }) => {
+    const parsed = parseMentions(`${token} summarize activity`, {
+      now: new Date(2026, 6, 30, 12, 0, 0),
+    });
+    const range = parsed.timeRanges[0];
+
+    expect(range.label).toBe(label);
+    expect([
+      range.start.getFullYear(),
+      range.start.getMonth(),
+      range.start.getDate(),
+      range.start.getHours(),
+    ]).toEqual(start);
+    expect([
+      range.end.getFullYear(),
+      range.end.getMonth(),
+      range.end.getDate(),
+      range.end.getHours(),
+    ]).toEqual(end);
+    expect(range.sourceToken).toBe(token);
+    expect(parsed.cleanedInput).toBe("summarize activity");
+  });
+
+  it("filters ~ suggestions by range syntax", () => {
+    expect(
+      filterMentionSuggestions({
+        mentionTrigger: "~",
+        mentionFilter: "last",
+        atMentionSuggestions: [],
+        timeRangeMentionSuggestions: TIME_RANGE_MENTION_SUGGESTIONS,
+        tagMentionSuggestions: [],
+        allTagMentionSuggestions: [],
+        tagSearchSuggestions: [],
+        speakerSuggestions: [],
+      }).map((suggestion) => suggestion.tag),
+    ).toEqual(["~lastweek", "~lastmonth"]);
+  });
+
+  it.each([
+    ["@", "@", ""],
+    ["find $pdf", "$", "pdf"],
+    ["review ~lastmonth", "~", "lastmonth"],
+    ["review ~(03/04/2025 - 06/07/2025)", "~", "(03/04/2025 - 06/07/2025)"],
+    ["search #project:atlas", "#", "project:atlas"],
+  ])("detects the %s composer command", (input, trigger, filter) => {
+    expect(findComposerMention(input)).toEqual({ trigger, filter });
   });
 
   it("shows speaker suggestions from the @ composer trigger", () => {

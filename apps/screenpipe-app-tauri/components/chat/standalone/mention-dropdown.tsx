@@ -25,7 +25,7 @@ export function MentionDropdown({
         transition={{ duration: 0.1 }}
         className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border shadow-lg overflow-hidden z-50 max-h-[240px] overflow-y-auto"
       >
-        {["chat", "time", "content", "app", "tag", "speaker"].map((category) => {
+        {["chat", "skill", "range", "time", "content", "app", "tag", "speaker"].map((category) => {
           const items = mentions.suggestions.filter(
             (suggestion) => suggestion.category === category,
           );
@@ -35,6 +35,10 @@ export function MentionDropdown({
               <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
                 {category === "chat"
                   ? "recent chats"
+                  : category === "skill"
+                    ? "installed skills"
+                    : category === "range"
+                      ? "time ranges"
                   : category === "time"
                   ? "time"
                   : category === "content"

@@ -1221,7 +1221,7 @@ export function StandaloneChat({
     isMac,
     isComposing,
     mentions: {
-      isOpen: showMentionDropdown,
+      isOpen: showMentionDropdown && filteredMentions.length > 0,
       selectedIndex: selectedMentionIndex,
       suggestions: filteredMentions,
     },
