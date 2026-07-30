@@ -172,6 +172,7 @@ export function LiveViewLayoutEditor({
       binding: null,
       value: null,
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
     };
     changeSlots([...slots, nextSlot]);
     setSelectedSlotId(id);
@@ -263,9 +264,7 @@ export function LiveViewLayoutEditor({
 
       <div
         className={`mb-4 grid border border-border ${
-          hasSelectableTimeRange
-            ? "md:grid-cols-[minmax(0,1fr)_12rem]"
-            : ""
+          hasSelectableTimeRange ? "md:grid-cols-[minmax(0,1fr)_12rem]" : ""
         }`}
       >
         <label

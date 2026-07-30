@@ -33,6 +33,7 @@ const view: BrainViewDefinition = {
       intent: "Show focused work time",
       binding: { pipeName: "daily-summary" },
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
       value: {
         payload: { value: 4.5, unit: "hours", delta: "+45m" },
         evidence: [
@@ -59,6 +60,7 @@ const view: BrainViewDefinition = {
       intent: "Show today's meetings",
       binding: { pipeName: "daily-summary" },
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
       value: {
         payload: { items: [{ title: "Canvas review", status: "done" }] },
         evidence: [],
@@ -151,6 +153,37 @@ describe("LiveViewCanvas", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onPersist).not.toHaveBeenCalled();
+  });
+
+  it("ignores React Flow's delayed move-end callback after unmount", async () => {
+    const onChange = vi.fn();
+    const result = render(
+      <React.StrictMode>
+        <LiveViewCanvas
+          document={createCanvasDocument(view)}
+          slots={view.slots}
+          timeRange="today"
+          refreshingSlotIds={new Set()}
+          aiEditingSlotId={null}
+          onChange={onChange}
+          onFeedback={vi.fn().mockResolvedValue(true)}
+          onRegenerate={vi.fn()}
+          onAiEdit={vi.fn().mockResolvedValue(true)}
+        />
+      </React.StrictMode>,
+    );
+
+    fireEvent.wheel(screen.getByTestId("rf__wrapper"), {
+      deltaX: 24,
+      deltaY: 24,
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const callsBeforeUnmount = onChange.mock.calls.length;
+
+    result.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(onChange).toHaveBeenCalledTimes(callsBeforeUnmount);
   });
 
   it("resizes a Block from its current size on the first drag", async () => {

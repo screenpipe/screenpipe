@@ -249,7 +249,11 @@ export function ChatMessageList({
             return [
               <motion.div
                 key={message.id}
-                initial={{ opacity: 0, y: 10 }}
+                // Keep restored/disk-hydrated messages paint-safe. Under heavy
+                // WebKit pressure an entry animation may never advance its
+                // first frame; starting at opacity 0 then leaves a complete
+                // transcript present in the DOM but visually blank.
+                initial={{ y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}

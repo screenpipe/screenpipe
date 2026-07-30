@@ -1,8 +1,9 @@
 [workspace]
+members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.151"
+version = "2.5.153"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -238,6 +239,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
     "Win32_System_Com",
+    "Win32_System_ErrorReporting",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_Security_Cryptography",
     # GetLastInputInfo/GetTickCount for the recording-health user-presence tier
@@ -357,10 +360,12 @@ incremental = true
 opt-level = 1
 debug = false
 
-# Faster dev builds
+# Default non-release builds retain complete Screenpipe symbols while omitting
+# debuginfo from third-party crates.
 [profile.dev]
 opt-level = 0
-debug = false
+debug = true
+split-debuginfo = "packed"
 # Per-worktree incremental state cannot help a cold target and prevents the
 # shared compiler cache from reusing screenpipe's path crates across worktrees.
 incremental = false
@@ -376,9 +381,8 @@ debug = false
 opt-level = 0
 debug = false
 
-# Space-efficient debugging: the app and Screenpipe retain complete symbols,
-# while third-party crates carry no debuginfo. Invoke through
-# `bun run tauri:dev:debug` (or `tauri dev -- --profile dev-debug`).
+# Kept for explicit invocations; default non-release builds use these settings
+# through the `dev` profile above.
 [profile.dev-debug]
 inherits = "dev"
 debug = true

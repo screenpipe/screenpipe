@@ -205,6 +205,16 @@
       "notes": "Composer draft isolation across conversations."
     },
     {
+      "spec": "chat-empty-space.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A real Tauri chat session keeps a short answer near the composer without exposing a false new-content state or a large empty viewport gap."
+    },
+    {
       "spec": "chat-ask-user-tool-card.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],
@@ -403,6 +413,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Opens Chat and focuses the composer for typing."
+    },
+    {
+      "spec": "chat-cross-window-transcript-sync.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "window-lifecycle", "real-ui-e2e"],
+      "features": ["chat", "chat-streaming", "window-lifecycle"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider."
     },
     {
       "spec": "chat-source-file-preview.spec.ts",
@@ -829,6 +849,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Creates the first-open starter dashboard, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
+    },
+    {
+      "spec": "live-view-item-actions.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api", "pipes"],
+      "features": ["brain-overview", "live-view-item-actions", "artifacts", "pipes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Installs the generic Commitments and Accounting Live View kits, shows Done, Later, and Not right without hover, persists snooze, correction, resolve, dismiss, and reopen decisions through the local API, verifies receipts survive reload, and captures real product screenshots."
     },
     {
       "spec": "html-artifact-render.spec.ts",

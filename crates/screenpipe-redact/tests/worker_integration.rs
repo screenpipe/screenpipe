@@ -40,6 +40,23 @@ fn test_worker_config() -> WorkerConfig {
     }
 }
 
+async fn wait_until<F, Fut>(description: &str, mut condition: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if condition().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {description}"));
+}
+
 async fn setup_db() -> (sqlx::SqlitePool, TempDir) {
     // Workers are aborted after each assertion window. If an abort cancels a
     // query, SQLx may discard that connection. A one-connection in-memory DB
@@ -922,7 +939,16 @@ async fn frame_fulltext_clean_frame_marks_both_done() {
         ..test_worker_config()
     };
     let handle = Worker::new(pool.clone(), redactor.clone(), cfg).spawn();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    wait_until("clean frame watermarks", || async {
+        let row = sqlx::query(
+            "SELECT full_text_redacted_at, accessibility_redacted_at FROM frames WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        row.get::<Option<i64>, _>(0).is_some() && row.get::<Option<i64>, _>(1).is_some()
+    })
+    .await;
     handle.abort();
 
     let row = sqlx::query(
@@ -1028,7 +1054,18 @@ async fn frame_fulltext_each_frame_detected_once() {
         ..test_worker_config()
     };
     let handle = Worker::new(pool.clone(), redactor.clone(), cfg).spawn();
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    wait_until("all frame watermarks", || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM frames \
+             WHERE full_text_redacted_at IS NOT NULL \
+               AND accessibility_redacted_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == 3
+    })
+    .await;
     handle.abort();
 
     assert_eq!(
@@ -1320,7 +1357,26 @@ async fn default_columns_leave_optin_columns_untouched() {
         ..test_worker_config()
     };
     let handle = Worker::new(pool.clone(), redactor, cfg).spawn();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_until("default-column redaction", || async {
+        let frame_done = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM frames \
+             WHERE full_text_redacted_at IS NOT NULL \
+               AND window_name_redacted_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == 1;
+        let event_done = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ui_events WHERE redacted_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == 1;
+        frame_done && event_done
+    })
+    .await;
     handle.abort();
 
     let frame = sqlx::query(

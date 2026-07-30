@@ -133,6 +133,34 @@ describe("enterprise onboarding authentication", () => {
 
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /use enterprise key/i })).not.toBeInTheDocument();
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_funnel_step", {
+      funnel_version: "onboarding_ui_v1",
+      step: "started",
+    });
+  });
+
+  it("does not start the standard funnel for managed onboarding", () => {
+    render(<OnboardingPage />);
+    expect(
+      mocks.capture.mock.calls.some(
+        ([event, properties]) =>
+          event === "onboarding_funnel_step" && properties.step === "started",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not start a new funnel when standard onboarding resumes", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    onboardingData.currentStep = "first-dashboard";
+    render(<OnboardingPage />);
+    await screen.findByText("first dashboard");
+
+    expect(
+      mocks.capture.mock.calls.some(
+        ([event, properties]) =>
+          event === "onboarding_funnel_step" && properties.step === "started",
+      ),
+    ).toBe(false);
   });
 
   it("gives the use-case step more room with a scroll fallback", async () => {

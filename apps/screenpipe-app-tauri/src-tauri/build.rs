@@ -446,6 +446,19 @@ fn main() {
         }
     }
 
+    // Windows: build the WER runtime exception helper DLL (fail-fast crash
+    // dump recovery, see src/windows_crash_dump.rs) and stage it under
+    // src-tauri/wer/ so the `wer\*.dll` resource glob in
+    // tauri.windows.conf.json always resolves — tauri-build hard-fails on a
+    // glob that matches nothing, which broke every build without a staged
+    // DLL. Built here rather than in pre_build.js or a workflow step so it
+    // runs in the exact toolchain environment of the app build itself
+    // (cargo-under-bun in pre_build.js resolved Git's GNU link.exe instead
+    // of MSVC's and failed to link, PR #5568).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        build_wer_dump_helper();
+    }
+
     // Windows: raise the main-thread stack reserve from the 1 MiB PE default to
     // 8 MiB, matching the Linux/macOS main-thread defaults. Debug builds place
     // large unoptimized futures/frames on the main thread's stack (the CLI's
@@ -462,6 +475,50 @@ fn main() {
     }
 
     tauri_build::build()
+}
+
+/// Build the `screenpipe-wer-dump-helper` cdylib with a nested cargo
+/// invocation and stage the DLL into `src-tauri/wer/` for bundling.
+///
+/// A separate `--target-dir` under OUT_DIR avoids deadlocking on the outer
+/// build's target-dir lock; `CARGO` and `TARGET` come from the outer build so
+/// toolchain and architecture (x64/arm64) always match the app.
+fn build_wer_dump_helper() {
+    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    println!("cargo:rerun-if-changed=wer-dump-helper/src/lib.rs");
+    println!("cargo:rerun-if-changed=wer-dump-helper/Cargo.toml");
+
+    let target = std::env::var("TARGET").unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let helper_target_dir =
+        std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wer-dump-helper-target");
+
+    let status = std::process::Command::new(&cargo)
+        .current_dir(manifest_dir.join("wer-dump-helper"))
+        .args([
+            "build",
+            "--release",
+            "--package",
+            "screenpipe-wer-dump-helper",
+        ])
+        .args(["--target", &target])
+        .arg("--target-dir")
+        .arg(&helper_target_dir)
+        .status();
+    match status {
+        Ok(status) if status.success() => {}
+        other => panic!("failed to build screenpipe-wer-dump-helper: {other:?}"),
+    }
+
+    let dll_name = "screenpipe_wer_dump_helper.dll";
+    let built = helper_target_dir
+        .join(&target)
+        .join("release")
+        .join(dll_name);
+    let stage_dir = manifest_dir.join("wer");
+    std::fs::create_dir_all(&stage_dir).expect("create src-tauri/wer staging dir");
+    std::fs::copy(&built, stage_dir.join(dll_name))
+        .unwrap_or_else(|error| panic!("stage {dll_name} from {}: {error}", built.display()));
 }
 
 /// Compile shortcut_reminder.swift into a static library.

@@ -971,6 +971,12 @@ impl SCServer {
                     crate::routes::structured_outputs::set_structured_output_feedback_handler,
                 ),
             )
+            .route(
+                "/outputs/targets/:target_id/items/:item_id/actions",
+                axum::routing::post(
+                    crate::routes::structured_outputs::set_structured_output_item_action_handler,
+                ),
+            )
             // Live View Templates are a versioned cross-surface protocol.
             // Local app/API clients can edit them; pipe tokens can only fill
             // their assigned structured output targets above.

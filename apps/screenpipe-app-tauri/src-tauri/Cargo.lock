@@ -11059,7 +11059,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.151"
+version = "2.5.153"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11660,6 +11660,13 @@ dependencies = [
  "tracing",
  "walkdir",
  "zeroize",
+]
+
+[[package]]
+name = "screenpipe-wer-dump-helper"
+version = "0.1.0"
+dependencies = [
+ "windows 0.58.0",
 ]
 
 [[package]]

@@ -17,8 +17,9 @@ use std::sync::Arc;
 use super::artifacts::{register_artifact_handler, RegisterArtifactRequest};
 use crate::server::AppState;
 use crate::structured_outputs::{
-    commit_output_submission, prepare_output_submission, set_output_feedback, targets_for_pipe,
-    AssignedOutputTarget, OutputEvidenceRef, OutputFeedbackRating, OutputFeedbackSummary,
+    commit_output_submission, prepare_output_submission, set_output_feedback,
+    set_output_item_action, targets_for_pipe, AssignedOutputTarget, OutputEvidenceRef,
+    OutputFeedbackRating, OutputFeedbackSummary, OutputItemActionKind, OutputItemActionSummary,
     StructuredOutputError, StructuredOutputErrorKind,
 };
 
@@ -83,6 +84,24 @@ pub(crate) struct SetStructuredOutputFeedbackRequest {
 pub(crate) struct SetStructuredOutputFeedbackResponse {
     pub target_id: String,
     pub feedback: OutputFeedbackSummary,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SetStructuredOutputItemActionRequest {
+    pub artifact_output_id: i64,
+    pub artifact_version: i64,
+    pub action: OutputItemActionKind,
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
+    #[serde(default)]
+    pub correction: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SetStructuredOutputItemActionResponse {
+    pub target_id: String,
+    pub item_id: String,
+    pub item_actions: OutputItemActionSummary,
 }
 
 pub(crate) async fn assigned_targets_handler(
@@ -237,6 +256,36 @@ pub(crate) async fn set_structured_output_feedback_handler(
     Ok(Json(SetStructuredOutputFeedbackResponse {
         target_id,
         feedback,
+    }))
+}
+
+pub(crate) async fn set_structured_output_item_action_handler(
+    State(state): State<Arc<AppState>>,
+    permissions: Option<Extension<Arc<PipePermissions>>>,
+    Path((target_id, item_id)): Path<(String, String)>,
+    Json(payload): Json<SetStructuredOutputItemActionRequest>,
+) -> Result<Json<SetStructuredOutputItemActionResponse>, ApiError> {
+    if permissions.is_some() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "pipes cannot act on their own structured output items" })),
+        ));
+    }
+    let item_actions = set_output_item_action(
+        &state.screenpipe_dir,
+        &target_id,
+        &item_id,
+        payload.artifact_output_id,
+        payload.artifact_version,
+        payload.action,
+        payload.snoozed_until,
+        payload.correction,
+    )
+    .map_err(api_error)?;
+    Ok(Json(SetStructuredOutputItemActionResponse {
+        target_id,
+        item_id,
+        item_actions,
     }))
 }
 

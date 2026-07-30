@@ -1003,6 +1003,46 @@ async fn wait_for_done_or_terminated(
 mod tests {
     use super::*;
 
+    /// Cross-platform fake-Pi stdin sink: drains stdin, emits nothing, exits
+    /// on EOF. `cat` on unix; `findstr "^"` on Windows (block-buffers stdout,
+    /// which is fine because stdout is null here).
+    fn spawn_stdin_sink() -> std::process::Child {
+        use std::process::{Command as StdCommand, Stdio};
+        #[cfg(unix)]
+        let mut cmd = StdCommand::new("cat");
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = StdCommand::new("findstr");
+            c.arg("^");
+            c
+        };
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn fake pi stdin sink")
+    }
+
+    /// Cross-platform fake-Pi echo: copies stdin lines to stdout unbuffered.
+    /// `cat` on unix; PowerShell `$input | Write-Output` on Windows (findstr
+    /// block-buffers when stdout is a pipe, so it cannot be used here).
+    fn spawn_stdin_echo() -> std::process::Child {
+        use std::process::{Command as StdCommand, Stdio};
+        #[cfg(unix)]
+        let mut cmd = StdCommand::new("cat");
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = StdCommand::new("powershell");
+            c.args(["-NoProfile", "-Command", "$input | Write-Output"]);
+            c
+        };
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn fake pi stdin echo")
+    }
+
     #[tokio::test]
     async fn test_queue_state_done_signal() {
         let state = PiQueueState::new();
@@ -1136,19 +1176,11 @@ mod tests {
     /// atomic, which is why it would catch a regression in the drain loop
     /// itself (e.g. dropping the `is_steer_in_flight()` term).
     ///
-    /// Unix-only because it needs a real writable child stdin; `cat` drains
-    /// whatever the loop writes and exits on EOF.
-    #[cfg(unix)]
+    /// Needs a real writable child stdin; the sink drains whatever the loop
+    /// writes and exits on EOF.
     #[tokio::test]
     async fn test_steer_in_flight_blocks_drain_loop_until_cleared() {
-        use std::process::{Command as StdCommand, Stdio};
-
-        let mut child = StdCommand::new("cat")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cat as a fake pi stdin");
+        let mut child = spawn_stdin_sink();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
 
         let state = PiQueueState::new();
@@ -1211,17 +1243,9 @@ mod tests {
     /// Pi can emit `agent_end` when an assistant turn asks for a tool, before
     /// that tool result exists. The queue must still treat the prompt as
     /// busy, otherwise a follow-up can race the running shell/read/edit tool.
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_active_tool_blocks_drain_loop_after_agent_end() {
-        use std::process::{Command as StdCommand, Stdio};
-
-        let mut child = StdCommand::new("cat")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cat as a fake pi stdin");
+        let mut child = spawn_stdin_sink();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
 
         let state = PiQueueState::new();
@@ -1280,18 +1304,11 @@ mod tests {
     /// Pi extension UI responses must echo the request id exactly. The normal
     /// immediate command path stamps a fresh id, which would orphan Pi's
     /// pending `extension_ui_request` and leave the chat waiting forever.
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_raw_immediate_preserves_extension_ui_response_id() {
         use std::io::{BufRead, BufReader};
-        use std::process::{Command as StdCommand, Stdio};
 
-        let mut child = StdCommand::new("cat")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cat as a fake pi stdin");
+        let mut child = spawn_stdin_echo();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
         let stdout = child.stdout.take().expect("child stdout");
 
@@ -1337,17 +1354,9 @@ mod tests {
     /// behind `agent_active`, then the process is terminated. This is what
     /// `PiManager::stop()` triggers when `pi_start_inner` restarts the same
     /// session.
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_mid_turn_process_termination_fails_queued_followup() {
-        use std::process::{Command as StdCommand, Stdio};
-
-        let mut child = StdCommand::new("cat")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cat as a fake pi stdin");
+        let mut child = spawn_stdin_sink();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
 
         let state = PiQueueState::new();
@@ -1424,17 +1433,9 @@ mod tests {
     /// emits nothing. The prompt must fail quickly, release the optimistic
     /// active guard, and let the caller restart the stuck process instead of
     /// leaving the UI behind the generic five-minute done timeout.
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_prompt_without_stdout_fails_start_watchdog() {
-        use std::process::{Command as StdCommand, Stdio};
-
-        let mut child = StdCommand::new("cat")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cat as a silent fake pi process");
+        let mut child = spawn_stdin_sink();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
 
         let state = PiQueueState::new();
@@ -1475,17 +1476,9 @@ mod tests {
     /// A request-scoped rejection is also a completed start attempt. Surface
     /// its error immediately and release the queue without touching an active
     /// turn that belongs to some other RPC command.
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_rejected_prompt_releases_queue_immediately() {
-        use std::process::{Command as StdCommand, Stdio};
-
-        let mut child = StdCommand::new("cat")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cat as a fake pi process");
+        let mut child = spawn_stdin_sink();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
 
         let state = PiQueueState::new();
@@ -1524,17 +1517,9 @@ mod tests {
     /// A queued follow-up must wait for the response ID assigned to its own
     /// command. An unrelated response from the previous turn cannot disable
     /// the watchdog for the new prompt.
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_previous_turn_output_does_not_satisfy_prompt_start_watchdog() {
-        use std::process::{Command as StdCommand, Stdio};
-
-        let mut child = StdCommand::new("cat")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cat as a silent fake pi process");
+        let mut child = spawn_stdin_sink();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
 
         let state = PiQueueState::new();
@@ -1603,5 +1588,169 @@ mod tests {
             !state.has_active_tools(),
             "process termination must clear active tool guards"
         );
+    }
+
+    /// PROBE (chaos session, documents current behavior): when the start
+    /// watchdog trips and the drain loop breaks, follow-ups still queued in
+    /// the mpsc channel are dropped with a *closed* reply channel — no Err
+    /// string ever reaches the caller. `pi_queue_prompt`'s detached reply
+    /// task only warn!-logs the RecvError, so the typed message vanishes
+    /// without UI feedback.
+    #[tokio::test]
+    async fn probe_watchdog_break_drops_queued_followup_unreplied() {
+        let mut child = spawn_stdin_sink();
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
+
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue_with_prompt_start_timeout(
+            stdin,
+            state.clone(),
+            0,
+            std::time::Duration::from_millis(75),
+        );
+
+        let (_a_id, a_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "first" }),
+                WaitMode::Prompt,
+                "first".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue first prompt");
+        let (_b_id, b_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "queued-behind" }),
+                WaitMode::Prompt,
+                "queued-behind".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up");
+
+        let a = tokio::time::timeout(std::time::Duration::from_secs(2), a_rx)
+            .await
+            .expect("watchdog must fire")
+            .expect("first reply channel stayed open");
+        assert_eq!(a, Err(PROMPT_START_TIMEOUT_ERROR.to_string()));
+
+        // Current behavior: the loop breaks, rx drops, and B's oneshot sender
+        // is dropped without a reply — the receiver observes a closed channel
+        // (RecvError), not an Err payload.
+        let b = tokio::time::timeout(std::time::Duration::from_secs(2), b_rx)
+            .await
+            .expect("queued follow-up must resolve promptly after the break");
+        assert!(
+            b.is_err(),
+            "documents the silent drop: reply channel closes unreplied, got {b:?}"
+        );
+
+        state.signal_terminated();
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// PROBE (chaos session, documents current behavior): `done_notify` is
+    /// `notify_waiters` with no stored permit and
+    /// `wait_for_done_or_terminated` has no already-idle fast path. If a turn
+    /// completes before the drain loop parks (instant provider error, short
+    /// turn on a loaded machine), the wait consumes the full 300s safety cap
+    /// while the next queued prompt sits stalled.
+    #[tokio::test]
+    async fn probe_done_wait_blocks_when_turn_already_finished() {
+        let state = PiQueueState::new();
+        let mut alive_rx = state.alive.subscribe();
+
+        // The turn already ended: agent idle, done fired with no waiter yet.
+        state.mark_agent_active();
+        state.mark_agent_idle();
+        state.signal_done_if_idle();
+
+        // Current behavior: no already-idle fast path, and the pre-park done
+        // signal is lost (notify_waiters stores no permit), so the wait heads
+        // for the 300s safety cap. 1.5s of real time is enough to prove it
+        // did not return promptly.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            wait_for_done_or_terminated(&state, &mut alive_rx, "probe"),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "documents the lost wakeup: the wait ignores an already-finished turn"
+        );
+    }
+
+    /// PROBE (chaos session, documents current behavior): a Pi-side
+    /// "already processing" rejection means a real turn IS running, but the
+    /// Rejected arm unconditionally clears the busy guard, so the next queued
+    /// prompt is written immediately into the busy process instead of staying
+    /// parked — where it then trips its own start watchdog.
+    #[tokio::test]
+    async fn probe_rejection_releases_queue_into_busy_process() {
+        let mut child = spawn_stdin_sink();
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
+
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue_with_prompt_start_timeout(
+            stdin,
+            state.clone(),
+            0,
+            std::time::Duration::from_millis(200),
+        );
+
+        let (_a_id, a_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "rejected-turn" }),
+                WaitMode::Prompt,
+                "rejected-turn".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue first prompt");
+        let (_b_id, mut b_rx) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "text": "should-stay-parked" }),
+                WaitMode::Prompt,
+                "should-stay-parked".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up");
+
+        // Give the drain loop time to write A and arm its watchdog, then
+        // reject A the way Pi does when another turn is streaming.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        state.signal_rpc_response(
+            "req_1",
+            Some("Agent is already processing another prompt".to_string()),
+        );
+
+        let a = tokio::time::timeout(std::time::Duration::from_secs(1), a_rx)
+            .await
+            .expect("rejection resolves the first prompt")
+            .expect("first reply channel stayed open");
+        assert_eq!(
+            a,
+            Err("Agent is already processing another prompt".to_string())
+        );
+
+        // Current behavior: the rejection cleared the busy guard, B was
+        // written into the still-busy process, and B's own watchdog times it
+        // out ~200ms later. A parked B would instead leave this receiver
+        // pending past the 1s window.
+        let b = tokio::time::timeout(std::time::Duration::from_secs(1), &mut b_rx)
+            .await
+            .expect("documents the cascade: B resolves instead of staying parked")
+            .expect("follow-up reply channel stayed open");
+        assert_eq!(b, Err(PROMPT_START_TIMEOUT_ERROR.to_string()));
+
+        state.signal_terminated();
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }

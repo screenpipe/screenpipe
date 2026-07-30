@@ -16,7 +16,8 @@ use screenpipe_engine::live_views::{
     LiveViewSource, LiveViewTemplateBlock, LiveViewTimeRange, SaveLiveViewRequest,
 };
 use screenpipe_engine::structured_outputs::{
-    OutputFeedbackRating, OutputFeedbackSummary, StructuredOutputValue,
+    OutputFeedbackRating, OutputFeedbackSummary, OutputItemActionSummary,
+    OutputItemDisposition, StructuredOutputValue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -351,6 +352,60 @@ pub struct BrainViewFeedbackSummary {
     pub current: Option<BrainViewFeedback>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainViewItemDisposition {
+    Active,
+    Resolved,
+    Snoozed,
+    Dismissed,
+}
+
+impl From<OutputItemDisposition> for BrainViewItemDisposition {
+    fn from(disposition: OutputItemDisposition) -> Self {
+        match disposition {
+            OutputItemDisposition::Active => Self::Active,
+            OutputItemDisposition::Resolved => Self::Resolved,
+            OutputItemDisposition::Snoozed => Self::Snoozed,
+            OutputItemDisposition::Dismissed => Self::Dismissed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewItemState {
+    pub item_id: String,
+    pub disposition: BrainViewItemDisposition,
+    pub snoozed_until: Option<String>,
+    pub correction: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewItemActionSummary {
+    pub items: Vec<BrainViewItemState>,
+}
+
+impl From<OutputItemActionSummary> for BrainViewItemActionSummary {
+    fn from(summary: OutputItemActionSummary) -> Self {
+        Self {
+            items: summary
+                .items
+                .into_iter()
+                .map(|state| BrainViewItemState {
+                    item_id: state.item_id,
+                    disposition: state.disposition.into(),
+                    snoozed_until: state.snoozed_until,
+                    correction: state.correction,
+                    updated_at: state.updated_at,
+                })
+                .collect(),
+        }
+    }
+}
+
 impl From<OutputFeedbackSummary> for BrainViewFeedbackSummary {
     fn from(summary: OutputFeedbackSummary) -> Self {
         Self {
@@ -379,6 +434,7 @@ pub struct BrainViewSlot {
     pub binding: Option<BrainViewBinding>,
     pub value: Option<BrainViewValue>,
     pub feedback: BrainViewFeedbackSummary,
+    pub item_actions: BrainViewItemActionSummary,
 }
 
 impl From<LiveViewBlock> for BrainViewSlot {
@@ -393,6 +449,7 @@ impl From<LiveViewBlock> for BrainViewSlot {
             binding: block.source.map(Into::into),
             value: block.value.map(Into::into),
             feedback: block.feedback.into(),
+            item_actions: block.item_actions.into(),
         }
     }
 }

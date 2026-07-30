@@ -57,6 +57,8 @@ export function createPiMessageQueueTransport(
     if (inputRef.current) inputRef.current.style.height = "auto";
     if (hadPastedImages) setPastedImages([]);
 
+    // Same recovery contract as normal sends. Rust strips the wrapper for a
+    // warm Pi subprocess and retains it after a restart.
     const queuedPrompt = withConversationHistory(userMessage, messages);
 
     {

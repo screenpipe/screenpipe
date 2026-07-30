@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, Settings } from "lucide-react";
+import { ChevronDown, Loader2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
@@ -112,7 +112,7 @@ export function ChatMainPane({
             CHAT_RAIL_CLASS,
             "px-5 sm:px-6 py-4 space-y-4",
             messages.length > 0 && "min-h-full flex flex-col justify-end",
-            messages.length === 0 && !isLoading && !isStreaming && !isPreparingPrefill && !activePipeExecution
+            messages.length === 0 && !isPreparingPrefill && !activePipeExecution
               && "min-h-full flex flex-col items-center justify-center"
           )}>
             {activePipeExecution && (
@@ -121,6 +121,27 @@ export function ChatMainPane({
                 executionId={activePipeExecution.executionId}
               />
             )}
+            {messages.length === 0 &&
+              !isPreparingPrefill &&
+              !activePipeExecution &&
+              (isLoading || isStreaming) && (
+                <div
+                  data-testid="chat-empty-active-turn"
+                  role="status"
+                  aria-live="polite"
+                  className="flex max-w-sm flex-col items-center gap-3 py-12 text-center"
+                >
+                  <div className="rounded-full border border-border/60 bg-muted/50 p-3">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="font-medium">Working on your message</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Your message is saved. Starting the AI can take a moment.
+                    </p>
+                  </div>
+                </div>
+              )}
             {messages.length === 0 &&
               !isPreparingPrefill &&
               !activePipeExecution &&

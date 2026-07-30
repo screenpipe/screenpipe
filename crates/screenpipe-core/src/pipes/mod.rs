@@ -85,6 +85,14 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "meeting-summary",
         include_str!("../../assets/pipes/meeting-summary/pipe.md"),
     ),
+    (
+        "commitments",
+        include_str!("../../assets/pipes/commitments/pipe.md"),
+    ),
+    (
+        "accounting-follow-through",
+        include_str!("../../assets/pipes/accounting-follow-through/pipe.md"),
+    ),
 ];
 
 /// Explicitly install one trusted Pipe bundled with the app.

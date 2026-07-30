@@ -43,6 +43,10 @@ import {
   type ConversationMeta,
 } from "@/lib/chat-storage";
 import type { ContentBlock, Message } from "@/lib/chat/types";
+import {
+  shouldAdoptPersistedTranscript,
+  toRuntimeMessages,
+} from "@/lib/chat/cross-window-transcript-sync";
 
 // --- Hook options ---
 
@@ -99,6 +103,11 @@ interface SaveConversationOptions {
    *  otherwise a lagging `conversationId` writes a second id and the sidebar
    *  upserts a duplicate row (#4719, summary/todo card twin). */
   idOverride?: string;
+  /** The turn state to broadcast to sibling WebViews with this disk snapshot. */
+  turnState?: {
+    isLoading: boolean;
+    isStreaming: boolean;
+  };
 }
 
 function newestUserMessageTimestamp(messages: Message[]): number | undefined {
@@ -149,6 +158,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       ? (opts.selectedPresetRef.current ?? null)
       : opts.selectedPreset;
   const componentUnmountedRef = useRef(false);
+  const currentMessagesRef = useRef(messages);
+  const latestSavedEventAtRef = useRef(new Map<string, number>());
+  currentMessagesRef.current = messages;
 
   const [showHistory, setShowHistoryRaw] = useState(() => {
     try { return localStorage.getItem("screenpipe:chat-history-open") === "true"; } catch { return false; }
@@ -407,18 +419,64 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       );
       unlistenFns.push(unlistenVisibility);
 
-      const unlistenSaved = await listen<{ id: string; title?: string; titleSource?: "fallback" | "ai" | "user" }>(
+      const unlistenSaved = await listen<{
+        id: string;
+        title?: string;
+        titleSource?: "fallback" | "ai" | "user";
+        updatedAt?: number;
+        turnState?: { isLoading: boolean; isStreaming: boolean };
+      }>(
         "chat-conversation-saved",
         async (event) => {
           if (cancelled) return;
-          const { id, title, titleSource } = event.payload ?? {};
+          const { id, title, titleSource, updatedAt, turnState } = event.payload ?? {};
           if (!id) return;
 
-          // The current conversation's transcript may be newer in local state
-          // than on disk, but title metadata should still converge to the
-          // persisted value across windows.
+          // Each WebView owns separate React/Zustand state. A sibling can save
+          // the user turn, partial response, or completed answer while this
+          // panel still renders a blank canvas. Hydrate only when disk is
+          // strictly more complete so a stale save never rolls back a live
+          // foreground stream.
           if (id === conversationId || id === piSessionIdRef.current) {
+            if (typeof updatedAt === "number") {
+              latestSavedEventAtRef.current.set(
+                id,
+                Math.max(latestSavedEventAtRef.current.get(id) ?? 0, updatedAt),
+              );
+            }
             await syncConversationTitleState(id, { title, titleSource });
+            try {
+              await markConversationFileChanged(id);
+              const persisted = await loadConversationFile(id);
+              if (persisted) {
+                const runtimeMessages = toRuntimeMessages(persisted.messages as Message[]);
+                if (
+                  shouldAdoptPersistedTranscript(
+                    currentMessagesRef.current,
+                    runtimeMessages,
+                  )
+                ) {
+                  currentMessagesRef.current = runtimeMessages;
+                  setMessages(runtimeMessages);
+                  const { useChatStore } = await import("@/lib/stores/chat-store");
+                  if (useChatStore.getState().sessions[id]) {
+                    useChatStore.getState().actions.setMessages(id, runtimeMessages as any);
+                  }
+                }
+              }
+            } catch (error) {
+              console.warn("[chat] failed to sync saved transcript across windows", {
+                id,
+                error,
+              });
+            }
+            const isLatestTurnState =
+              typeof updatedAt !== "number" ||
+              (latestSavedEventAtRef.current.get(id) ?? 0) <= updatedAt;
+            if (turnState && isLatestTurnState) {
+              setIsLoading(turnState.isLoading);
+              setIsStreaming(turnState.isStreaming);
+            }
             return;
           }
 
@@ -462,6 +520,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piSessionIdRef,
     scheduleHistoryRefresh,
     setConversationId,
+    setIsLoading,
+    setIsStreaming,
     setMessages,
     syncConversationTitleState,
     upsertFileConversationMeta,
@@ -810,6 +870,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         id: conversation.id,
         title: conversation.title,
         titleSource: conversation.titleSource,
+        updatedAt: conversation.updatedAt,
+        turnState: options.turnState ?? { isLoading, isStreaming },
       });
     } catch {
       // ignore broadcast failures; local save already succeeded

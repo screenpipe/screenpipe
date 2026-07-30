@@ -55,4 +55,25 @@ describe("qualifiedValue", () => {
       result_non_empty: true,
     });
   });
+
+  it("classifies persisted Live View item actions as accepted value", () => {
+    expect(qualifiedValue.liveViewItemActionCompleted("resolve")).toBe(true);
+
+    expect(capture).toHaveBeenCalledWith("qualified_value_event", {
+      metric_version: "repeat_value_d7_v1",
+      surface: "app",
+      action: "artifact",
+      value_strength: "accepted",
+      user_initiated: true,
+      success: true,
+      result_non_empty: true,
+    });
+  });
+
+  it("does not treat dismissing or reopening an item as accepted value", () => {
+    expect(qualifiedValue.liveViewItemActionCompleted("dismiss")).toBe(false);
+    expect(qualifiedValue.liveViewItemActionCompleted("reopen")).toBe(false);
+
+    expect(capture).not.toHaveBeenCalled();
+  });
 });

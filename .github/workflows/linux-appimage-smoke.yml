@@ -265,7 +265,15 @@ jobs:
               chmod +x screenpipe.AppImage
               ./screenpipe.AppImage --appimage-extract >/dev/null
 
-              desktop=squashfs-root/usr/share/applications/screenpipe.desktop
+              desktop=""
+              for candidate in squashfs-root/usr/share/applications/*.desktop; do
+                [ -f "${candidate}" ] || continue
+                if grep -Eq "^Exec=screenpipe-app-launcher([[:space:]]|$)" "${candidate}"; then
+                  desktop="${candidate}"
+                  break
+                fi
+              done
+              test -n "${desktop}"
               launcher=squashfs-root/usr/bin/screenpipe-app-launcher
               test -x "${launcher}"
               grep -qx "Exec=screenpipe-app-launcher" "${desktop}"

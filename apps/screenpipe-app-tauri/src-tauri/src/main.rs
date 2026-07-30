@@ -107,6 +107,8 @@ mod voice_training;
 mod window;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
+mod windows_crash_dump;
+#[cfg(target_os = "windows")]
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
@@ -424,6 +426,12 @@ async fn main() {
             }
         }
     }
+
+    // Register the WER helper DLL that writes a local minidump for fail-fast
+    // crashes such as 0xc0000409, which bypass Rust panic/Sentry hooks, and
+    // recover dumps produced by a previous run.
+    #[cfg(target_os = "windows")]
+    windows_crash_dump::install();
 
     // Check if telemetry is disabled via store setting (analyticsEnabled)
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
@@ -860,7 +868,10 @@ async fn main() {
         // single-instance plugin uses zbus::blocking on Linux which panics
         // inside an existing tokio runtime (nested block_on), so skip it on Linux
         ;
-    #[cfg(not(target_os = "linux"))]
+    // E2E instances already use isolated focus, API, WebDriver, and data
+    // ports. Registering the OS-wide single-instance plugin would still make
+    // an unrelated developer or CI app silently win before WebDriver starts.
+    #[cfg(all(not(target_os = "linux"), not(feature = "e2e")))]
     let app = app.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         // Defer off event stack: plugin may invoke this from run loop (nounwind).
         let app_for_closure = app.clone();

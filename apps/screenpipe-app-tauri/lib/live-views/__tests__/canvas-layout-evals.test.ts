@@ -32,6 +32,7 @@ function slot(index: number, width: 3 | 6 | 12 = 6): BrainViewSlot {
     intent: `Show metric ${index}`,
     binding: { pipeName: "canvas-eval" },
     feedback: { upCount: 0, downCount: 0, current: null },
+    itemActions: { items: [] },
     value: {
       payload: { value: index, unit: "items", delta: null },
       evidence: [],
