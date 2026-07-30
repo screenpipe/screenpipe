@@ -70,6 +70,7 @@ export interface KeywordSearchState {
 	isSearching: boolean;
 	searchQuery: string;
 	error: string | null;
+	lastCandidatePageSize: number;
 	lastRequest: SearchRequest | null;
 	activeRequestId: string | null;
 	currentAbortController: AbortController | null;
@@ -92,6 +93,7 @@ export interface KeywordSearchState {
 		signal?: AbortSignal,
 	) => Promise<void>;
 	setCurrentResultIndex: (index: number) => void;
+	removeSearchResult: (frameId: number) => void;
 	resetSearch: () => void;
 	nextResult: () => void;
 	previousResult: () => void;
@@ -99,6 +101,107 @@ export interface KeywordSearchState {
 
 const fuzzy_default = true;
 const offset_default = 0;
+const visibleMatchVerificationConcurrency = 3;
+
+interface FrameTextResponse {
+	text_positions?: SearchMatch["text_positions"];
+}
+
+export function queryHighlightTokens(query: string): string[] {
+	return query
+		.trim()
+		.split(/\s+/)
+		.map((token) => token.replace(/^["']+|["']+$/g, "").toLowerCase())
+		.filter(Boolean);
+}
+
+function textContainsToken(text: string, token: string): boolean {
+	const normalizedText = text.toLowerCase();
+	if (!/^[\p{L}\p{N}_]+$/u.test(token)) {
+		return normalizedText.includes(token);
+	}
+
+	const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(
+		`(^|[^\\p{L}\\p{N}_])${escaped}($|[^\\p{L}\\p{N}_])`,
+		"iu",
+	).test(normalizedText);
+}
+
+export function visibleMatchingPositions(
+	positions: SearchMatch["text_positions"],
+	query: string,
+): SearchMatch["text_positions"] {
+	const tokens = queryHighlightTokens(query);
+	if (tokens.length === 0) return [];
+
+	const matchedTokens = new Set<string>();
+	const matches = positions.filter((position) => {
+		const positionMatches = tokens.filter((token) =>
+			textContainsToken(position.text, token),
+		);
+		for (const token of positionMatches) matchedTokens.add(token);
+		return positionMatches.length > 0;
+	});
+
+	// Search candidates can originate from hidden accessibility text. A result
+	// is visible only when screenshot OCR confirms every query token.
+	return tokens.every((token) => matchedTokens.has(token)) ? matches : [];
+}
+
+async function verifyVisibleSearchMatches(
+	results: SearchMatch[],
+	query: string,
+	signal: AbortSignal,
+): Promise<SearchMatch[]> {
+	if (results.length === 0) return [];
+
+	const verified = new Array<SearchMatch | null>(results.length).fill(null);
+	let nextIndex = 0;
+
+	const verifyNext = async () => {
+		while (nextIndex < results.length) {
+			const index = nextIndex++;
+			const result = results[index];
+
+			// OCR-backed search positions already came from screenshot pixels.
+			// Accessibility and legacy candidates need an explicit screenshot
+			// OCR pass before they are allowed into Search or timeline navigation.
+			let positions = result.text_positions;
+			if (result.text_source !== "ocr") {
+				try {
+					const response = await localFetch(`/frames/${result.frame_id}/text`, {
+						method: "POST",
+						signal,
+					});
+					if (!response.ok) continue;
+					const data = (await response.json()) as FrameTextResponse;
+					positions = data.text_positions ?? [];
+				} catch (error) {
+					if (signal.aborted) throw error;
+					continue;
+				}
+			}
+
+			const matchingPositions = visibleMatchingPositions(positions, query);
+			if (matchingPositions.length === 0) continue;
+			verified[index] = {
+				...result,
+				text_positions: matchingPositions,
+			};
+		}
+	};
+
+	const workerCount = Math.min(
+		visibleMatchVerificationConcurrency,
+		results.length,
+	);
+	await Promise.all(
+		Array.from({ length: workerCount }, () => verifyNext()),
+	);
+
+	return verified.filter((result): result is SearchMatch => result !== null);
+}
 
 export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 	searchResults: [],
@@ -109,6 +212,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 	isSearching: false,
 	searchQuery: "",
 	error: null,
+	lastCandidatePageSize: 0,
 	lastRequest: null,
 	activeRequestId: null,
 	currentAbortController: null,
@@ -178,6 +282,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 				activeRequestId: requestId,
 				isSearching: true,
 				error: null,
+				lastCandidatePageSize: 0,
 			});
 		} else {
 			set((state) => ({
@@ -307,7 +412,11 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			}
 
 			const rawResults: SearchMatch[] = await response.json();
-			const results = rawResults;
+			const results = await verifyVisibleSearchMatches(
+				rawResults,
+				query,
+				combinedSignal,
+			);
 			// Wrap each flat result as a single-item group for UI compatibility
 			const groups: SearchMatchGroup[] = results.map((m) => ({
 				representative: m,
@@ -343,6 +452,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 						currentResultIndex: get().currentResultIndex,
 						searchQuery: query,
 						isSearching: false,
+						lastCandidatePageSize: rawResults.length,
 						lastRequest: searchRequest,
 						currentAbortController: null,
 					});
@@ -353,6 +463,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 						currentResultIndex: results.length > 0 ? 0 : -1,
 						searchQuery: query,
 						isSearching: false,
+						lastCandidatePageSize: rawResults.length,
 						lastRequest: searchRequest,
 						currentAbortController: null,
 					});
@@ -386,6 +497,35 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 		set({ currentResultIndex: index });
 	},
 
+	removeSearchResult: (frameId) => {
+		set((state) => {
+			const removedIndex = state.searchResults.findIndex(
+				(result) => result.frame_id === frameId,
+			);
+			if (removedIndex === -1) return state;
+
+			const searchResults = state.searchResults.filter(
+				(result) => result.frame_id !== frameId,
+			);
+			let currentResultIndex = state.currentResultIndex;
+			if (searchResults.length === 0) {
+				currentResultIndex = -1;
+			} else if (currentResultIndex > removedIndex) {
+				currentResultIndex -= 1;
+			} else if (currentResultIndex >= searchResults.length) {
+				currentResultIndex = searchResults.length - 1;
+			}
+
+			return {
+				searchResults,
+				searchGroups: state.searchGroups.filter(
+					(group) => group.representative.frame_id !== frameId,
+				),
+				currentResultIndex,
+			};
+		});
+	},
+
 	resetSearch: () => {
 		const { currentAbortController } = get();
 		if (currentAbortController) {
@@ -401,6 +541,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			isSearching: false,
 			searchQuery: "",
 			error: null,
+			lastCandidatePageSize: 0,
 			lastRequest: null,
 			activeRequestId: null,
 			currentAbortController: null,

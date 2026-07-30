@@ -9,6 +9,7 @@ import {
   useKeywordSearchStore,
   SearchMatch,
   UiEventResult,
+  queryHighlightTokens,
   type SearchAnalyticsSurface,
 } from "@/lib/hooks/use-keyword-search-store";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
@@ -329,7 +330,15 @@ function useSuggestions(isOpen: boolean, enabled: boolean) {
 }
 
 // Frame thumbnail component with loading state and retry logic
-const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
+const FrameThumbnail = ({
+  frameId,
+  alt,
+  onUnavailable,
+}: {
+  frameId: number;
+  alt: string;
+  onUnavailable?: (frameId: number) => void;
+}) => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   // <img> can't send an Authorization header, so when API auth is enabled we
@@ -393,6 +402,7 @@ const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
             } else {
               setIsLoading(false);
               setHasError(true);
+              onUnavailable?.(frameId);
             }
           }}
         />
@@ -735,9 +745,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     isSearching,
     searchQuery,
     error: searchError,
+    lastCandidatePageSize,
     searchKeywords,
     resetSearch,
     setCurrentResultIndex,
+    removeSearchResult,
   } = useKeywordSearchStore();
 
   // --- Facet state (loaded async, independent of paginated results) ---
@@ -1115,7 +1127,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // Tokenize query for thumbnail highlights (split on spaces, filter empty)
   const queryTokens = useMemo(() => {
     if (!debouncedQuery || isTagSearch || isPeopleSearch) return [];
-    return debouncedQuery.split(/\s+/).filter((t) => t.length > 0);
+    return queryHighlightTokens(debouncedQuery);
   }, [debouncedQuery, isTagSearch, isPeopleSearch]);
 
   const { setHighlight, clear: clearHighlight } = useSearchHighlight();
@@ -1625,19 +1637,35 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     });
   }, [analyticsSurface, appFilter, contentFilter, debouncedQuery, domainFilter, getSearchAnalyticsId, searchEpoch, searchKeywords]);
 
-  // Track if we got fewer results than page size (= no more pages).
-  // The server may filter results after fetching (e.g. app_name filter),
-  // so we only stop when we get zero new results — not just fewer than PAGE_SIZE.
-  const prevResultsLengthRef = useRef(0);
+  // Visibility verification can discard an entire candidate page when its
+  // matches exist only in hidden accessibility data. Pagination therefore
+  // follows the raw backend page size, never the filtered result count.
   useEffect(() => {
-    const prevLen = prevResultsLengthRef.current;
-    const curLen = searchResults.length;
-    prevResultsLengthRef.current = curLen;
-    // After a load-more, if no new results were added, we've exhausted all pages
-    if (ocrOffset > 0 && curLen === prevLen && !isSearching) {
+    if (!isSearching && lastCandidatePageSize < OCR_PAGE_SIZE) {
       setHasMoreOcr(false);
     }
-  }, [searchResults.length, ocrOffset, isSearching]);
+  }, [isSearching, lastCandidatePageSize]);
+
+  // A filtered page may be too short to scroll. Keep scanning raw candidate
+  // pages until the visible page fills or the backend reports exhaustion.
+  useEffect(() => {
+    if (
+      !isSearching &&
+      !isLoadingMore &&
+      hasMoreOcr &&
+      lastCandidatePageSize === OCR_PAGE_SIZE &&
+      searchResults.length < OCR_PAGE_SIZE
+    ) {
+      loadMoreOcr();
+    }
+  }, [
+    hasMoreOcr,
+    isLoadingMore,
+    isSearching,
+    lastCandidatePageSize,
+    loadMoreOcr,
+    searchResults.length,
+  ]);
 
   // Load more speaker transcriptions
   const loadMoreTranscriptions = useCallback(async () => {
@@ -2892,6 +2920,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                             key={result.frame_id}
                             frameId={result.frame_id}
                             alt={`${result.app_name} - ${result.window_name}`}
+                            onUnavailable={removeSearchResult}
                           />
                           {queryTokens.length > 0 && (
                             <ThumbnailHighlightOverlay
@@ -2964,7 +2993,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               })()}
 
               {/* Load more indicator */}
-              {(isLoadingMore || (hasMoreOcr && filteredResults.length > 0 && searchResults.length >= OCR_PAGE_SIZE)) && (
+              {(isLoadingMore || (hasMoreOcr && filteredResults.length > 0 && lastCandidatePageSize === OCR_PAGE_SIZE)) && (
                 <div className="flex justify-center py-4">
                   {isLoadingMore ? (
                     <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />

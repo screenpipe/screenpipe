@@ -4,7 +4,11 @@
 
 import { waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useKeywordSearchStore } from "../use-keyword-search-store";
+import {
+	queryHighlightTokens,
+	useKeywordSearchStore,
+	visibleMatchingPositions,
+} from "../use-keyword-search-store";
 import { localFetch } from "@/lib/api";
 
 const mocks = vi.hoisted(() => ({
@@ -86,12 +90,17 @@ describe("useKeywordSearchStore search scheduling", () => {
 				{
 					frame_id: 1,
 					timestamp: "2026-06-19T00:00:00.000Z",
-					text_positions: [],
+					text_positions: [{
+						text: "screenpipe",
+						confidence: 1,
+						bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+					}],
 					app_name: "Cursor",
 					window_name: "screenpipe",
 					confidence: 1,
 					text: "screenpipe search result",
 					url: "",
+					text_source: "ocr",
 				},
 			]),
 		);
@@ -174,28 +183,208 @@ describe("useKeywordSearchStore search scheduling", () => {
 		newResponse.resolve(jsonResponse([{
 			frame_id: 2,
 			timestamp: "2026-07-13T01:00:00.000Z",
-			text_positions: [],
+			text_positions: [{
+				text: "new-query",
+				confidence: 1,
+				bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+			}],
 			app_name: "New app",
 			window_name: "new result",
 			confidence: 1,
 			text: "new result",
 			url: "",
+			text_source: "ocr",
 		}]));
 		await newSearch;
 
 		oldResponse.resolve(jsonResponse([{
 			frame_id: 1,
 			timestamp: "2026-07-13T00:00:00.000Z",
-			text_positions: [],
+			text_positions: [{
+				text: "old-query",
+				confidence: 1,
+				bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+			}],
 			app_name: "Old app",
 			window_name: "old result",
 			confidence: 1,
 			text: "old result",
 			url: "",
+			text_source: "ocr",
 		}]));
 		await oldSearch;
 
 		expect(useKeywordSearchStore.getState().searchQuery).toBe("new-query");
 		expect(useKeywordSearchStore.getState().searchResults.map((item) => item.frame_id)).toEqual([2]);
+	});
+
+	it("excludes accessibility-only candidates that screenshot OCR cannot verify", async () => {
+		const candidates = Array.from({ length: 5 }, (_, index) => ({
+			frame_id: index + 1,
+			timestamp: `2026-07-30T07:4${index}:00.000Z`,
+			text_positions: [{
+				text: "offset from accessibility",
+				confidence: 1,
+				bounds: { left: 0.1, top: 0.1, width: 0.3, height: 0.05 },
+			}],
+			app_name: "Safari",
+			window_name: `candidate ${index + 1}`,
+			confidence: 1,
+			text: "offset from hidden accessibility data",
+			url: "",
+			text_source: "accessibility" as const,
+		}));
+
+		vi.mocked(localFetch).mockImplementation((input) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return Promise.resolve(jsonResponse(candidates));
+			}
+			if (url === "/frames/2/text" || url === "/frames/5/text") {
+				return Promise.resolve(jsonResponse({
+					frame_id: Number(url.match(/\d+/)?.[0]),
+					text_positions: [{
+						text: "visible offset text",
+						confidence: 0.98,
+						bounds: { left: 0.25, top: 0.3, width: 0.12, height: 0.04 },
+					}],
+				}));
+			}
+			if (url.startsWith("/frames/")) {
+				return Promise.resolve(jsonResponse({
+					frame_id: Number(url.match(/\d+/)?.[0]),
+					text_positions: [{
+						text: "pixels contain something else",
+						confidence: 0.99,
+						bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
+					}],
+				}));
+			}
+			if (url.startsWith("/search?")) {
+				return Promise.resolve(jsonResponse({ data: [] }));
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		await useKeywordSearchStore.getState().searchKeywords("offset");
+
+		const state = useKeywordSearchStore.getState();
+		expect(state.searchResults.map((result) => result.frame_id)).toEqual([2, 5]);
+		expect(state.searchGroups.map((group) => group.representative.frame_id)).toEqual([2, 5]);
+		expect(state.currentResultIndex).toBe(0);
+		expect(state.searchResults).toHaveLength(2);
+		expect(state.lastCandidatePageSize).toBe(5);
+		expect(state.searchResults[0].text_positions[0].text).toBe(
+			"visible offset text",
+		);
+	});
+
+	it("keeps verified candidates when another frame OCR request fails", async () => {
+		const candidate = (frameId: number) => ({
+			frame_id: frameId,
+			timestamp: `2026-07-30T08:0${frameId}:00.000Z`,
+			text_positions: [],
+			app_name: "Safari",
+			window_name: `candidate ${frameId}`,
+			confidence: 1,
+			text: "offset from accessibility",
+			url: "",
+			text_source: "accessibility" as const,
+		});
+
+		vi.mocked(localFetch).mockImplementation((input) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return Promise.resolve(jsonResponse([candidate(1), candidate(2)]));
+			}
+			if (url === "/frames/1/text") {
+				return Promise.reject(new TypeError("temporary connection failure"));
+			}
+			if (url === "/frames/2/text") {
+				return Promise.resolve(jsonResponse({
+					text_positions: [{
+						text: "visible offset",
+						confidence: 0.98,
+						bounds: { left: 0.2, top: 0.2, width: 0.1, height: 0.04 },
+					}],
+				}));
+			}
+			if (url.startsWith("/search?")) {
+				return Promise.resolve(jsonResponse({ data: [] }));
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		await useKeywordSearchStore.getState().searchKeywords("offset");
+
+		expect(
+			useKeywordSearchStore.getState().searchResults.map((result) => result.frame_id),
+		).toEqual([2]);
+	});
+});
+
+describe("visibleMatchingPositions", () => {
+	it("normalizes quoted query terms for verification and rendering", () => {
+		expect(queryHighlightTokens(`"offset" 'code'`)).toEqual([
+			"offset",
+			"code",
+		]);
+	});
+
+	it("does not treat a substring as a visible whole-word match", () => {
+		const positions = [
+			{
+				text: "concatenate",
+				confidence: 1,
+				bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+			},
+			{
+				text: "cat",
+				confidence: 1,
+				bounds: { left: 0.4, top: 0.1, width: 0.05, height: 0.05 },
+			},
+		];
+
+		expect(visibleMatchingPositions(positions, "cat")).toEqual([positions[1]]);
+	});
+});
+
+describe("unavailable search results", () => {
+	beforeEach(() => {
+		useKeywordSearchStore.getState().resetSearch();
+	});
+
+	it("removes a failed frame from both the grid and timeline navigation", () => {
+		const result = (frameId: number) => ({
+			frame_id: frameId,
+			timestamp: `2026-07-30T07:4${frameId}:00.000Z`,
+			text_positions: [],
+			app_name: "cmux",
+			window_name: "code",
+			confidence: 1,
+			text: "code",
+			url: "",
+			text_source: "ocr" as const,
+		});
+		const results = [result(1), result(2), result(3)];
+
+		useKeywordSearchStore.setState({
+			searchResults: results,
+			searchGroups: results.map((item) => ({
+				representative: item,
+				group_size: 1,
+				start_time: item.timestamp,
+				end_time: item.timestamp,
+				frame_ids: [item.frame_id],
+			})),
+			currentResultIndex: 2,
+		});
+
+		useKeywordSearchStore.getState().removeSearchResult(2);
+
+		const state = useKeywordSearchStore.getState();
+		expect(state.searchResults.map((item) => item.frame_id)).toEqual([1, 3]);
+		expect(state.searchGroups.map((group) => group.representative.frame_id)).toEqual([1, 3]);
+		expect(state.currentResultIndex).toBe(1);
 	});
 });
