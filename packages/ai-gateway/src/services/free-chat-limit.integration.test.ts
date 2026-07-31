@@ -6,10 +6,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Miniflare } from 'miniflare';
 import type { Env } from '../types';
 import {
-	DAILY_COST_LEASE_SECONDS,
-	releaseDailyCostLease,
+	DAILY_COST_RESERVATION_SECONDS,
+	MAX_ACTIVE_BACKGROUND_RESERVATIONS,
+	MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
+	releaseDailyCostReservation,
 	reserveDailyCostCap,
+	withDailyCostSettlement,
 } from './cost-cap';
+import { getCostReservationMicroUsd } from './cost-tracker';
 import {
 	FREE_CHAT_COST_RESERVATION_MICRO_USD,
 	FREE_CHAT_DAILY_BUDGET_MICRO_USD,
@@ -184,7 +188,7 @@ describe('usage reservations against workerd D1', () => {
 		expect(results.filter((result) => !result.allowed)).toHaveLength(8);
 	});
 
-	it('atomically grants one shared priced-request lease per account', async () => {
+	it('atomically admits only the bounded number of parallel interactive requests', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const results = await Promise.all(
 			Array.from({ length: 16 }, () =>
@@ -192,10 +196,17 @@ describe('usage reservations against workerd D1', () => {
 			),
 		);
 
-		expect(results.filter((result) => result.allowed)).toHaveLength(1);
-		expect(results.filter((result) => !result.allowed)).toHaveLength(15);
-		const winner = results.find((result) => result.allowed);
-		if (winner?.allowed && winner.lease) await releaseDailyCostLease(env, winner.lease);
+		expect(results.filter((result) => result.allowed)).toHaveLength(
+			MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
+		);
+		expect(results.filter((result) => !result.allowed)).toHaveLength(
+			16 - MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
+		);
+		await Promise.all(results.map(async (result) => {
+			if (result.allowed && result.reservation) {
+				await releaseDailyCostReservation(env, result.reservation);
+			}
+		}));
 		expect((await reserveDailyCostCap(
 			env,
 			'user-d1-cost',
@@ -205,51 +216,156 @@ describe('usage reservations against workerd D1', () => {
 		)).allowed).toBe(true);
 	});
 
-	it('grants one priced-request lease in each foreground/background lane', async () => {
+	it('allows multiple Pipes while preserving independent foreground capacity', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
-		const background = await reserveDailyCostCap(
-			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
-		);
-		const interactive = await reserveDailyCostCap(
-			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'interactive',
-		);
-		const overlap = await reserveDailyCostCap(
-			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
-		);
+		const backgrounds = await Promise.all(Array.from(
+			{ length: MAX_ACTIVE_BACKGROUND_RESERVATIONS + 1 },
+			() => reserveDailyCostCap(
+				env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
+			),
+		));
+		const interactives = await Promise.all(Array.from(
+			{ length: MAX_ACTIVE_INTERACTIVE_RESERVATIONS + 1 },
+			() => reserveDailyCostCap(
+				env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'interactive',
+			),
+		));
 
-		expect(background.allowed).toBe(true);
-		expect(interactive.allowed).toBe(true);
-		expect(overlap.allowed).toBe(false);
-		if (background.allowed && background.lease) await releaseDailyCostLease(env, background.lease);
-		if (interactive.allowed && interactive.lease) await releaseDailyCostLease(env, interactive.lease);
+		expect(backgrounds.filter((result) => result.allowed)).toHaveLength(
+			MAX_ACTIVE_BACKGROUND_RESERVATIONS,
+		);
+		expect(interactives.filter((result) => result.allowed)).toHaveLength(
+			MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
+		);
+		for (const result of [...backgrounds, ...interactives].filter((value) => !value.allowed)) {
+			if (!result.allowed) {
+				expect(await result.response.text()).toContain('hosted_ai_capacity_reserved');
+			}
+		}
 	});
 
-	it('reclaims an expired priced-request lease without accepting its stale release', async () => {
-		const start = new Date('2026-07-14T12:00:00.000Z');
-		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', 'gpt-5.6-sol', start);
-		expect(first.allowed).toBe(true);
+	it('reserves half the account budget for foreground Chat', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.40';
+		const firstPipe = await reserveDailyCostCap(
+			env, 'user-d1-chat-headroom', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		const secondPipe = await reserveDailyCostCap(
+			env, 'user-d1-chat-headroom', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		const chat = await reserveDailyCostCap(
+			env, 'user-d1-chat-headroom', 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
 
-		const afterExpiry = new Date(start.getTime() + (DAILY_COST_LEASE_SECONDS + 1) * 1000);
+		expect(firstPipe.allowed).toBe(true);
+		expect(secondPipe.allowed).toBe(false);
+		expect(chat.allowed).toBe(true);
+
+		const largePipe = await reserveDailyCostCap(
+			env,
+			'user-d1-large-pipe-headroom',
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+			'background',
+			{ inputTokens: 40_000, maxOutputTokens: 4_096 },
+		);
+		const separateChat = await reserveDailyCostCap(
+			env, 'user-d1-large-pipe-headroom', 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
+		expect(largePipe.allowed).toBe(false);
+		if (!largePipe.allowed) {
+			expect(await largePipe.response.text()).toContain('hosted_ai_capacity_reserved');
+		}
+		expect(separateChat.allowed).toBe(true);
+	});
+
+	it('rejects a request whose own measured shape cannot fit the cash cap', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.50';
+		const result = await reserveDailyCostCap(
+			env,
+			'user-d1-large-shape',
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+			'interactive',
+			{ inputTokens: 200_000, maxOutputTokens: 16_000 },
+		);
+
+		expect(getCostReservationMicroUsd('claude-sonnet-5', {
+			inputTokens: 200_000,
+			maxOutputTokens: 16_000,
+		})).toBe(990_000);
+		expect(result.allowed).toBe(false);
+		if (!result.allowed) {
+			expect(await result.response.text()).toContain('daily_cost_limit_exceeded');
+		}
+	});
+
+	it('releases only the settled request while a sibling hold remains active', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const model = 'gemini-2.5-flash';
+		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.15';
+		const background = await reserveDailyCostCap(
+			env, 'user-d1-cost-settle', 'subscribed', model, now, 'background',
+		);
+		const interactive = await reserveDailyCostCap(
+			env, 'user-d1-cost-settle', 'subscribed', model, now, 'interactive',
+		);
+		if (!background.allowed || !background.reservation ||
+			!interactive.allowed || !interactive.reservation) {
+			throw new Error('expected sibling reservations');
+		}
+
+		const response = withDailyCostSettlement(
+			new Response('ok'), env, background.reservation, Promise.resolve(true),
+		);
+		expect(await response.text()).toBe('ok');
+		const replacement = await reserveDailyCostCap(
+			env, 'user-d1-cost-settle', 'subscribed', model, now, 'background',
+		);
+		expect(replacement.allowed).toBe(true);
+		const rows = await env.DB.prepare(`
+			SELECT COUNT(*) AS count FROM usage
+			WHERE user_id = ? AND tier LIKE 'daily_cost_reservation_v3:%'
+		`).bind('user-d1-cost-settle').first<{ count: number }>();
+		expect(rows?.count).toBe(2);
+	});
+
+	it('reclaims an expired priced-request reservation without accepting its stale release', async () => {
+		const start = new Date('2026-07-14T12:00:00.000Z');
+		const model = 'gemini-2.5-flash';
+		env.MAX_DAILY_SUBSCRIBED_TEXT_COST = '0.05';
+		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', model, start);
+		expect(first.allowed).toBe(true);
+		expect((await reserveDailyCostCap(
+			env, 'user-d1-cost-expired', 'subscribed', model, start,
+		)).allowed).toBe(false);
+
+		const afterExpiry = new Date(start.getTime() + (DAILY_COST_RESERVATION_SECONDS + 1) * 1000);
 		const replacement = await reserveDailyCostCap(
 			env,
 			'user-d1-cost-expired',
 			'subscribed',
-			'gpt-5.6-sol',
+			model,
 			afterExpiry,
 		);
 		expect(replacement.allowed).toBe(true);
-		if (first.allowed && first.lease) await releaseDailyCostLease(env, first.lease);
+		if (first.allowed && first.reservation) {
+			await releaseDailyCostReservation(env, first.reservation);
+		}
 
 		const overlap = await reserveDailyCostCap(
 			env,
 			'user-d1-cost-expired',
 			'subscribed',
-			'gpt-5.6-sol',
+			model,
 			afterExpiry,
 		);
 		expect(overlap.allowed).toBe(false);
-		if (replacement.allowed && replacement.lease) {
-			await releaseDailyCostLease(env, replacement.lease);
+		if (replacement.allowed && replacement.reservation) {
+			await releaseDailyCostReservation(env, replacement.reservation);
 		}
 	});
 
@@ -266,8 +382,8 @@ describe('usage reservations against workerd D1', () => {
 
 		const first = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
 		expect(first.allowed).toBe(true);
-		if (!first.allowed || !first.lease) throw new Error('expected fresh epoch lease');
-		await releaseDailyCostLease(env, first.lease);
+		if (!first.allowed || !first.reservation) throw new Error('expected fresh epoch reservation');
+		await releaseDailyCostReservation(env, first.reservation);
 
 		const baseline = await env.DB.prepare(`
 			SELECT daily_cost_usd, cost_day FROM usage
@@ -275,11 +391,14 @@ describe('usage reservations against workerd D1', () => {
 		`).bind(deviceId).first<{ daily_cost_usd: number; cost_day: string }>();
 		expect(baseline).toEqual({ daily_cost_usd: 40, cost_day: day });
 
-		await env.DB.prepare(`UPDATE usage SET daily_cost_usd = 43.49 WHERE device_id = ?`)
+		// Leave room for the request-sized $0.12144 default Sonnet hold.
+		await env.DB.prepare(`UPDATE usage SET daily_cost_usd = 43.37 WHERE device_id = ?`)
 			.bind(deviceId).run();
 		const underCap = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
 		expect(underCap.allowed).toBe(true);
-		if (underCap.allowed && underCap.lease) await releaseDailyCostLease(env, underCap.lease);
+		if (underCap.allowed && underCap.reservation) {
+			await releaseDailyCostReservation(env, underCap.reservation);
+		}
 
 		await env.DB.prepare(`UPDATE usage SET daily_cost_usd = 43.5 WHERE device_id = ?`)
 			.bind(deviceId).run();
@@ -299,6 +418,8 @@ describe('usage reservations against workerd D1', () => {
 		env.COST_CAP_EPOCH = 'incident-v3';
 		const nextEpoch = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
 		expect(nextEpoch.allowed).toBe(true);
-		if (nextEpoch.allowed && nextEpoch.lease) await releaseDailyCostLease(env, nextEpoch.lease);
+		if (nextEpoch.allowed && nextEpoch.reservation) {
+			await releaseDailyCostReservation(env, nextEpoch.reservation);
+		}
 	});
 });

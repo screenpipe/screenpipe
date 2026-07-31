@@ -6,27 +6,33 @@ import { Env } from '../types';
 import { addCorsHeaders, createErrorResponse } from '../utils/cors';
 import { withResponseFinalizer } from '../utils/response-finalizer';
 import {
+	getCostReservationMicroUsd,
 	getDailyUserCost,
 	getDailyUserCostOrThrow,
 	getTierDailyCostCap,
 	isZeroCostModel,
+	type CostReservationShape,
 } from './cost-tracker';
 
-const COST_LEASE_TIER = 'daily_cost_in_flight_v1';
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
-export const DAILY_COST_LEASE_SECONDS = 10 * 60;
-export const FAILED_SETTLEMENT_LEASE_SECONDS = 60;
+const COST_RESERVATION_TIER_PREFIX = 'daily_cost_reservation_v3';
+export const DAILY_COST_RESERVATION_SECONDS = 10 * 60;
+export const MAX_ACTIVE_INTERACTIVE_RESERVATIONS = 2;
+export const MAX_ACTIVE_BACKGROUND_RESERVATIONS = 4;
+export const MAX_BACKGROUND_RESERVED_FRACTION = 0.5;
 
-export type DailyCostLease = {
+export type DailyCostHold = {
 	key: string;
 	deviceId: string;
+	tier: string;
+	reservedMicroUsd: number;
 	expiresAt: string;
 };
 
 export type DailyCostLane = 'interactive' | 'background';
 
 export type DailyCostReservation =
-	| { allowed: true; lease: DailyCostLease | null }
+	| { allowed: true; reservation: DailyCostHold | null }
 	| { allowed: false; response: Response };
 
 function changed(result: D1Result<unknown>): boolean {
@@ -129,48 +135,56 @@ function unavailableResponse(): Response {
 	})));
 }
 
-/** Release only the exact generation acquired by this request. */
-export async function releaseDailyCostLease(env: Env, lease: DailyCostLease): Promise<void> {
-	try {
-		await env.DB.prepare(`
-			UPDATE usage
-			SET daily_count = 0, updated_at = CURRENT_TIMESTAMP
-			WHERE device_id = ? AND user_id = ? AND tier = ? AND last_reset = ?
-		`).bind(lease.key, lease.deviceId, COST_LEASE_TIER, lease.expiresAt).run();
-	} catch (error) {
-		// A failed release remains closed until the bounded lease expires.
-		console.error('daily cost lease release failed', error);
-	}
+function capacityResponse(tier: string, lane: DailyCostLane): Response {
+	const response = addCorsHeaders(createErrorResponse(429, JSON.stringify({
+		error: 'hosted_ai_capacity_reserved',
+		message: lane === 'background'
+			? 'Other hosted AI background requests are still running. Wait for one to finish, then retry.'
+			: 'Other hosted AI chats are still running. Wait for one to finish, then retry.',
+		tier,
+		retry_after_seconds: 5,
+	})));
+	response.headers.set('Retry-After', '5');
+	return response;
 }
 
-/**
- * Keep a short fail-closed quarantine after accounting fails without blocking
- * the account for the full active-request TTL. Match the exact generation so a
- * delayed finalizer can never shorten a newer request's lease.
- */
-async function shortenFailedSettlementLease(env: Env, lease: DailyCostLease): Promise<void> {
+async function reservationTier(env: Env): Promise<string> {
+	const epoch = configuredCostCapEpoch(env) ?? 'legacy';
+	return `${COST_RESERVATION_TIER_PREFIX}:${(await sha256Hex(epoch)).slice(0, 16)}`;
+}
+
+function reservationKeyPrefix(lane: DailyCostLane): string {
+	return `daily-cost:reservation:v3:${lane}:`;
+}
+
+/** Release only this request's exact hold; sibling requests remain admitted. */
+export async function releaseDailyCostReservation(
+	env: Env,
+	reservation: DailyCostHold,
+): Promise<void> {
 	try {
-		const retryAt = new Date(Date.now() + FAILED_SETTLEMENT_LEASE_SECONDS * 1000).toISOString();
 		await env.DB.prepare(`
-			UPDATE usage
-			SET last_reset = ?, updated_at = CURRENT_TIMESTAMP
+			DELETE FROM usage
 			WHERE device_id = ? AND user_id = ? AND tier = ?
-				AND daily_count = 1 AND last_reset = ?
-		`).bind(retryAt, lease.key, lease.deviceId, COST_LEASE_TIER, lease.expiresAt).run();
+				AND daily_count = ? AND last_reset = ?
+		`).bind(
+			reservation.key,
+			reservation.deviceId,
+			reservation.tier,
+			reservation.reservedMicroUsd,
+			reservation.expiresAt,
+		).run();
 	} catch (error) {
-		// If shortening fails, preserve the original bounded fail-closed lease.
-		console.error('failed settlement lease shortening failed', error);
+		// A failed release retains only this request's bounded hold until expiry.
+		console.error('daily cost reservation release failed', error);
 	}
 }
 
 /**
- * Atomically serialize priced upstream work for an account, then read its cap.
- *
- * The old check read daily spend before inference and logged it after inference;
- * parallel requests could all observe the same below-cap total. This lease makes
- * that read/write interval account-wide. The cap is intentionally a soft daily
- * ceiling: a single request that starts below it may finish above it, but a
- * second priced request cannot overlap and amplify that overshoot.
+ * Atomically reserve spend for one priced request without serializing the
+ * account. Recorded spend plus every active hold must fit under the daily cap.
+ * A separate lane count bounds estimation error, and background holds may use
+ * at most half the account budget so scheduled Pipes cannot starve Chat.
  */
 export async function reserveDailyCostCap(
 	env: Env,
@@ -179,68 +193,136 @@ export async function reserveDailyCostCap(
 	model: string,
 	now: Date = new Date(),
 	lane: DailyCostLane = 'interactive',
+	shape: CostReservationShape = {},
 ): Promise<DailyCostReservation> {
-	if (isZeroCostModel(model)) return { allowed: true, lease: null };
+	if (isZeroCostModel(model)) return { allowed: true, reservation: null };
 
-	let lease: DailyCostLease | null = null;
 	try {
-		const leaseEpoch = configuredCostCapEpoch(env) ?? 'legacy';
-		// Foreground chat must not be rejected merely because a scheduled pipe is
-		// running. Keep one priced request per lane: background remains serialized,
-		// while an interactive request can proceed alongside it. The account-wide
-		// cash accumulator and cap remain shared across both lanes.
-		const key = `daily-cost:lease:v2:${await sha256Hex(`${leaseEpoch}:${deviceId}:${lane}`)}`;
-		const nowIso = now.toISOString();
-		const expiresAt = new Date(now.getTime() + DAILY_COST_LEASE_SECONDS * 1000).toISOString();
-		const claim = async () => env.DB.prepare(`
-			UPDATE usage
-			SET daily_count = 1, last_reset = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE device_id = ? AND user_id = ? AND tier = ?
-				AND (daily_count = 0 OR last_reset <= ?)
-		`).bind(expiresAt, key, deviceId, COST_LEASE_TIER, nowIso).run();
+		// Establish and read the immutable incident-epoch baseline before admission.
+		await getDailyUserCostForCapOrThrow(env, deviceId, now);
 
-		let claimed = changed(await claim());
-		if (!claimed) {
-			claimed = changed(await env.DB.prepare(`
-				INSERT OR IGNORE INTO usage (device_id, user_id, daily_count, last_reset, tier)
-				VALUES (?, ?, 1, ?, ?)
-			`).bind(key, deviceId, expiresAt, COST_LEASE_TIER).run());
-		}
-		if (!claimed) claimed = changed(await claim());
-		if (!claimed) {
+		const day = utcDay(now);
+		const nowIso = now.toISOString();
+		const expiresAt = new Date(
+			now.getTime() + DAILY_COST_RESERVATION_SECONDS * 1000,
+		).toISOString();
+		const holdTier = await reservationTier(env);
+		const baselineEpoch = configuredCostCapEpoch(env);
+		const baselineKey = baselineEpoch
+			? `daily-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
+			: '__no_daily_cost_baseline__';
+		const reservedMicroUsd = getCostReservationMicroUsd(model, shape);
+		const capMicroUsd = Math.floor(getTierDailyCostCap(tier, env) * 1_000_000);
+		const laneLimit = lane === 'background'
+			? MAX_ACTIVE_BACKGROUND_RESERVATIONS
+			: MAX_ACTIVE_INTERACTIVE_RESERVATIONS;
+		const lanePrefix = `${reservationKeyPrefix(lane)}%`;
+		const backgroundPrefix = `${reservationKeyPrefix('background')}%`;
+		const backgroundBudgetMicroUsd = Math.floor(
+			capMicroUsd * MAX_BACKGROUND_RESERVED_FRACTION,
+		);
+		const key = `${reservationKeyPrefix(lane)}${crypto.randomUUID()}`;
+
+		// Delete only expired holds for this account and incident epoch.
+		await env.DB.prepare(`
+			DELETE FROM usage
+			WHERE user_id = ? AND tier = ? AND last_reset <= ?
+		`).bind(deviceId, holdTier, nowIso).run();
+
+		// D1/SQLite serializes this write. The SELECT observes prior committed holds,
+		// so parallel admissions cannot all pass the same pre-request cap check.
+		const claimed = changed(await env.DB.prepare(`
+			INSERT OR IGNORE INTO usage
+				(device_id, user_id, daily_count, last_reset, tier)
+			SELECT ?, ?, ?, ?, ?
+			WHERE (
+				MAX(0, (
+					COALESCE((
+						SELECT CASE WHEN cost_day = ? THEN daily_cost_usd ELSE 0 END
+						FROM usage WHERE device_id = ?
+					), 0)
+					- COALESCE((
+						SELECT CASE WHEN cost_day = ? THEN daily_cost_usd ELSE 0 END
+						FROM usage WHERE device_id = ?
+					), 0)
+				) * 1000000)
+				+ COALESCE((
+					SELECT SUM(daily_count) FROM usage
+					WHERE user_id = ? AND tier = ? AND last_reset > ?
+				), 0)
+				+ ?
+			) <= ?
+			AND COALESCE((
+				SELECT COUNT(*) FROM usage
+				WHERE user_id = ? AND tier = ? AND last_reset > ?
+					AND device_id LIKE ?
+			), 0) < ?
+			AND (
+				? = 'interactive'
+				OR COALESCE((
+					SELECT SUM(daily_count) FROM usage
+					WHERE user_id = ? AND tier = ? AND last_reset > ?
+						AND device_id LIKE ?
+				), 0) + ? <= ?
+			)
+		`).bind(
+			key,
+			deviceId,
+			reservedMicroUsd,
+			expiresAt,
+			holdTier,
+			day,
+			deviceId,
+			day,
+			baselineKey,
+			deviceId,
+			holdTier,
+			nowIso,
+			reservedMicroUsd,
+			capMicroUsd,
+			deviceId,
+			holdTier,
+			nowIso,
+			lanePrefix,
+			laneLimit,
+			lane,
+			deviceId,
+			holdTier,
+			nowIso,
+			backgroundPrefix,
+			reservedMicroUsd,
+			backgroundBudgetMicroUsd,
+		).run());
+
+		if (claimed) {
 			return {
-				allowed: false,
-				response: addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: 'priced_request_in_flight',
-					message: lane === 'background'
-						? 'Another hosted AI background request is still running for this account. Wait for it to finish before retrying.'
-						: 'Another hosted AI chat request is still running for this account. Wait for it to finish before retrying.',
-				}))),
+				allowed: true,
+				reservation: { key, deviceId, tier: holdTier, reservedMicroUsd, expiresAt },
 			};
 		}
 
-		lease = { key, deviceId, expiresAt };
 		const dailyCost = await getDailyUserCostForCapOrThrow(env, deviceId, now);
-		if (dailyCost >= getTierDailyCostCap(tier, env)) {
-			await releaseDailyCostLease(env, lease);
-			return { allowed: false, response: capResponse(tier) };
-		}
-		return { allowed: true, lease };
+		const dailyCostMicroUsd = Math.max(0, Math.ceil(dailyCost * 1_000_000));
+		return {
+			allowed: false,
+			response: dailyCostMicroUsd + reservedMicroUsd > capMicroUsd
+				? capResponse(tier)
+				: capacityResponse(tier, lane),
+		};
 	} catch (error) {
 		console.error('daily cost reservation unavailable', error);
-		if (lease) await releaseDailyCostLease(env, lease);
 		return { allowed: false, response: unavailableResponse() };
 	}
 }
 
-/** Keep the spend lease until response consumption and its cost write finish. */
+/** Keep the hold until response consumption and its cost write finish. */
 export function withDailyCostSettlement(
 	response: Response,
 	env: Env,
-	lease: DailyCostLease | null,
+	reservation: DailyCostHold | null,
 	settlement: Promise<boolean>,
 ): Response {
-	if (!lease) return response;
+	if (!reservation) return response;
 	let finalized = false;
 	const finalize = async () => {
 		if (finalized) return;
@@ -252,12 +334,10 @@ export function withDailyCostSettlement(
 			console.error('daily cost settlement failed', error);
 		}
 		if (recorded) {
-			await releaseDailyCostLease(env, lease);
+			await releaseDailyCostReservation(env, reservation);
 		} else {
-			// Keep a short fail-closed quarantine after an accounting failure, but do
-			// not strand every chat for the full active-request crash-recovery TTL.
-			console.error('daily cost was not recorded; shortening spend lease quarantine');
-			await shortenFailedSettlementLease(env, lease);
+			// Retain only this request's estimated spend until its bounded expiry.
+			console.error('daily cost was not recorded; retaining request reservation until expiry');
 		}
 	};
 	return withResponseFinalizer(response, finalize, (error) => {
