@@ -280,7 +280,10 @@ describe("useKeywordSearchStore search scheduling", () => {
 			if (url.startsWith("/search/keyword?")) {
 				return Promise.resolve(jsonResponse(candidates));
 			}
-			if (url === "/frames/2/text" || url === "/frames/5/text") {
+			if (
+				url === "/frames/2/text?persist=false" ||
+				url === "/frames/5/text?persist=false"
+			) {
 				return Promise.resolve(jsonResponse({
 					frame_id: Number(url.match(/\d+/)?.[0]),
 					text_positions: [{
@@ -317,6 +320,10 @@ describe("useKeywordSearchStore search scheduling", () => {
 		expect(state.searchResults[0].text_positions[0].text).toBe(
 			"visible offset text",
 		);
+		expect(localFetch).toHaveBeenCalledWith(
+			"/frames/1/text?persist=false",
+			expect.objectContaining({ method: "POST" }),
+		);
 	});
 
 	it("keeps verified candidates when another frame OCR request fails", async () => {
@@ -337,10 +344,10 @@ describe("useKeywordSearchStore search scheduling", () => {
 			if (url.startsWith("/search/keyword?")) {
 				return Promise.resolve(jsonResponse([candidate(1), candidate(2)]));
 			}
-			if (url === "/frames/1/text") {
+			if (url === "/frames/1/text?persist=false") {
 				return Promise.reject(new TypeError("temporary connection failure"));
 			}
-			if (url === "/frames/2/text") {
+			if (url === "/frames/2/text?persist=false") {
 				return Promise.resolve(jsonResponse({
 					text_positions: [{
 						text: "visible offset",
@@ -474,7 +481,7 @@ describe("useKeywordSearchStore search scheduling", () => {
 			if (url.startsWith("/search/keyword?")) {
 				return jsonResponse([candidate]);
 			}
-			if (url === "/frames/12001/text") {
+			if (url === "/frames/12001/text?persist=false") {
 				frameTextRequests += 1;
 				return jsonResponse({
 					text_positions: [{

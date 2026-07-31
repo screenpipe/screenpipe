@@ -13,7 +13,7 @@ use lru::LruCache;
 use oasgen::{oasgen, OaSchema};
 
 use chrono::{DateTime, Utc};
-use screenpipe_db::TextPosition;
+use screenpipe_db::{OcrTextBlock, TextPosition};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1157,6 +1157,15 @@ pub struct FrameTextQuery {
     pub query: Option<String>,
 }
 
+/// Optional controls for on-demand frame OCR.
+#[derive(Debug, Deserialize, OaSchema)]
+pub struct FrameOcrQuery {
+    /// Whether newly generated OCR should be cached on the frame.
+    /// Existing callers retain the historical persistent default; read-only
+    /// verification callers can explicitly disable database writes.
+    pub persist: Option<bool>,
+}
+
 /// Get OCR text positions with bounding boxes for a specific frame.
 /// Falls back to accessibility tree node bounds when no OCR data exists.
 /// Both OCR and accessibility bounds are normalized to 0-1 relative to the
@@ -1269,13 +1278,15 @@ pub async fn get_frame_text_data(
 }
 
 /// Run on-demand OCR on a frame that has no stored bounding boxes.
-/// Loads the snapshot JPEG, runs Apple Vision OCR, stores the result,
-/// and returns the text positions. Subsequent GET requests will hit the
-/// cached DB row. If OCR data already exists, returns it without re-running.
+/// Loads the snapshot JPEG, runs platform OCR, and returns the text positions.
+/// Results are stored by default so subsequent GET requests hit the cached DB
+/// row; callers using the result only for verification can set `persist=false`.
+/// If OCR data already exists, returns it without re-running.
 #[oasgen]
 pub async fn run_frame_ocr(
     State(state): State<Arc<AppState>>,
     Path(frame_id): Path<i64>,
+    Query(params): Query<FrameOcrQuery>,
 ) -> Result<JsonResponse<FrameTextResponse>, (StatusCode, JsonResponse<Value>)> {
     // Check if OCR data already exists — avoid redundant work
     match state.db.get_frame_text_positions(frame_id).await {
@@ -1386,38 +1397,50 @@ pub async fn run_frame_ocr(
     .unwrap_or_else(|_| (String::new(), "[]".to_string()));
 
     let (ocr_text, ocr_text_json) = ocr_result;
+    let blocks: Vec<OcrTextBlock> = serde_json::from_str(&ocr_text_json).unwrap_or_default();
+    let text_positions = screenpipe_db::parse_all_text_positions(&blocks);
 
-    // Store in DB for future reads (ignore errors — the result is still returned)
-    if !ocr_text.is_empty() {
-        #[cfg(target_os = "macos")]
-        let engine = Arc::new(screenpipe_db::OcrEngine::AppleNative);
-        #[cfg(target_os = "windows")]
-        let engine = Arc::new(screenpipe_db::OcrEngine::WindowsNative);
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let engine = Arc::new(screenpipe_db::OcrEngine::Tesseract);
-        if let Err(e) = state
-            .db
-            .insert_ocr_text(frame_id, &ocr_text, &ocr_text_json, engine)
-            .await
-        {
-            debug!(
-                "Failed to cache on-demand OCR for frame {}: {}",
-                frame_id, e
-            );
-        }
-    }
-
-    // Parse and return
-    let text_positions = state
-        .db
-        .get_frame_text_positions(frame_id)
-        .await
-        .unwrap_or_default();
+    persist_on_demand_ocr(
+        &state.db,
+        frame_id,
+        &ocr_text,
+        &ocr_text_json,
+        params.persist.unwrap_or(true),
+    )
+    .await;
 
     Ok(JsonResponse(FrameTextResponse {
         frame_id,
         text_positions,
     }))
+}
+
+async fn persist_on_demand_ocr(
+    db: &screenpipe_db::DatabaseManager,
+    frame_id: i64,
+    ocr_text: &str,
+    ocr_text_json: &str,
+    persist: bool,
+) {
+    if !persist || ocr_text.is_empty() {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    let engine = Arc::new(screenpipe_db::OcrEngine::AppleNative);
+    #[cfg(target_os = "windows")]
+    let engine = Arc::new(screenpipe_db::OcrEngine::WindowsNative);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let engine = Arc::new(screenpipe_db::OcrEngine::Tesseract);
+    if let Err(e) = db
+        .insert_ocr_text(frame_id, ocr_text, ocr_text_json, engine)
+        .await
+    {
+        debug!(
+            "Failed to cache on-demand OCR for frame {}: {}",
+            frame_id, e
+        );
+    }
 }
 
 pub(crate) async fn serve_file(path: &str) -> Result<Response, (StatusCode, JsonResponse<Value>)> {
@@ -1458,6 +1481,73 @@ pub use super::content::FrameContent;
 
 /// extract_high_quality_frame re-export for video export
 pub use crate::video_utils::extract_high_quality_frame as extract_hq_frame;
+
+#[cfg(test)]
+mod ocr_tests {
+    use super::*;
+    use chrono::Utc;
+    use screenpipe_db::DatabaseManager;
+
+    #[tokio::test]
+    async fn read_only_ocr_preserves_canonical_text_and_search_index() {
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let canonical_text = "canonicalaccessibilitytoken from the accessibility tree";
+        let frame_id = db
+            .insert_snapshot_frame(
+                "read-only-ocr-device",
+                Utc::now(),
+                "unused-read-only-ocr-snapshot.jpg",
+                Some("Safari"),
+                Some("Accessibility-only frame"),
+                None,
+                true,
+                Some("test"),
+                Some(canonical_text),
+                Some("accessibility"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let generated_ocr = "different visible screenshot text";
+        let generated_json = serde_json::to_string(&vec![OcrTextBlock {
+            conf: "0.99".to_string(),
+            left: "0.1".to_string(),
+            top: "0.2".to_string(),
+            width: "0.3".to_string(),
+            height: "0.04".to_string(),
+            text: generated_ocr.to_string(),
+            ..Default::default()
+        }])
+        .unwrap();
+
+        persist_on_demand_ocr(&db, frame_id, generated_ocr, &generated_json, false).await;
+
+        let (full_text, text_json, text_source): (Option<String>, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT full_text, text_json, text_source FROM frames WHERE id = ?1")
+                .bind(frame_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        let searchable: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM frames_fts \
+             WHERE rowid = ?1 AND frames_fts MATCH ?2",
+        )
+        .bind(frame_id)
+        .bind("\"canonicalaccessibilitytoken\"*")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(full_text.as_deref(), Some(canonical_text));
+        assert!(text_json.is_none());
+        assert_eq!(text_source.as_deref(), Some("accessibility"));
+        assert_eq!(searchable, 1);
+    }
+}
 
 #[cfg(test)]
 mod thumbnail_tests {

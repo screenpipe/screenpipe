@@ -218,7 +218,7 @@ async function verifyVisibleSearchMatches(
 				} else {
 					try {
 						const response = await localFetch(
-							`/frames/${result.frame_id}/text`,
+							`/frames/${result.frame_id}/text?persist=false`,
 							{ method: "POST", signal },
 						);
 						if (!response.ok) return null;
