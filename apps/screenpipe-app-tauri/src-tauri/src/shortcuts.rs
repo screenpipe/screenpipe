@@ -308,7 +308,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                         use tauri_nspanel::ManagerExt;
                         if let Ok(panel) = app.get_webview_panel("chat") {
                             if panel.is_visible() {
-                                panel.order_out(None);
+                                let _ = ShowRewindWindow::Chat.close(app);
                                 return;
                             }
                         }

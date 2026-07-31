@@ -18,6 +18,8 @@ use super::util::with_autorelease_pool;
 /// `id` (*mut Object) is not Send.
 #[cfg(target_os = "macos")]
 pub(crate) static PREVIOUS_FRONTMOST_APP: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(0));
+#[cfg(target_os = "macos")]
+static FRONTMOST_FOCUS_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Search keeps its own origin because it can be shown while Main's focus
 /// restore state is still populated. The session flag prevents repeated
@@ -26,15 +28,17 @@ pub(crate) static PREVIOUS_FRONTMOST_APP: Lazy<Mutex<usize>> = Lazy::new(|| Mute
 static SEARCH_PREVIOUS_FRONTMOST_APP: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(0));
 #[cfg(target_os = "macos")]
 static SEARCH_FOCUS_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static CHAT_PREVIOUS_FRONTMOST_APP: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(0));
+#[cfg(target_os = "macos")]
+static CHAT_FOCUS_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "macos")]
-fn replace_search_origin(app: usize) {
+fn replace_focus_origin(origin: &Lazy<Mutex<usize>>, app: usize) {
     use objc::{msg_send, sel, sel_impl};
     use tauri_nspanel::cocoa::base::id;
 
-    let mut saved = SEARCH_PREVIOUS_FRONTMOST_APP
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut saved = origin.lock().unwrap_or_else(|e| e.into_inner());
     if *saved != 0 {
         let old = *saved as id;
         unsafe {
@@ -44,13 +48,11 @@ fn replace_search_origin(app: usize) {
     *saved = app;
 }
 
-/// Capture Search's origin once. Re-showing or repeatedly clicking the visible
-/// panel must not overwrite it after macOS has activated screenpipe.
 #[cfg(target_os = "macos")]
-pub(crate) fn begin_search_focus_session() {
+fn begin_focus_session(origin: &Lazy<Mutex<usize>>, active: &AtomicBool) {
     use std::sync::atomic::Ordering;
 
-    if SEARCH_FOCUS_SESSION_ACTIVE.swap(true, Ordering::SeqCst) {
+    if active.swap(true, Ordering::SeqCst) {
         return;
     }
 
@@ -61,44 +63,39 @@ pub(crate) fn begin_search_focus_session() {
             let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
             let frontmost: id = msg_send![workspace, frontmostApplication];
             if frontmost == nil {
-                replace_search_origin(0);
+                replace_focus_origin(origin, 0);
+                active.store(false, Ordering::SeqCst);
                 return;
             }
 
             let _: () = msg_send![frontmost, retain];
-            replace_search_origin(frontmost as usize);
+            replace_focus_origin(origin, frontmost as usize);
         }
     });
 }
 
 #[cfg(target_os = "macos")]
-fn should_restore_search_origin(
+fn should_restore_overlay_origin(
     current_pid: i32,
     own_pid: i32,
     saved_pid: i32,
-    search_was_key: bool,
+    overlay_was_key: bool,
 ) -> bool {
-    search_was_key && current_pid == own_pid && saved_pid != own_pid
+    overlay_was_key && current_pid == own_pid && saved_pid != own_pid
 }
 
-/// Finish Search without changing apps in the normal case. If macOS leaked
-/// activation to screenpipe while the non-activating panel was being used,
-/// reactivate the original app so dismissing Search does not reveal screenpipe.
-/// If the user clicked another external app, leave that app alone.
 #[cfg(target_os = "macos")]
-pub(crate) fn finish_search_focus_session(search_was_key: bool) {
+fn finish_focus_session(origin: &Lazy<Mutex<usize>>, active: &AtomicBool, overlay_was_key: bool) {
     use std::sync::atomic::Ordering;
 
-    SEARCH_FOCUS_SESSION_ACTIVE.store(false, Ordering::SeqCst);
+    active.store(false, Ordering::SeqCst);
 
     with_autorelease_pool(|| {
         use objc::{class, msg_send, sel, sel_impl};
         use tauri_nspanel::cocoa::base::{id, nil};
 
         let saved = {
-            let mut origin = SEARCH_PREVIOUS_FRONTMOST_APP
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut origin = origin.lock().unwrap_or_else(|e| e.into_inner());
             let saved = *origin;
             *origin = 0;
             saved
@@ -119,7 +116,7 @@ pub(crate) fn finish_search_focus_session(search_was_key: bool) {
             let saved_app = saved as id;
             let saved_pid: i32 = msg_send![saved_app, processIdentifier];
 
-            if should_restore_search_origin(current_pid, own_pid, saved_pid, search_was_key) {
+            if should_restore_overlay_origin(current_pid, own_pid, saved_pid, overlay_was_key) {
                 let _: bool = msg_send![saved_app, activateWithOptions: 2_u64];
             }
 
@@ -128,9 +125,63 @@ pub(crate) fn finish_search_focus_session(search_was_key: bool) {
     });
 }
 
+/// Capture Search's origin once. Re-showing or repeatedly clicking the visible
+/// panel must not overwrite it after macOS has activated screenpipe.
+#[cfg(target_os = "macos")]
+pub(crate) fn begin_search_focus_session() {
+    begin_focus_session(&SEARCH_PREVIOUS_FRONTMOST_APP, &SEARCH_FOCUS_SESSION_ACTIVE);
+}
+
+/// Finish Search without changing apps in the normal case. If macOS leaked
+/// activation to screenpipe while the non-activating panel was being used,
+/// reactivate the original app so dismissing Search does not reveal screenpipe.
+/// If the user clicked another external app, leave that app alone.
+#[cfg(target_os = "macos")]
+pub(crate) fn finish_search_focus_session(search_was_key: bool) {
+    finish_focus_session(
+        &SEARCH_PREVIOUS_FRONTMOST_APP,
+        &SEARCH_FOCUS_SESSION_ACTIVE,
+        search_was_key,
+    );
+}
+
+/// Capture Chat's origin once so repeated shows/clicks preserve the real app
+/// that was active before the overlay appeared.
+#[cfg(target_os = "macos")]
+pub(crate) fn begin_chat_focus_session() {
+    begin_focus_session(&CHAT_PREVIOUS_FRONTMOST_APP, &CHAT_FOCUS_SESSION_ACTIVE);
+}
+
+/// Finish Chat with the same conditional restoration used by Search.
+#[cfg(target_os = "macos")]
+pub(crate) fn finish_chat_focus_session(chat_was_key: bool) {
+    finish_focus_session(
+        &CHAT_PREVIOUS_FRONTMOST_APP,
+        &CHAT_FOCUS_SESSION_ACTIVE,
+        chat_was_key,
+    );
+}
+
+/// Finish the Main/Timeline focus session without overriding a different app
+/// the user intentionally selected while the overlay was open.
+#[cfg(target_os = "macos")]
+pub(crate) fn finish_frontmost_app_focus_session(main_was_key: bool) {
+    finish_focus_session(
+        &PREVIOUS_FRONTMOST_APP,
+        &FRONTMOST_FOCUS_SESSION_ACTIVE,
+        main_was_key,
+    );
+}
+
 /// Save the current frontmost app before activating our overlay.
 #[cfg(target_os = "macos")]
 pub(crate) fn save_frontmost_app() {
+    use std::sync::atomic::Ordering;
+
+    if FRONTMOST_FOCUS_SESSION_ACTIVE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
     with_autorelease_pool(|| {
         use objc::{class, msg_send, sel, sel_impl};
         use tauri_nspanel::cocoa::base::{id, nil};
@@ -147,15 +198,27 @@ pub(crate) fn save_frontmost_app() {
                     let _: () = msg_send![old, release];
                 }
                 *prev = frontmost as usize;
+            } else {
+                FRONTMOST_FOCUS_SESSION_ACTIVE.store(false, Ordering::SeqCst);
             }
         }
     });
+}
+
+/// Capture Main/Timeline's origin before a caller explicitly activates the
+/// screenpipe application (for example, a notification action).
+#[cfg(target_os = "macos")]
+pub(crate) fn begin_frontmost_app_focus_session() {
+    save_frontmost_app();
 }
 
 /// Re-activate the previously frontmost app (saved on show).
 /// This keeps macOS in the same Space instead of switching.
 #[cfg(target_os = "macos")]
 pub fn restore_frontmost_app() {
+    use std::sync::atomic::Ordering;
+
+    FRONTMOST_FOCUS_SESSION_ACTIVE.store(false, Ordering::SeqCst);
     with_autorelease_pool(|| {
         use objc::{msg_send, sel, sel_impl};
         let ptr = {
@@ -183,6 +246,9 @@ pub fn restore_frontmost_app() {
 /// pull them back by re-activating the previous app.
 #[cfg(target_os = "macos")]
 pub fn clear_frontmost_app() {
+    use std::sync::atomic::Ordering;
+
+    FRONTMOST_FOCUS_SESSION_ACTIVE.store(false, Ordering::SeqCst);
     with_autorelease_pool(|| {
         use objc::{msg_send, sel, sel_impl};
         let ptr = {
@@ -259,14 +325,14 @@ pub(crate) fn restore_frontmost_app_if_external_with_app(app: Option<&AppHandle>
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::should_restore_search_origin;
+    use super::should_restore_overlay_origin;
 
     #[test]
-    fn restores_only_when_search_activated_screenpipe() {
-        assert!(should_restore_search_origin(10, 10, 20, true));
-        assert!(!should_restore_search_origin(10, 10, 20, false));
-        assert!(!should_restore_search_origin(20, 10, 20, true));
-        assert!(!should_restore_search_origin(30, 10, 20, true));
-        assert!(!should_restore_search_origin(10, 10, 10, true));
+    fn restores_only_when_overlay_activated_screenpipe() {
+        assert!(should_restore_overlay_origin(10, 10, 20, true));
+        assert!(!should_restore_overlay_origin(10, 10, 20, false));
+        assert!(!should_restore_overlay_origin(20, 10, 20, true));
+        assert!(!should_restore_overlay_origin(30, 10, 20, true));
+        assert!(!should_restore_overlay_origin(10, 10, 10, true));
     }
 }

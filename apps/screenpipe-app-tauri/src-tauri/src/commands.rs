@@ -2071,11 +2071,21 @@ pub async fn show_window_activated(
     window: ShowRewindWindow,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
+    let is_main_overlay = matches!(window.id(), RewindWindowId::Main);
+    #[cfg(target_os = "macos")]
+    let is_chat_overlay = matches!(window.id(), RewindWindowId::Chat);
+
+    #[cfg(target_os = "macos")]
     {
         app_handle
-            .run_on_main_thread(|| {
+            .run_on_main_thread(move || {
                 use objc::{msg_send, sel, sel_impl};
                 use tauri_nspanel::cocoa::base::id;
+                if is_main_overlay {
+                    crate::window::begin_frontmost_app_focus_session();
+                } else if is_chat_overlay {
+                    crate::window::begin_chat_focus_session();
+                }
                 unsafe {
                     let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
                     let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
@@ -2083,7 +2093,18 @@ pub async fn show_window_activated(
             })
             .map_err(|e| format!("failed to activate app: {}", e))?;
     }
-    show_window(app_handle, window).await
+    let result = show_window(app_handle.clone(), window).await;
+    #[cfg(target_os = "macos")]
+    if result.is_err() {
+        let _ = app_handle.run_on_main_thread(move || {
+            if is_main_overlay {
+                crate::window::finish_frontmost_app_focus_session(true);
+            } else if is_chat_overlay {
+                crate::window::finish_chat_focus_session(true);
+            }
+        });
+    }
+    result
 }
 
 /// Programmatically adjust a window's always-on-top level after creation.

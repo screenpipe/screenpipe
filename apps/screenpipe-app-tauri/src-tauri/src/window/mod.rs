@@ -124,6 +124,10 @@ pub use first_responder::make_webview_first_responder;
 #[cfg(target_os = "macos")]
 pub use focus::clear_frontmost_app;
 #[cfg(target_os = "macos")]
+pub(crate) use focus::{begin_chat_focus_session, begin_frontmost_app_focus_session};
+#[cfg(target_os = "macos")]
+pub(crate) use focus::{finish_chat_focus_session, finish_frontmost_app_focus_session};
+#[cfg(target_os = "macos")]
 #[allow(unused_imports)]
 pub use focus::restore_frontmost_app;
 #[cfg(target_os = "macos")]

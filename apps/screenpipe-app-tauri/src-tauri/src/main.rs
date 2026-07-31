@@ -785,6 +785,24 @@ async fn main() {
                     return;
                 }
 
+                // Cmd-W / native close must use the same macOS NSPanel path as
+                // Escape and shortcut toggles. A plain WebviewWindow::hide()
+                // bypasses focus-session cleanup and can surface Home.
+                #[cfg(target_os = "macos")]
+                match window.label() {
+                    "main" | "main-window" => {
+                        api.prevent_close();
+                        let _ = ShowRewindWindow::Main.close(window.app_handle());
+                        return;
+                    }
+                    "chat" => {
+                        api.prevent_close();
+                        let _ = ShowRewindWindow::Chat.close(window.app_handle());
+                        return;
+                    }
+                    _ => {}
+                }
+
                 api.prevent_close();
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_visible_on_all_workspaces(false);

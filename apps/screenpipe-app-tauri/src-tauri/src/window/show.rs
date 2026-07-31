@@ -19,7 +19,8 @@ use super::content_process::setup_content_process_handler;
 use super::first_responder::{make_nswindow_webview_first_responder, make_webview_first_responder};
 #[cfg(target_os = "macos")]
 use super::focus::{
-    begin_search_focus_session, finish_search_focus_session, restore_frontmost_app,
+    begin_chat_focus_session, begin_search_focus_session, clear_frontmost_app,
+    finish_chat_focus_session, finish_frontmost_app_focus_session, finish_search_focus_session,
     restore_frontmost_app_if_external_with_app,
 };
 use super::panel::{main_label_for_mode, MAIN_CREATED_MODE};
@@ -37,10 +38,8 @@ use tauri_nspanel::WebviewWindowExt;
 
 /// Apply the chat window's always-on-top panel behaviour. Single source of
 /// truth shared by the show path and the live settings toggle
-/// (`commands::set_chat_always_on_top`). When on-top, the panel sits at level
-/// 1001 with the NonActivatingPanel style bit (128) so clicking it doesn't
-/// steal focus from the frontmost app; when off, it drops to normal window
-/// level and the bit is cleared so other windows can cover it.
+/// (`commands::set_chat_always_on_top`). The panel remains non-activating in
+/// both modes; the setting only controls whether it sits above other apps.
 ///
 /// Must run on the main thread (wrap callers in `run_on_main_thread_safe`).
 #[cfg(target_os = "macos")]
@@ -48,19 +47,16 @@ pub fn apply_chat_panel_on_top(panel: &tauri_nspanel::raw_nspanel::RawNSPanel, o
     use objc::{msg_send, sel, sel_impl};
     if on_top {
         panel.set_level(1001);
-        // NonActivatingPanel (128) so clicking doesn't activate app
-        unsafe {
-            let current: i32 = msg_send![panel, styleMask];
-            panel.set_style_mask(current | 128);
-        }
     } else {
         // Normal window level — allow it to go behind other windows
         panel.set_level(0);
-        // Remove NonActivatingPanel bit (128) so it behaves normally
-        unsafe {
-            let current: i32 = msg_send![panel, styleMask];
-            panel.set_style_mask(current & !128);
-        }
+    }
+    // Chat is always an overlay: it may become key for typing without making
+    // the entire screenpipe app active or switching Spaces.
+    unsafe {
+        let current: i32 = msg_send![panel, styleMask];
+        panel.set_style_mask(current | 128);
+        let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: true];
     }
 }
 
@@ -690,6 +686,7 @@ impl ShowRewindWindow {
 
                         if let Ok(panel) = app_clone.get_webview_panel(RewindWindowId::Chat.label())
                         {
+                            begin_chat_focus_session();
                             apply_chat_panel_on_top(&*panel, chat_on_top);
                             let _: () =
                                 unsafe { msg_send![&*panel, setMovableByWindowBackground: true] };
@@ -699,7 +696,8 @@ impl ShowRewindWindow {
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                             );
-                            panel.order_front_regardless();
+                            use tauri_nspanel::cocoa::base::nil;
+                            let _: () = unsafe { msg_send![&*panel, orderFront: nil] };
                             panel.make_key_window();
                             // Set WKWebView as first responder AFTER make_key_window
                             unsafe {
@@ -1595,19 +1593,7 @@ impl ShowRewindWindow {
                                     .unwrap_or_default()
                                     .chat_always_on_top;
 
-                                if chat_on_top {
-                                    // Level 1001 to appear above fullscreen apps
-                                    panel.set_level(1001);
-                                    // NonActivatingPanel (128) so clicking the chat doesn't
-                                    // activate the app (which would switch Spaces away from
-                                    // fullscreen apps). Preserve existing style bits.
-                                    unsafe {
-                                        let current: i32 = msg_send![&*panel, styleMask];
-                                        panel.set_style_mask(current | 128);
-                                    }
-                                } else {
-                                    panel.set_level(0);
-                                }
+                                apply_chat_panel_on_top(&*panel, chat_on_top);
 
                                 // Don't hide when app deactivates
                                 panel.set_hides_on_deactivate(false);
@@ -1867,8 +1853,10 @@ impl ShowRewindWindow {
                             }
                         }
                     }
-                    // Intentionally do NOT call restore_frontmost_app() here —
-                    // we're transitioning to another screenpipe window.
+                    // We're transitioning to another screenpipe window. Release
+                    // the retained origin without activating it, and allow the
+                    // next Timeline show to capture a fresh origin.
+                    clear_frontmost_app();
                 });
             }
 
@@ -1891,7 +1879,7 @@ impl ShowRewindWindow {
             {
                 // Hide whichever main panel is active (could be "main" or "main-window").
                 //
-                // IMPORTANT: order_out MUST happen BEFORE restore_frontmost_app().
+                // IMPORTANT: order_out MUST happen BEFORE finishing focus restore.
                 // Previously restore ran first (synchronous) while order_out was
                 // dispatched async. This caused a focus bounce: the panel lost key
                 // status (alpha→0), then NSNonactivatingPanelMask let it reassert
@@ -1899,26 +1887,30 @@ impl ShowRewindWindow {
                 // visible "blink and comes back" artifact.
                 //
                 // By doing both inside one run_on_main_thread_safe closure with
-                // order_out first, the panel is off-screen before the previous app
-                // is reactivated, so no focus events can bounce back to it.
+                // order_out first, the panel is off-screen before a conditional
+                // restore, so no focus events can bounce back to it.
                 MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
                 let app_clone = app.clone();
                 run_on_main_thread_safe(app, move || {
+                    let mut main_was_key = false;
                     for label in &["main", "main-window"] {
                         if let Ok(panel) = app_clone.get_webview_panel(label) {
                             if panel.is_visible() {
                                 // Alpha=0 first for instant visual hide
                                 unsafe {
                                     use objc::{msg_send, sel, sel_impl};
+                                    let was_key: bool = msg_send![&*panel, isKeyWindow];
+                                    main_was_key |= was_key;
                                     let _: () = msg_send![&*panel, setAlphaValue: 0.0f64];
                                 }
                                 panel.order_out(None);
                             }
                         }
                     }
-                    // Now that the panel is off-screen, safely restore the
-                    // previous app without triggering focus events on our panel.
-                    restore_frontmost_app();
+                    // Match Search: normally the external app never stopped
+                    // being frontmost. Restore only if AppKit leaked activation
+                    // to screenpipe while this overlay was key.
+                    finish_frontmost_app_focus_session(main_was_key);
                 });
             }
 
@@ -1944,6 +1936,36 @@ impl ShowRewindWindow {
                 }
             }
 
+            return Ok(());
+        }
+
+        // Chat is also a retained NSPanel on macOS. Ordering it out before
+        // finishing its dedicated focus session prevents close/Escape/shortcut
+        // dismissal from surfacing the screenpipe Home window.
+        if id.label() == RewindWindowId::Chat.label() {
+            if let Some(window) = id.get(app) {
+                #[cfg(target_os = "macos")]
+                {
+                    let window_clone = window.clone();
+                    run_on_main_thread_safe(app, move || {
+                        use objc::{msg_send, sel, sel_impl};
+                        use tauri_nspanel::cocoa::base::{id, nil};
+                        let mut chat_was_key = false;
+                        if let Ok(ns_win) = window_clone.ns_window() {
+                            let ns_win = ns_win as id;
+                            unsafe {
+                                chat_was_key = msg_send![ns_win, isKeyWindow];
+                                let _: () = msg_send![ns_win, orderOut: nil];
+                            }
+                        }
+                        finish_chat_focus_session(chat_was_key);
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.close().ok();
+                }
+            }
             return Ok(());
         }
 

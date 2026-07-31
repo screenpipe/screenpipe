@@ -46,7 +46,14 @@ pub(crate) unsafe fn show_panel_visible(
             let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
         }
 
-        panel.order_front_regardless();
+        if activate_app {
+            panel.order_front_regardless();
+        } else {
+            // Match Search: show the non-activating panel without making the
+            // whole screenpipe application frontmost.
+            use tauri_nspanel::cocoa::base::nil;
+            let _: () = msg_send![&*panel, orderFront: nil];
+        }
         panel.make_key_window();
         make_webview_first_responder(panel);
 
