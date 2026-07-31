@@ -675,6 +675,15 @@ async getChatsDir() : Promise<Result<string, string>> {
 async getCloudToken() : Promise<string | null> {
     return await TAURI_INVOKE("get_cloud_token");
 },
+/**
+ * Whether native skipped auto-start because account access is required.
+ * Clears the pending flag. AuthGuard listens for `app-entitlement-required`
+ * then calls this so cold-start emissions are not lost (Tauri events are not
+ * buffered for late listeners).
+ */
+async takeAppEntitlementRequired() : Promise<boolean> {
+    return await TAURI_INVOKE("take_app_entitlement_required");
+},
 async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promise<Result<JsonValue, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_disk_usage", { forceRefresh, dataDir }) };

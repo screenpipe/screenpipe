@@ -57,3 +57,39 @@ export function timelineTimestampFromDeepLink(href: string): string | null {
 
   return candidate;
 }
+
+/** Handler-level outcome for timeline deep links (toast vs navigate vs ignore). */
+export type TimelineDeepLinkOutcome = "navigate" | "invalid" | "ignore";
+
+export function timelineDeepLinkOutcome(href: string): TimelineDeepLinkOutcome {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return "ignore";
+  }
+
+  const path = url.pathname.replace(/^\/+/, "");
+  if (
+    url.protocol !== "screenpipe:" ||
+    (url.host !== "timeline" && path !== "timeline")
+  ) {
+    return "ignore";
+  }
+
+  const timestamp = timelineTimestampFromDeepLink(href);
+  if (timestamp) return "navigate";
+
+  if (url.searchParams.has("timestamp") || url.searchParams.has("start_time")) {
+    return "invalid";
+  }
+  // Raw query may use `+` offsets that URLSearchParams mangles; still toast when
+  // the decoded helper rejected a present timestamp/start_time key.
+  for (const part of url.search.slice(1).split("&")) {
+    if (!part) continue;
+    const rawKey = part.slice(0, part.includes("=") ? part.indexOf("=") : part.length);
+    const key = decodeQueryComponent(rawKey);
+    if (key === "timestamp" || key === "start_time") return "invalid";
+  }
+  return "ignore";
+}

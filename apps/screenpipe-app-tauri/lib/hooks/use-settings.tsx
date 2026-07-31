@@ -849,7 +849,10 @@ async function setSettingsStripped(store: Store, settings: Settings) {
 	let persisted = !token;
 	if (token) {
 		try {
-			const res = await commands.setCloudToken(token);
+			const { persistCloudTokenAndStripPlaintext } = await import(
+				"@/lib/cloud-token-persist"
+			);
+			const res = await persistCloudTokenAndStripPlaintext(token);
 			if (res.status === "ok") {
 				persisted = true;
 			} else {
@@ -861,7 +864,9 @@ async function setSettingsStripped(store: Store, settings: Settings) {
 	}
 	// Only strip the plaintext token from store.bin once it's safely in the
 	// encrypted secret store. If persistence failed, keep it on disk so the user
-	// isn't silently signed out on the next restart (#3943).
+	// isn't silently signed out on the next restart (#3943). A later successful
+	// `persistCloudTokenAndStripPlaintext` (deeplink retry / loadUser) rewrites
+	// store.bin without the retained token.
 	const toPersist =
 		token && persisted
 			? { ...settings, user: { ...settings.user, token: undefined } }
@@ -1658,7 +1663,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				// setCloudToken then refreshes the native PipeManager's safe cap.
 				await updateSettings({ user: userData });
 				try {
-					await commands.setCloudToken(token);
+					const { persistCloudTokenAndStripPlaintext } = await import(
+						"@/lib/cloud-token-persist"
+					);
+					const res = await persistCloudTokenAndStripPlaintext(token);
+					if (res.status !== "ok") {
+						console.warn(
+							"failed to apply unknown-plan restrictions:",
+							res.error,
+						);
+					}
 				} catch (e) {
 					console.warn("failed to apply unknown-plan restrictions:", e);
 				}
@@ -1727,7 +1741,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			// the engine keeps whatever token it captured at boot (often
 			// `null`), and every Sonnet/Opus pipe 403s on tier=anonymous.
 			try {
-				await commands.setCloudToken(token);
+				const { persistCloudTokenAndStripPlaintext } = await import(
+					"@/lib/cloud-token-persist"
+				);
+				const res = await persistCloudTokenAndStripPlaintext(token);
+				if (res.status !== "ok") {
+					console.warn(
+						"failed to push cloud token to sidecar:",
+						res.error,
+					);
+				}
 			} catch (e) {
 				console.warn("failed to push cloud token to sidecar:", e);
 			}

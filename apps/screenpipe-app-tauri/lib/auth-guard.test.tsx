@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   loadUser: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
   setCloudToken: vi.fn().mockResolvedValue(undefined),
+  takeAppEntitlementRequired: vi.fn().mockResolvedValue(false),
   capture: vi.fn(),
   toast: vi.fn(),
   state: { user: null as any },
@@ -26,7 +27,10 @@ vi.mock("@/lib/hooks/use-settings", () => ({
 }));
 
 vi.mock("@/lib/utils/tauri", () => ({
-  commands: { setCloudToken: mocks.setCloudToken },
+  commands: {
+    setCloudToken: mocks.setCloudToken,
+    takeAppEntitlementRequired: mocks.takeAppEntitlementRequired,
+  },
 }));
 
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
@@ -79,6 +83,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.loadUser.mockResolvedValue(undefined);
+  mocks.takeAppEntitlementRequired.mockResolvedValue(false);
   mocks.state.user = null;
 });
 
@@ -353,5 +358,23 @@ describe("installAuthInterceptor sign-out scoping", () => {
     originalFetch.mockResolvedValue({ status: 200 });
     await (window as any).fetch("https://screenpipe.com/api/user");
     expect(clearSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthGuard cold-start app-entitlement-required", () => {
+  beforeEach(() => {
+    mocks.state.user = { ...LOGGED_IN };
+  });
+
+  it("re-verifies when the pending native flag is set before listen", async () => {
+    mocks.takeAppEntitlementRequired.mockResolvedValueOnce(true);
+    renderGuard();
+
+    await waitFor(() =>
+      expect(mocks.takeAppEntitlementRequired).toHaveBeenCalled(),
+    );
+    // Toast may be suppressed by the module-level cooldown from earlier tests;
+    // the recovery path must still call verifyToken → loadUser.
+    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalled());
   });
 });

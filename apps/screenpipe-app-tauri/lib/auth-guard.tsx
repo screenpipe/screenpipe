@@ -282,19 +282,35 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   // Native emits this when recording auto-start is skipped because plan truth
   // is unknown/stale. Surface it — previously the UI stayed "logged in" with
   // capture paused and no recovery cue.
+  //
+  // Listen first, then take the pending native flag. Tauri events are not
+  // buffered; setup may emit before React registers, so the AtomicBool covers
+  // cold start without double-firing when the live event also arrives.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen("app-entitlement-required", () => {
+    let cancelled = false;
+
+    const onRequired = () => {
       showAccountAccessToast();
       void verifyToken();
-    })
-      .then((fn) => {
+    };
+
+    void listen("app-entitlement-required", onRequired)
+      .then(async (fn) => {
         unlisten = fn;
+        if (cancelled) return;
+        try {
+          const pending = await commands.takeAppEntitlementRequired();
+          if (!cancelled && pending) onRequired();
+        } catch {
+          // Older builds / jsdom may not expose the command yet.
+        }
       })
       .catch(() => {
         // jsdom / non-tauri hosts have no event IPC — skip quietly.
       });
     return () => {
+      cancelled = true;
       unlisten?.();
     };
   }, [verifyToken]);

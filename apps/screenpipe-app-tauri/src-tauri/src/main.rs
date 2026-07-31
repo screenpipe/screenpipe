@@ -1570,6 +1570,7 @@ async fn main() {
                 if !crate::recording::recording_access_allowed(&store_clone) {
                     info!("Skipping server auto-start: screenpipe account access required");
                     crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
+                    crate::recording::mark_app_entitlement_required();
                     let _ = app_handle.emit("app-entitlement-required", ());
                     break 'start_server;
                 }

@@ -152,12 +152,31 @@ pub(crate) fn recording_access_allowed(store: &SettingsStore) -> bool {
     )
 }
 
+/// Set when native skips auto-start because account access is required.
+/// React listens for `app-entitlement-required`, but Tauri events are not
+/// buffered — if setup emits before the listener registers, the toast/verify
+/// would be lost. AuthGuard calls [`take_app_entitlement_required`] after
+/// listening so a cold start still recovers.
+static APP_ENTITLEMENT_REQUIRED_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn mark_app_entitlement_required() {
+    APP_ENTITLEMENT_REQUIRED_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Returns whether auto-start was skipped for account access, and clears the flag.
+#[tauri::command]
+#[specta::specta]
+pub fn take_app_entitlement_required() -> bool {
+    APP_ENTITLEMENT_REQUIRED_PENDING.swap(false, Ordering::SeqCst)
+}
+
 fn require_recording_access(store: &SettingsStore) -> Result<(), String> {
     if recording_access_allowed(store) {
         return Ok(());
     }
 
     crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
+    mark_app_entitlement_required();
     Err("account_required: sign in to start screenpipe recording".to_string())
 }
 
@@ -1449,6 +1468,22 @@ async fn kill_process_on_port(port: u16) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod app_entitlement_required_pending_tests {
+    use super::{mark_app_entitlement_required, take_app_entitlement_required};
+
+    #[test]
+    fn take_clears_pending_flag_for_cold_start_handshake() {
+        // Ensure a clean slate — other tests may have marked the flag.
+        let _ = take_app_entitlement_required();
+        assert!(!take_app_entitlement_required());
+
+        mark_app_entitlement_required();
+        assert!(take_app_entitlement_required());
+        assert!(!take_app_entitlement_required());
     }
 }
 
