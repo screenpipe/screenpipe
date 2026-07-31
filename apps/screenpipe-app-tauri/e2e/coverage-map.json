@@ -431,6 +431,16 @@
       "notes": "Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider."
     },
     {
+      "spec": "chat-hosted-retry-feedback.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai", "real-ui-e2e", "tauri-command"],
+      "features": ["chat", "chat-streaming"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A local provider returns priced_request_in_flight twice; Pi retries while the UI remains active, a real composer follow-up enters the Rust queue, and both turns recover without the misleading mid-response error."
+    },
+    {
       "spec": "chat-source-file-preview.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],

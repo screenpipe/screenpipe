@@ -765,8 +765,15 @@ pub(crate) fn spawn_queue_with_prompt_start_timeout(
                             match started {
                                 PromptStartWait::Acknowledged => {}
                                 PromptStartWait::Rejected(error) => {
-                                    state.mark_agent_idle();
-                                    state.signal_done_if_idle();
+                                    // "Already processing" proves another turn
+                                    // still owns this process. Preserve the busy
+                                    // guard until its real terminal event arrives,
+                                    // otherwise every queued follow-up cascades
+                                    // into the same rejection.
+                                    if !error.to_ascii_lowercase().contains("already processing") {
+                                        state.mark_agent_idle();
+                                        state.signal_done_if_idle();
+                                    }
                                     if let Some(pid) = &prompt_id {
                                         state.dequeue_prompt(pid);
                                     }
@@ -973,6 +980,16 @@ async fn wait_for_done_or_terminated(
             cmd_type
         );
         return false;
+    }
+
+    // `Notify::notify_waiters` does not retain a permit. A very fast prompt can
+    // finish between its RPC acknowledgement and this wait being installed;
+    // the queue state is the durable source of truth for that narrow window.
+    // WaitDone commands (new_session/abort) have no agent-active lifecycle, so
+    // only prompt waits may use this fast path.
+    if cmd_type == "prompt" && !state.has_active_turn_work() {
+        debug!("pi_command_queue: prompt already idle before done wait");
+        return true;
     }
 
     tokio::select! {
@@ -1652,14 +1669,8 @@ mod tests {
         let _ = child.wait();
     }
 
-    /// PROBE (chaos session, documents current behavior): `done_notify` is
-    /// `notify_waiters` with no stored permit and
-    /// `wait_for_done_or_terminated` has no already-idle fast path. If a turn
-    /// completes before the drain loop parks (instant provider error, short
-    /// turn on a loaded machine), the wait consumes the full 300s safety cap
-    /// while the next queued prompt sits stalled.
     #[tokio::test]
-    async fn probe_done_wait_blocks_when_turn_already_finished() {
+    async fn done_wait_returns_when_prompt_already_finished() {
         let state = PiQueueState::new();
         let mut alive_rx = state.alive.subscribe();
 
@@ -1668,28 +1679,17 @@ mod tests {
         state.mark_agent_idle();
         state.signal_done_if_idle();
 
-        // Current behavior: no already-idle fast path, and the pre-park done
-        // signal is lost (notify_waiters stores no permit), so the wait heads
-        // for the 300s safety cap. 1.5s of real time is enough to prove it
-        // did not return promptly.
         let outcome = tokio::time::timeout(
-            std::time::Duration::from_millis(1500),
-            wait_for_done_or_terminated(&state, &mut alive_rx, "probe"),
+            std::time::Duration::from_millis(100),
+            wait_for_done_or_terminated(&state, &mut alive_rx, "prompt"),
         )
-        .await;
-        assert!(
-            outcome.is_err(),
-            "documents the lost wakeup: the wait ignores an already-finished turn"
-        );
+        .await
+        .expect("already-finished prompt returns without waiting");
+        assert!(outcome);
     }
 
-    /// PROBE (chaos session, documents current behavior): a Pi-side
-    /// "already processing" rejection means a real turn IS running, but the
-    /// Rejected arm unconditionally clears the busy guard, so the next queued
-    /// prompt is written immediately into the busy process instead of staying
-    /// parked — where it then trips its own start watchdog.
     #[tokio::test]
-    async fn probe_rejection_releases_queue_into_busy_process() {
+    async fn already_processing_rejection_keeps_followup_parked() {
         let mut child = spawn_stdin_sink();
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("child stdin")));
 
@@ -1737,13 +1737,20 @@ mod tests {
             Err("Agent is already processing another prompt".to_string())
         );
 
-        // Current behavior: the rejection cleared the busy guard, B was
-        // written into the still-busy process, and B's own watchdog times it
-        // out ~200ms later. A parked B would instead leave this receiver
-        // pending past the 1s window.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(400), &mut b_rx)
+                .await
+                .is_err(),
+            "follow-up stays parked while the real turn is still active"
+        );
+
+        // The real turn's terminal event releases the queue. Our stdin sink
+        // never acknowledges B, so its own watchdog then proves it was written.
+        state.mark_agent_idle();
+        state.signal_done_if_idle();
         let b = tokio::time::timeout(std::time::Duration::from_secs(1), &mut b_rx)
             .await
-            .expect("documents the cascade: B resolves instead of staying parked")
+            .expect("released follow-up reaches its start watchdog")
             .expect("follow-up reply channel stayed open");
         assert_eq!(b, Err(PROMPT_START_TIMEOUT_ERROR.to_string()));
 

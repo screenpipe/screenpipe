@@ -507,8 +507,25 @@ fn sync_queue_state_from_event(
             queue_state.clear_steer_in_flight();
         }
         Some("agent_end") => {
-            queue_state.mark_agent_idle();
-            queue_state.signal_done_if_idle();
+            // Pi emits agent_end before entering provider retry backoff. The
+            // SDK's `willRetry` flag means this logical turn still owns the
+            // process; releasing the queue here sends the next prompt into a
+            // busy agent and causes the misleading "already processing" loop.
+            if event.get("willRetry").and_then(|value| value.as_bool()) == Some(true) {
+                queue_state.mark_agent_active();
+            } else {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
+        }
+        Some("auto_retry_start") => {
+            queue_state.mark_agent_active();
+        }
+        Some("auto_retry_end") => {
+            if event.get("success").and_then(|value| value.as_bool()) == Some(false) {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
         }
         Some("message_start") => {
             if queue_state.is_steer_in_flight() {
@@ -4374,6 +4391,44 @@ mod tests {
             super::event_tool_call_ids(&tool_end),
             vec!["tool-1".to_string()]
         );
+    }
+
+    #[test]
+    fn queue_stays_busy_across_provider_retry_backoff() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        super::sync_queue_state_from_event(&state, &json!({ "type": "agent_start" }));
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": true }),
+        );
+        assert!(state.is_agent_active(), "retry backoff still owns the turn");
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({
+                "type": "auto_retry_start",
+                "attempt": 1,
+                "maxAttempts": 3,
+            }),
+        );
+        assert!(state.is_agent_active());
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": false }),
+        );
+        assert!(!state.is_agent_active(), "terminal agent_end releases the queue");
+    }
+
+    #[test]
+    fn exhausted_provider_retry_releases_queue() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        state.mark_agent_active();
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "auto_retry_end", "success": false }),
+        );
+        assert!(!state.is_agent_active());
     }
 
     #[test]

@@ -568,8 +568,8 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         if (isPiPromptStartTimeout(rawError)) {
           errorMsg = piPromptStartTimeoutMessage();
           retryPrompt = userMessage;
-        } else if (rawError.includes("already processing")) {
-          errorMsg = "The AI was mid-response when your message arrived.";
+        } else if (rawError.toLowerCase().includes("already processing")) {
+          errorMsg = "The previous reply was still finishing, so this message was not sent. Retry it in a moment.";
           retryPrompt = userMessage;
         } else if (rawError.includes("Broken pipe") || rawError.includes("not running") || rawError.includes("has died") || rawError.includes("Pi not initialized")) {
           const provider = currentPreset?.provider;
