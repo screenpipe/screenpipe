@@ -344,7 +344,11 @@ const CURATED_MODELS: ModelEntry[] = [
  * Handles model listing requests — curated list with rich metadata.
  * OpenAI-compatible: standard fields (id, object, owned_by) + extra metadata.
  */
-export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'): Promise<Response> {
+export async function handleModelListing(
+  env: Env,
+  tier: UserTier = 'subscribed',
+  upgradeEligible = false,
+): Promise<Response> {
   try {
     let models: ModelEntry[] = [...CURATED_MODELS];
 
@@ -390,6 +394,7 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
       object: 'list',
       data: responseModels,
       tier,
+      upgrade_eligible: upgradeEligible,
       tier_limits: getTierConfig(env)[tier],
     }));
   } catch (error) {

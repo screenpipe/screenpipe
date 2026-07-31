@@ -140,6 +140,12 @@ describe('tier locking in /v1/models', () => {
 		expect(body.data.length).toBeGreaterThan(0);
 		expect(body.data.every(m => !m.locked)).toBe(true);
 	});
+
+	it('returns the server-backed upgrade decision beside the model catalog', async () => {
+		const response = await handleModelListing(env(), 'logged_in', true);
+		const body = await response.json() as { upgrade_eligible?: boolean };
+		expect(body.upgrade_eligible).toBe(true);
+	});
 });
 
 describe('OpenAI API accounting and routing', () => {

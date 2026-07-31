@@ -176,8 +176,8 @@ pub async fn send_notification(
 
     // Delivery gate (master-off / snooze / quiet hours): drop the alert here so
     // it never writes history either. Announcements returned above are
-    // first-party product comms and exempt; `capture_stall` is the critical
-    // recording-stopped alert and also exempt (see `gate`).
+    // first-party product comms and exempt; capture-stall and disk-pressure
+    // recording-stopped alerts are also exempt (see `gate`).
     // `show_notification_panel` enforces the same gate for the direct callers
     // that skip this route.
     if super::gate::suppressed_now(

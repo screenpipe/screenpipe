@@ -250,6 +250,36 @@ describe('validateAuth — verified identities only', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('maps Lifetime app ownership to the canonical Basic hosted-AI plan', async () => {
+    verifyTokenMock.mockImplementation(async () => ({ sub: 'user_lifetime' }) as any);
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://screenpipe.com/api/user') {
+        return new Response(JSON.stringify({
+          success: true,
+          user: {
+            clerk_id: 'user_lifetime',
+            cloud_subscribed: false,
+            app_entitled: true,
+            subscription_plan: 'lifetime',
+            entitlement: { active: true, plan: 'lifetime', features: { app: true, cloud: false } },
+          },
+        }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    expect(await validateAuth(requestFor('eyJ.lifetime.clerk'), env)).toEqual({
+      isValid: true,
+      tier: 'logged_in',
+      accountPlan: 'basic',
+      deviceId: 'user_lifetime',
+      userId: 'user_lifetime',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps a verified identity but marks missing plan truth unknown', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_unknown' }) as any);
     const fetchMock = mock(async (input: RequestInfo | URL) => {

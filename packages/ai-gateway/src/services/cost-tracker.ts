@@ -198,6 +198,32 @@ export function getModelCost(
   return inCost + outCost;
 }
 
+/**
+ * Price stream usage without treating an absent final usage event as $0.
+ * Providers normally report both sides at completion; cancellation may expose
+ * only partial or zero counters, in which case the conservative model estimate
+ * is safer than releasing the spend lease with no recorded cost.
+ */
+export function getStreamModelCost(
+  model: string | null | undefined,
+  inputTokens: number,
+  outputTokens: number,
+  cache?: CacheUsage,
+): number {
+  if (inputTokens <= 0 || outputTokens <= 0) {
+    // Preserve any large partial counter already observed. Falling all the way
+    // back to the average would undercount a cancelled 100k-token prompt just
+    // because its final output usage event never arrived.
+    return getModelCost(
+      model,
+      Math.max(inputTokens, DEFAULT_INPUT_TOKENS),
+      Math.max(outputTokens, DEFAULT_OUTPUT_TOKENS),
+      cache,
+    );
+  }
+  return getModelCost(model, inputTokens, outputTokens, cache);
+}
+
 export interface CostLogEntry {
   device_id?: string;
   user_id?: string;
@@ -234,9 +260,11 @@ function utcToday(): string {
  * the (device_id, timestamp) index that would have made the SUM cheap
  * can't even build at that size (SQLITE_NOMEM).
  *
- * Best-effort: a telemetry failure must never block an inference request.
+ * The per-device accumulator is the quota source of truth. Callers that hold
+ * a priced-request lease use the boolean result to remain closed when this
+ * write fails; the separate bounded aggregate remains best-effort telemetry.
  */
-async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number): Promise<void> {
+async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number): Promise<boolean> {
   const today = utcToday();
   try {
     await env.DB.prepare(
@@ -247,8 +275,10 @@ async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number
          cost_day = ?2,
          updated_at = CURRENT_TIMESTAMP`
     ).bind(deviceId, today, cost).run();
+    return true;
   } catch (error) {
     console.warn('daily cost accumulator update failed:', error);
+    return false;
   }
 }
 
@@ -268,9 +298,10 @@ function boundedDimension(value: string | null | undefined, fallback: string): s
  * this table. The per-device daily accumulator in `usage` remains the O(1)
  * quota source of truth; this aggregate is only for operational summaries.
  */
-export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
+export async function logCost(env: Env, entry: CostLogEntry): Promise<boolean> {
+  let accumulatorRecorded = true;
   if (entry.device_id && entry.estimated_cost_usd > 0) {
-    await bumpDailyCostAccumulator(env, entry.device_id, entry.estimated_cost_usd);
+    accumulatorRecorded = await bumpDailyCostAccumulator(env, entry.device_id, entry.estimated_cost_usd);
   }
 
   const latencyMs = nonNegativeNumber(entry.latency_ms);
@@ -315,6 +346,7 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
   } catch (error) {
     console.error('cost aggregation failed:', error);
   }
+  return accumulatorRecorded;
 }
 
 /**
@@ -394,6 +426,16 @@ export function getTierDailyCostCap(tier: string, env?: Env): number {
  * scan was one of the failure modes this accumulator replaced.
  */
 export async function getDailyUserCost(env: Env, deviceId: string): Promise<number> {
+  try {
+    return await getDailyUserCostOrThrow(env, deviceId);
+  } catch (error) {
+    console.error('getDailyUserCost failed:', error);
+    return 0;
+  }
+}
+
+/** Same lookup as getDailyUserCost, but lets spend enforcement fail closed. */
+export async function getDailyUserCostOrThrow(env: Env, deviceId: string): Promise<number> {
   const today = utcToday();
   try {
     const row = await env.DB.prepare(
@@ -404,7 +446,7 @@ export async function getDailyUserCost(env: Env, deviceId: string): Promise<numb
     return row?.daily_cost ?? 0;
   } catch (error) {
     console.error('daily cost accumulator read failed:', error);
-    return 0; // Preserve the existing fail-open behavior on telemetry failure.
+    throw new Error('daily cost accounting unavailable');
   }
 }
 

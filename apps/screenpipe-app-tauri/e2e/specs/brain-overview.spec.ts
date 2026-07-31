@@ -689,7 +689,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     )) as string;
     expect(renderedText).toContain("Live Views");
     expect(renderedText).toContain("DASHBOARDS");
-    expect(renderedText).toContain("customize");
+    expect(renderedText.toLowerCase()).toContain("customize");
     expect(renderedText).toContain("Automation opportunities");
     expect(await dashboardSelector.getValue()).toBe(SELECTABLE_VIEW_ID);
     const selectedDashboardTitle = (await browser.execute(() => {

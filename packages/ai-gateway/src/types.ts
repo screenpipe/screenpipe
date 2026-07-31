@@ -228,7 +228,6 @@ export type AccountPlan =
 	| 'business'
 	| 'team'
 	| 'enterprise'
-	| 'lifetime'
 	| 'unknown';
 
 // Auth result with tier information
@@ -284,6 +283,8 @@ export interface UsageStatus {
 	 *  kill-switch (MODEL_GATING_ENABLED) turns the banner off server-side too,
 	 *  no app release needed. */
 	upsell_banner?: boolean;
+	/** Authoritative plan decision for proactive hosted-AI upgrade UI. */
+	upgrade_eligible?: boolean;
 	upgrade_options?: {
 		login?: { benefit: string };
 		subscribe?: { benefit: string };

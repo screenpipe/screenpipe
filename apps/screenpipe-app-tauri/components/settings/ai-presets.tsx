@@ -274,10 +274,9 @@ const AISection = ({
   // models. Null on BYOK providers; we render nothing in that case.
   const usage = useUsageStatus();
   // Whether to surface the proactive "Business" lock UI. Off unless the PostHog
-  // flag is on and the user has no persisted entitlement evidence (fail-open so
-  // a tier flicker never false-locks a paying customer). The gateway's `locked`
-  // flag only takes visual effect when this is true.
-  const showUpsell = useModelUpsellGating();
+  // flag, hydrated local entitlement, and gateway eligibility all agree. The
+  // gateway's `locked` flag only takes visual effect when this is true.
+  const showUpsell = useModelUpsellGating(usage?.upgrade_eligible);
   const [settingsPreset, setSettingsPreset] = useState<
     Partial<AIPreset> | undefined
   >(preset);

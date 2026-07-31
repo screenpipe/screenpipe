@@ -979,6 +979,11 @@ pub struct SettingsStore {
     #[serde(rename = "showRestartNotifications", default)]
     pub show_restart_notifications: bool,
 
+    /// Stop capture before the data volume is completely full. Search, pipes,
+    /// and the local API remain available. Explicitly opt-in for now.
+    #[serde(rename = "stopRecordingOnLowDisk", default)]
+    pub stop_recording_on_low_disk: bool,
+
     /// When true, apply macOS vibrancy effect to the sidebar for a translucent look.
     #[serde(rename = "translucentSidebar", default)]
     pub translucent_sidebar: bool,
@@ -1427,6 +1432,7 @@ Rules:
             show_overlay_in_screen_recording: false,
             chat_always_on_top: true,
             show_restart_notifications: false,
+            stop_recording_on_low_disk: false,
             #[cfg(target_os = "macos")]
             translucent_sidebar: true,
             #[cfg(not(target_os = "macos"))]
@@ -2152,6 +2158,24 @@ mod tests {
         }))
         .unwrap();
         assert!(opted_in.show_restart_notifications);
+    }
+
+    #[test]
+    fn low_disk_recording_guard_defaults_to_disabled() {
+        assert!(!SettingsStore::default().stop_recording_on_low_disk);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert!(!missing.stop_recording_on_low_disk);
+
+        let opted_in: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "stopRecordingOnLowDisk": true
+        }))
+        .unwrap();
+        assert!(opted_in.stop_recording_on_low_disk);
     }
 
     #[test]

@@ -92,9 +92,9 @@ async function tryDeductCredit(env: Env, userId: string, reason: string): Promis
 /**
  * Get user's current credit balance without deducting.
  *
- * Exported because the cost-cap check in `index.ts` also needs this — credits
- * extend the daily cost ceiling 1:1 (1 credit = $1 of headroom). Without that,
- * users who pay $50 still 429 on Opus and file Intercom tickets.
+ * Credits extend the weighted query allowance only. They do not increase the
+ * provider-cash ceiling until credit-funded spend has its own consumptive,
+ * atomic accounting path.
  */
 export async function getCreditBalance(env: Env, userId: string): Promise<number> {
   const clerkId = await resolveClerkId(env, userId);

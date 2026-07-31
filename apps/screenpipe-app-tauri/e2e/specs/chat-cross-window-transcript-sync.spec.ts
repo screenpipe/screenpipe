@@ -222,8 +222,12 @@ describe("Cross-window chat transcript sync", function () {
   });
 
   it("shows pending feedback, then hydrates the completed disk turn in both WebViews", async () => {
-    const startedAt = Date.now();
-    writeConversation(startedAt);
+    let lastFixtureUpdatedAt = Date.now();
+    const nextFixtureUpdatedAt = () => {
+      lastFixtureUpdatedAt = Math.max(Date.now(), lastFixtureUpdatedAt + 1);
+      return lastFixtureUpdatedAt;
+    };
+    writeConversation(lastFixtureUpdatedAt);
 
     await browser.switchToWindow("home");
     await loadConversationInForeground(CHAT_ID, "home");
@@ -233,11 +237,16 @@ describe("Cross-window chat transcript sync", function () {
     await loadConversationInForeground(CHAT_ID, "chat");
 
     await browser.switchToWindow("home");
+    // Foregrounding can restore Pi asynchronously, especially on Linux. Stamp
+    // each simulated save when it is published so the production stale-event
+    // guard sees the fixture as the newest disk snapshot.
+    const pendingAt = nextFixtureUpdatedAt();
+    writeConversation(pendingAt);
     await emitTauri("chat-conversation-saved", {
       id: CHAT_ID,
       title: "cross-window transcript sync",
       titleSource: "fallback",
-      updatedAt: startedAt,
+      updatedAt: pendingAt,
       turnState: { isLoading: true, isStreaming: false },
     });
     await expectActiveEmptyState();
@@ -245,7 +254,7 @@ describe("Cross-window chat transcript sync", function () {
     await browser.switchToWindow("chat");
     await expectActiveEmptyState();
 
-    const activeAt = startedAt + 10;
+    const activeAt = nextFixtureUpdatedAt();
     writeConversation(activeAt, "active");
     await emitTauri("chat-conversation-saved", {
       id: CHAT_ID,
@@ -278,7 +287,7 @@ describe("Cross-window chat transcript sync", function () {
     const activeScreenshot = await saveScreenshot("chat-cross-window-active-turn");
     expect(existsSync(activeScreenshot)).toBe(true);
 
-    const completedAt = activeAt + 10;
+    const completedAt = nextFixtureUpdatedAt();
     writeConversation(completedAt, "complete");
     await emitTauri("chat-conversation-saved", {
       id: CHAT_ID,

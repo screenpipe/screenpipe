@@ -57,7 +57,7 @@ const baseEntry: CostLogEntry = {
 describe('logCost — usage-table daily cost accumulator (migration 0006)', () => {
 	it('bumps the accumulator and inserts the cost row', async () => {
 		const { env, captured } = stubEnv({});
-		await logCost(env, baseEntry);
+		expect(await logCost(env, baseEntry)).toBe(true);
 
 		const upsert = captured.find((c) => c.sql.includes('ON CONFLICT(device_id)'));
 		expect(upsert).toBeDefined();
@@ -84,7 +84,7 @@ describe('logCost — usage-table daily cost accumulator (migration 0006)', () =
 
 	it('still writes the aggregate when the quota accumulator update fails', async () => {
 		const { env, captured } = stubEnv({ failWhen: (sql) => sql.includes('ON CONFLICT(device_id)') });
-		await logCost(env, baseEntry);
+		expect(await logCost(env, baseEntry)).toBe(false);
 		expect(captured.some((c) => c.sql.includes('INSERT INTO cost_daily'))).toBe(true);
 	});
 });

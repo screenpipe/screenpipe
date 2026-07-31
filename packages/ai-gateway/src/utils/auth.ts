@@ -331,7 +331,10 @@ function normalizeAccountPlan(value: unknown): Exclude<AccountPlan, 'unknown'> |
     case 'enterprise':
       return 'enterprise';
     case 'lifetime':
-      return 'lifetime';
+      // Lifetime is the non-expiring app license; its hosted-AI allowance is
+      // the canonical Basic tier. A separate cloud grant still promotes the
+      // request to the subscribed model/rate tier below.
+      return 'basic';
     default:
       return null;
   }

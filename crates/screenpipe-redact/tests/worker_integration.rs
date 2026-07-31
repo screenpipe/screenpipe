@@ -833,7 +833,16 @@ async fn frame_fulltext_uses_accessibility_input_context_without_extra_model_pas
         ..test_worker_config()
     };
     let handle = Worker::new(pool.clone(), redactor.clone(), cfg).spawn();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_until("contextual full-text redaction", || async {
+        let row = sqlx::query(
+            "SELECT full_text_redacted_at, accessibility_redacted_at FROM frames WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        row.get::<Option<i64>, _>(0).is_some() && row.get::<Option<i64>, _>(1).is_some()
+    })
+    .await;
     handle.abort();
 
     let row = sqlx::query(

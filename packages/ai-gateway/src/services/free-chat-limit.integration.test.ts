@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Miniflare } from 'miniflare';
 import type { Env } from '../types';
 import {
+	DAILY_COST_LEASE_SECONDS,
+	releaseDailyCostLease,
+	reserveDailyCostCap,
+} from './cost-cap';
+import {
 	FREE_CHAT_COST_RESERVATION_MICRO_USD,
 	FREE_CHAT_DAILY_BUDGET_MICRO_USD,
 	FREE_CHAT_IN_FLIGHT_LEASE_SECONDS,
@@ -41,7 +46,7 @@ function metered(
 	return { mode: 'metered', userId, turnKey };
 }
 
-describe('free chat reservation against workerd D1', () => {
+describe('usage reservations against workerd D1', () => {
 	let miniflare: Miniflare;
 	let env: Env;
 
@@ -177,5 +182,55 @@ describe('free chat reservation against workerd D1', () => {
 
 		expect(results.filter((result) => result.allowed)).toHaveLength(reservationLimit);
 		expect(results.filter((result) => !result.allowed)).toHaveLength(8);
+	});
+
+	it('atomically grants one shared priced-request lease per account', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const results = await Promise.all(
+			Array.from({ length: 16 }, () =>
+				reserveDailyCostCap(env, 'user-d1-cost', 'subscribed', 'gpt-5.6-sol', now),
+			),
+		);
+
+		expect(results.filter((result) => result.allowed)).toHaveLength(1);
+		expect(results.filter((result) => !result.allowed)).toHaveLength(15);
+		const winner = results.find((result) => result.allowed);
+		if (winner?.allowed && winner.lease) await releaseDailyCostLease(env, winner.lease);
+		expect((await reserveDailyCostCap(
+			env,
+			'user-d1-cost',
+			'subscribed',
+			'gpt-5.6-sol',
+			now,
+		)).allowed).toBe(true);
+	});
+
+	it('reclaims an expired priced-request lease without accepting its stale release', async () => {
+		const start = new Date('2026-07-14T12:00:00.000Z');
+		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', 'gpt-5.6-sol', start);
+		expect(first.allowed).toBe(true);
+
+		const afterExpiry = new Date(start.getTime() + (DAILY_COST_LEASE_SECONDS + 1) * 1000);
+		const replacement = await reserveDailyCostCap(
+			env,
+			'user-d1-cost-expired',
+			'subscribed',
+			'gpt-5.6-sol',
+			afterExpiry,
+		);
+		expect(replacement.allowed).toBe(true);
+		if (first.allowed && first.lease) await releaseDailyCostLease(env, first.lease);
+
+		const overlap = await reserveDailyCostCap(
+			env,
+			'user-d1-cost-expired',
+			'subscribed',
+			'gpt-5.6-sol',
+			afterExpiry,
+		);
+		expect(overlap.allowed).toBe(false);
+		if (replacement.allowed && replacement.lease) {
+			await releaseDailyCostLease(env, replacement.lease);
+		}
 	});
 });

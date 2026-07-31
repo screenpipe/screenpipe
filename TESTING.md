@@ -305,6 +305,7 @@ commits: `eea0c865`, `cc09de61`, `e61501da`, `d25191d7`, `60096fb9`
 - [ ] **event listener race condition** — Tauri event listener setup during rapid window creation. no crash (`cc09de61`).
 - [ ] **UTF-8 boundary panic** — search with special characters, non-ASCII text in OCR results. no panic on string slicing (`eea0c865`).
 - [ ] **low disk space** — with <1GB free, app should warn user. no crash from failed writes.
+- [ ] **opt-in low-disk recording guard** — the Storage toggle defaults off and persists across restart. With it off, a low-disk event leaves capture running. With it on, crossing the engine threshold stops the real capture session, leaves `/health` and authenticated search available, and persists the critical in-app notification even when ordinary notifications are disabled. Verify the data volume is selected correctly when `SCREENPIPE_DATA_DIR` is a symlink, junction, or nested mount.
 - [ ] **large database (>10GB)** — search still returns results within 2 seconds. app doesn't freeze on startup.
 - [ ] **Snapshot compaction integrity** — Verify compaction doesn't result in NULL offset_index or pool exhaustion. (`09245af5f`)
 - [ ] **Audio chunk timestamps** — `start_time` and `end_time` are correctly set for reconciled and retranscribed audio chunks in the database.

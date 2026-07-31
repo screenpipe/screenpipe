@@ -7,7 +7,7 @@ import { Env, RequestBody, AuthResult } from './types';
 import { handleOptions, createSuccessResponse, createErrorResponse, addCorsHeaders } from './utils/cors';
 import { validateAuth } from './utils/auth';
 import { RateLimiter, checkRateLimit } from './utils/rate-limiter';
-import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate, getTierConfig, getCreditBalance } from './services/usage-tracker';
+import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate, getTierConfig } from './services/usage-tracker';
 import { handleChatCompletions } from './handlers/chat';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
@@ -15,19 +15,22 @@ import { handleRealtimeTranscriptionUpgrade } from './handlers/realtime-transcri
 import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleVoiceChat } from './handlers/voice';
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
-import { handleTinfoilAttestation, handleTinfoilProxy } from './handlers/tinfoil-proxy';
-import { logCost, getModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, resolveServedModel } from './services/cost-tracker';
+import { handleTinfoilAttestation, handleTinfoilProxy, parseTinfoilUsageMetrics } from './handlers/tinfoil-proxy';
+import { logCost, getModelCost, getStreamModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, resolveServedModel } from './services/cost-tracker';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
 import { pruneRuntimeState } from './services/runtime-state-maintenance';
 import { resolveLatencyClass, isBackgroundRequest } from './utils/latency';
-import { enforceDailyCostCap } from './services/cost-cap';
+import {
+	releaseDailyCostLease,
+	reserveDailyCostCap,
+	withDailyCostSettlement,
+} from './services/cost-cap';
 import {
 	FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE,
 	FREE_CHAT_MAX_OUTPUT_TOKENS,
 	FREE_CHAT_MAX_REQUEST_BYTES,
 	FREE_CHAT_MESSAGE_LIMIT,
 	applyFreeChatRequestLimits,
-	hasPaidHostedAiPlan,
 	prepareFreeChatTurn,
 	releaseFreeChatLease,
 	reserveFreeChatRequest,
@@ -35,6 +38,7 @@ import {
 	type FreeChatLease,
 	type FreeChatLimitError,
 } from './services/free-chat-limit';
+import { hasPaidHostedAiPlan, isHostedAiUpgradeEligible } from './services/hosted-ai-policy';
 import { resolveModelAlias } from './providers';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
@@ -110,6 +114,75 @@ function paidHostedAiRouteError(auth: AuthResult): Response | null {
 	});
 }
 
+async function handleMeteredTinfoilRequest(
+	request: Request,
+	env: Env,
+	auth: AuthResult,
+	subPath: '/v1/chat/completions' | '/v1/responses',
+): Promise<Response> {
+	const model = 'gemma4-31b';
+	const reservation = await reserveDailyCostCap(env, auth.deviceId, auth.tier, model);
+	if (!reservation.allowed) return reservation.response;
+	let response: Response;
+	try {
+		response = await handleTinfoilProxy(request, env, auth, subPath);
+	} catch (error) {
+		if (reservation.lease) await releaseDailyCostLease(env, reservation.lease);
+		throw error;
+	}
+	const usage = parseTinfoilUsageMetrics(response);
+	const settlement = response.ok ? logCost(env, {
+		device_id: auth.deviceId,
+		user_id: auth.userId,
+		tier: auth.tier,
+		provider: 'tinfoil',
+		model,
+		input_tokens: usage?.promptTokens ?? null,
+		output_tokens: usage?.completionTokens ?? null,
+		estimated_cost_usd: getModelCost(
+			model,
+			usage?.promptTokens ?? null,
+			usage?.completionTokens ?? null,
+		),
+		endpoint: `/v1/tinfoil${subPath}`,
+		stream: usage === null,
+	}) : Promise.resolve(true);
+	return withDailyCostSettlement(response, env, reservation.lease, settlement);
+}
+
+async function handleMeteredVoiceAiRequest(
+	request: Request,
+	env: Env,
+	auth: AuthResult,
+	endpoint: '/v1/voice/query' | '/v1/voice/chat',
+): Promise<Response> {
+	const model = request.headers.get('ai-model') || 'gpt-5.4';
+	const reservation = await reserveDailyCostCap(env, auth.deviceId, auth.tier, model);
+	if (!reservation.allowed) return reservation.response;
+	let response: Response;
+	try {
+		response = endpoint === '/v1/voice/query'
+			? await handleVoiceQuery(request, env)
+			: await handleVoiceChat(request, env);
+	} catch (error) {
+		if (reservation.lease) await releaseDailyCostLease(env, reservation.lease);
+		throw error;
+	}
+	const settlement = response.ok ? logCost(env, {
+		device_id: auth.deviceId,
+		user_id: auth.userId,
+		tier: auth.tier,
+		provider: inferProvider(model),
+		model,
+		input_tokens: null,
+		output_tokens: null,
+		estimated_cost_usd: getModelCost(model, null, null),
+		endpoint,
+		stream: false,
+	}) : Promise.resolve(true);
+	return withDailyCostSettlement(response, env, reservation.lease, settlement);
+}
+
 // Handler function for the worker
 export async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
@@ -148,14 +221,15 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const status = await getUsageStatus(env, authResult.deviceId, authResult.tier, authResult.userId);
 			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
 			// are our internal margin and shouldn't leak to any client/user).
-			// Credits extend the cap 1:1 (1 credit = $1 of headroom) so that the
-			// /billing top-up button actually lifts the limit it advertises.
+			// Stored query credits do not raise the cash ceiling. Credit-funded
+			// provider spend needs consumptive accounting before it can safely do so.
 			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
 			const maxCost = getTierDailyCostCap(authResult.tier, env);
-			const credits = authResult.userId ? await getCreditBalance(env, authResult.userId) : 0;
 			const enriched = {
 				...status,
-				cost_limit_reached: dailyCost >= maxCost + credits,
+				cost_limit_reached: dailyCost >= maxCost,
+				upgrade_eligible: isHostedAiUpgradeEligible(authResult),
+				upsell_banner: status.upsell_banner === true && isHostedAiUpgradeEligible(authResult),
 			};
 			return addCorsHeaders(createSuccessResponse(enriched));
 		}
@@ -294,13 +368,6 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				return rateLimit.response;
 			}
 
-			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
-			// Applies to every priced model: weight-0 "free" models like
-			// gemini-3.5-flash still bleed real money once caching inflates the
-			// prompt, so the old weight>=3 gate let a single user hit ~$270/day.
-			const capError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, body.model);
-			if (capError) return capError;
-
 			// Track usage and check daily limit (includes IP-based abuse prevention)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, authResult.tier, authResult.userId, ipAddress, body.model);
@@ -330,9 +397,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				})));
 			}
 
-			// Reserve only after every other request gate has passed, but before the
-			// first upstream byte can incur cost. Metering storage failures fail open;
-			// the durable-object RPM limiter and daily cost cap remain in force.
+			// Reserve the Free-preview allowance only after every other request gate.
+			// Its legacy fail-open behavior is still bounded by the fail-closed shared
+			// spend lease acquired immediately below.
 			let freeChatLease: FreeChatLease | null = null;
 			if (freeChat.mode === 'metered') {
 				const reservation = await reserveFreeChatRequest(env, freeChat);
@@ -342,6 +409,20 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				freeChatLease = reservation.lease;
 			}
 
+			// Serialize the account's priced read/inference/write interval. Acquiring
+			// this only after every non-cost gate avoids holding it for rejected work.
+			const costReservation = await reserveDailyCostCap(
+				env,
+				authResult.deviceId,
+				authResult.tier,
+				body.model,
+			);
+			if (!costReservation.allowed) {
+				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
+				return costReservation.response;
+			}
+			const dailyCostLease = costReservation.lease;
+
 			// Route latency-tolerant (background) traffic to the cheaper flex tier.
 			const latency = resolveLatencyClass(request, body, env);
 			let leaseReleased = false;
@@ -350,9 +431,16 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				leaseReleased = true;
 				await releaseFreeChatLease(env, freeChatLease);
 			};
+			let costSettlement = Promise.resolve(true);
 			const attachLeaseRelease = (outgoing: Response): Response => {
-				if (!freeChatLease) return outgoing;
-				return withFreeChatLeaseRelease(outgoing, () => {
+				const costBound = withDailyCostSettlement(
+					outgoing,
+					env,
+					dailyCostLease,
+					costSettlement,
+				);
+				if (!freeChatLease) return costBound;
+				return withFreeChatLeaseRelease(costBound, () => {
 					const release = releaseLease();
 					ctx.waitUntil(release);
 					return release;
@@ -394,7 +482,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				if (body.stream) {
 					const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(response, 'openai');
 					response = trackedResponse;
-					ctx.waitUntil(usagePromise.then(u => logCost(env, {
+					costSettlement = usagePromise.then(u => logCost(env, {
 						device_id: authResult.deviceId,
 						user_id: authResult.userId,
 						tier: authResult.tier,
@@ -404,7 +492,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						output_tokens: u.output_tokens ?? null,
 						cache_read_tokens: u.cache_read_input_tokens ?? null,
 						cache_creation_tokens: u.cache_creation_input_tokens ?? null,
-						estimated_cost_usd: getModelCost(pricedModel, u.input_tokens ?? null, u.output_tokens ?? null, {
+						estimated_cost_usd: getStreamModelCost(pricedModel, u.input_tokens, u.output_tokens, {
 							cache_read_tokens: u.cache_read_input_tokens,
 							cache_creation_tokens: u.cache_creation_input_tokens,
 						}),
@@ -412,9 +500,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						stream: true,
 						latency_ms: latencyMs,
 						router_tier: routerTier,
-					})));
+					}));
 				} else {
-					ctx.waitUntil((async () => {
+					costSettlement = (async () => {
 						try {
 							const cloned = response.clone();
 							const json = await cloned.json() as any;
@@ -424,7 +512,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							// cached subset reported in prompt_tokens_details
 							const cacheRead = json?.usage?.prompt_tokens_details?.cached_tokens ?? null;
 							const cacheCreation = json?.usage?.cache_creation_input_tokens ?? null;
-							await logCost(env, {
+							return await logCost(env, {
 								device_id: authResult.deviceId,
 								user_id: authResult.userId,
 								tier: authResult.tier,
@@ -445,8 +533,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							});
 						} catch (e) {
 							console.error('cost log extraction failed:', e);
+							return false;
 						}
-					})());
+					})();
 				}
 
 				if (usage.paidVia === 'credits' && usage.creditsRemaining !== undefined) {
@@ -458,6 +547,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				return attachLeaseRelease(response);
 			} catch (error) {
 				await releaseLease();
+				if (dailyCostLease) await releaseDailyCostLease(env, dailyCostLease);
 				throw error;
 			}
 		}
@@ -480,8 +570,15 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					credits_remaining: usage.creditsRemaining ?? 0,
 				})));
 			}
+			const costReservation = await reserveDailyCostCap(
+				env,
+				authResult.deviceId,
+				authResult.tier,
+				'gemini-2.5-flash',
+			);
+			if (!costReservation.allowed) return costReservation.response;
 			const webSearchResponse = await handleWebSearch(request, env);
-			ctx.waitUntil(logCost(env, {
+			const settlement = webSearchResponse.ok ? logCost(env, {
 				device_id: authResult.deviceId,
 				user_id: authResult.userId,
 				tier: authResult.tier,
@@ -492,8 +589,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				estimated_cost_usd: getModelCost('gemini-2.5-flash', null, null),
 				endpoint: '/v1/web-search',
 				stream: false,
-			}));
-			return webSearchResponse;
+			}) : Promise.resolve(true);
+			return withDailyCostSettlement(
+				webSearchResponse,
+				env,
+				costReservation.lease,
+				settlement,
+			);
 		}
 
 		if (path === '/v1/listen' && request.method === 'POST') {
@@ -544,7 +646,11 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 		if (path === '/v1/models' && request.method === 'GET') {
 			// Return tier-filtered models with live health status
-			return await handleModelListing(env, authResult.tier);
+			return await handleModelListing(
+				env,
+				authResult.tier,
+				isHostedAiUpgradeEligible(authResult),
+			);
 		}
 
 		// ─── Tinfoil E2EE proxy ────────────────────────────────────────
@@ -560,12 +666,12 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		if (path === '/v1/tinfoil/chat/completions' && request.method === 'POST') {
 			const gate = paidHostedAiRouteError(authResult);
 			if (gate) return gate;
-			return await handleTinfoilProxy(request, env, authResult, '/v1/chat/completions');
+			return await handleMeteredTinfoilRequest(request, env, authResult, '/v1/chat/completions');
 		}
 		if (path === '/v1/tinfoil/responses' && request.method === 'POST') {
 			const gate = paidHostedAiRouteError(authResult);
 			if (gate) return gate;
-			return await handleTinfoilProxy(request, env, authResult, '/v1/responses');
+			return await handleMeteredTinfoilRequest(request, env, authResult, '/v1/responses');
 		}
 
 		if (path === '/v1/voice/transcribe' && request.method === 'POST') {
@@ -575,7 +681,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		if (path === '/v1/voice/query' && request.method === 'POST') {
 			const gate = paidHostedAiRouteError(authResult);
 			if (gate) return gate;
-			return await handleVoiceQuery(request, env);
+			return await handleMeteredVoiceAiRequest(request, env, authResult, '/v1/voice/query');
 		}
 
 		if (path === '/v1/text-to-speech' && request.method === 'POST') {
@@ -585,7 +691,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		if (path === '/v1/voice/chat' && request.method === 'POST') {
 			const gate = paidHostedAiRouteError(authResult);
 			if (gate) return gate;
-			return await handleVoiceChat(request, env);
+			return await handleMeteredVoiceAiRequest(request, env, authResult, '/v1/voice/chat');
 		}
 
 		// //TODO:
@@ -629,10 +735,6 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				// If body parse fails, let the proxy handle the error downstream
 			}
 
-			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
-			const msgCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, parsedModel);
-			if (msgCapError) return msgCapError;
-
 			// Track usage and check daily limit (weighted by model)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, authResult.tier, authResult.userId, ipAddress, parsedModel);
@@ -647,13 +749,27 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					credits_remaining: usage.creditsRemaining ?? 0,
 				})));
 			}
+			const costReservation = await reserveDailyCostCap(
+				env,
+				authResult.deviceId,
+				authResult.tier,
+				parsedModel,
+			);
+			if (!costReservation.allowed) return costReservation.response;
 
-			let vertexResponse = await handleVertexProxy(request, env);
+			let vertexResponse: Response;
+			try {
+				vertexResponse = await handleVertexProxy(request, env);
+			} catch (error) {
+				if (costReservation.lease) await releaseDailyCostLease(env, costReservation.lease);
+				throw error;
+			}
+			let costSettlement = Promise.resolve(true);
 			// Log cost — intercept stream for real token counts
 			if (parsedStream) {
 				const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(vertexResponse, 'anthropic');
 				vertexResponse = trackedResponse;
-				ctx.waitUntil(usagePromise.then(u => logCost(env, {
+				costSettlement = usagePromise.then(u => logCost(env, {
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
 					tier: authResult.tier,
@@ -663,15 +779,15 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					output_tokens: u.output_tokens ?? null,
 					cache_read_tokens: u.cache_read_input_tokens ?? null,
 					cache_creation_tokens: u.cache_creation_input_tokens ?? null,
-					estimated_cost_usd: getModelCost(parsedModel, u.input_tokens ?? null, u.output_tokens ?? null, {
+					estimated_cost_usd: getStreamModelCost(parsedModel, u.input_tokens, u.output_tokens, {
 						cache_read_tokens: u.cache_read_input_tokens,
 						cache_creation_tokens: u.cache_creation_input_tokens,
 					}),
 					endpoint: '/v1/messages',
 					stream: true,
-				})));
+				}));
 			} else {
-				ctx.waitUntil((async () => {
+				costSettlement = (async () => {
 					try {
 						const clonedResp = vertexResponse.clone();
 						const json = await clonedResp.json() as any;
@@ -682,7 +798,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						const rawInput = json?.usage?.input_tokens ?? null;
 						const inputTokens = rawInput === null ? null : rawInput + cacheRead + cacheCreation;
 						const outputTokens = json?.usage?.output_tokens ?? null;
-						await logCost(env, {
+						return await logCost(env, {
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
 							tier: authResult.tier,
@@ -701,10 +817,16 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						});
 					} catch (e) {
 						console.error('cost log /v1/messages failed:', e);
+						return false;
 					}
-				})());
+				})();
 			}
-			return vertexResponse;
+			return withDailyCostSettlement(
+				vertexResponse,
+				env,
+				costReservation.lease,
+				costSettlement,
+			);
 		}
 
 		// Anthropic-compatible endpoint for OpenCode integration
@@ -749,10 +871,6 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				})));
 			}
 
-			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
-			const ocCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, ocModel);
-			if (ocCapError) return ocCapError;
-
 			// Track usage for OpenCode requests (weighted by model)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, authResult.tier, authResult.userId, ipAddress, ocModel);
@@ -767,13 +885,27 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					credits_remaining: usage.creditsRemaining ?? 0,
 				})));
 			}
+			const costReservation = await reserveDailyCostCap(
+				env,
+				authResult.deviceId,
+				authResult.tier,
+				ocModel,
+			);
+			if (!costReservation.allowed) return costReservation.response;
 
-			let anthropicResponse = await handleVertexProxy(request, env);
+			let anthropicResponse: Response;
+			try {
+				anthropicResponse = await handleVertexProxy(request, env);
+			} catch (error) {
+				if (costReservation.lease) await releaseDailyCostLease(env, costReservation.lease);
+				throw error;
+			}
+			let costSettlement = Promise.resolve(true);
 			// Log cost — intercept stream for real token counts
 			if (ocStream) {
 				const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(anthropicResponse, 'anthropic');
 				anthropicResponse = trackedResponse;
-				ctx.waitUntil(usagePromise.then(u => logCost(env, {
+				costSettlement = usagePromise.then(u => logCost(env, {
 					device_id: authResult.deviceId,
 					user_id: authResult.userId,
 					tier: authResult.tier,
@@ -783,15 +915,15 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					output_tokens: u.output_tokens ?? null,
 					cache_read_tokens: u.cache_read_input_tokens ?? null,
 					cache_creation_tokens: u.cache_creation_input_tokens ?? null,
-					estimated_cost_usd: getModelCost(ocModel, u.input_tokens ?? null, u.output_tokens ?? null, {
+					estimated_cost_usd: getStreamModelCost(ocModel, u.input_tokens, u.output_tokens, {
 						cache_read_tokens: u.cache_read_input_tokens,
 						cache_creation_tokens: u.cache_creation_input_tokens,
 					}),
 					endpoint: '/anthropic/v1/messages',
 					stream: true,
-				})));
+				}));
 			} else {
-				ctx.waitUntil((async () => {
+				costSettlement = (async () => {
 					try {
 						const clonedResp = anthropicResponse.clone();
 						const json = await clonedResp.json() as any;
@@ -802,7 +934,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						const rawInput = json?.usage?.input_tokens ?? null;
 						const inputTokens = rawInput === null ? null : rawInput + cacheRead + cacheCreation;
 						const outputTokens = json?.usage?.output_tokens ?? null;
-						await logCost(env, {
+						return await logCost(env, {
 							device_id: authResult.deviceId,
 							user_id: authResult.userId,
 							tier: authResult.tier,
@@ -821,10 +953,16 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						});
 					} catch (e) {
 						console.error('cost log /anthropic/v1/messages failed:', e);
+						return false;
 					}
-				})());
+				})();
 			}
-			return anthropicResponse;
+			return withDailyCostSettlement(
+				anthropicResponse,
+				env,
+				costReservation.lease,
+				costSettlement,
+			);
 		}
 
 		// Anthropic models endpoint for OpenCode

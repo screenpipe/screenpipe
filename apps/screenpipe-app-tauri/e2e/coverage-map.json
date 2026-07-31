@@ -674,11 +674,11 @@
       "spec": "settings-sections.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "real-ui-e2e", "storage-privacy"],
-      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "audio-device-health"],
+      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, AI preset/preferences split and toggle flows, storage, privacy, and rapid switching crash guard."
+      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard."
     },
     {
       "spec": "meeting-apps-picker.spec.ts",
@@ -763,12 +763,12 @@
     {
       "spec": "windows-core-recording.spec.ts",
       "platforms": ["windows"],
-      "layers": ["capture-ocr", "local-api", "audio-device", "real-ui-e2e"],
-      "features": ["capture-ocr", "local-api-auth", "local-api-search", "audio-device-health", "timeline"],
+      "layers": ["capture-ocr", "local-api", "audio-device", "notifications", "storage-privacy", "real-ui-e2e"],
+      "features": ["capture-ocr", "local-api-auth", "local-api-search", "audio-device-health", "timeline", "low-disk-recording-guard"],
       "criticality": "high",
       "confidence": "conditional",
       "ux": "mixed",
-      "notes": "Windows recording-enabled lane; hosted runners can skip frame-dependent OCR assertions."
+      "notes": "Windows recording-enabled lane; low-disk coverage requires teardown of a real CaptureSession and continued API/search availability, while hosted runners can skip only frame-dependent OCR assertions."
     },
     {
       "spec": "windows-system-integration.spec.ts",

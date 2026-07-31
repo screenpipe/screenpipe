@@ -185,7 +185,6 @@ export function AIProviderConfig({
     AIPreset["provider"]
   >(defaultPreset?.provider || "openai");
   const { settings } = useSettings();
-  const showUpsell = useModelUpsellGating();
   const [isLoading, setIsLoading] = useState(false);
   const [openaiModels, setOpenAIModels] = useState<OpenAIModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -194,7 +193,8 @@ export function AIProviderConfig({
   const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const [piAvailable, setPiAvailable] = useState(false);
-  const { piModels, isLoading: loadingPiModels } = usePiModels();
+  const { piModels, isLoading: loadingPiModels, upgradeEligible } = usePiModels();
+  const showUpsell = useModelUpsellGating(upgradeEligible);
 
   // Check Pi availability (installed at app startup by Rust background thread)
   useEffect(() => {
@@ -1057,8 +1057,8 @@ export const AIPresetsSelector = ({
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const canManageEmployeePresets = !isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets;
 
-  const showUpsell = useModelUpsellGating();
-  const { piModels } = usePiModels();
+  const { piModels, upgradeEligible } = usePiModels();
+  const showUpsell = useModelUpsellGating(upgradeEligible);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {

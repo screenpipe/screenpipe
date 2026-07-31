@@ -341,4 +341,44 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(503);
 		expect(await errorCode(response)).toBe('account_plan_unavailable');
 	});
+
+	it.each([
+		'/v1/chat/completions',
+		'/v1/web-search',
+		'/v1/tinfoil/chat/completions',
+		'/v1/tinfoil/responses',
+		'/v1/voice/query',
+		'/v1/voice/chat',
+		'/v1/messages',
+		'/anthropic/v1/messages',
+	])('fails closed before every hosted text-AI route when spend storage is unavailable: %s', async (path: string) => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			if (String(input) === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: `user_cost_${path.replace(/\W/g, '_')}`,
+						cloud_subscribed: false,
+						app_entitled: true,
+						subscription_plan: 'standard',
+						entitlement: { active: true, plan: 'standard', features: { app: true } },
+					},
+				}), { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${String(input)}`);
+		}) as typeof fetch;
+
+		const unavailableEnv = {
+			...env,
+			DB: { prepare: () => { throw new Error('D1 unavailable'); } },
+		} as unknown as Env;
+		const response = await handleRequest(
+			request({ Authorization: `Bearer eyJ.cost.${path}` }, path, 'gpt-5.6-luna'),
+			unavailableEnv,
+			ctx,
+		);
+
+		expect(response.status).toBe(503);
+		expect(await errorCode(response)).toBe('cost_control_unavailable');
+	});
 });
