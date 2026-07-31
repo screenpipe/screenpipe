@@ -194,23 +194,10 @@ const CURATED_MODELS: ModelEntry[] = [
     warning: 'very expensive — avoid for pipes unless the task truly needs pro-level accuracy',
     requires_env: 'OPENAI_API_KEY',
   },
-  {
-    id: 'gpt-5.3-codex',
-    object: 'model',
-    owned_by: 'openai',
-    name: 'GPT-5.3 Codex',
-    description: 'openai coding specialist for agentic code changes and long-horizon engineering tasks',
-    tags: ['premium', 'coding', 'agentic', 'vision'],
-    free: false,
-    context_window: 400000,
-    best_for: ['agentic coding', 'code review', 'large refactors', 'debugging'],
-    speed: 'medium',
-    intelligence: 'highest',
-    cost_tier: 'medium',
-    recommended_for: ['coding', 'analysis'],
-    warning: 'coding-specialized model — use gpt-5.4-mini or a free model for ordinary chat/pipes',
-    requires_env: 'OPENAI_API_KEY',
-  },
+  // gpt-5.3-codex is deliberately NOT listed: codex models are served only via
+  // OpenAI's Responses API, and this worker speaks Chat Completions — every
+  // request 404s upstream ("model not found"). Codex stays available through
+  // ChatGPT-subscription connections in the app, which use a different backend.
   {
     id: 'gpt-5.4-mini',
     object: 'model',

@@ -60,6 +60,7 @@ mod enterprise_policy;
 mod enterprise_sync;
 mod events;
 mod feedback_redact;
+mod feedback_upload;
 mod google_calendar;
 mod hardware;
 mod ics_calendar;

@@ -3675,6 +3675,26 @@ mod tests {
         (format!("http://{addr}/feed.ics"), server)
     }
 
+    /// `?query=` is agent-reachable and carries whatever the caller sends —
+    /// URL encoding hides CR/LF from casual inspection, and nothing between
+    /// the socket and the IMAP connector strips them. This pins that fact so
+    /// the escaping in `connections::imap` stays the enforcement point rather
+    /// than a belt-and-braces nicety somebody later removes.
+    #[test]
+    fn imap_search_query_reaches_the_connector_with_control_bytes_intact() {
+        let uri: axum::http::Uri = "/imap/messages?query=invoice%0D%0Ax9%20EXPUNGE&limit=5"
+            .parse()
+            .unwrap();
+        let Query(parsed) = Query::<ImapMessagesQuery>::try_from_uri(&uri).unwrap();
+
+        let query = parsed.query.expect("query param must be extracted");
+        assert_eq!(query, "invoice\r\nx9 EXPUNGE");
+        assert!(
+            query.contains('\r') && query.contains('\n'),
+            "transport must not be trusted to sanitize; got {query:?}"
+        );
+    }
+
     #[tokio::test]
     async fn connections_lists_ics_calendar_when_feed_enabled() {
         let dir = TempDir::new().unwrap();

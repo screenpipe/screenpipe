@@ -275,7 +275,12 @@ export default function OnboardingPage() {
     transitioningRef.current = true;
     setIsTransitioning(true);
 
-    posthog.capture(`onboarding_${currentSlide}_completed`);
+    // The login gate owns this event because only it can distinguish a fresh
+    // logged-out -> logged-in transition from resuming a persisted session.
+    // Capturing it here as well duplicates every fresh-login completion.
+    if (currentSlide !== "login") {
+      posthog.capture(`onboarding_${currentSlide}_completed`);
+    }
     const currentIdx = SLIDE_ORDER.indexOf(currentSlide);
     posthog.capture("onboarding_step_reached", {
       step_name: `${currentSlide}_completed`,

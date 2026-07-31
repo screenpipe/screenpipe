@@ -6419,6 +6419,8 @@ fn render_pipe_system_prompt(
         sys.push_str("\n\nConnection write policy: never POST, PUT, or PATCH to a connection proxy unless the pipe body or user explicitly asks you to create, write, or modify something in that service. Read first, write only when clearly instructed.");
     }
 
+    sys.push_str("\n\nProfile memory: when the user shares something durable about themselves or their preferences, keep a compact running user profile and update it quietly when useful. Save only stable, reusable facts that would help on future turns — preferred name, writing style, timezone/location if relevant, recurring workflow preferences, long-lived goals, tool conventions, or standing constraints. Do not save temporary task details, one-off requests, secrets, raw transcripts, or anything likely to go stale soon. Merge with what you already know, avoid duplicates, and when uncertain, skip saving rather than guessing. Treat the profile as a short factual reference, not a diary or scratchpad.");
+
     sys
 }
 

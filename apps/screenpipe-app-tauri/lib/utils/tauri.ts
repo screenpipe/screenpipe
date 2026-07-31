@@ -1804,8 +1804,8 @@ async readViewerFile(path: string) : Promise<Result<ViewerContent, string>> {
  *
  * `text` is the raw logs + chat (PII-dense chat first); `settings_json` is the
  * raw settings store. Config secrets are stripped by field name, then the whole
- * thing goes through the crate's redaction pipeline (enclave model under a time
- * budget, regex for the overflow). Never returns `Err` — worst case is
+ * thing goes through the crate's deterministic local pipeline before bounded,
+ * concurrent enclave enrichment. Never returns `Err` — worst case is
  * regex-only redaction — so feedback submission is never blocked.
  */
 async redactPiiForFeedback(text: string, settingsJson: string) : Promise<Result<string, string>> {
@@ -2494,6 +2494,14 @@ async startExportRecording(meetingId: number | null, start: string | null, end: 
     else return { status: "error", error: e  as any };
 }
 },
+async startFeedbackUpload(request: FeedbackUploadRequest) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_feedback_upload", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Stop recording without killing the server.
  * Pipes, memories, search, and the HTTP API remain accessible.
@@ -2840,6 +2848,7 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
 export type ExportRequestInfo = { meetingId: number | null; start: string | null; end: string | null; outputPath: string }
+export type FeedbackUploadRequest = { jobId: string; identifier: string; reportType: string; feedbackText: string; settingsJson: string; chatHistory: string; consoleLog: string; analyticsId: string | null; os: string; osVersion: string; appVersion: string; screenshotDataUrl: string | null; videoDataUrl: string | null; videoPath: string | null; videoExt: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 /**

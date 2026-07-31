@@ -933,15 +933,11 @@ impl ShowRewindWindow {
                                         }
                                         #[cfg(not(target_os = "macos"))]
                                         {
-                                            // Only keep Escape when the overlay is still visible.
-                                            // Otherwise Home (or another app window) can hold focus while
-                                            // the overlay is already gone — returning here would skip
-                                            // blur unregister and leave the global Escape hook stuck on.
-                                            if crate::commands::any_screenpipe_webview_has_focus(&app)
-                                                && crate::commands::main_overlay_is_visible(&app)
-                                            {
+                                            // Keep Escape registered whenever the main overlay is visible,
+                                            // even if focus shifts temporarily (#5346).
+                                            if crate::commands::main_overlay_is_visible(&app) {
                                                 info!(
-                                                    "main-window blur: another screenpipe window has focus, keep Escape registered"
+                                                    "main-window blur: main overlay is visible, keeping Escape shortcut registered"
                                                 );
                                                 let _ = app.emit("window-focused", false);
                                                 return;
@@ -1343,11 +1339,11 @@ impl ShowRewindWindow {
                                     }
                                     #[cfg(target_os = "windows")]
                                     {
-                                        if crate::commands::any_screenpipe_webview_has_focus(&app)
-                                            && crate::commands::main_overlay_is_visible(&app)
-                                        {
+                                        // Keep Escape registered whenever the main overlay is visible,
+                                        // even if focus shifts temporarily (#5346).
+                                        if crate::commands::main_overlay_is_visible(&app) {
                                             info!(
-                                                "Main overlay blur: another screenpipe window has focus, keep Escape registered"
+                                                "Main overlay blur: main overlay is visible, keeping Escape shortcut registered"
                                             );
                                             let _ = app.emit("window-focused", false).ok();
                                             return;
