@@ -215,11 +215,19 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
     console.log("search visibility screenshot:", screenshot);
 
     await $("[data-index='0']").click();
-    await browser.waitUntil(
-      async () => (await browser.getWindowHandles()).includes("main"),
-      { timeout: t(10_000) },
+    const timelineHandle = await browser.waitUntil(
+      async () => {
+        const handles = await browser.getWindowHandles();
+        return handles.find(
+          (handle) => handle === "main" || handle === "main-window",
+        ) ?? false;
+      },
+      {
+        timeout: t(10_000),
+        timeoutMsg: "Timeline window handle did not appear",
+      },
     );
-    await browser.switchToWindow("main");
+    await browser.switchToWindow(timelineHandle as string);
     await browser.waitUntil(
       async () =>
         (await browser.execute(
