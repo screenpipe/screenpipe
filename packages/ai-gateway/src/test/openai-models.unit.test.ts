@@ -50,9 +50,13 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).toContain('gpt-5.5-pro');
 		expect(ids).toContain('gpt-5.4');
 		expect(ids).toContain('gpt-5.4-pro');
-		expect(ids).toContain('gpt-5.3-codex');
 		expect(ids).toContain('gpt-5.4-mini');
 		expect(ids).toContain('gpt-5.4-nano');
+	});
+
+	it('never advertises Responses-API-only codex models (chat-completions 404s them)', async () => {
+		const ids = await listedModelIds();
+		expect(ids).not.toContain('gpt-5.3-codex');
 	});
 
 	it('hides OpenAI models until OPENAI_API_KEY is configured', async () => {
