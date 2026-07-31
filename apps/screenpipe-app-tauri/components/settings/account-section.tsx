@@ -299,7 +299,10 @@ export function AccountSection() {
         pricing_experiment_variant: selection.experimentVariant,
       });
       try {
-        await openExternalUrl(BILLING_URL);
+        const billingUrl = new URL(BILLING_URL);
+        billingUrl.searchParams.set("target_plan", "pro");
+        billingUrl.searchParams.set("interval", selection.interval);
+        await openExternalUrl(billingUrl.toString());
       } finally {
         setCheckoutBusy(false);
       }

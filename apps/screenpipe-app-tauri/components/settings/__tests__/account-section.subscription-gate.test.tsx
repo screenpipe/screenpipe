@@ -332,7 +332,7 @@ describe("AccountSection subscription/login gating", () => {
       expect.anything(),
     );
     expect(mocks.openUrl).toHaveBeenCalledWith(
-      "https://screenpipe.com/account/billing",
+      "https://screenpipe.com/account/billing?target_plan=pro&interval=month",
     );
   });
 

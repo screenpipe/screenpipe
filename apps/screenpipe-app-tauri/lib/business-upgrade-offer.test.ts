@@ -57,6 +57,40 @@ describe("business upgrade offer", () => {
     });
   });
 
+  it("preserves an explicit zero saving across different currencies", () => {
+    const offer = parseBusinessUpgradeOffer({
+      prices: {
+        month: {
+          currency: "usd",
+          totalAmount: 5_000,
+          monthlyEquivalentAmount: 5_000,
+        },
+        year: {
+          currency: "eur",
+          totalAmount: 50_000,
+          monthlyEquivalentAmount: 4_167,
+        },
+        annualSavingsAmount: 0,
+        currency: "usd",
+      },
+    });
+
+    expect(offer.prices.annualSavingsAmount).toBe(0);
+    expect(offer.prices.month.currency).toBe("usd");
+    expect(offer.prices.year.currency).toBe("eur");
+  });
+
+  it("preserves server-declared checkout availability", () => {
+    const offer = parseBusinessUpgradeOffer({
+      prices: {
+        year: { checkoutAvailable: false },
+      },
+    });
+
+    expect(offer.prices.month.checkoutAvailable).toBe(true);
+    expect(offer.prices.year.checkoutAvailable).toBe(false);
+  });
+
   it("rejects malformed amounts and intervals", () => {
     const offer = parseBusinessUpgradeOffer({
       defaultInterval: "week",

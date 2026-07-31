@@ -121,4 +121,44 @@ describe("BusinessUpgradeCard", () => {
       screen.getByText(/review and confirm the prorated upgrade/i),
     ).toBeInTheDocument();
   });
+
+  it("does not open checkout for an unavailable interval", async () => {
+    const offer = {
+      ...DEFAULT_BUSINESS_UPGRADE_OFFER,
+      defaultInterval: "year",
+      prices: {
+        ...DEFAULT_BUSINESS_UPGRADE_OFFER.prices,
+        year: {
+          ...DEFAULT_BUSINESS_UPGRADE_OFFER.prices.year,
+          checkoutAvailable: false,
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(offer), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    render(
+      <BusinessUpgradeCard
+        signedIn
+        existingSubscription={false}
+        source="account"
+        busy={false}
+        onContinue={mocks.onContinue}
+      />,
+    );
+
+    const cta = await screen.findByRole("button", {
+      name: /billing option unavailable/i,
+    });
+    expect(cta).toBeDisabled();
+    fireEvent.click(cta);
+    expect(mocks.onContinue).not.toHaveBeenCalled();
+  });
 });

@@ -9,6 +9,7 @@ export type BusinessOfferPrice = {
   currency: string;
   totalAmount: number;
   monthlyEquivalentAmount: number;
+  checkoutAvailable: boolean;
 };
 
 export type BusinessUpgradeOffer = {
@@ -66,12 +67,14 @@ export const DEFAULT_BUSINESS_UPGRADE_OFFER: BusinessUpgradeOffer = {
       currency: "usd",
       totalAmount: 5_000,
       monthlyEquivalentAmount: 5_000,
+      checkoutAvailable: true,
     },
     year: {
       interval: "year",
       currency: "usd",
       totalAmount: 50_000,
       monthlyEquivalentAmount: 4_167,
+      checkoutAvailable: true,
     },
     annualSavingsAmount: 10_000,
     currency: "usd",
@@ -100,6 +103,12 @@ function safeAmount(value: unknown, fallback: number): number {
     : fallback;
 }
 
+function safeNonNegativeAmount(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : fallback;
+}
+
 function parsePrice(
   raw: unknown,
   interval: BusinessBillingInterval,
@@ -115,6 +124,10 @@ function parsePrice(
       input.monthlyEquivalentAmount,
       interval === "year" ? Math.round(totalAmount / 12) : totalAmount,
     ),
+    checkoutAvailable:
+      typeof input.checkoutAvailable === "boolean"
+        ? input.checkoutAvailable
+        : fallback.checkoutAvailable,
   };
 }
 
@@ -156,7 +169,7 @@ export function parseBusinessUpgradeOffer(raw: unknown): BusinessUpgradeOffer {
     prices: {
       month,
       year,
-      annualSavingsAmount: safeAmount(
+      annualSavingsAmount: safeNonNegativeAmount(
         prices.annualSavingsAmount,
         Math.max(0, month.totalAmount * 12 - year.totalAmount),
       ),

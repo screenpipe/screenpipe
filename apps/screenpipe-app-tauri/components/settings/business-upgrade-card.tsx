@@ -134,6 +134,7 @@ export function BusinessUpgradeCard({
   const month = offer.prices.month;
   const year = offer.prices.year;
   const selected = interval === "year" ? year : month;
+  const selectedAvailable = selected.checkoutAvailable;
   const selectedCharge = formatOfferAmount(
     selected.totalAmount,
     selected.currency,
@@ -177,6 +178,7 @@ export function BusinessUpgradeCard({
           aria-pressed={interval === "month"}
           data-testid="business-monthly-option"
           onClick={() => chooseInterval("month")}
+          disabled={!month.checkoutAvailable}
           className={`min-h-36 bg-background p-5 text-left transition-colors duration-150 ${
             interval === "month"
               ? "outline outline-2 -outline-offset-2 outline-foreground"
@@ -206,6 +208,7 @@ export function BusinessUpgradeCard({
           aria-pressed={interval === "year"}
           data-testid="business-annual-option"
           onClick={() => chooseInterval("year")}
+          disabled={!year.checkoutAvailable}
           className={`min-h-36 bg-background p-5 text-left transition-colors duration-150 ${
             interval === "year"
               ? "outline outline-2 -outline-offset-2 outline-foreground"
@@ -254,7 +257,7 @@ export function BusinessUpgradeCard({
           <Button
             className="h-11 w-full rounded-none bg-foreground font-mono text-xs uppercase tracking-wide text-background hover:bg-background hover:text-foreground"
             data-testid="account-upgrade-business-button"
-            disabled={busy}
+            disabled={busy || !selectedAvailable}
             onClick={() =>
               onContinue({
                 interval,
@@ -270,10 +273,16 @@ export function BusinessUpgradeCard({
             ) : (
               <ExternalLinkIcon className="mr-2 h-4 w-4" />
             )}
-            {busy ? "opening checkout" : ctaLabel}
+            {busy
+              ? "opening checkout"
+              : selectedAvailable
+                ? ctaLabel
+                : "billing option unavailable"}
           </Button>
           <p className="mt-2 text-center text-[11px] text-muted-foreground">
-            payment details stay in Stripe&apos;s secure checkout
+            {selectedAvailable
+              ? "payment details stay in Stripe's secure checkout"
+              : "choose another billing interval or try again later"}
           </p>
         </div>
       </div>
