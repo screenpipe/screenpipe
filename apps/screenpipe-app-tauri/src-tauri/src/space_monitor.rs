@@ -77,14 +77,17 @@ pub fn setup_space_listener(app: AppHandle) {
                     }
                     debug!("macOS Space changed, hiding overlay");
                     // Dispatch to main thread — this notification callback can
-                    // fire on any thread, and both clear_frontmost_app (ObjC
+                    // fire on any thread, and both focus-session cleanup (ObjC
                     // release) and hide_main_window (NSPanel order_out) require
                     // the main thread to avoid autorelease pool corruption.
                     let app = app_for_block.clone();
                     let app_inner = app.clone();
                     let _ = app.run_on_main_thread(move || {
                         crate::window::with_autorelease_pool(|| {
-                            crate::window::clear_frontmost_app();
+                            // A user-selected Space becomes the new focus origin.
+                            // Do not let Chat/Search/Timeline close reactivate an
+                            // app from the Space where the overlay was opened.
+                            crate::window::clear_all_overlay_focus_sessions();
                             hide_main_window(app_inner.clone());
                         });
                     });

@@ -308,8 +308,16 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                         use tauri_nspanel::ManagerExt;
                         if let Ok(panel) = app.get_webview_panel("chat") {
                             if panel.is_visible() {
-                                let _ = ShowRewindWindow::Chat.close(app);
-                                return;
+                                use objc::{msg_send, sel, sel_impl};
+                                let is_on_active_space: bool =
+                                    unsafe { msg_send![&*panel, isOnActiveSpace] };
+                                if is_on_active_space {
+                                    let _ = ShowRewindWindow::Chat.close(app);
+                                    return;
+                                }
+                                // The retained panel is visible on another
+                                // Space. Fall through to show() so one shortcut
+                                // press moves it to the user's current Space.
                             }
                         }
                     }

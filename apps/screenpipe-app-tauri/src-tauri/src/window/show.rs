@@ -686,6 +686,16 @@ impl ShowRewindWindow {
 
                         if let Ok(panel) = app_clone.get_webview_panel(RewindWindowId::Chat.label())
                         {
+                            let is_on_active_space: bool =
+                                unsafe { msg_send![&*panel, isOnActiveSpace] };
+                            if panel.is_visible() && !is_on_active_space {
+                                // An already-visible panel does not reliably move
+                                // when it is merely ordered front again. Remove it
+                                // from the old Space first. Keep any origin captured
+                                // by show_window_activated before it activated the app.
+                                use tauri_nspanel::cocoa::base::nil;
+                                let _: () = unsafe { msg_send![&*panel, orderOut: nil] };
+                            }
                             begin_chat_focus_session();
                             apply_chat_panel_on_top(&*panel, chat_on_top);
                             let _: () =
