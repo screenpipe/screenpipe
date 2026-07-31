@@ -330,6 +330,13 @@ describe("Basic subscriber upgrade uses billing, not fresh checkout", function (
     })) as string[];
 
     expect(checkoutCalls).toBe(0);
-    expect(openedUrls.some((url) => url.includes("/account/billing"))).toBe(true);
+    const billingUrl = openedUrls.find((url) =>
+      url.includes("/account/billing"),
+    );
+    expect(billingUrl).toBeDefined();
+    const parsedBillingUrl = new URL(billingUrl!);
+    expect(parsedBillingUrl.pathname).toBe("/account/billing");
+    expect(parsedBillingUrl.searchParams.get("target_plan")).toBe("pro");
+    expect(parsedBillingUrl.searchParams.get("interval")).toBe("month");
   });
 });
