@@ -28,7 +28,7 @@ const ASSISTANT_MARKER = "E2E-CROSS-WINDOW-ANSWER-4P8V2N";
 
 function writeConversation(
   updatedAt: number,
-  state: "empty" | "active" | "complete" = "empty",
+  state: "empty" | "active" | "active-tool" | "complete" = "empty",
 ): void {
   mkdirSync(CHATS_DIR, { recursive: true });
   writeFileSync(
@@ -56,7 +56,7 @@ function writeConversation(
                 timestamp: updatedAt,
               },
             ]
-          : state === "active"
+          : state === "active" || state === "active-tool"
             ? [
                 {
                   id: "cross-window-user",
@@ -67,7 +67,25 @@ function writeConversation(
                 {
                   id: "cross-window-assistant",
                   role: "assistant",
-                  content: "Processing...",
+                  content: state === "active-tool" ? "" : "Processing...",
+                  ...(state === "active-tool"
+                    ? {
+                        contentBlocks: [
+                          {
+                            type: "tool",
+                            toolCall: {
+                              id: "cross-window-tool",
+                              toolName: "read",
+                              args: { path: "SKILL.md" },
+                              result: "instructions loaded",
+                              isRunning: false,
+                              startedAtMs: updatedAt - 2_000,
+                              endedAtMs: updatedAt - 1_000,
+                            },
+                          },
+                        ],
+                      }
+                    : {}),
                   timestamp: updatedAt,
                 },
               ]
@@ -198,6 +216,15 @@ async function expectSynchronizedActiveTurn(): Promise<void> {
   });
 }
 
+async function expectActiveToolState(): Promise<void> {
+  const summary = await $('[data-testid="tool-activity-summary"]');
+  await summary.waitForDisplayed({ timeout: t(10_000) });
+  expect((await summary.getText()).toLowerCase()).not.toContain("done");
+  const indicator = await summary.$('[data-testid="tool-activity-running-indicator"]');
+  await indicator.waitForDisplayed({ timeout: t(10_000) });
+  expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);
+}
+
 describe("Cross-window chat transcript sync", function () {
   this.timeout(150_000);
 
@@ -283,6 +310,37 @@ describe("Cross-window chat transcript sync", function () {
 
     await browser.switchToWindow("chat");
     await expectSynchronizedActiveTurn();
+
+    const toolAt = nextFixtureUpdatedAt();
+    writeConversation(toolAt, "active-tool");
+    await emitTauri("chat-conversation-saved", {
+      id: CHAT_ID,
+      title: "cross-window transcript sync",
+      titleSource: "fallback",
+      updatedAt: toolAt,
+      turnState: { isLoading: true, isStreaming: true },
+    });
+    await expectActiveToolState();
+
+    await browser.switchToWindow("home");
+    await expectActiveToolState();
+
+    // A sibling may persist title/sidebar/transcript metadata while another
+    // WebView owns the live Pi turn. Metadata-only saves must not infer idle
+    // from that sibling's local React flags or the running tool receipt flips
+    // to "done" before agent_end.
+    const metadataOnlyAt = nextFixtureUpdatedAt();
+    writeConversation(metadataOnlyAt, "active-tool");
+    await emitTauri("chat-conversation-saved", {
+      id: CHAT_ID,
+      title: "cross-window transcript sync",
+      titleSource: "fallback",
+      updatedAt: metadataOnlyAt,
+    });
+    await expectActiveToolState();
+
+    await browser.switchToWindow("chat");
+    await expectActiveToolState();
 
     const activeScreenshot = await saveScreenshot("chat-cross-window-active-turn");
     expect(existsSync(activeScreenshot)).toBe(true);

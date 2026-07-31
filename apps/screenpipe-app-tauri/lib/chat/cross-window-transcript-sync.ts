@@ -12,6 +12,11 @@ export interface SynchronizedActiveTurn {
   contentBlocks: ContentBlock[];
 }
 
+export interface SavedTurnState {
+  isLoading: boolean;
+  isStreaming: boolean;
+}
+
 function blockProgress(block: ContentBlock): number {
   switch (block.type) {
     case "text":
@@ -39,6 +44,63 @@ function messageProgress(message: Message): number {
 
 function isProcessingPlaceholder(message: Message): boolean {
   return message.role === "assistant" && message.content.trim() === "Processing...";
+}
+
+/**
+ * Recover the optimistic assistant row when Pi echoes the user prompt before
+ * this WebView has finished hydrating the sibling's active-turn refs.
+ *
+ * The optimistic transcript is already durable at this point. Treating the
+ * echo as a new queued turn appends the same user prompt and a second
+ * "Processing..." row to that transcript. Match only the exact trailing
+ * user/placeholder pair so a later intentional repeat remains a new turn.
+ */
+export function optimisticAssistantForUserEcho(
+  messages: Message[],
+  echoedUserText: string,
+): SynchronizedActiveTurn | null {
+  const normalizedEcho = echoedUserText.trim();
+  if (!normalizedEcho || messages.length < 2) return null;
+
+  const user = messages[messages.length - 2];
+  const assistant = messages[messages.length - 1];
+  if (
+    user.role !== "user" ||
+    user.content.trim() !== normalizedEcho ||
+    !isProcessingPlaceholder(assistant)
+  ) {
+    return null;
+  }
+
+  return {
+    assistantMessageId: assistant.id,
+    streamingText: "",
+    contentBlocks: assistant.contentBlocks ? [...assistant.contentBlocks] : [],
+  };
+}
+
+/**
+ * Build the active-turn fields for a cross-window save event.
+ *
+ * A WebView that merely persists metadata or a transcript snapshot does not
+ * own Pi's lifecycle and must not infer an idle state from its local React
+ * flags. Only callers that explicitly observed a turn transition may publish
+ * turnState. This prevents a sibling save from changing a live "working"
+ * receipt to "done" before agent_end.
+ */
+export function savedTurnEventState(
+  messages: Message[],
+  turnState?: SavedTurnState,
+): { turnState?: SavedTurnState; activeAssistantMessageId?: string } {
+  if (!turnState) return {};
+
+  const activeTurn = synchronizedActiveTurn(messages, turnState);
+  return {
+    turnState,
+    ...(activeTurn
+      ? { activeAssistantMessageId: activeTurn.assistantMessageId }
+      : {}),
+  };
 }
 
 /**

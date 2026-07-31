@@ -16,6 +16,7 @@ import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, pars
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
+import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
@@ -458,6 +459,29 @@ export function usePiForegroundEvents({
           // point `sendPiMessage` has just created an empty placeholder and
           // there's nothing streamed yet (clearing would orphan the
           // placeholder and re-create a duplicate on the first delta).
+          const rawText = textFromMessageContent(data.message?.content);
+          const text = extractInjectedUserText(rawText) ?? rawText;
+          const sidForStartedUser = piSessionIdRef.current;
+
+          // A sibling WebView can receive this Pi echo before React commits
+          // the saved transcript and active assistant ref locally. The
+          // chat-store is updated synchronously by cross-window hydration, so
+          // consult both sources before interpreting the echo as a queued turn.
+          // Otherwise one card click persists the prompt + placeholder twice.
+          if (!piMessageIdRef.current) {
+            const storedMessages = sidForStartedUser
+              ? useChatStore.getState().sessions[sidForStartedUser]?.messages
+              : undefined;
+            const optimisticAssistant =
+              optimisticAssistantForUserEcho(messagesRef.current, text) ??
+              optimisticAssistantForUserEcho((storedMessages ?? []) as Message[], text);
+            if (optimisticAssistant) {
+              piMessageIdRef.current = optimisticAssistant.assistantMessageId;
+              piStreamingTextRef.current = optimisticAssistant.streamingText;
+              piContentBlocksRef.current = optimisticAssistant.contentBlocks;
+            }
+          }
+
           const hasStreamedContent =
             piStreamingTextRef.current.length > 0 ||
             piContentBlocksRef.current.length > 0;
@@ -470,8 +494,6 @@ export function usePiForegroundEvents({
             // processing the followUp turn.
           }
 
-          const rawText = textFromMessageContent(data.message?.content);
-          const text = extractInjectedUserText(rawText) ?? rawText;
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
           const pendingOptimisticSteer = optimisticSteerRef.current;
           const isPendingOptimisticSteerEcho = Boolean(
@@ -482,7 +504,6 @@ export function usePiForegroundEvents({
           const preMatchedTurnIntent = findTurnIntentForUserStart(piSessionIdRef.current, text, pendingNextPiUserDisplayRef.current);
 
           if (!piMessageIdRef.current || isPendingOptimisticSteerEcho || preMatchedTurnIntent?.kind === "steer") {
-            const sidForStartedUser = piSessionIdRef.current;
             const pendingDisplay = pendingNextPiUserDisplayRef.current &&
               (!text || turnIntentTextValuesMatch(pendingNextPiUserDisplayRef.current.preview, text))
                 ? pendingNextPiUserDisplayRef.current
@@ -565,6 +586,7 @@ export function usePiForegroundEvents({
                 idOverride: piSessionIdRef.current,
                 refreshHistory: false,
                 syncActiveConversation: false,
+                turnState: { isLoading: true, isStreaming: true },
               });
             }
 

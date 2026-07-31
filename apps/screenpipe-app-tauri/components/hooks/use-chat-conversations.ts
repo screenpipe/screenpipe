@@ -44,6 +44,7 @@ import {
 } from "@/lib/chat-storage";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import {
+  savedTurnEventState,
   shouldAdoptPersistedTranscript,
   synchronizedActiveTurn,
   toRuntimeMessages,
@@ -426,11 +427,19 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         titleSource?: "fallback" | "ai" | "user";
         updatedAt?: number;
         turnState?: { isLoading: boolean; isStreaming: boolean };
+        activeAssistantMessageId?: string;
       }>(
         "chat-conversation-saved",
         async (event) => {
           if (cancelled) return;
-          const { id, title, titleSource, updatedAt, turnState } = event.payload ?? {};
+          const {
+            id,
+            title,
+            titleSource,
+            updatedAt,
+            turnState,
+            activeAssistantMessageId,
+          } = event.payload ?? {};
           if (!id) return;
 
           // Each WebView owns separate React/Zustand state. A sibling can save
@@ -439,6 +448,19 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // strictly more complete so a stale save never rolls back a live
           // foreground stream.
           if (id === conversationId || id === piSessionIdRef.current) {
+            // Publish the stable assistant identity before any disk/title
+            // awaits below. Pi can echo the user prompt within milliseconds;
+            // without this synchronous handoff a sibling treats that echo as
+            // a queued turn and persists the prompt + placeholder twice.
+            if (
+              activeAssistantMessageId &&
+              (turnState?.isLoading || turnState?.isStreaming) &&
+              !piMessageIdRef.current
+            ) {
+              piMessageIdRef.current = activeAssistantMessageId;
+              piStreamingTextRef.current = "";
+              piContentBlocksRef.current = [];
+            }
             if (typeof updatedAt === "number") {
               latestSavedEventAtRef.current.set(
                 id,
@@ -917,12 +939,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       upsertFileConversationMeta(conversation);
     }
     try {
+      const emittedTurnState = savedTurnEventState(msgs, options.turnState);
       await emit("chat-conversation-saved", {
         id: conversation.id,
         title: conversation.title,
         titleSource: conversation.titleSource,
         updatedAt: conversation.updatedAt,
-        turnState: options.turnState ?? { isLoading, isStreaming },
+        ...emittedTurnState,
       });
     } catch {
       // ignore broadcast failures; local save already succeeded
@@ -995,7 +1018,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // If the user has typed follow-up messages, some won't have pipe- IDs → save.
       const allPipe = messages.every((m) => m.id?.startsWith("pipe-"));
       if (!allPipe) {
-        saveConversation(messages);
+        saveConversation(messages, {
+          turnState: { isLoading: false, isStreaming: false },
+        });
         // Reveal this session in the sidebar — the assistant has replied,
         // so it's no longer an empty draft.
         void (async () => {
@@ -1053,6 +1078,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       saveConversation(messages, {
         refreshHistory: false,
         syncActiveConversation: false,
+        turnState: { isLoading, isStreaming },
       });
     }, 1500);
 
