@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 #[test]
 fn pipe_system_prompt_source_includes_profile_memory_guidance() {
-    let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pipes/mod.rs"))
-        .expect("read pipes mod.rs");
+    let source =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pipes/mod.rs"))
+            .expect("read pipes mod.rs");
 
     assert!(source.contains("Profile memory:"));
     assert!(source.contains("keep a compact running user profile"));
@@ -18,10 +19,18 @@ fn pipe_system_prompt_source_includes_profile_memory_guidance() {
 
 #[test]
 fn pipe_system_prompt_source_keeps_connection_policy_near_profile_memory() {
-    let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pipes/mod.rs"))
-        .expect("read pipes mod.rs");
+    let source =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pipes/mod.rs"))
+            .expect("read pipes mod.rs");
 
-    let connection_idx = source.find("Connection write policy:").expect("connection policy present");
-    let profile_idx = source.find("Profile memory:").expect("profile memory present");
-    assert!(profile_idx > connection_idx, "profile memory should be appended after connection policy context");
+    let connection_idx = source
+        .find("Connection write policy:")
+        .expect("connection policy present");
+    let profile_idx = source
+        .find("Profile memory:")
+        .expect("profile memory present");
+    assert!(
+        profile_idx > connection_idx,
+        "profile memory should be appended after connection policy context"
+    );
 }
