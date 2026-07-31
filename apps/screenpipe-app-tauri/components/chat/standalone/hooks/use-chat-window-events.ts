@@ -461,9 +461,24 @@ export function useChatE2EGlobals({
       setIsStreaming(false);
     };
 
+    (window as unknown as {
+      __e2eReadActiveTurn?: () => {
+        sessionId: string;
+        assistantMessageId: string | null;
+        streamingText: string;
+        contentBlockCount: number;
+      };
+    }).__e2eReadActiveTurn = () => ({
+      sessionId: piSessionIdRef.current,
+      assistantMessageId: piMessageIdRef.current,
+      streamingText: piStreamingTextRef.current,
+      contentBlockCount: piContentBlocksRef.current.length,
+    });
+
     return () => {
       delete (window as unknown as { __e2eSeedUserMessage?: unknown }).__e2eSeedUserMessage;
       delete (window as unknown as { __e2eSeedAssistantMessage?: unknown }).__e2eSeedAssistantMessage;
+      delete (window as unknown as { __e2eReadActiveTurn?: unknown }).__e2eReadActiveTurn;
     };
   }, [
     piContentBlocksRef,

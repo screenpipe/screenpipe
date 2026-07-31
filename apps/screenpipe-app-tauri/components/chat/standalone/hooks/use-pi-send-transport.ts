@@ -316,6 +316,14 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     };
 
     const assistantMessageId = (Date.now() + 1).toString();
+    const assistantPlaceholder: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "Processing...",
+      timestamp: Date.now(),
+      model: getActivePreset()?.model,
+      provider: getActivePreset()?.provider,
+    };
 
     piStreamingTextRef.current = "";
     piMessageIdRef.current = assistantMessageId;
@@ -339,22 +347,26 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // state updater. React may defer updater callbacks; when that happened, a
     // slow provider response left a brand-new conversation without a file until
     // the response completed (or without one at all if the app exited first).
-    const nextRowsAfterUserAppend = [...messages, newUserMessage];
-    setMessages((prev) => [...prev, newUserMessage]);
+    const nextRowsAfterTurnStart = [
+      ...messages,
+      newUserMessage,
+      assistantPlaceholder,
+    ];
+    setMessages((prev) => [...prev, newUserMessage, assistantPlaceholder]);
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    setIsLoading(true);
+    setIsStreaming(true);
     // conversationId state hasn't committed yet this tick, so force the
     // immediate save under the same id explicitly.
     // Do not dispatch to the provider until the user turn is durable. Besides
     // preventing message loss on an immediate quit, this avoids slow WebKit
     // filesystem work being starved behind a long-running provider request.
-    await saveConversation(nextRowsAfterUserAppend, {
+    await saveConversation(nextRowsAfterTurnStart, {
       refreshHistory: false,
       idOverride: turnSessionId,
-      turnState: { isLoading: true, isStreaming: false },
+      turnState: { isLoading: true, isStreaming: true },
     });
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-    setIsLoading(true);
-    setIsStreaming(true);
 
     // Mirror the user message + assistant placeholder DIRECTLY into the
     // chat-store, synchronously. The snapshot-on-switch path reads
@@ -388,14 +400,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       if (displayLabel && isPlaceholderConversationTitle(currentTitle)) {
         storeState.actions.patch(sidNow, { title: displayLabel });
       }
-      storeState.actions.appendMessage(sidNow, {
-        id: assistantMessageId,
-        role: "assistant",
-        content: "Processing...",
-        timestamp: Date.now(),
-        model: getActivePreset()?.model,
-        provider: getActivePreset()?.provider,
-      } as any);
+      storeState.actions.appendMessage(sidNow, assistantPlaceholder as any);
       storeState.actions.setStreaming(sidNow, {
         streamingMessageId: assistantMessageId,
         streamingText: "",
@@ -456,11 +461,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         if (piImage) piImages.push(piImage);
       }
       if (shouldClearPastedImages) setPastedImages([]);
-
-      setMessages((prev) => [
-        ...prev,
-        { id: assistantMessageId, role: "assistant", content: "Processing...", timestamp: Date.now(), model: getActivePreset()?.model, provider: getActivePreset()?.provider },
-      ]);
 
       // Always attach the bounded frontend snapshot used to recover issue
       // #3636. Rust knows the exact Pi subprocess state: a cold/new process

@@ -312,7 +312,8 @@ export async function trackUsage(
         VALUES (?, 1, ?, 'ip_tracking')
         ON CONFLICT(device_id) DO UPDATE SET
           daily_count = CASE WHEN last_reset < ? THEN 1 ELSE daily_count + 1 END,
-          last_reset = ?
+          last_reset = ?,
+          updated_at = CURRENT_TIMESTAMP
       `).bind(ipKey, today, today, today).run();
     }
 

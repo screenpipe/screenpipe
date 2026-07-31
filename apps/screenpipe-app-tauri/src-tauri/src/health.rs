@@ -191,6 +191,15 @@ pub enum RecordingStatus {
     Error,
 }
 
+/// Audio-specific state shown alongside the overall recording state. Keeping
+/// this separate avoids claiming screen capture stopped while meetings-only
+/// audio intentionally owns no devices.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AudioCaptureStatus {
+    WaitingForMeeting,
+    MeetingDetectorUnavailable,
+}
+
 /// Kind of recording device
 #[derive(Clone, PartialEq, Debug)]
 pub enum DeviceKind {
@@ -215,12 +224,14 @@ pub struct DeviceInfo {
 #[derive(Clone, PartialEq, Debug)]
 pub struct RecordingInfo {
     pub status: RecordingStatus,
+    pub audio_capture_status: Option<AudioCaptureStatus>,
     pub devices: Vec<DeviceInfo>,
 }
 
 static RECORDING_INFO: Lazy<RwLock<RecordingInfo>> = Lazy::new(|| {
     RwLock::new(RecordingInfo {
         status: RecordingStatus::Starting,
+        audio_capture_status: None,
         devices: Vec::new(),
     })
 });
@@ -330,9 +341,14 @@ pub fn set_recording_status(status: RecordingStatus) {
         .status = status;
 }
 
-fn set_recording_info(status: RecordingStatus, devices: Vec<DeviceInfo>) {
+fn set_recording_info(
+    status: RecordingStatus,
+    audio_capture_status: Option<AudioCaptureStatus>,
+    devices: Vec<DeviceInfo>,
+) {
     let mut info = RECORDING_INFO.write().unwrap_or_else(|e| e.into_inner());
     info.status = status;
+    info.audio_capture_status = audio_capture_status;
     info.devices = devices;
 }
 
@@ -469,6 +485,22 @@ struct HealthCheckResponse {
     schedule_paused: bool,
 }
 
+fn audio_capture_status_from_health(
+    health_result: &Result<HealthCheckResponse>,
+) -> Option<AudioCaptureStatus> {
+    match health_result
+        .as_ref()
+        .ok()
+        .and_then(|health| health.audio_status.as_deref())
+    {
+        Some("waiting_for_meeting") => Some(AudioCaptureStatus::WaitingForMeeting),
+        Some("meeting_detector_unavailable") => {
+            Some(AudioCaptureStatus::MeetingDetectorUnavailable)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct CaptureFailureSignals {
     audio: bool,
@@ -485,6 +517,7 @@ fn capture_failure_signals(
         Some("stale")
             | Some("not_started")
             | Some("active_no_data")
+            | Some("meeting_detector_unavailable")
             | Some("permission_denied")
             | Some("capture_stalled")
             | Some("error")
@@ -531,7 +564,7 @@ fn health_confirms_recording(health: &HealthCheckResponse) -> bool {
     );
     let audio_healthy = matches!(
         health.audio_status.as_deref(),
-        Some("ok") | Some("disabled") | Some("no_input_device")
+        Some("ok") | Some("disabled") | Some("no_input_device") | Some("waiting_for_meeting")
     );
 
     vision_healthy && audio_healthy && !health.write_queue_degraded
@@ -1428,7 +1461,11 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 }
             }
 
-            set_recording_info(status, devices);
+            set_recording_info(
+                status,
+                audio_capture_status_from_health(&health_result),
+                devices,
+            );
 
             let current_status = status_to_icon_key(status);
 
@@ -2260,6 +2297,7 @@ mod tests {
             "stale",
             "not_started",
             "active_no_data",
+            "meeting_detector_unavailable",
             "permission_denied",
             "capture_stalled",
             "error",
@@ -2272,7 +2310,7 @@ mod tests {
             );
         }
 
-        for status in ["ok", "disabled", "no_input_device"] {
+        for status in ["ok", "disabled", "no_input_device", "waiting_for_meeting"] {
             let mut health = healthy_health();
             health.audio_status = Some(status.to_string());
             assert!(
@@ -2280,6 +2318,28 @@ mod tests {
                 "{status} must not be treated as a capture failure"
             );
         }
+    }
+
+    #[test]
+    fn tray_audio_status_preserves_meetings_only_detail() {
+        let mut waiting = healthy_health();
+        waiting.audio_status = Some("waiting_for_meeting".to_string());
+        assert_eq!(
+            audio_capture_status_from_health(&Ok(waiting)),
+            Some(AudioCaptureStatus::WaitingForMeeting)
+        );
+
+        let mut unavailable = healthy_health();
+        unavailable.audio_status = Some("meeting_detector_unavailable".to_string());
+        assert_eq!(
+            audio_capture_status_from_health(&Ok(unavailable)),
+            Some(AudioCaptureStatus::MeetingDetectorUnavailable)
+        );
+
+        assert_eq!(
+            audio_capture_status_from_health(&make_connection_error()),
+            None
+        );
     }
 
     #[test]
@@ -2359,7 +2419,7 @@ mod tests {
     #[test]
     fn only_explicit_good_capture_statuses_confirm_recovery() {
         for frame_status in ["ok", "disabled"] {
-            for audio_status in ["ok", "disabled", "no_input_device"] {
+            for audio_status in ["ok", "disabled", "no_input_device", "waiting_for_meeting"] {
                 let mut health = healthy_health();
                 health.frame_status = Some(frame_status.to_string());
                 health.audio_status = Some(audio_status.to_string());

@@ -20,6 +20,10 @@ routes = [
 [observability]
 enabled = true
 
+# Hourly bounded-state cleanup. The minute offset avoids top-of-hour load.
+[triggers]
+crons = ["17 * * * *"]
+
 # Automatically place your workloads in an optimal location to minimize latency.
 # If you are running back-end logic in a Worker, running it closer to your back-end infrastructure
 # rather than the end user may result in better performance.
@@ -97,8 +101,8 @@ binding = "AI"
 # Then update the database_id below with the returned ID
 [[d1_databases]]
 binding = "DB"
-database_name = "screenpipe-usage"
-database_id = "5496f4b2-03c9-496f-b8ca-675961c0622a"
+database_name = "screenpipe-usage-v2"
+database_id = "f410ff74-4c3f-4786-a1ca-c8365f6c0ddf"
 
 # Bind a dispatch namespace. Use Workers for Platforms to deploy serverless functions programmatically on behalf of your customers.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#dispatch-namespace-bindings-workers-for-platforms

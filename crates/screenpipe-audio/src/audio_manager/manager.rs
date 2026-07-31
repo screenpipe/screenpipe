@@ -124,6 +124,27 @@ const MEETING_AUDIO_FRAME_BUFFER: usize = 512;
 const RECONCILIATION_IDLE_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_IMMEDIATE_RECONCILIATION_SWEEPS: usize = 4;
 
+fn meetings_only_capture_waiting(
+    capture_mode: &AudioCaptureMode,
+    meeting_state: Option<bool>,
+) -> bool {
+    matches!(capture_mode, AudioCaptureMode::MeetingsOnly) && meeting_state != Some(true)
+}
+
+/// Final privacy boundary before an audio chunk can reach disk or
+/// transcription. Meetings-only capture fails closed when its detector is
+/// absent. A registered session stream may flush while a confirmed meeting is
+/// being torn down because its owner already scopes that short tail.
+fn should_persist_audio_chunk(
+    capture_mode: &AudioCaptureMode,
+    meeting_state: Option<bool>,
+    is_session_stream: bool,
+) -> bool {
+    !matches!(capture_mode, AudioCaptureMode::MeetingsOnly)
+        || meeting_state == Some(true)
+        || (meeting_state == Some(false) && is_session_stream)
+}
+
 /// Wall-clock milliseconds since the Unix epoch (0 if the clock predates it).
 /// Local to the audio manager so the receiver-loop stamping and the piggyback
 /// sweep share one monotonic-enough source without a cross-module dependency.
@@ -861,6 +882,20 @@ impl AudioManager {
             return Ok(());
         }
 
+        // Meetings-only is a device-ownership contract, not merely a
+        // persistence filter. The OS meeting watcher does not depend on these
+        // streams on macOS/Windows, so release normal configured devices while
+        // idle and let the monitor reopen them at the next meeting edge.
+        // A missing detector fails closed: without a confirmed meeting this
+        // mode must never acquire an audio device.
+        if self.meetings_only_capture_waiting().await {
+            debug!(
+                "skipping start of audio device while meetings-only capture waits for a meeting: {}",
+                device
+            );
+            return Ok(());
+        }
+
         // Bluetooth mics always force the paired device's audio link out of
         // A2DP into SCO, degrading the user's headphone/speaker output — a
         // macOS/OS-level tradeoff with no external workaround (issue #3750).
@@ -882,6 +917,18 @@ impl AudioManager {
             } else if !err_str.contains("already running") {
                 return Err(e);
             }
+        }
+
+        // The meeting may end while the OS backend is opening the stream. The
+        // pre-start gate cannot close that race, and the monitor cannot see the
+        // stream until its recording handle is registered.
+        if self.meetings_only_capture_waiting().await {
+            self.stop_device_recording(device).await?;
+            debug!(
+                "stopped newly-opened audio device after meeting ended during startup: {}",
+                device
+            );
+            return Ok(());
         }
 
         // The lock flag can change while CoreAudio is opening the stream. The
@@ -929,6 +976,13 @@ impl AudioManager {
         if self.options.read().await.is_disabled {
             return Ok(());
         }
+        if self.meetings_only_capture_waiting().await {
+            debug!(
+                "skipping start of meeting-session audio device without a confirmed meeting: {}",
+                device
+            );
+            return Ok(());
+        }
         #[cfg(target_os = "macos")]
         if screenpipe_config::should_pause_audio_for_lock() {
             debug!(
@@ -960,6 +1014,22 @@ impl AudioManager {
                     .remove(&device.to_string());
                 return Err(e);
             }
+        }
+
+        // The meeting can end while the backend is opening the stream. Remove
+        // session ownership before stopping so a racing callback cannot bypass
+        // the persistence gate after the edge.
+        if self.meetings_only_capture_waiting().await {
+            self.session_devices
+                .write()
+                .unwrap()
+                .remove(&device.to_string());
+            self.stop_device_recording(device).await?;
+            debug!(
+                "stopped newly-opened meeting-session audio device after the meeting ended during startup: {}",
+                device
+            );
+            return Ok(());
         }
 
         // As above, close a stream that finished opening after the screen-lock
@@ -1265,12 +1335,10 @@ impl AudioManager {
                     meeting.on_audio_activity(&audio.device.device_type, has_activity);
                 }
 
-                // Meetings-only capture: drop this chunk before it is persisted or
-                // transcribed unless a meeting / audio session is active. The detector
-                // was just fed this chunk's activity above, so a meeting that is
-                // starting still flips the session on in time. With no detector we
-                // cannot tell whether we're in a meeting, so we keep capturing rather
-                // than silently dropping everything.
+                // Meetings-only capture: enforce the privacy boundary again at
+                // the persistence edge. Device ownership should already be closed
+                // while idle, but an in-flight callback can race a meeting end.
+                // Detector absence fails closed instead of persisting ambient audio.
                 if audio_capture_mode == AudioCaptureMode::MeetingsOnly {
                     // Session streams exist only during a meeting by
                     // construction — never drop them, even if the detector
@@ -1279,13 +1347,14 @@ impl AudioManager {
                         .read()
                         .unwrap()
                         .contains(&audio.device.to_string());
-                    let in_session = meeting_detector
-                        .as_ref()
-                        .map(|m| m.is_in_audio_session())
-                        .unwrap_or(true);
-                    if !is_session_stream && !in_session {
+                    let meeting_state = meeting_detector.as_ref().map(|m| m.is_in_audio_session());
+                    if !should_persist_audio_chunk(
+                        &audio_capture_mode,
+                        meeting_state,
+                        is_session_stream,
+                    ) {
                         debug!(
-                            "meetings-only capture: no active meeting, dropping audio chunk from {:?}",
+                            "meetings-only capture: no confirmed meeting, dropping audio chunk from {:?}",
                             audio.device.name
                         );
                         continue;
@@ -1606,8 +1675,17 @@ impl AudioManager {
     /// that only hold an `AudioManager` (the piggyback sweep) can distinguish a
     /// registered-but-dead stream from one actually delivering audio — without
     /// reaching into the private `device_manager` or duplicating the check.
-    pub(crate) fn is_device_actively_streaming(&self, device: &AudioDevice) -> bool {
+    pub fn is_device_actively_streaming(&self, device: &AudioDevice) -> bool {
         super::is_device_actively_streaming(&self.device_manager, device)
+    }
+
+    /// Non-blocking read of the configured capture mode. Returns `None` if the
+    /// options lock is momentarily contended so `/health` never blocks on it.
+    pub fn configured_audio_capture_mode(&self) -> Option<AudioCaptureMode> {
+        self.options
+            .try_read()
+            .ok()
+            .map(|o| o.audio_capture_mode.clone())
     }
 
     /// Non-blocking read of the *configured* transcription mode. Returns `None`
@@ -1711,6 +1789,24 @@ impl AudioManager {
     /// Returns the current capture-owned meeting detector, if enabled.
     pub async fn meeting_detector(&self) -> Option<Arc<MeetingDetector>> {
         self.meeting_detector.read().await.clone()
+    }
+
+    /// Whether normal configured streams must stay closed until a meeting is
+    /// detected. Session streams intentionally bypass this gate because their
+    /// lifetime is already scoped to a meeting.
+    pub async fn meetings_only_capture_waiting(&self) -> bool {
+        // macOS and Windows use OS process ownership signals for meeting
+        // detection. Linux still relies on captured audio onset to accelerate
+        // its UI scanner, so retain its documented detector stream for now.
+        if !cfg!(any(target_os = "macos", target_os = "windows")) {
+            return false;
+        }
+        let capture_mode = self.options.read().await.audio_capture_mode.clone();
+        let meeting_state = self
+            .meeting_detector()
+            .await
+            .map(|detector| detector.is_in_meeting());
+        meetings_only_capture_waiting(&capture_mode, meeting_state)
     }
 
     /// Whether the meeting piggyback ("smart recording") flag is on. Consumed
@@ -2248,6 +2344,57 @@ mod tests {
         Arc,
     };
     use tokio::sync::{Barrier, Notify, Semaphore};
+
+    #[test]
+    fn meetings_only_waits_until_a_meeting_is_confirmed() {
+        assert!(meetings_only_capture_waiting(
+            &AudioCaptureMode::MeetingsOnly,
+            Some(false)
+        ));
+        assert!(!meetings_only_capture_waiting(
+            &AudioCaptureMode::MeetingsOnly,
+            Some(true)
+        ));
+        assert!(meetings_only_capture_waiting(
+            &AudioCaptureMode::MeetingsOnly,
+            None
+        ));
+        assert!(!meetings_only_capture_waiting(
+            &AudioCaptureMode::Always,
+            Some(false)
+        ));
+    }
+
+    #[test]
+    fn meetings_only_persistence_gate_fails_closed() {
+        for meeting_state in [None, Some(false)] {
+            assert!(!should_persist_audio_chunk(
+                &AudioCaptureMode::MeetingsOnly,
+                meeting_state,
+                false,
+            ));
+        }
+        assert!(should_persist_audio_chunk(
+            &AudioCaptureMode::MeetingsOnly,
+            Some(true),
+            false,
+        ));
+        assert!(should_persist_audio_chunk(
+            &AudioCaptureMode::MeetingsOnly,
+            Some(false),
+            true,
+        ));
+        assert!(!should_persist_audio_chunk(
+            &AudioCaptureMode::MeetingsOnly,
+            None,
+            true,
+        ));
+        assert!(should_persist_audio_chunk(
+            &AudioCaptureMode::Always,
+            None,
+            false,
+        ));
+    }
 
     #[derive(Clone)]
     struct FakeEngine {

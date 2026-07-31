@@ -258,23 +258,11 @@ impl MeetingStreamingConfig {
 }
 
 fn resolve_settings_provider(
-    enabled: bool,
+    _enabled: bool,
     requested_provider: MeetingStreamingProvider,
-    cloud_token: Option<&str>,
+    _cloud_token: Option<&str>,
 ) -> MeetingStreamingProvider {
-    if !enabled || requested_provider != MeetingStreamingProvider::SelectedEngine {
-        return requested_provider;
-    }
-
-    if cloud_token.is_some_and(|token| !token.trim().is_empty()) {
-        // Paid/cloud users expect live meeting notes to use Screenpipe Cloud by
-        // default. `selected-engine` remains the non-cloud default, but once a
-        // cloud token is configured we promote it to cloud live unless the user
-        // disables live transcription or explicitly chooses another provider.
-        MeetingStreamingProvider::ScreenpipeCloud
-    } else {
-        MeetingStreamingProvider::SelectedEngine
-    }
+    requested_provider
 }
 
 fn provider_api_key(provider: &MeetingStreamingProvider) -> Option<String> {
@@ -381,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_engine_promotes_to_cloud_when_cloud_is_configured() {
+    fn selected_engine_stays_selected_engine_when_cloud_is_configured() {
         let config = MeetingStreamingConfig::from_settings(
             true,
             "selected-engine",
@@ -391,9 +379,30 @@ mod tests {
             None,
         );
 
-        assert_eq!(config.provider, MeetingStreamingProvider::ScreenpipeCloud);
+        assert_eq!(config.provider, MeetingStreamingProvider::SelectedEngine);
         assert!(config.live_transcription_ready());
-        assert_eq!(config.model.as_deref(), Some("nova-3"));
+        assert_eq!(
+            config.model.as_deref(),
+            Some("selected transcription engine")
+        );
+    }
+
+    #[test]
+    fn regression_runtime_resolution_does_not_override_user_provider_choice() {
+        let config = MeetingStreamingConfig::from_settings(
+            true,
+            "selected-engine",
+            Some("cloud-token".to_string()),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            config.provider,
+            MeetingStreamingProvider::SelectedEngine,
+            "resolve_settings_provider must not silently promote to cloud on every app restart"
+        );
     }
 
     #[test]

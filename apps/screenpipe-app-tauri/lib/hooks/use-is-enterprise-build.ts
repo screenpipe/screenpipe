@@ -11,6 +11,31 @@ import { commands } from "@/lib/utils/tauri";
 let cachedResult: boolean | null = null;
 let pendingPromise: Promise<boolean> | null = null;
 
+// Tauri invokes can remain pending when WebKit's content process is replaced
+// during startup. A bounded attempt lets the shared promise clear so the next
+// invoke can reach the new content process instead of wedging every consumer.
+const ENTERPRISE_BUILD_IPC_TIMEOUT_MS = 3_000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("enterprise build policy check timed out")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export const E2E_FORCE_ENTERPRISE_BUILD_KEY =
   "screenpipe_e2e_force_enterprise_build";
 
@@ -39,7 +64,10 @@ async function resolveEnterpriseBuild(): Promise<boolean> {
   const attempt = (async () => {
     for (let i = 0; i < 3; i++) {
       try {
-        const result = await commands.isEnterpriseBuildCmd();
+        const result = await withTimeout(
+          commands.isEnterpriseBuildCmd(),
+          ENTERPRISE_BUILD_IPC_TIMEOUT_MS,
+        );
         cachedResult = result;
         if (i === 0) {
           console.log(`[enterprise] isEnterpriseBuild = ${result}`);

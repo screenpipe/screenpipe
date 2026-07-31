@@ -45,6 +45,7 @@ import {
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import {
   shouldAdoptPersistedTranscript,
+  synchronizedActiveTurn,
   toRuntimeMessages,
 } from "@/lib/chat/cross-window-transcript-sync";
 
@@ -450,17 +451,64 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
               const persisted = await loadConversationFile(id);
               if (persisted) {
                 const runtimeMessages = toRuntimeMessages(persisted.messages as Message[]);
+                let adoptedPersistedTranscript = false;
                 if (
                   shouldAdoptPersistedTranscript(
                     currentMessagesRef.current,
                     runtimeMessages,
                   )
                 ) {
+                  adoptedPersistedTranscript = true;
                   currentMessagesRef.current = runtimeMessages;
                   setMessages(runtimeMessages);
                   const { useChatStore } = await import("@/lib/stores/chat-store");
                   if (useChatStore.getState().sessions[id]) {
                     useChatStore.getState().actions.setMessages(id, runtimeMessages as any);
+                  }
+                }
+
+                const isLatestTurnState =
+                  typeof updatedAt !== "number" ||
+                  (latestSavedEventAtRef.current.get(id) ?? 0) <= updatedAt;
+                if (turnState && isLatestTurnState) {
+                  const { useChatStore } = await import("@/lib/stores/chat-store");
+                  const storeState = useChatStore.getState();
+                  const activeTurn = synchronizedActiveTurn(runtimeMessages, turnState);
+
+                  if (activeTurn) {
+                    const shouldHydrateRuntime =
+                      piMessageIdRef.current !== activeTurn.assistantMessageId;
+                    if (shouldHydrateRuntime) {
+                      piMessageIdRef.current = activeTurn.assistantMessageId;
+                      piStreamingTextRef.current = activeTurn.streamingText;
+                      piContentBlocksRef.current = activeTurn.contentBlocks;
+                    }
+
+                    const storedSession = storeState.sessions[id];
+                    if (
+                      storedSession &&
+                      (adoptedPersistedTranscript ||
+                        storedSession.streamingMessageId !== activeTurn.assistantMessageId)
+                    ) {
+                      storeState.actions.setStreaming(id, {
+                        streamingMessageId: activeTurn.assistantMessageId,
+                        streamingText: activeTurn.streamingText,
+                        contentBlocks: activeTurn.contentBlocks,
+                        isLoading: turnState.isLoading,
+                        isStreaming: turnState.isStreaming,
+                      });
+                      storeState.actions.patch(id, {
+                        status: "streaming",
+                        lastError: undefined,
+                      });
+                    }
+                  } else if (!turnState.isLoading && !turnState.isStreaming) {
+                    piMessageIdRef.current = null;
+                    piStreamingTextRef.current = "";
+                    piContentBlocksRef.current = [];
+                    if (storeState.sessions[id]) {
+                      storeState.actions.endTurn(id);
+                    }
                   }
                 }
               }
@@ -517,7 +565,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     };
   }, [
     conversationId,
+    piContentBlocksRef,
+    piMessageIdRef,
     piSessionIdRef,
+    piStreamingTextRef,
     scheduleHistoryRefresh,
     setConversationId,
     setIsLoading,

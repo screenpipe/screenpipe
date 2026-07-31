@@ -14,7 +14,7 @@ mock.module('@clerk/backend', () => ({
   verifyToken: verifyTokenMock,
 }));
 
-const { validateAuth } = await import('./auth');
+const { validateAuth, __resetAuthEntitlementCacheForTests } = await import('./auth');
 
 // Canceling a subscription must not strip Pro access before the paid period
 // ends. Stripe stamps canceled_at / flips status to canceled the moment a
@@ -65,6 +65,7 @@ describe('validateAuth — verified identities only', () => {
   });
 
   beforeEach(() => {
+    __resetAuthEntitlementCacheForTests();
     verifyTokenMock.mockImplementation(async () => {
       throw new Error('invalid token');
     });
@@ -74,6 +75,7 @@ describe('validateAuth — verified identities only', () => {
   });
 
   afterEach(() => {
+    __resetAuthEntitlementCacheForTests();
     globalThis.fetch = originalFetch;
     verifyTokenMock.mockClear();
   });
@@ -142,7 +144,7 @@ describe('validateAuth — verified identities only', () => {
 
   it('classifies an explicitly verified Free Clerk account', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_verified' }) as any);
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
 	  if (url === 'https://screenpipe.com/api/user') {
 		return new Response(JSON.stringify({
@@ -163,15 +165,21 @@ describe('validateAuth — verified identities only', () => {
         return new Response(JSON.stringify([]), { status: 200 });
       }
       throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    expect(await validateAuth(requestFor('eyJ.verified.clerk'), env)).toEqual({
+    const expected = {
       isValid: true,
       tier: 'logged_in',
       accountPlan: 'free',
       deviceId: 'user_verified',
       userId: 'user_verified',
-    });
+    } as const;
+
+    expect(await validateAuth(requestFor('eyJ.verified.clerk.1'), env)).toEqual(expected);
+    expect(await validateAuth(requestFor('eyJ.verified.clerk.2'), env)).toEqual(expected);
+    expect(verifyTokenMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('treats an explicit app denial as Free even when users.plan is stale', async () => {
@@ -204,7 +212,7 @@ describe('validateAuth — verified identities only', () => {
 
   it('keeps paid Basic in the logged_in model tier with paid plan truth', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_basic' }) as any);
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === 'https://screenpipe.com/api/user') {
         return new Response(JSON.stringify({
@@ -225,20 +233,26 @@ describe('validateAuth — verified identities only', () => {
         return new Response(JSON.stringify([]), { status: 200 });
       }
       throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    expect(await validateAuth(requestFor('eyJ.basic.clerk'), env)).toEqual({
+    const expected = {
       isValid: true,
       tier: 'logged_in',
       accountPlan: 'basic',
       deviceId: 'user_basic',
       userId: 'user_basic',
-    });
+    } as const;
+
+    expect(await validateAuth(requestFor('eyJ.basic.clerk.1'), env)).toEqual(expected);
+    expect(await validateAuth(requestFor('eyJ.basic.clerk.2'), env)).toEqual(expected);
+    expect(verifyTokenMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a verified identity but marks missing plan truth unknown', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_unknown' }) as any);
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === 'https://screenpipe.com/api/user') {
         return new Response(JSON.stringify({
@@ -253,15 +267,82 @@ describe('validateAuth — verified identities only', () => {
         return new Response(JSON.stringify([]), { status: 200 });
       }
       throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    expect(await validateAuth(requestFor('eyJ.unknown.clerk'), env)).toEqual({
+    const expected = {
       isValid: true,
       tier: 'logged_in',
       accountPlan: 'unknown',
       deviceId: 'user_unknown',
       userId: 'user_unknown',
+    } as const;
+
+    expect(await validateAuth(requestFor('eyJ.unknown.clerk.1'), env)).toEqual(expected);
+    expect(await validateAuth(requestFor('eyJ.unknown.clerk.2'), env)).toEqual(expected);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache a failed plan lookup for a verified identity', async () => {
+    verifyTokenMock.mockImplementation(async () => ({ sub: 'user_retry' }) as any);
+    const fetchMock = mock(async () => new Response('unavailable', { status: 503 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const expected = {
+      isValid: true,
+      tier: 'logged_in',
+      accountPlan: 'unknown',
+      deviceId: 'user_retry',
+      userId: 'user_retry',
+    } as const;
+
+    expect(await validateAuth(requestFor('eyJ.retry.clerk.1'), env)).toEqual(expected);
+    expect(await validateAuth(requestFor('eyJ.retry.clerk.2'), env)).toEqual(expected);
+    expect(verifyTokenMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('single-flights concurrent plan lookups after verifying each caller', async () => {
+    verifyTokenMock.mockImplementation(async () => ({ sub: 'user_concurrent' }) as any);
+    let resolveResponse!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => {
+      resolveResponse = resolve;
     });
+    const fetchMock = mock(async () => response);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const first = validateAuth(requestFor('eyJ.concurrent.clerk.1'), env);
+    const second = validateAuth(requestFor('eyJ.concurrent.clerk.2'), env);
+    await Promise.resolve();
+    await Promise.resolve();
+    resolveResponse(new Response(JSON.stringify({
+      success: true,
+      user: {
+        clerk_id: 'user_concurrent',
+        cloud_subscribed: true,
+        app_entitled: true,
+        subscription_plan: 'pro',
+        entitlement: { active: true, plan: 'pro', features: { app: true } },
+      },
+    }), { status: 200 }));
+
+    expect(await Promise.all([first, second])).toEqual([
+      {
+        isValid: true,
+        tier: 'subscribed',
+        accountPlan: 'business',
+        deviceId: 'user_concurrent',
+        userId: 'user_concurrent',
+      },
+      {
+        isValid: true,
+        tier: 'subscribed',
+        accountPlan: 'business',
+        deviceId: 'user_concurrent',
+        userId: 'user_concurrent',
+      },
+    ]);
+    expect(verifyTokenMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('grants subscribed only after a Clerk JWT proves account ownership', async () => {
@@ -300,7 +381,7 @@ describe('validateAuth — verified identities only', () => {
 
   it('does not trust paid plan data for a different Clerk subject', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_verified_caller' }) as any);
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe('https://screenpipe.com/api/user');
       return new Response(JSON.stringify({
         success: true,
@@ -312,15 +393,20 @@ describe('validateAuth — verified identities only', () => {
           entitlement: { active: true, plan: 'pro', features: { app: true } },
         },
       }), { status: 200 });
-    }) as typeof fetch;
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    expect(await validateAuth(requestFor('eyJ.verified.mismatch'), env)).toEqual({
+    const expected = {
       isValid: true,
       tier: 'logged_in',
       accountPlan: 'unknown',
       deviceId: 'user_verified_caller',
       userId: 'user_verified_caller',
-    });
+    } as const;
+
+    expect(await validateAuth(requestFor('eyJ.verified.mismatch.1'), env)).toEqual(expected);
+    expect(await validateAuth(requestFor('eyJ.verified.mismatch.2'), env)).toEqual(expected);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('requires the canonical clerk_id to bind plan truth to a verified Clerk JWT', async () => {

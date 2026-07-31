@@ -9,7 +9,7 @@ mod context_eval;
 fn semantic_context_is_smaller_than_raw_without_losing_task_facts() {
     let report = context_eval::evaluate_suite().expect("context eval must run");
 
-    assert_eq!(report.catalog_profiles, 47);
+    assert_eq!(report.catalog_profiles, 49);
     assert_eq!(report.parser_implementations, 23);
     assert_eq!(report.representative_cases, 10);
     assert_eq!(report.totals.raw_json.offscreen_distractors_retained, 10);

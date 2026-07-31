@@ -566,9 +566,13 @@ export function ChatMessageList({
 
           return (
             <motion.div
-              initial={{ opacity: 0, y: 5 }}
+              data-testid="chat-active-turn-loader"
+              // A sibling WKWebView can be background-throttled while it
+              // hydrates this turn. Starting at opacity 0 makes the loader
+              // stay invisible until WebKit schedules the entrance frame.
+              // Liveness feedback must be visible immediately in every view.
+              initial={false}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.15 }}
               className={cn(
                 "w-fit self-start",

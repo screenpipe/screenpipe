@@ -7,7 +7,7 @@ import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { listen } from "@tauri-apps/api/event";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
-import { hasFrameVisualMedia, snapFrameIndex } from "@/lib/hooks/timeline-frame-navigation";
+import { clampTimelineIndex } from "@/lib/hooks/timeline-frame-navigation";
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
@@ -133,16 +133,10 @@ export function useScrollZoom(opts: {
 				const newPos = Math.max(0, Math.min(pos + indexChange, matchingIndices.length - 1));
 				newIndex = matchingIndices[newPos];
 			} else {
-				const rawIndex = Math.min(
-					Math.max(0, Math.floor(prevIndex + indexChange)),
-					frames.length - 1,
-				);
-				newIndex = snapFrameIndex(
-					frames,
-					rawIndex,
-					indexChange,
-					hasFrameVisualMedia,
-				);
+				// Audio-only markers are real timeline positions. Keeping the
+				// raw index lets users scrub across periods where screenshots
+				// were paused while audio capture continued.
+				newIndex = clampTimelineIndex(prevIndex + indexChange, frames.length);
 			}
 
 			if (newIndex !== prevIndex && frames[newIndex]) {

@@ -28,6 +28,7 @@
     "coverage:all:check": "bun run e2e:coverage:check && bun run coverage:core:check && bun ../../docs/coverage/scripts/generate-unified-coverage-report.ts --check",
     "test:e2e:audio-fallback:macos": "SCREENPIPE_E2E_SEED=onboarding,no-recording,cloud-audio-fallback bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/audio-fallback.spec.ts",
     "test:e2e:audio-fallback-reverify:macos": "SCREENPIPE_E2E_SEED=onboarding,no-recording,cloud-audio-fallback bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/zz-audio-fallback-reverify.spec.ts",
+    "test:e2e:meetings-only-audio": "SCREENPIPE_E2E_SEED=onboarding,meetings-only-audio SCREENPIPE_PORT=3042 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/meetings-only-audio-lifecycle.spec.ts",
     "test:e2e:onboarding-redirect": "SCREENPIPE_E2E_SEED=no-recording bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-redirect.spec.ts",
     "test:e2e:hd:macos": "SCREENPIPE_E2E_SEED=onboarding bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/hd-recording-pipeline.spec.ts",
     "test:e2e:hd-duration-recovery:macos": "SCREENPIPE_E2E_SEED=onboarding,no-audio,hd-writer-stall-once bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/hd-recording-pipeline.spec.ts",

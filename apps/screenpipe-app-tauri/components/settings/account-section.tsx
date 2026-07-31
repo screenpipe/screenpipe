@@ -71,6 +71,18 @@ function hasExistingStripeSubscriptionPlan(plan: string | null | undefined): boo
   return normalized !== "none" && normalized !== "lifetime";
 }
 
+function isBusinessSubscriptionPlan(plan: string | null | undefined): boolean {
+  // `cloud_subscribed` can remain true in persisted settings after the server
+  // resolves an old one-time license as Lifetime. Explicit plan truth must win
+  // or Lifetime/Basic users land in the Business-active branch with no upgrade
+  // action. Keep the no-plan fallback for older Business responses that only
+  // carried the cloud flag.
+  if (!plan) return true;
+  return ["pro", "business", "team", "enterprise", "monthly", "annual"].includes(
+    plan.toLowerCase(),
+  );
+}
+
 async function openExternalUrl(url: string): Promise<void> {
   const e2eWindow =
     typeof window !== "undefined"
@@ -119,6 +131,9 @@ export function AccountSection() {
   const hasNamedPlan = !!subscriptionPlan && subscriptionPlan !== "none";
   const appUser = settings.user as AppUser | null;
   const hasExpiringProfilePlan = getUserPlanExpiration(appUser) !== null;
+  const isSignedInBusinessSubscriber =
+    isSignedInCloudSubscriber(settings.user) &&
+    isBusinessSubscriptionPlan(subscriptionPlan);
 
   useEffect(() => {
     if (!settings.user?.email) {
@@ -185,8 +200,7 @@ export function AccountSection() {
     if (
       settings.user?.token &&
       hasExistingStripeSubscriptionPlan(subscriptionPlan) &&
-      !hasExpiringProfilePlan &&
-      !settings.user?.cloud_subscribed
+      !hasExpiringProfilePlan
     ) {
       posthog.capture("cloud_plan_upgrade_billing_opened", {
         from_plan: subscriptionPlan,
@@ -196,7 +210,7 @@ export function AccountSection() {
       await openExternalUrl(BILLING_URL);
       return;
     }
-    if (!settings.user?.cloud_subscribed || hasExpiringProfilePlan) {
+    if (!isSignedInBusinessSubscriber || hasExpiringProfilePlan) {
       posthog.capture("cloud_plan_selected", { plan: "pro", interval: annual ? "year" : "month" });
       try {
         // New subscription checkout ($50/mo Pro). Pass the Clerk token so the
@@ -355,7 +369,7 @@ export function AccountSection() {
       {/* Subscribed view — requires a session token, not just cloud_subscribed,
           so a token-hydration failure can't render this "active" card under a
           "not logged in" header (see isSignedInCloudSubscriber). */}
-      {isSignedInCloudSubscriber(settings.user) ? (
+      {isSignedInBusinessSubscriber ? (
         <Card className="p-5" data-testid="account-cloud-active-card">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">

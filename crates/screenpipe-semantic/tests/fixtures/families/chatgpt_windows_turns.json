@@ -1,0 +1,130 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "chrome.exe",
+    "display_name": "Google Chrome",
+    "version": null,
+    "browser_url": "https://chatgpt.com/c/synthetic-fixture"
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Minimize",
+      "identifier": "view_1",
+      "classes": [
+        "WindowsCaptionButton"
+      ],
+      "description": "button"
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Close",
+      "identifier": "view_4",
+      "classes": [
+        "WindowsCaptionButton"
+      ],
+      "description": "button"
+    },
+    {
+      "parent": 1,
+      "role": "Button",
+      "text": "Back",
+      "identifier": "view_1001",
+      "classes": [
+        "BackForwardButton"
+      ],
+      "description": "button"
+    },
+    {
+      "parent": 2,
+      "role": "Edit",
+      "text": "chatgpt.com",
+      "value": "chatgpt.com",
+      "identifier": "view_1012",
+      "classes": [
+        "OmniboxViewViews"
+      ],
+      "description": "Ask Google or type a URL"
+    },
+    {
+      "parent": 1,
+      "role": "Button",
+      "text": "New Chrome available",
+      "identifier": "view_1007",
+      "classes": [
+        "BrowserAppMenuButton"
+      ],
+      "description": "button"
+    },
+    {
+      "parent": 4,
+      "role": "Text",
+      "text": "You said:",
+      "description": "heading"
+    },
+    {
+      "parent": 5,
+      "role": "Text",
+      "text": "Plan a birthday dinner for Alex Rivera",
+      "description": "text"
+    },
+    {
+      "parent": 4,
+      "role": "Text",
+      "text": "ChatGPT said:",
+      "description": "heading"
+    },
+    {
+      "parent": 7,
+      "role": "Text",
+      "text": "Here are three restaurant ideas near the waterfront.",
+      "description": "text"
+    },
+    {
+      "parent": 7,
+      "role": "Hyperlink",
+      "text": "Sample menu",
+      "value": "https://example.com/menu",
+      "description": "link"
+    },
+    {
+      "parent": 7,
+      "role": "Button",
+      "text": "Copy",
+      "description": "button"
+    },
+    {
+      "parent": 7,
+      "role": "Text",
+      "text": "Get responses tailored to you",
+      "identifier": "sidebar-login-title",
+      "classes": [
+        "wm-sidebar-loginTitle"
+      ],
+      "description": "heading"
+    },
+    {
+      "parent": 7,
+      "role": "Hyperlink",
+      "text": "Help center",
+      "value": "https://help.example.com/",
+      "classes": [
+        "wm-sidebar-navigationLink"
+      ],
+      "description": "link"
+    },
+    {
+      "parent": 7,
+      "role": "Edit",
+      "text": "Ask anything",
+      "identifier": "mobile-composer-prompt",
+      "classes": [
+        "wm-composer-textarea"
+      ],
+      "description": "Ask anything"
+    }
+  ]
+}

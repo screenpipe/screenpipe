@@ -273,6 +273,7 @@ fn parse_args(args: Vec<String>) -> Result<(AppIdentity, u64), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use screenpipe_semantic::NodeBounds;
 
     #[test]
     fn metrics_never_serialize_captured_text() {
@@ -295,6 +296,14 @@ mod tests {
                 role: "AXStaticText".into(),
                 text: "private offscreen sentinel".into(),
                 on_screen: Some(false),
+                // Off-window with known geometry: suppression requires that
+                // evidence, so keep the sentinel in the suppressed shape.
+                bounds: Some(NodeBounds {
+                    left: 0.1,
+                    top: -0.9,
+                    width: 0.6,
+                    height: 0.15,
+                }),
                 ..Default::default()
             },
         ];

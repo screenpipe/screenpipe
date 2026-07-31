@@ -8,6 +8,11 @@ import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import { emit, listen } from "@tauri-apps/api/event";
+import {
+	createSettingsWriteQueue,
+	enqueueSettingsWrite,
+	flushSettingsWrites,
+} from "@/components/settings/settings-write-queue";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
@@ -797,6 +802,48 @@ export function createDefaultSettingsObject(): Settings {
 // Store singleton
 let _store: Promise<Store> | undefined;
 
+// Settings writes are whole-object read/merge/save operations. Keep them in one
+// FIFO so two controls cannot both read the same snapshot and let the slower
+// save erase the faster one. The updater also drains this queue before a
+// banner-triggered relaunch, which closes the "toggle Auto-update, then click
+// Restart to update" race where process exit could beat the preference save.
+const settingsWriteQueue = createSettingsWriteQueue();
+
+async function waitForE2eSettingsWriteDelay(): Promise<void> {
+	if (
+		process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true" ||
+		typeof document === "undefined"
+	) {
+		return;
+	}
+	const delayMs = Number(
+		document.documentElement.dataset.e2eSettingsWriteDelayMs ?? 0,
+	);
+	if (Number.isFinite(delayMs) && delayMs > 0) {
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+	}
+}
+
+function enqueueSettingsStoreWrite(write: () => Promise<void>): Promise<void> {
+	const queuedWrite = async () => {
+		await waitForE2eSettingsWriteDelay();
+		await write();
+		if (
+			process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+			typeof document !== "undefined"
+		) {
+			document.documentElement.dataset.e2eSettingsWriteFinishedAt = String(
+				performance.now(),
+			);
+		}
+	};
+	return enqueueSettingsWrite(settingsWriteQueue, queuedWrite);
+}
+
+export async function flushPendingSettingsWrites(): Promise<void> {
+	await flushSettingsWrites(settingsWriteQueue);
+}
+
 export const getStore = async () => {
 	if (!_store) {
 		_store = (async () => {
@@ -1184,40 +1231,42 @@ function createSettingsStore() {
 		return settings;
 	};
 
-	const set = async (value: Partial<Settings>) => {
-		const store = await getStore();
-		const current = await get();
-		const managedValues = current.enterpriseManagedSettings;
-		let newSettings = { ...current, ...value } as Settings;
-		if ("user" in value) {
-			// On logout / Pro→non-Pro transition, clear the V2 marker so a future
-			// Pro login re-evaluates cloud defaults (handles account switching).
-			if (!isLoggedInProUser(newSettings.user)) {
-				delete (newSettings as any)._proCloudAudioDefaultsAppliedV2;
+	const set = (value: Partial<Settings>) =>
+		enqueueSettingsStoreWrite(async () => {
+			const store = await getStore();
+			const current = await get();
+			const managedValues = current.enterpriseManagedSettings;
+			let newSettings = { ...current, ...value } as Settings;
+			if ("user" in value) {
+				// On logout / Pro→non-Pro transition, clear the V2 marker so a future
+				// Pro login re-evaluates cloud defaults (handles account switching).
+				if (!isLoggedInProUser(newSettings.user)) {
+					delete (newSettings as any)._proCloudAudioDefaultsAppliedV2;
+				}
+				newSettings = applyProCloudAudioDefaults(newSettings);
 			}
-			newSettings = applyProCloudAudioDefaults(newSettings);
-		}
-		newSettings = applyManagedOverrides(
-			newSettings as Record<string, unknown>,
-			managedValues
-		) as Settings;
-		if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
-		await setSettingsStripped(store, newSettings);
-		await saveAndEncrypt(store);
-	};
+			newSettings = applyManagedOverrides(
+				newSettings as Record<string, unknown>,
+				managedValues
+			) as Settings;
+			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
+			await setSettingsStripped(store, newSettings);
+			await saveAndEncrypt(store);
+		});
 
-	const reset = async () => {
-		const store = await getStore();
-		const current = await get();
-		const managedValues = current.enterpriseManagedSettings;
-		const defaults = applyManagedOverrides(
-			createDefaultSettingsObject() as Record<string, unknown>,
-			managedValues
-		) as Settings;
-		if (managedValues) defaults.enterpriseManagedSettings = managedValues;
-		await store.set("settings", defaults);
-		await saveAndEncrypt(store);
-	};
+	const reset = () =>
+		enqueueSettingsStoreWrite(async () => {
+			const store = await getStore();
+			const current = await get();
+			const managedValues = current.enterpriseManagedSettings;
+			const defaults = applyManagedOverrides(
+				createDefaultSettingsObject() as Record<string, unknown>,
+				managedValues
+			) as Settings;
+			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
+			await store.set("settings", defaults);
+			await saveAndEncrypt(store);
+		});
 
 	const resetSetting = async <K extends keyof Settings>(key: K) => {
 		const current = await get();

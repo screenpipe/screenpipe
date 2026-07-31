@@ -315,8 +315,44 @@ fn ensure_frontend_dist() {
         .expect("write frontendDist placeholder");
 }
 
+fn generate_and_validate_tauri_commands() {
+    // This Cargo.toml is both the app package and a workspace containing the
+    // Windows WER helper. The helper defaults to scanning workspace members;
+    // once `wer-dump-helper` was added, that excluded the root app package and
+    // silently produced `tauri::generate_handler![]` in release builds.
+    let options = tauri_helper::TauriHelperOptions {
+        members: Some(vec![".".to_string()]),
+    };
+    tauri_helper::generate_command_file(options);
+
+    // Never publish another native binary with an empty or partial command
+    // registry. These sentinels cover startup, authentication, and build-policy
+    // checks that the frontend needs before it can render the normal app.
+    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let commands_path = manifest_dir
+        .join("target")
+        .join("tauri_commands_list")
+        .join("screenpipe_app.txt");
+    let commands = std::fs::read_to_string(&commands_path).unwrap_or_else(|error| {
+        panic!(
+            "missing generated Tauri command registry at {}: {error}",
+            commands_path.display()
+        )
+    });
+    for required in [
+        "screenpipe_app::config::get_screenpipe_base_dir",
+        "screenpipe_app::commands::get_cloud_token",
+        "screenpipe_app::commands::is_enterprise_build_cmd",
+    ] {
+        assert!(
+            commands.lines().any(|command| command == required),
+            "generated Tauri command registry is missing required command {required}"
+        );
+    }
+}
+
 fn main() {
-    tauri_helper::generate_command_file(tauri_helper::TauriHelperOptions::default());
+    generate_and_validate_tauri_commands();
 
     ensure_frontend_dist();
 

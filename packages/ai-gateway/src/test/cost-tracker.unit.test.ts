@@ -155,8 +155,8 @@ describe('getModelCost — cache-aware pricing', () => {
 	});
 });
 
-describe('logCost — cache columns with legacy fallback', () => {
-	function makeMockDB(shouldFail: (sql: string) => boolean = () => false) {
+describe('logCost — bounded daily aggregation', () => {
+	function makeMockDB() {
 		const calls: Array<{ sql: string; bindings: any[] }> = [];
 		const db = {
 			prepare(sql: string) {
@@ -165,7 +165,6 @@ describe('logCost — cache columns with legacy fallback', () => {
 						return {
 							async run() {
 								calls.push({ sql, bindings });
-								if (shouldFail(sql)) throw new Error(`no such column (simulated): ${sql.slice(0, 40)}`);
 								return { success: true };
 							},
 						};
@@ -175,8 +174,6 @@ describe('logCost — cache columns with legacy fallback', () => {
 		};
 		return { db, calls };
 	}
-	const failCache = (sql: string) => sql.includes('cache_read_tokens');
-	const failRouterCols = (sql: string) => sql.includes('latency_ms');
 
 	const entry = {
 		device_id: 'dev1',
@@ -192,54 +189,51 @@ describe('logCost — cache columns with legacy fallback', () => {
 		stream: true,
 	};
 
-	// logCost also bumps the usage-table daily-cost accumulator (migration
-	// 0006) before the cost_log insert — assertions below filter to the
-	// cost_log inserts they're actually about (accumulator behavior is
-	// covered in daily-cost.unit.test.ts).
-	const costLogInserts = (calls: Array<{ sql: string; bindings: any[] }>) =>
-		calls.filter((c) => c.sql.includes('INSERT INTO cost_log'));
+	const costDailyInserts = (calls: Array<{ sql: string; bindings: any[] }>) =>
+		calls.filter((c) => c.sql.includes('INSERT INTO cost_daily'));
 
-	it('writes the full column set (cache + router/latency) when the schema has them', async () => {
+	it('updates the quota accumulator and one aggregate row', async () => {
 		const { db, calls } = makeMockDB();
 		await logCost({ DB: db } as any, { ...entry, latency_ms: 1234, router_tier: 'hard' } as any);
-		const inserts = costLogInserts(calls);
+		expect(calls.filter((call) => call.sql.includes('INSERT INTO usage')).length).toBe(1);
+		const inserts = costDailyInserts(calls);
 		expect(inserts.length).toBe(1);
-		expect(inserts[0].sql).toContain('cache_read_tokens');
-		expect(inserts[0].sql).toContain('latency_ms');
-		expect(inserts[0].sql).toContain('router_tier');
-		expect(inserts[0].bindings).toContain(800);   // cache_read
-		expect(inserts[0].bindings).toContain(1234);  // latency_ms
-		expect(inserts[0].bindings).toContain('hard'); // router_tier
+		expect(inserts[0].sql).toContain('ON CONFLICT');
+		expect(inserts[0].bindings[3]).toBe('claude-sonnet-4-6');
+		expect(inserts[0].bindings[9]).toBe(800);
+		expect(inserts[0].bindings[12]).toBe(1234);
+		expect(inserts[0].bindings[13]).toBe(1);
 	});
 
-	it('falls back to cache-only insert when migration 0007 is not applied (router cols missing)', async () => {
-		const { db, calls } = makeMockDB(failRouterCols);
-		await logCost({ DB: db } as any, { ...entry, latency_ms: 99, router_tier: 'control' } as any);
-		const inserts = costLogInserts(calls);
-		expect(inserts.length).toBe(2);                       // router-insert fails → cache-insert
-		expect(inserts[1].sql).toContain('cache_read_tokens');
-		expect(inserts[1].sql).not.toContain('latency_ms');
-		expect(inserts[1].bindings).toContain(800);           // cache row still lands
-	});
-
-	it('falls back to legacy columns when migration 0004 is not applied (no dropped rows)', async () => {
-		const { db, calls } = makeMockDB(failCache);
-		await logCost({ DB: db } as any, entry as any);
-		const inserts = costLogInserts(calls);
-		expect(inserts.length).toBe(3);                       // router → cache → legacy
-		expect(inserts[2].sql).not.toContain('cache_read_tokens');
-		// the row still landed with token + cost data
-		expect(inserts[2].bindings).toContain(1000);
-		expect(inserts[2].bindings).toContain(0.001);
-	});
-
-	it('omitted cache fields bind as null (pre-cache callers unchanged)', async () => {
+	it('does not persist request-level user or device identifiers', async () => {
 		const { db, calls } = makeMockDB();
-		const { cache_read_tokens, cache_creation_tokens, ...legacyEntry } = entry;
-		await logCost({ DB: db } as any, legacyEntry as any);
-		const inserts = costLogInserts(calls);
+		await logCost({ DB: db } as any, { ...entry, user_id: 'user-private' } as any);
+		const inserts = costDailyInserts(calls);
 		expect(inserts.length).toBe(1);
-		expect(inserts[0].bindings[7]).toBeNull();
-		expect(inserts[0].bindings[8]).toBeNull();
+		expect(inserts[0].sql).not.toContain('device_id');
+		expect(inserts[0].sql).not.toContain('user_id');
+		expect(inserts[0].bindings).not.toContain('dev1');
+		expect(inserts[0].bindings).not.toContain('user-private');
+	});
+
+	it('coalesces unknown and oversized dimensions to bounded labels', async () => {
+		const { db, calls } = makeMockDB();
+		await logCost({ DB: db } as any, {
+			...entry,
+			model: 'attacker-controlled-model',
+			endpoint: 'x'.repeat(129),
+			latency_ms: Number.NaN,
+		} as any);
+		const insert = costDailyInserts(calls)[0];
+		expect(insert.bindings[3]).toBe('unknown');
+		expect(insert.bindings[4]).toBe('unknown');
+		expect(insert.bindings[12]).toBe(0);
+		expect(insert.bindings[13]).toBe(0);
+	});
+
+	it('keeps Deepgram Nova traffic distinct without accepting arbitrary labels', async () => {
+		const { db, calls } = makeMockDB();
+		await logCost({ DB: db } as any, { ...entry, model: 'nova-3-general' } as any);
+		expect(costDailyInserts(calls)[0].bindings[3]).toBe('nova-3');
 	});
 });

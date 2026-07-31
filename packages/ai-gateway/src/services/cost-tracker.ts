@@ -113,21 +113,35 @@ const DEFAULT_OUTPUT_TOKENS = 500;
  * Fuzzy-match a model string to a pricing entry.
  * E.g. "claude-haiku-4-5-20251001" → "claude-haiku-4-5"
  */
-function findPricing(model: string | null | undefined): ModelPricing | null {
+function findPricingKey(model: string | null | undefined): string | null {
   // Callers (isZeroCostModel, getModelCost, inferProvider) are reached from
   // request-parsing paths that don't enforce a model field. SCREENPIPE-AI-PROXY-1D.
   if (typeof model !== 'string' || model.length === 0) return null;
   const lower = model.toLowerCase();
   // Exact match first
-  if (MODEL_PRICING[lower]) return MODEL_PRICING[lower];
+  if (MODEL_PRICING[lower]) return lower;
   // Partial match — find the longest key that is a substring of the model
-  let best: { key: string; pricing: ModelPricing } | null = null;
-  for (const [key, pricing] of Object.entries(MODEL_PRICING)) {
-    if (lower.includes(key) && (!best || key.length > best.key.length)) {
-      best = { key, pricing };
+  let best: string | null = null;
+  for (const key of Object.keys(MODEL_PRICING)) {
+    if (lower.includes(key) && (!best || key.length > best.length)) {
+      best = key;
     }
   }
-  return best?.pricing ?? null;
+  return best;
+}
+
+function findPricing(model: string | null | undefined): ModelPricing | null {
+  const key = findPricingKey(model);
+  return key ? MODEL_PRICING[key] : null;
+}
+
+/** Collapse versioned model IDs and arbitrary caller input to a bounded key. */
+export function normalizeTelemetryModel(model: string | null | undefined): string {
+  const pricingKey = findPricingKey(model);
+  if (pricingKey) return pricingKey;
+  const lower = typeof model === 'string' ? model.toLowerCase() : '';
+  if (lower.startsWith('nova-3')) return 'nova-3';
+  return 'unknown';
 }
 
 /**
@@ -220,8 +234,7 @@ function utcToday(): string {
  * the (device_id, timestamp) index that would have made the SUM cheap
  * can't even build at that size (SQLITE_NOMEM).
  *
- * Best-effort: failure (e.g. migration not applied yet) must never block
- * the request — getDailyUserCost falls back to the legacy SUM in that case.
+ * Best-effort: a telemetry failure must never block an inference request.
  */
 async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number): Promise<void> {
   const today = utcToday();
@@ -231,92 +244,76 @@ async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number
        VALUES (?1, ?2, ?2, ?3)
        ON CONFLICT(device_id) DO UPDATE SET
          daily_cost_usd = CASE WHEN usage.cost_day = ?2 THEN usage.daily_cost_usd + ?3 ELSE ?3 END,
-         cost_day = ?2`
+         cost_day = ?2,
+         updated_at = CURRENT_TIMESTAMP`
     ).bind(deviceId, today, cost).run();
   } catch (error) {
     console.warn('daily cost accumulator update failed:', error);
   }
 }
 
+function nonNegativeNumber(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function boundedDimension(value: string | null | undefined, fallback: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return fallback;
+  return value;
+}
+
 /**
- * Insert a cost record into the cost_log table.
+ * Roll a request into the bounded daily cost table.
  *
- * Falls back to the legacy column set if the cache columns from migration
- * 0004 haven't been applied yet, so a deploy/migration ordering mismatch
- * never drops cost rows.
+ * No request identifier, user identifier, or device identifier is stored in
+ * this table. The per-device daily accumulator in `usage` remains the O(1)
+ * quota source of truth; this aggregate is only for operational summaries.
  */
 export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
   if (entry.device_id && entry.estimated_cost_usd > 0) {
     await bumpDailyCostAccumulator(env, entry.device_id, entry.estimated_cost_usd);
   }
+
+  const latencyMs = nonNegativeNumber(entry.latency_ms);
+  const model = normalizeTelemetryModel(entry.model);
   try {
-    // Newest column set (migration 0007: + latency_ms, router_tier).
     await env.DB.prepare(
-      `INSERT INTO cost_log (device_id, user_id, tier, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, endpoint, stream, latency_ms, router_tier)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO cost_daily (
+         date, tier, provider, model, endpoint, stream, router_tier,
+         requests, input_tokens, output_tokens, cache_read_tokens,
+         cache_creation_tokens, estimated_cost_usd, latency_ms_sum,
+         latency_samples
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(date, tier, provider, model, endpoint, stream, router_tier)
+       DO UPDATE SET
+         requests = requests + 1,
+         input_tokens = input_tokens + excluded.input_tokens,
+         output_tokens = output_tokens + excluded.output_tokens,
+         cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+         cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens,
+         estimated_cost_usd = estimated_cost_usd + excluded.estimated_cost_usd,
+         latency_ms_sum = latency_ms_sum + excluded.latency_ms_sum,
+         latency_samples = latency_samples + excluded.latency_samples,
+         updated_at = datetime('now')`
     )
       .bind(
-        entry.device_id ?? null,
-        entry.user_id ?? null,
-        entry.tier,
-        entry.provider,
-        entry.model,
-        entry.input_tokens,
-        entry.output_tokens,
-        entry.cache_read_tokens ?? null,
-        entry.cache_creation_tokens ?? null,
-        entry.estimated_cost_usd,
-        entry.endpoint,
+        utcToday(),
+        boundedDimension(entry.tier, 'unknown'),
+        boundedDimension(entry.provider, 'unknown'),
+        model,
+        boundedDimension(entry.endpoint, 'unknown'),
         entry.stream ? 1 : 0,
-        entry.latency_ms ?? null,
-        entry.router_tier ?? null,
+        boundedDimension(entry.router_tier, 'none'),
+        nonNegativeNumber(entry.input_tokens),
+        nonNegativeNumber(entry.output_tokens),
+        nonNegativeNumber(entry.cache_read_tokens),
+        nonNegativeNumber(entry.cache_creation_tokens),
+        nonNegativeNumber(entry.estimated_cost_usd),
+        latencyMs,
+        latencyMs > 0 ? 1 : 0,
       )
       .run();
-  } catch (routerColsError) {
-   try {
-    // Migration 0004 applied (cache cols) but not 0007 yet.
-    await env.DB.prepare(
-      `INSERT INTO cost_log (device_id, user_id, tier, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd, endpoint, stream)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        entry.device_id ?? null,
-        entry.user_id ?? null,
-        entry.tier,
-        entry.provider,
-        entry.model,
-        entry.input_tokens,
-        entry.output_tokens,
-        entry.cache_read_tokens ?? null,
-        entry.cache_creation_tokens ?? null,
-        entry.estimated_cost_usd,
-        entry.endpoint,
-        entry.stream ? 1 : 0,
-      )
-      .run();
-   } catch (error) {
-    try {
-      await env.DB.prepare(
-        `INSERT INTO cost_log (device_id, user_id, tier, provider, model, input_tokens, output_tokens, estimated_cost_usd, endpoint, stream)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-        .bind(
-          entry.device_id ?? null,
-          entry.user_id ?? null,
-          entry.tier,
-          entry.provider,
-          entry.model,
-          entry.input_tokens,
-          entry.output_tokens,
-          entry.estimated_cost_usd,
-          entry.endpoint,
-          entry.stream ? 1 : 0,
-        )
-        .run();
-    } catch (fallbackError) {
-      console.error('cost logging failed:', fallbackError);
-    }
-   }
+  } catch (error) {
+    console.error('cost aggregation failed:', error);
   }
 }
 
@@ -392,10 +389,9 @@ export function getTierDailyCostCap(tier: string, env?: Env): number {
 /**
  * Get a user's estimated cost for today. Used to enforce per-user daily cost caps.
  *
- * Fast path: single-row read of the usage-table accumulator (migration
- * 0006), maintained by logCost. Falls back to the legacy SUM over cost_log
- * only while the migration hasn't been applied — that scan is what hit
- * D1's CPU limit at scale (SCREENPIPE-AI-PROXY-1T/-1X/-1E).
+ * Single-row read of the usage-table accumulator (migration 0006), maintained
+ * by logCost. There is intentionally no request-log fallback: that unbounded
+ * scan was one of the failure modes this accumulator replaced.
  */
 export async function getDailyUserCost(env: Env, deviceId: string): Promise<number> {
   const today = utcToday();
@@ -407,17 +403,8 @@ export async function getDailyUserCost(env: Env, deviceId: string): Promise<numb
     // No usage row yet = no recorded spend today.
     return row?.daily_cost ?? 0;
   } catch (error) {
-    console.warn('daily cost accumulator read failed, falling back to cost_log scan:', error);
-  }
-  try {
-    const result = await env.DB.prepare(
-      `SELECT COALESCE(SUM(estimated_cost_usd), 0) as daily_cost
-       FROM cost_log WHERE device_id = ? AND timestamp >= ?`
-    ).bind(deviceId, today + ' 00:00:00').first<{ daily_cost: number }>();
-    return result?.daily_cost ?? 0;
-  } catch (error) {
-    console.error('getDailyUserCost failed:', error);
-    return 0; // On error, allow the request
+    console.error('daily cost accumulator read failed:', error);
+    return 0; // Preserve the existing fail-open behavior on telemetry failure.
   }
 }
 
@@ -430,14 +417,14 @@ export interface SpendSummary {
   by_model: Array<{ model: string; cost_usd: number; requests: number; input_tokens: number; output_tokens: number }>;
   by_provider: Array<{ provider: string; cost_usd: number; requests: number }>;
   by_tier: Array<{ tier: string; cost_usd: number; requests: number }>;
-  // Prompt-cache effectiveness over the window. null until migration 0004 is
-  // applied. estimated_net_savings_usd = (read discount) − (write premium),
-  // i.e. what we'd have paid extra without caching.
+  // Prompt-cache effectiveness over the window.
+  // estimated_net_savings_usd = (read discount) − (write premium), i.e.
+  // what we'd have paid extra without caching.
   cache: {
     read_tokens: number;
     creation_tokens: number;
     estimated_net_savings_usd: number;
-  } | null;
+  };
 }
 
 // One row per (date × model × provider × tier) group — a few hundred rows
@@ -455,16 +442,16 @@ interface SpendGroupRow {
   cache_creation_tokens?: number;
 }
 
-function spendGroupQuery(withCache: boolean): string {
-  return `SELECT date(timestamp) as date, model, provider, tier,
+function spendGroupQuery(): string {
+  return `SELECT date, model, provider, tier,
        COALESCE(SUM(estimated_cost_usd), 0) as cost_usd,
-       COUNT(*) as requests,
+       COALESCE(SUM(requests), 0) as requests,
        COALESCE(SUM(input_tokens), 0) as input_tokens,
-       COALESCE(SUM(output_tokens), 0) as output_tokens${withCache ? `,
+       COALESCE(SUM(output_tokens), 0) as output_tokens,
        COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
-       COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens` : ''}
-     FROM cost_log WHERE timestamp >= ?
-     GROUP BY date(timestamp), model, provider, tier`;
+       COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens
+     FROM cost_daily WHERE date >= ?
+     GROUP BY date, model, provider, tier`;
 }
 
 /**
@@ -477,20 +464,11 @@ function spendGroupQuery(withCache: boolean): string {
  * (SCREENPIPE-AI-PROXY-1T / -1X / -1E).
  */
 export async function getSpendSummary(env: Env, days: number): Promise<SpendSummary> {
+  const rangeDays = Number.isFinite(days) ? Math.min(90, Math.max(1, Math.floor(days))) : 7;
   const since = new Date();
-  since.setUTCDate(since.getUTCDate() - days);
-  const sinceStr = since.toISOString().replace('T', ' ').slice(0, 19);
-
-  let rows: SpendGroupRow[];
-  let hasCacheColumns = true;
-  try {
-    rows = (await env.DB.prepare(spendGroupQuery(true)).bind(sinceStr).all<SpendGroupRow>()).results ?? [];
-  } catch {
-    // Cache columns from migration 0004 not applied yet — fall back to the
-    // legacy column set, mirroring logCost's write-side fallback.
-    hasCacheColumns = false;
-    rows = (await env.DB.prepare(spendGroupQuery(false)).bind(sinceStr).all<SpendGroupRow>()).results ?? [];
-  }
+  since.setUTCDate(since.getUTCDate() - (rangeDays - 1));
+  const sinceStr = since.toISOString().slice(0, 10);
+  const rows = (await env.DB.prepare(spendGroupQuery()).bind(sinceStr).all<SpendGroupRow>()).results ?? [];
 
   let totalCost = 0;
   let totalRequests = 0;
@@ -528,22 +506,20 @@ export async function getSpendSummary(env: Env, days: number): Promise<SpendSumm
     tier.requests += row.requests;
     byTier.set(row.tier, tier);
 
-    if (hasCacheColumns) {
-      const readTokens = row.cache_read_tokens ?? 0;
-      const creationTokens = row.cache_creation_tokens ?? 0;
-      cacheReadTokens += readTokens;
-      cacheCreationTokens += creationTokens;
-      const pricing = findPricing(row.model);
-      if (pricing) {
-        const inputRate = pricing.input / 1_000_000;
-        cacheSavings += readTokens * inputRate * (1 - (pricing.cacheRead ?? 1));
-        cacheSavings -= creationTokens * inputRate * ((pricing.cacheWrite ?? 1) - 1);
-      }
+    const readTokens = row.cache_read_tokens ?? 0;
+    const creationTokens = row.cache_creation_tokens ?? 0;
+    cacheReadTokens += readTokens;
+    cacheCreationTokens += creationTokens;
+    const pricing = findPricing(row.model);
+    if (pricing) {
+      const inputRate = pricing.input / 1_000_000;
+      cacheSavings += readTokens * inputRate * (1 - (pricing.cacheRead ?? 1));
+      cacheSavings -= creationTokens * inputRate * ((pricing.cacheWrite ?? 1) - 1);
     }
   }
 
   return {
-    range_days: days,
+    range_days: rangeDays,
     total_cost_usd: totalCost,
     total_requests: totalRequests,
     avg_cost_per_request: totalRequests > 0 ? totalCost / totalRequests : 0,
@@ -551,12 +527,10 @@ export async function getSpendSummary(env: Env, days: number): Promise<SpendSumm
     by_model: [...byModel.values()].sort((a, b) => b.cost_usd - a.cost_usd),
     by_provider: [...byProvider.values()].sort((a, b) => b.cost_usd - a.cost_usd),
     by_tier: [...byTier.values()].sort((a, b) => b.cost_usd - a.cost_usd),
-    cache: hasCacheColumns
-      ? {
-          read_tokens: cacheReadTokens,
-          creation_tokens: cacheCreationTokens,
-          estimated_net_savings_usd: cacheSavings,
-        }
-      : null,
+    cache: {
+      read_tokens: cacheReadTokens,
+      creation_tokens: cacheCreationTokens,
+      estimated_net_savings_usd: cacheSavings,
+    },
   };
 }

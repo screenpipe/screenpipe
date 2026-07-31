@@ -59,10 +59,18 @@ impl SemanticParser for ChatGptParser {
 
     fn parse(
         &self,
-        _context: &ParseContext<'_>,
+        context: &ParseContext<'_>,
         tree: &SemanticTree,
     ) -> Result<ParseOutcome, ProjectionError> {
-        let turns = actor_delimited_turns(tree);
+        let mut turns = actor_delimited_turns(tree);
+        if turns.is_empty() && context.app.platform == Platform::Windows {
+            turns = windows_actor_delimited_turns(tree);
+            if turns.is_empty() && windows_landing_surface(tree) {
+                // Recognized ChatGPT landing/new-chat surface: zero
+                // conversation records is the truthful projection.
+                return Ok(ParseOutcome::Empty);
+            }
+        }
         if turns.is_empty() {
             return Ok(ParseOutcome::NotHandled);
         }
@@ -157,6 +165,127 @@ fn actor_delimited_turns(tree: &SemanticTree) -> Vec<Turn> {
     }
     finish_turn(&mut turns, pending);
     turns
+}
+
+/// Windows Chromium-UIA variant of `actor_delimited_turns`. The persisted
+/// tree keeps only text-bearing leaves: heading-ness survives solely as
+/// role_description "heading" (mapped into `description`), adapter
+/// reparenting gives every web leaf a browser-chrome Button ancestor (so the
+/// ancestor-based control filter cannot be reused), and ChatGPT's own
+/// `wm-*` classes mark sidebar/composer/app chrome to exclude per node.
+fn windows_actor_delimited_turns(tree: &SemanticTree) -> Vec<Turn> {
+    let mut turns = Vec::with_capacity(8);
+    let mut pending: Option<PendingTurn> = None;
+    let mut retained_bytes = 0usize;
+
+    'roots: for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if let Some(actor) = windows_actor_heading(tree, node) {
+                finish_turn(&mut turns, pending.take());
+                if turns.len() == MAX_MESSAGES || retained_bytes == MAX_BODY_BYTES {
+                    break 'roots;
+                }
+                pending = Some(PendingTurn {
+                    marker: node,
+                    actor,
+                    body: String::new(),
+                    last_line: None,
+                });
+                continue;
+            }
+
+            let Some(turn) = pending.as_mut() else {
+                continue;
+            };
+            if is_actor_label(windows_node_content(tree, node))
+                || !is_windows_body_role(tree.role(node))
+                || has_excluded_class(tree, node)
+            {
+                continue;
+            }
+            let Some(content) = windows_node_content(tree, node) else {
+                continue;
+            };
+            append_content(turn, content, &mut retained_bytes);
+            if retained_bytes == MAX_BODY_BYTES {
+                break 'roots;
+            }
+        }
+    }
+    finish_turn(&mut turns, pending);
+    turns
+}
+
+fn windows_actor_heading(tree: &SemanticTree, node: NodeId) -> Option<&'static str> {
+    if !is_windows_heading(tree, node) {
+        return None;
+    }
+    actor_for_label(windows_node_content(tree, node)?)
+}
+
+fn is_windows_heading(tree: &SemanticTree, node: NodeId) -> bool {
+    tree.role(node)
+        .is_some_and(|role| role.eq_ignore_ascii_case("Text"))
+        && tree
+            .description(node)
+            .is_some_and(|description| description.eq_ignore_ascii_case("heading"))
+}
+
+fn is_windows_body_role(role: Option<&str>) -> bool {
+    role.is_some_and(|role| {
+        ["Text", "Hyperlink", "ListItem"]
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(role))
+    })
+}
+
+const EXCLUDED_CLASS_PREFIXES: [&str; 3] = ["wm-sidebar", "wm-composer", "wm-app"];
+
+fn has_excluded_class(tree: &SemanticTree, node: NodeId) -> bool {
+    tree.classes(node).any(|class| {
+        EXCLUDED_CLASS_PREFIXES.iter().any(|prefix| {
+            class
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        })
+    })
+}
+
+/// On Windows, `Hyperlink.value` is the href URL while the visible anchor
+/// text lives in `text` — the inverse of the macOS value-first priority.
+fn windows_node_content(tree: &SemanticTree, node: NodeId) -> Option<&str> {
+    tree.text(node)
+        .or_else(|| tree.value(node))
+        .or_else(|| tree.description(node))
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+}
+
+/// ChatGPT's landing/new-chat surface: requires BOTH the composer Edit and
+/// the landing heading class, so a conversation page whose turn markup
+/// drifted still returns NotHandled instead of a false Empty.
+fn windows_landing_surface(tree: &SemanticTree) -> bool {
+    let mut composer = false;
+    let mut landing_heading = false;
+    for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if tree
+                .role(node)
+                .is_some_and(|role| role.eq_ignore_ascii_case("Edit"))
+                && (tree.identifier(node) == Some("mobile-composer-prompt")
+                    || tree.has_class(node, "wm-composer-textarea"))
+            {
+                composer = true;
+            }
+            if tree.has_class(node, "wm-app-landingHeading") {
+                landing_heading = true;
+            }
+            if composer && landing_heading {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn finish_turn(turns: &mut Vec<Turn>, pending: Option<PendingTurn>) {

@@ -23,6 +23,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 
@@ -273,7 +274,7 @@ describe("AccountSection subscription/login gating", () => {
     expect(screen.getByText("active")).toBeInTheDocument();
   });
 
-  it("sends existing Basic subscribers to billing instead of creating a second checkout", () => {
+  it("sends existing Basic subscribers to billing even with a stale cloud flag", () => {
     const checkoutFetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ url: "https://checkout.stripe.test/session" }), {
         status: 200,
@@ -285,7 +286,7 @@ describe("AccountSection subscription/login gating", () => {
       id: "u1",
       email: "basic@screenpipe.test",
       token: "tok",
-      cloud_subscribed: false,
+      cloud_subscribed: true,
       app_entitled: true,
       subscription_plan: "standard",
     };
@@ -298,6 +299,48 @@ describe("AccountSection subscription/login gating", () => {
       expect.anything(),
     );
     expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account/billing");
+  });
+
+  it("offers Lifetime users Business and starts a separate subscription checkout", async () => {
+    const checkoutFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "test stop" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", checkoutFetch);
+    mocks.state.user = {
+      id: "u1",
+      email: "lifetime@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: true,
+      app_entitled: true,
+      subscription_plan: "lifetime",
+      entitlement: {
+        active: true,
+        plan: "lifetime",
+        source: "lifetime",
+        status: "active",
+      },
+    };
+
+    render(<AccountSection />);
+
+    expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
+    expect(screen.getByText("Screenpipe Lifetime")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /upgrade to business/i }));
+
+    await waitFor(() => expect(checkoutFetch).toHaveBeenCalledTimes(1));
+    const [url, request] = checkoutFetch.mock.calls[0];
+    expect(url).toContain("/api/subscription/checkout");
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      plan: "pro",
+      token: "tok",
+      origin: "app-account-section",
+    });
+    expect(mocks.openUrl).not.toHaveBeenCalledWith(
+      "https://screenpipe.com/account/billing",
+    );
   });
 
   it("shows the login-first layout for a signed-out free user", () => {

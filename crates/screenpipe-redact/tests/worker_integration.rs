@@ -371,7 +371,16 @@ async fn worker_skips_already_redacted_rows() {
     let worker = Worker::new(pool.clone(), redactor, cfg);
     let handle = worker.clone().spawn();
 
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    wait_until("unredacted frame watermark", || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM frames WHERE id = 2 AND full_text_redacted_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == 1
+    })
+    .await;
     handle.abort();
 
     let status = worker.status().await;
