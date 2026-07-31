@@ -579,6 +579,24 @@ pub enum TranscriptionSession {
 }
 
 impl TranscriptionSession {
+    /// Force a single transcription language on this session, overriding the
+    /// engine's configured language set. Used by the live meeting path to honor
+    /// the meeting's resolved language (`MeetingStreamingConfig.language`) so the
+    /// local transcriber does not fall back to per-chunk auto-detection — which
+    /// on short live chunks mis-detects non-English speech and emits the wrong
+    /// script (e.g. Russian rendered as Latin/Polish). No-op for engines that do
+    /// not carry a language set (Parakeet/Qwen3 auto-detect internally).
+    pub fn force_language(&mut self, language: Language) {
+        match self {
+            Self::Whisper { languages, .. }
+            | Self::Deepgram { languages, .. }
+            | Self::OpenAICompatible { languages, .. } => {
+                *languages = vec![language];
+            }
+            _ => {}
+        }
+    }
+
     pub async fn transcribe_detailed(
         &mut self,
         audio: &[f32],
@@ -921,5 +939,58 @@ mod merge_keyterms_tests {
     fn empty_extra_returns_base_unchanged() {
         let base = vec![v("Screenpipe")];
         assert_eq!(merge_keyterms(&base, &[]).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod force_language_tests {
+    use super::*;
+    use crate::transcription::deepgram::DeepgramTranscriptionConfig;
+
+    /// Regression for #5650: the live meeting path must be able to force the
+    /// meeting's resolved language onto a session so the local transcriber does
+    /// not auto-detect per short chunk (which garbles non-English into the wrong
+    /// script). Whisper shares this exact match arm; it is exercised here via the
+    /// Deepgram variant, which needs no model file to construct.
+    #[test]
+    fn force_language_overrides_language_set() {
+        let mut session = TranscriptionSession::Deepgram {
+            config: DeepgramTranscriptionConfig::direct("k".to_string()),
+            languages: vec![],
+            vocabulary: vec![],
+        };
+        session.force_language(Language::Russian);
+        match &session {
+            TranscriptionSession::Deepgram { languages, .. } => {
+                assert_eq!(languages.as_slice(), &[Language::Russian]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Forcing must replace any previously-detected/multi set with exactly one
+    /// language, since downstream Whisper forcing only triggers on a single entry.
+    #[test]
+    fn force_language_replaces_multi_with_single() {
+        let mut session = TranscriptionSession::Deepgram {
+            config: DeepgramTranscriptionConfig::direct("k".to_string()),
+            languages: vec![Language::English, Language::German],
+            vocabulary: vec![],
+        };
+        session.force_language(Language::Russian);
+        match &session {
+            TranscriptionSession::Deepgram { languages, .. } => {
+                assert_eq!(languages.as_slice(), &[Language::Russian]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Disabled sessions carry no language set; forcing must be a safe no-op.
+    #[test]
+    fn force_language_noop_on_disabled() {
+        let mut session = TranscriptionSession::Disabled;
+        session.force_language(Language::Russian);
+        assert!(matches!(session, TranscriptionSession::Disabled));
     }
 }

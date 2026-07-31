@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
+use screenpipe_core::Language;
 use tokio::{
     sync::{mpsc, RwLock},
     task::JoinHandle,
@@ -73,7 +74,8 @@ async fn run_stream(
 ) -> Result<()> {
     // Bias the local live transcriber toward this meeting's keyterms (user
     // vocabulary + calendar attendee names) by seeding the session vocabulary.
-    let mut session = selected_engine_session(&engine_ref, &config.keyterms).await?;
+    let mut session =
+        selected_engine_session(&engine_ref, &config.keyterms, config.language.as_deref()).await?;
     let model = selected_engine_model(&session);
     let mut buffer = LiveChunkBuffer::default();
     let mut resampler: Option<StreamResampler> = None;
@@ -121,6 +123,7 @@ async fn run_stream(
 async fn selected_engine_session(
     engine_ref: &Arc<RwLock<Option<TranscriptionEngine>>>,
     keyterms: &[String],
+    language: Option<&str>,
 ) -> Result<TranscriptionSession> {
     let engine = engine_ref
         .read()
@@ -134,7 +137,18 @@ async fn selected_engine_session(
         ));
     }
 
-    engine.create_session_with_keyterms(keyterms)
+    let mut session = engine.create_session_with_keyterms(keyterms)?;
+
+    // Force the meeting's resolved language (parallel to the cloud/Deepgram live
+    // path, which passes `config.language`). Without this, the local Whisper live
+    // path auto-detects language per short chunk and mis-detects non-English
+    // speech — rendering e.g. Russian as Latin/Polish. Only apply when the user
+    // resolved a single language; empty/multi keeps auto-detection.
+    if let Some(forced) = language.and_then(|code| code.parse::<Language>().ok()) {
+        session.force_language(forced);
+    }
+
+    Ok(session)
 }
 
 fn selected_engine_model(session: &TranscriptionSession) -> Option<String> {
