@@ -5,8 +5,20 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Building2, CreditCard, Download, KeyRound, LogIn, RefreshCw } from "lucide-react";
+import {
+  Building2,
+  ClipboardCopy,
+  CreditCard,
+  Download,
+  FolderOpen,
+  KeyRound,
+  LogIn,
+  RefreshCw,
+} from "lucide-react";
 import posthog from "posthog-js";
+import { getVersion } from "@tauri-apps/api/app";
+import { homeDir, join } from "@tauri-apps/api/path";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import {
   arch as getOsArch,
@@ -31,6 +43,13 @@ import {
   PRICING_URL,
   TOKEN_HYDRATION_GRACE_MS,
 } from "@/lib/app-entitlement";
+import {
+  classifyEntitlementRefreshError,
+  ENTITLEMENT_REFRESH_AUTO_RETRY_DELAYS_MS,
+  EntitlementRefreshErrorInfo,
+  formatEntitlementRefreshDiagnostics,
+  shouldAutoRetryEntitlementRefresh,
+} from "@/lib/entitlement-refresh-error";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
@@ -122,7 +141,9 @@ export function AppEntitlementGate({
   // or cached policy, and always known right after a key was refused.
   const licenseKeyAllowed = !managedPolicy?.requireAccountLogin;
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] =
+    useState<EntitlementRefreshErrorInfo | null>(null);
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
   const [devToken, setDevToken] = useState("");
   const [devSubmitting, setDevSubmitting] = useState(false);
   const [devError, setDevError] = useState<string | null>(null);
@@ -134,6 +155,9 @@ export function AppEntitlementGate({
   const resumingRef = useRef(false);
   const gateReportedRef = useRef(false);
   const rehydratingRef = useRef(false);
+  const refreshAttemptRef = useRef(0);
+  const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoRetryCountRef = useRef(0);
   const hydrationWindowRef = useRef<{
     accountId: string;
     startedAtMs: number;
@@ -418,23 +442,131 @@ export function AppEntitlementGate({
     commands.openLoginWindow(null);
   }, []);
 
-  const refreshUser = useCallback(async () => {
-    const token = user?.token;
-    if (!token) return;
-    setIsRefreshing(true);
-    setRefreshError(null);
-    try {
-      // verify=true asks the server to consult Stripe directly, so a user who
-      // just paid unlocks immediately instead of waiting for the webhook.
-      await loadUser(token, true);
-      posthog.capture("app_entitlement_refresh_clicked");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "refresh failed";
-      setRefreshError(message);
-    } finally {
-      setIsRefreshing(false);
+  const clearAutoRetryTimer = useCallback(() => {
+    if (autoRetryTimerRef.current) {
+      clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
     }
-  }, [loadUser, user?.token]);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearAutoRetryTimer();
+    };
+  }, [clearAutoRetryTimer]);
+
+  const reportRefreshFailure = useCallback(
+    async (info: EntitlementRefreshErrorInfo) => {
+      let appVersion = "unknown";
+      let platform = "unknown";
+      try {
+        appVersion = await getVersion();
+      } catch {}
+      try {
+        platform = String(getOsPlatform());
+      } catch {}
+      posthog.capture("app_entitlement_refresh_failed", {
+        platform,
+        app_version: appVersion,
+        error_class: info.class,
+        http_status: info.httpStatus,
+        request_id: info.requestId,
+      });
+    },
+    [],
+  );
+
+  const refreshUser = useCallback(
+    async (opts?: { isAutoRetry?: boolean }) => {
+      const token = user?.token;
+      if (!token) return;
+      const attemptId = ++refreshAttemptRef.current;
+      if (!opts?.isAutoRetry) {
+        clearAutoRetryTimer();
+        autoRetryCountRef.current = 0;
+      }
+      setIsRefreshing(true);
+      setRefreshError(null);
+      setDiagnosticsCopied(false);
+      try {
+        // verify=true asks the server to consult Stripe directly, so a user who
+        // just paid unlocks immediately instead of waiting for the webhook.
+        await loadUser(token, true);
+        if (attemptId !== refreshAttemptRef.current) return;
+        clearAutoRetryTimer();
+        autoRetryCountRef.current = 0;
+        setRefreshError(null);
+        posthog.capture("app_entitlement_refresh_clicked", {
+          auto_retry: Boolean(opts?.isAutoRetry),
+        });
+      } catch (err) {
+        if (attemptId !== refreshAttemptRef.current) return;
+        const info = classifyEntitlementRefreshError(err);
+        setRefreshError(info);
+        void reportRefreshFailure(info);
+
+        const nextAuto = autoRetryCountRef.current;
+        if (
+          shouldAutoRetryEntitlementRefresh(info.class) &&
+          nextAuto < ENTITLEMENT_REFRESH_AUTO_RETRY_DELAYS_MS.length
+        ) {
+          const delay = ENTITLEMENT_REFRESH_AUTO_RETRY_DELAYS_MS[nextAuto];
+          autoRetryCountRef.current = nextAuto + 1;
+          clearAutoRetryTimer();
+          autoRetryTimerRef.current = setTimeout(() => {
+            void refreshUser({ isAutoRetry: true });
+          }, delay);
+        }
+      } finally {
+        if (attemptId === refreshAttemptRef.current) {
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [clearAutoRetryTimer, loadUser, reportRefreshFailure, user?.token],
+  );
+
+  const copyRefreshDiagnostics = useCallback(async () => {
+    if (!refreshError) return;
+    let appVersion = "unknown";
+    let platform = "unknown";
+    try {
+      appVersion = await getVersion();
+    } catch {}
+    try {
+      platform = String(getOsPlatform());
+    } catch {}
+    const text = formatEntitlementRefreshDiagnostics({
+      platform,
+      appVersion,
+      error: refreshError,
+    });
+    try {
+      const res = await commands.copyTextToClipboard(text);
+      if (res.status === "ok") {
+        setDiagnosticsCopied(true);
+        posthog.capture("app_entitlement_refresh_diagnostics_copied", {
+          error_class: refreshError.class,
+          http_status: refreshError.httpStatus,
+        });
+      }
+    } catch (e) {
+      console.warn("failed to copy entitlement refresh diagnostics:", e);
+    }
+  }, [refreshError]);
+
+  const openLogsFolder = useCallback(async () => {
+    try {
+      const home = await homeDir();
+      const screenpipeDir = await join(home, ".screenpipe");
+      await revealItemInDir(screenpipeDir);
+      posthog.capture("app_entitlement_refresh_logs_opened", {
+        error_class: refreshError?.class ?? null,
+      });
+    } catch (e) {
+      console.warn("failed to open screenpipe logs folder:", e);
+    }
+  }, [refreshError?.class]);
 
   const useDifferentAccount = useCallback(async () => {
     await updateSettings({ user: null as any });
@@ -864,7 +996,11 @@ export function AppEntitlementGate({
     >
       <div className="flex flex-col gap-3">
         <Button
-          onClick={needsRefresh || shouldVerifyPlan ? refreshUser : openPricing}
+          onClick={
+            needsRefresh || shouldVerifyPlan
+              ? () => void refreshUser()
+              : openPricing
+          }
           className="w-full gap-2"
           disabled={(needsRefresh || shouldVerifyPlan) && isRefreshing}
         >
@@ -878,7 +1014,11 @@ export function AppEntitlementGate({
           {needsRefresh || shouldVerifyPlan ? "refresh access" : "choose plan"}
         </Button>
         <Button
-          onClick={needsRefresh || shouldVerifyPlan ? openPricing : refreshUser}
+          onClick={
+            needsRefresh || shouldVerifyPlan
+              ? openPricing
+              : () => void refreshUser()
+          }
           variant="outline"
           className="w-full gap-2"
           disabled={!needsRefresh && !shouldVerifyPlan && isRefreshing}
@@ -900,9 +1040,52 @@ export function AppEntitlementGate({
           use different account
         </Button>
         {refreshError && (
-          <p className="font-mono text-[11px] leading-5 text-destructive">
-            refresh failed
-          </p>
+          <div
+            className="space-y-2 border border-destructive/30 bg-destructive/5 px-3 py-2"
+            data-testid="entitlement-refresh-error"
+          >
+            <p
+              className="font-mono text-[11px] leading-5 text-destructive"
+              data-testid="entitlement-refresh-error-title"
+            >
+              {refreshError.title}
+            </p>
+            <p className="text-[11px] leading-5 text-muted-foreground">
+              {refreshError.hint}
+            </p>
+            {refreshError.httpStatus !== null && (
+              <p className="font-mono text-[10px] text-muted-foreground">
+                http {refreshError.httpStatus}
+                {refreshError.requestId
+                  ? ` · request ${refreshError.requestId}`
+                  : ""}
+              </p>
+            )}
+            <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full gap-2"
+                onClick={() => void copyRefreshDiagnostics()}
+                data-testid="entitlement-copy-diagnostics"
+              >
+                <ClipboardCopy className="h-3.5 w-3.5" />
+                {diagnosticsCopied ? "copied" : "copy diagnostics"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full gap-2"
+                onClick={() => void openLogsFolder()}
+                data-testid="entitlement-open-logs"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                open logs folder
+              </Button>
+            </div>
+          </div>
         )}
       </div>
       {devLoginBlock}

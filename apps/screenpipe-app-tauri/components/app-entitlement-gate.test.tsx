@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
   setCloudToken: vi.fn().mockResolvedValue(undefined),
   getCloudToken: vi.fn().mockResolvedValue(null),
   piUpdateConfig: vi.fn().mockResolvedValue(undefined),
+  copyTextToClipboard: vi.fn().mockResolvedValue({ status: "ok", data: null }),
+  revealItemInDir: vi.fn().mockResolvedValue(undefined),
+  getVersion: vi.fn().mockResolvedValue("2.5.149"),
+  homeDir: vi.fn().mockResolvedValue("C:\\Users\\test"),
+  join: vi.fn(async (...parts: string[]) => parts.join("\\")),
   platform: vi.fn(() => "windows"),
   arch: vi.fn(() => "x86_64"),
   windowLabel: "home",
@@ -59,6 +64,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     setCloudToken: mocks.setCloudToken,
     getCloudToken: mocks.getCloudToken,
     piUpdateConfig: mocks.piUpdateConfig,
+    copyTextToClipboard: mocks.copyTextToClipboard,
   },
 }));
 
@@ -80,6 +86,16 @@ vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.open }));
 vi.mock("@tauri-apps/plugin-os", () => ({
   platform: mocks.platform,
   arch: mocks.arch,
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: mocks.getVersion,
+}));
+vi.mock("@tauri-apps/api/path", () => ({
+  homeDir: mocks.homeDir,
+  join: mocks.join,
+}));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  revealItemInDir: mocks.revealItemInDir,
 }));
 
 // The resume effect only restarts the engine from the primary window, which it
@@ -875,5 +891,150 @@ describe("AppEntitlementGate", () => {
       expect(mocks.spawnScreenpipe).toHaveBeenCalledWith(null),
     );
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+  });
+
+  describe("refresh access error surfacing (#5648)", () => {
+    function unknownPlanUser() {
+      return baseUser({
+        id: "stale-pro",
+        email: "pro@example.com",
+        cloud_subscribed: true,
+        app_entitled: true,
+        subscription_plan: "pro",
+        // Conflicting evidence → local plan unknown → refresh access gate
+        entitlement: null,
+      });
+    }
+
+    async function clickRefreshAccess() {
+      const buttons = screen.getAllByRole("button", { name: /refresh access/i });
+      // Prefer the primary action button (first in the action column).
+      fireEvent.click(buttons[0]);
+    }
+
+    it("shows rate limited instead of a raw 429 body", async () => {
+      mocks.state.user = unknownPlanUser();
+      mocks.loadUser.mockRejectedValue(
+        new Error(
+          "failed to verify token: 429 Too Many Requests - stripe throttle secret",
+        ),
+      );
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+      expect(
+        screen.getByRole("heading", { name: /refresh access/i }),
+      ).toBeInTheDocument();
+
+      await clickRefreshAccess();
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("entitlement-refresh-error-title"),
+        ).toHaveTextContent(/rate limited/i),
+      );
+      expect(screen.queryByText(/stripe throttle secret/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/http 429/i)).toBeInTheDocument();
+      await waitFor(() =>
+        expect(mocks.capture).toHaveBeenCalledWith(
+          "app_entitlement_refresh_failed",
+          expect.objectContaining({
+            error_class: "rate_limited",
+            http_status: 429,
+            platform: "windows",
+            app_version: "2.5.149",
+          }),
+        ),
+      );
+    });
+
+    it("shows service unavailable for 503", async () => {
+      mocks.state.user = unknownPlanUser();
+      mocks.loadUser.mockRejectedValue(
+        new Error("failed to verify token: 503 Service Unavailable - upstream html"),
+      );
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+      await clickRefreshAccess();
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("entitlement-refresh-error-title"),
+        ).toHaveTextContent(/service unavailable/i),
+      );
+      expect(screen.queryByText(/upstream html/i)).not.toBeInTheDocument();
+    });
+
+    it("shows network unavailable for fetch failures", async () => {
+      mocks.state.user = unknownPlanUser();
+      mocks.loadUser.mockRejectedValue(new TypeError("Failed to fetch"));
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+      await clickRefreshAccess();
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("entitlement-refresh-error-title"),
+        ).toHaveTextContent(/network unavailable/i),
+      );
+    });
+
+    it("copies diagnostics and opens the logs folder from the gate", async () => {
+      mocks.state.user = unknownPlanUser();
+      mocks.loadUser.mockRejectedValue(
+        new Error("failed to verify token: 503 Service Unavailable"),
+      );
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+      await clickRefreshAccess();
+      await waitFor(() =>
+        expect(screen.getByTestId("entitlement-refresh-error")).toBeInTheDocument(),
+      );
+
+      fireEvent.click(screen.getByTestId("entitlement-copy-diagnostics"));
+      await waitFor(() =>
+        expect(mocks.copyTextToClipboard).toHaveBeenCalledWith(
+          expect.stringContaining("error_class: service_unavailable"),
+        ),
+      );
+
+      fireEvent.click(screen.getByTestId("entitlement-open-logs"));
+      await waitFor(() =>
+        expect(mocks.revealItemInDir).toHaveBeenCalledWith(
+          expect.stringMatching(/\.screenpipe/),
+        ),
+      );
+    });
+
+    it("clears the error after a successful refresh unlocks the gate", async () => {
+      mocks.state.user = unknownPlanUser();
+      mocks.loadUser.mockImplementationOnce(async () => {
+        mocks.state.user = baseUser({
+          id: "stale-pro",
+          email: "pro@example.com",
+          app_entitled: true,
+          subscription_plan: "pro",
+          cloud_subscribed: true,
+          entitlement: {
+            active: true,
+            plan: "pro",
+            source: "subscription",
+            checked_at: minsAgo(1),
+            features: { app: true, cloud: true },
+          },
+        });
+      });
+
+      const { rerender } = render(
+        <AppEntitlementGate>{protectedApp}</AppEntitlementGate>,
+      );
+      expect(
+        screen.getByRole("heading", { name: /refresh access/i }),
+      ).toBeInTheDocument();
+
+      await clickRefreshAccess();
+      await waitFor(() => expect(mocks.loadUser).toHaveBeenCalled());
+
+      rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+      await waitFor(() =>
+        expect(screen.getByTestId("protected-app")).toBeInTheDocument(),
+      );
+      expect(
+        screen.queryByTestId("entitlement-refresh-error"),
+      ).not.toBeInTheDocument();
+    });
   });
 });
