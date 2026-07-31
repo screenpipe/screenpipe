@@ -205,6 +205,25 @@ describe('usage reservations against workerd D1', () => {
 		)).allowed).toBe(true);
 	});
 
+	it('grants one priced-request lease in each foreground/background lane', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const background = await reserveDailyCostCap(
+			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		const interactive = await reserveDailyCostCap(
+			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
+		const overlap = await reserveDailyCostCap(
+			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+
+		expect(background.allowed).toBe(true);
+		expect(interactive.allowed).toBe(true);
+		expect(overlap.allowed).toBe(false);
+		if (background.allowed && background.lease) await releaseDailyCostLease(env, background.lease);
+		if (interactive.allowed && interactive.lease) await releaseDailyCostLease(env, interactive.lease);
+	});
+
 	it('reclaims an expired priced-request lease without accepting its stale release', async () => {
 		const start = new Date('2026-07-14T12:00:00.000Z');
 		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', 'gpt-5.6-sol', start);
@@ -232,5 +251,54 @@ describe('usage reservations against workerd D1', () => {
 		if (replacement.allowed && replacement.lease) {
 			await releaseDailyCostLease(env, replacement.lease);
 		}
+	});
+
+	it('preserves incident spend while enforcing a fresh post-epoch cash budget', async () => {
+		const deviceId = 'user-d1-cost-epoch';
+		const day = new Date().toISOString().slice(0, 10);
+		const now = new Date();
+		env.COST_CAP_EPOCH = 'incident-v2';
+		env.MAX_DAILY_TEXT_COST_PER_USER = '0.5'; // subscribed cap = $3.50
+		await env.DB.prepare(`
+			INSERT INTO usage (device_id, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, ?, 'subscribed', ?, 40)
+		`).bind(deviceId, day, day).run();
+
+		const first = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
+		expect(first.allowed).toBe(true);
+		if (!first.allowed || !first.lease) throw new Error('expected fresh epoch lease');
+		await releaseDailyCostLease(env, first.lease);
+
+		const baseline = await env.DB.prepare(`
+			SELECT daily_cost_usd, cost_day FROM usage
+			WHERE tier = 'daily_cost_baseline_v1' AND user_id = ?
+		`).bind(deviceId).first<{ daily_cost_usd: number; cost_day: string }>();
+		expect(baseline).toEqual({ daily_cost_usd: 40, cost_day: day });
+
+		await env.DB.prepare(`UPDATE usage SET daily_cost_usd = 43.49 WHERE device_id = ?`)
+			.bind(deviceId).run();
+		const underCap = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
+		expect(underCap.allowed).toBe(true);
+		if (underCap.allowed && underCap.lease) await releaseDailyCostLease(env, underCap.lease);
+
+		await env.DB.prepare(`UPDATE usage SET daily_cost_usd = 43.5 WHERE device_id = ?`)
+			.bind(deviceId).run();
+		const atCap = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
+		expect(atCap.allowed).toBe(false);
+		if (!atCap.allowed) expect(await atCap.response.text()).toContain('daily_cost_limit_exceeded');
+
+		// The forensic accumulator remains intact; only the admission view subtracts
+		// the immutable epoch baseline.
+		const preserved = await env.DB.prepare(`
+			SELECT daily_cost_usd FROM usage WHERE device_id = ?
+		`).bind(deviceId).first<{ daily_cost_usd: number }>();
+		expect(preserved?.daily_cost_usd).toBe(43.5);
+
+		// A deliberately changed epoch starts a new reversible budget without
+		// deleting either the incident ledger or the previous baseline.
+		env.COST_CAP_EPOCH = 'incident-v3';
+		const nextEpoch = await reserveDailyCostCap(env, deviceId, 'subscribed', 'claude-sonnet-5', now);
+		expect(nextEpoch.allowed).toBe(true);
+		if (nextEpoch.allowed && nextEpoch.lease) await releaseDailyCostLease(env, nextEpoch.lease);
 	});
 });

@@ -24,6 +24,7 @@ import {
 	releaseDailyCostLease,
 	reserveDailyCostCap,
 	withDailyCostSettlement,
+	getDailyUserCostForCap,
 } from './services/cost-cap';
 import {
 	FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE,
@@ -121,7 +122,14 @@ async function handleMeteredTinfoilRequest(
 	subPath: '/v1/chat/completions' | '/v1/responses',
 ): Promise<Response> {
 	const model = 'gemma4-31b';
-	const reservation = await reserveDailyCostCap(env, auth.deviceId, auth.tier, model);
+	const reservation = await reserveDailyCostCap(
+		env,
+		auth.deviceId,
+		auth.tier,
+		model,
+		new Date(),
+		isBackgroundRequest(request) ? 'background' : 'interactive',
+	);
 	if (!reservation.allowed) return reservation.response;
 	let response: Response;
 	try {
@@ -157,7 +165,14 @@ async function handleMeteredVoiceAiRequest(
 	endpoint: '/v1/voice/query' | '/v1/voice/chat',
 ): Promise<Response> {
 	const model = request.headers.get('ai-model') || 'gpt-5.4';
-	const reservation = await reserveDailyCostCap(env, auth.deviceId, auth.tier, model);
+	const reservation = await reserveDailyCostCap(
+		env,
+		auth.deviceId,
+		auth.tier,
+		model,
+		new Date(),
+		isBackgroundRequest(request) ? 'background' : 'interactive',
+	);
 	if (!reservation.allowed) return reservation.response;
 	let response: Response;
 	try {
@@ -223,7 +238,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// are our internal margin and shouldn't leak to any client/user).
 			// Stored query credits do not raise the cash ceiling. Credit-funded
 			// provider spend needs consumptive accounting before it can safely do so.
-			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
+			const dailyCost = await getDailyUserCostForCap(env, authResult.deviceId);
 			const maxCost = getTierDailyCostCap(authResult.tier, env);
 			const enriched = {
 				...status,
@@ -409,13 +424,16 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				freeChatLease = reservation.lease;
 			}
 
-			// Serialize the account's priced read/inference/write interval. Acquiring
-			// this only after every non-cost gate avoids holding it for rejected work.
+			// Serialize priced work within its foreground/background lane. A scheduled
+			// pipe must not block a user who is actively waiting in chat.
+			const latency = resolveLatencyClass(request, body, env);
 			const costReservation = await reserveDailyCostCap(
 				env,
 				authResult.deviceId,
 				authResult.tier,
 				body.model,
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) {
 				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
@@ -424,7 +442,6 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const dailyCostLease = costReservation.lease;
 
 			// Route latency-tolerant (background) traffic to the cheaper flex tier.
-			const latency = resolveLatencyClass(request, body, env);
 			let leaseReleased = false;
 			const releaseLease = async () => {
 				if (!freeChatLease || leaseReleased) return;
@@ -575,6 +592,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.deviceId,
 				authResult.tier,
 				'gemini-2.5-flash',
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) return costReservation.response;
 			const webSearchResponse = await handleWebSearch(request, env);
@@ -720,7 +739,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			let parsedStream = false;
 			try {
 				const body = (await clonedRequest.json()) as { model?: string; stream?: boolean };
-				parsedModel = body.model || parsedModel;
+				parsedModel = resolveModelAlias(body.model || parsedModel);
 				parsedStream = body.stream === true;
 				if (!isModelAllowed(parsedModel, authResult.tier, env)) {
 					const allowedModels = getTierConfig(env)[authResult.tier].allowedModels;
@@ -754,6 +773,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.deviceId,
 				authResult.tier,
 				parsedModel,
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) return costReservation.response;
 
@@ -851,7 +872,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			try {
 				const clonedReq = request.clone();
 				const reqBody = await clonedReq.json() as { model?: string; stream?: boolean };
-				ocModel = reqBody.model || ocModel;
+				ocModel = resolveModelAlias(reqBody.model || ocModel);
 				ocStream = reqBody.stream === true;
 			} catch (e) {
 				// body parse failure — proceed with defaults
@@ -890,6 +911,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.deviceId,
 				authResult.tier,
 				ocModel,
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) return costReservation.response;
 

@@ -292,6 +292,9 @@ export function useChatConversationRoutingEvents({
         return;
       }
       await openConversationLocally(convId);
+      if (localStorage.getItem("pending-chat-conversation") === convId) {
+        localStorage.removeItem("pending-chat-conversation");
+      }
       if (focusMessageId) {
         focusMessageById(focusMessageId);
       }

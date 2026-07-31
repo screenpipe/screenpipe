@@ -92,9 +92,8 @@ describe('OpenAI API model catalog', () => {
 			TINFOIL_API_KEY: 'tinfoil-test',
 		});
 		for (const id of ids) {
-			expect(id).not.toMatch(/gemini|gemma|gpt-oss|glm-|kimi-|qwen|llama-4|haiku|sonnet-4/i);
+			expect(id).not.toMatch(/fable|opus|gemini|gemma|gpt-oss|glm-|kimi-|qwen|llama-4|haiku|sonnet-4/i);
 		}
-		expect(ids).toContain('claude-opus-5');
 		expect(ids).toContain('claude-sonnet-5');
 	});
 
@@ -118,9 +117,9 @@ describe('tier locking in /v1/models', () => {
 		const models = await listedFor('logged_in');
 		const sonnet = models.find(m => m.id === 'claude-sonnet-5');
 		const opus = models.find(m => m.id === 'claude-opus-5');
-		// present (not hidden) and flagged so the app can grey + upsell
+		// Sonnet remains visible and locked; Opus is hidden during containment.
 		expect(sonnet?.locked).toBe(true);
-		expect(opus?.locked).toBe(true);
+		expect(opus).toBeUndefined();
 	});
 
 	it('leaves allowed models unlocked for non-Business', async () => {
