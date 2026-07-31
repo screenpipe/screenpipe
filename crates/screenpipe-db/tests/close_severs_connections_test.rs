@@ -11,10 +11,14 @@
 //! These tests model the incident directly:
 //!  * a "leaked" pool clone must be SEVERED by `DatabaseManager::close()`
 //!    (fail fast, not pin the WAL-index),
-//!  * after `close()` SQLite must have dropped the `-wal`/`-shm` sidecars —
-//!    the file-level proof that zero connections survived teardown,
 //!  * a fresh `DatabaseManager` on the same file must then init and write,
 //!  * repeated restart cycles (the engine-respawn path) must stay clean.
+//!
+//! Do not use `-wal`/`-shm` file existence as a connection-leak oracle here.
+//! SQLite may retain both files when the last connection to disconnect is
+//! read-only; this manager closes independent read and write pools concurrently.
+//! A closed leaked clone plus a successful same-process reopen and write tests
+//! the recovery invariant directly.
 
 use screenpipe_config::{DbConfig, DeviceTier};
 use screenpipe_db::DatabaseManager;
@@ -24,29 +28,6 @@ fn temp_db_path(tag: &str) -> String {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir.join("db.sqlite").to_string_lossy().into_owned()
-}
-
-/// Wait (bounded) for SQLite to unlink the WAL sidecars after the last
-/// connection closes. `close()` resolves when the pools are closed; the OS
-/// unlink is usually immediate after that, but Linux CI can lag under load.
-async fn assert_wal_sidecars_gone(db_path: &str) {
-    let wal_path = format!("{db_path}-wal");
-    let shm_path = format!("{db_path}-shm");
-    for _ in 0..200 {
-        let wal = std::path::Path::new(&wal_path).exists();
-        let shm = std::path::Path::new(&shm_path).exists();
-        if !wal && !shm {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    let wal = std::path::Path::new(&wal_path).exists();
-    let shm = std::path::Path::new(&shm_path).exists();
-    panic!(
-        "-wal/-shm still present after close() — a SQLite connection survived teardown \
-         (the exact leak that made the 2026-07-02 wedge unrecoverable in-process); \
-         wal={wal}, shm={shm}"
-    );
 }
 
 #[tokio::test]
@@ -75,10 +56,6 @@ async fn close_severs_leaked_pool_clones_and_allows_reinit() {
         err.is_err(),
         "leaked pool clone must be unusable after DatabaseManager::close()"
     );
-
-    // File-level proof that ZERO connections survived: SQLite only deletes
-    // -wal/-shm when the LAST connection to the db closes.
-    assert_wal_sidecars_gone(&db_path).await;
 
     // And the same process can re-open the db cleanly — the step that failed
     // with (code: 522) disk I/O error for hours on 2026-07-02.
@@ -113,7 +90,6 @@ async fn repeated_restart_cycles_reopen_cleanly() {
             .await
             .unwrap_or_else(|e| panic!("cycle {cycle}: write failed: {e}"));
         db.close().await;
-        assert_wal_sidecars_gone(&db_path).await;
     }
 
     // All five cycles' writes survived the churn.

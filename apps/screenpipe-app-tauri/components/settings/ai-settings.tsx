@@ -15,7 +15,7 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Enhanced AI", keywords: ["cloud", "suggestions"] },
+  { label: "Enhanced AI", keywords: ["cloud", "suggestions", "daily summary", "timeline"] },
   {
     label: "AI audio & video analysis",
     keywords: [
@@ -99,10 +99,12 @@ export function AISettings() {
               <div>
                 <h3 className="text-sm font-medium text-foreground">Enhanced AI</h3>
                 <p className="text-xs text-muted-foreground">
-                  Use Screenpipe Cloud for smarter suggestions
+                  Use AI for smarter suggestions and on-demand daily summaries
                 </p>
                 <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                  sends recent activity to screenpipe cloud for processing. we don&apos;t store your data (zero retention).
+                  daily summaries use your configured AI model; suggestions may
+                  use screenpipe cloud. relevant activity is processed only when
+                  needed.
                 </p>
               </div>
             </div>

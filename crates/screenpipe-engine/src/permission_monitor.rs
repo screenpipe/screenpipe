@@ -84,6 +84,14 @@ struct State {
     /// Tracked separately from TCC because loss semantics differ (soft notify,
     /// not blocking modal).
     keychain: LastKnown,
+    /// Set when vision enumeration proves screen capture is broken while the
+    /// TCC preflight still (stale-ly) reports granted — the macOS 15+/26
+    /// "needs periodic re-approval" state, where SCK returns an empty display
+    /// list but `CGPreflightScreenCaptureAccess` keeps saying yes. While set,
+    /// the poll's ScreenRecording report is suppressed so it can't flap the
+    /// state back to granted every 5s; only a successful enumeration
+    /// ([`report_screen_enumeration`] with `working = true`) restores.
+    screen_enum_denied: bool,
     wake_grace_until: Option<Instant>,
     started: bool,
 }
@@ -98,6 +106,7 @@ static STATE: Lazy<Mutex<State>> = Lazy::new(|| {
         mic: LastKnown::new(true),
         accessibility: LastKnown::new(true),
         keychain: LastKnown::new(true),
+        screen_enum_denied: false,
         wake_grace_until: None,
         started: false,
     })
@@ -143,6 +152,15 @@ pub fn start() -> Option<JoinHandle<()>> {
 /// Skipped silently during the wake grace period to avoid spurious
 /// lost→restored flashes after sleep/wake.
 pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str>) {
+    report_state_inner(kind, now_granted, reason);
+}
+
+/// Body of [`report_state`], returning whether the transition was actually
+/// delivered (emitted). [`report_screen_enumeration`] needs that answer: it must
+/// not commit its sticky verdict on a pass that got swallowed by the wake grace
+/// or the loss cooldown, or the UI would read "denied" with no `permission_lost`
+/// event to explain it.
+fn report_state_inner(kind: PermissionKind, now_granted: bool, reason: Option<&str>) -> bool {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
 
     // Suppress emissions during wake grace period. A real transition will
@@ -153,7 +171,7 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
                 ?kind,
                 now_granted, "permission change suppressed (wake grace)"
             );
-            return;
+            return false;
         }
     }
 
@@ -164,9 +182,11 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
         PermissionKind::Keychain => &mut state.keychain,
     };
 
-    // Dedup: no transition, no emission.
+    // Dedup: no transition, no emission. The state already agrees with the
+    // caller, so this counts as delivered — a repeat report must not be read as
+    // "swallowed".
     if entry.granted == now_granted {
-        return;
+        return true;
     }
 
     // Cooldown applies only to back-to-back "lost" events (prevents flapping).
@@ -175,7 +195,7 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
         if let Some(t) = entry.last_lost_at {
             if t.elapsed() < EMIT_COOLDOWN {
                 debug!(?kind, "permission loss suppressed (cooldown)");
-                return;
+                return false;
             }
         }
     }
@@ -201,6 +221,41 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<&str
         PermissionEvent::lost(kind, reason.map(str::to_owned))
     };
     let _ = send_event(evt.event_name(), evt);
+    true
+}
+
+/// Called by the vision monitor watcher with the outcome of display
+/// enumeration — the ground truth for screen-recording permission.
+///
+/// Enumeration outranks the preflight poll: in the macOS "stale grant"
+/// state (periodic re-approval lapsed, or TCC invalidated by an update),
+/// `CGPreflightScreenCaptureAccess` keeps reporting granted while SCK
+/// returns zero displays, so the poll alone never notices the loss — the
+/// engine sat "healthy" for whole days capturing nothing. While an
+/// enumeration-reported loss is active, the poll's ScreenRecording report
+/// is suppressed so it can't flap the state back to granted; a successful
+/// enumeration lifts the suppression and restores.
+///
+/// The sticky verdict is committed only when the report was actually delivered.
+/// A loss swallowed by the wake grace (or the loss cooldown) must NOT leave the
+/// flag set: the app reads it as "denied" while no `permission_lost` was emitted,
+/// so the recovery window never opens and the user sees a refused-to-start app
+/// with nothing explaining why. Callers re-report every pass, so the verdict
+/// lands on the first pass after the grace expires.
+///
+/// Returns whether the verdict was committed.
+pub fn report_screen_enumeration(working: bool, reason: Option<&str>) -> bool {
+    let delivered = report_state_inner(PermissionKind::ScreenRecording, working, reason);
+    if delivered {
+        let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+        state.screen_enum_denied = !working;
+    } else {
+        debug!(
+            working,
+            "screen enumeration verdict not committed (report suppressed)"
+        );
+    }
+    delivered
 }
 
 /// Notify the monitor that the system just woke from sleep. Suppresses
@@ -233,11 +288,16 @@ async fn run() {
     loop {
         ticker.tick().await;
         let perms = check_permissions();
-        report_state(
-            PermissionKind::ScreenRecording,
-            granted(perms.screen_recording),
-            Some("poll"),
-        );
+        // While vision enumeration says screen capture is broken, the
+        // preflight's answer for ScreenRecording is known-stale (see
+        // `report_screen_enumeration`) — don't let it flap us back.
+        if !screen_poll_suppressed() {
+            report_state(
+                PermissionKind::ScreenRecording,
+                granted(perms.screen_recording),
+                Some("poll"),
+            );
+        }
         report_state(
             PermissionKind::Microphone,
             granted(perms.microphone),
@@ -258,6 +318,24 @@ async fn run() {
 
 fn granted(status: PermissionStatus) -> bool {
     status.is_granted()
+}
+
+/// True while an enumeration-reported screen-recording loss is active —
+/// the poll must not report ScreenRecording from the (stale) preflight.
+fn screen_poll_suppressed() -> bool {
+    screen_enumeration_denied()
+}
+
+/// True while capture-side enumeration says screen recording is broken and no
+/// successful enumeration has been seen since. Public so app-side permission
+/// checks (`do_permissions_check`, the recovery window's poll) can honor the
+/// enumeration verdict instead of trusting `CGPreflightScreenCaptureAccess`
+/// alone — in the lapsed-grant state the preflight keeps answering granted,
+/// which previously made the recovery window treat the loss as instantly
+/// restored, close, restart capture, and return to the same silent failure.
+pub fn screen_enumeration_denied() -> bool {
+    let state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    state.screen_enum_denied
 }
 
 /// Read-only probe of the OS keychain. Returns `true` if the encryption key
@@ -287,5 +365,59 @@ fn keychain_accessible() -> bool {
         KeyResult::Unavailable => true,
         // AccessDenied = had access, now don't. This is the only real loss.
         KeyResult::AccessDenied => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Single test (global STATE) covering the enumeration-override lifecycle:
+    /// an enumeration-reported loss must suppress the poll's ScreenRecording
+    /// report (the preflight is stale in exactly this state — it kept saying
+    /// "granted" for days while SCK enumerated zero displays), and a
+    /// successful enumeration must lift the suppression.
+    #[tokio::test]
+    async fn enumeration_loss_suppresses_poll_until_enumeration_recovers() {
+        assert!(
+            !screen_poll_suppressed(),
+            "no suppression before any report"
+        );
+
+        report_screen_enumeration(false, Some("test: zero displays enumerated"));
+        assert!(
+            screen_poll_suppressed(),
+            "poll must be suppressed while enumeration reports the grant dead"
+        );
+
+        // A poll-driven report must not clear the suppression (run() skips the
+        // report entirely, but even a direct report_state must leave the
+        // enumeration override in place).
+        report_state(PermissionKind::ScreenRecording, true, Some("poll"));
+        assert!(
+            screen_poll_suppressed(),
+            "plain report_state must not lift the enumeration override"
+        );
+
+        report_screen_enumeration(true, None);
+        assert!(
+            !screen_poll_suppressed(),
+            "successful enumeration lifts the suppression"
+        );
+
+        // A loss whose report was SWALLOWED (here by the loss cooldown; the
+        // wake-grace window behaves the same) must not commit the verdict.
+        // Otherwise the app reads "denied" — refusing to start capture — while
+        // no permission_lost was emitted, so the recovery window never opens
+        // and nothing tells the user why. Callers re-report every pass, so the
+        // verdict lands on the first pass that actually delivers.
+        assert!(
+            !report_screen_enumeration(false, Some("test: within loss cooldown")),
+            "report inside the cooldown must report itself as undelivered"
+        );
+        assert!(
+            !screen_poll_suppressed(),
+            "a swallowed loss report must not commit the enumeration verdict"
+        );
     }
 }

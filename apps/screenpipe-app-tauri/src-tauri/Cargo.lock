@@ -1992,11 +1992,11 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.15.1"
-source = "git+https://github.com/yury/cidre.git#7049fbfbb92a5b3ed034d3c3162e2fccf3dd5f3e"
+version = "0.16.1"
+source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
 dependencies = [
  "cc",
- "cidre-macros 0.5.0",
+ "cidre-macros 0.6.0",
  "half",
  "parking_lot",
  "tokio",
@@ -2005,7 +2005,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.16.1"
-source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
+source = "git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30#9c20f5ee5abaad4598843a33e13d6e48822d1f30"
 dependencies = [
  "cc",
  "cidre-macros 0.6.0",
@@ -2547,7 +2547,7 @@ version = "0.15.3"
 source = "git+https://github.com/screenpipe/cpal.git?rev=e7edfa174466e87a467d1a58e3a4aec233ff8a21#e7edfa174466e87a467d1a58e3a4aec233ff8a21"
 dependencies = [
  "alsa",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "core-foundation-sys 0.8.7",
  "coreaudio-rs",
  "dasp_sample",
@@ -11002,9 +11002,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
+source = "git+https://github.com/screenpipe/sck-rs?rev=6deefba79619c2763f24cfbaaf4e08fa7e8302e0#6deefba79619c2763f24cfbaaf4e08fa7e8302e0"
 dependencies = [
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30)",
  "image 0.25.10",
  "once_cell",
  "thiserror 1.0.69",
@@ -11032,7 +11032,7 @@ dependencies = [
  "arboard",
  "arc-swap",
  "chrono",
- "cidre 0.16.1",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716)",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "crossbeam-channel",
@@ -11059,7 +11059,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.136"
+version = "2.5.158"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11071,6 +11071,7 @@ dependencies = [
  "base64 0.22.1",
  "block",
  "block2 0.6.2",
+ "bytes",
  "cbc 0.1.2",
  "cc",
  "chrono",
@@ -11094,6 +11095,7 @@ dependencies = [
  "image 0.25.10",
  "ini",
  "lazy_static",
+ "libc",
  "log",
  "minisign",
  "minisign-verify",
@@ -11125,6 +11127,7 @@ dependencies = [
  "screenpipe-screen",
  "screenpipe-secrets",
  "screenpipe-sync",
+ "screenpipe-telemetry-wire",
  "screenpipe-vault",
  "security-framework",
  "sentry 0.42.0",
@@ -11165,6 +11168,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-tungstenite",
+ "tower 0.4.13",
  "tower-http 0.4.4",
  "tracing",
  "tracing-appender",
@@ -11184,14 +11188,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "audiopipe",
  "bytemuck",
  "bytes",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "clap",
  "cpal",
  "crossbeam",
@@ -11261,7 +11265,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11273,7 +11277,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -11319,7 +11323,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11370,7 +11374,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11383,6 +11387,7 @@ dependencies = [
  "rand 0.9.2",
  "regex",
  "screenpipe-config",
+ "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -11397,7 +11402,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11406,7 +11411,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "clap",
  "colored",
  "dashmap",
@@ -11439,6 +11444,7 @@ dependencies = [
  "screenpipe-resource",
  "screenpipe-screen",
  "screenpipe-secrets",
+ "screenpipe-semantic",
  "screenpipe-vault",
  "sentry 0.36.0",
  "serde",
@@ -11464,7 +11470,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11480,7 +11486,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11516,7 +11522,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "serde",
  "sysinfo",
@@ -11536,22 +11542,24 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "accessibility-sys",
  "anyhow",
+ "ashpd",
  "atspi",
  "atspi-common",
  "atspi-proxies",
  "base64 0.22.1",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "image 0.25.10",
  "image-compare",
  "libc",
  "once_cell",
+ "pipewire",
  "reqwest 0.13.3",
  "rusty-tesseract",
  "sck-rs",
@@ -11590,8 +11598,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-semantic"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "libsqlite3-sys",
  "tokio",
@@ -11600,7 +11619,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11619,8 +11638,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-telemetry-wire"
+version = "0.4.32"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tracing",
+]
+
+[[package]]
 name = "screenpipe-vault"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -11632,6 +11661,13 @@ dependencies = [
  "tracing",
  "walkdir",
  "zeroize",
+]
+
+[[package]]
+name = "screenpipe-wer-dump-helper"
+version = "0.1.0"
+dependencies = [
+ "windows 0.58.0",
 ]
 
 [[package]]

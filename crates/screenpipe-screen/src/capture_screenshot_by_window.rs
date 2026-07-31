@@ -219,6 +219,7 @@ pub struct CapturedWindow {
     pub window_height: u32,
 }
 
+#[derive(Debug, Clone)]
 pub struct WindowFilters {
     ignore_patterns: Vec<WindowPattern>,
     include_patterns: Vec<WindowPattern>,
@@ -236,6 +237,15 @@ impl WindowFilters {
 
     /// Apps that are always excluded — system lock screen processes.
     const BUILTIN_IGNORED: &'static [&'static str] = &["loginwindow", "logonui"];
+
+    /// True when no user-configured filters exist — resolving exclusion ids
+    /// is then a no-op that needs no WindowServer call (mirrors the early
+    /// return in `get_excluded_sck_window_ids`).
+    pub fn is_empty(&self) -> bool {
+        self.ignore_patterns.is_empty()
+            && self.include_patterns.is_empty()
+            && self.ignored_urls.is_empty()
+    }
 
     /// O(n) over ignore + include patterns. Patterns support an optional
     /// `AppName::WindowTitle` scope (parsed in `screenpipe-core::window_pattern`);

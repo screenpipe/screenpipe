@@ -1,3 +1,4 @@
+<h1 align="center"><a href="https://screenpipe.com/how-to-install?download=1">DOWNLOAD SCREENPIPE</a></h1>
 
 <img width="1500" height="500" alt="image" src="https://github.com/user-attachments/assets/058a44b8-fcad-4a37-92d8-830167dbd400" />
 
@@ -21,12 +22,6 @@
 
 <p align="center">
 <a align="center" href="https://trendshift.io/repositories/20386" target="_blank"><img align="center" src="https://trendshift.io/api/badge/repositories/20386" alt="screenpipe%2Fscreenpipe | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</p>
-
-<p align="center">
-  <a href="https://screenpi.pe/onboarding" target="_blank">
-    <img src="https://img.shields.io/badge/download-desktop%20app-black?style=for-the-badge" alt="download">
-  </a>
 </p>
 
 <p align="center">
@@ -79,7 +74,7 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 <img width="360" height="311" alt="image" src="https://github.com/user-attachments/assets/cfbf0fd3-84ef-4feb-8c6d-2779d67058a7" />
 
 - **search with ai** - find anything using natural language
-- **100% local** - your data never leaves your machine
+- **100% local** - your data lives on your machine only
 - **source-available** - inspect, modify, audit ([LICENSE.md](LICENSE.md))
 
 <p align="center">
@@ -91,7 +86,7 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 ## install
 
-[download the desktop app](https://screenpi.pe/onboarding) — all features, auto-updates
+[download the desktop app](https://screenpipe.com/how-to-install?download=1) — all features, auto-updates
 
 or run the CLI:
 

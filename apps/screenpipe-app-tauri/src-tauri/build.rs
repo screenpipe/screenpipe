@@ -298,8 +298,63 @@ void inbox_hide(void) {}
     println!("cargo:rustc-link-lib=static=notification_panel");
 }
 
+/// `tauri::generate_context!` resolves `frontendDist` (`../out`) at compile
+/// time, but cargo-only builds (`cargo test`, bindings) never run the Next.js
+/// build. Materialize a placeholder so a fresh clone compiles; a real
+/// `bun run build` replaces the directory wholesale.
+fn ensure_frontend_dist() {
+    let dist = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .parent()
+        .unwrap()
+        .join("out");
+    if dist.join("index.html").exists() {
+        return;
+    }
+    std::fs::create_dir_all(&dist).expect("create frontendDist placeholder");
+    std::fs::write(dist.join("index.html"), b"<!doctype html>\n")
+        .expect("write frontendDist placeholder");
+}
+
+fn generate_and_validate_tauri_commands() {
+    // This Cargo.toml is both the app package and a workspace containing the
+    // Windows WER helper. The helper defaults to scanning workspace members;
+    // once `wer-dump-helper` was added, that excluded the root app package and
+    // silently produced `tauri::generate_handler![]` in release builds.
+    let options = tauri_helper::TauriHelperOptions {
+        members: Some(vec![".".to_string()]),
+    };
+    tauri_helper::generate_command_file(options);
+
+    // Never publish another native binary with an empty or partial command
+    // registry. These sentinels cover startup, authentication, and build-policy
+    // checks that the frontend needs before it can render the normal app.
+    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let commands_path = manifest_dir
+        .join("target")
+        .join("tauri_commands_list")
+        .join("screenpipe_app.txt");
+    let commands = std::fs::read_to_string(&commands_path).unwrap_or_else(|error| {
+        panic!(
+            "missing generated Tauri command registry at {}: {error}",
+            commands_path.display()
+        )
+    });
+    for required in [
+        "screenpipe_app::config::get_screenpipe_base_dir",
+        "screenpipe_app::commands::get_cloud_token",
+        "screenpipe_app::commands::is_enterprise_build_cmd",
+    ] {
+        assert!(
+            commands.lines().any(|command| command == required),
+            "generated Tauri command registry is missing required command {required}"
+        );
+    }
+}
+
 fn main() {
-    tauri_helper::generate_command_file(tauri_helper::TauriHelperOptions::default());
+    generate_and_validate_tauri_commands();
+
+    ensure_frontend_dist();
 
     // Stamp the build time so `main.rs` can self-quiesce Sentry reports
     // for ancient builds. This makes the Sentry inbox reflect what's
@@ -427,6 +482,19 @@ fn main() {
         }
     }
 
+    // Windows: build the WER runtime exception helper DLL (fail-fast crash
+    // dump recovery, see src/windows_crash_dump.rs) and stage it under
+    // src-tauri/wer/ so the `wer\*.dll` resource glob in
+    // tauri.windows.conf.json always resolves — tauri-build hard-fails on a
+    // glob that matches nothing, which broke every build without a staged
+    // DLL. Built here rather than in pre_build.js or a workflow step so it
+    // runs in the exact toolchain environment of the app build itself
+    // (cargo-under-bun in pre_build.js resolved Git's GNU link.exe instead
+    // of MSVC's and failed to link, PR #5568).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        build_wer_dump_helper();
+    }
+
     // Windows: raise the main-thread stack reserve from the 1 MiB PE default to
     // 8 MiB, matching the Linux/macOS main-thread defaults. Debug builds place
     // large unoptimized futures/frames on the main thread's stack (the CLI's
@@ -443,6 +511,50 @@ fn main() {
     }
 
     tauri_build::build()
+}
+
+/// Build the `screenpipe-wer-dump-helper` cdylib with a nested cargo
+/// invocation and stage the DLL into `src-tauri/wer/` for bundling.
+///
+/// A separate `--target-dir` under OUT_DIR avoids deadlocking on the outer
+/// build's target-dir lock; `CARGO` and `TARGET` come from the outer build so
+/// toolchain and architecture (x64/arm64) always match the app.
+fn build_wer_dump_helper() {
+    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    println!("cargo:rerun-if-changed=wer-dump-helper/src/lib.rs");
+    println!("cargo:rerun-if-changed=wer-dump-helper/Cargo.toml");
+
+    let target = std::env::var("TARGET").unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let helper_target_dir =
+        std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wer-dump-helper-target");
+
+    let status = std::process::Command::new(&cargo)
+        .current_dir(manifest_dir.join("wer-dump-helper"))
+        .args([
+            "build",
+            "--release",
+            "--package",
+            "screenpipe-wer-dump-helper",
+        ])
+        .args(["--target", &target])
+        .arg("--target-dir")
+        .arg(&helper_target_dir)
+        .status();
+    match status {
+        Ok(status) if status.success() => {}
+        other => panic!("failed to build screenpipe-wer-dump-helper: {other:?}"),
+    }
+
+    let dll_name = "screenpipe_wer_dump_helper.dll";
+    let built = helper_target_dir
+        .join(&target)
+        .join("release")
+        .join(dll_name);
+    let stage_dir = manifest_dir.join("wer");
+    std::fs::create_dir_all(&stage_dir).expect("create src-tauri/wer staging dir");
+    std::fs::copy(&built, stage_dir.join(dll_name))
+        .unwrap_or_else(|error| panic!("stage {dll_name} from {}: {error}", built.display()));
 }
 
 /// Compile shortcut_reminder.swift into a static library.
@@ -830,34 +942,27 @@ fn copy_permission_flow_bundle() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| panic!("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set"));
 
-    // permission-flow's build.rs predicts the SwiftPM output dir from the
-    // TARGET arch, but swift-rs 1.0.7 always passes `--arch <host>` (codegen
-    // is overridden via `-Xswiftc -target`), so products land in the
-    // HOST-arch-named dir. On cross-compiles (x86_64 app build on arm64 CI)
-    // the predicted path is wrong; probe the host-arch sibling before
-    // concluding the bundle wasn't emitted.
+    // permission-flow predicts `<target arch>-apple-macosx/<PROFILE>/`, but
+    // swift-rs 1.0.7 builds for the HOST arch and picks its configuration from
+    // cargo's DEBUG flag (`[profile.dev] debug = false` here ⇒ `release/`), so
+    // the predicted leaf is wrong for both segments. Search the actual
+    // SwiftPM package root instead of guessing.
     let bundle_src = if bundle_src.exists() {
         bundle_src
     } else {
-        let host_arch = match std::env::consts::ARCH {
-            "aarch64" => "arm64",
-            a => a,
-        };
         bundle_src
-            .parent() // <config>/
-            .and_then(|c| c.parent()) // <arch>-apple-macosx/
-            .and_then(|a| a.parent()) // PermissionFlowShimFFI/
-            .map(|ffi| {
-                ffi.join(format!("{host_arch}-apple-macosx"))
-                    .join(
-                        bundle_src
-                            .parent()
-                            .and_then(|c| c.file_name())
-                            .unwrap_or_default(),
-                    )
-                    .join(bundle_name)
+            .ancestors()
+            .nth(3) // PermissionFlowShimFFI/
+            .and_then(|ffi| {
+                std::fs::read_dir(ffi).ok().and_then(|archs| {
+                    archs
+                        .flatten()
+                        .filter(|a| a.file_name().to_string_lossy().ends_with("-apple-macosx"))
+                        .flat_map(|a| std::fs::read_dir(a.path()).into_iter().flatten().flatten())
+                        .map(|cfg| cfg.path().join(bundle_name))
+                        .find(|p| p.exists())
+                })
             })
-            .filter(|p| p.exists())
             .unwrap_or(bundle_src)
     };
 

@@ -1,0 +1,100 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "time-and-focus",
+  "title": "Time & focus",
+  "description": "See active time, focus, app usage, and the shape of your day.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "time-breakdown",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "time-and-focus",
+    "title": "Time & focus",
+    "revision": 1,
+    "timeRange": "today",
+    "periodPolicy": {
+      "type": "selectable.v1",
+      "values": ["today", "24h", "7d", "30d"]
+    },
+    "blocks": [
+      {
+        "id": "active-time",
+        "title": "Active time",
+        "kind": "metric.v1",
+        "width": 3,
+        "order": 0,
+        "intent": "Calculate total active computer time inside the selected period, excluding idle gaps. Return the duration in minutes or hours and describe coverage gaps.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "focus-score",
+        "title": "Focus score",
+        "kind": "metric.v1",
+        "width": 3,
+        "order": 1,
+        "intent": "Estimate a 0 to 100 focus score for the selected period from sustained work intervals versus frequent application and task switching. Explain the basis in the delta field.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "time-by-application",
+        "title": "Time by application",
+        "kind": "bar-chart.v1",
+        "width": 6,
+        "order": 2,
+        "intent": "Group active time in the selected period by application and return the largest categories with durations in minutes.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "focus-over-time",
+        "title": "Focus over time",
+        "kind": "line-chart.v1",
+        "width": 6,
+        "order": 3,
+        "intent": "Show how focused active work changed across the selected period using evenly spaced timestamps and a consistent 0 to 100 focus measure.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "time-by-project",
+        "title": "Time by project",
+        "kind": "bar-chart.v1",
+        "width": 6,
+        "order": 4,
+        "intent": "Group active time in the selected period by evidence-backed project or workstream. Use Unclassified when the project cannot be determined.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "workday-timeline",
+        "title": "Activity timeline",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 5,
+        "intent": "Show the major work intervals in chronological order for the selected period, with timestamps, applications, and concise activity context.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

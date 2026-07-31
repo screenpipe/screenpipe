@@ -42,8 +42,12 @@ pub fn send_typed_with_actions(
     }
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::new();
+        let port = std::env::var("SCREENPIPE_FOCUS_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(11435);
         if let Err(e) = client
-            .post("http://127.0.0.1:11435/notify")
+            .post(format!("http://127.0.0.1:{port}/notify"))
             .json(&payload)
             .send()
             .await

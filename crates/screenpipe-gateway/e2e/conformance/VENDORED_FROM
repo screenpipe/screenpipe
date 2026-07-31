@@ -1,0 +1,23 @@
+repo:   screenpipe/website (PRIVATE)
+branch: ezra/archive-admin-local-setup-25f21c   (PR #579)
+commit: a144d3c38bdd7b7a0cf1cf673a447057208c8859
+date:   2026-07-24T21:32:03-07:00
+files:  openapi/enterprise-v1.yaml       -> enterprise-v1.yaml
+        conformance/spec.ts              -> spec.ts
+        conformance/cases.ts             -> cases.ts
+        conformance/run.test.ts          -> run.test.ts
+        conformance/auth.test.ts         -> auth.test.ts
+        conformance/strictness.test.ts   -> strictness.test.ts
+        conformance/targets/http.ts      -> targets/http.ts
+        conformance/fixtures/*           -> fixtures/*
+
+NOT vendored, deliberately:
+        conformance/targets/hosted-inproc.ts  imports the website's route modules
+        conformance/scope-map.test.ts         walks the website's app/ directory
+        conformance/README.md                 the canonical copy is in the website repo
+
+Re-vendor with:  crates/screenpipe-gateway/e2e/conformance/revendor.sh <website-worktree>
+Drift is detected by the website repo's CI job `spec-drift`, which checks THIS
+public repo out and diffs. screenpipe CI cannot detect staleness on its own —
+a screenpipe-only PR can land against a stale vendored spec and go green. That
+asymmetry is forced by the repo visibilities and is the known limitation.

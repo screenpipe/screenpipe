@@ -1,0 +1,132 @@
+[
+  {
+    "id": "english_12_hour",
+    "raw": "Today at 6:20 PM",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": -420,
+    "locale": "en-US",
+    "status": "parsed",
+    "occurred_at": "2025-07-27T18:20:00-07:00",
+    "precision": "minute"
+  },
+  {
+    "id": "english_24_hour",
+    "raw": "Today at 18:20",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": -420,
+    "locale": "en-GB",
+    "status": "parsed",
+    "occurred_at": "2025-07-27T18:20:00-07:00",
+    "precision": "minute"
+  },
+  {
+    "id": "french_today",
+    "raw": "Aujourd’hui à 18:20",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": 120,
+    "locale": "fr-FR",
+    "status": "parsed",
+    "occurred_at": "2025-07-28T18:20:00+02:00",
+    "precision": "minute"
+  },
+  {
+    "id": "spanish_yesterday",
+    "raw": "Ayer a las 23:58",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": 120,
+    "locale": "es-ES",
+    "status": "parsed",
+    "occurred_at": "2025-07-27T23:58:00+02:00",
+    "precision": "minute"
+  },
+  {
+    "id": "german_explicit_date",
+    "raw": "27.07.2025, 14:32",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": 120,
+    "locale": "de-DE",
+    "status": "parsed",
+    "occurred_at": "2025-07-27T14:32:00+02:00",
+    "precision": "minute"
+  },
+  {
+    "id": "us_ambiguous_date",
+    "raw": "07/08/2025 2:15 PM",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": 0,
+    "locale": "en-US",
+    "status": "parsed",
+    "occurred_at": "2025-07-08T14:15:00+00:00",
+    "precision": "minute"
+  },
+  {
+    "id": "french_ambiguous_date",
+    "raw": "07/08/2025 14:15",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": 0,
+    "locale": "fr-FR",
+    "status": "parsed",
+    "occurred_at": "2025-08-07T14:15:00+00:00",
+    "precision": "minute"
+  },
+  {
+    "id": "midnight_rollover",
+    "raw": "23:59",
+    "captured_at_unix_ms": 1753599720000,
+    "utc_offset_minutes": -420,
+    "locale": "en-US",
+    "status": "parsed",
+    "occurred_at": "2025-07-26T23:59:00-07:00",
+    "precision": "minute"
+  },
+  {
+    "id": "dst_first_0130",
+    "raw": "Today at 1:30 AM",
+    "captured_at_unix_ms": 1762072200000,
+    "utc_offset_minutes": -420,
+    "locale": "en-US",
+    "status": "parsed",
+    "occurred_at": "2025-11-02T01:30:00-07:00",
+    "precision": "minute"
+  },
+  {
+    "id": "dst_second_0130",
+    "raw": "Today at 1:30 AM",
+    "captured_at_unix_ms": 1762075800000,
+    "utc_offset_minutes": -480,
+    "locale": "en-US",
+    "status": "parsed",
+    "occurred_at": "2025-11-02T01:30:00-08:00",
+    "precision": "minute"
+  },
+  {
+    "id": "missing_timezone_context",
+    "raw": "Today at 18:20",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": null,
+    "locale": "en-US",
+    "status": "missing_context",
+    "occurred_at": null,
+    "precision": null
+  },
+  {
+    "id": "explicit_date_missing_timezone",
+    "raw": "27.07.2025, 14:32",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": null,
+    "locale": "de-DE",
+    "status": "missing_context",
+    "occurred_at": null,
+    "precision": null
+  },
+  {
+    "id": "unknown_localized_date_not_guessed",
+    "raw": "昨日 18:20",
+    "captured_at_unix_ms": 1753666200000,
+    "utc_offset_minutes": 540,
+    "locale": "ja-JP",
+    "status": "unrecognized",
+    "occurred_at": null,
+    "precision": null
+  }
+]

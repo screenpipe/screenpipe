@@ -15,12 +15,15 @@ vi.mock("@/lib/utils/tauri", () => ({
   },
 }));
 
-import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
+let useEnterpriseBuildStatus: (typeof import("@/lib/hooks/use-is-enterprise-build"))["useEnterpriseBuildStatus"];
 
 describe("useEnterpriseBuildStatus", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
     mocks.isEnterpriseBuildCmd.mockReset();
+    vi.resetModules();
+    ({ useEnterpriseBuildStatus } =
+      await import("@/lib/hooks/use-is-enterprise-build"));
   });
 
   afterEach(() => {
@@ -60,5 +63,32 @@ describe("useEnterpriseBuildStatus", () => {
       error: false,
     });
     expect(mocks.isEnterpriseBuildCmd).toHaveBeenCalledTimes(4);
+  });
+
+  it("abandons a hung startup IPC and recovers on a fresh invoke", async () => {
+    mocks.isEnterpriseBuildCmd
+      .mockImplementationOnce(() => new Promise<boolean>(() => {}))
+      .mockResolvedValueOnce(false);
+
+    const { result } = renderHook(() => useEnterpriseBuildStatus());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(result.current).toEqual({
+      isEnterprise: false,
+      resolved: false,
+      error: false,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(result.current).toEqual({
+      isEnterprise: false,
+      resolved: true,
+      error: false,
+    });
+    expect(mocks.isEnterpriseBuildCmd).toHaveBeenCalledTimes(2);
   });
 });

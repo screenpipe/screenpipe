@@ -23,6 +23,8 @@ import {
   platform as osPlatform,
 } from "@tauri-apps/plugin-os";
 import { ParticleStream, ProgressSteps } from "./particle-stream";
+import { screenpipeWebBase } from "@/lib/web-url";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
 interface EngineStartupProps {
   handleNextSlide: () => void;
@@ -286,6 +288,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
       posthog.capture("onboarding_engine_started", {
         time_spent_ms: Date.now() - mountTimeRef.current,
       });
+      onboardingFunnel.engineReady();
     }
 
     // Keep the completed progress visible briefly before advancing.
@@ -397,7 +400,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   const sendLogs = async () => {
     setIsSendingLogs(true);
     try {
-      const BASE_URL = "https://screenpipe.com";
+      const BASE_URL = screenpipeWebBase("https://screenpipe.com");
       const machineId =
         localStorage?.getItem("machineId") || crypto.randomUUID();
       try {

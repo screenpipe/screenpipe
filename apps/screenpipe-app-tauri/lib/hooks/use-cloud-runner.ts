@@ -15,12 +15,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
-// native HTTP (no webview CORS) — same client the enterprise policy poll uses
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+// native HTTP (no webview CORS) — same client the enterprise policy poll uses,
+// deadline included: the plugin sets no request timeout of its own, so a
+// tarpitting host would otherwise leave `loading`/`mutating` true forever.
+import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 import { useSettings } from "./use-settings";
 import { commands } from "@/lib/utils/tauri";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
-const API = "https://screenpipe.com/api/enterprise/cloud-runner";
+const API = screenpipeWebUrl("/api/enterprise/cloud-runner", "https://screenpipe.com");
 
 export interface CloudRunnerInfo {
   desired_state: "running" | "stopped" | "deleted";
@@ -109,7 +112,7 @@ export function useCloudRunner(active: boolean) {
         setState((s) => ({ ...s, loading: false, error: "no_license" }));
         return;
       }
-      const res = await tauriFetch(API, { headers: headers() });
+      const res = await tauriFetchWithDeadline(API, { headers: headers() });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `status ${res.status}`);
@@ -143,7 +146,7 @@ export function useCloudRunner(active: boolean) {
     async (method: "POST" | "PATCH" | "DELETE", body?: object) => {
       setMutating(true);
       try {
-        const res = await tauriFetch(API, {
+        const res = await tauriFetchWithDeadline(API, {
           method,
           headers: headers(),
           body: body ? JSON.stringify(body) : undefined,

@@ -203,7 +203,10 @@ pub async fn enable_pipe(
 /// Optional body for `POST /pipes/:id/run`.
 #[derive(Deserialize, Default)]
 pub struct RunPipeBody {
-    /// Context from a notification action — injected into the pipe prompt.
+    /// Canonical request-scoped context injected only into this Pipe run.
+    #[serde(default)]
+    pub run_context: Option<Value>,
+    /// Backward-compatible field used by existing notification actions.
     #[serde(default)]
     pub notification_context: Option<Value>,
     /// Low-cardinality product surface that initiated the run.
@@ -219,10 +222,23 @@ fn run_trigger_type(body: Option<&RunPipeBody>) -> &'static str {
     }
 }
 
+fn format_run_context(context: &Value) -> String {
+    let serialized = serde_json::to_string_pretty(context).unwrap_or_default();
+    if context.get("source").and_then(Value::as_str) == Some("live-view") {
+        format!(
+            "\n---\nLIVE VIEW RUN CONTEXT\nThis request is authoritative for the named Live View targets. Its exact time_range overrides generic lookback wording in the Pipe body, and target_ids limits which structured targets should be updated.\n\nContext:\n{serialized}\n---\n"
+        )
+    } else {
+        format!(
+            "\n---\nRUN CONTEXT\nRespond to this request-scoped context.\n\nContext:\n{serialized}\n---\n"
+        )
+    }
+}
+
 /// POST /pipes/:id/run — trigger a manual pipe run.
 /// Uses start_pipe_background to avoid holding the PipeManager mutex for the
 /// entire execution duration, which would block stop/list/other API calls.
-/// Accepts an optional JSON body with `notification_context` to inject into the pipe prompt.
+/// Accepts optional `run_context`. Legacy `notification_context` remains supported.
 pub async fn run_pipe_now(
     State(pm): State<SharedPipeManager>,
     secret_store: Option<axum::Extension<Arc<SecretStore>>>,
@@ -236,26 +252,14 @@ pub async fn run_pipe_now(
         tracing::warn!("failed to reload pipes from disk: {}", e);
     }
 
-    // If notification_context is provided, temporarily set it as extra context
-    let prev_context = if let Some(Json(ref b)) = body {
-        if let Some(ref ctx) = b.notification_context {
-            let formatted = format!(
-                "\n---\nNOTIFICATION ACTION\nThe user clicked a notification button. Respond to this action.\n\nContext:\n{}\n---\n",
-                serde_json::to_string_pretty(ctx).unwrap_or_default()
-            );
-            let prev = mgr.take_extra_context();
-            let combined = match prev.as_ref() {
-                Some(existing) => format!("{}\n{}", existing, formatted),
-                None => formatted,
-            };
-            mgr.set_extra_context(combined);
-            prev
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let run_context = body
+        .as_ref()
+        .and_then(|Json(body)| {
+            body.run_context
+                .as_ref()
+                .or(body.notification_context.as_ref())
+        })
+        .map(format_run_context);
 
     // Validate required connections are configured before running the pipe
     let required_connections = mgr
@@ -304,14 +308,8 @@ pub async fn run_pipe_now(
 
     let trigger_type = run_trigger_type(body.as_ref().map(|Json(b)| b));
     let result = mgr
-        .start_pipe_background_with_trigger(&id, trigger_type)
+        .start_pipe_background_with_trigger_and_context(&id, trigger_type, run_context.as_deref())
         .await;
-
-    // Restore previous extra context
-    match prev_context {
-        Some(ctx) => mgr.set_extra_context(ctx),
-        None => mgr.clear_extra_context(),
-    }
 
     match result {
         Ok(()) => Json(json!({ "success": true })),
@@ -540,10 +538,12 @@ mod tests {
     #[test]
     fn only_accepts_onboarding_as_a_non_manual_api_trigger() {
         let onboarding = RunPipeBody {
+            run_context: None,
             notification_context: None,
             trigger_type: Some("onboarding".to_string()),
         };
         let untrusted = RunPipeBody {
+            run_context: None,
             notification_context: None,
             trigger_type: Some("scheduled".to_string()),
         };
@@ -562,6 +562,48 @@ mod tests {
         ]);
 
         assert_eq!(out, "built-in connection context\n\nuser mcp context");
+    }
+
+    #[test]
+    fn live_view_run_context_is_explicitly_authoritative_and_scoped() {
+        let out = format_run_context(&json!({
+            "source": "live-view",
+            "target_ids": ["live-view:focus:gtm-share"],
+            "time_range": {
+                "preset": "7d",
+                "start": "2026-07-17T12:00:00Z",
+                "end": "2026-07-24T12:00:00Z"
+            }
+        }));
+
+        assert!(out.contains("This request is authoritative"));
+        assert!(out.contains("exact time_range overrides generic lookback"));
+        assert!(out.contains("target_ids limits which structured targets should be updated"));
+        assert!(out.contains("live-view:focus:gtm-share"));
+        assert!(out.contains("2026-07-17T12:00:00Z"));
+    }
+
+    #[test]
+    fn ordinary_run_context_does_not_claim_live_view_authority() {
+        let out = format_run_context(&json!({"source": "notification", "message": "retry"}));
+
+        assert!(out.contains("RUN CONTEXT"));
+        assert!(!out.contains("This request is authoritative"));
+    }
+
+    #[test]
+    fn run_body_accepts_canonical_and_legacy_context_fields() {
+        let canonical: RunPipeBody =
+            serde_json::from_value(json!({"run_context": {"source": "live-view"}})).unwrap();
+        let legacy: RunPipeBody =
+            serde_json::from_value(json!({"notification_context": {"source": "notification"}}))
+                .unwrap();
+
+        assert_eq!(canonical.run_context.unwrap()["source"], "live-view");
+        assert_eq!(
+            legacy.notification_context.unwrap()["source"],
+            "notification"
+        );
     }
 
     #[derive(Clone, Copy)]

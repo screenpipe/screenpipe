@@ -190,6 +190,16 @@ fn print_text(items: &[ContentItem]) {
                     one_line(&c.content)
                 );
             }
+            ContentItem::Parsed(c) => {
+                println!(
+                    "[{}] parsed · {} · {} · frame {}\n  {}",
+                    c.timestamp.to_rfc3339(),
+                    c.app_name,
+                    c.window_name,
+                    c.frame_id,
+                    one_line(&c.text)
+                );
+            }
         }
     }
 }

@@ -25,13 +25,20 @@ use tracing::{error, warn};
 const DB_BOOT_FAILURES_BEFORE_RECOVERY_ALERT: u32 = 2;
 
 static DB_BOOT_FAILURES: AtomicU32 = AtomicU32::new(0);
-/// Dedupe for the recovery notification (once per process lifetime is plenty —
-/// the state only clears with the restart or recovery the user must perform).
+/// Dedupe for the recovery notification and gate for automatic engine
+/// respawns. A confirmed healthy server clears it after recovery.
 static GAVE_UP_NOTIFIED: AtomicBool = AtomicBool::new(false);
 
 /// Call when an engine respawn succeeds — a healthy boot ends the episode.
 pub fn reset_db_boot_failures() {
     DB_BOOT_FAILURES.store(0, Ordering::SeqCst);
+    GAVE_UP_NOTIFIED.store(false, Ordering::SeqCst);
+}
+
+/// Whether automatic engine restarts must stay disabled until a manual repair
+/// produces a confirmed healthy server (or the app process restarts).
+pub fn manual_recovery_required() -> bool {
+    GAVE_UP_NOTIFIED.load(Ordering::SeqCst)
 }
 
 /// Does this spawn error look like the DB layer failing to open/init (the
@@ -81,7 +88,9 @@ pub async fn surface_manual_recovery(reason: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_db_shaped;
+    use super::{
+        is_db_shaped, manual_recovery_required, reset_db_boot_failures, surface_manual_recovery,
+    };
 
     #[test]
     fn db_shaped_errors_match() {
@@ -94,5 +103,15 @@ mod tests {
         ));
         assert!(!is_db_shaped("Failed to bind port 3030: address in use"));
         assert!(!is_db_shaped("screen recording permission denied"));
+    }
+
+    #[tokio::test]
+    async fn recovery_alert_gates_retries_until_a_healthy_boot_resets_it() {
+        reset_db_boot_failures();
+        surface_manual_recovery("test hard fault").await;
+        assert!(manual_recovery_required());
+
+        reset_db_boot_failures();
+        assert!(!manual_recovery_required());
     }
 }

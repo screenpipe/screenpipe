@@ -16,24 +16,27 @@ import { Check, ExternalLink, Loader2, LogOut, Pencil, Plus, X } from "lucide-re
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useInterval } from "@/lib/hooks/use-interval";
-import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import posthog from "posthog-js";
+import {
+  COMPOSIO_API,
+  COMPOSIO_TOOLKITS,
+  authorizeComposioToolkit,
+  composioStatusToMap,
+  fetchComposioStatus,
+  registerComposioMcpServer,
+  removeComposioMcpServer,
+  type ComposioAccount,
+  type ComposioStatus,
+  type ComposioStatusMap,
+  type ComposioToolkit,
+} from "@/lib/composio";
 
-const COMPOSIO_API = "https://screenpipe.com/api/composio";
-const MCP_SERVER_ID = "composio";
+export { COMPOSIO_TOOLKITS } from "@/lib/composio";
+export type { ComposioStatusMap } from "@/lib/composio";
+
 const POLL_MS = 2000;
 const MAX_POLLS = 60; // 2 minutes
-
-export const COMPOSIO_TOOLKITS = [
-  "gmail",
-  "zoom",
-  "googledrive",
-  "googledocs",
-  "googlesheets",
-] as const;
-export type ComposioToolkit = (typeof COMPOSIO_TOOLKITS)[number];
-export type ComposioStatusMap = Record<ComposioToolkit, boolean>;
 
 interface ToolkitMeta {
   label: string;
@@ -86,68 +89,6 @@ const TOOLKIT_META: Record<ComposioToolkit, ToolkitMeta> = {
 
 const MAX_ACCOUNTS = 5; // mirrors MAX_ACCOUNTS_PER_TOOLKIT on the server
 
-export interface ComposioAccount {
-  id: string;
-  alias: string | null;
-  /** Connected email resolved server-side; null while unknown. */
-  email?: string | null;
-  created_at?: string | null;
-}
-
-type ComposioStatus = Partial<
-  Record<
-    ComposioToolkit,
-    // `accounts` is absent on servers deployed before multi-account (#5383);
-    // the card degrades to the single-account UI in that case.
-    { connected: boolean; status: string | null; accounts?: ComposioAccount[] }
-  >
->;
-
-function statusToMap(status: ComposioStatus): ComposioStatusMap {
-  return Object.fromEntries(
-    COMPOSIO_TOOLKITS.map((t) => [t, status[t]?.connected === true])
-  ) as ComposioStatusMap;
-}
-
-async function fetchComposioStatus(token: string): Promise<ComposioStatus | null> {
-  try {
-    const res = await fetch(`${COMPOSIO_API}/status`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-// Register (or refresh) the shared Composio MCP server entry so the agent
-// can reach the connected toolkits through the existing mcp-bridge. One
-// entry serves every toolkit; the Authorization header carries the user's
-// token and the org Composio key never reaches this device.
-async function registerComposioMcpServer(token: string): Promise<void> {
-  const body = {
-    name: "Composio",
-    url: `${COMPOSIO_API}/mcp`,
-    headers: [{ name: "Authorization", value: `Bearer ${token}` }],
-    enabled: true,
-  };
-  const res = await localFetch(`/mcp-servers/${MCP_SERVER_ID}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error("failed to register composio mcp server");
-}
-
-async function removeComposioMcpServer(): Promise<void> {
-  try {
-    await localFetch(`/mcp-servers/${MCP_SERVER_ID}`, { method: "DELETE" });
-  } catch {
-    /* best effort */
-  }
-}
-
 export function ComposioCard({
   toolkit,
   initialConnected,
@@ -190,7 +131,7 @@ export function ComposioCard({
 
   const applyStatus = useCallback(
     (status: ComposioStatus) => {
-      const map = statusToMap(status);
+      const map = composioStatusToMap(status);
       lastStatusRef.current = map;
       const mine = map[toolkit];
       setConnected(mine);
@@ -252,29 +193,17 @@ export function ComposioCard({
     setError(null);
     try {
       const trimmed = alias?.trim();
-      const res = await fetch(`${COMPOSIO_API}/authorize`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(trimmed ? { toolkit, alias: trimmed } : { toolkit }),
-      });
-      if (res.status === 404) {
-        // Server half not deployed yet (or an old app against a rolled-back
-        // backend) — surface something a human can act on, not "Load failed".
-        throw new Error("this connection isn't available yet — update screenpipe and try again");
-      }
-      const data = await res.json();
-      if (!res.ok || !data.redirect_url) {
-        throw new Error(data.error || "could not start the connection");
-      }
+      const redirectUrl = await authorizeComposioToolkit(
+        token,
+        toolkit,
+        trimmed || undefined
+      );
       pollCount.current = 0;
       pollBaseline.current = accounts.length ? accounts.length : connected ? 1 : 0;
       setWaiting(true);
       setAddingAccount(false);
       setAliasInput("");
-      await openUrl(data.redirect_url);
+      await openUrl(redirectUrl);
     } catch (e: any) {
       const msg = e?.message === "Load failed" || e?.name === "TypeError"
         ? "couldn't reach screenpipe.com — check your internet connection and try again"

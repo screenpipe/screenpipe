@@ -57,6 +57,7 @@ function isGeminiModel(model: string): boolean {
 // Per-model fallback chains — when a current user-selected model fails with a
 // transient/upstream error, try a comparable model from another provider.
 export const MODEL_FALLBACKS: Record<string, string[]> = {
+  'claude-opus-5': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'gpt-5.6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-sonnet-5': ['gpt-5.4-mini'],
   'gpt-5.4-mini': ['claude-sonnet-5'],
@@ -117,14 +118,28 @@ export function clientPayloadMessage(status: number, msg: string): string | null
   return CLIENT_PAYLOAD_PATTERNS.find((p) => p.re.test(msg))?.message ?? null;
 }
 
-// OpenAI refuses service in some countries/regions based on the egress IP.
-// Nothing the worker or the user's API key can fix — surface which models DO
-// work there instead of the misleading "check your API key" advice, and keep
-// it out of Sentry (SCREENPIPE-AI-PROXY-1C, 14 users). Other 403s stay loud.
-const GEO_BLOCK_PATTERN = /country,? region,? or territory not supported/i;
+// Providers refuse service in some countries/regions based on the egress IP.
+// Nothing the worker or the user's API key can fix, and every hosted chain
+// entry is OpenAI/Anthropic so "pick another model" (or Auto) fails the same
+// way — point at local models instead, and keep it out of Sentry
+// (SCREENPIPE-AI-PROXY-1C, -2S/-1W: 3k+ events). Other 403s stay loud.
+// OpenAI: "Country, region, or territory not supported".
+// Anthropic: {"type":"forbidden","message":"Request not allowed"}.
+const GEO_BLOCK_PATTERN = /country,? region,? or territory not supported|request not allowed/i;
 
 export function isGeoBlocked(status: number, msg: string): boolean {
   return status === 403 && GEO_BLOCK_PATTERN.test(msg);
+}
+
+// Anthropic's org-level monthly spend cap ("You have reached your specified
+// API usage limits. You will regain access on ... at 00:00 UTC.", 400
+// invalid_request_error) — a provider-wide outage until the cap resets or is
+// raised, not a client bug. 4k+ identical Sentry events on 2026-07-31
+// (SCREENPIPE-AI-PROXY-30/-2P/-2W/-31) for one billing fact.
+const PROVIDER_USAGE_CAP_PATTERN = /reached your specified api usage limits/i;
+
+export function isProviderUsageCapped(status: number, msg: string): boolean {
+  return status === 400 && PROVIDER_USAGE_CAP_PATTERN.test(msg);
 }
 
 export function isUserInputTooLarge(status: number, msg: string): boolean {
@@ -257,10 +272,25 @@ async function tryModel(
       throw error;
     }
 
-    // Provider geo-blocks (OpenAI 403 by region) — expected per-region
-    // condition; tell the user what will work, keep Sentry quiet.
+    // Provider spend cap (Anthropic monthly limit) — cascade to another
+    // provider's model; if the whole chain is capped, tell the user what
+    // will work instead of leaking the raw provider JSON. One Sentry alert
+    // per request would drown the dashboard for a single billing fact, so
+    // skip it — the cost dashboards and model-health log still see it.
+    if (isProviderUsageCapped(status, msg)) {
+      error.transient = true;
+      error.userMessage = `${model} is temporarily at capacity (the provider's usage limit was reached). Pick Auto or a model from a different provider, or try again later.`;
+      console.warn(`${ctx}: ${model} provider usage cap hit (400), cascading`);
+      logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
+      throw error;
+    }
+
+    // Provider geo-blocks (OpenAI/Anthropic 403 by region) — expected
+    // per-region condition; tell the user what will work, keep Sentry quiet.
+    // No model name on purpose: the chain's last entry isn't what the user
+    // picked, and every hosted model fails identically in a blocked region.
     if (isGeoBlocked(status, msg)) {
-      error.userMessage = `${model} isn't available in your country or region (the provider rejected the request). Pick Auto instead.`;
+      error.userMessage = `Cloud AI models aren't available in your country or region (the provider rejected the request). Connect a local model like Ollama in Settings → AI to keep using chat.`;
       console.warn(`${ctx}: ${model} geo-blocked by provider (403)`);
       logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
       throw error;

@@ -85,7 +85,44 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "meeting-summary",
         include_str!("../../assets/pipes/meeting-summary/pipe.md"),
     ),
+    (
+        "commitments",
+        include_str!("../../assets/pipes/commitments/pipe.md"),
+    ),
+    (
+        "accounting-follow-through",
+        include_str!("../../assets/pipes/accounting-follow-through/pipe.md"),
+    ),
 ];
+
+/// Explicitly install one trusted Pipe bundled with the app.
+///
+/// Unlike startup installation, this clears a deletion tombstone because the
+/// user has chosen a Live View kit that requires the Pipe. Existing local
+/// customization is preserved and never overwritten.
+pub fn install_bundled_pipe(pipes_dir: &Path, name: &str) -> Result<bool> {
+    let content = BUNDLED_BUILTIN_PIPES
+        .iter()
+        .find_map(|(builtin_name, content)| (*builtin_name == name).then_some(*content))
+        .ok_or_else(|| anyhow!("unknown bundled Pipe '{name}'"))?;
+    let pipe_dir = pipes_dir.join(name);
+    let pipe_md = pipe_dir.join("pipe.md");
+
+    std::fs::create_dir_all(&pipe_dir)?;
+    remove_tombstone(pipes_dir, name)?;
+    if pipe_md.exists() {
+        if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+            if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
+                atomic_write(&pipe_md, &migrated)?;
+            }
+        }
+        return Ok(false);
+    }
+
+    atomic_write(&pipe_md, content)?;
+    info!("explicitly installed bundled Pipe: {}", name);
+    Ok(true)
+}
 /// Max event-triggered pipe runs allowed to execute concurrently.
 ///
 /// Scheduled runs are already serialized (one at a time). Event-triggered runs
@@ -95,6 +132,16 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
 /// still allowing several to run in parallel. Tunable. Live and peak usage are
 /// reported on `pipe_scheduled_run` so the limit's behavior is observable.
 const EVENT_TRIGGERED_CONCURRENCY_LIMIT: usize = 4;
+
+/// How long an event-run claim is remembered. Claims exist to suppress duplicate
+/// deliveries of one event, so this only has to outlive the delivery window —
+/// a week is generous and keeps the table small.
+const EVENT_CLAIM_RETENTION_DAYS: i64 = 7;
+
+/// Cap on triggers held back for a later tick. Reached only if a pipe stays busy
+/// while its events keep arriving; beyond this the oldest are dropped rather than
+/// growing without bound.
+const MAX_CARRYOVER_EVENTS: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Config & log types
@@ -1132,6 +1179,10 @@ pub struct PipeExecution {
     pub error_message: Option<String>,
     pub duration_ms: Option<i64>,
     pub session_path: Option<String>,
+    /// Event that triggered this run, and that event's identity (e.g. a meeting
+    /// id). Both None for scheduled and manual runs.
+    pub trigger_event: Option<String>,
+    pub trigger_key: Option<String>,
 }
 
 /// Compact activity row for sidebar/history inventory.
@@ -1171,6 +1222,51 @@ pub trait PipeStore: Send + Sync {
         model: &str,
         provider: Option<&str>,
     ) -> Result<i64>;
+
+    /// Same, but records which event instance started the run so duplicate runs
+    /// can be traced back to the events that caused them.
+    async fn create_execution_with_trigger(
+        &self,
+        pipe_name: &str,
+        trigger_type: &str,
+        model: &str,
+        provider: Option<&str>,
+        _trigger_event: Option<&str>,
+        _trigger_key: Option<&str>,
+    ) -> Result<i64> {
+        self.create_execution(pipe_name, trigger_type, model, provider)
+            .await
+    }
+
+    /// Claim `(pipe, event, key)` for an event-triggered run. Returns false if
+    /// the claim is already held, meaning this is a duplicate delivery.
+    ///
+    /// Default is "always won" so stores without persistence (CLI mode) keep the
+    /// previous best-effort behaviour rather than blocking every run.
+    async fn claim_event_run(
+        &self,
+        _pipe_name: &str,
+        _event_name: &str,
+        _event_key: &str,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Release a claim so the event can trigger the pipe again. Called when the
+    /// run fails, so a failure isn't remembered as a completed run.
+    async fn release_event_run(
+        &self,
+        _pipe_name: &str,
+        _event_name: &str,
+        _event_key: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Drop claims older than `before`.
+    async fn prune_event_runs(&self, _before: DateTime<Utc>) -> Result<()> {
+        Ok(())
+    }
 
     /// Transition an execution to 'running' and record its PID.
     async fn set_execution_running(&self, id: i64, pid: Option<u32>) -> Result<()>;
@@ -2034,6 +2130,9 @@ async fn setup_pipe_permissions(
     }
     if let Err(e) = PiExecutor::ensure_register_artifact_extension(pipe_dir) {
         warn!("failed to install register-artifact extension: {}", e);
+    }
+    if let Err(e) = PiExecutor::ensure_structured_output_extension(pipe_dir) {
+        warn!("failed to install structured-output extension: {}", e);
     }
     if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
         warn!("failed to install filtered skills: {}", e);
@@ -2968,7 +3067,19 @@ impl PipeManager {
     /// in a spawned tokio task.  Use this from API handlers to avoid holding
     /// the PipeManager mutex for the entire execution duration.
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
-        self.start_pipe_background_with_trigger(name, "manual")
+        self.start_pipe_background_with_trigger_and_context(name, "manual", None)
+            .await
+    }
+
+    /// Start one manual run with request-scoped context. Unlike the manager's
+    /// shared integration context, this value belongs only to this execution
+    /// and cannot leak into another concurrently started pipe.
+    pub async fn start_pipe_background_with_context(
+        &self,
+        name: &str,
+        run_context: Option<&str>,
+    ) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, "manual", run_context)
             .await
     }
 
@@ -2977,6 +3088,19 @@ impl PipeManager {
         &self,
         name: &str,
         trigger: &str,
+    ) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, trigger, None)
+            .await
+    }
+
+    /// Start a Pipe with both low-cardinality telemetry and execution-scoped
+    /// prompt context. Keeping both values as arguments avoids mutating shared
+    /// manager state while a background run is being prepared.
+    pub async fn start_pipe_background_with_trigger_and_context(
+        &self,
+        name: &str,
+        trigger: &str,
+        run_context: Option<&str>,
     ) -> Result<()> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
@@ -3134,7 +3258,19 @@ impl PipeManager {
             self.local_api_key.as_deref(),
             config.agent == "pi" && pi_package_enabled("pi-subagents"),
         );
-        let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
+        let combined_context = match (self.extra_context.as_deref(), run_context) {
+            (Some(shared), Some(scoped)) => Some(format!("{shared}\n{scoped}")),
+            (Some(shared), None) => Some(shared.to_string()),
+            (None, Some(scoped)) => Some(scoped.to_string()),
+            (None, None) => None,
+        };
+        let prompt = render_prompt_with_port(
+            &config,
+            &body,
+            self.api_port,
+            preset_prompt.as_deref(),
+            combined_context.as_deref(),
+        );
         let pipe_name = name.to_string();
 
         // Mark running in DB
@@ -4685,6 +4821,19 @@ impl PipeManager {
                 std::collections::HashMap::new();
             const CHAIN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
+            // Triggers that matched a pipe which was already busy. They used to be
+            // dropped on the floor; instead they wait for the next tick, where the
+            // idempotency claim decides whether they still need to run.
+            let mut carryover: Vec<(String, serde_json::Value)> = Vec::new();
+
+            // Claims are pruned once per process rather than every tick.
+            if let Some(ref store) = store {
+                let cutoff = Utc::now() - chrono::Duration::days(EVENT_CLAIM_RETENTION_DAYS);
+                if let Err(e) = store.prune_event_runs(cutoff).await {
+                    warn!("scheduler: failed to prune event claims: {}", e);
+                }
+            }
+
             loop {
                 // Check for shutdown
                 if *rx.borrow() {
@@ -4706,23 +4855,33 @@ impl PipeManager {
                 // Check each pipe
                 let pipe_snapshot: Vec<(String, PipeConfig, String)> = {
                     let p = pipes.lock().await;
-                    p.iter()
+                    let mut snapshot: Vec<(String, PipeConfig, String)> = p
+                        .iter()
                         .map(|(n, (c, b, _))| (n.clone(), c.clone(), b.clone()))
-                        .collect()
+                        .collect();
+                    // HashMap order is randomized per process, which made the start
+                    // order of pipes sharing a trigger unpredictable. Sorting makes
+                    // it reproducible; runs still overlap (see event_semaphore).
+                    snapshot.sort_by(|a, b| a.0.cmp(&b.0));
+                    snapshot
                 };
 
                 // Drain pending events and mark matching pipes for immediate execution.
                 // Collect events from targeted subscriptions to avoid processing
                 // high-frequency system events (ui_frame, window_ocr, etc.).
-                let mut event_triggered: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
+                let mut event_triggered: std::collections::HashMap<String, EventTrigger> =
+                    std::collections::HashMap::new();
                 let mut connection_triggered: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
+                // Triggers held back this tick, carried into the next one.
+                let mut deferred: Vec<(String, serde_json::Value)> = Vec::new();
                 {
                     use futures::FutureExt;
 
-                    // Collect events from all targeted subscriptions into one vec
-                    let mut pending_events: Vec<(String, serde_json::Value)> = Vec::new();
+                    // Collect events from all targeted subscriptions into one vec,
+                    // starting with anything held back from the previous tick.
+                    let mut pending_events: Vec<(String, serde_json::Value)> =
+                        std::mem::take(&mut carryover);
                     while let Some(e) = meeting_start_rx.next().now_or_never().flatten() {
                         pending_events.push((e.name, e.data));
                     }
@@ -4756,7 +4915,18 @@ impl PipeManager {
                                 if name == target && config.enabled {
                                     info!("scheduler: connection trigger fired pipe '{}'", name);
                                     last_run.remove(name);
-                                    event_triggered.insert(name.clone());
+                                    // No key: connection triggers already have their
+                                    // own committed-cursor dedupe in
+                                    // connection_triggers.rs, so they must not be
+                                    // suppressed a second time here.
+                                    event_triggered.insert(
+                                        name.clone(),
+                                        EventTrigger {
+                                            name: e.name.clone(),
+                                            key: None,
+                                            data: e.data.clone(),
+                                        },
+                                    );
                                     connection_triggered.insert(name.clone());
                                 }
                             }
@@ -4766,7 +4936,7 @@ impl PipeManager {
                     // Expire old chain cooldowns
                     recent_chain.retain(|_, ts| ts.elapsed() < CHAIN_COOLDOWN);
 
-                    for (event_name, _data) in &pending_events {
+                    for (event_name, data) in &pending_events {
                         for (name, config, _body) in &pipe_snapshot {
                             if !config.enabled {
                                 continue;
@@ -4802,11 +4972,15 @@ impl PipeManager {
                                     let r = running.lock().await;
                                     r.contains_key(name)
                                 };
-                                if already_running {
+                                // Busy, or another event already claimed this pipe's
+                                // slot this tick. Either way the trigger waits for
+                                // the next tick instead of being lost.
+                                if already_running || event_triggered.contains_key(name) {
                                     debug!(
-                                        "scheduler: event '{}' skipped pipe '{}' (already running)",
+                                        "scheduler: event '{}' deferred for pipe '{}' (busy)",
                                         event_name, name
                                     );
+                                    deferred.push((event_name.clone(), data.clone()));
                                     continue;
                                 }
                                 info!(
@@ -4814,7 +4988,14 @@ impl PipeManager {
                                     event_name, name
                                 );
                                 last_run.remove(name);
-                                event_triggered.insert(name.clone());
+                                event_triggered.insert(
+                                    name.clone(),
+                                    EventTrigger {
+                                        name: event_name.clone(),
+                                        key: event_identity_key(data),
+                                        data: data.clone(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -4825,7 +5006,7 @@ impl PipeManager {
                         continue;
                     }
 
-                    let triggered_by_event = event_triggered.contains(name);
+                    let triggered_by_event = event_triggered.contains_key(name);
                     let trigger = if connection_triggered.contains(name) {
                         "connection"
                     } else if triggered_by_event {
@@ -4878,6 +5059,17 @@ impl PipeManager {
                     {
                         let qr = queued_or_running.lock().await;
                         if qr.contains(name) {
+                            // Hold an event trigger back rather than dropping it —
+                            // the run in flight may be for a different event.
+                            // Connection triggers are excluded: they are addressed
+                            // to a pipe by name, so replaying them through event
+                            // matching wouldn't fire anything, and their watcher
+                            // already retries uncommitted fires.
+                            if !connection_triggered.contains(name) {
+                                if let Some(t) = event_triggered.get(name) {
+                                    deferred.push((t.name.clone(), t.data.clone()));
+                                }
+                            }
                             continue;
                         }
                     }
@@ -5028,6 +5220,37 @@ impl PipeManager {
                         }
                     }
 
+                    // Claim this (pipe, event, key) before committing to a run. A
+                    // second delivery of the same logical event — `meeting_ended`
+                    // fires again for a meeting the user rejoined — loses the claim
+                    // and is suppressed here instead of starting a duplicate run
+                    // (#5481).
+                    //
+                    // Claimed after the guards above, not when the event was
+                    // matched, so a trigger that lost one of those races is still
+                    // free to retry on a later tick. Must stay ahead of the queue
+                    // mark below: suppressing after that would leave the pipe
+                    // marked as queued forever.
+                    let mut event_claim: Option<(String, String)> = None;
+                    if let (Some(t), Some(store)) = (event_triggered.get(name), store.as_ref()) {
+                        if let Some(key) = t.key.clone() {
+                            match store.claim_event_run(name, &t.name, &key).await {
+                                Ok(true) => event_claim = Some((t.name.clone(), key)),
+                                Ok(false) => {
+                                    info!(
+                                        "scheduler: suppressed duplicate '{}' for pipe '{}' (key {}), already ran",
+                                        t.name, name, key
+                                    );
+                                    continue;
+                                }
+                                // Fail open: a store error must not stop the run.
+                                Err(e) => {
+                                    warn!("scheduler: could not claim event for '{}': {}", name, e)
+                                }
+                            }
+                        }
+                    }
+
                     // Mark as queued so the next tick doesn't double-queue
                     {
                         let mut qr = queued_or_running.lock().await;
@@ -5116,6 +5339,19 @@ impl PipeManager {
                                         0.0,
                                         Some("ai_preset_unavailable"),
                                     );
+                                }
+                                // The run never happened, so don't let the claim
+                                // suppress the next delivery of this event.
+                                if let (Some((event, key)), Some(store)) =
+                                    (&event_claim, store.as_ref())
+                                {
+                                    if let Err(e) = store.release_event_run(name, event, key).await
+                                    {
+                                        warn!(
+                                            "scheduler: could not release event claim for '{}': {}",
+                                            name, e
+                                        );
+                                    }
                                 }
                                 continue;
                             }
@@ -5224,6 +5460,22 @@ impl PipeManager {
                     let queued_ref = queued_or_running.clone();
                     let mcp_server_allowlist = selected_mcp_server_ids(config);
 
+                    // Tell the pipe which event fired it, so it acts on that
+                    // meeting instead of guessing at the most recent one.
+                    //
+                    // Skipped for connection triggers: their watcher already wrote
+                    // the same file with the items it detected, and overwriting it
+                    // would take that payload away from the pipe.
+                    if !connection_triggered.contains(name) {
+                        if let Some(t) = event_triggered.get(name) {
+                            write_event_trigger_context(&pipe_dir, t);
+                        }
+                    }
+
+                    let claim_for_release = event_claim.clone();
+                    let trigger_event_name = event_claim.as_ref().map(|(e, _)| e.clone());
+                    let trigger_event_key = event_claim.as_ref().map(|(_, k)| k.clone());
+
                     tokio::spawn(async move {
                         // Scheduled pipes wait for the previous one to finish
                         // (semaphore of 1). Event-triggered pipes skip that queue
@@ -5267,7 +5519,14 @@ impl PipeManager {
                         // Create DB execution row
                         let exec_id = if let Some(ref store) = store_ref {
                             match store
-                                .create_execution(&pipe_name, &trigger, &model, provider.as_deref())
+                                .create_execution_with_trigger(
+                                    &pipe_name,
+                                    &trigger,
+                                    &model,
+                                    provider.as_deref(),
+                                    trigger_event_name.as_deref(),
+                                    trigger_event_key.as_deref(),
+                                )
                                 .await
                             {
                                 Ok(id) => {
@@ -5568,6 +5827,24 @@ impl PipeManager {
                         let duration_secs =
                             (finished_at - started_at).num_milliseconds() as f64 / 1000.0;
                         let success = log.success;
+
+                        // A failed run shouldn't be remembered as one that happened —
+                        // drop the claim so the event can trigger the pipe again.
+                        if !success {
+                            if let (Some((event, key)), Some(ref store)) =
+                                (&claim_for_release, &store_ref)
+                            {
+                                if let Err(e) =
+                                    store.release_event_run(&pipe_name, event, key).await
+                                {
+                                    warn!(
+                                        "scheduler: could not release event claim for '{}': {}",
+                                        pipe_name, e
+                                    );
+                                }
+                            }
+                        }
+
                         let name_for_cb = log.pipe_name.clone();
                         let mut l = logs_ref.lock().await;
                         let entry = l.entry(log.pipe_name.clone()).or_insert_with(VecDeque::new);
@@ -5644,6 +5921,20 @@ impl PipeManager {
                         archive_old_pipe_logs_offloaded(pipes_dir.clone()).await,
                     );
                     last_cleanup = Instant::now();
+                }
+
+                // Retry deferred triggers next tick, newest last so the oldest are
+                // the ones dropped if a pipe stays busy indefinitely.
+                if !deferred.is_empty() {
+                    carryover.extend(deferred);
+                    if carryover.len() > MAX_CARRYOVER_EVENTS {
+                        let dropped = carryover.len() - MAX_CARRYOVER_EVENTS;
+                        carryover.drain(..dropped);
+                        warn!(
+                            "scheduler: dropped {} deferred trigger(s), backlog over {}",
+                            dropped, MAX_CARRYOVER_EVENTS
+                        );
+                    }
                 }
 
                 // Sleep 30s between checks
@@ -5941,10 +6232,51 @@ fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
         // /meetings/:id, but the server only registers PUT (see
         // screenpipe-engine server.rs) — so every save 404'd. fix already
         // installed local copies. PR #4247.
-        "meeting-summary" => &[(
-            "-X PATCH \"http://localhost:3030/meetings/",
-            "-X PUT \"http://localhost:3030/meetings/",
-        )],
+        "meeting-summary" => &[
+            (
+                "-X PATCH \"http://localhost:3030/meetings/",
+                "-X PUT \"http://localhost:3030/meetings/",
+            ),
+            // the pipe picked "the most recent meeting", which is the wrong one
+            // whenever two meetings end close together. the scheduler now names
+            // the meeting in .trigger-context.json — point installed copies at
+            // it, since install_builtin_pipes never overwrites them. #5481.
+            (
+                "step 1 — find the meeting that just ended:",
+                concat!(
+                    "step 1 — find the meeting that just ended. when the scheduler woke you for an event ",
+                    "it wrote `./.trigger-context.json` in this pipe's folder; read it first and use the ",
+                    "meeting id it names:\n",
+                    "\n",
+                    "  cat ./.trigger-context.json   # {\"event\": \"meeting_ended\", \"key\": \"<MEETING_ID>\", ...}\n",
+                    "\n",
+                    "  curl -s -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" \\\n",
+                    "    \"http://localhost:3030/meetings/<MEETING_ID>\"\n",
+                    "\n",
+                    "only if that file is missing (a manual run) fall back to the most recent row:",
+                ),
+            ),
+            (
+                "the most recent row is the one that just ended. capture its",
+                "either way, capture the meeting's",
+            ),
+            // A maintainer-only synchronization note was accidentally shipped
+            // inside the runtime prompt. Agents interpreted it as work to do
+            // and recursively searched the user's home or ~/.screenpipe for
+            // app source, pegging a CPU core after meetings. Replace it in
+            // already-installed copies with an explicit bounded-work rule.
+            (
+                "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in `apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app \"summarize with AI\" button) — the two surfaces should produce the same behavior.",
+                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
+            ),
+            // Clarify the first bounded-work migration: the pipe must search
+            // Screenpipe through the meeting-scoped API. Only recursive
+            // filesystem/source discovery is prohibited.
+            (
+                "the instructions below are complete. do not inspect app source or search outside this pipe folder. never run recursive `find` or `grep` over the user's home or `~/.screenpipe`; use only the named local files and bounded HTTP endpoints below.",
+                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
+            ),
+        ],
         _ => return None,
     };
 
@@ -6087,6 +6419,8 @@ fn render_pipe_system_prompt(
         sys.push_str("\n\nConnection write policy: never POST, PUT, or PATCH to a connection proxy unless the pipe body or user explicitly asks you to create, write, or modify something in that service. Read first, write only when clearly instructed.");
     }
 
+    sys.push_str("\n\nProfile memory: when the user shares something durable about themselves or their preferences, keep a compact running user profile and update it quietly when useful. Save only stable, reusable facts that would help on future turns — preferred name, writing style, timezone/location if relevant, recurring workflow preferences, long-lived goals, tool conventions, or standing constraints. Do not save temporary task details, one-off requests, secrets, raw transcripts, or anything likely to go stale soon. Merge with what you already know, avoid duplicates, and when uncertain, skip saving rather than guessing. Treat the profile as a short factual reference, not a diary or scratchpad.");
+
     sys
 }
 
@@ -6136,7 +6470,8 @@ fn render_prompt_with_port(
     let mut prompt = String::new();
 
     let header = format!(
-        r#"Time range: {start_time} to {end_time}
+        r#"Default run lookback: {start_time} to {end_time}
+Structured output targets may declare an authoritative time range that overrides this default for that target.
 Date: {date}
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
@@ -6203,6 +6538,58 @@ fn validate_one_off_freshness(schedule: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Name of the file a pipe reads to find out what triggered it. One file per run,
+/// written by whichever trigger fired: connection triggers write their detected
+/// items here, event triggers write the event below.
+const EVENT_TRIGGER_CONTEXT_FILE: &str = ".trigger-context.json";
+
+/// Record what fired the pipe, next to the pipe itself.
+///
+/// Without this a `meeting_ended` pipe has to guess which meeting it was woken
+/// for, which goes wrong exactly when two meetings end close together.
+fn write_event_trigger_context(pipe_dir: &Path, trigger: &EventTrigger) {
+    if !pipe_dir.is_dir() {
+        return;
+    }
+    let ctx = serde_json::json!({
+        "event": trigger.name,
+        "key": trigger.key,
+        "data": trigger.data,
+        "triggered_at": Utc::now().to_rfc3339(),
+    });
+    if let Ok(s) = serde_json::to_string_pretty(&ctx) {
+        let _ = atomic_write(&pipe_dir.join(EVENT_TRIGGER_CONTEXT_FILE), &s);
+    }
+}
+
+/// One event delivery that matched a pipe's `trigger.events`.
+///
+/// The payload is kept so the trigger can be held back for a later tick if the
+/// pipe is busy, and so the pipe can be told what fired it.
+#[derive(Clone, Debug)]
+struct EventTrigger {
+    /// Event name as matched against `trigger.events`.
+    name: String,
+    /// The event's own identity, if it has one — a meeting id for `meeting_*`.
+    /// Events without one can only be deduplicated within a single tick.
+    key: Option<String>,
+    data: serde_json::Value,
+}
+
+/// Read the identity of an event out of its payload.
+///
+/// Events that describe a specific thing carry its id (`meeting_ended` carries
+/// `meeting_id`), which is what makes "already ran for this one" answerable.
+fn event_identity_key(data: &serde_json::Value) -> Option<String> {
+    ["meeting_id", "event_id", "id"]
+        .iter()
+        .find_map(|field| match data.get(field) {
+            Some(serde_json::Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        })
 }
 
 fn pipe_completed_source(event_name: &str) -> Option<&str> {
@@ -7074,11 +7461,101 @@ mod tests {
         PipeManager::new(dir, HashMap::new(), None, 0)
     }
 
+    // -- event trigger identity (#5481) -------------------------------------
+
+    /// Both deliveries of a rejoined meeting's end must produce the same key,
+    /// otherwise the claim can't recognize the second one as a duplicate.
+    #[test]
+    fn duplicate_meeting_ended_yields_same_key() {
+        let first = serde_json::json!({ "meeting_id": 42 });
+        let second = serde_json::json!({ "meeting_id": 42 });
+        assert_eq!(event_identity_key(&first).as_deref(), Some("42"));
+        assert_eq!(event_identity_key(&first), event_identity_key(&second));
+    }
+
+    #[test]
+    fn different_meetings_yield_different_keys() {
+        let a = serde_json::json!({ "meeting_id": 42 });
+        let b = serde_json::json!({ "meeting_id": 43 });
+        assert_ne!(event_identity_key(&a), event_identity_key(&b));
+    }
+
+    #[test]
+    fn event_identity_key_accepts_string_ids() {
+        let data = serde_json::json!({ "event_id": "abc-123" });
+        assert_eq!(event_identity_key(&data).as_deref(), Some("abc-123"));
+    }
+
+    /// Events with no identity fall back to the per-tick guard, so they must not
+    /// produce a key that would collide across unrelated deliveries.
+    #[test]
+    fn keyless_events_have_no_identity() {
+        assert_eq!(event_identity_key(&serde_json::json!({})), None);
+        assert_eq!(
+            event_identity_key(&serde_json::json!({ "meeting_id": null })),
+            None
+        );
+        assert_eq!(
+            event_identity_key(&serde_json::json!({ "meeting_id": "" })),
+            None
+        );
+    }
+
+    #[test]
+    fn event_trigger_context_records_what_fired_the_pipe() {
+        let dir = std::env::temp_dir().join(format!(
+            "screenpipe-trigger-ctx-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let trigger = EventTrigger {
+            name: "meeting_ended".to_string(),
+            key: Some("42".to_string()),
+            data: serde_json::json!({ "meeting_id": 42 }),
+        };
+        write_event_trigger_context(&dir, &trigger);
+
+        let written = std::fs::read_to_string(dir.join(EVENT_TRIGGER_CONTEXT_FILE)).unwrap();
+        let ctx: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(ctx["event"], "meeting_ended");
+        assert_eq!(ctx["key"], "42");
+        assert_eq!(ctx["data"]["meeting_id"], 42);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn pipe_source(template: bool, body: &str) -> String {
         format!(
             "---\nschedule: manual\nenabled: true\ntemplate: {}\n---\n\n{}\n",
             template, body
         )
+    }
+
+    #[test]
+    fn explicitly_installs_only_known_bundled_pipes() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(dir.path().join("time-breakdown/pipe.md").exists());
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(install_bundled_pipe(dir.path(), "not-a-builtin").is_err());
+    }
+
+    #[test]
+    fn explicit_install_preserves_custom_pipe_and_clears_tombstone() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe_dir = dir.path().join("time-breakdown");
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(pipe_dir.join("pipe.md"), "custom prompt").unwrap();
+        add_tombstone(dir.path(), "time-breakdown", Some("old".into())).unwrap();
+
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(pipe_dir.join("pipe.md")).unwrap(),
+            "custom prompt"
+        );
+        assert!(!read_tombstones(dir.path()).contains_key("time-breakdown"));
     }
 
     fn write_pipe_source(dir: &Path, name: &str, template: bool) -> PathBuf {
@@ -7459,6 +7936,73 @@ mod tests {
         // other builtins and unrelated content are left alone.
         assert!(migrate_builtin_pipe_text("day-recap", stale).is_none());
         assert!(migrate_builtin_pipe_text("meeting-summary", "no api calls here").is_none());
+    }
+
+    /// #5481: installed copies still say "pick the most recent meeting", which is
+    /// wrong when two meetings end together. They must be pointed at the trigger
+    /// file, since install_builtin_pipes never overwrites an existing pipe.md.
+    #[test]
+    fn migrate_builtin_pipe_points_meeting_summary_at_trigger_context() {
+        let stale = concat!(
+            "read the screenpipe skill first.\n",
+            "\n",
+            "step 1 — find the meeting that just ended:\n",
+            "\n",
+            "  curl -s \"http://localhost:3030/meetings?limit=1\"\n",
+            "\n",
+            "the most recent row is the one that just ended. capture its `id` and `note`.\n",
+            "\n",
+            "step 2 — summarize it.",
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("stale most-recent-meeting content should migrate");
+        assert!(fixed.contains(".trigger-context.json"));
+        assert!(fixed.contains("/meetings/<MEETING_ID>"));
+        assert!(!fixed.contains("the most recent row is the one that just ended"));
+
+        // the manual-run fallback and the surrounding steps survive.
+        assert!(fixed.contains("http://localhost:3030/meetings?limit=1"));
+        assert!(fixed.starts_with("read the screenpipe skill first."));
+        assert!(fixed.ends_with("step 2 — summarize it."));
+
+        // idempotent: running it again is a no-op.
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
+    #[test]
+    fn migrate_builtin_pipe_removes_source_search_instruction() {
+        let stale = concat!(
+            "a meeting just ended.\n\n",
+            "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in ",
+            "`apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app ",
+            "\"summarize with AI\" button) — the two surfaces should produce the same behavior.\n\n",
+            "read the screenpipe skill first.\n",
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("source-search instruction should migrate");
+        assert!(!fixed.contains("buildMeetingSummarizeInstructions"));
+        assert!(fixed.contains("screenpipe API search is required"));
+        assert!(fixed.contains("never run recursive `find` or `grep`"));
+        assert!(fixed.ends_with("read the screenpipe skill first.\n"));
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
+    /// The shipped prompt must already be in its migrated form, or every fresh
+    /// install would be rewritten on the next startup.
+    #[test]
+    fn bundled_meeting_summary_needs_no_migration() {
+        let bundled = BUNDLED_BUILTIN_PIPES
+            .iter()
+            .find_map(|(name, content)| (*name == "meeting-summary").then_some(*content))
+            .expect("meeting-summary is bundled");
+        assert!(migrate_builtin_pipe_text("meeting-summary", bundled).is_none());
+        let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
+        assert_eq!(config.timeout, Some(300));
+        assert!(!body.contains("buildMeetingSummarizeInstructions"));
+        assert!(body.contains("screenpipe API search is required"));
+        assert!(body.contains("never run recursive `find` or `grep`"));
     }
 
     #[test]
@@ -8928,8 +9472,9 @@ mod tests {
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
-        // User prompt contains time range and the "Execute" instruction
-        assert!(prompt.contains("Time range:"));
+        // User prompt contains a default lookback and the "Execute" instruction.
+        assert!(prompt.contains("Default run lookback:"));
+        assert!(prompt.contains("authoritative time range"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
         let sys = render_pipe_system_prompt("body text", 3031, None, None, None, false);
@@ -9090,6 +9635,8 @@ mod tests {
             error_message: None,
             duration_ms: Some(60000),
             session_path: None,
+            trigger_event: Some("meeting_ended".to_string()),
+            trigger_key: Some("42".to_string()),
         };
         let json = serde_json::to_string(&exec).unwrap();
         let parsed: PipeExecution = serde_json::from_str(&json).unwrap();
@@ -9097,6 +9644,8 @@ mod tests {
         assert_eq!(parsed.status, "completed");
         assert_eq!(parsed.pid, Some(1234));
         assert_eq!(parsed.duration_ms, Some(60000));
+        assert_eq!(parsed.trigger_event.as_deref(), Some("meeting_ended"));
+        assert_eq!(parsed.trigger_key.as_deref(), Some("42"));
     }
 
     #[test]

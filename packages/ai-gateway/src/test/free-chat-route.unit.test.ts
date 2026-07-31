@@ -19,6 +19,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 	const originalFetch = globalThis.fetch;
 	const env = {
 		NODE_ENV: 'production',
+		AI_GATEWAY_SERVICE_TOKEN: 'runner-service-secret',
 		CLERK_SECRET_KEY: 'clerk-test-secret',
 		SUPABASE_URL: 'https://supabase.test',
 		SUPABASE_ANON_KEY: 'supabase-test-key',
@@ -92,6 +93,22 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(401);
 		expect(await errorCode(response)).toBe('authentication_required');
 		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	it('lets the trusted runner bearer reach hosted background inference without a human user id', async () => {
+		const response = await handleRequest(
+			request({
+				Authorization: 'Bearer runner-service-secret',
+				'x-screenpipe-latency': 'background',
+			}, '/v1/chat/completions', 'gpt-5.6-sol'),
+			env,
+			ctx,
+		);
+
+		// The unit env has no provider credential. Reaching provider setup proves
+		// the machine identity cleared both human-user guards and paid-model gates.
+		expect(response.status).toBe(503);
+		expect(await response.text()).not.toContain('authentication_required');
 	});
 
 	it('blocks a free hosted background request instead of trusting its header', async () => {
@@ -323,5 +340,45 @@ describe('/v1/chat/completions free-plan route policy', () => {
 
 		expect(response.status).toBe(503);
 		expect(await errorCode(response)).toBe('account_plan_unavailable');
+	});
+
+	it.each([
+		'/v1/chat/completions',
+		'/v1/web-search',
+		'/v1/tinfoil/chat/completions',
+		'/v1/tinfoil/responses',
+		'/v1/voice/query',
+		'/v1/voice/chat',
+		'/v1/messages',
+		'/anthropic/v1/messages',
+	])('fails closed before every hosted text-AI route when spend storage is unavailable: %s', async (path: string) => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			if (String(input) === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: `user_cost_${path.replace(/\W/g, '_')}`,
+						cloud_subscribed: false,
+						app_entitled: true,
+						subscription_plan: 'standard',
+						entitlement: { active: true, plan: 'standard', features: { app: true } },
+					},
+				}), { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${String(input)}`);
+		}) as typeof fetch;
+
+		const unavailableEnv = {
+			...env,
+			DB: { prepare: () => { throw new Error('D1 unavailable'); } },
+		} as unknown as Env;
+		const response = await handleRequest(
+			request({ Authorization: `Bearer eyJ.cost.${path}` }, path, 'gpt-5.6-luna'),
+			unavailableEnv,
+			ctx,
+		);
+
+		expect(response.status).toBe(503);
+		expect(await errorCode(response)).toBe('cost_control_unavailable');
 	});
 });

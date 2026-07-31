@@ -10,14 +10,29 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Rocket, Moon, Sun, Monitor, FlaskConical, ExternalLink, Layers, RefreshCw, MonitorOff } from "lucide-react";
+import { Rocket, Moon, Sun, Monitor, FlaskConical, ExternalLink, Layers, RefreshCw } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Settings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
+import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { UpdateBanner } from "@/components/update-banner";
 import type { SettingsField } from "./settings-search";
+import { ONBOARDING_GOALS } from "@/lib/live-views/onboarding-goals";
+import {
+  DEFAULT_USER_GOAL_CATEGORY,
+  normalizeUserGoalCategory,
+  type UserGoalCategory,
+} from "@/lib/live-views/onboarding-activation";
+import posthog from "posthog-js";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
@@ -26,10 +41,10 @@ export const searchIndex: SettingsField[] = [
   { label: "Check for updates", keywords: ["version"] },
   { label: "Auto-Update Pipes" },
   { label: "Reset Onboarding", keywords: ["setup"] },
-  { label: "Headless", keywords: ["low resource", "tray only", "memory", "webview"] },
-  { label: "Record only", keywords: ["headless", "pipes", "scheduler", "automation"] },
+  { label: "Your goal", keywords: ["onboarding", "purpose", "personalization"] },
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import {
   DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
@@ -40,9 +55,50 @@ import {
 export default function GeneralSettings() {
   const { isManagedDeployment } = useManagedPolicy();
   const { settings, updateSettings } = useSettings();
+  const resetOnboarding = useOnboarding((state) => state.resetOnboarding);
   const { toast } = useToast();
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
+  const [isResettingOnboarding, setIsResettingOnboarding] = useState(false);
+  const userGoal =
+    normalizeUserGoalCategory(settings.userGoalCategory) ??
+    DEFAULT_USER_GOAL_CATEGORY;
+
+  const handleUserGoalChange = async (category: UserGoalCategory) => {
+    try {
+      await updateSettings({ userGoalCategory: category });
+      posthog.capture("user_goal_changed", {
+        goal_category: category,
+        source: "general_settings",
+      });
+    } catch (error) {
+      console.error("failed to save user goal:", error);
+      toast({
+        title: "couldn't save your goal",
+        description: "please try again",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleResetOnboarding = async () => {
+    setIsResettingOnboarding(true);
+    try {
+      await resetOnboarding();
+      const result = await commands.showOnboardingWindow();
+      if (result.status === "error") throw new Error(result.error);
+    } catch (error) {
+      console.error("failed to reset onboarding:", error);
+      toast({
+        title: "couldn't reset onboarding",
+        description:
+          error instanceof Error ? error.message : "please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResettingOnboarding(false);
+    }
+  };
 
   const handleCheckForUpdates = async () => {
     setIsCheckingForUpdate(true);
@@ -148,7 +204,7 @@ export default function GeneralSettings() {
 
     const path = isManagedDeployment ? "/enterprise" : "/account/versions";
     if (isManagedDeployment) params.set("tab", "builds");
-    const url = `https://screenpipe.com${path}?${params.toString()}`;
+    const url = screenpipeWebUrl(`${path}?${params.toString()}`, "https://screenpipe.com");
 
     try {
       await openUrl(url);
@@ -331,6 +387,40 @@ export default function GeneralSettings() {
 
       <Card className="border-border bg-card">
         <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center space-x-2.5">
+              <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Your goal</h3>
+                <p className="text-xs text-muted-foreground">
+                  What you want screenpipe to help you accomplish
+                </p>
+              </div>
+            </div>
+            <Select
+              value={userGoal}
+              onValueChange={(value) =>
+                void handleUserGoalChange(value as UserGoalCategory)
+              }
+            >
+              <SelectTrigger className="h-8 w-[230px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">No specific goal</SelectItem>
+                {ONBOARDING_GOALS.map((goal) => (
+                  <SelectItem key={goal.category} value={goal.category}>
+                    {goal.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border bg-card">
+        <CardContent className="px-3 py-2.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2.5">
               <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -343,61 +433,12 @@ export default function GeneralSettings() {
               variant="outline"
               size="sm"
               className="ml-4 h-7 text-xs"
-              onClick={async () => {
-                try {
-                  await commands.resetOnboarding();
-                  await commands.showOnboardingWindow();
-                } catch (e) {
-                  console.error("failed to open onboarding:", e);
-                }
-              }}
+              disabled={isResettingOnboarding}
+              onClick={() => void handleResetOnboarding()}
             >
-              reset
+              {isResettingOnboarding ? "resetting..." : "reset"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-border bg-card" data-testid="headless-setting">
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <MonitorOff className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground">Headless</h3>
-                <p className="text-xs text-muted-foreground">
-                  Close the app UI completely while recording continues in the tray
-                </p>
-                <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                  App shortcuts and the UI are unavailable until you open screenpipe from the tray.
-                </p>
-              </div>
-            </div>
-            <Switch
-              id="headless-toggle"
-              checked={settings?.headless ?? false}
-              onCheckedChange={(checked) => handleSettingsChange({ headless: checked })}
-              className="ml-4"
-            />
-          </div>
-          {settings?.headless && (
-            <div className="ml-6 mt-2 border-l border-border pl-3 pt-2 flex items-center justify-between">
-              <div>
-                <h4 className="text-xs font-medium text-foreground">Record only</h4>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  Skip scheduled pipe runs while the UI is headless
-                </p>
-              </div>
-              <Switch
-                id="headless-record-only-toggle"
-                checked={settings?.headlessRecordOnly ?? false}
-                onCheckedChange={(checked) =>
-                  handleSettingsChange({ headlessRecordOnly: checked })
-                }
-                className="ml-4"
-              />
-            </div>
-          )}
         </CardContent>
       </Card>
 

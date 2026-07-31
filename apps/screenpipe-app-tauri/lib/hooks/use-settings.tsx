@@ -8,6 +8,11 @@ import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import { emit, listen } from "@tauri-apps/api/event";
+import {
+	createSettingsWriteQueue,
+	enqueueSettingsWrite,
+	flushSettingsWrites,
+} from "@/components/settings/settings-write-queue";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
@@ -34,6 +39,13 @@ import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
 } from "./managed-settings";
+import {
+	clearLegacyUserGoalCategory,
+	DEFAULT_USER_GOAL_CATEGORY,
+	normalizeUserGoalCategory,
+	readLegacyUserGoalCategory,
+	type UserGoalCategory,
+} from "@/lib/live-views/onboarding-activation";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -188,6 +200,10 @@ export interface ChatConversation {
 	/** Optional user-assigned sidebar group label (lowercase, trimmed).
 	 *  Drives the manual-grouping sections in the chat sidebar. */
 	sidebarGroup?: string;
+	/** Id of the conversation this one was branched from. Set only by
+	 *  "branch in new chat". Exempts the branch from first-user-message
+	 *  dedup — it deliberately shares its parent's opening message. */
+	branchedFrom?: string;
 	/** Last URL the agent navigated the embedded browser sidebar to.
 	 *  Drives the right-side `<BrowserSidebar />` panel: when the user
 	 *  re-opens this conversation the panel restores to this URL.
@@ -219,6 +235,8 @@ export interface ChatHistoryStore {
 
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
+	/** Goal used to prioritize the Home cards. Persisted in store.bin. */
+	userGoalCategory?: UserGoalCategory;
 	/** Internal marker/snapshot used to unwind the forced free-plan policy. */
 	_freePlanRetentionApplied?: boolean;
 	_preFreePlanRetention?: LocalRetentionPreference | null;
@@ -621,6 +639,7 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 
 let DEFAULT_SETTINGS: Settings = {
 			aiPresets: makeDefaultPresets(false) as any,
+			userGoalCategory: DEFAULT_USER_GOAL_CATEGORY,
 			deviceId: crypto.randomUUID(),
 			deepgramApiKey: "",
 			isLoading: false,
@@ -705,6 +724,8 @@ let DEFAULT_SETTINGS: Settings = {
 			lockVaultShortcut: "Super+Shift+L",
 			disableVision: false,
 			disableScreenshots: false,
+			enableSemanticContext: false,
+			semanticContextMode: "memory",
 			useAllMonitors: true,
 			showShortcutOverlay: true,
 			chatHistory: {
@@ -723,6 +744,7 @@ let DEFAULT_SETTINGS: Settings = {
 			meetingSummaryPipeSlug: "meeting-summary",
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
+			enhancedIncognitoDetection: false,
 			pauseOnDrmContent: false,
 			disableClipboardCapture: true,
 			disableKeyboardCapture: true,
@@ -779,6 +801,48 @@ export function createDefaultSettingsObject(): Settings {
 
 // Store singleton
 let _store: Promise<Store> | undefined;
+
+// Settings writes are whole-object read/merge/save operations. Keep them in one
+// FIFO so two controls cannot both read the same snapshot and let the slower
+// save erase the faster one. The updater also drains this queue before a
+// banner-triggered relaunch, which closes the "toggle Auto-update, then click
+// Restart to update" race where process exit could beat the preference save.
+const settingsWriteQueue = createSettingsWriteQueue();
+
+async function waitForE2eSettingsWriteDelay(): Promise<void> {
+	if (
+		process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true" ||
+		typeof document === "undefined"
+	) {
+		return;
+	}
+	const delayMs = Number(
+		document.documentElement.dataset.e2eSettingsWriteDelayMs ?? 0,
+	);
+	if (Number.isFinite(delayMs) && delayMs > 0) {
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+	}
+}
+
+function enqueueSettingsStoreWrite(write: () => Promise<void>): Promise<void> {
+	const queuedWrite = async () => {
+		await waitForE2eSettingsWriteDelay();
+		await write();
+		if (
+			process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+			typeof document !== "undefined"
+		) {
+			document.documentElement.dataset.e2eSettingsWriteFinishedAt = String(
+				performance.now(),
+			);
+		}
+	};
+	return enqueueSettingsWrite(settingsWriteQueue, queuedWrite);
+}
+
+export async function flushPendingSettingsWrites(): Promise<void> {
+	await flushSettingsWrites(settingsWriteQueue);
+}
 
 export const getStore = async () => {
 	if (!_store) {
@@ -889,6 +953,16 @@ function createSettingsStore() {
 
 		// Migration: Ensure existing users have deviceId for free tier tracking
 		let needsUpdate = false;
+		const existingUserGoal = normalizeUserGoalCategory(
+			settings.userGoalCategory,
+		);
+		const shouldMigrateUserGoal = existingUserGoal === null;
+		if (shouldMigrateUserGoal) {
+			settings.userGoalCategory = readLegacyUserGoalCategory();
+			needsUpdate = true;
+		} else {
+			settings.userGoalCategory = existingUserGoal;
+		}
 		if (!settings.deviceId) {
 			settings.deviceId = crypto.randomUUID();
 			needsUpdate = true;
@@ -1069,7 +1143,7 @@ function createSettingsStore() {
 		}
 
 		// Post-migration: if user becomes pro and the Chat preset is still on the
-		// non-pro fallback (Sonnet), upgrade it to Opus 4.7.
+		// non-pro fallback (Sonnet), upgrade it to Opus 5.
 		// Guards:
 		//   - only touches the preset with id === "chat" (leaves user-created presets alone)
 		//   - only if provider is still screenpipe-cloud and model is exactly the seeded
@@ -1089,7 +1163,7 @@ function createSettingsStore() {
 					p?.model === "claude-sonnet-4-5"
 				) {
 					upgraded = true;
-					return { ...p, model: "claude-opus-4-8" };
+					return { ...p, model: "claude-opus-5" };
 				}
 				return p;
 			});
@@ -1149,43 +1223,50 @@ function createSettingsStore() {
 			await saveAndEncrypt(store);
 		}
 
+		// Remove browser-only values only after the durable app setting exists.
+		// This makes the migration one-shot without risking data loss on a failed
+		// settings write.
+		if (shouldMigrateUserGoal) clearLegacyUserGoalCategory();
+
 		return settings;
 	};
 
-	const set = async (value: Partial<Settings>) => {
-		const store = await getStore();
-		const current = await get();
-		const managedValues = current.enterpriseManagedSettings;
-		let newSettings = { ...current, ...value } as Settings;
-		if ("user" in value) {
-			// On logout / Pro→non-Pro transition, clear the V2 marker so a future
-			// Pro login re-evaluates cloud defaults (handles account switching).
-			if (!isLoggedInProUser(newSettings.user)) {
-				delete (newSettings as any)._proCloudAudioDefaultsAppliedV2;
+	const set = (value: Partial<Settings>) =>
+		enqueueSettingsStoreWrite(async () => {
+			const store = await getStore();
+			const current = await get();
+			const managedValues = current.enterpriseManagedSettings;
+			let newSettings = { ...current, ...value } as Settings;
+			if ("user" in value) {
+				// On logout / Pro→non-Pro transition, clear the V2 marker so a future
+				// Pro login re-evaluates cloud defaults (handles account switching).
+				if (!isLoggedInProUser(newSettings.user)) {
+					delete (newSettings as any)._proCloudAudioDefaultsAppliedV2;
+				}
+				newSettings = applyProCloudAudioDefaults(newSettings);
 			}
-			newSettings = applyProCloudAudioDefaults(newSettings);
-		}
-		newSettings = applyManagedOverrides(
-			newSettings as Record<string, unknown>,
-			managedValues
-		) as Settings;
-		if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
-		await setSettingsStripped(store, newSettings);
-		await saveAndEncrypt(store);
-	};
+			newSettings = applyManagedOverrides(
+				newSettings as Record<string, unknown>,
+				managedValues
+			) as Settings;
+			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
+			await setSettingsStripped(store, newSettings);
+			await saveAndEncrypt(store);
+		});
 
-	const reset = async () => {
-		const store = await getStore();
-		const current = await get();
-		const managedValues = current.enterpriseManagedSettings;
-		const defaults = applyManagedOverrides(
-			createDefaultSettingsObject() as Record<string, unknown>,
-			managedValues
-		) as Settings;
-		if (managedValues) defaults.enterpriseManagedSettings = managedValues;
-		await store.set("settings", defaults);
-		await saveAndEncrypt(store);
-	};
+	const reset = () =>
+		enqueueSettingsStoreWrite(async () => {
+			const store = await getStore();
+			const current = await get();
+			const managedValues = current.enterpriseManagedSettings;
+			const defaults = applyManagedOverrides(
+				createDefaultSettingsObject() as Record<string, unknown>,
+				managedValues
+			) as Settings;
+			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
+			await store.set("settings", defaults);
+			await saveAndEncrypt(store);
+		});
 
 	const resetSetting = async <K extends keyof Settings>(key: K) => {
 		const current = await get();
@@ -1443,7 +1524,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
 
-	// Upgrade the seeded "chat" preset Sonnet → Opus 4.7 the moment the user
+	// Upgrade the seeded "chat" preset Sonnet → Opus 5 the moment the user
 	// becomes pro (mirrors the on-load migration for same-session transitions).
 	// Guards match the migration: only touch the unmodified seeded chat preset,
 	// never clobber a user override, only fire once.
@@ -1468,7 +1549,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		}
 
 		const nextPresets = settings.aiPresets.map((p: any, i: number) =>
-			i === idx ? { ...p, model: "claude-opus-4-8" } : p
+			i === idx ? { ...p, model: "claude-opus-5" } : p
 		);
 		settingsStore.set({
 			aiPresets: nextPresets,

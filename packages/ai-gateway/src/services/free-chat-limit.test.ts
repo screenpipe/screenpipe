@@ -218,11 +218,28 @@ const businessAuth: AuthResult = {
 	userId: 'user_paid',
 };
 
+const serviceAuth: AuthResult = {
+	isValid: true,
+	tier: 'subscribed',
+	accountPlan: 'business',
+	deviceId: 'cloud-runner',
+	service: true,
+};
+
 function metered(userId: string, turnKey: string): Extract<FreeChatPreflight, { mode: 'metered' }> {
 	return { mode: 'metered', userId, turnKey };
 }
 
 describe('prepareFreeChatTurn', () => {
+	it('bypasses Free chat metering for a trusted machine identity without a human user id', async () => {
+		const result = await prepareFreeChatTurn(
+			requestFor(undefined, { 'x-screenpipe-latency': 'background' }),
+			bodyWith([{ role: 'user', content: 'scheduled runner request' }]),
+			serviceAuth,
+		);
+		expect(result).toEqual({ mode: 'bypass' });
+	});
+
 	it.each([
 		['Basic', basicAuth],
 		['Business', businessAuth],

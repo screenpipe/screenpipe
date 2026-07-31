@@ -1,0 +1,21 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "notion.id",
+    "executable": null,
+    "display_name": "Notion",
+    "version": "4.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Launch plan - Notion" },
+    { "parent": 0, "role": "AXTextField", "description": "Search", "value": "semantic" },
+    {
+      "parent": 0,
+      "role": "AXTextArea",
+      "title": "Launch plan",
+      "classes": ["contenteditable-document"],
+      "value": "Ship semantic context\nMeasure token reduction"
+    }
+  ]
+}

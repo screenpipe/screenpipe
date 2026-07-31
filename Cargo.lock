@@ -244,7 +244,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -255,7 +255,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -349,6 +349,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashpd"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de3d60bee1a1d38c2077030f4788e1b4e31058d2e79a8cfc8f2b440bd44db290"
+dependencies = [
+ "async-fs",
+ "async-net",
+ "enumflags2",
+ "futures-channel",
+ "futures-util",
+ "rand 0.8.6",
+ "serde",
+ "serde_repr",
+ "url",
+ "zbus",
+]
+
+[[package]]
 name = "assert-json-diff"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -420,6 +438,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-fs"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8034a681df4aed8b8edbd7fbe472401ecf009251c8b40556b304567052e294c5"
+dependencies = [
+ "async-lock",
+ "blocking",
+ "futures-lite",
+]
+
+[[package]]
 name = "async-imap"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -469,6 +498,17 @@ dependencies = [
  "event-listener 5.4.1",
  "event-listener-strategy",
  "pin-project-lite",
+]
+
+[[package]]
+name = "async-net"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b948000fad4873c1c9339d60f2623323a0cfd3816e5181033c6a5cb68b2accf7"
+dependencies = [
+ "async-io",
+ "blocking",
+ "futures-lite",
 ]
 
 [[package]]
@@ -1459,11 +1499,11 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.15.1"
-source = "git+https://github.com/yury/cidre.git#8481f3f0dc7dd39bb5be80d9424bfac0cad3801a"
+version = "0.16.1"
+source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
 dependencies = [
  "cc",
- "cidre-macros 0.5.0",
+ "cidre-macros 0.6.0",
  "half",
  "parking_lot",
  "tokio",
@@ -1472,7 +1512,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.16.1"
-source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
+source = "git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30#9c20f5ee5abaad4598843a33e13d6e48822d1f30"
 dependencies = [
  "cc",
  "cidre-macros 0.6.0",
@@ -1857,7 +1897,7 @@ version = "0.15.3"
 source = "git+https://github.com/screenpipe/cpal.git?rev=e7edfa174466e87a467d1a58e3a4aec233ff8a21#e7edfa174466e87a467d1a58e3a4aec233ff8a21"
 dependencies = [
  "alsa",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "core-foundation-sys",
  "coreaudio-rs",
  "dasp_sample",
@@ -1912,6 +1952,16 @@ name = "crc-catalog"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
+
+[[package]]
+name = "crc-fast"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75b2483e97a5a7da73ac68a05b629f9c53cff58d8ed1c77866079e18b00dba5"
+dependencies = [
+ "digest 0.10.7",
+ "spin 0.10.1",
+]
 
 [[package]]
 name = "crc32fast"
@@ -2547,7 +2597,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2934,7 +2984,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3200,7 +3250,7 @@ checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
 dependencies = [
  "futures-core",
  "futures-sink",
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -3211,7 +3261,7 @@ checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
 dependencies = [
  "futures-core",
  "futures-sink",
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -4205,7 +4255,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4595,7 +4645,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4636,6 +4686,15 @@ name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
 dependencies = [
  "either",
 ]
@@ -4828,7 +4887,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -5534,7 +5593,7 @@ dependencies = [
  "httparse",
  "memchr",
  "mime",
- "spin",
+ "spin 0.9.8",
  "version_check",
 ]
 
@@ -5714,7 +5773,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6298,6 +6357,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "object_store"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354792e39fa5f0009e47623cf8b15b099bf9a652fa55c6f817fe28ac84fea50"
+dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "crc-fast",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "itertools 0.15.0",
+ "md-5",
+ "nix 0.31.3",
+ "parking_lot",
+ "percent-encoding",
+ "quick-xml 0.41.0",
+ "rand 0.10.1",
+ "reqwest 0.13.3",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "walkdir",
+ "wasm-bindgen-futures",
+ "web-time",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7088,7 +7189,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn",
@@ -7181,6 +7282,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7193,7 +7304,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7231,7 +7342,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7605,6 +7716,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -7975,7 +8087,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8034,7 +8146,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8171,9 +8283,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
+source = "git+https://github.com/screenpipe/sck-rs?rev=6deefba79619c2763f24cfbaaf4e08fa7e8302e0#6deefba79619c2763f24cfbaaf4e08fa7e8302e0"
 dependencies = [
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30)",
  "image",
  "once_cell",
  "thiserror 1.0.69",
@@ -8201,7 +8313,7 @@ dependencies = [
  "arboard",
  "arc-swap",
  "chrono",
- "cidre 0.16.1",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716)",
  "core-foundation 0.10.1",
  "core-graphics",
  "crossbeam-channel",
@@ -8230,14 +8342,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "audiopipe",
  "bytemuck",
  "bytes",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "clap",
  "cpal",
  "criterion",
@@ -8295,7 +8407,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8334,7 +8446,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -8347,7 +8459,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -8395,7 +8507,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8447,7 +8559,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8462,6 +8574,7 @@ dependencies = [
  "screenpipe-config",
  "screenpipe-core",
  "screenpipe-secrets",
+ "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -8477,7 +8590,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8486,7 +8599,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "clap",
  "colored",
  "console-subscriber",
@@ -8524,6 +8637,7 @@ dependencies = [
  "screenpipe-resource",
  "screenpipe-screen",
  "screenpipe-secrets",
+ "screenpipe-semantic",
  "screenpipe-vault",
  "sentry",
  "serde",
@@ -8533,6 +8647,7 @@ dependencies = [
  "sqlx",
  "sysinfo",
  "tempfile",
+ "tiktoken-rs",
  "tikv-jemallocator",
  "tinfoil",
  "tokio",
@@ -8552,7 +8667,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8569,8 +8684,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-gateway"
+version = "0.4.32"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 2.2.0",
+ "futures",
+ "http-body-util",
+ "object_store",
+ "reqwest 0.13.3",
+ "screenpipe-config",
+ "screenpipe-db",
+ "screenpipe-sync",
+ "screenpipe-telemetry-wire",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "clap",
@@ -8582,7 +8727,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -8620,7 +8765,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "serde",
  "sysinfo",
@@ -8640,16 +8785,17 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "accessibility-sys",
  "anyhow",
+ "ashpd",
  "atspi",
  "atspi-common",
  "atspi-proxies",
  "base64 0.22.1",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "core-foundation 0.10.1",
  "core-graphics",
  "criterion",
@@ -8658,6 +8804,7 @@ dependencies = [
  "libc",
  "memory-stats",
  "once_cell",
+ "pipewire",
  "reqwest 0.13.3",
  "rusty-tesseract",
  "sck-rs",
@@ -8700,8 +8847,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-semantic"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "regex",
+ "reqwest 0.13.3",
+ "screenpipe-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tiktoken-rs",
+ "tokio",
+]
+
+[[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "libsqlite3-sys",
  "tempfile",
@@ -8711,7 +8877,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8733,7 +8899,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -8741,8 +8907,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-telemetry-wire"
+version = "0.4.32"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tracing",
+]
+
+[[package]]
 name = "screenpipe-vault"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -9341,7 +9517,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9451,6 +9627,12 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 dependencies = [
  "lock_api",
 ]
+
+[[package]]
+name = "spin"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
 
 [[package]]
 name = "spki"
@@ -10130,7 +10312,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10874,7 +11056,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11590,7 +11772,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -12769,6 +12951,7 @@ dependencies = [
  "endi",
  "enumflags2",
  "serde",
+ "url",
  "winnow 1.0.2",
  "zvariant_derive",
  "zvariant_utils",

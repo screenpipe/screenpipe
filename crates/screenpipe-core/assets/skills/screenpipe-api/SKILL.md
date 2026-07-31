@@ -60,13 +60,15 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `q` | No | Keywords. Avoid for audio — transcriptions are noisy, `q` over-filters. |
-| `content_type` | No | `all` (default), `accessibility`, `audio`, `input`, `ocr`, `memory`. Screen text is primarily the accessibility tree; OCR is the fallback for apps without it (videos, games, remote desktops). |
+| `content_type` | No | `all` (default), `accessibility`, `audio`, `input`, `ocr`, `memory`, `parsed`. Use `parsed` for compact app-specific messages, emails, tasks, documents, and code review. Parsed capture is experimental, may be empty when disabled/unsupported, and is not included in `all`. Screen text is primarily the accessibility tree; OCR is the fallback for apps without it (videos, games, remote desktops). |
 | `limit` | No | Default 20. Keep ≤20 to protect context. |
 | `offset` | No | Pagination. Default 0. |
 | `start_time` | **Yes** | ISO 8601 or relative (`16h ago`, `2d ago`, `30m ago`). |
 | `end_time` | No | Defaults to now (`now`, `1h ago`). |
 | `app_name` | No | Substring, e.g. "Google Chrome", "Slack". |
 | `window_name` | No | Window title substring. |
+| `frame_id` | No | With `content_type=parsed`, return parsed data attached to one frame. |
+| `actor_id` | No | With `content_type=parsed`, filter by a resolved actor identity. |
 | `speaker_name` | No | Filter audio by speaker (case-insensitive partial). |
 | `focused` | No | Only focused windows. |
 | `tags` | No | Comma-separated; returns items carrying ALL of them (`person:ada,project:atlas`). Exact match. |
@@ -79,7 +81,7 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 
 **Tags** link people/projects/topics across screen, audio, and memories under one namespace (`person:ada`, `project:atlas`, `topic:pricing`). Add to a frame/audio: `POST /tags/vision/{frame_id}` or `POST /tags/audio/{chunk_id}` body `{"tags":["person:ada"]}`; to a memory: `tags` in `POST /memories`. Retrieve: `GET /search?tags=person:ada&start_time=30d%20ago` (add `content_type=memory` for memories). Frames are pruned by retention — tag a **memory** for durable links (memories carry `created_at` + a `frame_id` back to the moment). `include_related=true` returns co-occurring tags grouped by namespace, replacing 2-3 follow-up calls.
 
-Response: `{"data": [{"type":"OCR","content":{"frame_id":...,"text":...,"app_name":...}}, {"type":"Audio","content":{"chunk_id":...,"transcription":...,"speaker":{"name":...}}}, {"type":"Input","content":{...}}], "pagination":{"limit":10,"offset":0,"total":42}}`.
+Response: `{"data": [{"type":"OCR","content":{"frame_id":...,"text":...,"app_name":...}}, {"type":"Audio","content":{"chunk_id":...,"transcription":...,"speaker":{"name":...}}}, {"type":"Parsed","content":{"frame_id":...,"text":...,"items":[...],"actors":[...]}}], "pagination":{"limit":10,"offset":0,"total":42}}`.
 
 ---
 
@@ -92,6 +94,18 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 ```
 
 Params: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`, `format`, `fields`.
+
+Use `format=outline` for token-efficient reading. Use `format=automation` only
+for automation planning: it keeps interactive controls and returns a snapshot
+revision, short response-local refs, best-effort stable keys, state, bounds, and
+allowed actions. Refresh before each action and verify key + role + name + bounds.
+Database element ids and response refs are not durable live UI handles.
+`format=preferred` follows the desktop AI context setting; its default is the
+read/memory outline.
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/frames/12345/elements?format=automation"
+```
 
 Frame context (accessibility text, parsed nodes, extracted URLs): `GET /frames/{id}/context`.
 
@@ -281,7 +295,30 @@ All POST with `Content-Type: application/json` unless noted:
 
 ---
 
-## 11. Memories — High-Signal Persistent Knowledge
+## 11. Parsed app data and actors
+
+Semantic parsing is optional and disabled by default. When enabled, parser actor
+labels are heuristic observations. The API exposes a separate durable identity
+that a user or Pipe can correct without overwriting source evidence.
+
+- `GET /semantic/actors/search?q=Alice&limit=20` — canonical and observed names
+- `GET /search?content_type=parsed&actor_id=12&limit=20` — parsed app data assigned to an actor
+- `POST /semantic/actors/create` `{"name":"Alice Smith"}` — create a separate identity
+- `POST /semantic/actors/update` `{"id":12,"name":"Alice Smith"}` — rename
+- `POST /semantic/actors/merge` `{"actor_to_keep_id":12,"actor_to_merge_id":31}` — merge current and future aliases
+- `POST /semantic/actors/reassign` `{"item_id":902,"actor_id":12}` — correct one semantic item
+- `POST /semantic/actors/aliases/reassign` `{"alias_id":44,"actor_id":12}` — move one alias, its heuristic history, and future observations
+
+Each `Parsed` search result includes compact corrected text plus typed `items`
+and a parallel `actors` array. `items[*].actor` is always the original parser
+label; `actors` contains `item_id`, canonical `actor_id`/`name`, observed name,
+and assignment source. Use actor IDs for edits; never merge by display name
+alone. Prefer moving a specific alias when a full actor merge would be too broad;
+explicit item corrections are preserved.
+
+---
+
+## 12. Memories — High-Signal Persistent Knowledge
 
 **Memories are the highest-signal source** — curated facts, preferences, decisions, project context distilled from hours of data. **If you're calling `/search`, also query `/memories`**: search gives you what happened, memories give you what matters and why. Query memories first when answering about preferences/decisions/past context, building background on a project/person/workflow, or generating any summary/recommendation/plan.
 
@@ -298,7 +335,7 @@ curl -X DELETE http://localhost:3030/memories/1                                 
 
 ---
 
-## 12. Notifications — `POST http://localhost:11435/notify`
+## 13. Notifications — `POST http://localhost:11435/notify`
 
 Notify the desktop UI. This is the Tauri sidecar (port **11435**), not the main API. `body` supports markdown (`**bold**`, `` `code` ``, `[text](url)`).
 
@@ -328,7 +365,7 @@ Action types: `link` (web URL), `deeplink` (`screenpipe://`), `pipe` (run an ins
 
 ---
 
-## 13. Other Endpoints
+## 14. Other Endpoints
 
 ```bash
 curl http://localhost:3030/health        # health check

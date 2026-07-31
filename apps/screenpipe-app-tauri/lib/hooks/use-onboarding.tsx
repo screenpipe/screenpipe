@@ -8,18 +8,22 @@ import { commands, OnboardingStore } from "@/lib/utils/tauri";
 import { useEffect } from "react";
 import posthog from "posthog-js";
 import {
-  PIPES_SIDEBAR_COLLAPSED_KEY,
-  setPipesSidebarCollapsed,
-} from "@/lib/sidebar-pipes";
-import {
   isFirstRunGuidePending,
   setFirstRunGuidePending,
+  setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
 
 export type OnboardingCompletionContext = {
-  method: "pipes_installed" | "pipe_step_skipped" | "hidden_enterprise";
+  method:
+    | "pipes_installed"
+    | "pipe_step_skipped"
+    | "live_view_deferred"
+    | "hidden_enterprise"
+    | "live_view_created";
   pipeCount?: number;
   customized?: boolean;
+  dashboardBlockCount?: number;
+  goalCategory?: string;
 };
 
 interface OnboardingState {
@@ -62,26 +66,16 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
   },
 
   completeOnboarding: async (context) => {
-    let previousPipesCollapsed: string | null = null;
     const firstRunGuideWasPending = isFirstRunGuidePending();
     try {
       set({ isLoading: true, error: null });
-      try {
-        previousPipesCollapsed = localStorage.getItem(PIPES_SIDEBAR_COLLAPSED_KEY);
-      } catch {
-        // localStorage may be unavailable in restricted webviews.
-      }
-      // Rust opens Home before this command resolves, so persist and broadcast
-      // the expanded state first. A newly-created Home reads the preference;
-      // an existing Home receives the event.
-      await setPipesSidebarCollapsed(false);
-      // This explicit handoff is the eligibility gate for the guide. Existing
-      // onboarded installs never receive it, even though their settings are
-      // hydrated with firstRunGuideDone=false for backwards compatibility.
-      setFirstRunGuidePending(true);
+      // The personalized Brain dashboard owns activation after onboarding.
+      // The generic app tour remains available explicitly from Help.
+      setFirstRunGuidePending(false);
       const result = await commands.completeOnboarding();
       
       if (result.status === "ok") {
+        setFirstRunGuideReplayAfterOnboarding(false);
         // Update local state
         set(state => ({
           onboardingData: {
@@ -95,14 +89,18 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
           completion_method: context.method,
           pipe_count: context.pipeCount,
           customized: context.customized,
+          ...(context.dashboardBlockCount !== undefined
+            ? { dashboard_block_count: context.dashboardBlockCount }
+            : {}),
+          ...(context.goalCategory
+            ? { goal_category: context.goalCategory }
+            : {}),
         });
-        // A Home window that already existed before onboarding completed is
-        // reused by Rust (shown, not reloaded), so it consumed the guide
-        // handoff as `false` at its original mount. Nudge it to re-check.
-        // A freshly created Home reads localStorage on mount instead, so
-        // missing this event there is harmless.
+        // Rust routes a newly created Home to Brain. This covers a reused Home.
         try {
-          void emit("first-run-guide-pending").catch(() => {});
+          void emit("navigate", {
+            url: "screenpipe://home?section=brain",
+          }).catch(() => {});
         } catch {
           // not in tauri (preview/tests)
         }
@@ -111,10 +109,6 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       }
     } catch (error) {
       setFirstRunGuidePending(firstRunGuideWasPending);
-      const wasCollapsed = previousPipesCollapsed == null
-        ? true
-        : previousPipesCollapsed === "true";
-      await setPipesSidebarCollapsed(wasCollapsed);
       console.error("Error completing onboarding:", error);
       set({ 
         error: error instanceof Error ? error.message : "Failed to complete onboarding",
@@ -130,6 +124,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       const result = await commands.resetOnboarding();
       
       if (result.status === "ok") {
+        // Reset setup without replaying the separate optional app tour.
+        setFirstRunGuidePending(false);
+        setFirstRunGuideReplayAfterOnboarding(false);
         // Update local state
         set(state => ({
           onboardingData: {

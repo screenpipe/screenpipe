@@ -1,0 +1,19 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "md.obsidian",
+    "executable": "Obsidian",
+    "display_name": "Obsidian",
+    "version": "1.8",
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "AXWindow", "title": "Historical note - Obsidian" },
+    { "parent": 0, "role": "AXTextArea", "description": "Search", "value": "parser" },
+    {
+      "parent": 0,
+      "role": "AXTextArea",
+      "value": "This retained note body is longer than the search query and remains useful to an agent."
+    }
+  ]
+}

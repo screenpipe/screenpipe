@@ -4,7 +4,7 @@
 "use client";
 
 import React from "react";
-import { FileText, Loader2, Phone, Trash2 } from "lucide-react";
+import { Check, Copy, FileText, Loader2, Phone, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -26,6 +26,7 @@ import {
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
 import { ListeningSticks } from "./listening-sticks";
+import { copyMeetingToClipboard } from "./copy-meeting";
 
 const MEETING_DRAG_MIME = "application/x-screenpipe-meeting-id";
 
@@ -298,6 +299,27 @@ function PastMeetingRow({
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
   const { toast } = useToast();
+  const [copyState, setCopyState] = React.useState<
+    "idle" | "copying" | "copied"
+  >("idle");
+
+  const handleCopy = async () => {
+    if (copyState === "copying") return;
+    setCopyState("copying");
+    try {
+      await copyMeetingToClipboard(meeting);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 2000);
+      toast({ title: "copied meeting to clipboard" });
+    } catch (err) {
+      setCopyState("idle");
+      toast({
+        title: "couldn't copy meeting",
+        description: String(err),
+        variant: "destructive",
+      });
+    }
+  };
 
   const handleDelete = async () => {
     try {
@@ -376,11 +398,27 @@ function PastMeetingRow({
           <span className="w-16 text-right">{stamp}</span>
         </div>
 
-        {/* Fixed slot keeps all rows pixel-aligned; trash appears on hover */}
+        {/* Fixed slot keeps all rows aligned while exposing the common action. */}
         <div
-          className="shrink-0 w-7 flex items-center justify-center"
+          className="shrink-0 w-14 flex items-center justify-end"
           onClick={(e) => e.stopPropagation()}
         >
+          <button
+            type="button"
+            onClick={() => void handleCopy()}
+            disabled={copyState === "copying"}
+            className="h-7 w-7 flex items-center justify-center bg-transparent text-muted-foreground hover:text-foreground disabled:opacity-60"
+            title="copy full meeting"
+            aria-label="copy full meeting"
+          >
+            {copyState === "copying" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : copyState === "copied" ? (
+              <Check className="h-3 w-3" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
+          </button>
           {!isActive && (
             <AlertDialog>
               <AlertDialogTrigger asChild>

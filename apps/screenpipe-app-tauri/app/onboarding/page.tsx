@@ -4,36 +4,49 @@
 
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import OnboardingLogin from "@/components/onboarding/login-gate";
 import PermissionsStep from "@/components/onboarding/permissions-step";
+import TimelineChoice from "@/components/onboarding/timeline-choice";
 import EngineStartup from "@/components/onboarding/engine-startup";
 import ConnectApps from "@/components/onboarding/connect-apps";
-import PickPipe from "@/components/onboarding/pick-pipe";
+import FirstDashboard from "@/components/onboarding/first-dashboard";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { useSettings } from "@/lib/hooks/use-settings";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
-type SlideKey = "login" | "permissions" | "engine" | "connect-apps" | "pipe";
+type SlideKey =
+  | "login"
+  | "permissions"
+  | "timeline"
+  | "engine"
+  | "connect-apps"
+  | "first-dashboard";
 
 const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
   {
     login: { width: 500, height: 480 },
     permissions: { width: 500, height: 560 },
+    timeline: { width: 500, height: 680 },
     engine: { width: 500, height: 620 },
     "connect-apps": { width: 500, height: 680 },
-    pipe: { width: 500, height: 500 },
+    "first-dashboard": { width: 500, height: 720 },
   };
 
+// When shown, the timeline choice sits before "engine" so disableTimeline is
+// persisted before the engine spawns and reads it — no restart needed.
 const SLIDE_ORDER: SlideKey[] = [
   "login",
   "permissions",
+  "timeline",
   "engine",
   "connect-apps",
-  "pipe",
+  "first-dashboard",
 ];
 
 // endowed progress: the bar first renders on permissions with login already
@@ -84,7 +97,7 @@ const EndowedProgress = ({
                   : "bg-border"
             }`}
           />
-        )
+        ),
       )}
     </div>
   </div>
@@ -110,11 +123,13 @@ export default function OnboardingPage() {
   } | null>(null);
   const handlePermissionsProgress = useCallback(
     (done: number, total: number) => setPermissionsProgress({ done, total }),
-    []
+    [],
   );
   const { onboardingData, isLoading, completeOnboarding } = useOnboarding();
+  const { settings, isSettingsLoaded } = useSettings();
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
+  const funnelStartedRef = React.useRef(false);
   const {
     isManagedDeployment,
     isManagedDeploymentResolved,
@@ -124,10 +139,43 @@ export default function OnboardingPage() {
     selectAuthenticationMethod,
     submitLicenseKey,
     policy: managedPolicy,
+    isSettingLocked,
   } = useManagedPolicy();
+  // This intervention is intentionally narrow: only a canonical "low" tier
+  // written by the native hardware detector is enough evidence to show it.
+  // Missing, malformed, mid, and high tiers all skip it. We also wait for the
+  // settings store to hydrate below so its default/unknown state cannot be
+  // mistaken for hardware evidence.
+  const isConfidentLowEndDevice = settings.deviceTier === "low";
 
-  // Restore saved step on mount
+  // The timeline slide writes disableTimeline AND disableScreenshots, so a
+  // policy owning either one already decides the outcome — showing the choice
+  // would let it contradict what the user picked.
+  const timelineChoiceLocked =
+    isSettingLocked("disableTimeline") || isSettingLocked("disableScreenshots");
+  const timelineChoiceVisible =
+    isConfidentLowEndDevice && !timelineChoiceLocked;
+  const deviceTierForAnalytics =
+    settings.deviceTier === "low" ||
+    settings.deviceTier === "mid" ||
+    settings.deviceTier === "high"
+      ? settings.deviceTier
+      : "unknown";
+  const visibleOrder = useMemo(
+    () => SLIDE_ORDER.filter((s) => s !== "timeline" || timelineChoiceVisible),
+    [timelineChoiceVisible],
+  );
+  // Read by the hydration-gated restore effect below. Assigned during render,
+  // per the ref-mirror rule in CLAUDE.md.
+  const timelineChoiceVisibleRef = React.useRef(timelineChoiceVisible);
+  timelineChoiceVisibleRef.current = timelineChoiceVisible;
+
+  // Restore only after both settings and managed policy hydrate. Otherwise a
+  // low-tier device can briefly look unknown and a saved timeline step would
+  // be skipped before the real hardware tier arrives.
   useEffect(() => {
+    if (!isSettingsLoaded || !isManagedDeploymentResolved) return;
+
     const init = async () => {
       const { loadOnboardingStatus } = useOnboarding.getState();
       await loadOnboardingStatus();
@@ -139,15 +187,17 @@ export default function OnboardingPage() {
         const stepMap: Record<string, SlideKey> = {
           login: "login",
           permissions: "permissions",
+          timeline: "timeline",
           engine: "engine",
           "connect-apps": "connect-apps",
           integrations: "connect-apps",
           connections: "connect-apps",
-          pipe: "pipe",
+          "first-dashboard": "first-dashboard",
+          pipe: "first-dashboard",
           // backwards compat with old onboarding
           encrypt: "engine",
-          read: "pipe",
-          shortcut: "pipe",
+          read: "first-dashboard",
+          shortcut: "first-dashboard",
           welcome: "login",
           intro: "login",
           usecases: "permissions",
@@ -156,12 +206,44 @@ export default function OnboardingPage() {
         };
         const mapped = stepMap[step];
         if (mapped) {
-          setCurrentSlide(mapped);
+          // A saved step must not resume onto a slide that this device or its
+          // managed policy is no longer eligible to see.
+          setCurrentSlide(
+            mapped === "timeline" && !timelineChoiceVisibleRef.current
+              ? "engine"
+              : mapped,
+          );
         }
       }
     };
     init();
-  }, []);
+  }, [isManagedDeploymentResolved, isSettingsLoaded]);
+
+  useEffect(() => {
+    const persistedStep = onboardingData.currentStep;
+    const isNewEntry =
+      persistedStep === null ||
+      persistedStep === "login" ||
+      persistedStep === "welcome";
+    if (
+      isLoading ||
+      !isManagedDeploymentResolved ||
+      isManagedDeployment ||
+      onboardingData.isCompleted ||
+      !isNewEntry ||
+      funnelStartedRef.current
+    ) {
+      return;
+    }
+    funnelStartedRef.current = true;
+    onboardingFunnel.started();
+  }, [
+    isLoading,
+    isManagedDeployment,
+    isManagedDeploymentResolved,
+    onboardingData.currentStep,
+    onboardingData.isCompleted,
+  ]);
 
   // Set window size + track view when slide changes
   useEffect(() => {
@@ -178,7 +260,7 @@ export default function OnboardingPage() {
         return;
       }
       commands
-        .showWindow({ Home: { page: null } })
+        .showWindow({ Home: { page: "brain" } })
         .then(() => window.close())
         .catch(() => {});
     }
@@ -193,11 +275,16 @@ export default function OnboardingPage() {
     transitioningRef.current = true;
     setIsTransitioning(true);
 
-    posthog.capture(`onboarding_${currentSlide}_completed`);
+    // The login gate owns this event because only it can distinguish a fresh
+    // logged-out -> logged-in transition from resuming a persisted session.
+    // Capturing it here as well duplicates every fresh-login completion.
+    if (currentSlide !== "login") {
+      posthog.capture(`onboarding_${currentSlide}_completed`);
+    }
     const currentIdx = SLIDE_ORDER.indexOf(currentSlide);
     posthog.capture("onboarding_step_reached", {
       step_name: `${currentSlide}_completed`,
-      step_index: currentIdx + 1,
+      step_index: visibleOrder.indexOf(currentSlide) + 1,
     });
 
     // Hidden enterprise deployments only need authentication + permissions.
@@ -210,7 +297,7 @@ export default function OnboardingPage() {
       } catch (error) {
         console.warn(
           "failed to resolve enterprise UI visibility after permissions:",
-          error
+          error,
         );
       }
 
@@ -230,7 +317,23 @@ export default function OnboardingPage() {
       }
     }
 
-    const nextSlide = SLIDE_ORDER[currentIdx + 1] || "pipe";
+    // This event supplies the denominator for the low-tier fork. Keep the
+    // properties low-cardinality: native analytics already has the raw CPU and
+    // RAM measurements for detector audits, while this records the exact tier
+    // and policy decision that controlled onboarding.
+    if (currentSlide === "permissions") {
+      posthog.capture("onboarding_device_tier_evaluated", {
+        device_tier: deviceTierForAnalytics,
+        timeline_choice_eligible: timelineChoiceVisible,
+        timeline_choice_policy_locked: timelineChoiceLocked,
+      });
+    }
+
+    // Walk SLIDE_ORDER (never the filtered list) so the index stays valid even
+    // for a slide that policy hides, then land on the next visible slide.
+    const nextSlide =
+      SLIDE_ORDER.slice(currentIdx + 1).find((s) => visibleOrder.includes(s)) ||
+      "first-dashboard";
     try {
       await commands.setOnboardingStep(nextSlide);
     } catch {
@@ -247,7 +350,11 @@ export default function OnboardingPage() {
   }, [
     completeOnboarding,
     currentSlide,
+    deviceTierForAnalytics,
     isManagedDeployment,
+    timelineChoiceLocked,
+    timelineChoiceVisible,
+    visibleOrder,
   ]);
 
   // Enterprise authentication owns the onboarding login step. Existing saved
@@ -271,7 +378,7 @@ export default function OnboardingPage() {
     handleNextSlide,
   ]);
 
-  if (isLoading || !isManagedDeploymentResolved) {
+  if (isLoading || !isSettingsLoaded || !isManagedDeploymentResolved) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="w-6 h-6 border border-foreground border-t-transparent rounded-full animate-spin" />
@@ -284,25 +391,31 @@ export default function OnboardingPage() {
       {/* Drag region */}
       <div className="w-full bg-background p-3" data-tauri-drag-region />
 
-      {/* Content */}
-      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+      {/* Keep short steps centered, but let content taller than the available
+          display grow naturally and scroll from its top instead of clipping. */}
+      <div
+        data-testid="onboarding-scroll-region"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6"
+      >
         <div
-          className={`w-full max-w-lg mx-auto transition-opacity duration-300 ${
+          className={`mx-auto flex min-h-full w-full max-w-lg flex-col justify-center transition-opacity duration-300 ${
             isVisible ? "opacity-100" : "opacity-0"
           }`}
         >
           {currentSlide !== "login" && (
             <EndowedProgress
-              step={SLIDE_ORDER.indexOf(currentSlide) + 1}
-              total={SLIDE_ORDER.length}
+              step={Math.max(1, visibleOrder.indexOf(currentSlide) + 1)}
+              total={visibleOrder.length}
               sub={currentSlide === "permissions" ? permissionsProgress : null}
             />
           )}
-          {currentSlide === "login" && (
-            isManagedDeployment ? (
+          {currentSlide === "login" &&
+            (isManagedDeployment ? (
               authenticationState === "license_key" ? (
                 <div className="mx-auto w-full max-w-sm">
-                  <h2 className="mb-1 text-lg font-semibold">activate this device</h2>
+                  <h2 className="mb-1 text-lg font-semibold">
+                    activate this device
+                  </h2>
                   <p className="mb-4 text-sm text-muted-foreground">
                     enter the enterprise key provided by your administrator
                   </p>
@@ -341,13 +454,15 @@ export default function OnboardingPage() {
               )
             ) : (
               <OnboardingLogin handleNextSlide={handleNextSlide} />
-            )
-          )}
+            ))}
           {currentSlide === "permissions" && (
             <PermissionsStep
               handleNextSlide={handleNextSlide}
               onProgressChange={handlePermissionsProgress}
             />
+          )}
+          {currentSlide === "timeline" && (
+            <TimelineChoice handleNextSlide={handleNextSlide} />
           )}
           {currentSlide === "engine" && (
             <EngineStartup handleNextSlide={handleNextSlide} />
@@ -355,7 +470,7 @@ export default function OnboardingPage() {
           {currentSlide === "connect-apps" && (
             <ConnectApps handleNextSlide={handleNextSlide} />
           )}
-          {currentSlide === "pipe" && <PickPipe />}
+          {currentSlide === "first-dashboard" && <FirstDashboard />}
         </div>
       </div>
     </div>

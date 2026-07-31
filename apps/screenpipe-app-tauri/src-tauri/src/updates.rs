@@ -440,12 +440,71 @@ pub struct UpdatesManager {
     last_failed_update: Arc<Mutex<Option<(String, std::time::Instant)>>>,
 }
 
+/// Remove `<binary>.sp-old*` leftovers next to the app executable.
+///
+/// When the Windows installer cannot overwrite a binary because a process is
+/// still running from it, `windows/hooks.nsh` renames the old file aside so
+/// extraction can proceed, then tries to delete it. That delete fails while the
+/// orphaned process is still alive. By the time this app boots that process is
+/// gone, so the leftovers can go too.
+#[cfg(windows)]
+pub fn sweep_moved_aside_binaries() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else {
+        return;
+    };
+    let removed = sweep_sp_old_files(dir);
+    if removed > 0 {
+        info!(
+            "removed {} leftover installer file(s) from {}",
+            removed,
+            dir.display()
+        );
+    }
+}
+
+/// Returns how many files were removed. Split out from the caller so it can be
+/// tested against a temp dir on any platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sweep_sp_old_files(dir: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // `bun.exe.sp-old-<tick>` — hooks.nsh seeds the suffix with the tick
+        // count and increments on collision, so match the whole family (older
+        // installers wrote plain `.sp-old` / `.sp-old2`).
+        let is_leftover = name
+            .rsplit('.')
+            .next()
+            .is_some_and(|last| last.starts_with("sp-old"));
+        if !is_leftover || !entry.path().is_file() {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => removed += 1,
+            // Still locked (the old process outlived us, or antivirus has it).
+            // The next update's installer will move it aside again.
+            Err(e) => debug!("could not remove {}: {}", entry.path().display(), e),
+        }
+    }
+    removed
+}
+
 impl UpdatesManager {
     pub fn new(app: &tauri::AppHandle, interval_minutes: u64) -> Result<Self, Error> {
         // A staged file from a previous process can never be installed (the
         // in-memory Update handle died with that process) — drop it.
         #[cfg(target_os = "macos")]
         crate::staged_update::clear_stage_dir(app);
+
+        #[cfg(windows)]
+        sweep_moved_aside_binaries();
 
         let update_menu_item = if is_enterprise_build(app) {
             None
@@ -546,6 +605,9 @@ impl UpdatesManager {
         if is_enterprise_build(&self.app) {
             if let Some(license_key) = crate::commands::get_enterprise_license_key() {
                 builder = builder.header("X-License-Key", license_key)?;
+            }
+            if let Some(token) = crate::commands::get_cloud_token() {
+                builder = builder.header("Authorization", format!("Bearer {token}"))?;
             }
         } else if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
             if let Some(token) = settings
@@ -1271,6 +1333,49 @@ mod tests {
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);
+
+    #[test]
+    fn sweep_removes_installer_leftovers_only() {
+        let dir = tempfile::tempdir().unwrap();
+        // Left behind by hooks.nsh when the old process still held the file.
+        std::fs::write(dir.path().join("bun.exe.sp-old"), b"old").unwrap();
+        std::fs::write(dir.path().join("screenpipe.exe.sp-old2"), b"old").unwrap();
+        // Live app files must survive.
+        std::fs::write(dir.path().join("bun.exe"), b"new").unwrap();
+        std::fs::write(dir.path().join("screenpipe.exe"), b"new").unwrap();
+
+        assert_eq!(sweep_sp_old_files(dir.path()), 2);
+        assert!(!dir.path().join("bun.exe.sp-old").exists());
+        assert!(!dir.path().join("screenpipe.exe.sp-old2").exists());
+        assert!(dir.path().join("bun.exe").exists());
+        assert!(dir.path().join("screenpipe.exe").exists());
+    }
+
+    #[test]
+    fn sweep_clears_leftovers_accumulated_across_upgrades() {
+        // Repeated upgrades where the holder outlived each install: hooks.nsh
+        // seeds the suffix with the tick count, so the names differ every run.
+        let dir = tempfile::tempdir().unwrap();
+        for suffix in ["sp-old", "sp-old2", "sp-old-1", "sp-old-874219", "sp-old-9"] {
+            std::fs::write(dir.path().join(format!("bun.exe.{suffix}")), b"old").unwrap();
+        }
+        std::fs::write(dir.path().join("bun.exe"), b"new").unwrap();
+
+        assert_eq!(sweep_sp_old_files(dir.path()), 5);
+        assert!(dir.path().join("bun.exe").exists());
+    }
+
+    #[test]
+    fn sweep_is_a_noop_on_a_clean_install_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("bun.exe"), b"new").unwrap();
+        // A directory that merely looks like a leftover must not be touched.
+        std::fs::create_dir(dir.path().join("cache.sp-old")).unwrap();
+
+        assert_eq!(sweep_sp_old_files(dir.path()), 0);
+        assert!(dir.path().join("bun.exe").exists());
+        assert!(dir.path().join("cache.sp-old").exists());
+    }
 
     #[test]
     fn cooldown_blocks_same_version_within_window() {

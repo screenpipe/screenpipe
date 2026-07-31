@@ -56,7 +56,6 @@ import {
   ArrowUpCircle,
   ExternalLink,
   GitFork,
-  Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
@@ -69,6 +68,10 @@ import { PipesSection } from "@/components/settings/pipes-section";
 import { NotificationBell } from "@/components/notification-bell";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
+import {
+  getPipePublisherIdentity,
+  type PipePublisherIdentity,
+} from "@/lib/pipe-publisher";
 // --- Types ---
 
 interface StorePipe {
@@ -291,11 +294,18 @@ function relativeDate(dateStr: string | null | undefined): string {
  */
 function normalizePipe(raw: any): any {
   if (!raw) return raw;
+  const publisher = getPipePublisherIdentity({
+    id: raw.author_id,
+    name: raw.author || raw.author_name,
+    verified: raw.author_verified,
+  });
+
   return {
     ...raw,
     title: raw.title || raw.slug || "untitled pipe",
-    author: raw.author || raw.author_name || "",
+    author: publisher.name,
     author_id: raw.author_id || null,
+    author_verified: publisher.verified,
     rating: raw.rating ?? raw.avg_rating ?? 0,
     review_count: raw.review_count ?? 0,
     install_count: raw.install_count ?? 0,
@@ -1107,6 +1117,11 @@ function PipeCard({
   installing: boolean;
   onClick: () => void;
 }) {
+  const publisher = getPipePublisherIdentity({
+    id: pipe.author_id,
+    name: pipe.author,
+    verified: pipe.author_verified,
+  });
   const permissionPills = PERMISSION_LABELS.filter((p) => {
     const status = getPermissionStatus(pipe.permissions, p.key);
     return status === "allowed";
@@ -1120,7 +1135,7 @@ function PipeCard({
     >
       {/* Header: icon + action */}
       <div className="flex items-start justify-between gap-3">
-        <div className="text-2xl bg-muted rounded-none h-11 w-11 flex items-center justify-center flex-shrink-0">
+        <div className="text-xl bg-muted rounded-none h-10 w-10 flex items-center justify-center flex-shrink-0">
           {pipe.icon || "🔧"}
         </div>
         <Button
@@ -1154,33 +1169,88 @@ function PipeCard({
 
       {/* Title — full width, no truncation */}
       <h4 className="text-sm font-semibold mt-3 line-clamp-2 leading-snug">{pipe.title}</h4>
-      <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-        <span className="truncate">{pipe.author}</span>
-        {pipe.author_verified && (
-          <BadgeCheck className="h-3 w-3 text-foreground flex-shrink-0" />
-        )}
-      </div>
 
       {/* Description */}
-      <p className="text-xs text-muted-foreground line-clamp-2 mt-2 leading-relaxed flex-1">
+      <p className="text-xs text-muted-foreground line-clamp-2 mt-2.5 leading-relaxed flex-1">
         {pipe.description}
       </p>
 
-      {/* Footer: category + stats */}
-      <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
-        <div className="flex items-center gap-1.5">
-          {pipe.featured && (
-            <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
-          )}
-          <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
-            {pipe.category}
-          </Badge>
-        </div>
+      {/* Footer: publisher + installs. Category already lives in the filters. */}
+      <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-border">
+        <PublisherIdentity publisher={publisher} compact />
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
           <Download className="h-3 w-3" />
           {formatCount(pipe.install_count ?? 0)}
         </span>
       </div>
+    </div>
+  );
+}
+
+function PublisherIdentity({
+  publisher,
+  className,
+  compact = false,
+}: {
+  publisher: PipePublisherIdentity;
+  className?: string;
+  compact?: boolean;
+}) {
+  const avatarClass = compact ? "h-4 w-4" : "h-5 w-5";
+
+  return (
+    <div
+      data-testid="pipe-publisher-identity"
+      aria-label={publisher.isScreenpipeTeam ? "official Screenpipe publisher" : undefined}
+      title={compact && publisher.isScreenpipeTeam ? "built by screenpipe team" : undefined}
+      className={cn(
+        "flex min-w-0 items-center",
+        compact ? "gap-1.5" : "gap-2",
+        className,
+      )}
+    >
+      {publisher.isScreenpipeTeam ? (
+        <span
+          aria-hidden="true"
+          className={cn(avatarClass, "flex-shrink-0 bg-cover bg-center")}
+          style={{ backgroundImage: "url('/128x128.png')" }}
+        />
+      ) : (
+        <span
+          aria-hidden="true"
+          className={cn(
+            avatarClass,
+            "flex flex-shrink-0 items-center justify-center border border-border bg-muted font-semibold uppercase text-muted-foreground",
+            compact ? "text-[8px]" : "text-[9px]",
+          )}
+        >
+          {publisher.name.charAt(0)}
+        </span>
+      )}
+      <span
+        className={cn(
+          "truncate text-muted-foreground",
+          compact ? "text-[11px]" : "text-xs",
+        )}
+      >
+        {compact ? (
+          <span className="font-medium">{publisher.name}</span>
+        ) : (
+          <>
+            {publisher.isScreenpipeTeam ? "built by " : "by "}
+            <span className="font-medium text-foreground">{publisher.name}</span>
+          </>
+        )}
+      </span>
+      {publisher.verified && !publisher.isScreenpipeTeam && (
+        <BadgeCheck
+          aria-label="verified publisher"
+          className={cn(
+            "flex-shrink-0 text-foreground",
+            compact ? "h-3 w-3" : "h-3.5 w-3.5",
+          )}
+        />
+      )}
     </div>
   );
 }
@@ -1214,6 +1284,11 @@ function PipeDetailPanel({
   const { toast } = useToast();
   const unrestricted = isUnrestricted(pipe.permissions);
   const isOwner = !!(currentUserId && pipe.author_id && currentUserId === pipe.author_id);
+  const publisher = getPipePublisherIdentity({
+    id: pipe.author_id,
+    name: pipe.author,
+    verified: pipe.author_verified,
+  });
 
   const [editing, setEditing] = useState(false);
   const [editReadme, setEditReadme] = useState("");
@@ -1318,17 +1393,10 @@ function PipeDetailPanel({
             <div>
               <h2 className="text-xl font-semibold tracking-tight">{pipe.title || pipe.slug || "untitled pipe"}</h2>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
-                {pipe.author ? (
-                  <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                    <span>{pipe.author}</span>
-                    {pipe.author_verified && (
-                      <BadgeCheck className="h-3.5 w-3.5 text-foreground" />
-                    )}
-                  </div>
-                ) : null}
+                <PublisherIdentity publisher={publisher} />
                 {pipe.version ? (
                   <>
-                    {pipe.author && <span className="text-xs text-muted-foreground/50">·</span>}
+                    <span className="text-xs text-muted-foreground/50">·</span>
                     <span className="text-xs text-muted-foreground">v{pipe.version}</span>
                   </>
                 ) : null}

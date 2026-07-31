@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import {
   Trash2,
@@ -43,6 +44,7 @@ import {
   hasFreePlanPolicy,
 } from "@/lib/app-entitlement";
 import { cn } from "@/lib/utils";
+import { commands } from "@/lib/utils/tauri";
 
 type RetentionMode = "media" | "lean" | "all";
 type EffectiveMode = "off" | RetentionMode;
@@ -119,6 +121,9 @@ export function RetentionSettings({
   const [deletingRecent, setDeletingRecent] = useState(false);
   const [pendingCompact, setPendingCompact] = useState(false);
   const [compacting, setCompacting] = useState(false);
+  const [lowDiskThreshold, setLowDiskThreshold] = useState<string>(
+    "the safety reserve",
+  );
 
   const isFreePlan = hasFreePlanPolicy(settings.user as any);
   const enabled = isFreePlan ? true : (settings.localRetentionEnabled ?? false);
@@ -154,6 +159,23 @@ export function RetentionSettings({
     fetchStatus();
   }, [fetchStatus]);
   useInterval(fetchStatus, 10000);
+
+  useEffect(() => {
+    let cancelled = false;
+    void commands
+      .getLowDiskGuardConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setLowDiskThreshold(formatBytes(config.thresholdBytes));
+        }
+      })
+      .catch(() => {
+        // The fallback stays accurate without inventing a second threshold.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Pull a fresh disk-preview whenever a confirmation opens or retentionDays
   // changes while pending. Cheap query, no debounce needed at human pace.
@@ -399,7 +421,38 @@ export function RetentionSettings({
           </div>
         </div>
 
-        {/* Card 2 — ongoing retention policy (distinct from the manual purge above) */}
+        {/* Card 2 — opt-in guard against SQLite/capture writes filling the disk */}
+        <div className="rounded border border-border p-3">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">
+                  stop recording before disk is full
+                </p>
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="low-disk-recording-guard-copy"
+                >
+                  when free space falls to {lowDiskThreshold}, stop capture and
+                  notify you. search, pipes, and existing data stay available.
+                  off by default.
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="stop-recording-on-low-disk"
+              data-testid="low-disk-recording-guard-toggle"
+              aria-label="stop recording before disk is full"
+              checked={settings.stopRecordingOnLowDisk ?? false}
+              onCheckedChange={(checked) =>
+                updateSettings({ stopRecordingOnLowDisk: checked })
+              }
+            />
+          </div>
+        </div>
+
+        {/* Card 3 — ongoing retention policy (distinct from the manual purge above) */}
         <div className="space-y-3 rounded border border-border p-3">
           <div className="flex items-center gap-2">
             <Trash2 className="h-4 w-4 text-muted-foreground" />

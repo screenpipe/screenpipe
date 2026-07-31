@@ -1,0 +1,18 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "chrome.exe",
+    "display_name": "Chrome",
+    "version": null,
+    "browser_url": "https://app.todoist.com/app/project/example"
+  },
+  "nodes": [
+    { "parent": null, "role": "Window", "title": "Parser project - Todoist" },
+    { "parent": 0, "role": "Group", "classes": ["task-item"] },
+    { "parent": 1, "role": "Text", "classes": ["task-title"], "value": "Benchmark parser" },
+    { "parent": 0, "role": "Group", "classes": ["task-item", "completed"] },
+    { "parent": 3, "role": "Text", "classes": ["task-title"], "value": "Define schema" },
+    { "parent": 0, "role": "Button", "title": "Add task" }
+  ]
+}

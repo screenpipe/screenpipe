@@ -115,6 +115,10 @@ export async function handleTinfoilProxy(
 		const v = request.headers.get(name);
 		if (v) headers.set(name, v);
 	}
+	// Billing cannot inspect the encrypted body, so always request the token
+	// summary. Tinfoil returns it as a header for non-streaming responses and a
+	// trailer for streams; callers use a conservative fallback if unavailable.
+	headers.set('X-Tinfoil-Request-Usage-Metrics', 'true');
 	headers.set('Authorization', `Bearer ${env.TINFOIL_API_KEY}`);
 	// Tag every billed request with the screenpipe user id — useful for
 	// reconciling Tinfoil's invoice with our cost-tracker rows.
@@ -141,6 +145,22 @@ export async function handleTinfoilProxy(
 		status: upstream.status,
 		headers: passthroughHeaders(upstream.headers),
 	});
+}
+
+/** Parse Tinfoil's `prompt=N,completion=N,total=N` billing header. */
+export function parseTinfoilUsageMetrics(response: Response): {
+	promptTokens: number;
+	completionTokens: number;
+} | null {
+	const value = response.headers.get('X-Tinfoil-Usage-Metrics');
+	if (!value) return null;
+	const prompt = /(?:^|,)\s*prompt=(\d+)/i.exec(value);
+	const completion = /(?:^|,)\s*completion=(\d+)/i.exec(value);
+	if (!prompt || !completion) return null;
+	return {
+		promptTokens: Number(prompt[1]),
+		completionTokens: Number(completion[1]),
+	};
 }
 
 /**

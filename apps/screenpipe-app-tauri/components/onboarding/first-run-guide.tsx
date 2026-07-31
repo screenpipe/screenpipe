@@ -259,6 +259,18 @@ export default function FirstRunGuide({
 
   const skip = useCallback(() => dismiss("skip_button"), [dismiss]);
 
+  // The guide used to render `send ↵` as a button-shaped span. Submit the
+  // real composer from an actual button so the first action is unambiguous
+  // and still exercises the same chat path as pressing Enter.
+  const submitPrefilledPrompt = useCallback(() => {
+    const form = document.querySelector<HTMLFormElement>(
+      '[data-firstrun-target="composer"]',
+    );
+    if (!form) return;
+    posthog.capture("firstrun_send_prompt_clicked");
+    form.requestSubmit();
+  }, []);
+
   // Step 0 accepted — start the tour. Reset the send baseline so a chat
   // sent while the invite sat open doesn't instantly advance the phase.
   const acceptInvite = useCallback(() => {
@@ -530,12 +542,16 @@ export default function FirstRunGuide({
                   </span>
                 </div>
                 <p className="font-sans text-sm text-foreground/90 leading-snug">
-                  i wrote a prompt below to create your first automation — hit{" "}
-                  <span className="font-mono text-xs border border-foreground/25 px-1.5 py-0.5">
-                    send ↵
-                  </span>{" "}
-                  and screenpipe will set it up for you.
+                  i filled the prompt below. send it to create your first
+                  automation.
                 </p>
+                <button
+                  type="button"
+                  onClick={submitPrefilledPrompt}
+                  className="mt-4 flex w-full items-center justify-center border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background transition-colors hover:bg-background hover:text-foreground"
+                >
+                  send prompt ↵
+                </button>
                 <button
                   onClick={skip}
                   className={SKIP_BUTTON_CLASS}

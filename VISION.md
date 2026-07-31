@@ -40,7 +40,8 @@ We build the layer that gives AI full context of human work so it can act autono
 
 - State facts. No marketing fluff.
 - No emoji in the product. No exclamation marks. Remove what's unecessary.
-- Black and white. 1px borders. Sharp corners. No shadows, no gradients.
+- Escher monochrome with one phosphor signal for human-to-model transformation.
+  1px borders. Sharp corners. No decorative shadows or gradients.
 - 40% of any composition should be empty space.
 - When in doubt, remove.
 

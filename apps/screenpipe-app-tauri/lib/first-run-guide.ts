@@ -4,6 +4,8 @@
 
 export const FIRST_RUN_GUIDE_PENDING_KEY =
   "screenpipe:first-run-guide-pending";
+export const FIRST_RUN_GUIDE_REPLAY_AFTER_ONBOARDING_KEY =
+  "screenpipe:first-run-guide-replay-after-onboarding";
 
 export function isFirstRunGuidePending(): boolean {
   try {
@@ -19,6 +21,39 @@ export function setFirstRunGuidePending(pending: boolean): void {
       localStorage.setItem(FIRST_RUN_GUIDE_PENDING_KEY, "true");
     } else {
       localStorage.removeItem(FIRST_RUN_GUIDE_PENDING_KEY);
+    }
+  } catch {
+    // localStorage may be unavailable in restricted webviews.
+  }
+}
+
+/**
+ * Remember that an explicit onboarding reset should replay the final guide.
+ * This is separate from the one-time Home handoff: setting the handoff during
+ * onboarding would show the guide too early, on top of the setup window.
+ */
+export function isFirstRunGuideReplayAfterOnboarding(): boolean {
+  try {
+    return (
+      localStorage.getItem(FIRST_RUN_GUIDE_REPLAY_AFTER_ONBOARDING_KEY) ===
+      "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function setFirstRunGuideReplayAfterOnboarding(
+  shouldReplay: boolean,
+): void {
+  try {
+    if (shouldReplay) {
+      localStorage.setItem(
+        FIRST_RUN_GUIDE_REPLAY_AFTER_ONBOARDING_KEY,
+        "true",
+      );
+    } else {
+      localStorage.removeItem(FIRST_RUN_GUIDE_REPLAY_AFTER_ONBOARDING_KEY);
     }
   } catch {
     // localStorage may be unavailable in restricted webviews.
@@ -57,10 +92,9 @@ export function shouldShowFirstRunGuide({
   captureUnhealthy?: boolean;
   /**
    * True when the pending handoff arrived via the `first-run-guide-pending`
-   * event in this session (help → replay intro, or onboarding completing on
-   * an already-open Home). The `onboarding` e2e seed suppression only
-   * guards against the boot-time auto-popup breaking unrelated seeded
-   * specs — a deliberate in-session request bypasses it.
+   * event in this session. The `onboarding` e2e seed suppression only guards
+   * against the boot-time auto-popup breaking unrelated seeded specs — a
+   * deliberate in-session request bypasses it.
    */
   explicitlyRequested?: boolean;
 }): boolean {

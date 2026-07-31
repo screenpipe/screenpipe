@@ -1,0 +1,100 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "automation-finder",
+  "title": "Automation finder",
+  "description": "Find one repeated workflow worth automating and turn it into a safe, testable first step.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "automate-my-work",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "automation-finder",
+    "title": "Automation finder",
+    "revision": 1,
+    "timeRange": "7d",
+    "periodPolicy": {
+      "type": "selectable.v1",
+      "values": ["7d", "30d"]
+    },
+    "blocks": [
+      {
+        "id": "best-opportunity",
+        "title": "Best automation opportunity",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 0,
+        "intent": "Identify the single strongest repeated workflow to automate in the selected period, based on frequency, time cost, consistency, and feasibility.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "workflow-evidence",
+        "title": "When this workflow repeated",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 1,
+        "intent": "Show timestamped examples of the selected workflow repeating during the selected period, with enough context to verify they are the same process.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "friction",
+        "title": "Why it is costly",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 2,
+        "intent": "List the concrete friction, manual steps, delays, or error risk that make the selected workflow costly, grounded in observed examples.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "current-coverage",
+        "title": "What is already covered",
+        "kind": "table.v1",
+        "width": 6,
+        "order": 3,
+        "intent": "Map which steps of the selected workflow are already handled by software or AI and which steps still require manual work.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "safe-first-version",
+        "title": "Safe first version",
+        "kind": "markdown.v1",
+        "width": 6,
+        "order": 4,
+        "intent": "Propose the smallest safe automation that removes meaningful work while keeping risky decisions or external writes behind human approval.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "success-test",
+        "title": "How to know it worked",
+        "kind": "list.v1",
+        "width": 12,
+        "order": 5,
+        "intent": "Define measurable checks for whether the proposed automation saves time and remains correct, including a bounded initial trial.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

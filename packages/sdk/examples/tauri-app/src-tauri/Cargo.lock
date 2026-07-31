@@ -327,6 +327,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashpd"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de3d60bee1a1d38c2077030f4788e1b4e31058d2e79a8cfc8f2b440bd44db290"
+dependencies = [
+ "async-fs",
+ "async-net",
+ "enumflags2",
+ "futures-channel",
+ "futures-util",
+ "rand 0.8.7",
+ "serde",
+ "serde_repr",
+ "url",
+ "zbus",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -388,6 +406,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-fs"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8034a681df4aed8b8edbd7fbe472401ecf009251c8b40556b304567052e294c5"
+dependencies = [
+ "async-lock",
+ "blocking",
+ "futures-lite",
+]
+
+[[package]]
 name = "async-imap"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -437,6 +466,17 @@ dependencies = [
  "event-listener 5.4.1",
  "event-listener-strategy",
  "pin-project-lite",
+]
+
+[[package]]
+name = "async-net"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b948000fad4873c1c9339d60f2623323a0cfd3816e5181033c6a5cb68b2accf7"
+dependencies = [
+ "async-io",
+ "blocking",
+ "futures-lite",
 ]
 
 [[package]]
@@ -1270,6 +1310,18 @@ dependencies = [
 name = "cidre"
 version = "0.16.1"
 source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
+dependencies = [
+ "cc",
+ "cidre-macros 0.6.0",
+ "half",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "cidre"
+version = "0.16.1"
+source = "git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30#9c20f5ee5abaad4598843a33e13d6e48822d1f30"
 dependencies = [
  "cc",
  "cidre-macros 0.6.0",
@@ -6168,11 +6220,22 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rand"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
+dependencies = [
+ "libc",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "rand_core 0.9.5",
 ]
 
@@ -6185,6 +6248,16 @@ dependencies = [
  "chacha20 0.10.0",
  "getrandom 0.4.2",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -6249,7 +6322,7 @@ dependencies = [
  "paste",
  "profiling",
  "rand 0.9.4",
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "simd_helpers",
  "thiserror 2.0.18",
  "v_frame",
@@ -6880,9 +6953,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
+source = "git+https://github.com/screenpipe/sck-rs?rev=6deefba79619c2763f24cfbaaf4e08fa7e8302e0#6deefba79619c2763f24cfbaaf4e08fa7e8302e0"
 dependencies = [
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30)",
  "image",
  "once_cell",
  "thiserror 1.0.69",
@@ -6910,7 +6983,7 @@ dependencies = [
  "arboard",
  "arc-swap",
  "chrono",
- "cidre 0.16.1",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716)",
  "core-foundation",
  "core-graphics 0.24.0",
  "crossbeam-channel",
@@ -6954,7 +7027,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6965,7 +7038,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -7010,7 +7083,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -7050,7 +7123,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7063,6 +7136,7 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "screenpipe-config",
+ "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -7077,7 +7151,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7113,10 +7187,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "accessibility-sys",
  "anyhow",
+ "ashpd",
  "atspi",
  "atspi-common",
  "atspi-proxies",
@@ -7129,6 +7204,7 @@ dependencies = [
  "image-compare",
  "libc",
  "once_cell",
+ "pipewire",
  "reqwest",
  "rusty-tesseract",
  "sck-rs",
@@ -7167,8 +7243,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-semantic"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "libsqlite3-sys",
  "tokio",
@@ -7201,7 +7288,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.30"
+version = "0.4.32"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -10986,6 +11073,7 @@ dependencies = [
  "endi",
  "enumflags2",
  "serde",
+ "url",
  "winnow 1.0.2",
  "zvariant_derive",
  "zvariant_utils",

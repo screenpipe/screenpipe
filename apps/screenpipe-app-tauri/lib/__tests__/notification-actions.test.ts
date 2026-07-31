@@ -4,6 +4,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const apiMocks = vi.hoisted(() => ({
+  isLocalApiUrl: vi.fn(),
+  localFetch: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(async () => undefined),
 }));
@@ -13,7 +18,8 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  localFetch: vi.fn(),
+  isLocalApiUrl: apiMocks.isLocalApiUrl,
+  localFetch: apiMocks.localFetch,
 }));
 
 vi.mock("@/lib/chat-utils", () => ({
@@ -21,10 +27,48 @@ vi.mock("@/lib/chat-utils", () => ({
 }));
 
 import {
+  executeNotificationAction,
   parseMeetingDeeplink,
   routeNotificationDeeplink,
   windowForDeeplink,
 } from "../notifications/actions";
+
+describe("notification API actions", () => {
+  beforeEach(() => {
+    apiMocks.isLocalApiUrl.mockReset();
+    apiMocks.localFetch.mockReset();
+  });
+
+  it("refuses a non-local target before making a request", async () => {
+    apiMocks.isLocalApiUrl.mockReturnValue(false);
+
+    await expect(
+      executeNotificationAction({
+        type: "api",
+        url: "http://localhost:3030@attacker.example/collect",
+      }),
+    ).rejects.toThrow("refused api action to non-local url");
+
+    expect(apiMocks.localFetch).not.toHaveBeenCalled();
+  });
+
+  it("allows a relative local API target", async () => {
+    apiMocks.isLocalApiUrl.mockReturnValue(true);
+    apiMocks.localFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await executeNotificationAction({
+      type: "api",
+      url: "/capture/hd/start",
+      body: { fps: 1 },
+    });
+
+    expect(apiMocks.localFetch).toHaveBeenCalledWith("/capture/hd/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fps: 1 }),
+    });
+  });
+});
 
 const emitMock = vi.fn(async () => undefined);
 const showWindowActivatedMock = vi.fn(async () => ({

@@ -84,6 +84,7 @@ import {
 } from "@/components/ui/tooltip";
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
+import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 
 type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
@@ -130,6 +131,8 @@ function HomeContent() {
   const [connectionFocusRequest, setConnectionFocusRequest] = useState<ConnectionFocusRequest | null>(null);
 
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
+  const updateSettingsRef = useRef(updateSettings);
+  updateSettingsRef.current = updateSettings;
   const { isTranslucent } = useSidebarContext();
   const [e2eSeedFlags, setE2eSeedFlags] = useState<string[] | null>(null);
   // Consume the handoff on first display so closing/reloading the window can
@@ -139,8 +142,7 @@ function HomeContent() {
   // reuses an already-open Home window (show, not reload), so a Home created
   // before onboarding finished would otherwise never see the handoff.
   const [firstRunGuidePending, setFirstRunGuidePendingState] = useState(false);
-  // Event-driven arrivals (help → replay intro, onboarding completing on an
-  // already-open Home) are deliberate requests — they bypass the e2e seed
+  // Event-driven arrivals are deliberate requests, so they bypass the e2e seed
   // suppression that only guards the boot-time auto-popup.
   const [firstRunGuideExplicit, setFirstRunGuideExplicit] = useState(false);
   useEffect(() => {
@@ -149,6 +151,7 @@ function HomeContent() {
     let unmounted = false;
     void listen("first-run-guide-pending", () => {
       if (consumeFirstRunGuidePending()) {
+        void updateSettingsRef.current({ firstRunGuideDone: false });
         setFirstRunGuidePendingState(true);
         setFirstRunGuideExplicit(true);
       }
@@ -987,7 +990,12 @@ function HomeContent() {
       router.push(`/settings?section=${mapped}`);
     } else {
       const mapped = section === "feedback" ? "help" : section;
-      if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
+      if (ALL_SECTIONS.includes(mapped)) {
+        setActiveSection(mapped);
+        if (mapped === "brain") {
+          window.dispatchEvent(new Event(ONBOARDING_BRAIN_HANDOFF_EVENT));
+        }
+      }
     }
   });
 

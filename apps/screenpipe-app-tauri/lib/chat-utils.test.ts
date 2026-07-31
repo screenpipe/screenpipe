@@ -87,13 +87,19 @@ describe("chat-utils", () => {
     expect(showWindowMock).not.toHaveBeenCalled();
   });
 
-  it("handles untargeted and same-window chat-load-conversation payloads for chat", () => {
+  it("keeps untargeted chat-load-conversation payloads on Home only", () => {
+    expect(
+      shouldHandleChatLoadConversationForWindow(
+        { conversationId: "chat-1" },
+        "home",
+      )
+    ).toBe(true);
     expect(
       shouldHandleChatLoadConversationForWindow(
         { conversationId: "chat-1" },
         "chat",
       )
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldHandleChatLoadConversationForWindow(
         { conversationId: "chat-1", targetWindow: "chat" },

@@ -72,6 +72,13 @@ export interface RecorderOptions {
    * the recorder skips writing frames. Mirrors `--ignored-urls`.
    */
   ignoredUrls?: Array<string>
+  /** Detect and skip incognito/private browser windows. Default: true. */
+  ignoreIncognitoWindows?: boolean
+  /**
+   * Use browser-native incognito detection on macOS. Default: false.
+   * May require Automation permission for supported Chromium browsers.
+   */
+  enhancedIncognitoDetection?: boolean
   /**
    * When set, the recorder runs the engine's event-driven paired-capture
    * pipeline in parallel with the MP4 writer: typed UI events (click,

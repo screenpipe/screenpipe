@@ -1,0 +1,20 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "chrome.exe",
+    "display_name": "Chrome",
+    "version": null,
+    "browser_url": "https://mail.google.com/mail/u/0/#inbox/example"
+  },
+  "nodes": [
+    { "parent": null, "role": "Window", "title": "Release blocked - Gmail" },
+    { "parent": 0, "role": "Document" },
+    { "parent": 1, "role": "Heading", "classes": ["thread-title"], "title": "Release blocked" },
+    { "parent": 1, "role": "Group", "classes": ["email-message"] },
+    { "parent": 3, "role": "Text", "classes": ["sender"], "value": "Alice" },
+    { "parent": 3, "role": "Group", "classes": ["message-body"] },
+    { "parent": 5, "role": "Text", "value": "Please retry signing." },
+    { "parent": 1, "role": "Button", "title": "Archive" }
+  ]
+}

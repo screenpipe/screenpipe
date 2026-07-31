@@ -13,7 +13,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { listen } from "@tauri-apps/api/event";
 import { showNotificationPanel } from "@/lib/hooks/use-notification-panel";
 import { showChatWithPrefill } from "@/lib/chat-utils";
-import { localFetch } from "@/lib/api";
+import { localFetch, isLocalApiUrl } from "@/lib/api";
 import { routeNotificationDeeplink } from "@/lib/notifications/actions";
 import {
   notificationAnalyticsProperties,
@@ -242,6 +242,10 @@ const NotificationHandler: React.FC = () => {
         }
 
         if (action.type === "api" && action.url) {
+          if (!isLocalApiUrl(action.url)) {
+            console.warn("refused api action to non-local url:", action.url);
+            return;
+          }
           const res = await localFetch(action.url, {
             method: action.method || "POST",
             headers: { "Content-Type": "application/json" },

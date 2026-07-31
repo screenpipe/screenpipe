@@ -40,6 +40,60 @@ pub enum ContentItem {
     Input(InputContent),
     /// Persistent memory: fact, preference, decision, insight
     Memory(MemoryContent),
+    /// App-specific records parsed from a captured accessibility frame.
+    Parsed(ParsedContent),
+}
+
+#[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]
+pub struct ParsedContent {
+    pub frame_id: i64,
+    pub timestamp: DateTime<Utc>,
+    pub app_name: String,
+    pub window_name: String,
+    pub browser_url: Option<String>,
+    /// Compact, corrected representation for token-efficient agent reads.
+    pub text: String,
+    pub run_id: i64,
+    pub parser_id: String,
+    pub parser_version: String,
+    pub schema_version: u16,
+    pub app_platform: String,
+    pub app_id: Option<String>,
+    pub app_executable: Option<String>,
+    pub app_version: Option<String>,
+    pub parse_duration_us: u64,
+    pub text_bytes: usize,
+    pub items: Vec<ParsedItem>,
+    /// Correctable identities kept separate from immutable parser observations.
+    pub actors: Vec<ParsedActorReference>,
+}
+
+#[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]
+pub struct ParsedItem {
+    pub local_id: String,
+    pub parent_local_id: Option<String>,
+    pub kind: String,
+    pub item_key: String,
+    pub identity_quality: String,
+    pub title: Option<String>,
+    pub body: Option<String>,
+    /// Original label observed by the parser. Resolved names live in `actors`.
+    pub actor: Option<String>,
+    pub occurred_at: Option<String>,
+    pub timestamp_precision: Option<String>,
+    pub status: Option<String>,
+    pub metadata: std::collections::HashMap<String, String>,
+    pub source_nodes: Vec<u32>,
+}
+
+#[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]
+pub struct ParsedActorReference {
+    pub item_id: i64,
+    pub local_id: String,
+    pub actor_id: i64,
+    pub name: String,
+    pub observed_name: String,
+    pub assignment_source: String,
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]

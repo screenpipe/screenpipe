@@ -21,7 +21,7 @@ The `$SCREENPIPE_LOCAL_API_KEY` env var is already set in your environment. With
 
 API responses can be large. Always write curl output to a file first (`curl ... -o /tmp/sp_result.json`), check size (`wc -c /tmp/sp_result.json`), and if over 5KB read only the first 50-100 lines. Extract what you need with `jq`. NEVER dump full large responses into context.
 
-For the list endpoints (`/search`, `/elements`, `/frames/{id}/elements`) you can also cut tokens at the source: add `&format=csv` (or `tsv`) to get a columnar table that writes each column name once instead of repeating keys per row, and `&fields=a,b,c` to return only the columns you need (dotted paths like `content.text`). On a list of UI elements that is roughly a 70% token cut versus JSON. For the element endpoints specifically, `&format=outline` (alias `tree`) goes further still — a deduped, indented tree of just the text-bearing nodes (~91% fewer tokens, measured) — and is the best default for reading UI structure. Text-heavy `ocr`/`audio` barely benefit from any reshaping (the text blob dominates), so reach for `fields` + `max_content_length` there. With no `format`/`fields` the response is unchanged JSON.
+For the list endpoints (`/search`, `/elements`, `/frames/{id}/elements`) you can also cut tokens at the source: add `&format=csv` (or `tsv`) to get a columnar table that writes each column name once instead of repeating keys per row, and `&fields=a,b,c` to return only the columns you need (dotted paths like `content.text`). On a list of UI elements that is roughly a 70% token cut versus JSON. For the element endpoints specifically, `&format=outline` (alias `tree`) goes further still — a deduped, indented tree of just the text-bearing nodes (~91% fewer tokens, measured) — and is the best default for reading UI structure. Use `&format=automation` for automation planning: it retains interactive controls, state, bounds, allowed actions, short response-local refs, and best-effort stable keys. Text-heavy `ocr`/`audio` barely benefit from any reshaping (the text blob dominates), so reach for `fields` + `max_content_length` there. With no `format`/`fields` the response is unchanged JSON.
 
 ---
 
@@ -36,13 +36,15 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `q` | string | No | Keywords. Do NOT use for audio searches — transcriptions are noisy, q filters too aggressively. |
-| `content_type` | string | No | `all` (default), `accessibility`, `audio`, `input`, `ocr`, `memory`. Screen text is primarily captured via the OS accessibility tree (`accessibility`); OCR is a fallback for apps without accessibility support (games, remote desktops). Use `all` unless you need a specific modality. |
+| `content_type` | string | No | `all` (default), `accessibility`, `audio`, `input`, `ocr`, `memory`, `parsed`. Use `parsed` for compact app-specific messages, emails, tasks, documents, and code review. Parsed capture is experimental, may be empty when disabled/unsupported, and is not included in `all`. Screen text is primarily captured via the OS accessibility tree (`accessibility`); OCR is a fallback for apps without accessibility support. |
 | `limit` | integer | No | Max 1-20. Default: 10 |
 | `offset` | integer | No | Pagination. Default: 0 |
 | `start_time` | ISO 8601 or relative | **Yes** | Accepts `2024-01-15T10:00:00Z` or `16h ago`, `2d ago`, `30m ago` |
 | `end_time` | ISO 8601 or relative | No | Defaults to now. Accepts `now`, `1h ago` |
 | `app_name` | string | No | e.g. "Google Chrome", "Slack", "zoom.us" |
 | `window_name` | string | No | Window title substring |
+| `frame_id` | integer | No | With `content_type=parsed`, return parsed data attached to one frame. |
+| `actor_id` | integer | No | With `content_type=parsed`, filter by a resolved actor identity. |
 | `speaker_name` | string | No | Filter audio by speaker (case-insensitive partial) |
 | `focused` | boolean | No | Only focused windows |
 | `tags` | string | No | Comma-separated; return only items carrying ALL of them (e.g. `person:ada,project:atlas`). Works for screen/audio and, with `content_type=memory`, memories. See Tags below. |
@@ -105,7 +107,8 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
   "data": [
     {"type": "OCR", "content": {"frame_id": 12345, "text": "...", "timestamp": "...", "app_name": "Chrome", "window_name": "..."}},
     {"type": "Audio", "content": {"chunk_id": 678, "transcription": "...", "timestamp": "...", "speaker": {"name": "John"}}},
-    {"type": "UI", "content": {"id": 999, "text": "Clicked 'Submit'", "timestamp": "...", "app_name": "Safari"}}
+    {"type": "UI", "content": {"id": 999, "text": "Clicked 'Submit'", "timestamp": "...", "app_name": "Safari"}},
+    {"type": "Parsed", "content": {"frame_id": 12345, "text": "compact corrected app data", "items": [], "actors": []}}
   ],
   "pagination": {"limit": 10, "offset": 0, "total": 42}
 }
@@ -142,7 +145,7 @@ Lightweight FTS search across UI elements (~100-500 bytes each vs 5-20KB from `/
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/elements?q=Submit&start_time=1h%20ago&limit=10"
 ```
 
-Parameters: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`, plus `format` (`json`/`csv`/`tsv`/`outline`) and `fields` (dotted paths). Elements are uniform rows, so this is where compact formats pay off most.
+Parameters: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`, plus `format` (`json`/`csv`/`tsv`/`outline`/`automation`) and `fields` (dotted paths). Elements are uniform rows, so this is where compact formats pay off most.
 
 **`format=outline` (alias `tree`) is the cheapest read for "what's on screen?"** — a deduped, indented text tree of just the text-bearing nodes (drops empty structural nodes + bounds, collapses repeats into `×N`, `#id` is the ref, inlines `(disabled)`/`(selected)`/`(focused)`/`(expanded)`/`(off-screen)` state, body capped). Best on `source=accessibility` (the common UI case — structural noise, repeated rows, hierarchy, state): 85–99% fewer tokens than JSON (o200k_base). Flat OCR text blocks are the floor (~67%, nothing to dedup) — for pure OCR `format=csv&fields=text` is about as good.
 
@@ -159,6 +162,18 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030
 ```
 
 `GET /frames/{id}/elements?format=outline` gives the whole frame's tree the same way (and is capped, unlike the raw JSON dump).
+
+**`format=automation` is for automation structure, not memory.** It emits a
+snapshot revision, short `ref=eN` handles, best-effort `key=k_*` identities,
+key quality, state, normalized bounds, and allowed actions. Re-fetch it before
+every action. A best-effort key is matching evidence, not authority to act: verify
+key + role + name + bounds, and stop on `key_quality=ambiguous`.
+`format=preferred` follows the desktop AI context setting; the default setting
+keeps the read/memory outline.
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/frames/12345/elements?format=automation"
+```
 
 ### Frame Context — `GET /frames/{id}/context`
 
@@ -434,7 +449,25 @@ When the user says "that was actually Jordan, not Karishma":
 
 ---
 
-## 11. Memories — High-Signal Persistent Knowledge
+## 11. Parsed app data and actors
+
+Parsed data uses the same search surface as every other readable content type:
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/search?content_type=parsed&start_time=2h%20ago&limit=10"
+```
+
+Results contain compact corrected `text`, typed `items`, parser provenance, and
+a separate `actors` array for correctable identities. Filter one frame with
+`frame_id` or one resolved identity with `actor_id`. Actor edits remain explicit:
+`GET /semantic/actors/search`, then `POST /semantic/actors/create`, `update`,
+`merge`, `reassign`, or `aliases/reassign`. Never merge actors by display name
+alone; the parser label is observed evidence, while the actor record is mutable.
+
+---
+
+## 12. Memories — High-Signal Persistent Knowledge
 
 **Memories are the highest-signal data source in screenpipe.** They contain curated facts, user preferences, decisions, and project context — distilled from hours of screen/audio data. Always check memories when answering questions or building context.
 

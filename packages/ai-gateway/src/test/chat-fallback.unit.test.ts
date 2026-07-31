@@ -7,6 +7,7 @@ import {
 	isTransient,
 	isUserInputTooLarge,
 	isGeoBlocked,
+	isProviderUsageCapped,
 	clientPayloadMessage,
 	MODEL_FALLBACKS,
 	TRANSIENT_STATUSES,
@@ -83,9 +84,30 @@ describe('chat handler — geo-block detection (SCREENPIPE-AI-PROXY-1C)', () => 
 		expect(isGeoBlocked(403, '403 Country, region, or territory not supported')).toBe(true);
 	});
 
+	it('detects the Anthropic geo/policy 403 (SCREENPIPE-AI-PROXY-2S/-1W, 3k+ events)', () => {
+		expect(isGeoBlocked(403, '403 {"error":{"type":"forbidden","message":"Request not allowed"}}')).toBe(true);
+	});
+
 	it('keeps other 403s loud (IAM regressions must still reach Sentry)', () => {
 		expect(isGeoBlocked(403, 'The caller does not have permission')).toBe(false);
 		expect(isGeoBlocked(401, 'Country, region, or territory not supported')).toBe(false);
+		expect(isGeoBlocked(401, 'Request not allowed')).toBe(false);
+	});
+});
+
+describe('chat handler — provider usage-cap classification (SCREENPIPE-AI-PROXY-30/-2P)', () => {
+	it('detects the Anthropic monthly spend-cap 400', () => {
+		expect(
+			isProviderUsageCapped(
+				400,
+				'400 {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-08-01 at 00:00 UTC."},"request_id":"req_011CdZwqaamihBfwacKwXY4a"}',
+			),
+		).toBe(true);
+	});
+
+	it('leaves other 400s and non-400 statuses unclassified', () => {
+		expect(isProviderUsageCapped(400, 'invalid tool schema')).toBe(false);
+		expect(isProviderUsageCapped(429, 'You have reached your specified API usage limits.')).toBe(false);
 	});
 });
 
@@ -112,6 +134,7 @@ describe('chat handler — client payload classification (SCREENPIPE-AI-PROXY-1A
 
 describe('chat handler — current hosted fallback chains', () => {
 	it('crosses providers through Sonnet 5 when Luna fails', () => {
+		expect(MODEL_FALLBACKS['claude-opus-5']).toEqual(['claude-sonnet-5', 'gpt-5.4-mini']);
 		expect(MODEL_FALLBACKS['gpt-5.6-luna']).toEqual(['claude-sonnet-5', 'gpt-5.4-mini']);
 		expect(MODEL_FALLBACKS['claude-sonnet-5']).toEqual(['gpt-5.4-mini']);
 	});

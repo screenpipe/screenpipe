@@ -138,6 +138,42 @@ describe("computeLiveCaptureState", () => {
     ).toBe("no-input-device");
   });
 
+  it("shows that meetings-only audio is detecting with devices closed", () => {
+    const state = computeLiveCaptureState({
+      isLive: true,
+      health: {
+        audio_status: "waiting_for_meeting",
+        capture_status: {
+          status: "waiting_for_meeting",
+          severity: "waiting",
+          reason:
+            "configured audio devices are released until a meeting is detected",
+        },
+      },
+      devices: [],
+    });
+
+    expect(state.kind).toBe("waiting-for-meeting");
+    expect(state.label).toBe("Waiting for meeting");
+    expect(state.recordingContinues).toBe(false);
+  });
+
+  it("shows fail-closed meeting detector unavailability", () => {
+    const state = computeLiveCaptureState({
+      isLive: true,
+      health: {
+        audio_status: "meeting_detector_unavailable",
+        audio_pipeline: null,
+      },
+      devices: [],
+    });
+
+    expect(state.kind).toBe("meeting-detector-unavailable");
+    expect(state.severity).toBe("warning");
+    expect(state.description).toContain("Audio devices are closed");
+    expect(state.recordingContinues).toBe(false);
+  });
+
   it("surfaces stale audio as stalled", () => {
     expect(
       computeLiveCaptureState({

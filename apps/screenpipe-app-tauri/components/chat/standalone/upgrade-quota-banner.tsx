@@ -11,6 +11,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useUsageStatus, formatResetTime } from "@/lib/hooks/use-usage-status";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { commands } from "@/lib/utils/tauri";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 /**
  * At-the-cap upgrade prompt (the "intensity" lever). Appears in the composer
@@ -26,13 +27,12 @@ import { commands } from "@/lib/utils/tauri";
 export function UpgradeQuotaBanner() {
   const { settings } = useSettings();
   const usage = useUsageStatus();
-  const upsellEnabled = useModelUpsellGating();
+  const upsellEnabled = useModelUpsellGating(usage?.upgrade_eligible);
   const [dismissed, setDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   if (dismissed) return null;
-  // Off unless the PostHog flag is on AND the user isn't a (possibly flickering)
-  // paying customer — never nag someone with persisted entitlement evidence.
+  // Settings, PostHog, and server plan truth must all resolve affirmatively.
   if (!upsellEnabled) return null;
   if (!usage) return null;
   if (usage.tier === "subscribed") return null;
@@ -51,7 +51,7 @@ export function UpgradeQuotaBanner() {
         await commands.openLoginWindow(null);
         return;
       }
-      const res = await fetch("https://screenpipe.com/api/cloud-sync/checkout", {
+      const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

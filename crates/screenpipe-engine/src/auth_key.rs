@@ -243,6 +243,19 @@ pub async fn find_api_auth_key() -> Option<String> {
 /// `auth_token` module (`apps/screenpipe-app-tauri/src-tauri/src/auth_token.rs`).
 const CLOUD_AUTH_TOKEN_KEY: &str = "cloud.auth_token";
 
+/// Resolve a cloud token for a short-lived CLI command without minting or
+/// persisting credentials. An explicit process token wins; desktop and
+/// headless persisted stores are read only as fallbacks.
+pub async fn resolve_cloud_token(
+    data_dir: &Path,
+    explicit_token: Option<String>,
+) -> Option<String> {
+    if let Some(token) = explicit_token.filter(|token| !token.is_empty()) {
+        return Some(token);
+    }
+    find_cloud_token(data_dir).await
+}
+
 /// Read the cloud auth token. Priority:
 ///   1. The shared encrypted SecretStore key `cloud.auth_token` — written by
 ///      the desktop app (`auth_token.rs`).
@@ -282,6 +295,32 @@ fn cloud_token_from_store_json(data_dir: &Path) -> Option<String> {
 #[cfg(test)]
 mod cloud_token_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn resolve_cloud_token_reads_desktop_secret_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), None)
+            .await
+            .unwrap();
+        store
+            .set(CLOUD_AUTH_TOKEN_KEY, b"desktop-cloud-token")
+            .await
+            .unwrap();
+
+        let token = resolve_cloud_token(dir.path(), None).await;
+
+        assert_eq!(token.as_deref(), Some("desktop-cloud-token"));
+    }
+
+    #[tokio::test]
+    async fn resolve_cloud_token_prefers_explicit_token() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let token = resolve_cloud_token(dir.path(), Some("explicit-cloud-token".to_string())).await;
+
+        assert_eq!(token.as_deref(), Some("explicit-cloud-token"));
+    }
 
     #[test]
     fn test_cloud_token_from_store_json() {

@@ -410,6 +410,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             kind: meta.kind,
             pipeContext: meta.pipeContext,
             dedupKey: meta.dedupKey,
+            branchedFrom: meta.branchedFrom,
             draft: false,
           });
           return;
@@ -933,6 +934,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
   const recentsLoading = !diskHydrated && recents.length === 0 && pipes.length === 0;
+  // "view all" opens the history view (chats / pipes / archived tabs) — pointless
+  // to offer when there is nothing anywhere to look at.
+  const hasAnythingToView =
+    recents.length > 0 || pinned.length > 0 || pipes.length > 0 || archived.length > 0;
 
   const recentsCap = SIDEBAR_CAP;
   const visibleGroupedSections = useMemo(
@@ -1253,7 +1258,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     "ml-auto inline-flex items-center gap-0.5 select-none",
                     "text-[10px] uppercase tracking-wider transition-colors",
                     "opacity-0 group-hover/recents:opacity-100",
-                    recentsCollapsed && "hidden",
+                    (recentsCollapsed || !hasAnythingToView) && "hidden",
                     onViewAll
                       ? "text-muted-foreground/70 hover:text-muted-foreground cursor-pointer"
                       : "text-muted-foreground/30 cursor-default"
@@ -1284,9 +1289,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <Skeleton key={i} className="h-6 w-full rounded-md" />
                   ))}
                 </div>
-              ) : recents.length === 0 && pipes.length === 0 ? (
+              ) : recents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                  {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
+                  {pinned.length === 0 && pipes.length === 0
+                    ? "no chats yet — click + to start"
+                    : "no recent chats"}
                 </div>
               ) : (
                 <RecentsBody
@@ -2392,6 +2399,8 @@ export function SidebarChatRow({
     session.status === "tool";
   const isError = session.status === "error";
   const isUnread = session.unread && !isCurrent;
+  const showCurrentLabel =
+    isCurrent && !isLive && !isError && queuedCount === 0;
   const canShowActions = showActions && !disableHover;
   const activityAt = session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
   const now = useMinuteTick(!isLive && !isUnread && !isError && queuedCount === 0);
@@ -2429,24 +2438,26 @@ export function SidebarChatRow({
       <ContextMenuTrigger asChild disabled={!canShowActions}>
     <div
       className={cn(
-        "group relative flex items-center gap-2 px-2.5 py-1 rounded-md select-none",
+        "group relative flex items-center gap-2 border-l-2 px-2.5 py-1 rounded-md select-none",
         "transition-colors",
         isCurrent
-          ? "bg-muted/70 text-foreground"
+          ? "border-foreground bg-foreground/[0.08] text-foreground"
           : disableHover
             ? tone === "subtle"
-              ? "text-muted-foreground/75"
-              : "text-muted-foreground"
+              ? "border-transparent text-muted-foreground/75"
+              : "border-transparent text-muted-foreground"
             : tone === "subtle"
-              ? "text-muted-foreground/75 hover:bg-muted/12"
-              : "text-muted-foreground hover:bg-muted/20"
+              ? "border-transparent text-muted-foreground/75 hover:bg-muted/12"
+              : "border-transparent text-muted-foreground hover:bg-muted/20"
       )}
       data-testid={`chat-row-${session.id}`}
+      data-current={isCurrent ? "true" : undefined}
       title={isError && session.lastError ? session.lastError : undefined}
     >
       <button
         type="button"
         className="min-w-0 flex-1 flex items-center gap-2 text-left"
+        aria-current={isCurrent ? "page" : undefined}
         onClick={() => {
           setOpenConversationMenuId?.(null);
           onSelect(session.id);
@@ -2461,7 +2472,7 @@ export function SidebarChatRow({
             isUnread
               ? "font-medium text-foreground"
               : isCurrent
-                ? "text-foreground/80"
+                ? "font-medium text-foreground"
                 : tone === "subtle"
                   ? "text-muted-foreground/70"
                 : "text-muted-foreground"
@@ -2477,14 +2488,20 @@ export function SidebarChatRow({
               menuOpen && "opacity-0"
             )}
           >
-            <RowRightSignal
-              isLive={isLive}
-              isError={isError}
-              isUnread={isUnread}
-              queuedCount={queuedCount}
-              status={session.status}
-              age={age}
-            />
+            {showCurrentLabel ? (
+              <span className="text-[9px] font-medium uppercase tracking-[0.08em] text-foreground/70">
+                current
+              </span>
+            ) : (
+              <RowRightSignal
+                isLive={isLive}
+                isError={isError}
+                isUnread={isUnread}
+                queuedCount={queuedCount}
+                status={session.status}
+                age={age}
+              />
+            )}
           </span>
         </span>
       </button>

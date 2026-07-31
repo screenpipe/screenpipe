@@ -10,6 +10,11 @@ import { SearchModal } from "@/components/rewind/search-modal";
 import { emit, listen } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
 import {
+	clearRecentChatsCache,
+	invalidateConversationListCache,
+	prefetchRecentChats,
+} from "@/lib/chat-storage";
+import {
 	RECENT_CHAT_SEARCH_HANDOFF_EVENT,
 	readSearchOpenedFromChatSurface,
 } from "@/lib/chat-utils";
@@ -30,9 +35,34 @@ export default function SearchPage() {
 			setIsSearchActive(true);
 		}
 	}, []);
+
+	// Warm the recent-chats cache while the webview is still hidden. Listing
+	// conversations parses every chat file off disk, so doing it on the open path
+	// makes the empty state flash "type to search" before the list appears.
+	useEffect(() => {
+		void prefetchRecentChats().catch(() => {});
+	}, []);
+
+	// The cache is what the recents strip paints on open, so a chat deleted or
+	// renamed in another window would otherwise show a stale row for the frame
+	// before the refresh lands. These events are broadcast app-wide; drop the
+	// cached list (and the directory listing behind it) and re-warm it here.
+	useEffect(() => {
+		const unlistenPromises = ["chat-deleted", "chat-renamed", "chat-visibility-changed"].map(
+			(event) =>
+				listen(event, () => {
+					clearRecentChatsCache();
+					invalidateConversationListCache();
+					void prefetchRecentChats().catch(() => {});
+				}),
+		);
+		return () => {
+			for (const p of unlistenPromises) p.then((f) => f());
+		};
+	}, []);
 	const handleNavigate = useCallback(async (timestamp: string, frameId?: number, searchTerms?: string[], searchResultsJson?: string, searchQuery?: string) => {
 		// Rust command: shows Main, emits navigation event from app handle, closes Search
-		commands.searchNavigateToTimeline(timestamp, frameId ?? null, searchTerms ?? null, searchResultsJson ?? null, searchQuery ?? null).catch(console.error);
+		await commands.searchNavigateToTimeline(timestamp, frameId ?? null, searchTerms ?? null, searchResultsJson ?? null, searchQuery ?? null);
 	}, []);
 
 	const handleClose = useCallback(async () => {

@@ -75,6 +75,22 @@ describe("ArtifactHtmlBody (Brain html artifact)", () => {
     expect(hostStyleLeaked()).toBe(false);
   });
 
+  it("expanded: renders a bare HTML fragment first with source one click away", () => {
+    const { container } = render(
+      <ArtifactHtmlBody
+        title="fragment"
+        content="<h1>Fragment artifact</h1>"
+        expanded={true}
+        onToggleExpanded={() => {}}
+      />,
+    );
+
+    expect(container.querySelector("iframe")).not.toBeNull();
+    expect(screen.getByTestId("brain-html-render-toggle").textContent).toContain(
+      "view source",
+    );
+  });
+
   it("expanded: 'view source' toggles to escaped source (still no leak)", () => {
     render(
       <ArtifactHtmlBody

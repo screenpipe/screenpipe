@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { getMaxDailyCostPerUser } from '../services/cost-tracker';
+import { getMaxDailyCostPerUser, getTierDailyCostCap } from '../services/cost-tracker';
 
 // Replicate the cost estimation logic from index.ts /v1/listen handler
 function estimateTranscriptionCost(contentLength: number): {
@@ -77,6 +77,16 @@ describe('daily cost cap', () => {
 
   it('should fallback to default on invalid env value', () => {
     const env = { MAX_DAILY_COST_PER_USER: 'not-a-number' } as any;
+    expect(getMaxDailyCostPerUser(env)).toBe(5.0);
+  });
+
+  it('keeps emergency text caps separate from transcription', () => {
+    const env = {
+      MAX_DAILY_TEXT_COST_PER_USER: '0.5',
+      MAX_DAILY_SUBSCRIBED_TEXT_COST: '35',
+    } as any;
+    expect(getTierDailyCostCap('logged_in', env)).toBe(0.32);
+    expect(getTierDailyCostCap('subscribed', env)).toBe(35);
     expect(getMaxDailyCostPerUser(env)).toBe(5.0);
   });
 });

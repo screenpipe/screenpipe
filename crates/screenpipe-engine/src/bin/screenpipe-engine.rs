@@ -34,6 +34,7 @@ use screenpipe_engine::{
         status::handle_status_command,
         sync::{handle_sync_command, start_sync_service},
         team::handle_team_command,
+        view::handle_view_command,
         vision::handle_vision_command,
         Cli, Command, RecordArgSources,
     },
@@ -295,6 +296,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Pipe { ref subcommand } => {
             handle_pipe_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::View { ref subcommand } => {
+            handle_view_command(subcommand)?;
             return Ok(());
         }
         Command::Audio { ref subcommand } => {

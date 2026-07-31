@@ -73,6 +73,7 @@ windows = { workspace = true, features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_SystemInformation",
+    "Win32_Storage_FileSystem",
     "Win32_UI_Accessibility",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",

@@ -26,7 +26,7 @@ const HEARTBEAT_STATUS_KEY = 'screenpipe_e2e_enterprise_heartbeat_status';
 const SKIP_SAVED_LICENSE_KEY = 'screenpipe_e2e_enterprise_skip_saved_license';
 const POLICY_CACHE_KEY = 'enterprise-policy-cache';
 
-const VALID_LICENSE = 'ENT-GWXX-RNUB-LW9F-3YA6';
+const VALID_LICENSE = 'ENT-TEST-ONLY-E2E0-0001';
 const WRONG_LICENSE = 'ENT-WRNG-WRNG-WRNG-WRNG';
 const MANAGED_PIPE_NAME = 'e2e-managed-review';
 const MANAGED_PRESET_ID = 'e2e-org-private-ai';

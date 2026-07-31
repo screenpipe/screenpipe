@@ -40,6 +40,7 @@ use crate::analytics::start_analytics;
 mod agent_event_emitter;
 mod audio_exclusions;
 mod auth_token;
+mod brain_views;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -49,14 +50,17 @@ mod db_recovery_notifications;
 mod db_relaunch;
 mod diagnostic_logs;
 mod disk_usage;
+mod disk_pressure_notifications;
 mod e2e_seed;
 mod embedded_server;
 mod enterprise;
+mod enterprise_host_identity;
 mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
 mod events;
 mod feedback_redact;
+mod feedback_upload;
 mod google_calendar;
 mod hardware;
 mod ics_calendar;
@@ -99,14 +103,19 @@ mod tray;
 mod tray_monitor_preview;
 #[cfg(target_os = "macos")]
 mod staged_update;
+mod stale_tier;
 mod updates;
 mod voice_training;
 mod window;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
+mod windows_crash_dump;
+#[cfg(target_os = "windows")]
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
+#[cfg(target_os = "linux")]
+mod linux_webkit_env;
 
 pub use server::*;
 
@@ -128,6 +137,7 @@ pub use server::spawn_server;
 // Removed: pub use store::get_profiles_store; // Profile functionality has been removed
 
 pub use enterprise_install_metadata::get_enterprise_install_metadata;
+pub use enterprise_host_identity::get_enterprise_host_identity;
 pub use enterprise_policy::set_enterprise_policy;
 pub use enterprise_policy::set_sync_streams;
 pub use permissions::do_permissions_check;
@@ -150,6 +160,7 @@ mod skills;
 mod specta_bindings;
 mod vault;
 mod viewer;
+mod web_base;
 
 #[cfg(target_os = "macos")]
 /// Tracks the observed permission transition so repeated focus events cannot
@@ -166,12 +177,20 @@ impl MicFocusRecoveryTracker {
         }
     }
 
-    fn should_restart_capture(&self, permission_granted: bool, audio_devices_empty: bool) -> bool {
+    fn should_restart_capture(
+        &self,
+        permission_granted: bool,
+        audio_devices_empty: bool,
+        audio_capture_enabled: bool,
+    ) -> bool {
         let permission_was_granted = self
             .permission_was_granted
             .swap(permission_granted, Ordering::SeqCst);
 
-        permission_granted && !permission_was_granted && audio_devices_empty
+        audio_capture_enabled
+            && permission_granted
+            && !permission_was_granted
+            && audio_devices_empty
     }
 }
 
@@ -256,6 +275,15 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
     Ok(response.is_ok())
 }
 
+// `tauri_collect_commands!` historically degraded to an empty handler when
+// its generated registry was missing. Make the same compile-time view a hard
+// build invariant so a commandless native app can never be published again.
+const TAURI_COMMAND_COUNT: usize = tauri_helper::array_collect_commands!(false).len();
+const _: () = assert!(
+    TAURI_COMMAND_COUNT > 0,
+    "generated Tauri command registry must not be empty"
+);
+
 /// Shared tauri-specta registry body.
 macro_rules! define_specta_builder {
     () => {{
@@ -276,6 +304,7 @@ macro_rules! define_specta_builder {
             .typ::<suggestions::Suggestion>()
             .typ::<hardware::HardwareCapability>()
             .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
+            .typ::<enterprise_host_identity::EnterpriseHostIdentity>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
             .typ::<oauth::OAuthStatus>()
             .typ::<events::JobEvent>()
@@ -290,6 +319,9 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    linux_webkit_env::configure();
+
     // Raise the file-descriptor soft limit BEFORE any DB/socket work. The app
     // embeds the engine in-process, so it never ran the engine binary's main()
     // and kept macOS's default soft RLIMIT_NOFILE of 256 — too low for the
@@ -405,6 +437,12 @@ async fn main() {
             }
         }
     }
+
+    // Register the WER helper DLL that writes a local minidump for fail-fast
+    // crashes such as 0xc0000409, which bypass Rust panic/Sentry hooks, and
+    // recover dumps produced by a previous run.
+    #[cfg(target_os = "windows")]
+    windows_crash_dump::install();
 
     // Check if telemetry is disabled via store setting (analyticsEnabled)
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
@@ -719,9 +757,16 @@ async fn main() {
                     let permission_granted =
                         permissions::check_microphone_permission().permitted();
                     let audio_devices_empty = health::get_audio_device_status().is_empty();
-                    if !MIC_FOCUS_RECOVERY
-                        .should_restart_capture(permission_granted, audio_devices_empty)
-                    {
+                    let audio_capture_enabled = store::SettingsStore::get(&app)
+                        .ok()
+                        .flatten()
+                        .map(|settings| !settings.recording.disable_audio)
+                        .unwrap_or(true);
+                    if !MIC_FOCUS_RECOVERY.should_restart_capture(
+                        permission_granted,
+                        audio_devices_empty,
+                        audio_capture_enabled,
+                    ) {
                         return;
                     }
                     info!(
@@ -834,7 +879,10 @@ async fn main() {
         // single-instance plugin uses zbus::blocking on Linux which panics
         // inside an existing tokio runtime (nested block_on), so skip it on Linux
         ;
-    #[cfg(not(target_os = "linux"))]
+    // E2E instances already use isolated focus, API, WebDriver, and data
+    // ports. Registering the OS-wide single-instance plugin would still make
+    // an unrelated developer or CI app silently win before WebDriver starts.
+    #[cfg(all(not(target_os = "linux"), not(feature = "e2e")))]
     let app = app.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         // Defer off event stack: plugin may invoke this from run loop (nounwind).
         let app_for_closure = app.clone();
@@ -1125,6 +1173,20 @@ async fn main() {
                     .extra
                     .insert("_proCloudMigrationDone".to_string(), json!(true));
                 info!("E2E seed: screenpipe cloud audio fallback");
+            }
+            if e2e_flags.iter().any(|f| f == "meetings-only-audio") {
+                // Real audio lifecycle lane for meetings-only capture. Keep
+                // vision and transcription disabled so the spec isolates OS
+                // device ownership without loading OCR/STT models.
+                store.recording.disable_audio = false;
+                store.recording.disable_vision = true;
+                store.recording.audio_capture_mode = "meetings-only".to_string();
+                store.recording.audio_transcription_engine = "disabled".to_string();
+                // Emit a real segment quickly enough for the lifecycle spec to
+                // verify the first capture callback without a 30-second wait.
+                store.recording.audio_chunk_duration = 5;
+                store.recording.experimental_meeting_piggyback = false;
+                info!("E2E seed: meetings-only audio device lifecycle");
             }
 
             // The frontend reads settings from the Tauri store rather than the
@@ -1594,15 +1656,30 @@ async fn main() {
                     }),
                 );
 
-                std::thread::Builder::new()
+                let is_starting_after_spawn_error = is_starting_clone.clone();
+                let server_thread = std::thread::Builder::new()
                     .name("screenpipe-server".to_string())
                     .spawn(move || {
-                        let server_runtime = tokio::runtime::Builder::new_multi_thread()
+                        let server_runtime = match tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(16)
                             .thread_name("screenpipe-worker")
                             .enable_all()
                             .build()
-                            .expect("Failed to create server runtime");
+                        {
+                            Ok(runtime) => runtime,
+                            Err(error) => {
+                                let message =
+                                    format!("failed to create local API runtime: {error}");
+                                error!("{message}");
+                                crate::health::set_boot_error(&message);
+                                crate::health::set_recording_status(
+                                    crate::health::RecordingStatus::Error,
+                                );
+                                is_starting_clone
+                                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                                return;
+                            }
+                        };
 
                         server_runtime.block_on(async move {
                             // Resolve + seed the shared api_auth_key cache before building
@@ -1768,7 +1845,10 @@ async fn main() {
                                 *guard = Some(server);
                             }
                             if let Some(capture) = capture {
-                                *capture_guard = Some(capture);
+                                crate::recording::install_capture_session(
+                                    &mut capture_guard,
+                                    capture,
+                                );
                                 info!("Server + capture started successfully on dedicated runtime");
                             } else {
                                 info!("Server started without capture");
@@ -1788,8 +1868,17 @@ async fn main() {
                                 }
                             }
                         });
-                    })
-                    .expect("Failed to spawn server thread");
+                    });
+                if let Err(error) = server_thread {
+                    let message = format!("failed to spawn local API thread: {error}");
+                    error!("{message}");
+                    crate::health::set_boot_error(&message);
+                    crate::health::set_recording_status(
+                        crate::health::RecordingStatus::Error,
+                    );
+                    is_starting_after_spawn_error
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                }
             }
 
             // Initialize update check
@@ -1892,6 +1981,7 @@ async fn main() {
             crate::meeting_live_notes::start(app_handle.clone());
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
+            crate::disk_pressure_notifications::start(app_handle.clone());
 
             // Background ChatGPT OAuth token refresh — keeps access tokens
             // fresh so the lazy path in get_valid_token() rarely needs to
@@ -2209,34 +2299,42 @@ mod mic_focus_recovery_tests {
     fn repeated_focus_with_empty_audio_status_restarts_only_once() {
         let tracker = MicFocusRecoveryTracker::new();
 
-        assert!(tracker.should_restart_capture(true, true));
-        assert!(!tracker.should_restart_capture(true, true));
-        assert!(!tracker.should_restart_capture(true, true));
+        assert!(tracker.should_restart_capture(true, true, true));
+        assert!(!tracker.should_restart_capture(true, true, true));
+        assert!(!tracker.should_restart_capture(true, true, true));
     }
 
     #[test]
     fn temporary_empty_audio_status_does_not_look_like_a_new_permission_grant() {
         let tracker = MicFocusRecoveryTracker::new();
 
-        assert!(!tracker.should_restart_capture(true, false));
-        assert!(!tracker.should_restart_capture(true, true));
+        assert!(!tracker.should_restart_capture(true, false, true));
+        assert!(!tracker.should_restart_capture(true, true, true));
     }
 
     #[test]
     fn permission_revoke_rearms_focus_recovery() {
         let tracker = MicFocusRecoveryTracker::new();
 
-        assert!(tracker.should_restart_capture(true, true));
-        assert!(!tracker.should_restart_capture(false, true));
-        assert!(tracker.should_restart_capture(true, true));
+        assert!(tracker.should_restart_capture(true, true, true));
+        assert!(!tracker.should_restart_capture(false, true, true));
+        assert!(tracker.should_restart_capture(true, true, true));
     }
 
     #[test]
     fn missing_permission_never_restarts_capture() {
         let tracker = MicFocusRecoveryTracker::new();
 
-        assert!(!tracker.should_restart_capture(false, true));
-        assert!(!tracker.should_restart_capture(false, false));
+        assert!(!tracker.should_restart_capture(false, true, true));
+        assert!(!tracker.should_restart_capture(false, false, true));
+    }
+
+    #[test]
+    fn disabled_audio_never_restarts_capture_on_focus() {
+        let tracker = MicFocusRecoveryTracker::new();
+
+        assert!(!tracker.should_restart_capture(true, true, false));
+        assert!(!tracker.should_restart_capture(true, true, true));
     }
 }
 

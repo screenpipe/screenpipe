@@ -8,8 +8,11 @@
 //! Captures happen only on meaningful user events: app switch, window focus,
 //! click, typing pause, scroll stop, clipboard, and periodic idle fallback.
 
+use crate::capture_exclusions::{probe_excluded_sck_window_ids, storage_excluded_sck_window_ids};
 use crate::hot_frame_cache::{HotFrame, HotFrameCache};
 use crate::power::PowerProfile;
+use crate::semantic_worker::{SemanticProjectionJob, SemanticProjectionSender};
+use crate::visual_probe::bounded_visual_probe;
 use anyhow::Result;
 use chrono::Utc;
 use screenpipe_a11y::tree::TreeWalkerConfig;
@@ -18,13 +21,13 @@ use screenpipe_capture::ocr_gate::OcrGate;
 use screenpipe_capture::paired_capture::{paired_capture, CaptureContext, PairedCaptureResult};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::DatabaseManager;
-use screenpipe_screen::capture_screenshot_by_window::{get_excluded_sck_window_ids, WindowFilters};
+use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use screenpipe_screen::utils::capture_monitor_image;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
@@ -60,7 +63,7 @@ async fn wait_for_warm_focus_or_timeout(
 ///
 /// Groups parameters that don't change between captures on the same monitor,
 /// keeping `do_capture`'s argument list manageable.
-pub struct CaptureParams<'a> {
+pub(crate) struct CaptureParams<'a> {
     pub db: &'a DatabaseManager,
     pub monitor: &'a SafeMonitor,
     pub monitor_id: u32,
@@ -72,6 +75,8 @@ pub struct CaptureParams<'a> {
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
     pub languages: &'a [screenpipe_core::Language],
+    /// Opt-in background semantic parser. None preserves historical capture.
+    pub semantic_tx: Option<&'a SemanticProjectionSender>,
 }
 
 async fn capture_with_timeout<F, T>(
@@ -655,7 +660,7 @@ fn idle_phase_delay(
 ///
 /// Each trigger results in a paired capture (screenshot + accessibility tree walk).
 #[allow(clippy::too_many_arguments)]
-pub async fn event_driven_capture_loop(
+pub(crate) async fn event_driven_capture_loop(
     db: Arc<DatabaseManager>,
     monitor: Arc<SafeMonitor>,
     monitor_id: u32,
@@ -678,6 +683,7 @@ pub async fn event_driven_capture_loop(
     // The loop polls `effective_interval_ms()` each tick; `None` here means
     // the override is fully disabled (no auto, no manual, no detector).
     high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
+    semantic_tx: Option<SemanticProjectionSender>,
 ) -> Result<()> {
     info!(
         "event-driven capture started for monitor {} (device: {})",
@@ -805,6 +811,7 @@ pub async fn event_driven_capture_loop(
         use_pii_removal,
         pause_on_drm_content,
         languages: &languages,
+        semantic_tx: semantic_tx.as_ref(),
     };
 
     // Capture immediately on startup so the timeline has a frame right away.
@@ -986,9 +993,23 @@ pub async fn event_driven_capture_loop(
                     // seeded yet (Active path fills it), this snapshot pass
                     // is still correct — it just might include pixels from
                     // soon-to-be-excluded transient windows.
-                    let snap = capture_monitor_image(&monitor, &cached_excluded_ids).await;
+                    // Bounded: an unbounded await here froze the whole loop
+                    // when ScreenCaptureKit wedged (see VISUAL_PROBE_TIMEOUT).
+                    let snap =
+                        bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await;
                     match snap {
-                        Ok((image, _)) => {
+                        Ok(None) => {
+                            // Probe timed out — treat like a failed check and
+                            // keep the Warm cadence (loop stays live).
+                            wait_for_warm_focus_or_timeout(
+                                &focus_controller,
+                                monitor_id,
+                                warm_visual_wait_duration(Duration::ZERO),
+                            )
+                            .await;
+                            continue;
+                        }
+                        Ok(Some((image, _))) => {
                             let diff = comparer.compare(&image);
                             if diff > visual_change_threshold {
                                 debug!(
@@ -1369,6 +1390,17 @@ pub async fn event_driven_capture_loop(
         // Use the same window exclusions as the full capture so the diff image
         // matches what we'd actually store — avoids triggering on excluded
         // windows and seeing phantom "visual changes" from their pixels.
+        //
+        // The armed e2e hang seed forces one check past the keyboard-idle
+        // gate so the fault injection fires deterministically even while
+        // someone is typing on the e2e host (debug builds only).
+        #[cfg(debug_assertions)]
+        let force_visual_check_for_e2e = trigger.is_none()
+            && visual_check_enabled
+            && frame_comparer.is_some()
+            && crate::visual_probe::e2e_visual_check_hang_armed();
+        #[cfg(not(debug_assertions))]
+        let force_visual_check_for_e2e = false;
         if should_run_visual_check(
             &trigger,
             visual_check_enabled,
@@ -1378,17 +1410,20 @@ pub async fn event_driven_capture_loop(
             last_visual_check.elapsed(),
             visual_check_interval,
             activity_feed.keyboard_idle_ms(),
-        ) {
+        ) || force_visual_check_for_e2e
+        {
             last_visual_check = Instant::now();
-            let mut fresh_ids = get_excluded_sck_window_ids(&capture_params.window_filters);
-            fresh_ids.sort_unstable();
-            fresh_ids.dedup();
+            // Bounded refresh + probe: neither the WindowServer IPC nor the
+            // SCK screenshot may freeze the loop — a wedged probe previously
+            // starved the idle-capture heartbeat and produced a false
+            // "recording needs help" incident (see VISUAL_PROBE_TIMEOUT).
+            let fresh_ids = probe_excluded_sck_window_ids(&capture_params.window_filters).await;
             if fresh_ids != cached_excluded_ids {
                 cached_excluded_ids = fresh_ids;
             }
             if let Some(ref mut comparer) = frame_comparer {
-                match capture_monitor_image(&monitor, &cached_excluded_ids).await {
-                    Ok((image, _dur)) => {
+                match bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await {
+                    Ok(Some((image, _dur))) => {
                         let diff = comparer.compare(&image);
                         if diff > visual_change_threshold {
                             debug!(
@@ -1397,6 +1432,10 @@ pub async fn event_driven_capture_loop(
                             );
                             trigger = Some(CaptureTrigger::VisualChange);
                         }
+                    }
+                    Ok(None) => {
+                        // Probe timed out — skip this check; the idle fallback
+                        // still fires and keeps the capture heartbeat honest.
                     }
                     Err(e) => {
                         debug!(
@@ -2314,7 +2353,40 @@ async fn do_capture(
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
 
-    let image = if screenshot_disabled {
+    // Resolve ignored windows to SCK window IDs so ScreenCaptureKit excludes
+    // them from the capture buffer (zero overhead, pixel-perfect). Sorted +
+    // deduped so the persistent stream isn't needlessly recreated when
+    // transient windows (tooltips, popups) cause ordering changes. Bounded
+    // and off-thread: the raw call is a synchronous WindowServer IPC that
+    // would otherwise block this async task in a way the outer
+    // CAPTURE_OPERATION_TIMEOUT cannot preempt. `None` = exclusion state
+    // UNKNOWN while filters are configured: fail closed by skipping this
+    // frame's pixels (like `screenshot_disabled`; the a11y walk continues and
+    // applies its own independent window filtering) rather than storing a
+    // frame that may contain a window the user asked to hide.
+    let storage_exclusions = if screenshot_disabled {
+        Some(Vec::new())
+    } else {
+        storage_excluded_sck_window_ids(&params.window_filters).await
+    };
+    let skip_pixels_for_unknown_exclusions = storage_exclusions.is_none();
+    if skip_pixels_for_unknown_exclusions {
+        static LAST_SKIP_LOG: AtomicU64 = AtomicU64::new(0);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let prev = LAST_SKIP_LOG.load(Ordering::Relaxed);
+        if now_secs.saturating_sub(prev) >= 60 {
+            LAST_SKIP_LOG.store(now_secs, Ordering::Relaxed);
+            warn!(
+                "monitor {}: window-exclusion state unknown (WindowServer unresponsive); skipping frame pixels until a refresh succeeds",
+                params.monitor_id
+            );
+        }
+    }
+
+    let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
             params.monitor_id,
@@ -2322,13 +2394,7 @@ async fn do_capture(
         );
         image::DynamicImage::new_rgba8(1, 1)
     } else {
-        // Resolve ignored windows to SCK window IDs so ScreenCaptureKit
-        // excludes them from the capture buffer (zero overhead, pixel-perfect).
-        // Sort + dedup so the persistent stream isn't needlessly recreated when
-        // transient windows (tooltips, popups) cause ordering changes.
-        let mut excluded_ids = get_excluded_sck_window_ids(&params.window_filters);
-        excluded_ids.sort_unstable();
-        excluded_ids.dedup();
+        let excluded_ids = storage_exclusions.unwrap_or_default();
 
         // Take screenshot (with ignored windows excluded at the OS level)
         let (image, capture_dur) = capture_monitor_image(params.monitor, &excluded_ids).await?;
@@ -2350,7 +2416,7 @@ async fn do_capture(
     // write, but still return the image so the frame comparer stays updated
     // (prevents re-triggering on the same bad frame). The caller records the
     // matching telemetry counter from `corrupt`.
-    if !screenshot_disabled {
+    if !screenshot_disabled && !skip_pixels_for_unknown_exclusions {
         if let Some(kind) = frame_corruption(&image) {
             match kind {
                 // Green is the notable, rarer signal — surface it at warn so it
@@ -2755,13 +2821,26 @@ async fn do_capture(
         use_pii_removal: params.use_pii_removal,
         languages: params.languages.to_vec(),
         elements_ref_frame_id,
-        screenshot_disabled,
+        // A frame whose pixels were skipped for unknown exclusion state is
+        // persisted exactly like a screenshot-disabled frame: text pipeline
+        // only, no snapshot written for the 1x1 placeholder.
+        screenshot_disabled: screenshot_disabled || skip_pixels_for_unknown_exclusions,
         in_meeting,
         monitor_hosts_focus,
         focused_window_bounds,
     };
 
     let result = paired_capture(&ctx, tree_snapshot.as_ref(), Some(ocr_gate)).await?;
+    if let (Some(sender), Some(snapshot)) = (params.semantic_tx, tree_snapshot) {
+        sender.submit(SemanticProjectionJob::from_capture(
+            result.frame_id,
+            result.captured_at,
+            result.app_name.clone(),
+            result.browser_url.clone(),
+            snapshot,
+            params.use_pii_removal,
+        ));
+    }
     let deduped = elements_ref_frame_id.is_some();
     // Extract image from Arc for comparer reuse. Arc::try_unwrap succeeds
     // because paired_capture no longer retains a clone.
@@ -3180,9 +3259,13 @@ mod tests {
     fn resolve_capture_metadata_uses_lightweight_metadata_when_tree_values_are_blank() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "  ".into(),
+            app_id: None,
+            executable: None,
+            app_version: None,
             window_name: "".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),
@@ -3211,9 +3294,13 @@ mod tests {
     fn resolve_capture_metadata_prefers_lightweight_metadata_over_stale_tree_values() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "electron".into(),
+            app_id: None,
+            executable: Some("electron".into()),
+            app_version: None,
             window_name: "stale browser title".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),
@@ -3246,9 +3333,13 @@ mod tests {
     fn resolve_capture_metadata_keeps_tree_values_when_lightweight_is_fallback_only() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "Safari".into(),
+            app_id: Some("com.apple.Safari".into()),
+            executable: None,
+            app_version: None,
             window_name: "Current Page".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),
@@ -3281,9 +3372,13 @@ mod tests {
     fn resolve_capture_metadata_normalizes_blank_tree_values_without_lightweight_metadata() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "  ".into(),
+            app_id: None,
+            executable: None,
+            app_version: None,
             window_name: "".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),

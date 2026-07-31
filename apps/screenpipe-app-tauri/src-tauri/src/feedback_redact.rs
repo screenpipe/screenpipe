@@ -17,31 +17,37 @@
 //!      something neither a shape regex nor the model can do.
 //!
 //! The enclave's latency scales with length (~10-15s/2KB per its adapter docs),
-//! so the text pass line-chunks the input, redacts chunks under a wall-clock
-//! budget, and finishes the remainder with the on-device regex pass — the
-//! bundle is built PII-dense-first (settings + chat, then bulk logs) so the
-//! enclave budget is spent where it matters.
+//! so the text pass first redacts the complete bundle locally, then enriches
+//! chunks concurrently under a hard wall-clock budget. Timed-out chunks keep
+//! the safe local result. The bundle is built PII-dense-first (settings + chat,
+//! then bulk logs) so the enclave budget is spent where it matters.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use futures::stream::{self, StreamExt};
 use screenpipe_redact::{
     adapters::tinfoil::{TinfoilConfig, TinfoilRedactor},
-    Pipeline, PipelineConfig, Redactor, SpanLabel, TextRedactionPolicy,
+    Pipeline, Redactor, SpanLabel, TextRedactionPolicy,
 };
 use serde_json::Value;
 use tokio::sync::OnceCell;
+use tokio::time::{timeout_at, Instant};
 use tracing::{info, warn};
 
 /// Per-chunk target size. ~1.8KB keeps each enclave request in the
 /// single-digit-seconds range (per the Tinfoil adapter's latency notes).
 const CHUNK_BYTES: usize = 1800;
-/// Wall-clock budget for enclave calls. Once exceeded, remaining chunks are
-/// redacted with the local regex pass so submission can't hang for minutes.
-const ENCLAVE_BUDGET: Duration = Duration::from_secs(45);
+/// Contextual enclave redaction is best-effort enrichment after the complete
+/// local pass below. Keep it short enough that clicking "send" stays responsive.
+const ENCLAVE_BUDGET: Duration = Duration::from_secs(10);
+/// Four workers preserve roughly the same number of enclave-enriched chunks as
+/// the old 45-second serial loop without increasing total request volume.
+const ENCLAVE_CONCURRENCY: usize = 4;
 
-/// Cloud (enclave) pipeline: regex pre-pass + Tinfoil enclave model.
-static CLOUD: OnceCell<Arc<Pipeline>> = OnceCell::const_new();
+/// Cloud model used only after the full deterministic pass has made every
+/// chunk safe to fall back to unchanged.
+static CLOUD: OnceCell<Arc<TinfoilRedactor>> = OnceCell::const_new();
 /// Local deterministic pass used past the budget / when the enclave errors.
 static REGEX: OnceCell<Arc<Pipeline>> = OnceCell::const_new();
 
@@ -65,7 +71,7 @@ fn feedback_policy() -> TextRedactionPolicy {
     }
 }
 
-fn cloud_pipeline() -> Arc<Pipeline> {
+fn cloud_redactor() -> Arc<TinfoilRedactor> {
     let labels = [
         "person",
         "email",
@@ -80,17 +86,10 @@ fn cloud_pipeline() -> Arc<Pipeline> {
     .iter()
     .map(|s| s.to_string())
     .collect::<Vec<_>>();
-    let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::new(TinfoilConfig {
+    Arc::new(TinfoilRedactor::new(TinfoilConfig {
         labels,
         ..Default::default()
-    }));
-    Arc::new(Pipeline::regex_then_ai(
-        ai,
-        PipelineConfig {
-            policy: feedback_policy(),
-            ..Default::default()
-        },
-    ))
+    }))
 }
 
 fn regex_pipeline() -> Arc<Pipeline> {
@@ -199,6 +198,46 @@ async fn redact_one(primary: &Pipeline, fallback: &Pipeline, chunk: &str) -> Str
     }
 }
 
+/// Opportunistically add contextual redaction to an already-safe local result.
+/// Calls are concurrent but globally deadline-bound. A failed or timed-out
+/// chunk returns the local baseline verbatim; raw input never crosses this
+/// boundary and is never restored on fallback.
+async fn enrich_chunks_with_deadline(
+    redactor: Arc<dyn Redactor>,
+    chunks: Vec<String>,
+    budget: Duration,
+    concurrency: usize,
+) -> (String, usize) {
+    let deadline = Instant::now() + budget;
+    let mut results = stream::iter(chunks.into_iter().enumerate().map(|(index, chunk)| {
+        let redactor = Arc::clone(&redactor);
+        async move {
+            if Instant::now() >= deadline {
+                return (index, chunk, false);
+            }
+            match timeout_at(deadline, redactor.redact(&chunk)).await {
+                Ok(Ok(output)) => (index, output.redacted, true),
+                Ok(Err(error)) => {
+                    warn!("feedback contextual redaction failed ({error}); keeping local result");
+                    (index, chunk, false)
+                }
+                Err(_) => (index, chunk, false),
+            }
+        }
+    }))
+    .buffer_unordered(concurrency.max(1))
+    .collect::<Vec<_>>()
+    .await;
+
+    results.sort_unstable_by_key(|(index, _, _)| *index);
+    let enriched = results.iter().filter(|(_, _, enriched)| *enriched).count();
+    let mut output = String::new();
+    for (_, chunk, _) in results {
+        output.push_str(&chunk);
+    }
+    (output, enriched)
+}
+
 /// Deterministic, on-device redaction for unattended diagnostic uploads.
 ///
 /// Unlike the manual feedback flow below, this boundary never sends raw text
@@ -218,8 +257,8 @@ pub(crate) async fn redact_diagnostics_locally(text: String) -> Result<String, S
 ///
 /// `text` is the raw logs + chat (PII-dense chat first); `settings_json` is the
 /// raw settings store. Config secrets are stripped by field name, then the whole
-/// thing goes through the crate's redaction pipeline (enclave model under a time
-/// budget, regex for the overflow). Never returns `Err` — worst case is
+/// thing goes through the crate's deterministic local pipeline before bounded,
+/// concurrent enclave enrichment. Never returns `Err` — worst case is
 /// regex-only redaction — so feedback submission is never blocked.
 #[tauri::command]
 #[specta::specta]
@@ -227,7 +266,7 @@ pub async fn redact_pii_for_feedback(
     text: String,
     settings_json: String,
 ) -> Result<String, String> {
-    let cloud = CLOUD.get_or_init(|| async { cloud_pipeline() }).await;
+    let cloud = CLOUD.get_or_init(|| async { cloud_redactor() }).await;
     let regex = REGEX.get_or_init(|| async { regex_pipeline() }).await;
 
     // PII-dense first (settings + chat live at the front of `text`) so the
@@ -240,21 +279,14 @@ pub async fn redact_pii_for_feedback(
     let chunks = chunk_by_lines(&bundle, CHUNK_BYTES);
     let total = chunks.len();
     let start = Instant::now();
-    let mut cloud_chunks = 0usize;
-    let mut out = String::with_capacity(bundle.len() + 64);
-
-    for chunk in &chunks {
-        if start.elapsed() < ENCLAVE_BUDGET {
-            out.push_str(&redact_one(cloud, regex, chunk).await);
-            cloud_chunks += 1;
-        } else {
-            out.push_str(&redact_one(regex, regex, chunk).await);
-        }
-    }
+    let cloud: Arc<dyn Redactor> = Arc::clone(cloud) as Arc<dyn Redactor>;
+    let (out, cloud_chunks) =
+        enrich_chunks_with_deadline(cloud, chunks, ENCLAVE_BUDGET, ENCLAVE_CONCURRENCY).await;
 
     info!(
-        "feedback redaction: {cloud_chunks}/{total} chunks via Tinfoil enclave, rest via regex ({}ms)",
-        start.elapsed().as_millis()
+        "feedback redaction: {cloud_chunks}/{total} chunks enriched via Tinfoil, rest kept from local regex ({}ms; {} workers)",
+        start.elapsed().as_millis(),
+        ENCLAVE_CONCURRENCY,
     );
     Ok(out)
 }
@@ -262,9 +294,15 @@ pub async fn redact_pii_for_feedback(
 #[cfg(test)]
 mod tests {
     use super::{
-        chunk_by_lines, redact_diagnostics_locally, redact_settings_json, strip_secret_keys,
+        chunk_by_lines, enrich_chunks_with_deadline, redact_diagnostics_locally,
+        redact_settings_json, strip_secret_keys,
     };
+    use async_trait::async_trait;
+    use screenpipe_redact::{RedactError, RedactionOutput, Redactor};
     use serde_json::json;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Barrier;
 
     #[test]
     fn strips_secret_named_string_fields_recursively() {
@@ -306,6 +344,89 @@ mod tests {
     fn single_oversized_line_is_its_own_chunk() {
         let text = format!("{}\nsmall\n", "x".repeat(5000));
         assert_eq!(chunk_by_lines(&text, 1800).concat(), text);
+    }
+
+    struct BarrierRedactor {
+        barrier: Arc<Barrier>,
+    }
+
+    #[async_trait]
+    impl Redactor for BarrierRedactor {
+        fn name(&self) -> &str {
+            "barrier-test"
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        async fn redact_batch(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<RedactionOutput>, RedactError> {
+            self.barrier.wait().await;
+            Ok(texts
+                .iter()
+                .map(|text| RedactionOutput {
+                    input: text.clone(),
+                    redacted: format!("<{text}>"),
+                    spans: Vec::new(),
+                })
+                .collect())
+        }
+    }
+
+    struct NeverRedactor;
+
+    #[async_trait]
+    impl Redactor for NeverRedactor {
+        fn name(&self) -> &str {
+            "never-test"
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        async fn redact_batch(
+            &self,
+            _texts: &[String],
+        ) -> Result<Vec<RedactionOutput>, RedactError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn contextual_enrichment_is_concurrent_and_preserves_chunk_order() {
+        let redactor: Arc<dyn Redactor> = Arc::new(BarrierRedactor {
+            barrier: Arc::new(Barrier::new(4)),
+        });
+        let chunks = ["one", "two", "three", "four"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        let (output, enriched) =
+            enrich_chunks_with_deadline(redactor, chunks, Duration::from_secs(1), 4).await;
+
+        assert_eq!(output, "<one><two><three><four>");
+        assert_eq!(enriched, 4);
+    }
+
+    #[tokio::test]
+    async fn contextual_enrichment_keeps_safe_local_chunks_at_deadline() {
+        let redactor: Arc<dyn Redactor> = Arc::new(NeverRedactor);
+        let chunks = vec!["already [EMAIL]".to_string(), "safe tail".to_string()];
+
+        let (output, enriched) = tokio::time::timeout(
+            Duration::from_secs(1),
+            enrich_chunks_with_deadline(redactor, chunks, Duration::from_millis(20), 2),
+        )
+        .await
+        .expect("hard redaction deadline should settle");
+
+        assert_eq!(output, "already [EMAIL]safe tail");
+        assert_eq!(enriched, 0);
     }
 
     #[tokio::test]

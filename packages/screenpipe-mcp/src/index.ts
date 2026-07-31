@@ -26,6 +26,10 @@ import {
   flushMcpTelemetry,
   initMcpTelemetry,
 } from "./telemetry";
+import { createMcpQualifiedValueReporter } from "./qualified-value";
+import { discoverTeamApiBase, discoverTeamToken } from "./team-config";
+import { PKG_VERSION } from "./version";
+import { formatForElementPurpose } from "./element-format";
 
 initMcpTelemetry({ transport: "stdio" });
 
@@ -34,6 +38,7 @@ const args = process.argv.slice(2);
 let port = 3030;
 let host = "localhost";
 let baseOverride: string | undefined;
+let teamApiOverride: string | undefined;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--port" && args[i + 1]) {
     port = parseInt(args[i + 1], 10);
@@ -44,6 +49,8 @@ for (let i = 0; i < args.length; i++) {
     args[i + 1]
   ) {
     baseOverride = args[i + 1];
+  } else if (args[i] === "--team-api-url" && args[i + 1]) {
+    teamApiOverride = args[i + 1];
   }
 }
 
@@ -311,37 +318,33 @@ function ensureApiKey(): Promise<string> {
 }
 
 // Enterprise team token — when present, this MCP additionally registers
-// `team-*` tools that query the org-wide telemetry control plane
-// (https://screenpi.pe/api/enterprise/v1/*) instead of just the local
-// recordings. Same audience: an enterprise admin running screenpipe-mcp
-// inside Claude Desktop / Cursor / Windsurf wants to ask "what did MY
-// machine do" AND "what did MY TEAM do" without juggling two MCPs.
+// `team-*` tools that query the org-wide telemetry control plane instead of
+// just the local recordings. Same audience: an enterprise admin running
+// screenpipe-mcp inside Claude Desktop / Cursor / Windsurf wants to ask "what
+// did MY machine do" AND "what did MY TEAM do" without juggling two MCPs.
 //
-// Resolution order matches discoverApiKey() in spirit:
-//   1. SCREENPIPE_ENTERPRISE_TOKEN env var (Claude config, terminal)
-//   2. team_api_token field in ~/.screenpipe/enterprise.json (written by
-//      the desktop app's Settings → Privacy → Admin Team API Token)
+// TWO independent things get resolved here, both in ./team-config:
 //
-// Token format is `sk_ent_…`. Empty / missing → team tools are not
-// registered; non-admin users of screenpipe-mcp see exactly what they
-// see today.
-function discoverTeamToken(): string {
-  const envTok = process.env.SCREENPIPE_ENTERPRISE_TOKEN;
-  if (envTok && envTok.startsWith("sk_ent_")) return envTok;
-  try {
-    const entPath = path.join(os.homedir(), ".screenpipe", "enterprise.json");
-    if (fs.existsSync(entPath)) {
-      const raw = fs.readFileSync(entPath, "utf-8");
-      const parsed = JSON.parse(raw);
-      const tok = typeof parsed?.team_api_token === "string" ? parsed.team_api_token : "";
-      if (tok && tok.startsWith("sk_ent_")) return tok;
-    }
-  } catch {}
-  return "";
-}
-
+//   TOKEN (discoverTeamToken) — `sk_ent_…`:
+//     1. SCREENPIPE_ENTERPRISE_TOKEN env var (Claude config, terminal)
+//     2. team_api_token in ~/.screenpipe/enterprise.json (written by the
+//        desktop app's Settings → Privacy → Admin Team API Token)
+//
+//   BASE URL (discoverTeamApiBase) — where those tools send their requests:
+//     1. --team-api-url flag
+//     2. SCREENPIPE_TEAM_API_URL env var
+//     3. gateway_url in ~/.screenpipe/enterprise.json
+//     4. the hosted default, https://screenpi.pe/api/enterprise/v1
+//
+// The base is NOT always the hosted API: orgs on the write-only archive tier
+// run their own query gateway inside their network, and the hosted API has no
+// read path to their data — pointing there returns 401. The bearer token is
+// the same `sk_ent_` either way; only the base moves.
+//
+// Empty / missing token → team tools are not registered; non-admin users of
+// screenpipe-mcp see exactly what they see today.
 const TEAM_TOKEN = discoverTeamToken();
-const TEAM_API = "https://screenpi.pe/api/enterprise/v1";
+const TEAM_API = discoverTeamApiBase(teamApiOverride);
 
 async function fetchTeam(p: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${TEAM_API}${p}`, {
@@ -352,10 +355,6 @@ async function fetchTeam(p: string, init: RequestInit = {}): Promise<Response> {
     },
   });
 }
-
-// Read version from package.json (single source of truth)
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const PKG_VERSION: string = require("../package.json").version;
 
 // Initialize server
 const server = new Server(
@@ -378,8 +377,8 @@ const TOOLS: Tool[] = [
   {
     name: "search-content",
     description:
-      "Search screen text, audio transcriptions, input events, and memories. Returns timestamped results with app context. " +
-      "USE WHEN: you need the actual text/content of a moment — quotes, OCR snippets, transcript lines — or want to filter by speaker/window. " +
+      "Search screen text, audio transcriptions, input events, memories, and parsed app data. Returns timestamped results with app context. " +
+      "USE WHEN: you need the actual text/content of a moment — quotes, screen text, transcript lines, or compact parsed messages, emails, tasks, documents, and code review — or want to filter by speaker/window. " +
       "DO NOT USE for: broad questions like 'what was I doing?' (use activity-summary, it pre-summarizes apps + windows + transcripts). " +
       "Also DO NOT USE for: targeted UI controls (use search-elements). " +
       "Start with limit=5, increase only if needed. Per-result text is auto-truncated to 1000 chars; pass max_content_length=0 to opt out, or a custom integer to override.",
@@ -393,9 +392,9 @@ const TOOLS: Tool[] = [
         },
         content_type: {
           type: "string",
-          enum: ["all", "ocr", "audio", "input", "accessibility", "memory"],
+          enum: ["all", "ocr", "audio", "input", "accessibility", "memory", "parsed"],
           description:
-            "Filter by content type. NOTE on screen text: 'ocr' is a legacy label — it returns ALL screen-text rows, which are accessibility-derived for most apps (the result tag [Screen·a11y] vs [Screen·ocr] tells you which). Use 'ocr' for screen text (covers both paths), 'audio' for transcriptions, 'input' for keyboard/mouse events, 'memory' for stored facts. Default: 'all'.",
+            "Filter by content type. Use 'parsed' for compact app-specific records such as messages, emails, tasks, documents, and code review; it is experimental and may be empty when parsing is disabled or unsupported. NOTE on screen text: 'ocr' is a legacy label — it returns ALL screen-text rows, which are accessibility-derived for most apps (the result tag [Screen·a11y] vs [Screen·ocr] tells you which). Use 'ocr' for screen text (covers both paths), 'audio' for transcriptions, 'input' for keyboard/mouse events, 'memory' for stored facts. Default: 'all'.",
           default: "all",
         },
         limit: { type: "integer", description: "Max results (default 10, max 20). Start with 5 for exploration.", default: 10 },
@@ -410,6 +409,8 @@ const TOOLS: Tool[] = [
         },
         app_name: { type: "string", description: "Filter by app name (e.g. 'Google Chrome', 'Slack', 'zoom.us'). Case-sensitive." },
         window_name: { type: "string", description: "Filter by window title substring" },
+        frame_id: { type: "integer", description: "With content_type='parsed', return parsed data attached to one frame." },
+        actor_id: { type: "integer", description: "With content_type='parsed', filter items by a resolved actor identity." },
         min_length: { type: "integer", description: "Min content length in characters" },
         max_length: { type: "integer", description: "Max content length in characters" },
         include_frames: {
@@ -422,7 +423,7 @@ const TOOLS: Tool[] = [
         tags: {
           type: "string",
           description:
-            "Comma-separated tags; returns only items carrying ALL of them (e.g. 'person:ada,project:atlas'). Works for screen + audio (content_type 'ocr'/'audio'/'all', tags written by add-tags) AND memories (content_type 'memory', tags written by update-memory). Same tag string links across all three, so two items sharing a tag are connected. Use namespaced tags (person:, project:, topic:) to link people/projects/topics. content_type 'input' and 'accessibility' have no tags and return nothing when this is set.",
+            "Comma-separated tags; returns only items carrying ALL of them (e.g. 'person:ada,project:atlas'). Works for screen + audio (content_type 'ocr'/'audio'/'all', tags written by add-tags) AND memories (content_type 'memory', tags written by update-memory). Same tag string links across all three, so two items sharing a tag are connected. Use namespaced tags (person:, project:, topic:) to link people/projects/topics. content_type 'input' and 'accessibility' have no tags and return nothing when this is set; 'parsed' does not support tags.",
         },
         include_related: {
           type: "boolean",
@@ -497,6 +498,12 @@ const TOOLS: Tool[] = [
         start_time: { type: "string", description: "ISO 8601 UTC or relative" },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
         app_name: { type: "string", description: "Filter by app name" },
+        purpose: {
+          type: "string",
+          enum: ["read", "automation"],
+          description:
+            "read returns the compact memory outline; automation returns fresh refs, best-effort keys, state, bounds, and allowed actions. Omit to follow the desktop capture profile.",
+        },
         limit: { type: "integer", description: "Max results (default 50). Start with 10-20.", default: 50 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
       },
@@ -783,6 +790,12 @@ const TOOLS: Tool[] = [
       type: "object",
       properties: {
         frame_id: { type: "integer", description: "Frame ID" },
+        purpose: {
+          type: "string",
+          enum: ["read", "automation"],
+          description:
+            "read returns the memory outline; automation returns targeting context for a downstream automation tool. Omit to follow the desktop capture profile. Refresh before each action.",
+        },
       },
       required: ["frame_id"],
     },
@@ -887,7 +900,8 @@ const TOOLS: Tool[] = [
 // ---------------------------------------------------------------------------
 // Enterprise team tools — registered only when a team API token is present.
 // Same endpoint surface as the desktop `screenpipe-team` pi-agent skill:
-// proxy GETs to https://screenpi.pe/api/enterprise/v1/* with Bearer auth.
+// proxy GETs to `${TEAM_API}/*` with Bearer auth, where TEAM_API is the hosted
+// control plane OR the org's own query gateway (see discoverTeamApiBase above).
 //
 // Naming convention: every team tool is `team-*` so it's obvious at a glance
 // which scope (just-me vs the-whole-org) any given call is hitting.
@@ -1059,8 +1073,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 | Step | Tool | When to use |
 |------|------|-------------|
 | 1 | activity-summary | Broad questions: "what was I doing?", "which apps?", "how long on X?" |
-| 2 | search-content | Need specific text, transcriptions, or content |
-| 3 | search-elements | Need UI structure — buttons, links, form fields |
+| 2 | search-content | Need specific text, transcriptions, memories, or compact app data (use content_type=parsed) |
+| 3 | search-elements | Need UI structure: buttons, links, form fields |
 | 4 | frame-context | Need full detail for a specific moment (use frame_id from step 2) |
 
 ## Search Strategy
@@ -1239,6 +1253,13 @@ async function callAPI(endpoint: string, options: RequestInit = {}): Promise<Res
   }
   return response;
 }
+
+const qualifiedValue = createMcpQualifiedValueReporter((payload) =>
+  callAPI("/internal/telemetry/mcp-value", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
+);
 
 // Server's deserialize_flexible_datetime accepts ISO 8601 + "Nh ago" / "Nd ago"
 // / "Nw ago" / "now". Models also try "yesterday", "today", and bare dates
@@ -1490,6 +1511,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        qualifiedValue.searchResult();
+
         const contentItems: Array<
           | { type: "text"; text: string }
           | { type: "image"; data: string; mimeType: string }
@@ -1545,6 +1568,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               `[Memory #${content.id}]${tagsStr}${importance}${frameRef}\n` +
                 `${content.created_at || ""}\n` +
                 `${truncateMiddle(content.content || "", effectiveCap)}`
+            );
+          } else if (result.type === "Parsed") {
+            formattedResults.push(
+              `[Parsed] ${content.app_name || "?"} | ${content.window_name || "?"} | frame ${content.frame_id || "?"}\n` +
+                `${content.timestamp || ""}\n` +
+                `${truncateMiddle(content.text || "", effectiveCap)}`
             );
           }
         }
@@ -1604,6 +1633,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        qualifiedValue.meetingResult();
+
         const formatted = meetings.map((m: Record<string, unknown>) => {
           const start = m.meeting_start as string;
           const end = (m.meeting_end as string) || "ongoing";
@@ -1636,6 +1667,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const response = await callAPI(`/activity-summary?${params.toString()}`);
 
         const data = await response.json();
+
+        if (
+          (data.total_frames ?? 0) > 0 ||
+          (data.audio_summary?.segment_count ?? 0) > 0 ||
+          (data.apps?.length ?? 0) > 0
+        ) {
+          qualifiedValue.artifactResult();
+        }
 
         const appsLines = (data.apps || []).map(
           (a: {
@@ -1711,19 +1750,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const normalized = normalizeTimeFields(args);
         const params = new URLSearchParams();
         for (const [key, value] of Object.entries(normalized)) {
+          if (key === "purpose") continue;
           if (value !== null && value !== undefined) {
             params.append(key, String(value));
           }
         }
 
-        // Default to the server's compact `outline` view — a deduped, indented
-        // tree of just the text-bearing nodes, far cheaper for the model to read
-        // than the raw JSON rows (and the dedup/cap/footer replace the old
-        // hand-rolled header). Callers can still override with format=json|csv|tsv.
-        if (!params.has("format")) params.append("format", "outline");
+        // An explicit purpose selects one view. Otherwise let the server follow
+        // the user's desktop capture profile. Callers can still override with
+        // format=json|csv|tsv when this tool schema is extended to expose it.
+        if (!params.has("format")) {
+          params.append("format", formatForElementPurpose(args.purpose));
+        }
 
         const response = await callAPI(`/elements?${params.toString()}`);
         const text = (await response.text()).trim();
+
+        if (text.length && !text.startsWith("No elements")) {
+          qualifiedValue.searchResult();
+        }
 
         return {
           content: [
@@ -1747,6 +1792,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const data = await response.json();
         const lines = [`Frame ${data.frame_id} (source: ${data.text_source})`];
+
+        if (data.text || data.nodes?.length || data.urls?.length) {
+          qualifiedValue.searchResult();
+        }
 
         if (data.urls?.length) {
           lines.push("", "URLs:", ...data.urls.map((u: string) => `  ${u}`));
@@ -1805,6 +1854,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const sizeMb = data.file_size_bytes
             ? (data.file_size_bytes / (1024 * 1024)).toFixed(1)
             : null;
+          if ((data.frame_count ?? 0) > 0 || (data.audio_chunk_count ?? 0) > 0) {
+            qualifiedValue.artifactCreated();
+          }
           return {
             content: [
               {
@@ -2101,6 +2153,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
+        if (meeting && Object.keys(meeting).length > 0) {
+          qualifiedValue.meetingResult();
+        }
+
         return {
           content: [{ type: "text", text }],
         };
@@ -2173,6 +2229,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (results.length === 0) {
           return { content: [{ type: "text", text: "No keyword search results found." }] };
         }
+        qualifiedValue.searchResult();
         const formatted = results.map((r) => {
           // Flat shape from search_with_text_positions: { app_name, frame_id,
           // timestamp, text, text_source, ... }. Truncate to keep responses
@@ -2199,8 +2256,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // rows, caps the body. Also avoids the old bug here that parsed the
         // `{data,pagination}` envelope as a bare array and always reported
         // "no elements".
-        const response = await callAPI(`/frames/${frameId}/elements?format=outline`);
+        const format = formatForElementPurpose(args.purpose);
+        const response = await callAPI(`/frames/${frameId}/elements?format=${format}`);
         const text = (await response.text()).trim();
+        if (text.length && !text.startsWith("No elements")) {
+          qualifiedValue.searchResult();
+        }
         return {
           content: [
             {
@@ -2243,11 +2304,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               {
                 type: "text",
                 text:
-                  `team-* tools require an enterprise admin token. Set ` +
-                  `SCREENPIPE_ENTERPRISE_TOKEN in your MCP env, or mint one ` +
-                  `at https://screenpi.pe/enterprise → API Tokens and paste ` +
-                  `it into Settings → Privacy → Admin Team API Token in the ` +
-                  `screenpipe desktop app.`,
+                  `team-* tools require an enterprise admin token (sk_ent_…). ` +
+                  `Set SCREENPIPE_ENTERPRISE_TOKEN in your MCP env, or paste ` +
+                  `the token into Settings → Privacy → Admin Team API Token in ` +
+                  `the screenpipe desktop app.\n` +
+                  `Where to get it: hosted orgs mint one at ` +
+                  `https://screenpi.pe/enterprise → API Tokens. Orgs running ` +
+                  `their own query gateway use the token their gateway accepts, ` +
+                  `and must ALSO point this MCP at that gateway — ` +
+                  `SCREENPIPE_TEAM_API_URL=https://<gateway>/api/enterprise/v1 ` +
+                  `(or --team-api-url). Requests currently go to ${TEAM_API}.`,
               },
             ],
           };

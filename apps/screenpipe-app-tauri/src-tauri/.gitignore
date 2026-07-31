@@ -7,3 +7,6 @@
 
 # Swift SPM resource bundle copied by build.rs for Tauri bundling
 /PermissionFlow_PermissionFlow.bundle/
+
+# WER helper DLL staged by pre_build.js for Tauri bundling (Windows)
+/wer/

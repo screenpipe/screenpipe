@@ -1,0 +1,74 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "WindowsTerminal.exe",
+    "display_name": "Windows Terminal",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "TabItem",
+      "text": "Dev Shell",
+      "description": "tab item",
+      "classes": [
+        "ListViewItem"
+      ]
+    },
+    {
+      "parent": 0,
+      "role": "Text",
+      "text": "Dev Shell",
+      "identifier": "HeaderTextBlock",
+      "description": "text",
+      "classes": [
+        "TextBlock"
+      ]
+    },
+    {
+      "parent": 0,
+      "role": "Button",
+      "text": "Close Tab",
+      "identifier": "CloseButton",
+      "description": "button",
+      "classes": [
+        "Button"
+      ]
+    },
+    {
+      "parent": null,
+      "role": "Text",
+      "text": "Dev Shell",
+      "description": "Dev Shell",
+      "classes": [
+        "TermControl"
+      ]
+    },
+    {
+      "parent": null,
+      "role": "MenuItem",
+      "text": "System",
+      "description": "menu item"
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Minimize",
+      "description": "button"
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Maximize",
+      "description": "button"
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Close",
+      "description": "button"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { useQueryState } from "nuqs";
@@ -112,7 +113,7 @@ function ReferralSection() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [sending, setSending] = useState(false);
   const referralCode = settings.user?.id ? `REF-${settings.user.id.slice(0, 8).toUpperCase()}` : "";
-  const referralLink = referralCode ? `https://screenpipe.com/?ref=${referralCode}` : "";
+  const referralLink = referralCode ? screenpipeWebUrl(`/?ref=${referralCode}`, "https://screenpipe.com") : "";
 
   const handleCopy = async () => {
     if (!referralLink) return;
@@ -125,7 +126,7 @@ function ReferralSection() {
     if (!inviteEmail || !referralLink || sending) return;
     setSending(true);
     try {
-      const res = await fetch("https://screenpipe.com/api/referral/invite", {
+      const res = await fetch(screenpipeWebUrl("/api/referral/invite", "https://screenpipe.com"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

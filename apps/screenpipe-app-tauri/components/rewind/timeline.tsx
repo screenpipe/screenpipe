@@ -23,6 +23,9 @@ import { SearchResultStrip } from "@/components/rewind/search-result-strip";
 import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
+import {
+	findTimelineDisplayFrame,
+} from "@/lib/hooks/timeline-frame-navigation";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
@@ -184,6 +187,22 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		useTimelineData(currentDate, (frame) => {
 			setCurrentFrame(frame);
 		});
+
+	// Audio-only markers advance the playhead and subtitles, but they have no
+	// image to render. Keep the nearest captured screenshot on the canvas while
+	// the cursor traverses that audio tail; if the entire loaded range is
+	// audio-only, CurrentFrameTimeline falls back to its "screenshot paused"
+	// state. This keeps the scrubber mounted and avoids the abrupt blank/clipped
+	// transition after the final visual frame.
+	const visualFrame = useMemo(() => {
+		if (!currentFrame) return null;
+		const markerDate = new Date(currentFrame.timestamp);
+		return findTimelineDisplayFrame(
+			frames,
+			currentIndex,
+			Number.isNaN(markerDate.getTime()) ? currentDate : markerDate,
+		);
+	}, [currentFrame, currentDate, currentIndex, frames]);
 
 	const { meetings } = useMeetings(frames);
 
@@ -1109,9 +1128,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			>
 				{/* Main Image - Full Screen - Should fill entire viewport */}
 				<div className={`absolute inset-0 z-10 ${embedded ? "bg-background" : "bg-black"}`} onWheel={onContainerWheel}>
-					{currentFrame ? (
+					{visualFrame ? (
 						<CurrentFrameTimeline
-							currentFrame={currentFrame}
+							currentFrame={visualFrame}
 							isPlaying={isPlaying}
 							playbackSpeed={playbackSpeed}
 							selectedDeviceId={selectedDeviceId}

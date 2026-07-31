@@ -173,17 +173,16 @@ pub(crate) async fn audio_device_status(
             JsonResponse(json!({"error": format!("Failed to list audio devices: {}", e)})),
         )
     })?;
-    let enabled = state.audio_manager.enabled_devices().await;
     let user_disabled = state.audio_manager.user_disabled_devices().await;
 
     let entries: Vec<DeviceStatusEntry> = all_devices
         .into_iter()
         .map(|d| {
             let name = d.to_string();
-            let in_enabled = enabled.contains(&name);
             let is_disabled = user_disabled.contains(&name);
+            let is_running = state.audio_manager.is_device_actively_streaming(&d);
             DeviceStatusEntry {
-                is_running: in_enabled && !is_disabled,
+                is_running,
                 is_user_disabled: is_disabled,
                 name,
             }
