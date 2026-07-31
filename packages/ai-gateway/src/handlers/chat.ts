@@ -131,6 +131,17 @@ export function isGeoBlocked(status: number, msg: string): boolean {
   return status === 403 && GEO_BLOCK_PATTERN.test(msg);
 }
 
+// Anthropic's org-level monthly spend cap ("You have reached your specified
+// API usage limits. You will regain access on ... at 00:00 UTC.", 400
+// invalid_request_error) — a provider-wide outage until the cap resets or is
+// raised, not a client bug. 4k+ identical Sentry events on 2026-07-31
+// (SCREENPIPE-AI-PROXY-30/-2P/-2W/-31) for one billing fact.
+const PROVIDER_USAGE_CAP_PATTERN = /reached your specified api usage limits/i;
+
+export function isProviderUsageCapped(status: number, msg: string): boolean {
+  return status === 400 && PROVIDER_USAGE_CAP_PATTERN.test(msg);
+}
+
 export function isUserInputTooLarge(status: number, msg: string): boolean {
   if (status !== 400 && status !== 413) return false;
   return USER_INPUT_TOO_LARGE_PATTERNS.some((re) => re.test(msg));
@@ -257,6 +268,19 @@ async function tryModel(
       error.status = 413;
       error.transient = true;
       console.warn(`${ctx}: ${model} rejected oversized prompt (413), cascading`);
+      logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
+      throw error;
+    }
+
+    // Provider spend cap (Anthropic monthly limit) — cascade to another
+    // provider's model; if the whole chain is capped, tell the user what
+    // will work instead of leaking the raw provider JSON. One Sentry alert
+    // per request would drown the dashboard for a single billing fact, so
+    // skip it — the cost dashboards and model-health log still see it.
+    if (isProviderUsageCapped(status, msg)) {
+      error.transient = true;
+      error.userMessage = `${model} is temporarily at capacity (the provider's usage limit was reached). Pick Auto or a model from a different provider, or try again later.`;
+      console.warn(`${ctx}: ${model} provider usage cap hit (400), cascading`);
       logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
       throw error;
     }
