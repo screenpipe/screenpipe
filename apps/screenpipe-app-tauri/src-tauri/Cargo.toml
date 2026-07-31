@@ -1,8 +1,9 @@
 [workspace]
+members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.149"
+version = "2.5.158"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -89,6 +90,7 @@ tracing-appender = "0.2.3"
 
 
 sha2 = "0.10"
+libc = "0.2"
 anyhow = "1.0.71"
 arboard = "3.4"
 
@@ -237,8 +239,13 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
     "Win32_System_Com",
+    "Win32_System_ErrorReporting",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_Security_Cryptography",
+    # GetLastInputInfo/GetTickCount for the recording-health user-presence tier
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -353,10 +360,12 @@ incremental = true
 opt-level = 1
 debug = false
 
-# Faster dev builds
+# Default non-release builds retain complete Screenpipe symbols while omitting
+# debuginfo from third-party crates.
 [profile.dev]
 opt-level = 0
-debug = false
+debug = true
+split-debuginfo = "packed"
 # Per-worktree incremental state cannot help a cold target and prevents the
 # shared compiler cache from reusing screenpipe's path crates across worktrees.
 incremental = false
@@ -369,5 +378,58 @@ debug = false
 # with the dependency-wide opt-level=2 only slows the build and cannot improve
 # app runtime performance.
 [profile.dev.build-override]
+opt-level = 0
+debug = false
+
+# Kept for explicit invocations; default non-release builds use these settings
+# through the `dev` profile above.
+[profile.dev-debug]
+inherits = "dev"
+debug = true
+split-debuginfo = "packed"
+incremental = false
+
+[profile.dev-debug.package."*"]
+opt-level = 2
+debug = false
+
+# Preserve complete debugging across the first-party runtime
+# stack without paying for third-party dependency symbols.
+[profile.dev-debug.package.screenpipe-a11y]
+debug = true
+[profile.dev-debug.package.screenpipe-audio]
+debug = true
+[profile.dev-debug.package.screenpipe-capture]
+debug = true
+[profile.dev-debug.package.screenpipe-config]
+debug = true
+[profile.dev-debug.package.screenpipe-connect]
+debug = true
+[profile.dev-debug.package.screenpipe-core]
+debug = true
+[profile.dev-debug.package.screenpipe-db]
+debug = true
+[profile.dev-debug.package.screenpipe-engine]
+debug = true
+[profile.dev-debug.package.screenpipe-events]
+debug = true
+[profile.dev-debug.package.screenpipe-redact]
+debug = true
+[profile.dev-debug.package.screenpipe-resource]
+debug = true
+[profile.dev-debug.package.screenpipe-screen]
+debug = true
+[profile.dev-debug.package.screenpipe-secrets]
+debug = true
+[profile.dev-debug.package.screenpipe-sqlite-coordinator]
+debug = true
+[profile.dev-debug.package.screenpipe-sync]
+debug = true
+[profile.dev-debug.package.screenpipe-vault]
+debug = true
+
+# Build scripts/proc macros are not part of the shipped app, so do not retain
+# their debuginfo either.
+[profile.dev-debug.build-override]
 opt-level = 0
 debug = false

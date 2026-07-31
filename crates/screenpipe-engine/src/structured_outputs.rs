@@ -9,7 +9,7 @@
 //! the latest source-backed value. It intentionally knows nothing about cards,
 //! charts, layouts, Brain, or any other presentation concern.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -26,6 +26,9 @@ const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_EVIDENCE: usize = 50;
 const MAX_FEEDBACK_PER_TARGET: usize = 20;
 const MAX_FEEDBACK_CORRECTION_CHARS: usize = 500;
+const MAX_ITEM_ACTIONS_PER_TARGET: usize = 200;
+const MAX_ITEM_ACTIONS_PER_OUTPUT: usize = 5;
+const MAX_ITEM_ID_CHARS: usize = 128;
 
 static STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -87,6 +90,70 @@ pub struct OutputFeedbackSummary {
     pub recent: Vec<OutputFeedback>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputItemActionKind {
+    Resolve,
+    Snooze,
+    Correct,
+    Dismiss,
+    Reopen,
+}
+
+impl OutputItemActionKind {
+    fn schema_name(self) -> &'static str {
+        match self {
+            Self::Resolve => "resolve",
+            Self::Snooze => "snooze",
+            Self::Correct => "correct",
+            Self::Dismiss => "dismiss",
+            Self::Reopen => "reopen",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputItemAction {
+    pub item_id: String,
+    pub action: OutputItemActionKind,
+    pub artifact_output_id: i64,
+    pub artifact_version: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputItemDisposition {
+    #[default]
+    Active,
+    Resolved,
+    Snoozed,
+    Dismissed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputItemState {
+    pub item_id: String,
+    pub disposition: OutputItemDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct OutputItemActionSummary {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<OutputItemState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent: Vec<OutputItemAction>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OutputTarget {
     pub id: String,
@@ -104,6 +171,8 @@ pub struct OutputTarget {
     pub latest: Option<StructuredOutputValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub feedback: Vec<OutputFeedback>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub item_actions: Vec<OutputItemAction>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -127,6 +196,9 @@ pub struct AssignedOutputTarget {
     pub schema_name: String,
     pub schema: Value,
     pub feedback: OutputFeedbackSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest: Option<StructuredOutputValue>,
+    pub item_actions: OutputItemActionSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -393,6 +465,11 @@ pub fn replace_consumer_targets(
                     } else {
                         Vec::new()
                     },
+                    item_actions: if compatible {
+                        previous.item_actions.clone()
+                    } else {
+                        Vec::new()
+                    },
                     created_at: previous.created_at.clone(),
                     updated_at: if compatible && metadata_unchanged {
                         previous.updated_at.clone()
@@ -412,6 +489,7 @@ pub fn replace_consumer_targets(
                     revision: 1,
                     latest: None,
                     feedback: Vec::new(),
+                    item_actions: Vec::new(),
                     created_at: now.clone(),
                     updated_at: now.clone(),
                 });
@@ -453,6 +531,8 @@ pub fn targets_for_pipe(
                 schema_name: target.schema_name.clone(),
                 schema: target.schema.clone(),
                 feedback: output_feedback_summary(target),
+                latest: target.latest.clone(),
+                item_actions: output_item_action_summary(target),
             })
             .collect();
         Ok((targets, false))
@@ -483,6 +563,49 @@ pub fn output_feedback_summary(target: &OutputTarget) -> OutputFeedbackSummary {
         down_count,
         current,
         recent,
+    }
+}
+
+pub fn output_item_action_summary(target: &OutputTarget) -> OutputItemActionSummary {
+    let mut states = HashMap::<String, OutputItemState>::new();
+    for action in &target.item_actions {
+        let state = states
+            .entry(action.item_id.clone())
+            .or_insert_with(|| OutputItemState {
+                item_id: action.item_id.clone(),
+                disposition: OutputItemDisposition::Active,
+                snoozed_until: None,
+                correction: None,
+                updated_at: action.created_at.clone(),
+            });
+        match action.action {
+            OutputItemActionKind::Resolve => {
+                state.disposition = OutputItemDisposition::Resolved;
+                state.snoozed_until = None;
+            }
+            OutputItemActionKind::Snooze => {
+                state.disposition = OutputItemDisposition::Snoozed;
+                state.snoozed_until = action.snoozed_until.clone();
+            }
+            OutputItemActionKind::Correct => {
+                state.correction = action.correction.clone();
+            }
+            OutputItemActionKind::Dismiss => {
+                state.disposition = OutputItemDisposition::Dismissed;
+                state.snoozed_until = None;
+            }
+            OutputItemActionKind::Reopen => {
+                state.disposition = OutputItemDisposition::Active;
+                state.snoozed_until = None;
+            }
+        }
+        state.updated_at = action.created_at.clone();
+    }
+    let mut items = states.into_values().collect::<Vec<_>>();
+    items.sort_by(|left, right| left.item_id.cmp(&right.item_id));
+    OutputItemActionSummary {
+        items,
+        recent: target.item_actions.iter().rev().take(20).cloned().collect(),
     }
 }
 
@@ -558,6 +681,255 @@ pub fn set_output_feedback(
     })
 }
 
+fn validate_item_id(item_id: &str) -> Result<(), StructuredOutputError> {
+    let mut chars = item_id.chars();
+    let Some(first) = chars.next() else {
+        return Err(StructuredOutputError::invalid("item id cannot be empty"));
+    };
+    if item_id.chars().count() > MAX_ITEM_ID_CHARS
+        || !first.is_ascii_alphanumeric()
+        || !chars.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+        })
+    {
+        return Err(StructuredOutputError::invalid(format!(
+            "item id must be at most {MAX_ITEM_ID_CHARS} characters and use letters, numbers, '.', ':', '-' or '_'"
+        )));
+    }
+    Ok(())
+}
+
+fn list_item<'a>(payload: &'a Value, item_id: &str) -> Option<&'a Value> {
+    payload
+        .get("items")?
+        .as_array()?
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(item_id))
+}
+
+fn list_item_allows_action(item: &Value, action: OutputItemActionKind) -> bool {
+    item.get("actions")
+        .and_then(Value::as_array)
+        .is_some_and(|actions| {
+            actions
+                .iter()
+                .any(|candidate| candidate.as_str() == Some(action.schema_name()))
+        })
+}
+
+fn compact_item_actions(target: &mut OutputTarget) {
+    if target.item_actions.len() <= MAX_ITEM_ACTIONS_PER_TARGET {
+        return;
+    }
+    let current_item_ids = target
+        .latest
+        .as_ref()
+        .and_then(|latest| latest.payload.get("items"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+    let mut correction_items = HashSet::new();
+    let mut disposition_items = HashSet::new();
+    let mut compacted = target
+        .item_actions
+        .iter()
+        .rev()
+        .filter(|event| current_item_ids.contains(event.item_id.as_str()))
+        .filter(|event| {
+            if event.action == OutputItemActionKind::Correct {
+                correction_items.insert(event.item_id.as_str())
+            } else {
+                disposition_items.insert(event.item_id.as_str())
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    compacted.reverse();
+    target.item_actions = compacted;
+}
+
+pub fn set_output_item_action(
+    screenpipe_dir: &Path,
+    target_id: &str,
+    item_id: &str,
+    artifact_output_id: i64,
+    artifact_version: i64,
+    action: OutputItemActionKind,
+    snoozed_until: Option<String>,
+    correction: Option<String>,
+) -> Result<OutputItemActionSummary, StructuredOutputError> {
+    validate_identifier(target_id, "target id")?;
+    validate_item_id(item_id)?;
+    let correction = correction
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if correction
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > MAX_FEEDBACK_CORRECTION_CHARS)
+    {
+        return Err(StructuredOutputError::invalid(format!(
+            "item correction must be at most {MAX_FEEDBACK_CORRECTION_CHARS} characters"
+        )));
+    }
+    if action == OutputItemActionKind::Correct && correction.is_none() {
+        return Err(StructuredOutputError::invalid(
+            "correct requires a correction",
+        ));
+    }
+    if action != OutputItemActionKind::Correct && correction.is_some() {
+        return Err(StructuredOutputError::invalid(
+            "correction is only allowed for correct",
+        ));
+    }
+    let snoozed_until = snoozed_until
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if action == OutputItemActionKind::Snooze {
+        let until = snoozed_until
+            .as_deref()
+            .ok_or_else(|| StructuredOutputError::invalid("snooze requires snoozed_until"))?;
+        let parsed = DateTime::parse_from_rfc3339(until).map_err(|_| {
+            StructuredOutputError::invalid("snoozed_until must be an RFC3339 timestamp")
+        })?;
+        if parsed.with_timezone(&Utc) <= Utc::now() {
+            return Err(StructuredOutputError::invalid(
+                "snoozed_until must be in the future",
+            ));
+        }
+    } else if snoozed_until.is_some() {
+        return Err(StructuredOutputError::invalid(
+            "snoozed_until is only allowed for snooze",
+        ));
+    }
+
+    with_store(screenpipe_dir, |store| {
+        let target = store
+            .targets
+            .iter_mut()
+            .find(|target| target.id == target_id)
+            .ok_or_else(|| {
+                StructuredOutputError::not_found(format!("target '{target_id}' not found"))
+            })?;
+        if target.schema_name != "list.v1" {
+            return Err(StructuredOutputError::invalid(
+                "item actions are only supported by list.v1 outputs",
+            ));
+        }
+        let latest = target.latest.as_ref().ok_or_else(|| {
+            StructuredOutputError::conflict(format!(
+                "target '{target_id}' does not have an output to update"
+            ))
+        })?;
+        if latest.artifact_output_id != artifact_output_id
+            || latest.artifact_version != artifact_version
+        {
+            return Err(StructuredOutputError::conflict(format!(
+                "target output changed (current artifact {} version {})",
+                latest.artifact_output_id, latest.artifact_version
+            )));
+        }
+        let item = list_item(&latest.payload, item_id).ok_or_else(|| {
+            StructuredOutputError::not_found(format!(
+                "item '{item_id}' is not present in target '{target_id}'"
+            ))
+        })?;
+        let state = output_item_action_summary(target)
+            .items
+            .into_iter()
+            .find(|state| state.item_id == item_id);
+        if action == OutputItemActionKind::Reopen {
+            if state
+                .as_ref()
+                .is_none_or(|state| state.disposition == OutputItemDisposition::Active)
+            {
+                return Err(StructuredOutputError::conflict(format!(
+                    "item '{item_id}' is already active"
+                )));
+            }
+        } else if !list_item_allows_action(item, action) {
+            return Err(StructuredOutputError::invalid(format!(
+                "item '{item_id}' does not allow '{}'",
+                action.schema_name()
+            )));
+        }
+
+        target.item_actions.push(OutputItemAction {
+            item_id: item_id.to_string(),
+            action,
+            artifact_output_id,
+            artifact_version,
+            snoozed_until,
+            correction,
+            created_at: Utc::now().to_rfc3339(),
+        });
+        compact_item_actions(target);
+        target.updated_at = Utc::now().to_rfc3339();
+        Ok((output_item_action_summary(target), true))
+    })
+}
+
+fn validate_interactive_list_payload(payload: &Value) -> Result<(), StructuredOutputError> {
+    let Some(items) = payload.get("items").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let mut ids = HashSet::new();
+    for (index, item) in items.iter().enumerate() {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        if let Some(id) = object.get("id").and_then(Value::as_str) {
+            validate_item_id(id)?;
+            if !ids.insert(id.to_string()) {
+                return Err(StructuredOutputError::invalid(format!(
+                    "payload.items[{index}].id duplicates '{id}'"
+                )));
+            }
+        }
+        let Some(actions) = object.get("actions") else {
+            continue;
+        };
+        if !object.contains_key("id") {
+            return Err(StructuredOutputError::invalid(format!(
+                "payload.items[{index}].id is required when actions are present"
+            )));
+        }
+        let actions = actions.as_array().ok_or_else(|| {
+            StructuredOutputError::invalid(format!(
+                "payload.items[{index}].actions must be an array"
+            ))
+        })?;
+        if actions.is_empty() || actions.len() > MAX_ITEM_ACTIONS_PER_OUTPUT {
+            return Err(StructuredOutputError::invalid(format!(
+                "payload.items[{index}].actions must contain between 1 and {MAX_ITEM_ACTIONS_PER_OUTPUT} actions"
+            )));
+        }
+        let mut seen = HashSet::new();
+        for candidate in actions {
+            let candidate = candidate.as_str().ok_or_else(|| {
+                StructuredOutputError::invalid(format!(
+                    "payload.items[{index}].actions entries must be strings"
+                ))
+            })?;
+            if !matches!(
+                candidate,
+                "resolve" | "snooze" | "correct" | "dismiss" | "handoff"
+            ) {
+                return Err(StructuredOutputError::invalid(format!(
+                    "payload.items[{index}].actions contains unsupported action '{candidate}'"
+                )));
+            }
+            if !seen.insert(candidate) {
+                return Err(StructuredOutputError::invalid(format!(
+                    "payload.items[{index}].actions contains duplicate '{candidate}'"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_evidence(evidence: &[OutputEvidenceRef]) -> Result<(), StructuredOutputError> {
     if evidence.len() > MAX_EVIDENCE {
         return Err(StructuredOutputError::invalid(format!(
@@ -619,6 +991,9 @@ pub fn prepare_output_submission(
             )));
         }
         validate_payload_against_schema(&payload, &target.schema)?;
+        if target.schema_name == "list.v1" {
+            validate_interactive_list_payload(&payload)?;
+        }
         Ok((
             PreparedOutputSubmission {
                 target_id: target.id.clone(),
@@ -928,6 +1303,41 @@ mod tests {
         })
     }
 
+    fn interactive_list_target(id: &str, pipe: &str) -> OutputTargetInput {
+        OutputTargetInput {
+            id: id.to_string(),
+            title: "Commitments".to_string(),
+            instruction: "Keep commitments current".to_string(),
+            bound_pipe: pipe.to_string(),
+            schema_name: "list.v1".to_string(),
+            schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["items"],
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["title"],
+                            "properties": {
+                                "id": {"type": "string", "maxLength": 128},
+                                "title": {"type": "string", "maxLength": 200},
+                                "actions": {
+                                    "type": "array",
+                                    "maxItems": 5,
+                                    "items": {"type": "string", "maxLength": 32}
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        }
+    }
+
     #[test]
     fn consumer_replacement_preserves_compatible_values_and_removes_stale_targets() {
         let dir = tempfile::tempdir().unwrap();
@@ -1100,6 +1510,217 @@ mod tests {
             .kind,
             StructuredOutputErrorKind::Conflict
         );
+    }
+
+    #[test]
+    fn item_actions_are_reversible_and_follow_stable_ids_across_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let created = replace_consumer_targets(
+            dir.path(),
+            "live-views.v1",
+            vec![interactive_list_target(
+                "live-view:commitments:open",
+                "commitments",
+            )],
+        )
+        .unwrap();
+        let payload = json!({
+            "items": [{
+                "id": "meeting-42-send-recap",
+                "title": "Send the customer recap",
+                "actions": ["resolve", "snooze", "correct", "dismiss", "handoff"]
+            }]
+        });
+        let prepared = prepare_output_submission(
+            dir.path(),
+            "live-view:commitments:open",
+            created[0].revision,
+            "commitments",
+            payload.clone(),
+            vec![],
+        )
+        .unwrap();
+        commit_output_submission(dir.path(), &prepared, 42).unwrap();
+
+        let corrected = set_output_item_action(
+            dir.path(),
+            "live-view:commitments:open",
+            "meeting-42-send-recap",
+            42,
+            1,
+            OutputItemActionKind::Correct,
+            None,
+            Some("Sam owns this, not me".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            corrected.items[0].correction.as_deref(),
+            Some("Sam owns this, not me")
+        );
+        let resolved = set_output_item_action(
+            dir.path(),
+            "live-view:commitments:open",
+            "meeting-42-send-recap",
+            42,
+            1,
+            OutputItemActionKind::Resolve,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.items[0].disposition,
+            OutputItemDisposition::Resolved
+        );
+        assert_eq!(
+            resolved.items[0].correction.as_deref(),
+            Some("Sam owns this, not me")
+        );
+        let reopened = set_output_item_action(
+            dir.path(),
+            "live-view:commitments:open",
+            "meeting-42-send-recap",
+            42,
+            1,
+            OutputItemActionKind::Reopen,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(reopened.items[0].disposition, OutputItemDisposition::Active);
+
+        let next = prepare_output_submission(
+            dir.path(),
+            "live-view:commitments:open",
+            created[0].revision,
+            "commitments",
+            payload,
+            vec![],
+        )
+        .unwrap();
+        commit_output_submission(dir.path(), &next, 43).unwrap();
+        let assigned = targets_for_pipe(dir.path(), "commitments").unwrap();
+        assert_eq!(assigned[0].latest.as_ref().unwrap().artifact_version, 2);
+        assert_eq!(
+            assigned[0].item_actions.items[0].item_id,
+            "meeting-42-send-recap"
+        );
+        assert_eq!(
+            assigned[0].item_actions.items[0].correction.as_deref(),
+            Some("Sam owns this, not me")
+        );
+    }
+
+    #[test]
+    fn bounded_item_history_compacts_without_forgetting_current_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let created = replace_consumer_targets(
+            dir.path(),
+            "live-views.v1",
+            vec![interactive_list_target(
+                "live-view:commitments:open",
+                "commitments",
+            )],
+        )
+        .unwrap();
+        let prepared = prepare_output_submission(
+            dir.path(),
+            "live-view:commitments:open",
+            created[0].revision,
+            "commitments",
+            json!({
+                "items": [{
+                    "id": "meeting-42-send-recap",
+                    "title": "Send the customer recap",
+                    "actions": ["resolve", "snooze", "correct", "dismiss", "handoff"]
+                }]
+            }),
+            vec![],
+        )
+        .unwrap();
+        commit_output_submission(dir.path(), &prepared, 42).unwrap();
+
+        set_output_item_action(
+            dir.path(),
+            "live-view:commitments:open",
+            "meeting-42-send-recap",
+            42,
+            1,
+            OutputItemActionKind::Correct,
+            None,
+            Some("Sam owns this, not me".to_string()),
+        )
+        .unwrap();
+        for _ in 0..100 {
+            set_output_item_action(
+                dir.path(),
+                "live-view:commitments:open",
+                "meeting-42-send-recap",
+                42,
+                1,
+                OutputItemActionKind::Resolve,
+                None,
+                None,
+            )
+            .unwrap();
+            set_output_item_action(
+                dir.path(),
+                "live-view:commitments:open",
+                "meeting-42-send-recap",
+                42,
+                1,
+                OutputItemActionKind::Reopen,
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let target = list_output_targets(dir.path()).unwrap().remove(0);
+        let summary = output_item_action_summary(&target);
+        assert!(target.item_actions.len() < MAX_ITEM_ACTIONS_PER_TARGET);
+        assert_eq!(summary.items[0].disposition, OutputItemDisposition::Active);
+        assert_eq!(
+            summary.items[0].correction.as_deref(),
+            Some("Sam owns this, not me")
+        );
+    }
+
+    #[test]
+    fn interactive_lists_reject_missing_duplicate_and_invalid_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let created = replace_consumer_targets(
+            dir.path(),
+            "live-views.v1",
+            vec![interactive_list_target(
+                "live-view:commitments:open",
+                "commitments",
+            )],
+        )
+        .unwrap();
+        for payload in [
+            json!({"items": [{"title": "No id", "actions": ["resolve"]}]}),
+            json!({"items": [
+                {"id": "same", "title": "One", "actions": ["resolve"]},
+                {"id": "same", "title": "Two", "actions": ["resolve"]}
+            ]}),
+            json!({"items": [{"id": "invalid/id", "title": "Bad", "actions": ["resolve"]}]}),
+            json!({"items": [{"id": "valid", "title": "Bad", "actions": ["delete"]}]}),
+        ] {
+            assert_eq!(
+                prepare_output_submission(
+                    dir.path(),
+                    "live-view:commitments:open",
+                    created[0].revision,
+                    "commitments",
+                    payload,
+                    vec![],
+                )
+                .unwrap_err()
+                .kind,
+                StructuredOutputErrorKind::Invalid
+            );
+        }
     }
 
     #[test]

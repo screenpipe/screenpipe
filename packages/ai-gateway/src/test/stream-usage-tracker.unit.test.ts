@@ -141,4 +141,22 @@ describe('trackStreamUsage — openai format', () => {
 		expect(u.input_tokens).toBe(1234);
 		expect(u.cache_read_input_tokens).toBe(1000);
 	});
+
+	it('resolves observed usage when the client cancels before stream completion', async () => {
+		const event = `data: ${JSON.stringify({
+			choices: [],
+			usage: { prompt_tokens: 321, completion_tokens: 12 },
+		})}\n\n`;
+		const source = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(event));
+			},
+		});
+		const { response, usage } = trackResponseUsage(new Response(source), 'openai');
+		const reader = response.body!.getReader();
+		await reader.read();
+		await reader.cancel('client disconnected');
+
+		expect(await usage).toMatchObject({ input_tokens: 321, output_tokens: 12 });
+	});
 });

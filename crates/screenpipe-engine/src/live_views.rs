@@ -10,8 +10,9 @@
 //! not contain React components, CSS, or arbitrary HTML supplied by pipes.
 
 use crate::structured_outputs::{
-    list_output_targets, output_feedback_summary, replace_consumer_targets, OutputFeedbackSummary,
-    OutputTarget, OutputTargetInput, StructuredOutputValue,
+    list_output_targets, output_feedback_summary, output_item_action_summary,
+    replace_consumer_targets, OutputFeedbackSummary, OutputItemActionSummary, OutputTarget,
+    OutputTargetInput, StructuredOutputValue,
 };
 use chrono::Utc;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -208,9 +209,18 @@ impl LiveViewBlockKind {
             }),
             Self::ListV1 => item_collection_schema(
                 json!({
+                    "id": {"type": "string", "maxLength": 128},
                     "title": {"type": "string", "maxLength": 200},
                     "subtitle": {"type": "string", "maxLength": 500},
-                    "status": {"type": "string", "maxLength": 80}
+                    "status": {"type": "string", "maxLength": 80},
+                    "dueAt": {"type": "string", "maxLength": 128},
+                    "source": {"type": "string", "maxLength": 200},
+                    "resolveLabel": {"type": "string", "maxLength": 32},
+                    "actions": {
+                        "type": "array",
+                        "maxItems": 5,
+                        "items": {"type": "string", "maxLength": 32}
+                    }
                 }),
                 &["title"],
             ),
@@ -362,6 +372,8 @@ pub struct LiveViewBlock {
     pub value: Option<StructuredOutputValue>,
     #[serde(default)]
     pub feedback: OutputFeedbackSummary,
+    #[serde(default)]
+    pub item_actions: OutputItemActionSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -673,6 +685,8 @@ pub fn list_bundled_live_view_kits() -> Result<Vec<LiveViewKit>, LiveViewError> 
         include_str!("../schemas/kits/automation-finder.live-view-kit.v1.json"),
         include_str!("../schemas/kits/ai-work-patterns.live-view-kit.v1.json"),
         include_str!("../schemas/kits/standup-ready.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/commitments.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/accounting-follow-through.live-view-kit.v1.json"),
     ];
 
     BUNDLED_KITS
@@ -938,6 +952,7 @@ fn hydrate(
                     LiveViewBlock {
                         value: target.and_then(|target| target.latest.clone()),
                         feedback: target.map(output_feedback_summary).unwrap_or_default(),
+                        item_actions: target.map(output_item_action_summary).unwrap_or_default(),
                         id: block.id,
                         title: block.title,
                         kind: block.kind,
@@ -1373,7 +1388,7 @@ mod tests {
     #[test]
     fn bundled_kits_declare_every_pipe_used_by_their_templates() {
         let kits = list_bundled_live_view_kits().unwrap();
-        assert_eq!(kits.len(), 6);
+        assert_eq!(kits.len(), 8);
         assert_eq!(live_view_kit_json_schema()["$id"], LIVE_VIEW_KIT_SCHEMA);
         for kit in kits {
             validate_live_view_kit(&kit).unwrap();

@@ -15,6 +15,7 @@ use crate::server_core::ServerCore;
 use crate::store::{LocalPlanPolicy, SettingsStore};
 use screenpipe_engine::RecordingConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -69,6 +70,48 @@ fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
     let (data_dir, _) = config::resolve_data_dir(&store.data_dir);
     Ok(store.to_recording_config(data_dir))
+}
+
+/// Verifies an OpenAI-compatible endpoint with the exact request path and
+/// audio encoding used by the recording engine. A successful response is
+/// required before the settings UI can activate this engine, so recordings
+/// cannot silently accumulate without searchable audio transcripts.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_openai_compatible_transcription(
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+    headers: Option<HashMap<String, String>>,
+    raw_audio: bool,
+) -> Result<String, String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Err("Enter an OpenAI-compatible endpoint first.".to_string());
+    }
+
+    let model = if model.trim().is_empty() {
+        screenpipe_audio::DEFAULT_OPENAI_COMPATIBLE_MODEL
+    } else {
+        model.trim()
+    };
+
+    let test_audio = vec![0.0_f32; 16_000];
+    screenpipe_audio::transcription::openai_compatible::batch::transcribe_with_openai_compatible(
+        None,
+        endpoint,
+        api_key.as_deref(),
+        model,
+        &test_audio,
+        "OpenAI-compatible settings test",
+        16_000,
+        Vec::new(),
+        &[],
+        headers.as_ref(),
+        raw_audio,
+    )
+    .await
+    .map_err(|error| format!("Endpoint test failed: {error}"))
 }
 
 fn configured_local_api_port(app: &tauri::AppHandle) -> u16 {
@@ -226,6 +269,18 @@ pub struct RecordingState {
     /// Restart-storm guard for DB-wedge auto-recovery. Shared across server
     /// restarts so a DB that stays broken after N restarts stops retrying.
     pub db_wedge_breaker: DbWedgeBreaker,
+}
+
+/// Install a fully constructed capture session before activating any monitor
+/// that can synchronously request its teardown.
+pub(crate) fn install_capture_session(
+    slot: &mut Option<CaptureSession>,
+    session: CaptureSession,
+) {
+    *slot = Some(session);
+    slot.as_ref()
+        .expect("capture session was just installed")
+        .start_disk_pressure_monitor();
 }
 
 impl RecordingState {
@@ -631,7 +686,7 @@ pub async fn start_capture(
     let session = CaptureSession::start(server, &config, false).await?;
     drop(server_guard);
 
-    *capture_guard = Some(session);
+    install_capture_session(&mut capture_guard, session);
 
     info!("Capture session started");
     Ok(())
@@ -1198,7 +1253,7 @@ async fn spawn_screenpipe_inner(
                     *guard = Some(server);
                 }
                 if let Some(capture) = capture {
-                    *capture_guard = Some(capture);
+                    install_capture_session(&mut capture_guard, capture);
                     info!("Server + capture started successfully on dedicated runtime");
                 } else {
                     info!("Server started with capture deliberately stopped");
@@ -1288,7 +1343,7 @@ async fn start_capture_internal(
     let session = CaptureSession::start(server, &config, false).await?;
     drop(server_guard);
 
-    *capture_guard = Some(session);
+    install_capture_session(&mut capture_guard, session);
     state.is_starting.store(false, Ordering::SeqCst);
 
     info!("Capture started on existing server");

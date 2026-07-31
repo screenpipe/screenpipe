@@ -22,6 +22,7 @@ import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import {
   authorizeComposioToolkit,
   fetchComposioStatus,
@@ -802,6 +803,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       integrations_connected: connectedKeys,
       time_spent_ms: Date.now() - mountTimeRef.current,
     });
+    onboardingFunnel.connectionsScreenCompleted(numConnected);
     handleNextSlide();
   }, [numConnected, connectedKeys, handleNextSlide]);
 

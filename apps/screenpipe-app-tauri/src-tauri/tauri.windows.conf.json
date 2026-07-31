@@ -21,6 +21,7 @@
             "ffmpeg\\bin\\*.dll": "./",
             "ffmpeg\\lib\\*": "./",
             "onnxruntime*\\lib\\onnxruntime.dll": "./",
+            "wer\\*.dll": "./",
             "openblas\\bin\\*.dll": "./",
             "vcredist\\*.dll": "./",
             "assets/*": "./assets/"

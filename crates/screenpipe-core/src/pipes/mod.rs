@@ -85,6 +85,14 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "meeting-summary",
         include_str!("../../assets/pipes/meeting-summary/pipe.md"),
     ),
+    (
+        "commitments",
+        include_str!("../../assets/pipes/commitments/pipe.md"),
+    ),
+    (
+        "accounting-follow-through",
+        include_str!("../../assets/pipes/accounting-follow-through/pipe.md"),
+    ),
 ];
 
 /// Explicitly install one trusted Pipe bundled with the app.
@@ -6252,6 +6260,22 @@ fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
                 "the most recent row is the one that just ended. capture its",
                 "either way, capture the meeting's",
             ),
+            // A maintainer-only synchronization note was accidentally shipped
+            // inside the runtime prompt. Agents interpreted it as work to do
+            // and recursively searched the user's home or ~/.screenpipe for
+            // app source, pegging a CPU core after meetings. Replace it in
+            // already-installed copies with an explicit bounded-work rule.
+            (
+                "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in `apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app \"summarize with AI\" button) — the two surfaces should produce the same behavior.",
+                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
+            ),
+            // Clarify the first bounded-work migration: the pipe must search
+            // Screenpipe through the meeting-scoped API. Only recursive
+            // filesystem/source discovery is prohibited.
+            (
+                "the instructions below are complete. do not inspect app source or search outside this pipe folder. never run recursive `find` or `grep` over the user's home or `~/.screenpipe`; use only the named local files and bounded HTTP endpoints below.",
+                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
+            ),
         ],
         _ => return None,
     };
@@ -7944,6 +7968,25 @@ mod tests {
         assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
     }
 
+    #[test]
+    fn migrate_builtin_pipe_removes_source_search_instruction() {
+        let stale = concat!(
+            "a meeting just ended.\n\n",
+            "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in ",
+            "`apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app ",
+            "\"summarize with AI\" button) — the two surfaces should produce the same behavior.\n\n",
+            "read the screenpipe skill first.\n",
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("source-search instruction should migrate");
+        assert!(!fixed.contains("buildMeetingSummarizeInstructions"));
+        assert!(fixed.contains("screenpipe API search is required"));
+        assert!(fixed.contains("never run recursive `find` or `grep`"));
+        assert!(fixed.ends_with("read the screenpipe skill first.\n"));
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
     /// The shipped prompt must already be in its migrated form, or every fresh
     /// install would be rewritten on the next startup.
     #[test]
@@ -7953,6 +7996,11 @@ mod tests {
             .find_map(|(name, content)| (*name == "meeting-summary").then_some(*content))
             .expect("meeting-summary is bundled");
         assert!(migrate_builtin_pipe_text("meeting-summary", bundled).is_none());
+        let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
+        assert_eq!(config.timeout, Some(300));
+        assert!(!body.contains("buildMeetingSummarizeInstructions"));
+        assert!(body.contains("screenpipe API search is required"));
+        assert!(body.contains("never run recursive `find` or `grep`"));
     }
 
     #[test]

@@ -607,7 +607,9 @@ async fn check_recording_health() -> (bool, bool) {
                     .unwrap_or("unknown");
 
                 let vision_healthy = frame_status == "ok" || frame_status == "healthy";
-                let audio_healthy = audio_status == "ok" || audio_status == "healthy";
+                let audio_healthy = audio_status == "ok"
+                    || audio_status == "healthy"
+                    || audio_status == "waiting_for_meeting";
 
                 (audio_healthy, vision_healthy)
             } else {

@@ -196,6 +196,22 @@ const getAppIconUrl = (appName: string): string => {
 
 const FALLBACK_TRANSCRIPTION_ENGINE = "whisper-large-v3-turbo-quantized";
 
+type OpenAICompatibleDraft = {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  headers?: Record<string, string>;
+  rawAudio: boolean;
+};
+
+const getOpenAICompatibleDraft = (settings: Settings): OpenAICompatibleDraft => ({
+  endpoint: settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
+  apiKey: settings.openaiCompatibleApiKey || "",
+  model: settings.openaiCompatibleModel || "",
+  headers: settings.openaiCompatibleHeaders || undefined,
+  rawAudio: settings.openaiCompatibleRawAudio || false,
+});
+
 const TRANSCRIPTION_ENGINE_LABELS: Record<string, string> = {
   "screenpipe-cloud": "Screenpipe Cloud",
   deepgram: "Deepgram",
@@ -1909,6 +1925,12 @@ export function RecordingSettings() {
   const [platformReady, setPlatformReady] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
+  const [isOpenAICompatibleSetupOpen, setIsOpenAICompatibleSetupOpen] = useState(false);
+  const [openAICompatibleDraft, setOpenAICompatibleDraft] = useState<OpenAICompatibleDraft>(
+    () => getOpenAICompatibleDraft(settings)
+  );
+  const [isTestingOpenAICompatible, setIsTestingOpenAICompatible] = useState(false);
+  const [openAICompatibleTestError, setOpenAICompatibleTestError] = useState<string | null>(null);
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
   const { checkLogin } = useLoginDialog();
   const overlayData = useOverlayData();
@@ -1923,10 +1945,27 @@ export function RecordingSettings() {
     setFilterText: setFilterTranscriptionModels,
     fetchOpenAIModels,
   } = useOpenAIModels({
-    engine: settings.audioTranscriptionEngine,
-    endpoint: settings.openaiCompatibleEndpoint || "",
-    apiKey: settings.openaiCompatibleApiKey || "",
+    engine: isOpenAICompatibleSetupOpen || settings.audioTranscriptionEngine === "openai-compatible"
+      ? "openai-compatible"
+      : settings.audioTranscriptionEngine,
+    endpoint: openAICompatibleDraft.endpoint,
+    apiKey: openAICompatibleDraft.apiKey,
   });
+
+  // Keep the draft in sync with persisted settings until the user starts a
+  // verification attempt. Draft edits must not mark recording as restartable.
+  useEffect(() => {
+    if (!isOpenAICompatibleSetupOpen) {
+      setOpenAICompatibleDraft(getOpenAICompatibleDraft(settings));
+    }
+  }, [
+    isOpenAICompatibleSetupOpen,
+    settings.openaiCompatibleApiKey,
+    settings.openaiCompatibleEndpoint,
+    settings.openaiCompatibleHeaders,
+    settings.openaiCompatibleModel,
+    settings.openaiCompatibleRawAudio,
+  ]);
 
   // Transcription diagnostics
   const {
@@ -2384,8 +2423,23 @@ export function RecordingSettings() {
 
   const handleAudioTranscriptionModelChange = async (
     value: string,
-    realtime = false
+    realtime = false,
+    endpointVerified = false
   ) => {
+    // Do not activate an OpenAI-compatible server optimistically. Its first
+    // real transcription failure otherwise leaves audio recorded but absent
+    // from search with no clear recovery path.
+    if (
+      value === "openai-compatible" &&
+      settings.audioTranscriptionEngine !== value &&
+      !endpointVerified
+    ) {
+      setOpenAICompatibleDraft(getOpenAICompatibleDraft(settings));
+      setIsOpenAICompatibleSetupOpen(true);
+      setOpenAICompatibleTestError(null);
+      return;
+    }
+
     const isLoggedIn = checkLogin(settings.user);
     // Cloud transcription works on every plan (free tier allowance is
     // enforced server-side) — the only requirement is being logged in.
@@ -2426,6 +2480,54 @@ export function RecordingSettings() {
     }
 
     handleSettingsChange(newSettings, true);
+  };
+
+  const updateOpenAICompatibleDraft = (
+    updates: Partial<OpenAICompatibleDraft>
+  ) => {
+    setOpenAICompatibleTestError(null);
+    setIsOpenAICompatibleSetupOpen(true);
+    setOpenAICompatibleDraft((current) => ({ ...current, ...updates }));
+  };
+
+  const handleTestAndEnableOpenAICompatible = async () => {
+    setIsTestingOpenAICompatible(true);
+    setOpenAICompatibleTestError(null);
+
+    try {
+      const result = await commands.testOpenaiCompatibleTranscription(
+        openAICompatibleDraft.endpoint,
+        openAICompatibleDraft.apiKey || null,
+        openAICompatibleDraft.model,
+        openAICompatibleDraft.headers || null,
+        openAICompatibleDraft.rawAudio
+      );
+      if (result.status === "error") {
+        throw new Error(result.error);
+      }
+
+      handleSettingsChange(
+        {
+          openaiCompatibleEndpoint: openAICompatibleDraft.endpoint,
+          openaiCompatibleApiKey: openAICompatibleDraft.apiKey || undefined,
+          openaiCompatibleModel: openAICompatibleDraft.model || undefined,
+          openaiCompatibleHeaders: openAICompatibleDraft.headers,
+          openaiCompatibleRawAudio: openAICompatibleDraft.rawAudio,
+        },
+        true
+      );
+      await handleAudioTranscriptionModelChange("openai-compatible", false, true);
+      setIsOpenAICompatibleSetupOpen(false);
+      toast({
+        title: "OpenAI Compatible enabled",
+        description: "The endpoint accepted a real transcription request.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setOpenAICompatibleTestError(message);
+    } finally {
+      setIsTestingOpenAICompatible(false);
+    }
   };
 
 
@@ -2830,18 +2932,27 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </Button>
               </div>
             )}
-            {settings.audioTranscriptionEngine === "openai-compatible" && (
+            {(settings.audioTranscriptionEngine === "openai-compatible" || isOpenAICompatibleSetupOpen) && (
               <div className="mt-2 ml-[26px] space-y-2">
+                {isOpenAICompatibleSetupOpen && (
+                  <Alert className="border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle className="text-xs font-semibold">Endpoint verification required</AlertTitle>
+                    <AlertDescription className="text-xs">
+                      These edits are not saved or applied until this endpoint completes a test transcription. This prevents recordings that cannot be searched.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 {/* API Endpoint Input */}
                 <ValidatedInput
                   id="openaiCompatibleEndpoint"
                   label=""
-                  value={settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT}
-                  onChange={(value: string) => handleSettingsChange({ openaiCompatibleEndpoint: value }, true)}
-                  onBlur={() => fetchOpenAIModels(settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, settings.openaiCompatibleApiKey)}
+                  value={openAICompatibleDraft.endpoint}
+                  onChange={(value: string) => updateOpenAICompatibleDraft({ endpoint: value })}
+                  onBlur={() => fetchOpenAIModels(openAICompatibleDraft.endpoint, openAICompatibleDraft.apiKey)}
                   onKeyDown={(e: React.KeyboardEvent) => {
                     if (e.key === 'Enter') {
-                      fetchOpenAIModels(settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, settings.openaiCompatibleApiKey);
+                      fetchOpenAIModels(openAICompatibleDraft.endpoint, openAICompatibleDraft.apiKey);
                     }
                   }}
                   placeholder="API Endpoint (e.g., http://127.0.0.1:8080)"
@@ -2854,8 +2965,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     id="openaiCompatibleApiKey"
                     label=""
                     type={showOpenAIApiKey ? "text" : "password"}
-                    value={settings.openaiCompatibleApiKey || ""}
-                    onChange={(value: string) => handleSettingsChange({ openaiCompatibleApiKey: value }, true)}
+                    value={openAICompatibleDraft.apiKey}
+                    onChange={(value: string) => updateOpenAICompatibleDraft({ apiKey: value })}
                     placeholder="API Key (optional)"
                     className="pr-8 h-7 text-xs"
                   />
@@ -2868,8 +2979,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <div className="space-y-1.5">
                   <div className="relative">
                     <Input
-                      value={settings.openaiCompatibleModel || ""}
-                      onChange={(e) => handleSettingsChange({ openaiCompatibleModel: e.target.value }, true)}
+                      value={openAICompatibleDraft.model}
+                      onChange={(e) => updateOpenAICompatibleDraft({ model: e.target.value })}
                       placeholder={isLoadingModels ? "Loading models..." : "Model name (e.g., whisper-large-v3-turbo)"}
                       className="h-7 text-xs pr-8"
                     />
@@ -2900,11 +3011,11 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                             type="button"
                             className={cn(
                               "px-2 py-0.5 rounded text-xs border transition-colors",
-                              settings.openaiCompatibleModel === model
+                              openAICompatibleDraft.model === model
                                 ? "bg-foreground text-background border-foreground"
                                 : "hover:bg-accent border-border"
                             )}
-                            onClick={() => handleSettingsChange({ openaiCompatibleModel: model }, true)}
+                            onClick={() => updateOpenAICompatibleDraft({ model })}
                           >
                             {model}
                           </button>
@@ -2924,8 +3035,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <label className="flex items-center gap-2 text-xs cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={settings.openaiCompatibleRawAudio || false}
-                    onChange={(e) => handleSettingsChange({ openaiCompatibleRawAudio: e.target.checked }, true)}
+                    checked={openAICompatibleDraft.rawAudio}
+                    onChange={(e) => updateOpenAICompatibleDraft({ rawAudio: e.target.checked })}
                     className="rounded border-border"
                   />
                   <span>send raw WAV audio (instead of MP3)</span>
@@ -2935,17 +3046,17 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <div className="space-y-1">
                   <label className="text-xs text-muted-foreground">custom headers (JSON)</label>
                   <Input
-                    defaultValue={settings.openaiCompatibleHeaders ? JSON.stringify(settings.openaiCompatibleHeaders) : ""}
+                    defaultValue={openAICompatibleDraft.headers ? JSON.stringify(openAICompatibleDraft.headers) : ""}
                     onBlur={(e) => {
                       const val = e.target.value.trim();
                       if (!val) {
-                        handleSettingsChange({ openaiCompatibleHeaders: undefined }, true);
+                        updateOpenAICompatibleDraft({ headers: undefined });
                         return;
                       }
                       try {
                         const parsed = JSON.parse(val);
                         if (typeof parsed === "object" && !Array.isArray(parsed)) {
-                          handleSettingsChange({ openaiCompatibleHeaders: parsed }, true);
+                          updateOpenAICompatibleDraft({ headers: parsed });
                         }
                       } catch {
                         // Invalid JSON — don't save
@@ -2955,6 +3066,31 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     className="h-7 text-xs font-mono"
                   />
                 </div>
+
+                <div className="flex flex-wrap items-center gap-2 border border-border bg-muted/20 p-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={handleTestAndEnableOpenAICompatible}
+                    disabled={isTestingOpenAICompatible}
+                  >
+                    {isTestingOpenAICompatible ? (
+                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                    ) : (
+                      <Zap className="mr-1.5 h-3 w-3" />
+                    )}
+                    {isTestingOpenAICompatible ? "Testing endpoint..." : "Test and enable"}
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Sends a short silent sample using the configured model and audio format.
+                  </span>
+                </div>
+                {openAICompatibleTestError && (
+                  <p className="text-xs text-destructive" role="alert">
+                    {openAICompatibleTestError}
+                  </p>
+                )}
 
                 {/* Connection Test Panel */}
                 <div className="border rounded-lg">

@@ -979,6 +979,11 @@ pub struct SettingsStore {
     #[serde(rename = "showRestartNotifications", default)]
     pub show_restart_notifications: bool,
 
+    /// Stop capture before the data volume is completely full. Search, pipes,
+    /// and the local API remain available. Explicitly opt-in for now.
+    #[serde(rename = "stopRecordingOnLowDisk", default)]
+    pub stop_recording_on_low_disk: bool,
+
     /// When true, apply macOS vibrancy effect to the sidebar for a translucent look.
     #[serde(rename = "translucentSidebar", default)]
     pub translucent_sidebar: bool,
@@ -1427,6 +1432,7 @@ Rules:
             show_overlay_in_screen_recording: false,
             chat_always_on_top: true,
             show_restart_notifications: false,
+            stop_recording_on_low_disk: false,
             #[cfg(target_os = "macos")]
             translucent_sidebar: true,
             #[cfg(not(target_os = "macos"))]
@@ -1845,6 +1851,25 @@ impl SettingsStore {
     }
 }
 
+/// Consumer builds no longer support the legacy tray-only UI preference. Reset
+/// both fields together so installs that used it reopen headed and resume their
+/// normal scheduled-pipe behavior on the first launch after upgrading.
+///
+/// Enterprise builds retain the fields because a managed deployment may still
+/// use the dormant-UI lifecycle independently of the consumer settings page.
+fn restore_headed_mode_for_consumer(
+    settings: &mut SettingsStore,
+    is_enterprise_build: bool,
+) -> bool {
+    if is_enterprise_build || (!settings.headless && !settings.headless_record_only) {
+        return false;
+    }
+
+    settings.headless = false;
+    settings.headless_record_only = false;
+    true
+}
+
 pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     println!("Initializing settings store");
 
@@ -1952,6 +1977,13 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
             );
             should_save = true;
         }
+    }
+
+    if restore_headed_mode_for_consumer(&mut store, cfg!(feature = "enterprise-build")) {
+        tracing::info!(
+            "settings migration: restored headed UI and scheduled pipe runs for consumer install"
+        );
+        should_save = true;
     }
 
     if should_save {
@@ -2129,6 +2161,24 @@ mod tests {
     }
 
     #[test]
+    fn low_disk_recording_guard_defaults_to_disabled() {
+        assert!(!SettingsStore::default().stop_recording_on_low_disk);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert!(!missing.stop_recording_on_low_disk);
+
+        let opted_in: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "stopRecordingOnLowDisk": true
+        }))
+        .unwrap();
+        assert!(opted_in.stop_recording_on_low_disk);
+    }
+
+    #[test]
     fn missing_auto_update_deserializes_disabled() {
         let settings: SettingsStore = serde_json::from_value(json!({
             "aiPresets": []
@@ -2160,6 +2210,29 @@ mod tests {
         .unwrap();
 
         assert!(settings.headless_record_only);
+    }
+
+    #[test]
+    fn consumer_headless_migration_restores_headed_mode() {
+        let mut consumer = SettingsStore {
+            headless: true,
+            headless_record_only: true,
+            ..Default::default()
+        };
+
+        assert!(restore_headed_mode_for_consumer(&mut consumer, false));
+        assert!(!consumer.headless);
+        assert!(!consumer.headless_record_only);
+        assert!(!restore_headed_mode_for_consumer(&mut consumer, false));
+
+        let mut enterprise = SettingsStore {
+            headless: true,
+            headless_record_only: true,
+            ..Default::default()
+        };
+        assert!(!restore_headed_mode_for_consumer(&mut enterprise, true));
+        assert!(enterprise.headless);
+        assert!(enterprise.headless_record_only);
     }
 
     #[test]

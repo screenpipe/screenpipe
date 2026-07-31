@@ -13,10 +13,20 @@ use std::sync::Arc;
 
 /// Handle pipe subcommands (standalone — does NOT require a running server).
 pub async fn handle_pipe_command(command: &PipeCommand) -> anyhow::Result<()> {
-    let pipes_dir = screenpipe_core::paths::default_screenpipe_data_dir().join("pipes");
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let pipes_dir = data_dir.join("pipes");
     std::fs::create_dir_all(&pipes_dir)?;
 
-    let user_token = std::env::var("SCREENPIPE_API_KEY").ok();
+    // In-app agent shells intentionally hide SCREENPIPE_API_KEY so the cloud
+    // JWT cannot be mistaken for the local API bearer. Pipe subcommands still
+    // need the desktop's cloud credential for screenpipe-hosted presets, so
+    // resolve the shared SecretStore fallback used by the running engine.
+    let user_token = if matches!(command, PipeCommand::Run { .. }) {
+        crate::auth_key::resolve_cloud_token(&data_dir, std::env::var("SCREENPIPE_API_KEY").ok())
+            .await
+    } else {
+        None
+    };
     let pi: Arc<dyn AgentExecutor> = Arc::new(PiExecutor::new(user_token));
     let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
     executors.insert("pi".to_string(), pi);

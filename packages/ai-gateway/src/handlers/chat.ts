@@ -118,11 +118,14 @@ export function clientPayloadMessage(status: number, msg: string): string | null
   return CLIENT_PAYLOAD_PATTERNS.find((p) => p.re.test(msg))?.message ?? null;
 }
 
-// OpenAI refuses service in some countries/regions based on the egress IP.
-// Nothing the worker or the user's API key can fix — surface which models DO
-// work there instead of the misleading "check your API key" advice, and keep
-// it out of Sentry (SCREENPIPE-AI-PROXY-1C, 14 users). Other 403s stay loud.
-const GEO_BLOCK_PATTERN = /country,? region,? or territory not supported/i;
+// Providers refuse service in some countries/regions based on the egress IP.
+// Nothing the worker or the user's API key can fix, and every hosted chain
+// entry is OpenAI/Anthropic so "pick another model" (or Auto) fails the same
+// way — point at local models instead, and keep it out of Sentry
+// (SCREENPIPE-AI-PROXY-1C, -2S/-1W: 3k+ events). Other 403s stay loud.
+// OpenAI: "Country, region, or territory not supported".
+// Anthropic: {"type":"forbidden","message":"Request not allowed"}.
+const GEO_BLOCK_PATTERN = /country,? region,? or territory not supported|request not allowed/i;
 
 export function isGeoBlocked(status: number, msg: string): boolean {
   return status === 403 && GEO_BLOCK_PATTERN.test(msg);
@@ -258,10 +261,12 @@ async function tryModel(
       throw error;
     }
 
-    // Provider geo-blocks (OpenAI 403 by region) — expected per-region
-    // condition; tell the user what will work, keep Sentry quiet.
+    // Provider geo-blocks (OpenAI/Anthropic 403 by region) — expected
+    // per-region condition; tell the user what will work, keep Sentry quiet.
+    // No model name on purpose: the chain's last entry isn't what the user
+    // picked, and every hosted model fails identically in a blocked region.
     if (isGeoBlocked(status, msg)) {
-      error.userMessage = `${model} isn't available in your country or region (the provider rejected the request). Pick Auto instead.`;
+      error.userMessage = `Cloud AI models aren't available in your country or region (the provider rejected the request). Connect a local model like Ollama in Settings → AI to keep using chat.`;
       console.warn(`${ctx}: ${model} geo-blocked by provider (403)`);
       logModelOutcome(env, { model, outcome: 'error' }).catch(() => {});
       throw error;

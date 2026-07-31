@@ -24,6 +24,10 @@ pub struct AudioPipelineMetrics {
     /// recovered long ago. Without it, a single historical timeout pins the
     /// audio status to "active_no_data" forever — even while audio flows again.
     pub last_stream_timeout_at: AtomicU64,
+    /// Most recent timeout per device. Recovery must be proven by later usable
+    /// audio from the same device; aggregate audio from another stream cannot
+    /// clear a microphone or system-output failure.
+    per_device_stream_timeout_at: RwLock<HashMap<String, u64>>,
     /// Audio buffers skipped because the recorder consumer fell behind the
     /// capture broadcast channel. This is otherwise-silent audio loss under
     /// CPU contention — previously invisible to telemetry.
@@ -94,6 +98,7 @@ impl AudioPipelineMetrics {
             chunks_channel_full: AtomicU64::new(0),
             stream_timeouts: AtomicU64::new(0),
             last_stream_timeout_at: AtomicU64::new(0),
+            per_device_stream_timeout_at: RwLock::new(HashMap::new()),
             chunks_lagged: AtomicU64::new(0),
             vad_passed: AtomicU64::new(0),
             vad_rejected: AtomicU64::new(0),
@@ -129,13 +134,30 @@ impl AudioPipelineMetrics {
         self.chunks_channel_full.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_stream_timeout(&self) {
-        self.stream_timeouts.fetch_add(1, Ordering::Relaxed);
+    pub fn record_stream_timeout(&self, device_name: &str) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
+        self.record_stream_timeout_at(device_name, now);
+    }
+
+    fn record_stream_timeout_at(&self, device_name: &str, now: u64) {
+        self.stream_timeouts.fetch_add(1, Ordering::Relaxed);
         self.last_stream_timeout_at.store(now, Ordering::Relaxed);
+        self.per_device_stream_timeout_at
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(device_name.to_string(), now);
+    }
+
+    /// Point-in-time timeout map used by `/health` to correlate recovery with
+    /// the device that actually failed.
+    pub fn per_device_stream_timeouts_snapshot(&self) -> HashMap<String, u64> {
+        self.per_device_stream_timeout_at
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Record `n` audio buffers skipped because the recorder consumer fell
@@ -438,5 +460,21 @@ mod tests {
         let per_device = metrics.per_device_rms_snapshot();
         assert_eq!(per_device.len(), 1);
         assert_eq!(per_device["mic"], 0.0);
+    }
+
+    #[test]
+    fn stream_timeouts_keep_latest_timestamp_per_device() {
+        let metrics = AudioPipelineMetrics::new();
+
+        metrics.record_stream_timeout_at("mic", 100);
+        metrics.record_stream_timeout_at("speakers", 110);
+        metrics.record_stream_timeout_at("mic", 120);
+
+        let per_device = metrics.per_device_stream_timeouts_snapshot();
+        assert_eq!(per_device.len(), 2);
+        assert_eq!(per_device["mic"], 120);
+        assert_eq!(per_device["speakers"], 110);
+        assert_eq!(metrics.stream_timeouts.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.last_stream_timeout_at.load(Ordering::Relaxed), 120);
     }
 }

@@ -26,6 +26,8 @@ export interface UsageStatus {
    *  server (via MODEL_GATING_ENABLED) turn the banner off without an app
    *  release. Absent on older gateways → treated as false. */
   upsell_banner?: boolean;
+  /** Server-backed Free/Basic eligibility. Missing or unresolved is false. */
+  upgrade_eligible?: boolean;
 }
 
 const USAGE_URL = "https://api.screenpipe.com/v1/usage";
@@ -34,13 +36,18 @@ const USAGE_URL = "https://api.screenpipe.com/v1/usage";
 const POLL_INTERVAL_MS = 30_000;
 
 export function useUsageStatus(): UsageStatus | null {
-  const { settings } = useSettings();
+  const { settings, isSettingsLoaded } = useSettings();
   const token = settings.user?.token;
-  const [status, setStatus] = useState<UsageStatus | null>(null);
+  const requestKey = isSettingsLoaded ? token ?? "" : null;
+  const [snapshot, setSnapshot] = useState<{
+    requestKey: string;
+    status: UsageStatus;
+  } | null>(null);
 
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    if (!isSettingsLoaded) return;
 
     const fetchOnce = async () => {
       try {
@@ -54,13 +61,17 @@ export function useUsageStatus(): UsageStatus | null {
           typeof json.limit_today === "number" &&
           typeof json.remaining === "number"
         ) {
-          setStatus({
-            tier: (json.tier as UsageStatus["tier"]) ?? "anonymous",
-            used_today: json.used_today ?? 0,
-            limit_today: json.limit_today,
-            remaining: json.remaining,
-            resets_at: json.resets_at ?? "",
-            upsell_banner: json.upsell_banner === true,
+          setSnapshot({
+            requestKey: token ?? "",
+            status: {
+              tier: (json.tier as UsageStatus["tier"]) ?? "anonymous",
+              used_today: json.used_today ?? 0,
+              limit_today: json.limit_today,
+              remaining: json.remaining,
+              resets_at: json.resets_at ?? "",
+              upsell_banner: json.upsell_banner === true,
+              upgrade_eligible: json.upgrade_eligible === true,
+            },
           });
         }
       } catch {
@@ -82,9 +93,11 @@ export function useUsageStatus(): UsageStatus | null {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [token]);
+  }, [isSettingsLoaded, token]);
 
-  return status;
+  return requestKey !== null && snapshot?.requestKey === requestKey
+    ? snapshot.status
+    : null;
 }
 
 /**

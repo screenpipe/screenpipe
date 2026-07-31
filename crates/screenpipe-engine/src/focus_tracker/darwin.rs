@@ -93,18 +93,37 @@ struct MonitorRect {
     h: f64,
 }
 
-/// Pure bounds check — returns the first monitor whose rect contains (x, y).
+/// Pure bounds check — returns the monitor whose rect contains (x, y).
 ///
 /// `[x, x+w)` / `[y, y+h)` is half-open so adjacent monitors don't overlap
 /// at the seam.
-fn pick_monitor(rects: &[MonitorRect], x: f64, y: f64) -> Option<MonitorIdentity> {
-    rects.iter().find_map(|r| {
-        if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h {
-            Some(r.identity.clone())
-        } else {
-            None
+///
+/// Mirrored displays share (overlapping) bounds, so several rects can contain
+/// the same point while carrying distinct identities. Picking by enumeration
+/// order alone made the resolved identity flap between mirror twins: every
+/// flap emits a focus event, which keeps the controller's stale-focus Active
+/// fallback from ever engaging and can pin the capture loop's monitor in
+/// Warm/Cold on a mirrored setup. When multiple rects match, stay sticky on
+/// the currently-resolved identity if it is among them.
+fn pick_monitor(
+    rects: &[MonitorRect],
+    x: f64,
+    y: f64,
+    current: Option<&MonitorIdentity>,
+) -> Option<MonitorIdentity> {
+    let containing: Vec<&MonitorRect> = rects
+        .iter()
+        .filter(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+        .collect();
+
+    if containing.len() > 1 {
+        if let Some(cur) = current {
+            if let Some(sticky) = containing.iter().find(|r| r.identity.matches(cur)) {
+                return Some(sticky.identity.clone());
+            }
         }
-    })
+    }
+    containing.first().map(|r| r.identity.clone())
 }
 
 /// Find the monitor whose bounds contain the given point.
@@ -116,6 +135,7 @@ fn monitor_for_point(
     monitors: &[screenpipe_screen::monitor::SafeMonitor],
     x: f64,
     y: f64,
+    current: Option<&MonitorIdentity>,
 ) -> Option<MonitorIdentity> {
     let rects: Vec<MonitorRect> = monitors
         .iter()
@@ -127,7 +147,7 @@ fn monitor_for_point(
             h: m.height() as f64,
         })
         .collect();
-    pick_monitor(&rects, x, y)
+    pick_monitor(&rects, x, y, current)
 }
 
 /// Inner shared state updated by both the observer thread and the safety-net
@@ -150,7 +170,10 @@ impl Inner {
         if self.stop_flag.load(Ordering::Relaxed) {
             return;
         }
-        let resolved = cursor_location().and_then(|(x, y)| monitor_for_point(monitors, x, y));
+        // Snapshot the current identity for sticky mirror-twin resolution.
+        let current_snapshot = self.current.lock().ok().and_then(|g| g.clone());
+        let resolved = cursor_location()
+            .and_then(|(x, y)| monitor_for_point(monitors, x, y, current_snapshot.as_ref()));
 
         match resolved {
             Some(identity) => {
@@ -382,19 +405,78 @@ mod tests {
         ];
 
         assert_eq!(
-            pick_monitor(&monitors, 100.0, 100.0),
+            pick_monitor(&monitors, 100.0, 100.0, None),
             Some(MonitorIdentity::runtime_id(1))
         );
         assert_eq!(
-            pick_monitor(&monitors, 2000.0, 100.0),
+            pick_monitor(&monitors, 2000.0, 100.0, None),
             Some(MonitorIdentity::runtime_id(2))
         );
         // Left edge of m2 is inclusive; right edge of m1 is exclusive.
         assert_eq!(
-            pick_monitor(&monitors, 1920.0, 500.0),
+            pick_monitor(&monitors, 1920.0, 500.0, None),
             Some(MonitorIdentity::runtime_id(2))
         );
-        assert_eq!(pick_monitor(&monitors, 500.0, 5000.0), None);
-        assert_eq!(pick_monitor(&monitors, -5.0, -5.0), None);
+        assert_eq!(pick_monitor(&monitors, 500.0, 5000.0, None), None);
+        assert_eq!(pick_monitor(&monitors, -5.0, -5.0, None), None);
+    }
+
+    /// Mirrored displays share overlapping bounds; two rects contain the same
+    /// cursor point with distinct identities.
+    fn mirrored_rects() -> Vec<MonitorRect> {
+        vec![
+            MonitorRect {
+                identity: MonitorIdentity::runtime_id(1),
+                x: 0.0,
+                y: 0.0,
+                w: 1512.0,
+                h: 982.0,
+            },
+            MonitorRect {
+                identity: MonitorIdentity::runtime_id(4),
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn pick_monitor_stays_sticky_on_mirrored_overlap() {
+        let rects = mirrored_rects();
+        let current = MonitorIdentity::runtime_id(4);
+
+        // Point inside both rects: without stickiness the first rect (id 1)
+        // would win and the resolved identity would flap with enumeration
+        // order; with a current identity among the matches, it must hold.
+        assert_eq!(
+            pick_monitor(&rects, 100.0, 100.0, Some(&current)),
+            Some(MonitorIdentity::runtime_id(4))
+        );
+
+        // Identity flapping is exactly what kept last_event_time fresh and
+        // pinned the capture loop's monitor in Warm/Cold: resolving twice in
+        // a row with the previous result must be a fixed point.
+        let first = pick_monitor(&rects, 100.0, 100.0, Some(&current)).unwrap();
+        let second = pick_monitor(&rects, 100.0, 100.0, Some(&first)).unwrap();
+        assert!(first.matches(&second), "sticky pick must be a fixed point");
+    }
+
+    #[test]
+    fn pick_monitor_sticky_ignores_current_outside_matches() {
+        let rects = mirrored_rects();
+        // Current identity is not among the containing rects (stale monitor):
+        // fall back to the first match rather than returning nothing.
+        let stale = MonitorIdentity::runtime_id(99);
+        assert_eq!(
+            pick_monitor(&rects, 100.0, 100.0, Some(&stale)),
+            Some(MonitorIdentity::runtime_id(1))
+        );
+        // Single-match points are unaffected by stickiness.
+        assert_eq!(
+            pick_monitor(&rects, 1800.0, 500.0, Some(&stale)),
+            Some(MonitorIdentity::runtime_id(4))
+        );
     }
 }

@@ -37,13 +37,21 @@ export function trackStreamUsage(
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
   const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let completed = false;
 
-  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      // Pass data through unchanged
-      controller.enqueue(chunk);
+  const completeOnce = () => {
+    if (completed) return;
+    completed = true;
+    onComplete({
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cache_read_input_tokens: cacheReadTokens,
+      cache_creation_input_tokens: cacheCreationTokens,
+    });
+  };
 
-      // Parse SSE events to extract usage
+  const inspect = (chunk: Uint8Array) => {
       buffer += decoder.decode(chunk, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || ''; // Keep incomplete line in buffer
@@ -78,16 +86,35 @@ export function trackStreamUsage(
           // Not valid JSON, skip
         }
       }
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          completeOnce();
+          controller.close();
+          return;
+        }
+        inspect(value);
+        controller.enqueue(value);
+      } catch (error) {
+        completeOnce();
+        controller.error(error);
+      }
     },
-    flush() {
-      onComplete({
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cache_read_input_tokens: cacheReadTokens,
-        cache_creation_input_tokens: cacheCreationTokens,
-      });
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        // Resolve the usage promise with the tokens observed so far. Cost
+        // settlement can then record a conservative partial/fallback estimate
+        // and release its account lease instead of hanging until TTL expiry.
+        completeOnce();
+      }
     },
-  }));
+  });
 }
 
 /**

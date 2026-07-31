@@ -23,6 +23,7 @@ import {
 } from "@/lib/notifications/actions";
 import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
+import { NotificationActionButton } from "@/components/notification-action-button";
 
 interface NotificationPayload {
   id: string;
@@ -675,7 +676,8 @@ export default function NotificationPanelPage() {
               alignItems: "center",
               padding: "0 14px 10px 14px",
               gap: "8px",
-              flexWrap: "wrap",
+              flexWrap: "nowrap",
+              minWidth: 0,
             }}
           >
             {restartState === "restarting" ? (
@@ -725,35 +727,15 @@ export default function NotificationPanelPage() {
                   action.type ||
                   "action";
                 return (
-                  <button
+                  <NotificationActionButton
                     key={action.id || action.action || action.type || index}
                     onClick={() =>
                       handleAction(action.type ? action : action.action || "")
                     }
-                    style={{
-                      background: action.primary
-                        ? "rgba(0, 0, 0, 0.06)"
-                        : "none",
-                      border: "1px solid rgba(0, 0, 0, 0.12)",
-                      color: "rgba(0, 0, 0, 0.75)",
-                      cursor: "pointer",
-                      padding: "4px 10px",
-                      fontSize: "10px",
-                      fontFamily: '"IBM Plex Mono", monospace',
-                      fontWeight: 500,
-                      letterSpacing: "0.03em",
-                    }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = "rgba(0, 0, 0, 0.08)")
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = action.primary
-                        ? "rgba(0, 0, 0, 0.06)"
-                        : "none")
-                    }
-                  >
-                    {actionLabel}
-                  </button>
+                    label={actionLabel}
+                    primary={action.primary}
+                    shareAvailableWidth={payload.actions.length > 1}
+                  />
                 );
               })
             )}

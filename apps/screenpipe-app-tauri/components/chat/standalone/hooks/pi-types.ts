@@ -28,6 +28,10 @@ type SaveConversationOptions = {
   /** Force the target conversation id (send path passes the dispatched
    *  session id so the save can't split into a duplicate row — #4719). */
   idOverride?: string;
+  turnState?: {
+    isLoading: boolean;
+    isStreaming: boolean;
+  };
 };
 
 type SaveConversation = (

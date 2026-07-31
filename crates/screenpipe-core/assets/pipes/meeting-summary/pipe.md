@@ -3,6 +3,7 @@ schedule: manual
 enabled: true
 preset:
   - screenpipe-cloud
+timeout: 300
 trigger:
   events:
     - meeting_ended
@@ -26,7 +27,7 @@ Keep memory healthy so it never drifts:
 
 a meeting just ended. find it, summarize it, and save the summary back onto its record so the user sees it next time they open the meeting.
 
-keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in `apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app "summarize with AI" button) — the two surfaces should produce the same behavior.
+the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.
 
 read the screenpipe skill first so you know the meetings + search endpoints.
 

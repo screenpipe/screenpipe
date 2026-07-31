@@ -173,10 +173,14 @@ impl DatabaseManager {
         // Run migrations after establishing the connection
         Self::run_migrations(&db_manager.pool).await?;
 
-        // Surface corruption proactively at boot with a recovery hint,
-        // instead of only discovering it later via worker query errors
-        // (which used to spin a CPU core retrying a malformed DB).
-        db_manager.spawn_startup_integrity_check(Arc::from(database_path));
+        // Surface persistent-file corruption proactively at boot with a recovery
+        // hint, instead of only discovering it later via worker query errors.
+        // An in-memory database cannot carry corruption across startups, and a
+        // quick_check on SQLite's shared in-memory cache takes table read locks
+        // that can make concurrent writes fail immediately with SQLITE_LOCKED.
+        if !database_path.contains("mode=memory") && database_path != ":memory:" {
+            db_manager.spawn_startup_integrity_check(Arc::from(database_path));
+        }
 
         // Periodic WAL checkpoint so the write-ahead log can't grow unbounded
         // when passive auto-checkpoint is blocked by long-lived readers. An

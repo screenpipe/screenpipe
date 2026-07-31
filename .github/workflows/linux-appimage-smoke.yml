@@ -265,6 +265,47 @@ jobs:
               chmod +x screenpipe.AppImage
               ./screenpipe.AppImage --appimage-extract >/dev/null
 
+              desktop=""
+              for candidate in squashfs-root/usr/share/applications/*.desktop; do
+                [ -f "${candidate}" ] || continue
+                if grep -Eq "^Exec=screenpipe-app-launcher([[:space:]]|$)" "${candidate}"; then
+                  desktop="${candidate}"
+                  break
+                fi
+              done
+              test -n "${desktop}"
+              launcher=squashfs-root/usr/bin/screenpipe-app-launcher
+              test -x "${launcher}"
+              grep -qx "Exec=screenpipe-app-launcher" "${desktop}"
+              grep -qx "unset GST_PLUGIN_SYSTEM_PATH" "${launcher}"
+              grep -qx "unset GST_PLUGIN_SYSTEM_PATH_1_0" "${launcher}"
+              sh -n "${launcher}"
+
+              launcher_probe=/tmp/screenpipe-launcher-probe
+              install -D -m 0755 "${launcher}" "${launcher_probe}/usr/bin/screenpipe-app-launcher"
+              ln -s /bin/sh "${launcher_probe}/usr/bin/screenpipe-app"
+              launcher_env="$(
+                APPDIR="${launcher_probe}" \
+                  GST_PLUGIN_SYSTEM_PATH=/poisoned \
+                  GST_PLUGIN_SYSTEM_PATH_1_0=/poisoned-1.0 \
+                  SCREENPIPE_LAUNCHER_PROBE=preserved \
+                  "${launcher_probe}/usr/bin/screenpipe-app-launcher" -c env
+              )"
+              if grep -q "^GST_PLUGIN_SYSTEM_PATH" <<<"${launcher_env}"; then
+                echo "Launcher did not clear the GStreamer system plugin paths"
+                exit 1
+              fi
+              grep -qx "SCREENPIPE_LAUNCHER_PROBE=preserved" <<<"${launcher_env}"
+
+              # GStreamer plugins are intentionally supplied by the host. If a
+              # future build bundles any, the launcher policy must be revisited.
+              if find squashfs-root \
+                \( -type d \( -name gstreamer -o -name gstreamer-1.0 \) \
+                -o -type f -name "libgst*.so*" \) -print -quit | grep -q .; then
+                echo "Unexpected bundled GStreamer plugins or plugin directory"
+                exit 1
+              fi
+
               export LD_LIBRARY_PATH=/smoke/squashfs-root/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
               squashfs-root/usr/bin/ffmpeg -version
               squashfs-root/usr/bin/ffprobe -version
@@ -297,8 +338,8 @@ jobs:
               fi
 
               find squashfs-root/usr/bin -maxdepth 1 -type f -executable -print
-              app_bin="$(find squashfs-root/usr/bin -maxdepth 1 -type f -executable -iname "*screenpipe*" -print -quit)"
-              test -n "${app_bin}"
+              app_bin=squashfs-root/usr/bin/screenpipe-app
+              test -x "${app_bin}"
               check_ldd "${app_bin}" /tmp/app.ldd
               if grep -q "not found" /tmp/app.ldd; then
                 exit 1
@@ -393,8 +434,8 @@ jobs:
                 exit 1
               fi
 
-              app_bin="$(find squashfs-root/usr/bin -maxdepth 1 -type f -executable -iname "*screenpipe*" -print -quit)"
-              test -n "${app_bin}"
+              app_bin=squashfs-root/usr/bin/screenpipe-app
+              test -x "${app_bin}"
 
               app_ld_library_path=/smoke/squashfs-root/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
               unset LD_LIBRARY_PATH

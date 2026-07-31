@@ -8,6 +8,23 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 
 pub fn create_session<P: AsRef<Path>>(path: P) -> Result<ort::session::Session> {
+    create_session_with_embedding_ep(path, false)
+}
+
+/// Speaker turns produce a different fbank time dimension on almost every run.
+/// On Apple Silicon the CPU execution path retained several gigabytes of native
+/// activation memory while a meeting backlog drained. CoreML's NeuralNetwork
+/// backend accepts the original dynamic tensor (so embeddings are unchanged)
+/// and keeps that repeated inference working set bounded. CPU remains fallback
+/// for unsupported nodes, without its retaining arena.
+pub(crate) fn create_embedding_session<P: AsRef<Path>>(path: P) -> Result<ort::session::Session> {
+    create_session_with_embedding_ep(path, true)
+}
+
+fn create_session_with_embedding_ep<P: AsRef<Path>>(
+    path: P,
+    embedding_ep: bool,
+) -> Result<ort::session::Session> {
     let path = path.as_ref().to_path_buf();
     // ort 2.0.0-rc.10 panics from inside its global OnceLock when the ONNX
     // Runtime API can't be initialized (Windows DLL/version mismatch hits
@@ -36,6 +53,20 @@ pub fn create_session<P: AsRef<Path>>(path: P) -> Result<ort::session::Session> 
                     .map_err(|e| oe(&e))?;
                 let b = b.with_intra_threads(1).map_err(|e| oe(&e))?;
                 let mut b = b.with_inter_threads(1).map_err(|e| oe(&e))?;
+                if embedding_ep {
+                    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                    {
+                        b = b
+                            .with_execution_providers([
+                                ort::ep::CoreML::default()
+                                    .with_static_input_shapes(false)
+                                    .with_subgraphs(true)
+                                    .build(),
+                                ort::ep::CPU::default().with_arena_allocator(false).build(),
+                            ])
+                            .map_err(|e| oe(&e))?;
+                    }
+                }
                 let session = b.commit_from_file(&path).map_err(|e| oe(&e))?;
                 Ok(session)
             })

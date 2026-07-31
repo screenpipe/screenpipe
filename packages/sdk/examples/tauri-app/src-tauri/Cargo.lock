@@ -1319,6 +1319,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cidre"
+version = "0.16.1"
+source = "git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30#9c20f5ee5abaad4598843a33e13d6e48822d1f30"
+dependencies = [
+ "cc",
+ "cidre-macros 0.6.0",
+ "half",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
 name = "cidre-macros"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6941,9 +6953,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
+source = "git+https://github.com/screenpipe/sck-rs?rev=6deefba79619c2763f24cfbaaf4e08fa7e8302e0#6deefba79619c2763f24cfbaaf4e08fa7e8302e0"
 dependencies = [
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30)",
  "image",
  "once_cell",
  "thiserror 1.0.69",
@@ -6971,7 +6983,7 @@ dependencies = [
  "arboard",
  "arc-swap",
  "chrono",
- "cidre 0.16.1",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716)",
  "core-foundation",
  "core-graphics 0.24.0",
  "crossbeam-channel",

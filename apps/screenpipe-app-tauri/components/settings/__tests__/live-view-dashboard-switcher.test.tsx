@@ -34,9 +34,11 @@ const dashboards: BrainViewDefinition[] = [
 ];
 
 describe("LiveViewDashboardSwitcher", () => {
-  it("switches, creates, renames, duplicates, and confirms deletion", async () => {
+  it("keeps management actions in More", async () => {
     const onSelect = vi.fn();
     const onCreate = vi.fn();
+    const onCustomize = vi.fn();
+    const onOpenTemplates = vi.fn();
     const onRename = vi.fn();
     const onDuplicate = vi.fn();
     const onDelete = vi.fn();
@@ -47,6 +49,8 @@ describe("LiveViewDashboardSwitcher", () => {
         busy={false}
         onSelect={onSelect}
         onCreate={onCreate}
+        onCustomize={onCustomize}
+        onOpenTemplates={onOpenTemplates}
         onRename={onRename}
         onDuplicate={onDuplicate}
         onDelete={onDelete}
@@ -60,8 +64,30 @@ describe("LiveViewDashboardSwitcher", () => {
     fireEvent.change(selector, { target: { value: "weekly-review" } });
     expect(onSelect).toHaveBeenCalledWith("weekly-review");
 
-    fireEvent.click(screen.getByTestId("overview-new-dashboard"));
+    expect(screen.queryByTestId("overview-new-dashboard")).toBeNull();
+    fireEvent.pointerDown(screen.getByTestId("overview-dashboard-menu"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(await screen.findByTestId("overview-new-dashboard"));
     expect(onCreate).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(screen.getByTestId("overview-dashboard-menu"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(await screen.findByTestId("overview-edit"));
+    expect(onCustomize).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(screen.getByTestId("overview-dashboard-menu"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(await screen.findByTestId("overview-templates"));
+    expect(onOpenTemplates).toHaveBeenCalledTimes(1);
 
     fireEvent.pointerDown(screen.getByTestId("overview-dashboard-menu"), {
       button: 0,

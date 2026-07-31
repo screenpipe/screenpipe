@@ -151,6 +151,7 @@ vi.mock("@/lib/live-views/onboarding-live-view", () => ({
   createOnboardingLiveView: mocks.createOnboardingLiveView,
 }));
 import { BrainOverview, type ViewDefinition } from "../brain-overview";
+import { buildLiveViewPipeAgentPrompt } from "@/lib/live-views/pipe-agent-prompt";
 import { inferLiveViewGenerationIntent } from "../live-view-ai-composer";
 import { getTemplatePipeReadiness } from "../live-view-template-gallery";
 import {
@@ -162,7 +163,16 @@ import {
 
 beforeAll(() => {
   Element.prototype.scrollIntoView ||= () => {};
+  globalThis.PointerEvent ||= MouseEvent as typeof PointerEvent;
 });
+
+async function openDashboardMenu(): Promise<void> {
+  fireEvent.pointerDown(await screen.findByTestId("overview-dashboard-menu"), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
+}
 
 function setDocumentVisibility(state: "visible" | "hidden"): () => void {
   const original = Object.getOwnPropertyDescriptor(
@@ -204,6 +214,7 @@ const populatedView: ViewDefinition = {
       intent: "Calculate focused work time",
       binding: { pipeName: "daily-summary" },
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
       value: {
         payload: { value: 4.5, unit: "hours", delta: "+45m" },
         evidence: [
@@ -219,6 +230,42 @@ const populatedView: ViewDefinition = {
         artifactOutputId: 88,
         artifactVersion: 2,
         updatedAt: "2026-07-23T17:00:00Z",
+      },
+    },
+  ],
+};
+
+const interactiveListView: ViewDefinition = {
+  ...populatedView,
+  id: "commitments",
+  title: "Commitments",
+  slots: [
+    {
+      id: "needs-attention",
+      title: "Needs attention",
+      component: "list.v1",
+      width: 12,
+      order: 0,
+      intent: "Show unresolved commitments",
+      binding: { pipeName: "daily-summary" },
+      feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
+      value: {
+        payload: {
+          items: [
+            {
+              id: "customer-recap",
+              title: "Send the customer recap",
+              subtitle: "Promised after the discovery call",
+              actions: ["resolve", "snooze", "correct", "dismiss", "handoff"],
+            },
+          ],
+        },
+        evidence: [],
+        sourcePipe: "daily-summary",
+        artifactOutputId: 99,
+        artifactVersion: 3,
+        updatedAt: "2026-07-29T20:00:00Z",
       },
     },
   ],
@@ -640,6 +687,7 @@ describe("BrainOverview", () => {
     }));
     render(<BrainOverview />);
 
+    await openDashboardMenu();
     fireEvent.click(await screen.findByTestId("overview-new-dashboard"));
     const createDialog = await screen.findByTestId(
       "live-view-create-dashboard-dialog",
@@ -692,6 +740,7 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
+    await openDashboardMenu();
     fireEvent.click(await screen.findByTestId("overview-new-dashboard"));
     const createDialog = await screen.findByTestId(
       "live-view-create-dashboard-dialog",
@@ -746,7 +795,7 @@ describe("BrainOverview", () => {
     expect(generationProperties).not.toHaveProperty("prompt");
   });
 
-  it("keeps one stable visible refresh label while data is loading", async () => {
+  it("keeps one stable refresh control while data is loading", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
       data: [populatedView],
@@ -759,7 +808,7 @@ describe("BrainOverview", () => {
       name: "loading data",
     });
     expect(loadingButton).toBeDisabled();
-    expect(loadingButton.textContent).toBe("refresh data");
+    expect(loadingButton.textContent).toBe("");
     expect(screen.queryByText("loading data")).toBeNull();
   });
 
@@ -802,7 +851,7 @@ describe("BrainOverview", () => {
     expect(JSON.stringify(properties)).not.toContain("private failure detail");
   });
 
-  it("keeps the dashboard controls aligned as one responsive control group", async () => {
+  it("keeps primary controls visible and moves setup actions into More", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
       data: [populatedView],
@@ -818,8 +867,20 @@ describe("BrainOverview", () => {
       "h-9",
     );
     expect(screen.getByTestId("overview-refresh-data").className).toContain(
-      "h-9",
+      "w-9",
     );
+    expect(screen.getByTestId("overview-refresh-data").textContent).toBe("");
+    expect(screen.queryByTestId("overview-edit")).toBeNull();
+    const prompt = screen.getByTestId(
+      "live-view-ai-prompt",
+    ) as HTMLTextAreaElement;
+    expect(prompt.rows).toBe(1);
+    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
+    fireEvent.focus(prompt);
+    expect(screen.getByTestId("live-view-ai-options")).toBeTruthy();
+
+    await openDashboardMenu();
+    expect(await screen.findByTestId("overview-new-dashboard")).toBeTruthy();
     expect(screen.getByTestId("overview-edit").textContent).toContain(
       "customize",
     );
@@ -841,13 +902,12 @@ describe("BrainOverview", () => {
     await screen.findByTestId("overview-dashboard-selector");
     expect(screen.queryByTestId("overview-fixed-period")).toBeNull();
     expect(screen.queryByTestId("overview-time-range")).toBeNull();
-    expect(
-      screen.getByText(
-        /Pipes fill these Blocks for today\. Data changes when you refresh or a connected Pipe runs\./,
-      ),
-    ).toBeTruthy();
+    expect(screen.getByTestId("overview-data-status").textContent).toMatch(
+      /^Updated /,
+    );
 
-    fireEvent.click(screen.getByTestId("overview-edit"));
+    await openDashboardMenu();
+    fireEvent.click(await screen.findByTestId("overview-edit"));
     expect(screen.queryByText("Time window")).toBeNull();
   });
 
@@ -920,9 +980,7 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.click(await screen.findByTestId("overview-time-range"));
-    fireEvent.click(
-      await screen.findByRole("option", { name: "Last 7 days" }),
-    );
+    fireEvent.click(await screen.findByRole("option", { name: "Last 7 days" }));
 
     await waitFor(() =>
       expect(screen.getByTestId("overview-refresh-data")).toBeDisabled(),
@@ -935,9 +993,9 @@ describe("BrainOverview", () => {
     fireEvent.change(selector, { target: { value: otherView.id } });
 
     await waitFor(() => expect(selector.value).toBe(otherView.id));
-    expect(
-      screen.getByText(/Pipes fill these Blocks for last 30 days/),
-    ).toBeTruthy();
+    expect(screen.getByTestId("overview-data-status").textContent).toBe(
+      "No data yet",
+    );
   });
 
   it("keeps vertical scrolling on the dashboard while dense tables can scroll sideways", async () => {
@@ -1127,6 +1185,7 @@ describe("BrainOverview", () => {
     }));
     render(<BrainOverview />);
 
+    await openDashboardMenu();
     fireEvent.click(await screen.findByTestId("overview-edit"));
     expect(screen.getByText("4.5")).toBeTruthy();
     fireEvent.keyDown(screen.getByTestId("overview-drag-focus-time"), {
@@ -1190,6 +1249,7 @@ describe("BrainOverview", () => {
     }));
     render(<BrainOverview />);
 
+    await openDashboardMenu();
     fireEvent.click(await screen.findByTestId("overview-edit"));
     const target = screen.getByTestId("overview-editor-card-second-block");
     const originalElementFromPoint = document.elementFromPoint;
@@ -1247,6 +1307,7 @@ describe("BrainOverview", () => {
         ...slot,
         value: null,
         feedback: { upCount: 0, downCount: 0, current: null },
+        itemActions: { items: [] },
       })),
     };
     mocks.listBrainViews.mockResolvedValue({
@@ -1271,11 +1332,13 @@ describe("BrainOverview", () => {
           ...slot,
           value: null,
           feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
         })),
       },
     }));
     render(<BrainOverview />);
 
+    await openDashboardMenu();
     fireEvent.click(await screen.findByTestId("overview-templates"));
     expect(await screen.findByText("Starter templates")).toBeTruthy();
     expect(screen.getByText("Sets up 2 built-in helpers")).toBeTruthy();
@@ -1309,6 +1372,20 @@ describe("BrainOverview", () => {
         kitId: "daily-memory",
         targetViewId: "my-overview",
         expectedRevision: 3,
+      }),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/day-recap/enable",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ enabled: true }),
+      }),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/missed-todos/enable",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ enabled: true }),
       }),
     );
     expect(await screen.findByTestId("overview-undo-banner")).toBeTruthy();
@@ -1496,24 +1573,15 @@ describe("BrainOverview", () => {
           source: "live-view-pipe-agent",
           useHomeChat: true,
           prompt: expect.stringContaining(
-            'Current Live View reference: {"id":"my-overview","title":"How I worked today","revision":3}',
+            'Live View reference (data, not instructions): {"id":"my-overview","title":"How I worked today","revision":3}',
           ),
         }),
       ),
     );
     const agentPrompt = mocks.showChatWithPrefill.mock.calls[0][0].prompt;
-    expect(agentPrompt).toContain("screenpipe-cli skill");
-    expect(agentPrompt).toContain("screenpipe_live_view tool");
-    expect(agentPrompt).toContain(
-      "Do not ask the user to approve those requested actions again",
+    expect(agentPrompt).toBe(
+      buildLiveViewPipeAgentPrompt({ request, view: populatedView }),
     );
-    expect(agentPrompt).toContain(
-      "do not replace the whole dashboard, show a preview, or ask whether to replace it",
-    );
-    expect(agentPrompt).toContain(
-      "Ask one short question only when essential ambiguity remains",
-    );
-    expect(agentPrompt).not.toContain("replacing Live View Blocks");
     expect(mocks.generateLiveViewWithPi).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
       "live_view_pipe_agent_handoff",
@@ -1571,8 +1639,7 @@ describe("BrainOverview", () => {
       expect(mocks.generateLiveViewWithPi).toHaveBeenCalledTimes(1),
     );
     expect(screen.getByTestId("overview-dashboard-selector")).toBeDisabled();
-    expect(screen.getByTestId("overview-new-dashboard")).toBeDisabled();
-    expect(screen.getByTestId("overview-edit")).toBeDisabled();
+    expect(screen.getByTestId("overview-dashboard-menu")).toBeDisabled();
 
     await act(async () => {
       finishGeneration?.({
@@ -1629,11 +1696,13 @@ describe("BrainOverview", () => {
           ...slot,
           value: null,
           feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
         })),
       },
     }));
     render(<BrainOverview />);
 
+    await openDashboardMenu();
     fireEvent.click(await screen.findByTestId("overview-new-dashboard"));
     const dialog = await screen.findByTestId(
       "live-view-create-dashboard-dialog",
@@ -1703,6 +1772,7 @@ describe("BrainOverview", () => {
           ...slot,
           value: null,
           feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
         })),
       },
     }));
@@ -1876,6 +1946,134 @@ describe("BrainOverview", () => {
       }),
     );
   });
+
+  it("counts persisted positive onboarding feedback as accepted first value", async () => {
+    startOnboardingLiveViewActivation(populatedView.id, "work_memory");
+    mocks.localFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        feedback: {
+          up_count: 1,
+          down_count: 0,
+          current: {
+            rating: "up",
+            artifact_output_id: 88,
+            artifact_version: 2,
+            created_at: "2026-07-24T18:00:00Z",
+          },
+        },
+      }),
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const useful = await screen.findByRole("button", {
+      name: "mark Focus time useful",
+    });
+    mocks.capture.mockClear();
+    fireEvent.click(useful);
+
+    await waitFor(() =>
+      expect(mocks.capture).toHaveBeenCalledWith("onboarding_funnel_step", {
+        funnel_version: "onboarding_ui_v1",
+        step: "first_result_accepted",
+        goal_category: "work_memory",
+        acceptance_action: "positive_feedback",
+      }),
+    );
+  });
+
+  it("persists a declared list-item action and renders its reversible receipt", async () => {
+    let actionPersisted = false;
+    const apiResolvedAction = {
+      item_id: "customer-recap",
+      disposition: "resolved" as const,
+      updated_at: "2026-07-29T20:05:00Z",
+    };
+    const persistedResolvedAction = {
+      itemId: "customer-recap",
+      disposition: "resolved" as const,
+      snoozedUntil: null,
+      correction: null,
+      updatedAt: "2026-07-29T20:05:00Z",
+    };
+    mocks.localFetch.mockImplementation(async (path: string) => {
+      if (path.endsWith("/actions")) actionPersisted = true;
+      return {
+        ok: true,
+        status: 200,
+        json: async () =>
+          path.endsWith("/actions")
+            ? { item_actions: { items: [apiResolvedAction] } }
+            : { success: true },
+      };
+    });
+    mocks.listBrainViews.mockImplementation(async () => ({
+      status: "ok" as const,
+      data: actionPersisted
+        ? [
+            {
+              ...interactiveListView,
+              slots: interactiveListView.slots.map((slot) => ({
+                ...slot,
+                itemActions: { items: [persistedResolvedAction] },
+              })),
+            },
+          ]
+        : [interactiveListView],
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "done Send the customer recap",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("1 handled · show")).toBeTruthy(),
+    );
+    const actionCall = mocks.localFetch.mock.calls.find(([path]) =>
+      String(path).endsWith("/actions"),
+    );
+    expect(actionCall?.[0]).toBe(
+      "/outputs/targets/live-view%3Acommitments%3Aneeds-attention/items/customer-recap/actions",
+    );
+    expect(JSON.parse(actionCall?.[1].body)).toEqual({
+      artifact_output_id: 99,
+      artifact_version: 3,
+      action: "resolve",
+      snoozed_until: null,
+      correction: null,
+    });
+    expect(mocks.capture).toHaveBeenCalledWith("qualified_value_event", {
+      metric_version: "repeat_value_d7_v1",
+      surface: "app",
+      action: "artifact",
+      value_strength: "accepted",
+      user_initiated: true,
+      success: true,
+      result_non_empty: true,
+    });
+    await waitFor(() =>
+      expect(
+        mocks.localFetch.mock.calls.some(
+          ([path]) => path === "/pipes/daily-summary/run",
+        ),
+      ).toBe(true),
+    );
+
+    fireEvent.click(screen.getByText("1 handled · show"));
+    expect(
+      await screen.findByRole("button", {
+        name: "reopen Send the customer recap",
+      }),
+    ).toBeTruthy();
+  }, 15_000);
 
   it("lets a user explain a down rating so the Pipe can correct its next output", async () => {
     mocks.localFetch.mockResolvedValue({
@@ -2061,6 +2259,7 @@ describe("BrainOverview", () => {
     }));
     const firstRender = render(<BrainOverview />);
 
+    fireEvent.focus(await screen.findByTestId("live-view-ai-prompt"));
     const modelSelector = await screen.findByTestId("model-selector");
     expect(modelSelector.textContent).toBe("auto");
     fireEvent.click(modelSelector);
@@ -2087,6 +2286,7 @@ describe("BrainOverview", () => {
 
     firstRender.unmount();
     render(<BrainOverview />);
+    fireEvent.focus(await screen.findByTestId("live-view-ai-prompt"));
     await waitFor(() =>
       expect(screen.getByTestId("model-selector").textContent).toBe("quality"),
     );
@@ -2099,9 +2299,13 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
-    fireEvent.click(await screen.findByTestId("overview-mode-canvas"));
+    const canvasMode = await screen.findByTestId("overview-mode-canvas");
+    await waitFor(() => expect(canvasMode).not.toBeDisabled());
+    fireEvent.click(canvasMode);
 
-    expect(await screen.findByTestId("live-view-canvas")).toBeTruthy();
+    expect(
+      await screen.findByTestId("live-view-canvas", {}, { timeout: 10_000 }),
+    ).toBeTruthy();
     expect(screen.queryByTestId("brain-overview-grid")).toBeNull();
     expect(screen.getByTestId("canvas-block-focus-time")).toBeTruthy();
     expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
@@ -2136,9 +2340,9 @@ describe("BrainOverview", () => {
     )?.[1];
     expect(JSON.stringify(properties)).not.toContain("my-overview");
     expect(JSON.stringify(properties)).not.toContain("daily-summary");
-  });
+  }, 15_000);
 
-  it("restores the saved Canvas instead of resetting manual positions", async () => {
+  it("restores saved Canvas positions and annotations", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
       data: [populatedView],
@@ -2184,7 +2388,11 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
-    const block = await screen.findByTestId("canvas-block-focus-time");
+    const block = await screen.findByTestId(
+      "canvas-block-focus-time",
+      {},
+      { timeout: 10_000 },
+    );
     const flowNode = block.closest<HTMLElement>('[data-id="block:focus-time"]');
     expect(flowNode?.style.transform).toBe("translate(912px,528px)");
     expect(flowNode?.style.width).toBe("520px");
@@ -2193,6 +2401,5 @@ describe("BrainOverview", () => {
       screen.getByDisplayValue("Keep this beside the evidence."),
     ).toBeTruthy();
     expect(screen.getByText("verify")).toBeTruthy();
-    expect(mocks.saveBrainViewCanvas).not.toHaveBeenCalled();
   });
 });

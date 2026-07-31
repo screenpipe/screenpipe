@@ -20,6 +20,10 @@ routes = [
 [observability]
 enabled = true
 
+# Hourly bounded-state cleanup. The minute offset avoids top-of-hour load.
+[triggers]
+crons = ["17 * * * *"]
+
 # Automatically place your workloads in an optimal location to minimize latency.
 # If you are running back-end logic in a Worker, running it closer to your back-end infrastructure
 # rather than the end user may result in better performance.
@@ -54,14 +58,28 @@ SELF_HOSTED_TRANSCRIPTION_URL = "https://audio.screenpi.pe"
 # deliberate default across redeploys; FLEX_TIER_ENABLED remains the master switch.
 GEMINI_FLEX_INTERACTIVE = "false"
 
+# 2026-07-31 emergency spend containment. Fable and Opus are rerouted to Sonnet
+# in code; reject frontier-priced background work. The epoch preserves today's
+# incident ledger while giving legitimate chats a fresh post-containment budget.
+# Effective text-AI caps: $0.16 anonymous / $0.32 Free+Basic / $35 Business.
+COST_CAP_EPOCH = "anthropic-incident-2026-07-31-v2"
+MAX_DAILY_TEXT_COST_PER_USER = "0.5"
+MAX_DAILY_SUBSCRIBED_TEXT_COST = "35"
+MODEL_GATING_ENABLED = "true"
+PIPE_FRONTIER_POLICY = "reject"
+
 # Cost / flex tuning knobs — read with a code default, so they live in the CF
 # dashboard (Settings → Variables), not here, and take effect with no redeploy:
 # - FLEX_TIER_ENABLED ("true"): master kill switch for the Vertex Gemini flex tier.
 # - GEMINI_FLEX_INTERACTIVE ("true"): also flex interactive Gemini, not just
 #   background. Set "false" to revert to background-only flex if best-effort
 #   latency hurts user-facing chat.
-# - MAX_DAILY_COST_PER_USER ("5"): base per-user daily $ cap; ×7 subscribed,
-#   ×0.64 logged_in, ×0.32 anonymous (getTierDailyCostCap). Credits extend 1:1.
+# - MAX_DAILY_TEXT_COST_PER_USER ("5"): base per-user daily text-AI $ cap; ×7 subscribed,
+#   ×0.64 logged_in, ×0.32 anonymous (getTierDailyCostCap).
+# - MAX_DAILY_SUBSCRIBED_TEXT_COST: optional absolute Business/Team/Enterprise
+#   text-AI cap. This keeps paid users available without raising Free/Basic.
+# - MAX_DAILY_COST_PER_USER ("5"): legacy transcription base cap. Keep this
+#   separate from text containment so chat policy cannot disrupt audio capture.
 # - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = GPT-5.6 Luna
 #   (today's behavior). "heuristic" = regex tiering (0 latency). "embedding" =
 #   bge centroid via Workers AI (best accuracy, +1 embed call). See difficulty-router.ts.
@@ -97,8 +115,8 @@ binding = "AI"
 # Then update the database_id below with the returned ID
 [[d1_databases]]
 binding = "DB"
-database_name = "screenpipe-usage"
-database_id = "5496f4b2-03c9-496f-b8ca-675961c0622a"
+database_name = "screenpipe-usage-v2"
+database_id = "f410ff74-4c3f-4786-a1ca-c8365f6c0ddf"
 
 # Bind a dispatch namespace. Use Workers for Platforms to deploy serverless functions programmatically on behalf of your customers.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#dispatch-namespace-bindings-workers-for-platforms

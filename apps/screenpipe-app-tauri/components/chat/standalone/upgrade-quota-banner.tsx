@@ -24,13 +24,12 @@ import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
  */
 export function UpgradeQuotaBanner() {
   const usage = useUsageStatus();
-  const upsellEnabled = useModelUpsellGating();
+  const upsellEnabled = useModelUpsellGating(usage?.upgrade_eligible);
   const [dismissed, setDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   if (dismissed) return null;
-  // Off unless the PostHog flag is on AND the user isn't a (possibly flickering)
-  // paying customer — never nag someone with persisted entitlement evidence.
+  // Settings, PostHog, and server plan truth must all resolve affirmatively.
   if (!upsellEnabled) return null;
   if (!usage) return null;
   if (usage.tier === "subscribed") return null;

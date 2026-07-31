@@ -225,6 +225,27 @@ pub fn get_app_identifier(app_handle: tauri::AppHandle) -> String {
     app_handle.config().identifier.clone()
 }
 
+/// Stable low-disk safety values shared with the settings UI.
+///
+/// Keeping the threshold and monitor cadence in Rust prevents user-facing copy
+/// from drifting away from the values enforced by the capture engine.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LowDiskGuardConfig {
+    pub threshold_bytes: u64,
+    pub check_interval_seconds: u64,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_low_disk_guard_config() -> LowDiskGuardConfig {
+    LowDiskGuardConfig {
+        threshold_bytes: screenpipe_events::LOW_DISK_THRESHOLD_BYTES,
+        check_interval_seconds:
+            screenpipe_engine::disk_pressure::LOW_DISK_CHECK_INTERVAL_SECS,
+    }
+}
+
 /// Get the local API auth key and port for the frontend to use.
 /// Returns the local API config (key, port, auth flag).
 ///
@@ -1157,6 +1178,118 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
         }
         false
     }
+}
+
+/// E2E helper: model an active capture intent without requiring physical
+/// screen/audio devices on the CI runner.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_mark_capture_intended(
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    state.set_capture_intent(true);
+    Ok(())
+}
+
+/// E2E helper: publish the same typed core event as the real disk probe.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_emit_disk_space_low(available_bytes: u64) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let event = screenpipe_events::DiskSpaceLowEvent::new(
+        available_bytes,
+        ".e2e".to_string(),
+    );
+    screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
+}
+
+/// E2E helper: execute the production policy handler directly and return its
+/// explicit outcome. This avoids sleep-based assertions; the settings E2E also
+/// publishes through the typed event bus to cover the production subscription.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_handle_disk_space_low(
+    app_handle: tauri::AppHandle,
+    available_bytes: u64,
+) -> Result<crate::disk_pressure_notifications::DiskPressureOutcome, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let event = screenpipe_events::DiskSpaceLowEvent::new(
+        available_bytes,
+        ".e2e".to_string(),
+    );
+    Ok(crate::disk_pressure_notifications::handle(&app_handle, event).await)
+}
+
+/// E2E helper: distinguish a real CaptureSession from capture intent alone.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_capture_session_running(
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    Ok(state.capture.lock().await.is_some())
+}
+
+/// E2E helper: update the native store without depending on a mounted settings
+/// webview. Used by the recording-enabled Windows lane.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_set_low_disk_guard_enabled(
+    app_handle: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    settings.stop_recording_on_low_disk = enabled;
+    settings.save(&app_handle)
+}
+
+/// E2E helper: prove critical recording-stopped alerts bypass the user's
+/// ordinary notification master switch.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_set_notification_master_enabled(
+    app_handle: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let prefs = settings
+        .extra
+        .entry("notificationPrefs".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !prefs.is_object() {
+        *prefs = serde_json::json!({});
+    }
+    prefs["notificationsEnabled"] = serde_json::Value::Bool(enabled);
+    settings.save(&app_handle)
+}
+
+/// E2E helper: read back the persisted guard value before publishing an event.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_low_disk_guard_enabled(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    Ok(SettingsStore::get(&app_handle)?
+        .unwrap_or_default()
+        .stop_recording_on_low_disk)
 }
 
 /// E2E helper: drive the health-to-native-tray status transition.

@@ -634,6 +634,7 @@ mod imp {
             assert!(jwt_subject("not-a-jwt").is_none());
         }
 
+        #[cfg(debug_assertions)]
         #[test]
         fn debug_api_override_is_localhost_only() {
             assert_eq!(

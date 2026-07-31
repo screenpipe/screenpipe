@@ -176,10 +176,72 @@ lto = "thin"
 codegen-units = 16
 incremental = true
 
-# Faster dev builds - optimize dependencies but keep local code debuggable
+# Default non-release builds retain complete Screenpipe symbols while omitting
+# DWARF from third-party crates.
 [profile.dev]
 opt-level = 0
+debug = true
+split-debuginfo = "packed"
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2      # Optimize all dependencies (faster runtime, same compile time)
 debug = false      # deps don't need debug symbols — keeps target/ from ballooning
+
+# Kept for explicit invocations; default non-release builds use these settings
+# through the `dev` profile above.
+[profile.dev-debug]
+inherits = "dev"
+debug = true
+split-debuginfo = "packed"
+incremental = false
+
+[profile.dev-debug.package."*"]
+opt-level = 2
+debug = false
+
+# The wildcard above deliberately strips third-party dependencies. Restore
+# complete symbols for every first-party crate so stepping through the
+# Screenpipe stack still works.
+[profile.dev-debug.package.screenpipe-a11y]
+debug = true
+[profile.dev-debug.package.screenpipe-audio]
+debug = true
+[profile.dev-debug.package.screenpipe-audio-eval]
+debug = true
+[profile.dev-debug.package.screenpipe-capture]
+debug = true
+[profile.dev-debug.package.screenpipe-config]
+debug = true
+[profile.dev-debug.package.screenpipe-connect]
+debug = true
+[profile.dev-debug.package.screenpipe-core]
+debug = true
+[profile.dev-debug.package.screenpipe-db]
+debug = true
+[profile.dev-debug.package.screenpipe-engine]
+debug = true
+[profile.dev-debug.package.screenpipe-events]
+debug = true
+[profile.dev-debug.package.screenpipe-gateway]
+debug = true
+[profile.dev-debug.package.screenpipe-meeting-eval]
+debug = true
+[profile.dev-debug.package.screenpipe-redact]
+debug = true
+[profile.dev-debug.package.screenpipe-resource]
+debug = true
+[profile.dev-debug.package.screenpipe-screen]
+debug = true
+[profile.dev-debug.package.screenpipe-secrets]
+debug = true
+[profile.dev-debug.package.screenpipe-sqlite-coordinator]
+debug = true
+[profile.dev-debug.package.screenpipe-sync]
+debug = true
+[profile.dev-debug.package.screenpipe-team-memory]
+debug = true
+[profile.dev-debug.package.screenpipe-telemetry-wire]
+debug = true
+[profile.dev-debug.package.screenpipe-vault]
+debug = true

@@ -383,6 +383,17 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check", { initialCheck });
 },
 /**
+ * E2E helper: distinguish a real CaptureSession from capture intent alone.
+ */
+async e2eCaptureSessionRunning() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_capture_session_running") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: emit a deterministic chat stream from the Rust side.
  *
  * This keeps chat performance tests close to production's Pi stdout path:
@@ -393,6 +404,17 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async e2eEmitAgentStream(sessionId: string, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_emit_agent_stream", { sessionId, deltaCount }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper: publish the same typed core event as the real disk probe.
+ */
+async e2eEmitDiskSpaceLow(availableBytes: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_disk_space_low", { availableBytes }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -426,12 +448,36 @@ async e2eEmitSettledAgentFollowUp(sessionId: string) : Promise<Result<null, stri
 }
 },
 /**
+ * E2E helper: execute the production policy handler directly and return its
+ * explicit outcome. This avoids sleep-based assertions; the settings E2E also
+ * publishes through the typed event bus to cover the production subscription.
+ */
+async e2eHandleDiskSpaceLow(availableBytes: number) : Promise<Result<DiskPressureOutcome, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_handle_disk_space_low", { availableBytes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: read the status text from the menu that was successfully
  * installed into the native tray, not merely the desired health state.
  */
 async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_installed_tray_recording_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper: read back the persisted guard value before publishing an event.
+ */
+async e2eLowDiskGuardEnabled() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_low_disk_guard_enabled") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -446,6 +492,18 @@ async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>>
  */
 async e2eMainOverlayVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_main_overlay_visible");
+},
+/**
+ * E2E helper: model an active capture intent without requiring physical
+ * screen/audio devices on the CI runner.
+ */
+async e2eMarkCaptureIntended() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_mark_capture_intended") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * E2E-only: detach and close the owned-browser child webview, resetting the
@@ -473,6 +531,30 @@ async e2eOwnedBrowserDetach() : Promise<Result<null, string>> {
  */
 async e2eOwnedBrowserVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_owned_browser_visible");
+},
+/**
+ * E2E helper: update the native store without depending on a mounted settings
+ * webview. Used by the recording-enabled Windows lane.
+ */
+async e2eSetLowDiskGuardEnabled(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_set_low_disk_guard_enabled", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper: prove critical recording-stopped alerts bypass the user's
+ * ordinary notification master switch.
+ */
+async e2eSetNotificationMasterEnabled(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_set_notification_master_enabled", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * E2E helper: drive the health-to-native-tray status transition.
@@ -690,6 +772,9 @@ async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promi
 async getE2eSeedFlags() : Promise<string[]> {
     return await TAURI_INVOKE("get_e2e_seed_flags");
 },
+async getEnterpriseHostIdentity() : Promise<EnterpriseHostIdentity> {
+    return await TAURI_INVOKE("get_enterprise_host_identity");
+},
 async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
     return await TAURI_INVOKE("get_enterprise_install_metadata");
 },
@@ -753,6 +838,9 @@ async getLogFiles() : Promise<Result<LogFile[], string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getLowDiskGuardConfig() : Promise<LowDiskGuardConfig> {
+    return await TAURI_INVOKE("get_low_disk_guard_config");
 },
 async getMediaFile(filePath: string) : Promise<Result<JsonValue, string>> {
     try {
@@ -2440,6 +2528,20 @@ async suspendGlobalShortcuts() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Verifies an OpenAI-compatible endpoint with the exact request path and
+ * audio encoding used by the recording engine. A successful response is
+ * required before the settings UI can activate this engine, so recordings
+ * cannot silently accumulate without searchable audio transcripts.
+ */
+async testOpenaiCompatibleTranscription(endpoint: string, apiKey: string | null, model: string, headers: { [key in string]: string } | null, rawAudio: boolean) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("test_openai_compatible_transcription", { endpoint, apiKey, model, headers, rawAudio }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tauri command: start voice training. Spawns a background task that polls
  * until audio is transcribed, then assigns the speaker. Returns immediately.
  */
@@ -2642,8 +2744,11 @@ export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | n
 export type BrainViewFeedback = { rating: BrainViewFeedbackRating; artifactOutputId: number; artifactVersion: number; correction: string | null; createdAt: string }
 export type BrainViewFeedbackRating = "up" | "down"
 export type BrainViewFeedbackSummary = { upCount: number; downCount: number; current: BrainViewFeedback | null }
+export type BrainViewItemActionSummary = { items: BrainViewItemState[] }
+export type BrainViewItemDisposition = "active" | "resolved" | "snoozed" | "dismissed"
+export type BrainViewItemState = { itemId: string; disposition: BrainViewItemDisposition; snoozedUntil: string | null; correction: string | null; updatedAt: string }
 export type BrainViewPeriodPolicy = { type: "fixed.v1"; value: BrainViewTimeRange } | { type: "selectable.v1"; values: BrainViewTimeRange[] }
-export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; intent: string | null; binding: BrainViewBinding | null; value: BrainViewValue | null; feedback: BrainViewFeedbackSummary }
+export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; intent: string | null; binding: BrainViewBinding | null; value: BrainViewValue | null; feedback: BrainViewFeedbackSummary; itemActions: BrainViewItemActionSummary }
 export type BrainViewSlotInput = { id: string; title: string; component: BrainViewComponent; width: number; order: number; intent: string | null; binding: BrainViewBinding | null }
 export type BrainViewTemplateKit = { id: string; title: string; description: string; version: number; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; pipes: BrainViewTemplatePipe[]; slots: BrainViewSlotInput[] }
 export type BrainViewTemplatePipe = { name: string; distribution: string }
@@ -2726,9 +2831,11 @@ export type DiscoveredHost = { host: string; port: number; user: string | null; 
  * Only set when `HostName` resolves to an IP different from the alias.
  */
 alias?: string | null }
+export type DiskPressureOutcome = "guard_disabled" | "capture_already_stopped" | "capture_stopped" | "stop_failed"
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type EngineEvent = { name: string; data: JsonValue }
+export type EnterpriseHostIdentity = { machine_id_hash: string | null; os_user_id_hash: string | null }
 export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
@@ -2748,6 +2855,13 @@ export type JobEvent = { kind: "started"; jobId: string; label: string; message:
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
+/**
+ * Stable low-disk safety values shared with the settings UI.
+ *
+ * Keeping the threshold and monitor cadence in Rust prevents user-facing copy
+ * from drifting away from the values enforced by the capture engine.
+ */
+export type LowDiskGuardConfig = { thresholdBytes: number; checkIntervalSeconds: number }
 export type MeetingExportSummary = { job_id: string; output_path: string; frame_count: number; audio_chunk_count: number; duration_secs: number; file_size_bytes: number }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type NotificationActionEvent = { actionType: string | null; rawJson: string; payload: JsonValue }
@@ -2926,6 +3040,16 @@ endTime: string;
  */
 recordMode: string }
 export type SchedulerStatus = { running: boolean; last_sync: string | null; last_error: string | null }
+/**
+ * Which AI projection to build from the existing screen/accessibility stream.
+ *
+ * `Memory` preserves the original semantic-parser behavior. `ComputerUse` is
+ * shown to users as automation: it keeps capture action-oriented and skips the
+ * semantic parser worker. `Both` is shown as memory + automation and derives
+ * both views from the same captured tree; it never starts a second screen
+ * recorder or stores a duplicate raw accessibility tree.
+ */
+export type SemanticContextMode = "memory" | "computerUse" | "both"
 export type SettingsStore =
 /**
  * All recording/capture config lives here. Flattened so the JSON shape
@@ -3075,14 +3199,17 @@ disableVision: boolean;
  */
 disableScreenshots?: boolean;
 /**
- * Enable experimental normalized semantic context parsing. Off by default.
+ * Build normalized semantic context from captured accessibility trees.
+ * Experimental and opt-in. False preserves the historical capture path
+ * without starting a parser worker or writing semantic tables.
  */
 enableSemanticContext?: boolean;
 /**
- * AI projection derived from the shared accessibility capture. `computerUse`
- * skips semantic parser storage; `both` reuses the same captured tree.
+ * Select the AI view derived from the single captured accessibility tree.
+ * Missing values default to memory so existing opt-in users retain the
+ * exact behavior they selected before this setting existed.
  */
-semanticContextMode?: "memory" | "computerUse" | "both";
+semanticContextMode?: SemanticContextMode;
 /**
  * Disable the timeline / rewind feature. When true, the engine skips
  * timeline-only work: warming the hot frame cache from the DB at startup
@@ -3526,6 +3653,11 @@ chatAlwaysOnTop?: boolean;
  * detector is more reliable.
  */
 showRestartNotifications?: boolean;
+/**
+ * Stop capture before the data volume is completely full. Search, pipes,
+ * and the local API remain available. Explicitly opt-in for now.
+ */
+stopRecordingOnLowDisk?: boolean;
 /**
  * When true, apply macOS vibrancy effect to the sidebar for a translucent look.
  */

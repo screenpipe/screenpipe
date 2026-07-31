@@ -62,6 +62,15 @@ pub fn get_device_capture_time(device_name: &str) -> u64 {
         .unwrap_or_else(|| LAST_AUDIO_CAPTURE.load(Ordering::Relaxed))
 }
 
+/// Exact per-device capture timestamp. Unlike `get_device_capture_time`, this
+/// never substitutes another stream's global activity for a device that has
+/// not produced usable audio.
+pub fn get_device_capture_time_exact(device_name: &str) -> Option<u64> {
+    DEVICE_AUDIO_CAPTURES
+        .get(device_name)
+        .map(|atomic| atomic.load(Ordering::Relaxed))
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod e2e_ghost_word_silent_room;
 

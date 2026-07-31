@@ -27,7 +27,7 @@
       { "role": "AXStaticText", "text": "Alice", "depth": 3, "class_name": "sender" },
       { "role": "AXStaticText", "text": "notarization is still blocking", "depth": 3 },
       { "role": "AXButton", "text": "Add reaction", "depth": 2 },
-      { "role": "AXStaticText", "text": "stale hidden Slack instruction", "depth": 1, "on_screen": false }
+      { "role": "AXStaticText", "text": "stale hidden Slack instruction", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -60,7 +60,7 @@
       { "role": "AXStaticText", "text": "ChatGPT said:", "depth": 3 },
       { "role": "AXStaticText", "text": "Use a bounded replay eval", "depth": 2 },
       { "role": "AXButton", "text": "Copy response", "depth": 2 },
-      { "role": "AXStaticText", "text": "stale hidden ChatGPT answer", "depth": 1, "on_screen": false }
+      { "role": "AXStaticText", "text": "stale hidden ChatGPT answer", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -94,7 +94,7 @@
       { "role": "AXGroup", "text": "", "depth": 3, "class_name": "font-claude-response relative" },
       { "role": "AXStaticText", "text": "Use exact DOM message boundaries.", "depth": 4 },
       { "role": "AXButton", "text": "Copy", "depth": 3 },
-      { "role": "AXStaticText", "text": "stale hidden Claude answer", "depth": 1, "on_screen": false }
+      { "role": "AXStaticText", "text": "stale hidden Claude answer", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -130,7 +130,7 @@
         "value": "extract the active note\nreplay archived notes",
         "class_name": "cm-content cm-lineWrapping"
       },
-      { "role": "AXTextArea", "text": "stale hidden Obsidian note", "depth": 1, "value": "stale hidden Obsidian note", "on_screen": false }
+      { "role": "AXTextArea", "text": "stale hidden Obsidian note", "depth": 1, "value": "stale hidden Obsidian note", "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -157,7 +157,7 @@
       { "role": "Group", "text": "", "depth": 3, "class_name": "message-body" },
       { "role": "Text", "text": "Please retry signing.", "depth": 4 },
       { "role": "Button", "text": "Archive", "depth": 2 },
-      { "role": "Text", "text": "stale hidden Gmail message", "depth": 1, "on_screen": false }
+      { "role": "Text", "text": "stale hidden Gmail message", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -185,7 +185,7 @@
         "value": "Ship semantic context\nMeasure token reduction",
         "help_text": "Launch plan"
       },
-      { "role": "AXStaticText", "text": "stale hidden Notion paragraph", "depth": 1, "on_screen": false }
+      { "role": "AXStaticText", "text": "stale hidden Notion paragraph", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -209,7 +209,7 @@
       { "role": "Group", "text": "", "depth": 1, "class_name": "task-item completed" },
       { "role": "Text", "text": "Define schema", "depth": 2, "class_name": "task-title" },
       { "role": "Button", "text": "Add task", "depth": 1 },
-      { "role": "Text", "text": "stale hidden Todoist task", "depth": 1, "on_screen": false }
+      { "role": "Text", "text": "stale hidden Todoist task", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -243,7 +243,7 @@
       },
       { "role": "AXStaticText", "text": "Parser review", "depth": 2, "class_name": "event-title" },
       { "role": "AXButton", "text": "Today", "depth": 1 },
-      { "role": "AXStaticText", "text": "stale hidden Calendar event", "depth": 1, "on_screen": false }
+      { "role": "AXStaticText", "text": "stale hidden Calendar event", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -266,7 +266,7 @@
       { "role": "AXStaticText", "text": "$ cargo test", "depth": 1 },
       { "role": "AXStaticText", "text": "24 passed", "depth": 1 },
       { "role": "AXButton", "text": "New Tab", "depth": 1 },
-      { "role": "AXStaticText", "text": "stale hidden terminal command", "depth": 1, "on_screen": false }
+      { "role": "AXStaticText", "text": "stale hidden terminal command", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   },
   {
@@ -301,7 +301,7 @@
       { "role": "AXStaticText", "text": "17 passed", "depth": 3 },
       { "role": "AXButton", "text": "Explorer", "depth": 2 },
       { "role": "AXButton", "text": "Search", "depth": 2 },
-      { "role": "AXStaticText", "text": "stale hidden editor buffer", "depth": 1, "on_screen": false }
+      { "role": "AXStaticText", "text": "stale hidden editor buffer", "depth": 1, "on_screen": false, "bounds": { "left": 0.1, "top": -0.9, "width": 0.6, "height": 0.15 } }
     ]
   }
 ]

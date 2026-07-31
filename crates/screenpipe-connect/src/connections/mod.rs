@@ -151,6 +151,8 @@ pub enum ProxyAuth {
         username_key: &'static str,
         password_key: &'static str,
     },
+    /// HTTP Basic Auth using one credential field as the username and an empty password.
+    BasicAuthEmptyPassword { username_key: &'static str },
     /// No auth needed (e.g. webhook-based integrations where the URL is the secret).
     None,
 }
@@ -429,6 +431,29 @@ pub struct SavedConnection {
     pub credentials: Map<String, Value>,
 }
 
+/// Normalize credentials received from API/agent callers before persistence.
+///
+/// Empty optional fields (for example PostHog's host) are omitted so the
+/// proxy's `{field|default}` URL fallback works consistently. Required fields
+/// remain validated by the integration's test/proxy paths, while this keeps
+/// configuration writes idempotent and tolerant of UI form submissions.
+fn normalize_credentials(
+    def: &'static IntegrationDef,
+    mut credentials: Map<String, Value>,
+) -> Result<Map<String, Value>> {
+    for field in def.fields {
+        let should_remove = credentials
+            .get(field.key)
+            .and_then(Value::as_str)
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(false);
+        if should_remove {
+            credentials.remove(field.key);
+        }
+    }
+    Ok(credentials)
+}
+
 fn store_path(screenpipe_dir: &Path) -> PathBuf {
     screenpipe_dir.join("connections.json")
 }
@@ -614,7 +639,8 @@ impl ConnectionManager {
     }
 
     pub async fn connect(&self, id: &str, creds: Map<String, Value>) -> Result<()> {
-        self.find(id)?;
+        let integration = self.find(id)?;
+        let creds = normalize_credentials(integration.def(), creds)?;
         let conn = SavedConnection {
             enabled: true,
             credentials: creds,
@@ -710,7 +736,8 @@ impl ConnectionManager {
         instance: Option<&str>,
         creds: Map<String, Value>,
     ) -> Result<()> {
-        self.find(id)?;
+        let integration = self.find(id)?;
+        let creds = normalize_credentials(integration.def(), creds)?;
         let key = make_key(id, instance);
         let conn = SavedConnection {
             enabled: true,

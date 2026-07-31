@@ -554,7 +554,8 @@ fn pi_command(model: &str, prompt: &str) -> Command {
         "--no-skills",
         "--no-prompt-templates",
         "--no-context-files",
-        "--no-approve",
+        // pi >= 0.7x removed `--no-approve`; `--print` mode runs without
+        // interactive approval, so the flag is unnecessary.
         "--offline",
         prompt,
     ]);

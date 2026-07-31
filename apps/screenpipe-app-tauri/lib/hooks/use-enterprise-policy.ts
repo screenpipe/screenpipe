@@ -424,6 +424,10 @@ async function sendHeartbeat(
       settings.enterpriseAppUpdatePolicy
     );
     const installMetadata = await getEnterpriseInstallMetadata();
+    const hostIdentity = await commands.getEnterpriseHostIdentity().catch(() => ({
+      machine_id_hash: null,
+      os_user_id_hash: null,
+    }));
 
     let frameStatus = "unknown";
     let audioStatus = "unknown";
@@ -459,6 +463,8 @@ async function sendHeartbeat(
         },
         body: JSON.stringify({
           device_id: deviceId,
+          machine_id_hash: hostIdentity.machine_id_hash,
+          os_user_id_hash: hostIdentity.os_user_id_hash,
           hostname,
           platform: devicePlatform,
           app_version: appVersion,

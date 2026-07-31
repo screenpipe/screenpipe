@@ -90,6 +90,11 @@ async function selectDashboard(viewId: string) {
   );
 }
 
+async function openDashboardMenu() {
+  await pointerPressTestId("overview-dashboard-menu");
+  await waitForTestId("overview-new-dashboard", 10_000);
+}
+
 async function openHomeWithDiagnostics() {
   try {
     await openHomeWindow();
@@ -242,9 +247,7 @@ async function resizeCanvasBlockBottomRight(
   );
 
   const geometry = (await browser.execute((id) => {
-    const block = document.querySelector<HTMLElement>(
-      `[data-testid="${id}"]`,
-    );
+    const block = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
     const handle = block?.querySelector<HTMLElement>(
       ".react-flow__resize-control.handle.bottom.right",
     );
@@ -265,9 +268,19 @@ async function resizeCanvasBlockBottomRight(
   expect(geometry).not.toBeNull();
 
   const dragError = (await browser.execute(
-    (drag: { startX: number; startY: number; endX: number; endY: number }) => {
+    (drag: {
+      testId: string;
+      startX: number;
+      startY: number;
+      endX: number;
+      endY: number;
+    }) => {
       try {
-        const handle = document.elementFromPoint(drag.startX, drag.startY);
+        const handle = document
+          .querySelector<HTMLElement>(`[data-testid="${drag.testId}"]`)
+          ?.querySelector<HTMLElement>(
+            ".react-flow__resize-control.handle.bottom.right",
+          );
         if (!(handle instanceof HTMLElement)) {
           return "resize handle is not available at the drag origin";
         }
@@ -307,6 +320,7 @@ async function resizeCanvasBlockBottomRight(
       }
     },
     {
+      testId,
       startX: Math.round(geometry!.handle.x),
       startY: Math.round(geometry!.handle.y),
       endX: Math.round(geometry!.handle.x + delta.x),
@@ -662,7 +676,8 @@ Refresh the assigned Live View output targets from source-backed activity.
     if (await collapseSidebar.isExisting()) {
       await collapseSidebar.click();
     }
-    const customize = await $("[data-testid='overview-edit']");
+    await openDashboardMenu();
+    const customize = await waitForTestId("overview-edit", 10_000);
     await customize.moveTo({
       xOffset: 10,
       yOffset: 10,
@@ -674,7 +689,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     )) as string;
     expect(renderedText).toContain("Live Views");
     expect(renderedText).toContain("DASHBOARDS");
-    expect(renderedText).toContain("CUSTOMIZE");
+    expect(renderedText.toLowerCase()).toContain("customize");
     expect(renderedText).toContain("Automation opportunities");
     expect(await dashboardSelector.getValue()).toBe(SELECTABLE_VIEW_ID);
     const selectedDashboardTitle = (await browser.execute(() => {
@@ -686,6 +701,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(selectedDashboardTitle).toBe("How I worked today");
     const screenshot = await saveScreenshot("brain-overview-pipe-filled");
     expect(existsSync(screenshot)).toBe(true);
+    await browser.keys(["Escape"]);
 
     const timeRange = await waitForTestId("overview-time-range", 10_000);
     await timeRange.click();
@@ -717,14 +733,13 @@ Refresh the assigned Live View output targets from source-backed activity.
     const fixedDashboardText = (await browser.execute(
       () => document.body?.innerText || "",
     )) as string;
-    expect(fixedDashboardText).toContain(
-      "Pipes fill these Blocks for today. Data changes when you refresh or a connected Pipe runs.",
-    );
+    expect(fixedDashboardText).toContain("Updated");
     const fixedScreenshot = await saveScreenshot(
       "brain-overview-fixed-range-hidden",
     );
     expect(existsSync(fixedScreenshot)).toBe(true);
 
+    await openDashboardMenu();
     const fixedCustomize = await waitForTestId("overview-edit", 10_000);
     await fixedCustomize.click();
     await waitForTestId("brain-overview-editor", 10_000);
@@ -753,9 +768,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       "canvas-block-time-by-app",
       { x: 96, y: 64 },
     );
-    let chartAfterResize:
-      | CanvasDocument["blocks"][number]
-      | undefined;
+    let chartAfterResize: CanvasDocument["blocks"][number] | undefined;
     await browser.waitUntil(
       async () => {
         const saved = await invokeOrThrow<CanvasDocument | null>(
@@ -767,8 +780,8 @@ Refresh the assigned Live View output targets from source-backed activity.
         );
         return Boolean(
           chartAfterResize &&
-            chartAfterResize.width >= chartBeforeResize.width + 80 &&
-            chartAfterResize.height >= chartBeforeResize.height + 48,
+          chartAfterResize.width >= chartBeforeResize.width + 80 &&
+          chartAfterResize.height >= chartBeforeResize.height + 48,
         );
       },
       {
@@ -872,8 +885,7 @@ Refresh the assigned Live View output targets from source-backed activity.
               candidate.fromId === "block:focus-time" &&
               candidate.toId === "block:time-by-app",
           ) &&
-          saved.blocks.find((block) => block.slotId === "focus-time")?.x ===
-            96,
+          saved.blocks.find((block) => block.slotId === "focus-time")?.x === 96,
         );
       },
       {
@@ -960,6 +972,8 @@ Refresh the assigned Live View output targets from source-backed activity.
     const restoredBrainNav = await waitForTestId("nav-brain", 10_000);
     await restoredBrainNav.click();
     await waitForTestId("section-brain", 15_000);
+    await waitForTestId("overview-dashboard-selector", 10_000);
+    await selectDashboard(SELECTABLE_VIEW_ID);
     await waitForTestId("live-view-canvas", 15_000);
     expect(await $("textarea[aria-label='Canvas note']").getValue()).toBe(
       "Review the source evidence before automating.",
@@ -967,10 +981,15 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(await $("[data-testid^='canvas-arrow-']").isExisting()).toBe(true);
 
     await setCssWindowSize(1440, 900);
-    await $("[data-testid='overview-mode-dashboard']").click();
+    const dashboardMode = await $("[data-testid='overview-mode-dashboard']");
+    await dashboardMode.waitForEnabled({ timeout: t(15_000) });
+    await dashboardMode.click();
     await waitForTestId("brain-overview-grid", 10_000);
 
-    await $("[data-testid='overview-edit']").click();
+    await openDashboardMenu();
+    await waitForTestId("overview-edit", 10_000).then((element) =>
+      element.click(),
+    );
     await waitForTestId("brain-overview-editor", 10_000);
     const editorText = (await browser.execute(
       () => document.body?.innerText || "",

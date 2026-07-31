@@ -582,7 +582,7 @@ async fn get_connection(
     response
 }
 
-/// PUT /connections/:id — save credentials.
+/// PUT/POST /connections/:id — save credentials.
 async fn connect_integration(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
@@ -649,7 +649,8 @@ async fn list_instances(
         .is_some();
 
     if is_oauth {
-        let instances = oauth_store::list_oauth_instances(state.secret_store.as_deref(), &id).await;
+        let instances =
+            oauth_store::list_connected_oauth_instances(state.secret_store.as_deref(), &id).await;
         let mut items = Vec::new();
         for inst in instances {
             let token =
@@ -1853,7 +1854,7 @@ fn resolve_auth(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if user.is_empty() && pass.is_empty() {
+                if user.is_empty() || pass.is_empty() {
                     ResolvedAuth::None
                 } else {
                     ResolvedAuth::Basic(user, pass)
@@ -1862,6 +1863,12 @@ fn resolve_auth(
                 ResolvedAuth::None
             }
         }
+        ProxyAuth::BasicAuthEmptyPassword { username_key } => creds
+            .and_then(|c| c.get(*username_key))
+            .and_then(Value::as_str)
+            .filter(|user| !user.is_empty())
+            .map(|user| ResolvedAuth::Basic(user.to_string(), String::new()))
+            .unwrap_or(ResolvedAuth::None),
         ProxyAuth::None => ResolvedAuth::None,
     }
 }
@@ -3397,7 +3404,12 @@ where
         .route(
             "/:id",
             get(get_connection)
+                // Keep POST as an alias for agent/tool callers. The UI and
+                // older clients use PUT, but the public connection contract
+                // describes configuration as POST /connections/:id. Both
+                // paths share the same credential-safe handler.
                 .put(connect_integration)
+                .post(connect_integration)
                 .delete(disconnect_integration),
         )
         .route("/:id/test", post(test_connection))
@@ -3603,7 +3615,7 @@ mod calendar_error_response_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use screenpipe_connect::connections::ProxyAuth;
+    use screenpipe_connect::connections::{lexi::Lexi, mochi::Mochi, Integration, ProxyAuth};
     use serde_json::json;
 
     use axum::body::{to_bytes, Body};
@@ -4057,6 +4069,89 @@ mod tests {
         let creds = Map::new(); // no email or api_token
         assert!(matches!(
             resolve_auth(&auth_cfg, Some(&creds), None, None),
+            ResolvedAuth::None
+        ));
+    }
+
+    #[test]
+    fn test_resolve_auth_basic_requires_both_credentials() {
+        let auth_cfg = ProxyAuth::BasicAuth {
+            username_key: "username",
+            password_key: "password",
+        };
+
+        for creds in [
+            Map::from_iter([("username".into(), json!("user"))]),
+            Map::from_iter([("password".into(), json!("secret"))]),
+        ] {
+            assert!(matches!(
+                resolve_auth(&auth_cfg, Some(&creds), None, None),
+                ResolvedAuth::None
+            ));
+        }
+    }
+
+    #[test]
+    fn mochi_proxy_resolves_api_key_with_empty_password() {
+        let config = Mochi.proxy_config().expect("Mochi should support proxying");
+        let creds = Map::from_iter([("api_key".into(), json!("mochi-api-key"))]);
+
+        match resolve_auth(&config.auth, Some(&creds), None, None) {
+            ResolvedAuth::Basic(user, pass) => {
+                assert_eq!(user, "mochi-api-key");
+                assert!(pass.is_empty());
+            }
+            _ => panic!("expected Mochi API key to resolve with an empty Basic password"),
+        }
+    }
+
+    #[test]
+    fn leexi_proxy_resolves_complete_credentials_as_basic() {
+        let config = Lexi.proxy_config().expect("Leexi should support proxying");
+        let creds = Map::from_iter([
+            ("api_key_id".into(), json!("key-id")),
+            ("key_secret".into(), json!("key-secret")),
+        ]);
+
+        match resolve_auth(&config.auth, Some(&creds), None, None) {
+            ResolvedAuth::Basic(user, pass) => {
+                assert_eq!(user, "key-id");
+                assert_eq!(pass, "key-secret");
+            }
+            _ => panic!("expected complete Leexi credentials to resolve as Basic auth"),
+        }
+    }
+
+    #[test]
+    fn leexi_proxy_rejects_partial_or_empty_credentials() {
+        let config = Lexi.proxy_config().expect("Leexi should support proxying");
+
+        for creds in [
+            Map::from_iter([("api_key_id".into(), json!("key-id"))]),
+            Map::from_iter([("key_secret".into(), json!("key-secret"))]),
+            Map::from_iter([
+                ("api_key_id".into(), json!("")),
+                ("key_secret".into(), json!("key-secret")),
+            ]),
+            Map::from_iter([
+                ("api_key_id".into(), json!("key-id")),
+                ("key_secret".into(), json!("")),
+            ]),
+        ] {
+            assert!(matches!(
+                resolve_auth(&config.auth, Some(&creds), None, None),
+                ResolvedAuth::None
+            ));
+        }
+    }
+
+    #[test]
+    fn leexi_proxy_does_not_reinterpret_legacy_api_key() {
+        let config = Lexi.proxy_config().expect("Leexi should support proxying");
+        let creds = Map::from_iter([("api_key".into(), json!("legacy-secret"))]);
+
+        assert!(matches!(
+            resolve_auth(&config.auth, Some(&creds), None, None),
             ResolvedAuth::None
         ));
     }

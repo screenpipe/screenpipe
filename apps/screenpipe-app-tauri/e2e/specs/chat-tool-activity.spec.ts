@@ -186,6 +186,12 @@ describe("Chat tool activity progressive disclosure", function () {
       interval: 100,
       timeoutMsg: "running activity never became a friendly test status",
     });
+    const runningIndicator = await summary.$('[data-testid="tool-activity-running-indicator"]');
+    await runningIndicator.waitForExist({
+      timeout: t(2_000),
+      timeoutMsg: "collapsed running tool activity has no visible loading indicator",
+    });
+    expect(await runningIndicator.isDisplayed()).toBe(true);
     expect(await summary.getAttribute("aria-expanded")).toBe("false");
     expect((await $$('[data-testid="tool-activity-list"]')).length).toBe(0);
 
@@ -277,6 +283,9 @@ describe("Chat tool activity progressive disclosure", function () {
     );
     const summary = await lastSummary();
     expect(await summary.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      await summary.$('[data-testid="tool-activity-running-indicator"]').isExisting(),
+    ).toBe(false);
 
     const body = await visibleBodyText();
     expect(body).toContain("I reviewed the information and prepared the summary.");

@@ -1,0 +1,100 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "commitments",
+  "title": "Commitments",
+  "description": "One living inbox for promises, requests, waiting, corrections, and follow-through.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "commitments",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "commitments",
+    "title": "Commitments",
+    "revision": 1,
+    "timeRange": "7d",
+    "periodPolicy": {
+      "type": "selectable.v1",
+      "values": ["24h", "7d", "30d"]
+    },
+    "blocks": [
+      {
+        "id": "open-commitments",
+        "title": "Needs attention",
+        "kind": "list.v1",
+        "width": 12,
+        "order": 0,
+        "intent": "Maintain one reconciled list of explicit open commitments from the selected period. Use stable ids and the interactive item fields. Include requests to me, promises I made, waiting dependencies, and due work; never infer completion from silence.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "commitments"
+        }
+      },
+      {
+        "id": "due-now",
+        "title": "Due now",
+        "kind": "metric.v1",
+        "width": 3,
+        "order": 1,
+        "intent": "Count reconciled open commitments that are source-backed as due or overdue now. Do not count uncertain dates.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "commitments"
+        }
+      },
+      {
+        "id": "waiting-on",
+        "title": "Waiting",
+        "kind": "metric.v1",
+        "width": 3,
+        "order": 2,
+        "intent": "Count open commitments currently blocked by or delegated to someone else, using the same reconciled set as the inbox.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "commitments"
+        }
+      },
+      {
+        "id": "needs-review",
+        "title": "Needs review",
+        "kind": "metric.v1",
+        "width": 3,
+        "order": 3,
+        "intent": "Count commitment candidates whose ownership, deadline, or open state still needs the user's review.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "commitments"
+        }
+      },
+      {
+        "id": "material-changes",
+        "title": "What changed",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 4,
+        "intent": "Show only material source-backed commitment changes: created, deadline or owner changed, explicitly completed, cancelled, or reopened.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "commitments"
+        }
+      },
+      {
+        "id": "inbox-context",
+        "title": "What Screenpipe could verify",
+        "kind": "markdown.v1",
+        "width": 6,
+        "order": 5,
+        "intent": "Explain the evidence boundary, uncertainty, and any important source gap behind this refresh in at most three short sentences.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "commitments"
+        }
+      }
+    ],
+    "createdAt": "2026-07-29T00:00:00Z",
+    "updatedAt": "2026-07-29T00:00:00Z"
+  }
+}

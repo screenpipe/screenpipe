@@ -27,6 +27,7 @@ import {
   type OnboardingGoalCategory,
 } from "@/lib/live-views/onboarding-goals";
 import type { AIPreset } from "@/lib/utils/tauri";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
 const STALLED_BUILD_ESCAPE_DELAY_MS = 12_000;
 const SHELL_PREPARE_TIMEOUT_MS = 8_000;
@@ -261,6 +262,7 @@ export default function FirstDashboard() {
       goal_length: lengthBucket(normalizedGoal),
       time_spent_ms: Date.now() - mountedAtRef.current,
     });
+    onboardingFunnel.goalSubmitted(goalCategory);
 
     try {
       await updateSettings({
@@ -300,6 +302,7 @@ export default function FirstDashboard() {
         refresh_started_count: result.refreshStartedCount,
         time_spent_ms: Date.now() - mountedAtRef.current,
       });
+      onboardingFunnel.liveViewCreated(goalCategory);
       posthog.capture("onboarding_path_selected", {
         path: "ai_live_view",
         pipes: result.pipeSlugs,

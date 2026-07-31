@@ -1133,6 +1133,13 @@ function ToolCallGroup({
             aria-expanded={isExpanded}
             disabled={forceCollapsed || hasInteractiveTool}
           >
+            {isWorking && (
+              <RefreshCw
+                className="h-3 w-3 shrink-0 animate-spin text-foreground/40"
+                data-testid="tool-activity-running-indicator"
+                aria-hidden="true"
+              />
+            )}
             <span className="truncate text-xs text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
               {isWorking ? runningSummary : summary}
             </span>

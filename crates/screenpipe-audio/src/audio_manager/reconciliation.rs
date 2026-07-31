@@ -396,6 +396,9 @@ pub async fn reconcile_untranscribed(
             Ok(output) => output,
             Err(e) => {
                 error!("reconciliation: transcription failed for batch: {}", e);
+                if let Some(metrics) = &metrics {
+                    metrics.record_transcription_error();
+                }
                 // Bump attempts on every chunk in the batch. Once a chunk has
                 // failed MAX_TRANSCRIPTION_ATTEMPTS times in a row the outcome
                 // helper flips it to status='failed' and it stops being picked.
@@ -2427,6 +2430,31 @@ mod tests {
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    fn physical_footprint_bytes() -> u64 {
+        let mut info: libc::rusage_info_v0 = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::proc_pid_rusage(
+                std::process::id() as libc::c_int,
+                libc::RUSAGE_INFO_V0,
+                (&mut info as *mut libc::rusage_info_v0).cast(),
+            )
+        };
+        assert_eq!(result, 0, "proc_pid_rusage(RUSAGE_INFO_V0) failed");
+        info.ri_phys_footprint
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
+    fn release_allocator_pages() -> usize {
+        extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+
+        // Match the production resource monitor: sample memory after asking
+        // macOS to return completely free malloc pages to the operating system.
+        unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) }
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
     fn mib(bytes: u64) -> f64 {
         bytes as f64 / 1024.0 / 1024.0
     }
@@ -2452,16 +2480,18 @@ mod tests {
     /// temporary SQLite DB, candidate query, ffmpeg decode, per-batch session,
     /// Parakeet MLX transcription, ONNX speaker diarization, and persistence.
     ///
-    /// `cargo test --release -p screenpipe-audio --features parakeet-mlx cached_parakeet_mlx_reconciliation_memory_plateaus -- --ignored --nocapture --test-threads=1`
+    /// `cargo test --release -p screenpipe-audio --features parakeet-mlx cached_parakeet_mlx_post_meeting_backlog_memory_plateaus -- --ignored --nocapture --test-threads=1`
     #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "parakeet-mlx"))]
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "real-model full reconciliation memory plateau regression"]
-    async fn cached_parakeet_mlx_reconciliation_memory_plateaus() {
+    async fn cached_parakeet_mlx_post_meeting_backlog_memory_plateaus() {
         const MODEL_REPO: &str = "mlx-community/parakeet-tdt-0.6b-v3";
         const WARMUP_CALLS: usize = 4;
-        const CANDIDATES_PER_SWEEP: [usize; 4] = [50, 21, 21, 21];
-        const SWEEP_COUNT: usize = CANDIDATES_PER_SWEEP.len();
-        const MAX_POST_WARMUP_ENDPOINT_GROWTH_BYTES: u64 = 64 * 1024 * 1024;
+        // Mirrors the v2.5.151 incident: four immediately-drained capped sweeps
+        // followed by the final partial sweep after the ordinary idle interval.
+        const SYNTHETIC_CANDIDATES_PER_SWEEP: [usize; 5] = [50, 50, 50, 50, 48];
+        const SYNTHETIC_CANDIDATE_COUNT: usize = 248;
+        const MAX_POST_WARMUP_FOOTPRINT_GROWTH_BYTES: u64 = 512 * 1024 * 1024;
 
         if !cached_parakeet_mlx_model_available() {
             eprintln!(
@@ -2476,15 +2506,17 @@ mod tests {
         let thirty_seconds = sample_rate as usize * 30;
         assert!(audio.len() >= thirty_seconds);
 
-        let engine = TranscriptionEngine::new(
-            Arc::new(AudioTranscriptionEngine::ParakeetMlx),
-            None,
-            None,
-            vec![screenpipe_core::Language::English],
-            Vec::new(),
-        )
-        .await
-        .expect("failed to load cached Parakeet MLX model");
+        let engine = Arc::new(
+            TranscriptionEngine::new(
+                Arc::new(AudioTranscriptionEngine::ParakeetMlx),
+                None,
+                None,
+                vec![screenpipe_core::Language::English],
+                Vec::new(),
+            )
+            .await
+            .expect("failed to load cached Parakeet MLX model"),
+        );
 
         for call in 1..=WARMUP_CALLS {
             let mut session = engine
@@ -2501,7 +2533,8 @@ mod tests {
         }
 
         let temp = tempfile::tempdir().expect("create reconciliation repro dir");
-        let db = temp_db(temp.path()).await;
+        let db = Arc::new(temp_db(temp.path()).await);
+        let sweep_count = SYNTHETIC_CANDIDATES_PER_SWEEP.len();
         let model_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("models")
             .join("pyannote");
@@ -2519,16 +2552,22 @@ mod tests {
             segmentation_model_path: tokio::sync::Mutex::new(Some(segmentation_model_path)),
         });
         let base_timestamp = Utc::now() - chrono::Duration::hours(6);
-        let mut sweep_endpoints = Vec::with_capacity(SWEEP_COUNT);
+        let mut rss_endpoints = Vec::with_capacity(sweep_count);
+        let mut footprint_endpoints = Vec::with_capacity(sweep_count);
         let mut next_index = 0usize;
 
-        for (sweep, candidate_count) in CANDIDATES_PER_SWEEP.into_iter().enumerate() {
+        for (sweep, candidate_count) in SYNTHETIC_CANDIDATES_PER_SWEEP.into_iter().enumerate() {
             for offset in 0..candidate_count {
                 let index = next_index;
                 next_index += 1;
-                let duration_step = offset % 21;
+                // A real meeting produces slightly different AAC durations for
+                // nearly every chunk. Exercise 248 distinct MLX tensor shapes
+                // instead of cycling the same 21 shapes (the old regression),
+                // which hid the shape-cache growth seen in v2.5.151.
+                let base_samples = sample_rate as usize * 20;
+                let variable_span_samples = sample_rate as usize * 10;
                 let sample_count =
-                    sample_rate as usize * 20 + duration_step * sample_rate as usize / 2;
+                    base_samples + index * variable_span_samples / (SYNTHETIC_CANDIDATE_COUNT - 1);
                 let path = temp.path().join(format!(
                     "Display (output)_2026-07-23_{sweep:02}-{offset:02}-00.wav"
                 ));
@@ -2550,31 +2589,49 @@ mod tests {
             assert_eq!(candidates.len(), candidate_count);
 
             let sweep_start = resident_size_bytes();
-            let result = reconcile_untranscribed(
-                &db,
-                &engine,
-                None,
-                Arc::new(AudioTranscriptionEngine::Parakeet),
-                Some(segmentation_manager.clone()),
-                Some(temp.path()),
-                None,
-                None,
-            )
-            .await;
+            let footprint_start = physical_footprint_bytes();
+            let result = {
+                let db = db.clone();
+                let engine = engine.clone();
+                let segmentation_manager = segmentation_manager.clone();
+                let data_dir = temp.path().to_path_buf();
+                tokio::spawn(async move {
+                    reconcile_untranscribed(
+                        &db,
+                        &engine,
+                        None,
+                        Arc::new(AudioTranscriptionEngine::ParakeetMlx),
+                        Some(segmentation_manager),
+                        Some(&data_dir),
+                        None,
+                        None,
+                    )
+                    .await
+                })
+                .await
+                .expect("reconciliation worker panicked")
+            };
             let sweep_end = resident_size_bytes();
+            let allocator_bytes_released = release_allocator_pages();
+            let footprint_end = physical_footprint_bytes();
             assert_eq!(result.processed_chunks, candidate_count);
             assert_eq!(
                 result.hit_candidate_limit,
                 candidate_count == RECONCILIATION_CHUNKS_PER_SWEEP as usize
             );
-            sweep_endpoints.push(sweep_end);
+            rss_endpoints.push(sweep_end);
+            footprint_endpoints.push(footprint_end);
             eprintln!(
-                "[mlx-reconciliation-memory] sweep={}/{SWEEP_COUNT} reconciled={}/{candidate_count} rss_start={:.1} MiB rss_end={:.1} MiB working_set_delta={:.1} MiB active_mlx={:.1} MiB",
+                "[mlx-reconciliation-memory] sweep={}/{sweep_count} reconciled={}/{candidate_count} rss_start={:.1} MiB rss_end={:.1} MiB rss_delta={:.1} MiB allocator_released={:.1} MiB footprint_start={:.1} MiB footprint_end={:.1} MiB footprint_delta={:.1} MiB active_mlx={:.1} MiB",
                 sweep + 1,
                 result.processed_chunks,
                 mib(sweep_start),
                 mib(sweep_end),
                 mib(sweep_end.saturating_sub(sweep_start)),
+                mib(allocator_bytes_released as u64),
+                mib(footprint_start),
+                mib(footprint_end),
+                mib(footprint_end.saturating_sub(footprint_start)),
                 crate::transcription::engine::mlx_active_memory_bytes_for_test() as f64
                     / 1024.0
                     / 1024.0,
@@ -2584,19 +2641,25 @@ mod tests {
         // A sweep's start can be lower because macOS reclaims empty malloc pages
         // between passes. Compare completed sweep endpoints instead: a leak keeps
         // raising that high-water mark, while reusable working memory plateaus.
-        let warmup_endpoint = sweep_endpoints[0];
-        let post_warmup_peak = *sweep_endpoints[1..]
+        let warmup_endpoint = footprint_endpoints[0];
+        let post_warmup_peak = *footprint_endpoints[1..]
             .iter()
             .max()
             .expect("at least one measured reconciliation sweep");
-        let endpoint_growth = post_warmup_peak.saturating_sub(warmup_endpoint);
+        let footprint_growth = post_warmup_peak.saturating_sub(warmup_endpoint);
         assert!(
-            endpoint_growth <= MAX_POST_WARMUP_ENDPOINT_GROWTH_BYTES,
-            "Parakeet MLX reconciliation endpoints did not plateau: {SWEEP_COUNT} real backlog \
-             sweeps grew the post-warm-up high-water mark by \
+            footprint_growth <= MAX_POST_WARMUP_FOOTPRINT_GROWTH_BYTES,
+            "Parakeet MLX reconciliation physical footprint did not plateau: {sweep_count} \
+             post-meeting backlog sweeps grew the post-warm-up high-water mark by \
              {:.1} MiB (limit: {:.1} MiB)",
-            mib(endpoint_growth),
-            mib(MAX_POST_WARMUP_ENDPOINT_GROWTH_BYTES),
+            mib(footprint_growth),
+            mib(MAX_POST_WARMUP_FOOTPRINT_GROWTH_BYTES),
+        );
+
+        eprintln!(
+            "[mlx-reconciliation-memory] completed rss_endpoints={:?} footprint_endpoints={:?}",
+            rss_endpoints.into_iter().map(mib).collect::<Vec<_>>(),
+            footprint_endpoints.into_iter().map(mib).collect::<Vec<_>>(),
         );
     }
 }

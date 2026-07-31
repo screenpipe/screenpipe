@@ -1992,11 +1992,11 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.15.1"
-source = "git+https://github.com/yury/cidre.git#7049fbfbb92a5b3ed034d3c3162e2fccf3dd5f3e"
+version = "0.16.1"
+source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
 dependencies = [
  "cc",
- "cidre-macros 0.5.0",
+ "cidre-macros 0.6.0",
  "half",
  "parking_lot",
  "tokio",
@@ -2005,7 +2005,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.16.1"
-source = "git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716#8d0f7307d201d75328ed82ea0d4ca7bb0a649716"
+source = "git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30#9c20f5ee5abaad4598843a33e13d6e48822d1f30"
 dependencies = [
  "cc",
  "cidre-macros 0.6.0",
@@ -2547,7 +2547,7 @@ version = "0.15.3"
 source = "git+https://github.com/screenpipe/cpal.git?rev=e7edfa174466e87a467d1a58e3a4aec233ff8a21#e7edfa174466e87a467d1a58e3a4aec233ff8a21"
 dependencies = [
  "alsa",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "core-foundation-sys 0.8.7",
  "coreaudio-rs",
  "dasp_sample",
@@ -11002,9 +11002,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
+source = "git+https://github.com/screenpipe/sck-rs?rev=6deefba79619c2763f24cfbaaf4e08fa7e8302e0#6deefba79619c2763f24cfbaaf4e08fa7e8302e0"
 dependencies = [
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30)",
  "image 0.25.10",
  "once_cell",
  "thiserror 1.0.69",
@@ -11032,7 +11032,7 @@ dependencies = [
  "arboard",
  "arc-swap",
  "chrono",
- "cidre 0.16.1",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716)",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "crossbeam-channel",
@@ -11059,7 +11059,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.149"
+version = "2.5.158"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11094,6 +11094,7 @@ dependencies = [
  "image 0.25.10",
  "ini",
  "lazy_static",
+ "libc",
  "log",
  "minisign",
  "minisign-verify",
@@ -11193,7 +11194,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "clap",
  "cpal",
  "crossbeam",
@@ -11409,7 +11410,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "clap",
  "colored",
  "dashmap",
@@ -11550,7 +11551,7 @@ dependencies = [
  "atspi-proxies",
  "base64 0.22.1",
  "chrono",
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git?rev=8481f3f0dc7dd39bb5be80d9424bfac0cad3801a)",
+ "cidre 0.15.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "image 0.25.10",
@@ -11659,6 +11660,13 @@ dependencies = [
  "tracing",
  "walkdir",
  "zeroize",
+]
+
+[[package]]
+name = "screenpipe-wer-dump-helper"
+version = "0.1.0"
+dependencies = [
+ "windows 0.58.0",
 ]
 
 [[package]]

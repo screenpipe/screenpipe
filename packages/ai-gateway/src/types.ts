@@ -209,6 +209,17 @@ export interface Env {
 	LIMIT_SUBSCRIBED_DAILY?: string;
 	LIMIT_SUBSCRIBED_RPM?: string;
 	LIMIT_IP_DAILY?: string;
+	/**
+	 * Stable incident/repricing identifier for text-AI cash caps. When changed,
+	 * the gateway snapshots each account's existing UTC-day spend and enforces
+	 * the new cap only on spend incurred after that snapshot.
+	 */
+	COST_CAP_EPOCH?: string;
+	MAX_DAILY_TEXT_COST_PER_USER?: string;
+	MAX_DAILY_SUBSCRIBED_TEXT_COST?: string;
+	// Legacy/transcription base cap. Text falls back to this only when its
+	// dedicated override is absent.
+	MAX_DAILY_COST_PER_USER?: string;
 	// Per-minute RPM for free (weight-0) models — a separate, much higher bucket
 	// so heavy free usage never trips the low paid-model limit. Tunable per tier.
 	LIMIT_ANONYMOUS_FREE_RPM?: string;
@@ -228,7 +239,6 @@ export type AccountPlan =
 	| 'business'
 	| 'team'
 	| 'enterprise'
-	| 'lifetime'
 	| 'unknown';
 
 // Auth result with tier information
@@ -284,6 +294,8 @@ export interface UsageStatus {
 	 *  kill-switch (MODEL_GATING_ENABLED) turns the banner off server-side too,
 	 *  no app release needed. */
 	upsell_banner?: boolean;
+	/** Authoritative plan decision for proactive hosted-AI upgrade UI. */
+	upgrade_eligible?: boolean;
 	upgrade_options?: {
 		login?: { benefit: string };
 		subscribe?: { benefit: string };

@@ -157,6 +157,13 @@ fn parse_conversation(
         }
         messages.push((node, actor, actor_evidence, time_label, body));
     }
+    let mut title_override: Option<String> = None;
+    if messages.is_empty() {
+        if let Some(labeled) = labeled_uia_turns(profile, tree) {
+            title_override = Some(labeled.title);
+            messages = labeled.messages;
+        }
+    }
     if messages.is_empty() {
         return Vec::new();
     }
@@ -167,11 +174,11 @@ fn parse_conversation(
         format!("{}:conversation", profile.id),
         IdentityQuality::Derived,
     );
-    conversation.title = Some(
+    conversation.title = Some(title_override.unwrap_or_else(|| {
         first_root_title(tree)
             .unwrap_or(profile.display_name)
-            .to_owned(),
-    );
+            .to_owned()
+    }));
     conversation
         .metadata
         .insert("app".into(), profile.display_name.into());
@@ -301,7 +308,7 @@ fn parse_mail(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticI
         messages.push((node, sender.to_owned(), body));
     }
     if messages.is_empty() {
-        return Vec::new();
+        return parse_mail_list_rows(profile, tree);
     }
 
     let mut conversation = SemanticItem::new(
@@ -455,6 +462,9 @@ fn parse_calendar(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Seman
 }
 
 fn parse_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticItem> {
+    if profile.id == "windowsterminal" {
+        return parse_windows_terminal(profile, tree);
+    }
     let mut bodies = Vec::new();
     for root in tree.roots() {
         if let Some(body) = collect_text(tree, root) {
@@ -478,6 +488,337 @@ fn parse_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Seman
         .insert("app".into(), profile.display_name.into());
     terminal.metadata.insert("family".into(), "terminal".into());
     vec![terminal]
+}
+
+/// Windows Terminal renders each pane as a XAML `TermControl` element. Exact
+/// class match; abstain without it so WT settings/palette surfaces never fall
+/// through to a text sweep. Today the walker does not read TermControl's UIA
+/// TextPattern, so the honest yield is session identity (tab title), with the
+/// pane `Value` picked up automatically once walker-side capture lands.
+fn parse_windows_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticItem> {
+    let mut panes = Vec::new();
+    'roots: for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if tree.has_class(node, "TermControl") {
+                panes.push(node);
+                if panes.len() == MAX_STRUCTURAL_CANDIDATES {
+                    break 'roots;
+                }
+            }
+        }
+    }
+    if panes.is_empty() {
+        return Vec::new();
+    }
+    let mut bodies = Vec::new();
+    for &pane in &panes {
+        let body = tree
+            .value(pane)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| collect_text(tree, pane));
+        if let Some(body) = body {
+            bodies.push(body);
+        }
+    }
+    if bodies.is_empty() {
+        return Vec::new();
+    }
+    let title = tree
+        .text(panes[0])
+        .or_else(|| tree.description(panes[0]))
+        .map(str::trim)
+        .filter(|title| !title.is_empty() && title.len() <= 240 && !title.contains(['\n', '\r']))
+        .or_else(|| first_root_title(tree))
+        .unwrap_or(profile.display_name)
+        .to_owned();
+    let mut terminal = SemanticItem::new(
+        "terminal",
+        SemanticKind::Document,
+        format!("{}:terminal", profile.id),
+        IdentityQuality::Ephemeral,
+    );
+    let body = bodies.join("\n");
+    // Until the walker reads TermControl's UIA TextPattern, the only text on
+    // the pane is its tab title. Echoing it as the body would advertise
+    // buffer content that was never captured, so record identity alone.
+    terminal.body = (body != title).then_some(body);
+    terminal.title = Some(title);
+    terminal
+        .metadata
+        .insert("app".into(), profile.display_name.into());
+    terminal.metadata.insert("family".into(), "terminal".into());
+    terminal.source_nodes.push(panes[0]);
+    vec![terminal]
+}
+
+/// Gmail's thread list through Chromium's UIA bridge on Windows: each
+/// conversation is a `DataItem` row carrying Gmail's long-stable class markers
+/// (`zA` row, `zE` unread) whose child cells are classed `yX` (sender),
+/// `a4W` (subject + snippet), and `xW` (date). AppKit and web-DOM trees never
+/// expose the `DataItem` control type, so this path abstains there. Tokens are
+/// matched with exact `has_class`, never substring signatures — 2-3 char
+/// tokens would collide with unrelated utility classes.
+fn parse_mail_list_rows(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticItem> {
+    let mut rows = Vec::new();
+    'roots: for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if is_mail_list_row(tree, node) {
+                rows.push(node);
+                if rows.len() == MAX_STRUCTURAL_CANDIDATES {
+                    break 'roots;
+                }
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    for row in rows {
+        let Some(sender) = mail_row_cell_text(tree, row, "yX") else {
+            continue;
+        };
+        let Some(combined) = mail_row_cell_text(tree, row, "a4W") else {
+            continue;
+        };
+        entries.push((row, sender, combined, mail_row_cell_text(tree, row, "xW")));
+    }
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut mailbox = SemanticItem::new(
+        "thread-list",
+        SemanticKind::Conversation,
+        format!("{}:mail-list", profile.id),
+        IdentityQuality::Derived,
+    );
+    mailbox.title = Some(profile.display_name.to_owned());
+    mailbox
+        .metadata
+        .insert("app".into(), profile.display_name.into());
+    mailbox.metadata.insert("family".into(), "mail".into());
+    mailbox.metadata.insert("view".into(), "list".into());
+    let mut items = Vec::with_capacity(entries.len() + 1);
+    items.push(mailbox);
+    for (index, (row, sender, combined, date)) in entries.into_iter().enumerate() {
+        // Gmail joins subject and snippet with U+00A0 '-' U+00A0.
+        let (subject, snippet) = match combined.split_once("\u{a0}-\u{a0}") {
+            Some((subject, snippet)) => (subject.trim(), Some(snippet.trim())),
+            None => (combined.trim(), None),
+        };
+        if subject.is_empty() {
+            continue;
+        }
+        let mut message = SemanticItem::new(
+            format!("mail-row-{index}"),
+            SemanticKind::Message,
+            format!("{}:mail-row:{index}", profile.id),
+            IdentityQuality::Ephemeral,
+        );
+        message.parent_local_id = Some("thread-list".into());
+        message.actor = Some(sender.to_owned());
+        message.title = Some(subject.to_owned());
+        message.body = snippet.filter(|s| !s.is_empty()).map(str::to_owned);
+        if let Some(date) = date {
+            message.occurred_at = Some(date.to_owned());
+            message.timestamp_precision = Some("minute".into());
+        }
+        if tree.has_class(row, "zE") {
+            message.status = Some("unread".into());
+        }
+        message.source_nodes.push(row);
+        items.push(message);
+    }
+    if items.len() == 1 {
+        return Vec::new();
+    }
+    items
+}
+
+fn is_mail_list_row(tree: &SemanticTree, node: NodeId) -> bool {
+    tree.role(node)
+        .is_some_and(|role| role.eq_ignore_ascii_case("DataItem"))
+        && tree.has_class(node, "zA")
+        && tree.children(node).any(|cell| tree.has_class(cell, "yX"))
+        && tree.children(node).any(|cell| tree.has_class(cell, "a4W"))
+}
+
+fn mail_row_cell_text<'a>(tree: &'a SemanticTree, row: NodeId, class: &str) -> Option<&'a str> {
+    tree.children(row)
+        .find(|cell| tree.has_class(*cell, class))
+        .and_then(|cell| node_content(tree, cell))
+}
+
+struct LabeledTurns {
+    title: String,
+    /// Same shape the marker path produces: node, actor, actor evidence,
+    /// time label, body.
+    messages: Vec<(NodeId, String, &'static str, Option<String>, String)>,
+}
+
+/// Actor evidence for turns identified by their per-turn action controls
+/// rather than by direction state or an explicit author label.
+const CONTROL_ANCHOR: &str = "control_anchor";
+const UIA_CONTENT_ROLES: &[&str] = &["Text", "Heading", "Link", "Paragraph", "ListItem"];
+const MAX_UIA_BUFFER_NODES: usize = 1024;
+const MAX_UIA_BODY_BYTES: usize = 48 * 1024;
+
+fn chromium_document_root(tree: &SemanticTree) -> Option<NodeId> {
+    tree.roots().find(|&root| {
+        tree.role(root)
+            .is_some_and(|role| role.eq_ignore_ascii_case("Document"))
+            && tree.identifier(root) == Some("RootWebArea")
+    })
+}
+
+fn button_label(tree: &SemanticTree, node: NodeId) -> Option<&str> {
+    tree.role(node)
+        .filter(|role| role.eq_ignore_ascii_case("Button"))?;
+    node_content(tree, node)
+}
+
+/// Chromium-UIA conversation surfaces (Codex desktop and relatives) expose no
+/// DOM classes, but their per-turn action buttons carry stable accessible
+/// names. Hard gate on the full trio before extracting; the anchor buttons
+/// then segment turns in capture order. Unrelated apps cannot satisfy the
+/// gate, and macOS trees (AXWebArea, no `RootWebArea` identifier) bypass the
+/// path entirely.
+fn labeled_uia_turns(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option<LabeledTurns> {
+    let root = chromium_document_root(tree)?;
+    let (mut good, mut bad, mut user) = (false, false, false);
+    for node in tree.descendants(root) {
+        if let Some(label) = button_label(tree, node) {
+            good |= label.eq_ignore_ascii_case("Good response");
+            bad |= label.eq_ignore_ascii_case("Bad response");
+            user |= label.eq_ignore_ascii_case("Edit user message")
+                || label.eq_ignore_ascii_case("Copy message");
+        }
+    }
+    if !(good && bad && user) {
+        return None;
+    }
+
+    let mut messages: Vec<(NodeId, String, &'static str, Option<String>, String)> = Vec::new();
+    let mut buffer: Vec<NodeId> = Vec::new();
+    let mut title: Option<String> = None;
+    let mut last_text: Option<NodeId> = None;
+    let mut skip_under: Option<NodeId> = None;
+    for node in tree.descendants(root) {
+        if let Some(anchor) = skip_under {
+            if is_descendant_of(tree, node, anchor) {
+                continue;
+            }
+            skip_under = None;
+        }
+        if let Some(label) = button_label(tree, node) {
+            if label.eq_ignore_ascii_case("Chat actions") {
+                // Header: the Text immediately preceding this button is the
+                // chat title.
+                title = last_text
+                    .and_then(|text| node_content(tree, text))
+                    .map(str::trim)
+                    .filter(|text| {
+                        !text.is_empty() && text.len() <= 240 && !text.contains(['\n', '\r'])
+                    })
+                    .map(str::to_owned);
+                buffer.clear();
+            } else if label.eq_ignore_ascii_case("Edit user message") {
+                buffer.clear();
+                if let Some(body) = collect_text(tree, node) {
+                    if messages.len() < MAX_STRUCTURAL_CANDIDATES {
+                        messages.push((node, "[user]".to_owned(), CONTROL_ANCHOR, None, body));
+                    }
+                }
+                skip_under = Some(node);
+            } else if [
+                "Copy message",
+                "Edit message",
+                "Bad response",
+                "Fork from this point",
+            ]
+            .iter()
+            .any(|anchor| label.eq_ignore_ascii_case(anchor))
+            {
+                // Turn-adjacent chrome (timestamps etc.) is discarded.
+                buffer.clear();
+            } else if label.eq_ignore_ascii_case("Good response") {
+                if !buffer.is_empty() && messages.len() < MAX_STRUCTURAL_CANDIDATES {
+                    if let Some(body) = joined_buffer_text(tree, &buffer) {
+                        messages.push((
+                            buffer[0],
+                            profile.display_name.to_owned(),
+                            CONTROL_ANCHOR,
+                            None,
+                            body,
+                        ));
+                    }
+                }
+                buffer.clear();
+            }
+            // Inline cards ("Scheduled task", "Worked for ...") must not
+            // split the assistant body.
+            continue;
+        }
+        let role = tree.role(node).unwrap_or("");
+        if !UIA_CONTENT_ROLES
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(role))
+        {
+            continue;
+        }
+        let Some(content) = node_content(tree, node) else {
+            continue;
+        };
+        // These surfaces render the turn time as a bare Text sibling right
+        // after the turn's own controls. Attach it to the turn just closed
+        // and keep it out of the body.
+        if content.len() <= 96 && is_message_time_label(content) {
+            if let Some(last) = messages.last_mut() {
+                last.3.get_or_insert_with(|| {
+                    content.replace(['\u{00a0}', '\u{202f}'], " ").to_owned()
+                });
+            }
+            continue;
+        }
+        if role.eq_ignore_ascii_case("Text") {
+            last_text = Some(node);
+        }
+        if buffer.len() < MAX_UIA_BUFFER_NODES {
+            buffer.push(node);
+        }
+        if role.eq_ignore_ascii_case("ListItem") {
+            // Child Texts duplicate fragments of the item line.
+            skip_under = Some(node);
+        }
+    }
+    (!messages.is_empty()).then(|| LabeledTurns {
+        title: title.unwrap_or_else(|| profile.display_name.to_owned()),
+        messages,
+    })
+}
+
+fn joined_buffer_text(tree: &SemanticTree, buffer: &[NodeId]) -> Option<String> {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut bytes = 0usize;
+    for &node in buffer {
+        let Some(content) = node_content(tree, node) else {
+            continue;
+        };
+        for line in content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            if lines.last() == Some(&line) {
+                continue;
+            }
+            bytes += line.len() + 1;
+            if bytes > MAX_UIA_BODY_BYTES {
+                return (!lines.is_empty()).then(|| lines.join("\n"));
+            }
+            lines.push(line);
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 fn leaf_marker_nodes(tree: &SemanticTree, tokens: &[&str]) -> Vec<NodeId> {

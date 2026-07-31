@@ -67,8 +67,8 @@ describe('proxyToAnthropic', () => {
 		expect(capturedHeaders['anthropic-version']).toBe('2023-06-01');
 		expect(capturedHeaders['content-type']).toBe('application/json');
 
-		// Verify model is kept in body (unlike Vertex which removes it)
-		expect(capturedBody.model).toBe('claude-opus-4-6');
+		// The direct route keeps a model in the body, after emergency normalization.
+		expect(capturedBody.model).toBe('claude-sonnet-5');
 		expect(capturedBody.max_tokens).toBe(1024);
 
 		// Verify response passthrough
@@ -130,6 +130,43 @@ describe('proxyToAnthropic', () => {
 		expect(fullText).toContain('message_stop');
 	});
 
+	it('should route Fable and Opus requests to Sonnet before calling Anthropic', async () => {
+		let capturedBody: any = null;
+		globalThis.fetch = async (_url: any, init: any) => {
+			capturedBody = JSON.parse(init.body);
+			return new Response(JSON.stringify({ type: 'message', content: [] }), { status: 200 });
+		};
+
+		const request = new Request('http://localhost/v1/messages', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model: 'claude-fable-5',
+				max_tokens: 100,
+				messages: [{ role: 'user', content: 'Hello' }],
+			}),
+		});
+
+		await proxyToAnthropic(request, 'sk-ant-test-key');
+
+		expect(capturedBody.model).toBe('claude-sonnet-5');
+
+		capturedBody = null;
+		const opusRequest = new Request('http://localhost/v1/messages', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model: 'claude-opus-4-8',
+				max_tokens: 100,
+				messages: [{ role: 'user', content: 'Hello' }],
+			}),
+		});
+
+		await proxyToAnthropic(opusRequest, 'sk-ant-test-key');
+
+		expect(capturedBody.model).toBe('claude-sonnet-5');
+	});
+
 	it('should sanitize nested text.text bug in messages', async () => {
 		let capturedBody: any = null;
 
@@ -186,7 +223,7 @@ describe('proxyToAnthropic', () => {
 		expect(capturedBody.top_k).toBeUndefined();
 	});
 
-	it('strips unsupported sampling parameters for Opus 5', async () => {
+	it('routes Opus 5 to Sonnet and strips unsupported sampling parameters', async () => {
 		let capturedBody: any = null;
 		globalThis.fetch = async (_url: any, init: any) => {
 			capturedBody = JSON.parse(init.body);
@@ -206,7 +243,7 @@ describe('proxyToAnthropic', () => {
 			}),
 		}), 'sk-ant-test-key');
 
-		expect(capturedBody.model).toBe('claude-opus-5');
+		expect(capturedBody.model).toBe('claude-sonnet-5');
 		expect(capturedBody.temperature).toBeUndefined();
 		expect(capturedBody.top_p).toBeUndefined();
 		expect(capturedBody.top_k).toBeUndefined();
@@ -364,8 +401,8 @@ describe('proxyToAnthropic', () => {
 
 		await proxyToAnthropic(request, 'sk-ant-test-key');
 
-		// Vertex deleted model from body — direct API must keep it
-		expect(capturedBody.model).toBe('claude-opus-4-6');
+		// Vertex deleted model from body — direct API keeps the normalized model.
+		expect(capturedBody.model).toBe('claude-sonnet-5');
 	});
 
 	it('should handle tool use messages correctly', async () => {
@@ -456,6 +493,7 @@ describe('listAnthropicModels', () => {
 			return new Response(JSON.stringify({
 				data: [
 					{ id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5', created_at: '2026-07-21T00:00:00Z', type: 'model' },
+					{ id: 'claude-fable-5', display_name: 'Claude Fable 5', created_at: '2026-07-21T00:00:00Z', type: 'model' },
 					{ id: 'claude-opus-4-6', display_name: 'Claude Opus 4.6', created_at: '2026-02-05T00:00:00Z', type: 'model' },
 					{ id: 'claude-sonnet-4-5-20250929', display_name: 'Claude Sonnet 4.5', created_at: '2025-09-29T00:00:00Z', type: 'model' },
 					{ id: 'claude-haiku-4-5-20251001', display_name: 'Claude Haiku 4.5', created_at: '2025-10-01T00:00:00Z', type: 'model' },
@@ -465,11 +503,11 @@ describe('listAnthropicModels', () => {
 
 		const models = await listAnthropicModels('sk-test');
 
-		expect(models.length).toBe(2);
+		expect(models.length).toBe(1);
 		expect(models[0].id).toBe('claude-sonnet-5');
 		expect(models[0].owned_by).toBe('anthropic');
 		expect(models[0].object).toBe('model');
-		expect(models.some(m => /haiku|sonnet-4/.test(m.id))).toBe(false);
+		expect(models.some(m => /fable|opus|haiku|sonnet-4/.test(m.id))).toBe(false);
 	});
 
 	it('should return fallback models on API error', async () => {
@@ -479,8 +517,8 @@ describe('listAnthropicModels', () => {
 
 		// Should return fallback list
 		expect(models.length).toBeGreaterThan(0);
-		expect(models.some(m => m.id === 'claude-opus-5')).toBe(true);
 		expect(models.some(m => m.id === 'claude-sonnet-5')).toBe(true);
+		expect(models.some(m => m.id.includes('opus'))).toBe(false);
 		expect(models.some(m => m.id.includes('haiku'))).toBe(false);
 	});
 
@@ -777,7 +815,7 @@ describe('Backwards compatibility with @YYYYMMDD model IDs', () => {
 		expect(capturedBody.model).toBe('claude-sonnet-5');
 	});
 
-	it('proxyToAnthropic should not modify model IDs without @', async () => {
+	it('proxyToAnthropic should route exact Opus IDs to Sonnet', async () => {
 		let capturedBody: any = null;
 
 		globalThis.fetch = async (_url: any, init: any) => {
@@ -797,10 +835,10 @@ describe('Backwards compatibility with @YYYYMMDD model IDs', () => {
 
 		await proxyToAnthropic(request, 'sk-ant-test-key');
 
-		expect(capturedBody.model).toBe('claude-opus-4-6');
+		expect(capturedBody.model).toBe('claude-sonnet-5');
 	});
 
-	it('proxyToAnthropic should handle opus @YYYYMMDD format', async () => {
+	it('proxyToAnthropic should normalize and route Opus @YYYYMMDD format', async () => {
 		let capturedBody: any = null;
 
 		globalThis.fetch = async (_url: any, init: any) => {
@@ -820,7 +858,7 @@ describe('Backwards compatibility with @YYYYMMDD model IDs', () => {
 
 		await proxyToAnthropic(request, 'sk-ant-test-key');
 
-		expect(capturedBody.model).toBe('claude-opus-4-5-20251101');
+		expect(capturedBody.model).toBe('claude-sonnet-5');
 	});
 });
 

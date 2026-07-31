@@ -4,7 +4,15 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Copy, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Copy,
+  LayoutTemplate,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -43,6 +51,8 @@ export function LiveViewDashboardSwitcher({
   selectionDisabled = busy,
   onSelect,
   onCreate,
+  onCustomize,
+  onOpenTemplates,
   onRename,
   onDuplicate,
   onDelete,
@@ -53,6 +63,8 @@ export function LiveViewDashboardSwitcher({
   selectionDisabled?: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  onCustomize?: () => void;
+  onOpenTemplates?: () => void;
   onRename: (title: string) => void | Promise<void>;
   onDuplicate: () => void | Promise<void>;
   onDelete: () => void | Promise<void>;
@@ -97,19 +109,6 @@ export function LiveViewDashboardSwitcher({
               </option>
             ))}
           </select>
-          <Button
-            data-testid="overview-new-dashboard"
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 shrink-0 rounded-none"
-            aria-label="create dashboard with AI"
-            title="create dashboard with AI"
-            disabled={busy || views.length >= MAX_DASHBOARDS}
-            onClick={onCreate}
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -119,12 +118,38 @@ export function LiveViewDashboardSwitcher({
                 size="icon"
                 className="h-9 w-9 shrink-0 rounded-none"
                 aria-label="dashboard actions"
+                title="dashboard actions"
                 disabled={busy}
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44 rounded-none">
+              <DropdownMenuItem
+                data-testid="overview-new-dashboard"
+                disabled={views.length >= MAX_DASHBOARDS}
+                onSelect={onCreate}
+              >
+                <Plus className="mr-2 h-3.5 w-3.5" /> new dashboard
+              </DropdownMenuItem>
+              {onCustomize && (
+                <DropdownMenuItem
+                  data-testid="overview-edit"
+                  onSelect={onCustomize}
+                >
+                  <SlidersHorizontal className="mr-2 h-3.5 w-3.5" />
+                  customize
+                </DropdownMenuItem>
+              )}
+              {onOpenTemplates && (
+                <DropdownMenuItem
+                  data-testid="overview-templates"
+                  onSelect={onOpenTemplates}
+                >
+                  <LayoutTemplate className="mr-2 h-3.5 w-3.5" /> templates
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => setRenameOpen(true)}>
                 <Pencil className="mr-2 h-3.5 w-3.5" /> rename
               </DropdownMenuItem>

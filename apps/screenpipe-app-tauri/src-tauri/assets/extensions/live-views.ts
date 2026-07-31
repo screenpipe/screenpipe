@@ -25,6 +25,12 @@ type LiveViewTemplate = {
   updatedAt?: string;
 };
 
+type LoadedViewSnapshot = {
+  revision: number;
+  loadedAt: number;
+  pipeBindings: Map<string, string>;
+};
+
 const parameters = {
   type: "object",
   properties: {
@@ -58,7 +64,7 @@ function headers(json = false): Record<string, string> {
 
 async function responseJson(response: Response): Promise<any> {
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  if (!response.ok || typeof body?.error === "string") {
     const message =
       typeof body?.error === "string" ? body.error : `HTTP ${response.status}`;
     throw new Error(message);
@@ -95,6 +101,114 @@ function saveRequest(view: LiveViewTemplate) {
   };
 }
 
+function pipeBinding(
+  block: Record<string, unknown>,
+): { name: string; signature: string } | null {
+  const source =
+    block.source && typeof block.source === "object"
+      ? (block.source as Record<string, unknown>)
+      : block.binding && typeof block.binding === "object"
+        ? (block.binding as Record<string, unknown>)
+        : null;
+  const name = source?.pipeName;
+  if (typeof name !== "string" || !name.trim()) return null;
+  const normalizedName = name.trim();
+  return {
+    name: normalizedName,
+    // Presentation-only edits (title, width, order) do not invalidate a run.
+    // These fields define which Pipe runs and the output contract it must fill.
+    signature: JSON.stringify([
+      normalizedName,
+      block.kind ?? null,
+      block.intent ?? null,
+    ]),
+  };
+}
+
+function pipeBindings(
+  blocks: Array<Record<string, unknown>>,
+): Map<string, string> {
+  return new Map(
+    blocks.flatMap((block) => {
+      const binding = pipeBinding(block);
+      return typeof block.id === "string" && binding
+        ? [[block.id, binding.signature] as const]
+        : [];
+    }),
+  );
+}
+
+function snapshotView(view: LiveViewTemplate): LoadedViewSnapshot {
+  return {
+    revision: view.revision,
+    loadedAt: Date.now(),
+    pipeBindings: pipeBindings(view.blocks),
+  };
+}
+
+function changedPipeBindings(
+  current: Map<string, string>,
+  next: LiveViewTemplate,
+): string[] {
+  const names = new Set<string>();
+
+  for (const block of next.blocks) {
+    const binding = pipeBinding(block);
+    if (!binding) continue;
+
+    const previous = typeof block.id === "string" ? current.get(block.id) : null;
+    if (previous !== binding.signature) {
+      names.add(binding.name);
+    }
+  }
+
+  return [...names];
+}
+
+async function requireFreshSuccessfulPipeTests(
+  names: string[],
+  loadedAt: number,
+  signal: AbortSignal,
+) {
+  for (const name of names) {
+    const payload = await responseJson(
+      await fetch(`${API_BASE}/pipes/${encodeURIComponent(name)}`, {
+        method: "GET",
+        headers: headers(),
+        signal,
+      }),
+    );
+    const status = payload?.data;
+    if (!status || typeof status !== "object") {
+      throw new Error(`Pipe "${name}" is not installed`);
+    }
+    if (status.is_running === true) {
+      throw new Error(
+        `Pipe "${name}" is still running. Wait for its test to finish before saving this Live View.`,
+      );
+    }
+
+    const lastRun =
+      typeof status.last_run === "string"
+        ? Date.parse(status.last_run)
+        : Number.NaN;
+    if (status.last_success !== true || !Number.isFinite(lastRun)) {
+      const detail =
+        typeof status.last_error === "string" && status.last_error.trim()
+          ? ` Latest error: ${status.last_error.trim().split("\n")[0]}`
+          : "";
+      throw new Error(
+        `Pipe "${name}" must complete a successful test before it can be bound to this Live View.${detail}`,
+      );
+    }
+    if (lastRun < loadedAt) {
+      throw new Error(
+        `Pipe "${name}" must be tested after the current Live View is loaded so this edit cannot reuse a stale success.`,
+      );
+    }
+  }
+}
+
 function toolResult(payload: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(payload) }],
@@ -102,6 +216,9 @@ function toolResult(payload: unknown) {
 }
 
 export default function (pi: ExtensionAPI) {
+  const toolStartedAt = Date.now();
+  const loadedViews = new Map<string, LoadedViewSnapshot>();
+
   pi.registerTool({
     name: "screenpipe_live_view",
     label: "Screenpipe Live View",
@@ -159,11 +276,34 @@ export default function (pi: ExtensionAPI) {
               { method: "GET", headers: headers(), signal },
             ),
           );
+          loadedViews.set(viewId, snapshotView(view));
           return toolResult({ view });
         }
 
         if (params.action === "save") {
-          const request = saveRequest(params.view as LiveViewTemplate);
+          const view = params.view as LiveViewTemplate;
+          const request = saveRequest(view);
+          const loaded = loadedViews.get(request.id);
+          if (request.expectedRevision !== null && !loaded) {
+            throw new Error(
+              `Load Live View "${request.id}" with action "get" before saving it`,
+            );
+          }
+          if (
+            request.expectedRevision !== null &&
+            loaded?.revision !== request.expectedRevision
+          ) {
+            throw new Error(
+              `Loaded Live View revision ${loaded?.revision ?? "unknown"} does not match save revision ${request.expectedRevision}`,
+            );
+          }
+
+          await requireFreshSuccessfulPipeTests(
+            changedPipeBindings(loaded?.pipeBindings ?? new Map(), view),
+            loaded?.loadedAt ?? toolStartedAt,
+            signal,
+          );
+
           const saved = await responseJson(
             await fetch(
               `${API_BASE}/live-views/${encodeURIComponent(request.id)}`,
@@ -175,6 +315,7 @@ export default function (pi: ExtensionAPI) {
               },
             ),
           );
+          loadedViews.set(saved.id, snapshotView(saved));
           return toolResult({
             saved: {
               id: saved.id,

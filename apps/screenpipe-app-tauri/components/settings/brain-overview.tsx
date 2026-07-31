@@ -13,15 +13,14 @@ import React, {
 import dynamic from "next/dynamic";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import {
   AlertCircle,
   CheckCircle2,
   LayoutDashboard,
-  LayoutTemplate,
   Loader2,
   Network,
   RefreshCw,
-  SlidersHorizontal,
   Undo2,
   X,
 } from "lucide-react";
@@ -37,7 +36,11 @@ import {
   LiveViewAiComposer,
   type LiveViewGenerationIntent,
 } from "@/components/settings/live-view-ai-composer";
-import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
+import {
+  LiveViewCard as OverviewCard,
+  type LiveViewItemActionRequest,
+  type LiveViewListItem,
+} from "@/components/settings/live-view-card";
 import { LiveViewCreateDashboardDialog } from "@/components/settings/live-view-create-dashboard-dialog";
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
@@ -64,6 +67,10 @@ import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
+  buildLiveViewItemHandoff,
+  persistLiveViewItemAction,
+} from "@/lib/live-views/item-actions";
+import {
   readActiveAiPresetId,
   resolveActiveAiPreset,
   writeActiveAiPresetId,
@@ -80,6 +87,7 @@ import {
   type LiveViewGenerationScope,
 } from "@/lib/live-views/generate-live-view-with-pi";
 import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
+import { buildLiveViewPipeAgentPrompt } from "@/lib/live-views/pipe-agent-prompt";
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,
@@ -153,6 +161,7 @@ type LiveViewRefreshTrigger =
   | "dashboard_duplicated"
   | "undo"
   | "card_regenerated"
+  | "item_changed"
   | "card_ai_edit";
 
 type PreviewSource =
@@ -196,8 +205,7 @@ function liveViewAnalyticsProperties(
     time_range: targetView.timeRange,
     has_result: resultSlots.length > 0,
     all_bound_blocks_have_results:
-      boundSlots.length > 0 &&
-      boundSlots.every((slot) => slot.value !== null),
+      boundSlots.length > 0 && boundSlots.every((slot) => slot.value !== null),
     reviewed_block_count:
       positiveFeedbackBlockCount + negativeFeedbackBlockCount,
     positive_feedback_block_count: positiveFeedbackBlockCount,
@@ -331,6 +339,7 @@ function generatedSlots(
       binding: block.pipeName ? { pipeName: block.pipeName } : null,
       value: null,
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
     };
   });
 }
@@ -358,6 +367,7 @@ function kitSlots(kit: BrainViewTemplateKit): ViewSlot[] {
     ...slot,
     value: null,
     feedback: { upCount: 0, downCount: 0, current: null },
+    itemActions: { items: [] },
   }));
 }
 
@@ -736,8 +746,7 @@ export function BrainOverview({
       ...liveViewAnalyticsProperties(view, views.length),
       entry_method,
       is_onboarding: Boolean(onboardingActivation),
-      onboarding_goal_category:
-        onboardingActivation?.goalCategory ?? "unknown",
+      onboarding_goal_category: onboardingActivation?.goalCategory ?? "unknown",
     });
   }, [onboardingActivation, view, views.length]);
 
@@ -749,10 +758,7 @@ export function BrainOverview({
     const captureVisibleResult = () => {
       if (document.visibilityState === "hidden") return;
       const previous = lastViewedResultRef.current;
-      if (
-        previous?.viewId === view.id &&
-        previous.signature === signature
-      ) {
+      if (previous?.viewId === view.id && previous.signature === signature) {
         return;
       }
       const entryMethod = !previous
@@ -836,9 +842,7 @@ export function BrainOverview({
         trigger,
         requested_block_count: boundSlots.length,
         requested_pipe_count: pipeNames.length,
-        is_onboarding: Boolean(
-          getOnboardingLiveViewActivation(targetView.id),
-        ),
+        is_onboarding: Boolean(getOnboardingLiveViewActivation(targetView.id)),
       };
       posthog.capture("live_view_refresh_requested", analyticsProperties);
       if (pipeNames.length === 0) {
@@ -966,6 +970,7 @@ export function BrainOverview({
         pipe_count: onboardingPipeNames.length,
         capture_state: captureReadiness,
       });
+      onboardingFunnel.brainHandoffViewed(onboardingActivation.goalCategory);
     }
     if (!onboardingHasResult || onboardingActivation.firstResultAt) return;
     const updated = markOnboardingLiveViewFirstResult(
@@ -977,6 +982,7 @@ export function BrainOverview({
       goal_category: onboardingActivation.goalCategory,
       pipe_count: onboardingPipeNames.length,
     });
+    onboardingFunnel.firstResultVisible(onboardingActivation.goalCategory);
   }, [
     captureReadiness,
     onboardingActivation,
@@ -1391,30 +1397,10 @@ export function BrainOverview({
         prompt_length: prompt.length,
       });
 
-      const liveViewReference = view
-        ? JSON.stringify({
-            id: view.id,
-            title: view.title,
-            revision: view.revision,
-          })
-        : "none; the user has not created a Live View yet";
-      const agentPrompt = `The user started this request from Brain > Live Views.
-
-Current Live View reference: ${liveViewReference}
-
-User request:
-${prompt}
-
-Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_live_view tool for Live View work.
-- Read the screenpipe-cli skill before changing a Pipe.
-- Load the current Live View lazily by id. Do not ask the app to inject its contents into chat context.
-- Treat this submitted request as explicit authorization to make the requested Pipe and Live View changes. Do not ask the user to approve those requested actions again.
-- It is okay to create a new disabled/manual Pipe draft and run it once for testing.
-- Test a changed Pipe with pipe run before binding it to the Live View.
-- After the Pipe works, save the smallest relevant Live View Block additions or edits directly. Preserve every unrelated Block; do not replace the whole dashboard, show a preview, or ask whether to replace it.
-- Ask one short question only when essential ambiguity remains or an action goes beyond the request: deleting a Pipe, overwriting a name collision when the user asked for a new Pipe, installing external code or a connection, or enabling a schedule the user did not request.
-- Use ask_user for that exceptional question when it is available; otherwise ask in chat and wait.
-- Do not publish anything to the Pipe Store.`;
+      const agentPrompt = buildLiveViewPipeAgentPrompt({
+        request: prompt,
+        view,
+      });
 
       try {
         await showChatWithPrefill({
@@ -1519,6 +1505,12 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
       });
       if (rating === "up" && persistedFeedback.current?.rating === "up") {
         qualifiedValue.liveViewResultAccepted();
+        if (onboardingActivation) {
+          onboardingFunnel.firstResultAccepted(
+            onboardingActivation.goalCategory,
+            "positive_feedback",
+          );
+        }
       }
       if (rating) finishOnboardingActivation("feedback");
       return true;
@@ -1540,6 +1532,94 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
         variant: "destructive",
       });
       return false;
+    }
+  };
+
+  const recordItemAction = async (
+    slot: ViewSlot,
+    request: LiveViewItemActionRequest,
+  ): Promise<boolean> => {
+    if (!view || !slot.value) return false;
+    try {
+      const persistedItemActions = await persistLiveViewItemAction({
+        viewId: view.id,
+        slot,
+        request,
+      });
+      setView((current) =>
+        current
+          ? {
+              ...current,
+              slots: current.slots.map((candidate) =>
+                candidate.id === slot.id
+                  ? { ...candidate, itemActions: persistedItemActions }
+                  : candidate,
+              ),
+            }
+          : current,
+      );
+      posthog.capture("live_view_item_action", {
+        ...liveViewAnalyticsProperties(view, views.length),
+        action: request.action,
+        component: slot.component,
+        has_pipe: Boolean(slot.binding),
+        has_correction: Boolean(request.correction?.trim()),
+      });
+      if (qualifiedValue.liveViewItemActionCompleted(request.action)) {
+        if (onboardingActivation) {
+          onboardingFunnel.firstResultAccepted(
+            onboardingActivation.goalCategory,
+            "item_action",
+          );
+        }
+      }
+      // The row changes immediately from persisted local state. Reconcile the
+      // whole dashboard in the background so metrics, timelines, and context
+      // blocks cannot remain out of step with the list.
+      void refreshConnectedPipes(view, undefined, "item_changed");
+      return true;
+    } catch (actionError) {
+      posthog.capture("live_view_item_action_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: request.action,
+        component: slot.component,
+        failure_type: analyticsErrorType(actionError),
+      });
+      toast({
+        title: "could not update this item",
+        description:
+          actionError instanceof Error
+            ? actionError.message
+            : String(actionError),
+        variant: "destructive",
+      });
+      return false;
+    }
+  };
+
+  const handoffItem = async (slot: ViewSlot, item: LiveViewListItem) => {
+    if (!view) return;
+    const handoff = buildLiveViewItemHandoff({
+      viewTitle: view.title,
+      slotTitle: slot.title,
+      item,
+    });
+    try {
+      await showChatWithPrefill({
+        ...handoff,
+        autoSend: true,
+        source: "live-view-item-handoff",
+        useHomeChat: true,
+      });
+    } catch (handoffError) {
+      toast({
+        title: "could not open the handoff",
+        description:
+          handoffError instanceof Error
+            ? handoffError.message
+            : String(handoffError),
+        variant: "destructive",
+      });
     }
   };
 
@@ -1799,6 +1879,29 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
           throw new Error(renameResult.error);
         installedView = renameResult.data;
       }
+      const pipeEnableFailures: string[] = [];
+      await Promise.all(
+        kit.pipes.map(async (pipe) => {
+          try {
+            const response = await localFetch(
+              `/pipes/${encodeURIComponent(pipe.name)}/enable`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: true }),
+              },
+            );
+            const body = (await response.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            if (!response.ok || body.error) {
+              throw new Error(body.error || `HTTP ${response.status}`);
+            }
+          } catch {
+            pipeEnableFailures.push(pipe.name);
+          }
+        }),
+      );
       setView(installedView);
       setUndoView(previousView);
       setUndoRevision(previousView ? installedView.revision : null);
@@ -1813,6 +1916,10 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
         title: creatingNew
           ? `${installedView.title} created`
           : `${installedView.title} replaced`,
+        description:
+          pipeEnableFailures.length > 0
+            ? `Open Pipes to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
+            : undefined,
       });
       posthog.capture("live_view_dashboard_saved", {
         ...liveViewAnalyticsProperties(
@@ -1824,11 +1931,7 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
         template_id: kit.id,
         refresh_requested: true,
       });
-      void refreshConnectedPipes(
-        installedView,
-        undefined,
-        "template_applied",
-      );
+      void refreshConnectedPipes(installedView, undefined, "template_applied");
     } catch (installError) {
       posthog.capture("live_view_dashboard_save_failed", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
@@ -2467,9 +2570,6 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
   const slots = normalizedSlots(view.slots);
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
-  const selectedPeriod =
-    periodRanges.find((range) => range.value === view.timeRange) ??
-    getLiveViewTimeRangeOption(view.timeRange);
   const latestDataTimestamp = slots.reduce<number | null>((latest, slot) => {
     const timestamp = slot.value?.updatedAt
       ? Date.parse(slot.value.updatedAt)
@@ -2506,6 +2606,12 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
             selectionDisabled={dashboardSelectionDisabled}
             onSelect={selectDashboard}
             onCreate={beginCreate}
+            onCustomize={onboardingColdStart ? undefined : beginEdit}
+            onOpenTemplates={
+              !onboardingColdStart && templateKits.length > 0
+                ? () => setTemplateGalleryOpen(true)
+                : undefined
+            }
             onRename={renameDashboard}
             onDuplicate={duplicateDashboard}
             onDelete={deleteDashboard}
@@ -2521,15 +2627,15 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
             }
             onCreateBlank={beginManualCreate}
           />
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p
+            data-testid="overview-data-status"
+            className="mt-2 text-xs text-muted-foreground"
+          >
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : `Pipes fill these Blocks for ${selectedPeriod.label.toLowerCase()}. Data changes when you refresh or a connected Pipe runs.`}
-            {latestDataTimestamp !== null && (
-              <span className="ml-1">
-                Last data {new Date(latestDataTimestamp).toLocaleString()}.
-              </span>
-            )}
+              : latestDataTimestamp !== null
+                ? `Updated ${new Date(latestDataTimestamp).toLocaleString()}`
+                : "No data yet"}
           </p>
         </div>
         <div
@@ -2609,46 +2715,22 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
               </SelectContent>
             </Select>
           )}
-          {!onboardingColdStart && templateKits.length > 0 && (
-            <Button
-              data-testid="overview-templates"
-              variant="outline"
-              size="sm"
-              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
-              disabled={dashboardBusy}
-              onClick={() => setTemplateGalleryOpen((open) => !open)}
-            >
-              <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" /> templates
-            </Button>
-          )}
           {boundSlotCount > 0 && !onboardingColdStart && (
             <Button
               data-testid="overview-refresh-data"
               variant="outline"
-              size="sm"
-              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
+              size="icon"
+              className="h-9 w-9 shrink-0 rounded-none"
               aria-label={refreshIsActive ? "loading data" : "refresh data"}
+              title={refreshIsActive ? "loading data" : "refresh data"}
               disabled={dashboardBusy}
               onClick={() => void refreshConnectedPipes(view)}
             >
               <RefreshCw
-                className={`mr-1.5 h-3.5 w-3.5 ${
+                className={`h-3.5 w-3.5 ${
                   refreshIsActive ? "animate-spin" : ""
                 }`}
               />
-              <span aria-hidden="true">refresh data</span>
-            </Button>
-          )}
-          {!onboardingColdStart && (
-            <Button
-              data-testid="overview-edit"
-              variant="outline"
-              size="sm"
-              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
-              disabled={dashboardBusy}
-              onClick={beginEdit}
-            >
-              <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" /> customize
             </Button>
           )}
         </div>
@@ -2781,6 +2863,8 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
             void refreshConnectedPipes(view, [slot], "card_regenerated")
           }
           onAiEdit={editSlotWithAi}
+          onItemAction={recordItemAction}
+          onItemHandoff={handoffItem}
         />
       ) : (
         <div
@@ -2800,13 +2884,11 @@ Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_liv
                 recordCardFeedback(slot, rating, correction)
               }
               onRegenerate={() =>
-                void refreshConnectedPipes(
-                  view,
-                  [slot],
-                  "card_regenerated",
-                )
+                void refreshConnectedPipes(view, [slot], "card_regenerated")
               }
               onAiEdit={(prompt) => editSlotWithAi(slot, prompt)}
+              onItemAction={(request) => recordItemAction(slot, request)}
+              onItemHandoff={(item) => void handoffItem(slot, item)}
             />
           ))}
         </div>

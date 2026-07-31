@@ -245,84 +245,6 @@ const CURATED_MODELS: ModelEntry[] = [
   },
   // ── Included with screenpipe ──
   {
-    id: 'claude-opus-5',
-    object: 'model',
-    owned_by: 'anthropic',
-    name: 'Claude Opus 5',
-    description: 'latest frontier claude model for complex reasoning, coding, and agentic work',
-    tags: ['premium', 'reasoning', 'new'],
-    free: false,
-    context_window: 1000000,
-    best_for: ['hardest tasks', 'complex analysis', 'agentic coding'],
-    speed: 'medium',
-    intelligence: 'highest',
-    cost_tier: 'medium',
-    recommended_for: ['chat', 'analysis', 'coding'],
-    warning: 'frontier-priced ($5/$25 per M tokens). use Sonnet 5 or Auto for high-volume work',
-  },
-  {
-    id: 'claude-fable-5',
-    object: 'model',
-    owned_by: 'anthropic',
-    name: 'Claude Fable 5',
-    description: 'premium claude model for frontier reasoning and long-horizon agentic work',
-    tags: ['premium', 'reasoning', 'new'],
-    free: false,
-    context_window: 1000000,
-    best_for: ['hardest tasks', 'complex analysis', 'agentic coding'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'very_high',
-    recommended_for: ['chat', 'analysis', 'coding'],
-    warning: 'most expensive model ($10/$50 per M tokens). use Opus 5, Sonnet 5, or Auto for high-volume work',
-  },
-  {
-    id: 'claude-opus-4-8',
-    object: 'model',
-    owned_by: 'anthropic',
-    name: 'Claude Opus 4.8',
-    description: 'most intelligent, best reasoning — latest opus',
-    tags: ['premium', 'reasoning', 'new'],
-    free: false,
-    context_window: 200000,
-    best_for: ['complex tasks', 'analysis', 'agentic coding'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'medium',
-    recommended_for: ['chat', 'analysis', 'coding'],
-  },
-  {
-    id: 'claude-opus-4-7',
-    object: 'model',
-    owned_by: 'anthropic',
-    name: 'Claude Opus 4.7',
-    description: 'previous opus — still very capable',
-    tags: ['premium', 'reasoning'],
-    free: false,
-    context_window: 200000,
-    best_for: ['complex tasks', 'analysis', 'agentic coding'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'medium',
-    recommended_for: ['chat', 'analysis', 'coding'],
-  },
-  {
-    id: 'claude-opus-4-6',
-    object: 'model',
-    owned_by: 'anthropic',
-    name: 'Claude Opus 4.6',
-    description: 'previous opus — still very capable',
-    tags: ['premium', 'reasoning'],
-    free: false,
-    context_window: 200000,
-    best_for: ['complex tasks', 'analysis'],
-    speed: 'slow',
-    intelligence: 'highest',
-    cost_tier: 'very_high',
-    recommended_for: ['chat', 'analysis'],
-    warning: 'very expensive — will quickly use your daily limit. use Auto or GPT-5.4 mini for pipes',
-  },
-  {
     id: 'claude-sonnet-5',
     object: 'model',
     owned_by: 'anthropic',
@@ -344,7 +266,11 @@ const CURATED_MODELS: ModelEntry[] = [
  * Handles model listing requests — curated list with rich metadata.
  * OpenAI-compatible: standard fields (id, object, owned_by) + extra metadata.
  */
-export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'): Promise<Response> {
+export async function handleModelListing(
+  env: Env,
+  tier: UserTier = 'subscribed',
+  upgradeEligible = false,
+): Promise<Response> {
   try {
     let models: ModelEntry[] = [...CURATED_MODELS];
 
@@ -390,6 +316,7 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
       object: 'list',
       data: responseModels,
       tier,
+      upgrade_eligible: upgradeEligible,
       tier_limits: getTierConfig(env)[tier],
     }));
   } catch (error) {

@@ -75,6 +75,7 @@ export function LiveViewAiComposer({
   );
   const [prompt, setPrompt] = useState("");
   const [generationStep, setGenerationStep] = useState(0);
+  const [compactFocused, setCompactFocused] = useState(false);
 
   useEffect(() => {
     if (!busy) return;
@@ -90,6 +91,8 @@ export function LiveViewAiComposer({
     (preset) => preset.id === selectedPresetId,
   );
   const canSubmit = Boolean(prompt.trim() && selectedPreset && !busy);
+  const compactExpanded =
+    compact && (compactFocused || Boolean(prompt.trim()) || busy);
   const intent = inferLiveViewGenerationIntent(
     prompt,
     Boolean(currentViewTitle),
@@ -103,6 +106,11 @@ export function LiveViewAiComposer({
       : intent === "replace-dashboard"
         ? `will edit “${currentViewTitle}”`
         : "will create a new dashboard";
+  const actionLabel = busy
+    ? "creating"
+    : intent === "pipe-agent"
+      ? "open agent"
+      : "generate";
 
   const submit = () => {
     if (!canSubmit || !selectedPreset) return;
@@ -113,6 +121,9 @@ export function LiveViewAiComposer({
   return (
     <div
       data-testid="live-view-ai-composer"
+      onFocusCapture={() => {
+        if (compact) setCompactFocused(true);
+      }}
       className={
         compact
           ? "border border-border bg-background"
@@ -127,70 +138,124 @@ export function LiveViewAiComposer({
           </p>
         </div>
       )}
-      <Textarea
-        data-testid="live-view-ai-prompt"
-        autoFocus={autoFocus}
-        value={prompt}
-        disabled={busy}
-        rows={compact ? 2 : 3}
-        maxLength={1_500}
-        className="min-h-16 resize-none rounded-none border-0 px-4 py-3 text-sm shadow-none focus-visible:ring-0"
-        placeholder={
-          compact
-            ? "Ask AI to change this Live View..."
-            : "For example: show how I spend my time and what changed this week"
-        }
-        onChange={(event) => setPrompt(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            submit();
-          }
-        }}
-      />
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-2 py-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <AIPresetsSelector
-            controlledPresetId={selectedPresetId}
-            onControlledSelect={onSelectedPresetIdChange}
+      <div className={compact ? "flex items-stretch" : undefined}>
+        <Textarea
+          data-testid="live-view-ai-prompt"
+          autoFocus={autoFocus}
+          value={prompt}
+          disabled={busy}
+          rows={compactExpanded ? 2 : compact ? 1 : 3}
+          maxLength={1_500}
+          className={
             compact
-            showModelOnly
-            showLoginCta
-            containerClassName="w-auto min-w-36"
-            triggerClassName="h-8 rounded-none"
-          />
-          {prompt.trim() && (
-            <span
-              data-testid="live-view-generation-intent"
-              className="max-w-72 truncate text-[11px] text-muted-foreground"
-            >
-              {intentLabel}
-            </span>
-          )}
-        </div>
-        <Button
-          data-testid="live-view-ai-generate"
-          type="button"
-          size="sm"
-          className="h-8 rounded-none"
-          disabled={!canSubmit}
-          onClick={submit}
-        >
-          {busy ? (
-            <>
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              <span>creating</span>
-            </>
-          ) : (
-            <>
-              <span className="mr-1.5">
-                {intent === "pipe-agent" ? "open agent" : "generate"}
-              </span>
+              ? `resize-none rounded-none border-0 px-4 text-sm shadow-none transition-[min-height] duration-150 focus-visible:ring-0 ${
+                  compactExpanded ? "min-h-16 py-3" : "h-10 min-h-10 py-2.5"
+                }`
+              : "min-h-16 resize-none rounded-none border-0 px-4 py-3 text-sm shadow-none focus-visible:ring-0"
+          }
+          placeholder={
+            compact
+              ? "Ask AI to change this Live View..."
+              : "For example: show how I spend my time and what changed this week"
+          }
+          onChange={(event) => setPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        {compact && (
+          <Button
+            data-testid="live-view-ai-generate"
+            type="button"
+            size="icon"
+            className="h-10 w-10 shrink-0 rounded-none"
+            aria-label={actionLabel}
+            title={actionLabel}
+            disabled={!canSubmit}
+            onClick={submit}
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
               <ArrowUp className="h-3.5 w-3.5" />
-            </>
-          )}
-        </Button>
+            )}
+            <span className="sr-only">{actionLabel}</span>
+          </Button>
+        )}
       </div>
+      {compact ? (
+        compactExpanded && (
+          <div
+            data-testid="live-view-ai-options"
+            className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border px-2 py-2"
+          >
+            <AIPresetsSelector
+              controlledPresetId={selectedPresetId}
+              onControlledSelect={onSelectedPresetIdChange}
+              compact
+              showModelOnly
+              showLoginCta
+              containerClassName="w-auto min-w-36"
+              triggerClassName="h-8 rounded-none"
+            />
+            {prompt.trim() && (
+              <span
+                data-testid="live-view-generation-intent"
+                className="max-w-72 truncate text-[11px] text-muted-foreground"
+              >
+                {intentLabel}
+              </span>
+            )}
+          </div>
+        )
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-2 py-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <AIPresetsSelector
+              controlledPresetId={selectedPresetId}
+              onControlledSelect={onSelectedPresetIdChange}
+              compact
+              showModelOnly
+              showLoginCta
+              containerClassName="w-auto min-w-36"
+              triggerClassName="h-8 rounded-none"
+            />
+            {prompt.trim() && (
+              <span
+                data-testid="live-view-generation-intent"
+                className="max-w-72 truncate text-[11px] text-muted-foreground"
+              >
+                {intentLabel}
+              </span>
+            )}
+          </div>
+          <Button
+            data-testid="live-view-ai-generate"
+            type="button"
+            size="sm"
+            className="h-8 rounded-none"
+            disabled={!canSubmit}
+            onClick={submit}
+          >
+            {busy ? (
+              <>
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                <span>creating</span>
+              </>
+            ) : (
+              <>
+                <span className="mr-1.5">
+                  {intent === "pipe-agent" ? "open agent" : "generate"}
+                </span>
+                <ArrowUp className="h-3.5 w-3.5" />
+              </>
+            )}
+          </Button>
+        </div>
+      )}
       {busy && (
         <div
           data-testid="live-view-generation-progress"

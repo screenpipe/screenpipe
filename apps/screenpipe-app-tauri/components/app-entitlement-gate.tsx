@@ -109,6 +109,7 @@ export function AppEntitlementGate({
   const {
     isManagedDeployment,
     isManagedDeploymentResolved,
+    managedDeploymentResolutionError,
     authenticationState,
     authenticationError,
     isManagedAuthenticated,
@@ -669,6 +670,22 @@ export function AppEntitlementGate({
   }
 
   if (!isManagedDeploymentResolved) {
+    if (managedDeploymentResolutionError) {
+      return (
+        <EntitlementShell
+          title="couldn't check access"
+          description="screenpipe could not confirm which build is installed. it will retry automatically."
+        >
+          <Button
+            onClick={() => window.location.reload()}
+            variant="secondary"
+            className="w-full"
+          >
+            reload and retry
+          </Button>
+        </EntitlementShell>
+      );
+    }
     return (
       <EntitlementShell
         title="checking access"

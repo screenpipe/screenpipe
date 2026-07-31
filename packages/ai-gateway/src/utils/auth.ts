@@ -4,6 +4,7 @@
 import { verifyToken } from '@clerk/backend';
 import { Env, AuthResult, type AccountPlan } from '../types';
 import { activeSubscriptionFilter } from './subscription';
+import { TtlSingleFlightCache } from './ttl-single-flight-cache';
 
 /**
  * Verifies a JWT token from Clerk
@@ -90,7 +91,10 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
     // of Free/Basic/Business plan + cloud truth. Tier alone cannot distinguish
     // paid Basic from Free because both intentionally use `logged_in` for model
     // access and rate limiting.
-    const screenpipeUser = await validateScreenpipeToken(token);
+    const screenpipeUser = await verifiedEntitlementCache.getOrLoad(
+      resolvedUserId,
+      () => validateScreenpipeToken(token),
+    );
     // A successful /api/user lookup is not enough to transfer its plan to the
     // Clerk-authenticated caller: the response must identify the exact same
     // Clerk subject. Keep the verified caller logged in when plan lookup is
@@ -280,6 +284,31 @@ type ScreenpipeTokenResult = {
   accountPlan?: AccountPlan;
 };
 
+// Keep upgrade propagation fast for Free accounts. Paid results can absorb a
+// longer request burst, but remain short enough to bound post-cancel/refund
+// access to 30 seconds even when an isolate is hot.
+const FREE_ENTITLEMENT_CACHE_TTL_MS = 5 * 1000;
+const PAID_ENTITLEMENT_CACHE_TTL_MS = 30 * 1000;
+const MAX_CACHED_ENTITLEMENTS_PER_ISOLATE = 2_048;
+
+const verifiedEntitlementCache = new TtlSingleFlightCache<ScreenpipeTokenResult>({
+  maxEntries: MAX_CACHED_ENTITLEMENTS_PER_ISOLATE,
+  ttlForValue: (verifiedClerkId, result) => {
+    // Cache only complete plan truth bound to the Clerk subject that was just
+    // verified for this request. Provider failures, malformed responses,
+    // unknown plans, and identity mismatches must be retried on the next call.
+    if (!result.isValid || result.clerkUserId !== verifiedClerkId) return null;
+    if (!result.accountPlan || result.accountPlan === 'unknown') return null;
+    return result.accountPlan === 'free'
+      ? FREE_ENTITLEMENT_CACHE_TTL_MS
+      : PAID_ENTITLEMENT_CACHE_TTL_MS;
+  },
+});
+
+export function __resetAuthEntitlementCacheForTests(): void {
+  verifiedEntitlementCache.clear();
+}
+
 function nonEmptyIdentity(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   return value.trim().length > 0 ? value : undefined;
@@ -302,7 +331,10 @@ function normalizeAccountPlan(value: unknown): Exclude<AccountPlan, 'unknown'> |
     case 'enterprise':
       return 'enterprise';
     case 'lifetime':
-      return 'lifetime';
+      // Lifetime is the non-expiring app license; its hosted-AI allowance is
+      // the canonical Basic tier. A separate cloud grant still promotes the
+      // request to the subscribed model/rate tier below.
+      return 'basic';
     default:
       return null;
   }

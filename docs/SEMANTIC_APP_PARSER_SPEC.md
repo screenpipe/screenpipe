@@ -96,19 +96,19 @@ of app definitions.
 
 ### Built-in catalog and reference family parsers
 
-The built-in catalog covers 47 app targets using public app identities, URL
+The built-in catalog covers 49 app targets using public app identities, URL
 patterns, and stable accessibility contracts. Implementations remain
 Screenpipe-owned parser families and exact app overrides.
 
 | Family | Built-in profiles |
 |---|---|
-| Conversation | Antigravity, Antigravity IDE, ChatGPT, ChatGPT legacy, ChatGPT web, Claude, Claude macOS, ClickUp, ClickUp web, Cursor, Discord, Gemini desktop, Gemini web, Messages, Messenger, Microsoft Teams, Slack, WhatsApp, WhatsApp web, Windsurf |
+| Conversation | Antigravity, Antigravity IDE, ChatGPT, ChatGPT legacy, ChatGPT web, Claude, Claude macOS, ClickUp, ClickUp web, Codex, Cursor, Discord, Gemini desktop, Gemini web, Messages, Messenger, Microsoft Teams, Slack, WhatsApp, WhatsApp web, Windsurf |
 | Mail | Gmail, Mail, Microsoft Outlook, Spark Desktop, Spark Mail Classic, Superhuman |
 | Editor | Antigravity IDE, Cursor, VS Code, Windsurf, Xcode |
 | Document | Antigravity IDE, Claude macOS, ClickUp, ClickUp web, Microsoft Outlook, Microsoft Word, Microsoft Word web, Notes, Notion, Obsidian, Pages, TextEdit, Xcode |
 | Task | Antigravity, Asana, Asana web, ClickUp, ClickUp web, Microsoft To Do, OmniFocus, Todoist, Toggl |
 | Calendar | Calendar, Fantastical |
-| Terminal | Ghostty, iTerm2, Terminal, Warp |
+| Terminal | Ghostty, iTerm2, Terminal, Warp, Windows Terminal |
 
 Profiles may belong to more than one family because the same app can expose
 different semantic surfaces. The registry still runs at most four matching

@@ -566,7 +566,9 @@ export class AnthropicProvider implements AIProvider {
 	async listModels(): Promise<{ id: string; name: string; provider: string }[]> {
 		try {
 			const response = await this.client.models.list();
-			return response.data.map((model) => ({
+			return response.data.filter((model) => !(
+				model.id.includes('fable') || model.id.includes('opus')
+			)).map((model) => ({
 				id: model.id,
 				name: model.display_name,
 				provider: 'anthropic',
@@ -575,21 +577,6 @@ export class AnthropicProvider implements AIProvider {
 			console.error('Failed to fetch Anthropic models:', error);
 			// Fallback to current models when the provider catalog is unavailable.
 			return [
-				{
-					id: 'claude-opus-5',
-					name: 'Claude Opus 5',
-					provider: 'anthropic',
-				},
-				{
-					id: 'claude-fable-5',
-					name: 'Claude Fable 5',
-					provider: 'anthropic',
-				},
-				{
-					id: 'claude-opus-4-8',
-					name: 'Claude Opus 4.8',
-					provider: 'anthropic',
-				},
 				{
 					id: 'claude-sonnet-5',
 					name: 'Claude Sonnet 5',

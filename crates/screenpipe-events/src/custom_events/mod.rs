@@ -6,6 +6,7 @@ pub mod audio_devices;
 pub mod audio_health;
 pub mod connections;
 pub mod db_recovery;
+pub mod disk_pressure;
 pub mod permissions;
 pub mod pipes;
 pub mod power;

@@ -69,6 +69,12 @@
       "layers": ["audio-device"]
     },
     {
+      "id": "meetings-only-audio-lifecycle",
+      "label": "Meetings-only audio device ownership",
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device", "local-api", "real-ui-e2e"]
+    },
+    {
       "id": "window-lifecycle",
       "label": "Window lifecycle, focus, and dedupe",
       "platforms": ["windows", "macos", "linux"],
@@ -205,6 +211,16 @@
       "notes": "Composer draft isolation across conversations."
     },
     {
+      "spec": "chat-empty-space.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A real Tauri chat session keeps a short answer near the composer without exposing a false new-content state or a large empty viewport gap."
+    },
+    {
       "spec": "chat-ask-user-tool-card.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],
@@ -255,6 +271,16 @@
       "notes": "The real new-chat shortcut opens a fresh chat from non-empty conversations and reuses one blank chat when pressed repeatedly."
     },
     {
+      "spec": "chat-new-session-stale-save.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e", "storage-privacy"],
+      "features": ["chat", "chat-drafts"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Switching to a new Pi session binds its echoed user turn to the new conversation file and leaves the previous chat intact."
+    },
+    {
       "spec": "chat-sidebar-stub-dedup.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],
@@ -263,6 +289,16 @@
       "confidence": "partial",
       "ux": "synthetic",
       "notes": "Listener-order regression for metadata-only sidebar stubs gaining dedup keys."
+    },
+    {
+      "spec": "chat-sidebar-repeated-prompt.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e"],
+      "features": ["chat", "chat-sidebar-dedupe"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Two distinct chats sent with the same opening prompt stay visible in the left sidebar."
     },
     {
       "spec": "chat-sidebar-groups.spec.ts",
@@ -383,6 +419,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Opens Chat and focuses the composer for typing."
+    },
+    {
+      "spec": "chat-cross-window-transcript-sync.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "window-lifecycle", "real-ui-e2e"],
+      "features": ["chat", "chat-streaming", "window-lifecycle"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider."
     },
     {
       "spec": "chat-source-file-preview.spec.ts",
@@ -515,6 +561,16 @@
       "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
     },
     {
+      "spec": "meetings-only-audio-lifecycle.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device", "local-api", "real-ui-e2e"],
+      "features": ["meetings-only-audio-lifecycle", "audio-device-health"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge."
+    },
+    {
       "spec": "notification-viewer-link.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["notifications", "local-api", "window-lifecycle"],
@@ -565,6 +621,16 @@
       "notes": "Opt-in macOS fault injection verifies bounded SCK enumeration recovery, same-process capture, and OCR persistence."
     },
     {
+      "spec": "capture-loop-liveness.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["capture-ocr", "local-api", "os-integration"],
+      "features": ["app-launch", "capture-ocr"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident)."
+    },
+    {
       "spec": "pipes.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["pipes", "real-ui-e2e", "local-api"],
@@ -608,11 +674,11 @@
       "spec": "settings-sections.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "real-ui-e2e", "storage-privacy"],
-      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "audio-device-health"],
+      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, AI preset/preferences split and toggle flows, storage, privacy, and rapid switching crash guard."
+      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard."
     },
     {
       "spec": "meeting-apps-picker.spec.ts",
@@ -697,12 +763,12 @@
     {
       "spec": "windows-core-recording.spec.ts",
       "platforms": ["windows"],
-      "layers": ["capture-ocr", "local-api", "audio-device", "real-ui-e2e"],
-      "features": ["capture-ocr", "local-api-auth", "local-api-search", "audio-device-health", "timeline"],
+      "layers": ["capture-ocr", "local-api", "audio-device", "notifications", "storage-privacy", "real-ui-e2e"],
+      "features": ["capture-ocr", "local-api-auth", "local-api-search", "audio-device-health", "timeline", "low-disk-recording-guard"],
       "criticality": "high",
       "confidence": "conditional",
       "ux": "mixed",
-      "notes": "Windows recording-enabled lane; hosted runners can skip frame-dependent OCR assertions."
+      "notes": "Windows recording-enabled lane; low-disk coverage requires teardown of a real CaptureSession and continued API/search availability, while hosted runners can skip only frame-dependent OCR assertions."
     },
     {
       "spec": "windows-system-integration.spec.ts",
@@ -747,12 +813,12 @@
     {
       "spec": "updater-banner.spec.ts",
       "platforms": ["windows", "macos", "linux"],
-      "layers": ["real-ui-e2e"],
-      "features": ["update-surfacing"],
+      "layers": ["real-ui-e2e", "settings"],
+      "features": ["update-surfacing", "settings-persistence"],
       "criticality": "high",
       "confidence": "partial",
-      "ux": "synthetic",
-      "notes": "Synthetic update-available event surfaces the restart-to-update banner (no relaunch). Real check/download/install + rollback stay manual via e2e/mock-updates; the debug e2e build disables the updater check under cfg!(debug_assertions)."
+      "ux": "mixed",
+      "notes": "Synthetic update-available event surfaces the restart-to-update banner. A real Auto-update toggle plus delayed store save verifies restart waits for preference persistence and survives settings-store re-hydration; an E2E-only handoff suppresses the destructive relaunch. Real check/download/install + rollback stay manual via e2e/mock-updates because the debug E2E build disables updater checks."
     },
     {
       "spec": "privacy-installed-apps.spec.ts",
@@ -799,6 +865,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Creates the first-open starter dashboard, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
+    },
+    {
+      "spec": "live-view-item-actions.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api", "pipes"],
+      "features": ["brain-overview", "live-view-item-actions", "artifacts", "pipes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Installs the generic Commitments and Accounting Live View kits, shows Done, Later, and Not right without hover, persists snooze, correction, resolve, dismiss, and reopen decisions through the local API, verifies receipts survive reload, and captures real product screenshots."
     },
     {
       "spec": "html-artifact-render.spec.ts",

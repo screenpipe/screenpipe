@@ -187,7 +187,6 @@ export function NoteView({
     initialTranscriptOpen || readTranscriptOpenPreference(meeting.id),
   );
   const [transcriptRefreshKey, setTranscriptRefreshKey] = useState(0);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioStatusDevices, setAudioStatusDevices] = useState<
     AudioStatusDevice[]
   >([]);
@@ -417,13 +416,6 @@ export function NoteView({
   useEffect(() => {
     if (initialTranscriptOpen) setTranscriptOpen(true);
   }, [initialTranscriptOpen, setTranscriptOpen, transcriptOpenRequestKey]);
-
-  useEffect(() => {
-    if (!isLive) return;
-    setNowMs(Date.now());
-    const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(handle);
-  }, [isLive]);
 
   useEffect(() => {
     let cancelled = false;
@@ -903,9 +895,6 @@ export function NoteView({
   const attendeeCount = parseAttendees(attendees).length;
   const englishOnly =
     settings.languages.length === 1 && settings.languages[0] === "english";
-  const dockDuration = isLive
-    ? formatElapsed(meeting.meeting_start, nowMs)
-    : formatDuration(meeting.meeting_start, meeting.meeting_end);
   const meetingDateLabel = formatDateOnly(meeting.meeting_start);
   const meetingStartClock = formatClock(meeting.meeting_start);
   const meetingEndClock = meeting.meeting_end
@@ -1284,7 +1273,13 @@ export function NoteView({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                  <span>{dockDuration}</span>
+                  <span>
+                    <MeetingDuration
+                      startIso={meeting.meeting_start}
+                      endIso={meeting.meeting_end}
+                      isLive={isLive}
+                    />
+                  </span>
                   {hasSaveStatus && (
                     <>
                       <span aria-hidden>·</span>
@@ -1815,6 +1810,29 @@ function SaveIndicator({ state }: { state: SaveState }) {
     return <span className="text-destructive">offline — will retry</span>;
   }
   return <span aria-hidden>&nbsp;</span>;
+}
+
+function MeetingDuration({
+  startIso,
+  endIso,
+  isLive,
+}: {
+  startIso: string;
+  endIso: string | null;
+  isLive: boolean;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isLive) return;
+    setNowMs(Date.now());
+    const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(handle);
+  }, [isLive]);
+
+  return isLive
+    ? formatElapsed(startIso, nowMs)
+    : formatDuration(startIso, endIso);
 }
 
 function formatElapsed(startIso: string, nowMs: number): string {
