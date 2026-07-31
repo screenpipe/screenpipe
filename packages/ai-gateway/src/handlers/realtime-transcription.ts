@@ -365,5 +365,7 @@ async function logRealtimeCost(
 		estimated_cost_usd: (durationSeconds / 3600) * costPerHour,
 		endpoint: '/v1/realtime',
 		stream: true,
+		budgeted: false,
+		transcription_budgeted: true,
 	});
 }

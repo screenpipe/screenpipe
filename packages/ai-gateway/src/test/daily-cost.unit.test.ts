@@ -87,6 +87,23 @@ describe('logCost — usage-table daily cost accumulator (migration 0006)', () =
 		expect(await logCost(env, baseEntry)).toBe(false);
 		expect(captured.some((c) => c.sql.includes('INSERT INTO cost_daily'))).toBe(true);
 	});
+
+	it('keeps transcription in its own daily accumulator', async () => {
+		const { env, captured } = stubEnv({});
+		expect(await logCost(env, {
+			...baseEntry,
+			provider: 'deepgram',
+			model: 'nova-3',
+			endpoint: '/v1/listen',
+			budgeted: false,
+			transcription_budgeted: true,
+		})).toBe(true);
+
+		const usageUpserts = captured.filter((c) => c.sql.includes('ON CONFLICT(device_id)'));
+		expect(usageUpserts).toHaveLength(1);
+		expect(usageUpserts[0].binds[0]).toContain('hosted-transcription-cost:day:v1:');
+		expect(usageUpserts[0].binds[0]).not.toBe(baseEntry.device_id);
+	});
 });
 
 describe('getDailyUserCost — O(1) accumulator read', () => {

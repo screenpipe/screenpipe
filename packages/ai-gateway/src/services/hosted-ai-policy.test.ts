@@ -4,7 +4,13 @@
 
 import { describe, expect, it } from 'bun:test';
 import type { AccountPlan, AuthResult, UserTier } from '../types';
-import { hasPaidHostedAiPlan, isHostedAiUpgradeEligible } from './hosted-ai-policy';
+import {
+	getHostedAiAllowedModels,
+	getHostedAiPlan,
+	hasPaidHostedAiPlan,
+	isHostedAiModelAllowed,
+	isHostedAiUpgradeEligible,
+} from './hosted-ai-policy';
 
 function auth(accountPlan: AccountPlan, tier: UserTier = 'logged_in'): AuthResult {
 	return { isValid: true, accountPlan, tier, deviceId: 'user_test' };
@@ -25,5 +31,29 @@ describe('hosted AI plan policy', () => {
 
 	it('suppresses an upgrade for Lifetime/Basic when a higher active cloud grant made the tier subscribed', () => {
 		expect(isHostedAiUpgradeEligible(auth('basic', 'subscribed'))).toBe(false);
+	});
+});
+
+describe('hosted AI model products', () => {
+	it('keeps Free on Auto only', () => {
+		expect(getHostedAiPlan('free')).toBe('free');
+		expect(getHostedAiAllowedModels('free')).toEqual(['auto']);
+		expect(isHostedAiModelAllowed('gpt-5.6-luna', 'free')).toBe(false);
+	});
+
+	it('gives Basic efficient models but no frontier access', () => {
+		expect(isHostedAiModelAllowed('gpt-5.6-luna', 'basic')).toBe(true);
+		expect(isHostedAiModelAllowed('gpt-5.4-mini', 'basic')).toBe(true);
+		expect(isHostedAiModelAllowed('claude-sonnet-5', 'basic')).toBe(false);
+		expect(isHostedAiModelAllowed('claude-opus-5', 'basic')).toBe(false);
+	});
+
+	it('maps Business, Team, and Enterprise to frontier access', () => {
+		for (const plan of ['business', 'team', 'enterprise'] as const) {
+			expect(getHostedAiPlan(plan)).toBe('business');
+			expect(isHostedAiModelAllowed('claude-fable-5', plan)).toBe(true);
+			expect(isHostedAiModelAllowed('gpt-5.6-sol', plan)).toBe(true);
+			expect(isHostedAiModelAllowed('future-unpriced-frontier', plan)).toBe(false);
+		}
 	});
 });

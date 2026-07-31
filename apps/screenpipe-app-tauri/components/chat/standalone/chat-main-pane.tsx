@@ -111,7 +111,6 @@ export function ChatMainPane({
           <div className={cn(
             CHAT_RAIL_CLASS,
             "px-5 sm:px-6 py-4 space-y-4",
-            messages.length > 0 && "min-h-full flex flex-col justify-end",
             messages.length === 0 && !isPreparingPrefill && !activePipeExecution
               && "min-h-full flex flex-col items-center justify-center"
           )}>

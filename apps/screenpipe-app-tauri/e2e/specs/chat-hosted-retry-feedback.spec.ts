@@ -171,7 +171,40 @@ describe("Hosted AI retry feedback and follow-up queue", function () {
     );
 
     await submitComposer(QUEUED_PROMPT);
-    await $('[aria-label="remove queued message 1"]').waitForDisplayed({
+    await browser.waitUntil(
+      async () =>
+        browser.execute((prompt: string) =>
+          Array.from(document.querySelectorAll<HTMLElement>('[role="listitem"]'))
+            .some((item) => {
+              const rect = item.getBoundingClientRect();
+              let node: HTMLElement | null = item;
+              while (node) {
+                const style = getComputedStyle(node);
+                if (
+                  style.display === "none" ||
+                  style.visibility === "hidden" ||
+                  Number(style.opacity) < 0.9
+                ) {
+                  return false;
+                }
+                node = node.parentElement;
+              }
+              return (
+                item.textContent?.includes(prompt) &&
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.top < window.innerHeight &&
+                rect.bottom > 0
+              );
+            }),
+        QUEUED_PROMPT),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "queued follow-up did not render in the composer",
+      },
+    );
+    await $('[aria-label="remove queued message 1"]').waitForExist({
       timeout: t(10_000),
     });
 
@@ -212,8 +245,24 @@ describe("Hosted AI retry feedback and follow-up queue", function () {
         timeoutMsg: "queued user message did not run",
       },
     );
+
+    await browser.waitUntil(
+      async () => {
+        const replyText = await browser.execute(() =>
+          Array.from(
+            document.querySelectorAll('[data-testid="chat-message-assistant"]'),
+          ).map((reply) => reply.textContent ?? ""),
+        );
+        return replyText.filter((text) => text.includes("mock-ok")).length >= 2;
+      },
+      {
+        timeout: t(30_000),
+        interval: 100,
+        timeoutMsg: "queued message did not receive its assistant reply",
+      },
+    );
+
     const bodyText = await $("body").getText();
-    expect(bodyText).toContain("mock-ok");
     expect(bodyText).not.toContain("mid-response");
 
     const recoveredScreenshot = await saveScreenshot(

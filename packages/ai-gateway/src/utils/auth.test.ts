@@ -409,6 +409,30 @@ describe('validateAuth — verified identities only', () => {
     });
   });
 
+	it('propagates only a server-verified hosted AI trial marker', async () => {
+		verifyTokenMock.mockImplementation(async () => ({ sub: 'user_trial' }) as any);
+		globalThis.fetch = mock(async () => new Response(JSON.stringify({
+			success: true,
+			user: {
+				clerk_id: 'user_trial',
+				cloud_subscribed: true,
+				app_entitled: true,
+				subscription_plan: 'pro',
+				hosted_ai_trial: true,
+				entitlement: { active: true, plan: 'pro', features: { app: true } },
+			},
+		}), { status: 200 })) as typeof fetch;
+
+		expect(await validateAuth(requestFor('eyJ.trial.clerk'), env)).toEqual({
+			isValid: true,
+			tier: 'subscribed',
+			accountPlan: 'business',
+			hostedAiTrial: true,
+			deviceId: 'user_trial',
+			userId: 'user_trial',
+		});
+	});
+
   it('does not trust paid plan data for a different Clerk subject', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_verified_caller' }) as any);
     const fetchMock = mock(async (input: RequestInfo | URL) => {

@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.80.6";
-pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.80.6";
+pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.83.0";
+pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.83.0";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 

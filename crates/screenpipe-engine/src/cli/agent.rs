@@ -393,9 +393,16 @@ fn claude_desktop_config(home: &Path) -> Result<PathBuf> {
     if cfg!(target_os = "macos") {
         Ok(home.join("Library/Application Support/Claude/claude_desktop_config.json"))
     } else if cfg!(target_os = "windows") {
-        let appdata = std::env::var("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join("AppData/Roaming"));
+        // Honor %APPDATA% (it can be redirected, e.g. roaming profiles) only
+        // when probing the real home. Tests probe temp dirs and must not leak
+        // the host's installed agents into detection results.
+        let appdata = if dirs::home_dir().as_deref() == Some(home) {
+            std::env::var("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join("AppData/Roaming"))
+        } else {
+            home.join("AppData/Roaming")
+        };
         Ok(appdata.join("Claude/claude_desktop_config.json"))
     } else {
         anyhow::bail!("claude-desktop is only available on macOS/Windows")

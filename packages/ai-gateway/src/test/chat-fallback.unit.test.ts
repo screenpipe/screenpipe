@@ -14,6 +14,7 @@ import {
 	FREE_PREVIEW_MAX_UPSTREAM_ATTEMPTS,
 	FREE_PREVIEW_WATERFALL,
 	boundedModelChain,
+	efficientModelChain,
 } from '../handlers/chat';
 
 describe('chat handler — transient status classification', () => {
@@ -134,9 +135,23 @@ describe('chat handler — client payload classification (SCREENPIPE-AI-PROXY-1A
 
 describe('chat handler — current hosted fallback chains', () => {
 	it('crosses providers through Sonnet 5 when Luna fails', () => {
+		expect(MODEL_FALLBACKS['claude-fable-5']).toEqual([
+			'claude-opus-5',
+			'claude-sonnet-5',
+			'gpt-5.4-mini',
+		]);
 		expect(MODEL_FALLBACKS['claude-opus-5']).toEqual(['claude-sonnet-5', 'gpt-5.4-mini']);
 		expect(MODEL_FALLBACKS['gpt-5.6-luna']).toEqual(['claude-sonnet-5', 'gpt-5.4-mini']);
 		expect(MODEL_FALLBACKS['claude-sonnet-5']).toEqual(['gpt-5.4-mini']);
+	});
+
+	it('strips frontier fallbacks from Free and Basic Auto chains', () => {
+		expect(efficientModelChain([
+			'gpt-5.6-luna',
+			'claude-sonnet-5',
+			'gpt-5.6-sol',
+			'gpt-5.4-mini',
+		])).toEqual(['gpt-5.6-luna', 'gpt-5.4-mini']);
 	});
 
 	it('contains no removed Google, Open MaaS, Gemma, or GPT-OSS model', () => {

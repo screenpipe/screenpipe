@@ -37,6 +37,9 @@ env:
 jobs:
   test-ubuntu:
     runs-on: ubuntu-latest
+    # A hung test otherwise burns the 6-hour GitHub default and blocks the
+    # merge queue; a cold cached run finishes well under this.
+    timeout-minutes: 90
     env:
       RUSTFLAGS: "-C link-arg=-Wl,--allow-multiple-definition"
     steps:
@@ -100,6 +103,9 @@ jobs:
     # image so we keep getting security patches and can pin a stable build
     # toolchain.
     runs-on: windows-2022
+    # A hung test otherwise burns the 6-hour GitHub default; cold Windows
+    # builds (ORT/OpenBLAS) are slow but finish well under this.
+    timeout-minutes: 120
     env:
       # Single source of truth for the ONNX Runtime version. Referenced by
       # the download URL, the extract dirname, the DLL staging src path, and
@@ -359,6 +365,9 @@ jobs:
     # (Sonoma) has a complete toolchain and is proven here — e2e-macos.yml builds
     # screenpipe-screen on it and passes. Revisit when macos-latest is fixed.
     runs-on: macos-14
+    # A hung test otherwise burns the 6-hour GitHub default and blocks the
+    # merge queue.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 

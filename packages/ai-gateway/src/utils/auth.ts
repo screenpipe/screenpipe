@@ -111,6 +111,9 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
       accountPlan: identityMatches
         ? screenpipeUser.accountPlan ?? 'unknown'
         : 'unknown',
+      ...(identityMatches && screenpipeUser.hostedAiTrial === true
+        ? { hostedAiTrial: true }
+        : {}),
       deviceId: resolvedUserId,
       userId: resolvedUserId,
     };
@@ -126,6 +129,7 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
         isValid: true,
         tier: 'subscribed',
         accountPlan: screenpipeUser.accountPlan ?? 'unknown',
+        ...(screenpipeUser.hostedAiTrial === true ? { hostedAiTrial: true } : {}),
         deviceId: resolvedUserId,
         userId: screenpipeUser.userId,
       };
@@ -135,6 +139,7 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
       isValid: true,
       tier: 'logged_in',
       accountPlan: screenpipeUser.accountPlan ?? 'unknown',
+      ...(screenpipeUser.hostedAiTrial === true ? { hostedAiTrial: true } : {}),
       deviceId: resolvedUserId,
       userId: screenpipeUser.userId,
     };
@@ -269,6 +274,7 @@ interface ScreenpipeUserData {
   cloud_subscribed?: boolean;
   app_entitled?: boolean;
   subscription_plan?: string | null;
+  hosted_ai_trial?: boolean;
   entitlement?: {
     active?: boolean;
     plan?: string | null;
@@ -282,6 +288,7 @@ type ScreenpipeTokenResult = {
   clerkUserId?: string;
   hasSubscription?: boolean;
   accountPlan?: AccountPlan;
+  hostedAiTrial?: boolean;
 };
 
 // Keep upgrade propagation fast for Free accounts. Paid results can absorb a
@@ -402,6 +409,7 @@ async function validateScreenpipeToken(token: string): Promise<ScreenpipeTokenRe
           accountPlan === 'team' ||
           accountPlan === 'enterprise',
         accountPlan,
+        hostedAiTrial: userData.hosted_ai_trial === true,
       };
     } else {
       console.log('Invalid screenpipe user token');

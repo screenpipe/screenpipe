@@ -12,7 +12,35 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { getCostReservationMicroUsd, getModelCost, getStreamModelCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+import type { Env } from '../types';
+import { getCostReservationMicroUsd, getModelCost, getNonStreamSettlementCost, getStreamModelCost, getStreamSettlementCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+import { getGlobalDailyCostCap, getGlobalHourlyCostCap, getPlanDailyCostCap, getPlanMonthlyCostCap, getPlanRequestCostCap } from '../services/hosted-ai-cost-controls';
+import { TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
+
+describe('hosted AI plan budget math', () => {
+	it('reads every operational ceiling from private bindings', () => {
+		expect(getPlanDailyCostCap('free', TEST_PRIVATE_COST_CONTROLS)).toBe(101);
+		expect(getPlanMonthlyCostCap('basic', TEST_PRIVATE_COST_CONTROLS)).toBe(202);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS)).toBe(53);
+		expect(getPlanMonthlyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(301);
+		expect(getPlanDailyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(104);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(54);
+		expect(getGlobalHourlyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(401);
+		expect(getGlobalDailyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(402);
+	});
+
+	it('fails closed instead of using a public fallback', () => {
+		expect(() => getPlanDailyCostCap('free', {} as Env)).toThrow('MAX_DAILY_FREE_TEXT_COST');
+		expect(() => getPlanMonthlyCostCap('basic', {
+			...TEST_PRIVATE_COST_CONTROLS,
+			MAX_MONTHLY_BASIC_TEXT_COST: 'invalid',
+		})).toThrow('MAX_MONTHLY_BASIC_TEXT_COST');
+		expect(() => getGlobalDailyCostCap({
+			...TEST_PRIVATE_COST_CONTROLS,
+			MAX_GLOBAL_DAILY_TEXT_COST: undefined,
+		} as Env)).toThrow('MAX_GLOBAL_DAILY_TEXT_COST');
+	});
+});
 
 describe('getCostReservationMicroUsd', () => {
 	it('prices the default Sonnet hold as a worst-case cache write', () => {
@@ -34,6 +62,84 @@ describe('getCostReservationMicroUsd', () => {
 	it('keeps cheap priced work bounded and zero-cost work free', () => {
 		expect(getCostReservationMicroUsd('gemma4-31b')).toBe(50_000);
 		expect(getCostReservationMicroUsd('glm-5')).toBe(0);
+	});
+});
+
+describe('getStreamSettlementCost', () => {
+	const incompleteUsage = {
+		input_tokens: 0,
+		output_tokens: 0,
+		cache_read_tokens: 0,
+		cache_creation_tokens: 0,
+		usage_complete: false,
+	};
+
+	it('charges at least the reservation when terminal usage is missing', () => {
+		const reserved = getCostReservationMicroUsd('claude-fable-5');
+		expect(getStreamSettlementCost('claude-fable-5', incompleteUsage, reserved))
+			.toBe(reserved / 1_000_000);
+	});
+
+	it('uses terminal provider usage instead of the reservation', () => {
+		const usage = {
+			input_tokens: 1_000,
+			output_tokens: 10,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
+			usage_complete: true,
+		};
+		expect(getStreamSettlementCost('claude-fable-5', usage, 900_000))
+			.toBe(getModelCost('claude-fable-5', 1_000, 10));
+	});
+
+	it('never discards a partial observation larger than the reservation', () => {
+		const usage = {
+			...incompleteUsage,
+			input_tokens: 200_000,
+		};
+		expect(getStreamSettlementCost('claude-fable-5', usage, 50_000))
+			.toBe(getStreamModelCost('claude-fable-5', 200_000, 0));
+	});
+});
+
+describe('getNonStreamSettlementCost', () => {
+	it('uses complete provider usage even when it is below the reservation', () => {
+		const expected = getModelCost('claude-fable-5', 1_000, 10);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			1_000,
+			10,
+			{},
+			900_000,
+		)).toBe(expected);
+	});
+
+	it('charges at least the reservation when either terminal counter is absent', () => {
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			undefined,
+			10,
+			{},
+			900_000,
+		)).toBe(0.9);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			1_000,
+			null,
+			{},
+			900_000,
+		)).toBe(0.9);
+	});
+
+	it('keeps a partial observation when it exceeds the reservation', () => {
+		const observed = getModelCost('claude-fable-5', 200_000, null);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			200_000,
+			null,
+			{},
+			50_000,
+		)).toBe(observed);
 	});
 });
 
@@ -230,7 +336,7 @@ describe('logCost — bounded daily aggregation', () => {
 	it('updates the quota accumulator and one aggregate row', async () => {
 		const { db, calls } = makeMockDB();
 		await logCost({ DB: db } as any, { ...entry, latency_ms: 1234, router_tier: 'hard' } as any);
-		expect(calls.filter((call) => call.sql.includes('INSERT INTO usage')).length).toBe(1);
+		expect(calls.filter((call) => call.sql.includes('INSERT INTO usage')).length).toBe(4);
 		const inserts = costDailyInserts(calls);
 		expect(inserts.length).toBe(1);
 		expect(inserts[0].sql).toContain('ON CONFLICT');

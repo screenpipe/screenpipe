@@ -599,7 +599,9 @@ fn active_screenpipe_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let settings = SettingsStore::get(app)
         .map_err(|error| format!("failed to read Screenpipe settings: {error}"))?
         .unwrap_or_default();
-    Ok(crate::config::resolve_data_dir(&settings.data_dir).0)
+    crate::config::resolve_data_dir(&settings.data_dir)
+        .map(|(path, _)| path)
+        .map_err(|error| format!("failed to prepare Screenpipe data directory: {error}"))
 }
 
 fn canvas_document_path(screenpipe_dir: &Path, view_id: &str) -> PathBuf {

@@ -744,18 +744,18 @@ describe('isModelAllowed with Anthropic model IDs', () => {
 		expect(isModelAllowed('claude-opus-4-6', 'logged_in')).toBe(false);
 	});
 
-	it('should allow opus for subscribed users', () => {
-		expect(isModelAllowed('claude-opus-4-6', 'subscribed')).toBe(true);
+	it('should allow the current Opus model for subscribed users', () => {
+		expect(isModelAllowed('claude-opus-5', 'subscribed')).toBe(true);
 	});
 
-	it('should deny sonnet for logged_in users (Business-only)', () => {
+	it('should deny retired Sonnet IDs rather than exposing the provider catalog', () => {
 		expect(isModelAllowed('claude-sonnet-4-5-20250929', 'logged_in')).toBe(false);
-		expect(isModelAllowed('claude-sonnet-4-5-20250929', 'subscribed')).toBe(true);
+		expect(isModelAllowed('claude-sonnet-4-5-20250929', 'subscribed')).toBe(false);
 	});
 
-	it('should allow any model for subscribed (wildcard)', () => {
-		expect(isModelAllowed('claude-opus-4-6', 'subscribed')).toBe(true);
-		expect(isModelAllowed('some-random-model', 'subscribed')).toBe(true);
+	it('should expose only the reviewed Business catalog', () => {
+		expect(isModelAllowed('claude-fable-5', 'subscribed')).toBe(true);
+		expect(isModelAllowed('some-random-model', 'subscribed')).toBe(false);
 	});
 
 	it('should reject removed Gemini IDs before top-level alias normalization', () => {
@@ -769,10 +769,10 @@ describe('isModelAllowed with Anthropic model IDs', () => {
 describe('Model ID format consistency', () => {
 	it('Opus 4.6 has no date suffix', () => {
 		// The Anthropic API uses 'claude-opus-4-6' with no date suffix
-		// This verifies our code doesn't break on models without dates
+		// even though it is no longer in the current Business product catalog.
 		const model = 'claude-opus-4-6';
 		expect(model).not.toContain('@');
-		expect(isModelAllowed(model, 'subscribed')).toBe(true);
+		expect(isModelAllowed(model, 'subscribed')).toBe(false);
 	});
 
 	it('retired Haiku is no longer directly allowed', () => {

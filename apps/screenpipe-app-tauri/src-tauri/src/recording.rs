@@ -68,7 +68,8 @@ impl LocalApiContext {
 /// Build a `RecordingConfig` from the current settings store.
 fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
-    let (data_dir, _) = config::resolve_data_dir(&store.data_dir);
+    let (data_dir, _) = config::resolve_data_dir(&store.data_dir)
+        .map_err(|e| format!("failed to prepare recording data directory: {e}"))?;
     Ok(store.to_recording_config(data_dir))
 }
 
@@ -1102,7 +1103,8 @@ async fn spawn_screenpipe_inner(
         permissions_check.microphone
     );
 
-    let (data_dir, fell_back) = config::resolve_data_dir(&store.data_dir);
+    let (data_dir, fell_back) = config::resolve_data_dir(&store.data_dir)
+        .map_err(|e| format!("failed to prepare recording data directory: {e}"))?;
     if fell_back {
         warn!(
             "Custom data dir '{}' unavailable, using default: {}",

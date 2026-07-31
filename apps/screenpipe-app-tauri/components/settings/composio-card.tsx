@@ -17,6 +17,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import posthog from "posthog-js";
 import {
   COMPOSIO_API,
@@ -180,6 +181,7 @@ export function ComposioCard({
         } catch {
           setError("connected, but registering the agent tools failed — reconnect to retry");
         }
+        await foregroundAfterOAuth();
         notifyConnectionsUpdated();
         posthog.capture("connection_saved", { integration: `composio-${toolkit}` });
       }

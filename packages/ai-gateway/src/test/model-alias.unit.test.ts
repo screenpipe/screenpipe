@@ -4,7 +4,6 @@
 
 import { describe, it, expect } from 'bun:test';
 import {
-	EMERGENCY_ANTHROPIC_FALLBACK,
 	resolveModelAlias,
 	RETIRED_HOSTED_MODEL_FALLBACK,
 } from '../providers';
@@ -50,7 +49,7 @@ describe('resolveModelAlias', () => {
 		expect(resolveModelAlias('gemma4-e4b')).toBe('gemma4-e4b');
 	});
 
-	it('routes Fable and Opus aliases to Sonnet during emergency spend containment', () => {
+	it('preserves current Fable and Opus IDs for Business policy enforcement', () => {
 		for (const model of [
 			'claude-fable-5',
 			'Claude-Fable-5',
@@ -59,7 +58,7 @@ describe('resolveModelAlias', () => {
 			'Claude-Opus-4-8',
 			'claude-opus-4-6-20260205',
 		]) {
-			expect(resolveModelAlias(model)).toBe(EMERGENCY_ANTHROPIC_FALLBACK);
+			expect(resolveModelAlias(model)).toBe(model);
 		}
 	});
 
