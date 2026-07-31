@@ -47,10 +47,10 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
 
   afterEach(closeSearchIfOpen);
 
-  // Bug 1 — results don't reflow on resize. The grid is hard-coded
-  // `grid grid-cols-3`, so widening the window never adds columns/thumbnails.
-  it("reflows the results grid to more than 3 columns on a wide window", async () => {
-    await openSearch("vector");
+  // The backend expands `vect` to the prefix query `"vect"*`, so the visible
+  // `vector` fixture frames must survive screenshot verification and reflow.
+  it("keeps fuzzy-prefix results while reflowing the wide grid", async () => {
+    await openSearch("vect");
 
     await browser.execute(async () => {
       const tauri = (
@@ -86,6 +86,40 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
     });
 
     expect(columnCount).toBeGreaterThan(3);
+
+    await browser.waitUntil(
+      async () => {
+        const counts = await browser.execute(() => ({
+          cards: document.querySelectorAll("[data-index]").length,
+          firstCardHighlighted: Boolean(
+            document.querySelector(
+              "[data-index='0'] [data-search-highlight]",
+            ),
+          ),
+        }));
+        return counts.cards >= 12 && counts.firstCardHighlighted;
+      },
+      {
+        timeout: t(20_000),
+        interval: 200,
+        timeoutMsg:
+          "visible vector frames did not survive vect prefix verification",
+      },
+    );
+
+    const prefixAudit = await browser.execute(() => ({
+      cardCount: document.querySelectorAll("[data-index]").length,
+      highlightCount: document.querySelectorAll(
+        "[data-search-highlight]",
+      ).length,
+    }));
+    expect(prefixAudit.cardCount).toBeGreaterThanOrEqual(12);
+    expect(prefixAudit.highlightCount).toBeGreaterThan(0);
+
+    const screenshot = await saveScreenshot(
+      "search-4645-visible-fuzzy-prefix-results",
+    );
+    console.log("search fuzzy-prefix screenshot:", screenshot);
   });
 
   it("keeps only screenshot-visible matches and carries them into timeline navigation", async () => {

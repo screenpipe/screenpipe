@@ -117,7 +117,21 @@ export function queryHighlightTokens(query: string): string[] {
 	return query
 		.trim()
 		.split(/\s+/)
-		.map((token) => token.replace(/^["']+|["']+$/g, "").toLowerCase())
+		.flatMap((token) => {
+			const cleaned = token
+				.replace(/[\\"]/g, "")
+				.replace(/^'+|'+$/g, "");
+			const split = cleaned
+				.replace(/([a-z])([A-Z])/g, "$1 $2")
+				.replace(/([0-9])([a-zA-Z])/g, "$1 $2")
+				.replace(/([a-zA-Z])([0-9])/g, "$1 $2")
+				.split(/\s+/);
+
+			return split.length > 1
+				? [cleaned, ...split.filter((part) => part.length >= 2)]
+				: [cleaned];
+		})
+		.map((token) => token.toLowerCase())
 		.filter(Boolean);
 }
 
@@ -129,7 +143,7 @@ function textContainsToken(text: string, token: string): boolean {
 
 	const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	return new RegExp(
-		`(^|[^\\p{L}\\p{N}_])${escaped}($|[^\\p{L}\\p{N}_])`,
+		`(^|[^\\p{L}\\p{N}_])${escaped}`,
 		"iu",
 	).test(normalizedText);
 }
@@ -141,18 +155,12 @@ export function visibleMatchingPositions(
 	const tokens = queryHighlightTokens(query);
 	if (tokens.length === 0) return [];
 
-	const matchedTokens = new Set<string>();
-	const matches = positions.filter((position) => {
-		const positionMatches = tokens.filter((token) =>
-			textContainsToken(position.text, token),
-		);
-		for (const token of positionMatches) matchedTokens.add(token);
-		return positionMatches.length > 0;
-	});
-
 	// Search candidates can originate from hidden accessibility text. A result
-	// is visible only when screenshot OCR confirms every query token.
-	return tokens.every((token) => matchedTokens.has(token)) ? matches : [];
+	// is visible only when screenshot OCR confirms one of the same prefix and
+	// compound-token alternatives that backend fuzzy search joins with OR.
+	return positions.filter((position) =>
+		tokens.some((token) => textContainsToken(position.text, token)),
+	);
 }
 
 async function verifyVisibleSearchMatches(

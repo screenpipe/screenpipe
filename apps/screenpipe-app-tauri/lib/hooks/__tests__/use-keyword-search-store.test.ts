@@ -218,6 +218,46 @@ describe("useKeywordSearchStore search scheduling", () => {
 		expect(useKeywordSearchStore.getState().searchResults.map((item) => item.frame_id)).toEqual([2]);
 	});
 
+	it("keeps an OCR candidate whose visible text matches a fuzzy prefix", async () => {
+		vi.mocked(localFetch).mockImplementation((input) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return Promise.resolve(jsonResponse([{
+					frame_id: 566,
+					timestamp: "2026-07-30T03:27:38.299898Z",
+					text_positions: [{
+						text: "100% Deterministic",
+						confidence: 1,
+						bounds: {
+							left: 0.1,
+							top: 0.1,
+							width: 0.2,
+							height: 0.05,
+						},
+					}],
+					app_name: "ChatGPT",
+					window_name: "ChatGPT",
+					confidence: 1,
+					text: "Deterministic",
+					url: "",
+					text_source: "ocr",
+				}]));
+			}
+			if (url.startsWith("/search?")) {
+				return Promise.resolve(jsonResponse({ data: [] }));
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		await useKeywordSearchStore.getState().searchKeywords("determ");
+
+		expect(
+			useKeywordSearchStore
+				.getState()
+				.searchResults.map((result) => result.frame_id),
+		).toEqual([566]);
+	});
+
 	it("excludes accessibility-only candidates that screenshot OCR cannot verify", async () => {
 		const candidates = Array.from({ length: 5 }, (_, index) => ({
 			frame_id: index + 1,
@@ -476,7 +516,7 @@ describe("visibleMatchingPositions", () => {
 		]);
 	});
 
-	it("does not treat a substring as a visible whole-word match", () => {
+	it("matches visible word prefixes without matching inside another word", () => {
 		const positions = [
 			{
 				text: "concatenate",
@@ -484,13 +524,65 @@ describe("visibleMatchingPositions", () => {
 				bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
 			},
 			{
+				text: "category",
+				confidence: 1,
+				bounds: { left: 0.3, top: 0.1, width: 0.1, height: 0.05 },
+			},
+			{
+				text: "bobcat",
+				confidence: 1,
+				bounds: { left: 0.4, top: 0.1, width: 0.1, height: 0.05 },
+			},
+			{
 				text: "cat",
 				confidence: 1,
-				bounds: { left: 0.4, top: 0.1, width: 0.05, height: 0.05 },
+				bounds: { left: 0.6, top: 0.1, width: 0.05, height: 0.05 },
 			},
 		];
 
-		expect(visibleMatchingPositions(positions, "cat")).toEqual([positions[1]]);
+		expect(visibleMatchingPositions(positions, "cat")).toEqual([
+			positions[1],
+			positions[3],
+		]);
+	});
+
+	it("keeps the real fuzzy-prefix case determ matching Deterministic", () => {
+		const position = {
+			text: "100% Deterministic",
+			confidence: 1,
+			bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+		};
+
+		expect(visibleMatchingPositions([position], "determ")).toEqual([position]);
+	});
+
+	it("mirrors backend compound-token expansion", () => {
+		expect(queryHighlightTokens("ActivityPerformance")).toEqual([
+			"activityperformance",
+			"activity",
+			"performance",
+		]);
+
+		const position = {
+			text: "Performance",
+			confidence: 1,
+			bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+		};
+		expect(
+			visibleMatchingPositions([position], "ActivityPerformance"),
+		).toEqual([position]);
+	});
+
+	it("mirrors the backend OR semantics across query words", () => {
+		const position = {
+			text: "worldwide",
+			confidence: 1,
+			bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+		};
+
+		expect(visibleMatchingPositions([position], "hello world")).toEqual([
+			position,
+		]);
 	});
 });
 
