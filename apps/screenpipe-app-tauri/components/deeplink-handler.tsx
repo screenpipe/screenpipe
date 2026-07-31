@@ -17,6 +17,7 @@ import {
   openScreenpipeViewerLink,
   screenpipeViewerPathFromHref,
 } from "@/components/markdown";
+import { timelineTimestampFromDeepLink } from "@/lib/timeline-deeplink";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
@@ -80,12 +81,14 @@ export function DeeplinkHandler() {
           try {
             await loadUser(apiKey);
             // #3943: token lives in the encrypted secret store, not store.bin.
-            // Confirm durable persistence so a keychain/db failure can't leave
-            // the UI "logged in" while native entitlement refresh has no token.
-            const persisted = await commands.getCloudToken().catch(() => null);
-            if (!persisted) {
+            // Check setCloudToken's Result — getCloudToken() can return the
+            // in-process cache that is seeded before durable persist succeeds,
+            // so it cannot prove the secret-store write landed.
+            const persist = await commands.setCloudToken(apiKey);
+            if (persist.status !== "ok") {
               console.warn(
-                "[deeplink] login succeeded but cloud token was not persisted to secret store",
+                "[deeplink] login succeeded but cloud token was not persisted to secret store:",
+                persist.error,
               );
               toast({
                 title: "login incomplete",
@@ -198,9 +201,7 @@ export function DeeplinkHandler() {
       //   screenpipe://timeline?timestamp=ISO8601
       //   screenpipe://timeline?start_time=ISO8601&end_time=ISO8601
       if (parsedUrl.pathname === "timeline" || parsedUrl.host === "timeline") {
-        const timestamp =
-          parsedUrl.searchParams.get("timestamp") ||
-          parsedUrl.searchParams.get("start_time");
+        const timestamp = timelineTimestampFromDeepLink(url);
         if (timestamp) {
           try {
             const date = new Date(timestamp);
