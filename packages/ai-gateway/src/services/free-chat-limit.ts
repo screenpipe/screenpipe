@@ -4,6 +4,7 @@
 
 import type { AuthResult, Env, RequestBody } from '../types';
 import { hasPaidHostedAiPlan } from './hosted-ai-policy';
+import { PrivateCostControlError } from './hosted-ai-cost-controls';
 import { isBackgroundRequest } from '../utils/latency';
 import { withResponseFinalizer } from '../utils/response-finalizer';
 
@@ -21,19 +22,50 @@ export const FREE_CHAT_MAX_STRUCTURE_DEPTH = 32;
 export const FREE_CHAT_MAX_IN_FLIGHT = 1;
 export const FREE_CHAT_IN_FLIGHT_LEASE_SECONDS = 10 * 60;
 
-// This is a conservative reservation for both entries in the dedicated
-// preview waterfall at the maximum request/tool/output limits above. Reserving
-// before inference makes concurrent requests unable to race a post-hoc spend
-// check. Keep this in sync with FREE_PREVIEW_WATERFALL in handlers/chat.ts.
-export const FREE_CHAT_COST_RESERVATION_MICRO_USD = 150_000;
-// Deliberately independent from the turn/call constants: increasing those
-// later cannot silently raise the daily cash ceiling.
-export const FREE_CHAT_DAILY_BUDGET_MICRO_USD = 2_400_000;
-
 const FREE_CHAT_USAGE_TIER_PREFIX = 'free_chat_turn_v2';
 const FREE_CHAT_BUDGET_TIER_PREFIX = 'free_chat_budget_v2';
 const FREE_CHAT_LEASE_TIER = 'free_chat_in_flight_v1';
 const INTERNAL_TITLE_SESSION_PREFIX = '__title:';
+
+function requiredPrivatePositiveInteger(value: string | undefined, name: string): number {
+	const normalized = value?.trim();
+	if (!normalized || !/^\d+$/.test(normalized)) {
+		throw new PrivateCostControlError(name);
+	}
+	const parsed = Number(normalized);
+	if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+	throw new PrivateCostControlError(name);
+}
+
+export type FreeChatCostControls = {
+	reservationMicroUsd: number;
+	dailyBudgetMicroUsd: number;
+};
+
+export function loadFreeChatCostControls(env: Env): FreeChatCostControls {
+	const controls = {
+		reservationMicroUsd: requiredPrivatePositiveInteger(
+			env.FREE_CHAT_COST_RESERVATION_MICRO_USD,
+			'FREE_CHAT_COST_RESERVATION_MICRO_USD',
+		),
+		dailyBudgetMicroUsd: requiredPrivatePositiveInteger(
+			env.FREE_CHAT_DAILY_BUDGET_MICRO_USD,
+			'FREE_CHAT_DAILY_BUDGET_MICRO_USD',
+		),
+	};
+	if (controls.reservationMicroUsd > controls.dailyBudgetMicroUsd) {
+		throw new PrivateCostControlError('free chat budget windows', 'inconsistent');
+	}
+	return controls;
+}
+
+export function getFreeChatCostReservationMicroUsd(env: Env): number {
+	return loadFreeChatCostControls(env).reservationMicroUsd;
+}
+
+export function getFreeChatDailyBudgetMicroUsd(env: Env): number {
+	return loadFreeChatCostControls(env).dailyBudgetMicroUsd;
+}
 
 export type FreeChatLimitError = {
 	status: number;
@@ -563,9 +595,14 @@ export async function reserveFreeChatTurn(
 		};
 	} catch (error) {
 		console.error('free chat limit unavailable', error);
-		// Availability wins over metering during a D1 incident. The durable-object
-		// RPM limiter and normal daily cost cap still run before this gate.
-		return { allowed: true };
+		return {
+			allowed: false,
+			error: {
+				status: 503,
+				code: 'free_chat_control_unavailable',
+				message: 'Free hosted AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
+			},
+		};
 	}
 }
 
@@ -649,8 +686,15 @@ export async function acquireFreeChatLease(
 		}
 		return { allowed: true, lease: { key: leaseKey, userId, expiresAt } };
 	} catch (error) {
-		console.error('free chat lease unavailable, failing open', error);
-		return { allowed: true, lease: null };
+		console.error('free chat lease unavailable, failing closed', error);
+		return {
+			allowed: false,
+			error: {
+				status: 503,
+				code: 'free_chat_control_unavailable',
+				message: 'Free hosted AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
+			},
+		};
 	}
 }
 
@@ -663,6 +707,9 @@ export async function reserveFreeChatBudget(
 	const { userId } = preflight;
 	const day = utcDay(now);
 	try {
+		const controls = loadFreeChatCostControls(env);
+		const reservationMicroUsd = controls.reservationMicroUsd;
+		const dailyBudgetMicroUsd = controls.dailyBudgetMicroUsd;
 		const budgetKey = await accountResourceKey('budget', `${userId}:${day}`);
 		const budgetTier = `${FREE_CHAT_BUDGET_TIER_PREFIX}:${day}`;
 		const incrementBudget = async () => env.DB.prepare(`
@@ -671,12 +718,12 @@ export async function reserveFreeChatBudget(
 			WHERE device_id = ? AND user_id = ? AND tier = ?
 				AND daily_count <= ? - ?
 		`).bind(
-			FREE_CHAT_COST_RESERVATION_MICRO_USD,
+			reservationMicroUsd,
 			budgetKey,
 			userId,
 			budgetTier,
-			FREE_CHAT_DAILY_BUDGET_MICRO_USD,
-			FREE_CHAT_COST_RESERVATION_MICRO_USD,
+			dailyBudgetMicroUsd,
+			reservationMicroUsd,
 		).run();
 
 		let budgetClaimed = changed(await incrementBudget());
@@ -688,11 +735,11 @@ export async function reserveFreeChatBudget(
 			`).bind(
 				budgetKey,
 				userId,
-				FREE_CHAT_COST_RESERVATION_MICRO_USD,
+				reservationMicroUsd,
 				day,
 				budgetTier,
-				FREE_CHAT_COST_RESERVATION_MICRO_USD,
-				FREE_CHAT_DAILY_BUDGET_MICRO_USD,
+				reservationMicroUsd,
+				dailyBudgetMicroUsd,
 			).run();
 			budgetClaimed = changed(insert);
 		}
@@ -713,8 +760,15 @@ export async function reserveFreeChatBudget(
 
 		return { allowed: true };
 	} catch (error) {
-		console.error('free chat budget unavailable, failing open', error);
-		return { allowed: true };
+		console.error('free chat budget unavailable, failing closed', error);
+		return {
+			allowed: false,
+			error: {
+				status: 503,
+				code: 'free_chat_budget_unavailable',
+				message: 'Free hosted AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
+			},
+		};
 	}
 }
 

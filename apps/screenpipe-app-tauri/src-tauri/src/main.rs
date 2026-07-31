@@ -82,6 +82,7 @@ mod engine_events;
 mod monitor_events;
 mod owned_browser_cookies;
 mod permissions;
+mod acp_runtime;
 mod pi;
 mod pi_command_queue;
 mod power_awake;
@@ -319,6 +320,36 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    // The ACP agent runs as a hidden mode of this same signed executable, so no
+    // second sidecar or hand-written protocol ships. These paths must exit
+    // before any Tauri, database, or recording setup.
+    if acp_runtime::is_process_guard_mode() {
+        let exit_code = match acp_runtime::run_process_guard() {
+            Ok(exit_code) => exit_code,
+            Err(error) => {
+                eprintln!("[acp-process-guard] {error}");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+    if acp_runtime::is_runtime_mode() {
+        let exit_code = match acp_runtime::run_from_env().await {
+            Ok(()) => 0,
+            Err(error) => {
+                use std::io::Write as _;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::json!({ "type": "error", "message": error })
+                );
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
 
@@ -1034,11 +1065,7 @@ async fn main() {
             }
 
             // Logging setup
-            let base_dir = get_base_dir(app_handle, None)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to get base dir, using fallback: {}", e);
-                    screenpipe_core::paths::default_screenpipe_data_dir()
-                });
+            let base_dir = get_base_dir(app_handle, None)?;
 
             // Set up rolling file appender
             let log_dir = get_screenpipe_data_dir(app.handle())
@@ -1209,7 +1236,7 @@ async fn main() {
             }
 
             // Resolve data directory from user setting (custom dir or ~/.screenpipe)
-            let (data_dir, data_dir_fell_back) = config::resolve_data_dir(&store.data_dir);
+            let (data_dir, data_dir_fell_back) = config::resolve_data_dir(&store.data_dir)?;
             info!("Recording data directory: {}", data_dir.display());
 
             // Pin SCREENPIPE_DATA_DIR to the *resolved* dir so every consumer of

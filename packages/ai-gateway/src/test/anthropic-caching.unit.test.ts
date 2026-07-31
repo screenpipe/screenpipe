@@ -98,6 +98,32 @@ describe('current Claude request compatibility', () => {
 			expect(calls[0].temperature).toBeUndefined();
 		});
 	}
+
+	it('aborts the upstream Anthropic request when the client cancels', async () => {
+		const controller = new AbortController();
+		let resolveNext: ((value: IteratorResult<any>) => void) | null = null;
+		controller.signal.addEventListener('abort', () => {
+			resolveNext?.({ done: true, value: undefined });
+		});
+		const upstream: any = {
+			controller,
+			[Symbol.asyncIterator]() {
+				return {
+					next: () => new Promise<IteratorResult<any>>((resolve) => {
+						resolveNext = resolve;
+					}),
+				};
+			},
+		};
+		const { provider } = makeProvider(upstream);
+		const responseStream = await provider.createStreamingCompletion(body([
+			{ role: 'user', content: 'cancel this' },
+		]));
+		await responseStream.cancel('client disconnected');
+
+		expect(controller.signal.aborted).toBe(true);
+		expect(controller.signal.reason).toBe('client disconnected');
+	});
 });
 
 describe('system prompt cache breakpoints', () => {

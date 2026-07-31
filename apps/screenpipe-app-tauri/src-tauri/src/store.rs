@@ -1064,6 +1064,9 @@ pub enum AIProviderType {
     Pi,
     #[serde(rename = "anthropic")]
     Anthropic,
+    /// External Agent Client Protocol adapter, launched via the ACP runtime.
+    #[serde(rename = "acp")]
+    Acp,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -1084,6 +1087,9 @@ pub struct AIPreset {
     pub max_context_chars: i32,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     pub max_tokens: i32,
+    /// The external adapter to launch when `provider` is `acp`.
+    #[serde(rename = "acpAgent", default)]
+    pub acp_agent: Option<crate::pi::AcpAgentConfig>,
 }
 
 fn default_max_tokens() -> i32 {
@@ -1102,6 +1108,7 @@ impl Default for AIPreset {
             api_key: None,
             max_context_chars: 512000,
             max_tokens: 4096,
+            acp_agent: None,
         }
     }
 }
@@ -1357,6 +1364,7 @@ Rules:
             api_key: None,
             max_context_chars: 128000,
             max_tokens: 4096,
+            acp_agent: None,
         };
 
         Self {
@@ -1962,7 +1970,8 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     // app-config dir. So additionally require that the data dir holds no existing
     // recordings — retention may only default on when there is nothing to delete.
     if is_new_store && !store.extra.contains_key("localRetentionEnabled") {
-        let (data_dir, _) = crate::config::resolve_data_dir(&store.data_dir);
+        let (data_dir, _) = crate::config::resolve_data_dir(&store.data_dir)
+            .map_err(|error| format!("failed to prepare Screenpipe data directory: {error}"))?;
         let has_existing_recordings = data_dir.join("db.sqlite").exists();
         if has_existing_recordings {
             tracing::info!(

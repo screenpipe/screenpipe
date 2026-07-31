@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { removeSpotlightExclusion } from './spotlight.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -184,6 +185,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
 
   rmSync(E2E_DATA_DIR, { recursive: true, force: true });
   mkdirSync(E2E_DATA_DIR, { recursive: true });
+  removeSpotlightExclusion(E2E_DATA_DIR);
 
   appProcess = spawn(appPath, [], {
     env: {
@@ -229,5 +231,10 @@ export function stopApp(): void {
     unlinkSync(APP_PID_FILE);
   } catch {
     // already gone
+  }
+  try {
+    removeSpotlightExclusion(E2E_DATA_DIR);
+  } catch (error) {
+    console.warn('[e2e] failed to clean up Spotlight exclusion:', error);
   }
 }

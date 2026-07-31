@@ -117,6 +117,12 @@
       "layers": ["storage-privacy"]
     },
     {
+      "id": "spotlight-exclusion",
+      "label": "Screenpipe data stays out of macOS Spotlight",
+      "platforms": ["macos"],
+      "layers": ["storage-privacy", "os-integration"]
+    },
+    {
       "id": "updates",
       "label": "Updater install and rollback safety",
       "platforms": ["windows", "macos", "linux"],
@@ -130,6 +136,16 @@
     }
   ],
   "specs": [
+    {
+      "spec": "acp-text-streaming.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "tauri-command"],
+      "features": ["chat", "acp-runtime", "acp-text-streaming"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "A deterministic ACP adapter runs through the packaged Rust desktop runtime and proves ordered assistant text streaming from pi_start through agent_end."
+    },
     {
       "spec": "api.spec.ts",
       "platforms": ["windows", "macos", "linux"],
@@ -218,7 +234,7 @@
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "A real Tauri chat session keeps a short answer near the composer without exposing a false new-content state or a large empty viewport gap."
+      "notes": "A real Tauri chat session keeps a short answer at the top of the message rail without exposing a false new-content state."
     },
     {
       "spec": "chat-ask-user-tool-card.spec.ts",
@@ -709,6 +725,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard."
+    },
+    {
+      "spec": "spotlight-exclusion.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["storage-privacy", "os-integration"],
+      "features": ["spotlight-exclusion"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Requires the launched app's exact E2E data directory to appear in Spotlight Search Privacy, then force-imports paired excluded/control canaries and proves only the control becomes searchable."
     },
     {
       "spec": "meeting-apps-picker.spec.ts",

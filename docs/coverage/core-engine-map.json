@@ -111,6 +111,8 @@
         "src/power/profile.rs",
         "src/power/manager.rs",
         "src/power/monitor.rs",
+        "src/permission_monitor.rs",
+        "src/bin/screenpipe-engine.rs",
         "tests/consumer_sleep_test.rs",
         "tests/health_debounce_test.rs"
       ],
@@ -137,6 +139,9 @@
         "src/snapshot_compaction.rs",
         "src/video_utils.rs",
         "src/vision_manager/manager.rs",
+        "src/vision_manager/monitor_watcher.rs",
+        "src/visual_probe.rs",
+        "src/semantic_worker.rs",
         "tests/audio_vision_integration_test.rs",
         "tests/first_frames_test.rs",
         "tests/frame_extraction_test.rs",
@@ -159,15 +164,29 @@
       "label": "Engine API route logic and stream contracts",
       "crate": "screenpipe-engine",
       "files": [
+        "src/auth_key.rs",
         "src/routes/activity_summary.rs",
+        "src/routes/artifacts.rs",
+        "src/routes/content.rs",
+        "src/routes/data.rs",
+        "src/routes/elements.rs",
+        "src/routes/frames.rs",
         "src/routes/health.rs",
+        "src/routes/live_views.rs",
         "src/routes/meetings.rs",
         "src/routes/memories.rs",
+        "src/routes/response_format.rs",
         "src/routes/retranscribe.rs",
         "src/routes/search.rs",
+        "src/routes/semantic.rs",
+        "src/routes/speakers.rs",
         "src/routes/streaming.rs",
+        "src/routes/structured_outputs.rs",
         "src/routes/time.rs",
         "src/routes/timezone.rs",
+        "src/routes/websocket.rs",
+        "src/server.rs",
+        "tests/router_contract_test.rs",
         "tests/tags_test.rs",
         "tests/transcribe_test.rs",
         "tests/websockets_test.rs"
@@ -201,7 +220,8 @@
       "crate": "screenpipe-engine",
       "files": [
         "src/focus_tracker/darwin.rs",
-        "src/focus_tracker/windows.rs"
+        "src/focus_tracker/windows.rs",
+        "src/process_priority.rs"
       ],
       "platforms": ["windows", "macos"],
       "layers": ["engine-lifecycle", "os-integration"],
@@ -217,22 +237,29 @@
       "crate": "screenpipe-engine",
       "files": [
         "src/calendar_speaker_id.rs",
+        "src/capture_exclusions.rs",
+        "src/cli/agent.rs",
         "src/cli/install.rs",
         "src/cli/mod.rs",
         "src/cli/presets.rs",
+        "src/cli/profile.rs",
         "src/cli/search.rs",
+        "src/cli/service.rs",
         "src/cli/store_file.rs",
         "src/cli/team.rs",
+        "src/cli/view.rs",
         "src/cloud_search.rs",
         "src/connections_api.rs",
         "src/drm_detector.rs",
         "src/external_memory_sync.rs",
+        "src/live_views.rs",
         "src/mcp_servers_api.rs",
-        "src/meeting_detector.rs",
         "src/meeting_export.rs",
-        "src/meeting_telemetry.rs",
         "src/pipe_store.rs",
+        "src/pipes_api.rs",
         "src/privacy_filter.rs",
+        "src/qualified_value.rs",
+        "src/structured_outputs.rs",
         "src/sync_api.rs",
         "src/sync_provider.rs",
         "src/ui_recorder.rs",
@@ -244,7 +271,69 @@
       "criticality": "medium",
       "confidence": "strong",
       "kind": "unit",
-      "notes": "Unit-heavy coverage for meeting heuristics, privacy filter policy, UI recorder safety, pipes, sync helpers, and CLI parsing."
+      "notes": "Unit-heavy coverage for privacy filter policy, capture exclusions, UI recorder safety, pipes/live-view/structured-output helpers, sync helpers, and CLI parsing. Meeting detection moved to the engine-meeting-watcher suite."
+    },
+    {
+      "id": "engine-meeting-watcher",
+      "label": "Engine meeting watcher state machines and eval harness",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/meeting_watcher/mod.rs",
+        "src/meeting_watcher/shared/telemetry.rs",
+        "src/meeting_watcher/audio_process/resolve.rs",
+        "src/meeting_watcher/audio_process/state.rs",
+        "src/meeting_watcher/audio_process/tests.rs",
+        "src/meeting_watcher/ui_scan/tests.rs",
+        "src/meeting_watcher/ui_scan/macos.rs",
+        "src/meeting_watcher/ui_scan/windows.rs",
+        "tests/meeting_detection_eval.rs"
+      ],
+      "platforms": ["windows", "macos"],
+      "layers": ["meeting"],
+      "flows": ["meeting-live-notes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Successor of src/meeting_detector.rs and src/meeting_telemetry.rs. Audio-process and UI-scan backend state machines, candidate resolution, shared telemetry, and a scored trajectory eval. ui_scan/macos.rs and ui_scan/windows.rs are cfg-gated and only execute on their target OS; both backends are null on Linux."
+    },
+    {
+      "id": "engine-retention-storage",
+      "label": "Engine retention, archive, and disk pressure",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/archive.rs",
+        "src/atomic_file.rs",
+        "src/disk_pressure.rs",
+        "src/retention.rs",
+        "tests/retention_lean_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["storage", "engine-lifecycle", "performance"],
+      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "kind": "mixed",
+      "notes": "Local retention deletion (including lean-mode heavy-text stripping), cloud archive watermarking, atomic state-file replacement, and the low-disk capture monitor."
+    },
+    {
+      "id": "engine-telemetry-observability",
+      "label": "Engine telemetry, crash logs, and reliability metrics",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/analytics.rs",
+        "src/crash_log.rs",
+        "src/piggyback_telemetry.rs",
+        "src/recording_coverage.rs",
+        "src/resource_monitor.rs",
+        "src/telemetry_context.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["engine-lifecycle", "performance"],
+      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "PostHog capture gating, telemetry context shaping, piggyback telemetry forwarding, crash-log helpers, resource monitoring, and the recording-coverage reliability metric."
     },
     {
       "id": "db-search-indexing",
@@ -253,12 +342,17 @@
       "files": [
         "src/text_normalizer.rs",
         "src/text_similarity.rs",
+        "tests/accessibility_late_materialization_test.rs",
         "tests/fts_contention_test.rs",
         "tests/fts_dots_test.rs",
         "tests/keyword_search_accessibility_test.rs",
         "tests/keyword_search_order_test.rs",
+        "tests/output_search_test.rs",
         "tests/query_plan_test.rs",
-        "tests/search_ocr_snapshot_test.rs"
+        "tests/search_issue_4474_bench.rs",
+        "tests/search_ocr_snapshot_test.rs",
+        "tests/tag_autocomplete_query_test.rs",
+        "tests/tag_filter_bench.rs"
       ],
       "platforms": ["windows", "macos", "linux"],
       "layers": ["db-search", "ocr", "accessibility", "performance"],
@@ -273,13 +367,22 @@
       "label": "Database frames, timeline, and storage joins",
       "crate": "screenpipe-db",
       "files": [
-        "src/db.rs",
+        "src/db/feedback.rs",
+        "src/db/maintenance.rs",
+        "src/db/setup.rs",
+        "src/db/tests.rs",
+        "src/db/truncation_tests.rs",
         "src/types.rs",
         "src/write_queue.rs",
         "tests/db.rs",
+        "tests/evict_media_null_chunk_test.rs",
         "tests/frame_offset_sync_test.rs",
         "tests/live_coverage_marker_test.rs",
+        "tests/orphan_chunk_null_poisoning_test.rs",
+        "tests/outputs_saf_test.rs",
+        "tests/semantic_storage_test.rs",
         "tests/suggestions_frames_table_test.rs",
+        "tests/timeline_frameless_audio_test.rs",
         "tests/timeline_performance_test.rs"
       ],
       "platforms": ["windows", "macos", "linux"],
@@ -288,7 +391,31 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
-      "notes": "Frame/audio joins, timeline query shape, suggestions frames, write queue, DB primitives, and timeline performance."
+      "notes": "Frame/audio joins, timeline query shape, suggestions frames, write queue, DB primitives (src/db.rs split into src/db/ modules), feedback record upserts, media eviction anti-join regressions, SAF output registry, semantic storage, and timeline performance."
+    },
+    {
+      "id": "db-runtime-reliability",
+      "label": "Database runtime, WAL, and cancellation reliability",
+      "crate": "screenpipe-db",
+      "files": [
+        "src/cancellable_query.rs",
+        "src/failpoint_vfs.rs",
+        "src/sqlite_error.rs",
+        "tests/cancellable_query_test.rs",
+        "tests/cancellation_performance_bench.rs",
+        "tests/close_severs_connections_test.rs",
+        "tests/memory_pressure_test.rs",
+        "tests/multi_pool_wal_parity_test.rs",
+        "tests/sqlite_runtime_version.rs",
+        "tests/wal_chaos_e2e_test.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "performance"],
+      "flows": ["performance-liveness"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "mixed",
+      "notes": "SQLite hard-fault classification, failpoint VFS injection, query cancellation surviving dropped futures, close-severs-connections wedge regression, multi-pool WAL parity/corruption coverage, runtime version pinning, and manual WAL chaos plus memory-pressure probes (several ignored by default)."
     },
     {
       "id": "db-audio-meetings-speakers",
@@ -296,6 +423,7 @@
       "crate": "screenpipe-db",
       "files": [
         "tests/audio_duplicate_test.rs",
+        "tests/audio_search_speaker_join_test.rs",
         "tests/chunk_outcome_test.rs",
         "tests/meeting_context_test.rs",
         "tests/meeting_end_reason_test.rs",
@@ -303,7 +431,9 @@
         "tests/output_audio_liveness_test.rs",
         "tests/single_open_meeting_invariant_test.rs",
         "tests/speaker_benchmark.rs",
+        "tests/speaker_delete_test.rs",
         "tests/speaker_reassignment_test.rs",
+        "tests/timeline_live_meeting_index_test.rs",
         "tests/timeline_live_meeting_test.rs",
         "tests/untranscribed_chunks_test.rs"
       ],
@@ -320,7 +450,9 @@
       "label": "Database accessibility elements and UI events",
       "crate": "screenpipe-db",
       "files": [
+        "src/db/elements.rs",
         "tests/db_config_test.rs",
+        "tests/display_layout_test.rs",
         "tests/heavy_read_test.rs",
         "tests/ocr_elements_bulk_test.rs",
         "tests/on_screen_filter_test.rs",
@@ -342,9 +474,13 @@
         "src/core/engine.rs",
         "src/core/run_record_and_transcribe.rs",
         "src/transcription/deepgram/batch.rs",
+        "src/transcription/engine.rs",
         "src/transcription/openai_compatible/batch.rs",
         "src/transcription/transcription_result.rs",
+        "src/transcription/whisper/batch.rs",
         "src/transcription/whisper/detect_language.rs",
+        "src/utils/audio/convert.rs",
+        "src/utils/audio/resample.rs",
         "tests/accuracy_test.rs",
         "tests/batch_deferral_test.rs",
         "tests/core_tests.rs"
@@ -367,11 +503,13 @@
         "src/core/device.rs",
         "src/core/device_detection.rs",
         "src/core/e2e_ghost_word_silent_room.rs",
-        "src/core/process_tap.rs",
+        "src/core/process_tap/counters.rs",
         "src/core/source_buffer.rs",
         "src/core/stream.rs",
+        "src/device/device_manager.rs",
         "src/idle_detector.rs",
         "src/lib.rs",
+        "src/metrics.rs",
         "tests/bluetooth_gap_hallucination_test.rs",
         "tests/channel_lag_test.rs"
       ],
@@ -381,19 +519,45 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
-      "notes": "Device monitor, stream buffering, source lag, Bluetooth gap/hallucination regressions, and process-tap/unit coverage."
+      "notes": "Device monitor, device manager, stream buffering, source lag, audio metrics, Bluetooth gap/hallucination regressions, and cross-platform process-tap watchdog counters (process_tap.rs split into src/core/process_tap/ modules)."
+    },
+    {
+      "id": "audio-platform-output-capture",
+      "label": "Platform output capture, process taps, and stream watchdogs",
+      "crate": "screenpipe-audio",
+      "files": [
+        "src/audio_manager/windows_output_follow.rs",
+        "src/core/meeting_audio/macos.rs",
+        "src/core/meeting_audio/windows.rs",
+        "src/core/process_tap/macos.rs",
+        "src/core/process_tap/windows.rs",
+        "src/core/sck_output_watchdog.rs",
+        "src/device/vpio_health.rs"
+      ],
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device", "audio", "meeting"],
+      "flows": ["audio-device-health", "audio-record-transcribe", "meeting-live-notes"],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "OS-specific output/system-audio capture: CoreAudio process tap and SCK output watchdog plus VPIO health policy on macOS, per-process meeting audio taps on both platforms, and the Windows follow-the-audio output watchdog. Platform impl files are cfg-gated to their target OS."
     },
     {
       "id": "audio-meetings-speakers-dedup",
       "label": "Audio meetings, speakers, and transcript dedupe",
       "crate": "screenpipe-audio",
       "files": [
+        "src/audio_manager/meeting_piggyback.rs",
+        "src/audio_manager/piggyback_listeners.rs",
         "src/audio_manager/reconciliation.rs",
         "src/meeting_detector.rs",
+        "src/meeting_processes.rs",
         "src/meeting_streaming/config.rs",
         "src/meeting_streaming/controller.rs",
         "src/meeting_streaming/deepgram_live.rs",
         "src/meeting_streaming/selected_engine.rs",
+        "src/segmentation/segmentation_manager.rs",
+        "src/speaker/embedding.rs",
         "src/speaker/embedding_manager.rs",
         "src/speaker/mod.rs",
         "src/speaker/models.rs",
@@ -443,6 +607,7 @@
       "files": [
         "src/models/download.rs",
         "src/utils/audio/music_detection.rs",
+        "src/utils/ort_watchdog.rs",
         "tests/hf_tls_test.rs",
         "tests/music_detection_real.rs",
         "tests/onnx_model_test.rs"
@@ -463,6 +628,7 @@
         "src/browser_utils/mod.rs",
         "src/capture_screenshot_by_window.rs",
         "src/frame_comparison.rs",
+        "src/metrics.rs",
         "src/monitor.rs",
         "src/ocr_cache.rs",
         "src/snapshot_writer.rs",
@@ -487,7 +653,9 @@
       "label": "Screen capture to OCR result contract",
       "crate": "screenpipe-screen",
       "files": [
-        "src/core.rs"
+        "src/core.rs",
+        "src/tesseract.rs",
+        "src/text_regions.rs"
       ],
       "platforms": ["windows", "macos", "linux"],
       "layers": ["vision-capture", "ocr"],
@@ -495,7 +663,26 @@
       "criticality": "high",
       "confidence": "partial",
       "kind": "unit",
-      "notes": "Cross-platform cached-OCR unit coverage for RawCaptureResult to CaptureResult metadata, browser URL, focus state, and window-to-screen OCR coordinate transformation."
+      "notes": "Cross-platform cached-OCR unit coverage for RawCaptureResult to CaptureResult metadata, browser URL, focus state, window-to-screen OCR coordinate transformation, Tesseract output parsing, and contour-based text-region detection for the meeting OCR gate."
+    },
+    {
+      "id": "screen-monitor-platform",
+      "label": "Platform monitor enumeration and capture backends",
+      "crate": "screenpipe-screen",
+      "files": [
+        "src/monitor/linux_portal.rs",
+        "src/monitor/linux_wayland.rs",
+        "src/monitor/macos.rs",
+        "src/monitor/windows.rs",
+        "src/wgc_capture.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["vision-capture"],
+      "flows": ["capture-ocr-pipeline"],
+      "criticality": "medium",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "Per-OS monitor enumeration (Windows, macOS, Wayland/portal on Linux) and the persistent Windows.Graphics.Capture session. Each file is cfg-gated and only executes on its target OS."
     },
     {
       "id": "screen-macos-ocr",
@@ -518,6 +705,7 @@
       "label": "Windows native OCR",
       "crate": "screenpipe-screen",
       "files": [
+        "src/microsoft.rs",
         "tests/windows_vision_test.rs"
       ],
       "platforms": ["windows"],
@@ -555,10 +743,13 @@
         "src/incognito/mod.rs",
         "src/incognito/titles.rs",
         "src/lib.rs",
+        "src/scroll.rs",
+        "src/tree/app_version.rs",
         "src/tree/cache.rs",
         "src/tree/electron_docs.rs",
         "src/tree/enhanced_mode_cache.rs",
-        "src/tree/mod.rs"
+        "src/tree/mod.rs",
+        "src/url_filter.rs"
       ],
       "platforms": ["windows", "macos", "linux"],
       "layers": ["accessibility", "ui-events", "privacy", "performance"],

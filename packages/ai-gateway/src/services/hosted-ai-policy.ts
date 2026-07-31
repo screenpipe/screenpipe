@@ -4,6 +4,37 @@
 
 import type { AccountPlan, AuthResult } from '../types';
 
+export type HostedAiPlan = 'free' | 'basic' | 'business';
+
+const BASIC_HOSTED_MODELS = [
+	'auto',
+	'gpt-5.6-luna',
+	'gpt-5.4-mini',
+	'gpt-5.4-nano',
+	'gpt-5-mini',
+	'gpt-5-nano',
+] as const;
+
+const FREE_HOSTED_MODELS = ['auto'] as const;
+
+// Adding a model is a commercial change: verify its provider price first, then
+// add it here. An explicit catalog prevents a provider's newly accepted model
+// name from bypassing our cost review through a Business wildcard.
+const BUSINESS_HOSTED_MODELS = [
+	...BASIC_HOSTED_MODELS,
+	'gpt-5.6',
+	'gpt-5.6-sol',
+	'gpt-5.6-terra',
+	'gpt-5.5',
+	'gpt-5.5-pro',
+	'gpt-5.4',
+	'gpt-5.4-pro',
+	'claude-sonnet-5',
+	'claude-opus-5',
+	'claude-fable-5',
+	'screenpipe-event-classifier',
+] as const;
+
 const PAID_HOSTED_AI_PLANS = new Set<AccountPlan>([
 	'basic',
 	'business',
@@ -14,6 +45,48 @@ const PAID_HOSTED_AI_PLANS = new Set<AccountPlan>([
 /** Plans that are allowed to consume screenpipe-hosted AI. */
 export function hasPaidHostedAiPlan(auth: AuthResult): boolean {
 	return PAID_HOSTED_AI_PLANS.has(auth.accountPlan);
+}
+
+/** Collapse commercial variants to the three hosted-AI products we sell. */
+export function getHostedAiPlan(accountPlan: AccountPlan): HostedAiPlan | null {
+	switch (accountPlan) {
+		case 'free': return 'free';
+		case 'basic': return 'basic';
+		case 'business':
+		case 'team':
+		case 'enterprise':
+			return 'business';
+		default:
+			return null;
+	}
+}
+
+/** Public model-access contract. A missing plan deliberately gets no models. */
+export function getHostedAiAllowedModels(accountPlan: AccountPlan): readonly string[] {
+	switch (getHostedAiPlan(accountPlan)) {
+		case 'free': return FREE_HOSTED_MODELS;
+		case 'basic': return BASIC_HOSTED_MODELS;
+		case 'business': return BUSINESS_HOSTED_MODELS;
+		default: return [];
+	}
+}
+
+/** Customer-facing credits advertised by the public plan contract. */
+export function getHostedAiIncludedCredits(accountPlan: AccountPlan): number {
+	switch (getHostedAiPlan(accountPlan)) {
+		case 'free': return 10;
+		case 'basic': return 150;
+		case 'business': return 400;
+		default: return 0;
+	}
+}
+
+export function isHostedAiModelAllowed(model: string, accountPlan: AccountPlan): boolean {
+	if (typeof model !== 'string' || model.length === 0) return false;
+	const allowedModels = getHostedAiAllowedModels(accountPlan);
+	if (allowedModels.includes('*')) return true;
+	const lower = model.toLowerCase();
+	return allowedModels.some((allowed) => lower === allowed.toLowerCase());
 }
 
 /**

@@ -15,6 +15,9 @@ export interface StreamUsage {
   cache_read_input_tokens: number;
   /** Prompt tokens written to the cache this request (Anthropic write premium). */
   cache_creation_input_tokens: number;
+	/** True only after the provider emitted its terminal usage counters. */
+	usage_complete: boolean;
+	termination: 'complete' | 'cancelled' | 'error';
 }
 
 /**
@@ -36,11 +39,12 @@ export function trackStreamUsage(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+	let usageComplete = false;
   const decoder = new TextDecoder();
   const reader = body.getReader();
   let completed = false;
 
-  const completeOnce = () => {
+  const completeOnce = (termination: StreamUsage['termination']) => {
     if (completed) return;
     completed = true;
     onComplete({
@@ -48,44 +52,56 @@ export function trackStreamUsage(
       output_tokens: outputTokens,
       cache_read_input_tokens: cacheReadTokens,
       cache_creation_input_tokens: cacheCreationTokens,
+			usage_complete: usageComplete,
+			termination,
     });
   };
 
-  const inspect = (chunk: Uint8Array) => {
-      buffer += decoder.decode(chunk, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
-        try {
-          const data = JSON.parse(line.slice(6));
-          if (format === 'anthropic') {
-            if (data.type === 'message_start' && data.message?.usage) {
-              const u = data.message.usage;
-              cacheReadTokens = u.cache_read_input_tokens || 0;
-              cacheCreationTokens = u.cache_creation_input_tokens || 0;
-              // Normalize to TOTAL prompt tokens (raw input excludes cache)
-              inputTokens = (u.input_tokens || 0) + cacheReadTokens + cacheCreationTokens;
-            }
-            if (data.type === 'message_delta' && data.usage) {
-              outputTokens = data.usage.output_tokens || 0;
-            }
-          } else {
-            // OpenAI format: usage in final chunk; prompt_tokens already
-            // includes cached tokens
-            if (data.usage) {
-              inputTokens = data.usage.prompt_tokens || 0;
-              outputTokens = data.usage.completion_tokens || 0;
-              cacheReadTokens = data.usage.prompt_tokens_details?.cached_tokens || 0;
-              // Non-standard field our Anthropic→OpenAI conversion emits
-              cacheCreationTokens = data.usage.cache_creation_input_tokens || 0;
-            }
-          }
-        } catch {
-          // Not valid JSON, skip
+  const inspectLine = (line: string) => {
+    if (!line.startsWith('data: ') || line.includes('[DONE]')) return;
+    try {
+      const data = JSON.parse(line.slice(6));
+      if (format === 'anthropic') {
+        if (data.type === 'message_start' && data.message?.usage) {
+          const u = data.message.usage;
+          cacheReadTokens = u.cache_read_input_tokens || 0;
+          cacheCreationTokens = u.cache_creation_input_tokens || 0;
+          // Normalize to TOTAL prompt tokens (raw input excludes cache)
+          inputTokens = (u.input_tokens || 0) + cacheReadTokens + cacheCreationTokens;
         }
+        if (data.type === 'message_delta' && data.usage) {
+          outputTokens = data.usage.output_tokens || 0;
+					usageComplete = true;
+        }
+      } else if (data.usage) {
+        // OpenAI format: usage in final chunk; prompt_tokens already includes
+        // cached tokens.
+        inputTokens = data.usage.prompt_tokens || 0;
+        outputTokens = data.usage.completion_tokens || 0;
+        cacheReadTokens = data.usage.prompt_tokens_details?.cached_tokens || 0;
+        // Non-standard field our Anthropic→OpenAI conversion emits.
+        cacheCreationTokens = data.usage.cache_creation_input_tokens || 0;
+				usageComplete = true;
       }
+    } catch {
+      // Invalid or unrelated SSE data is passed through unchanged and ignored.
+    }
+  };
+
+  const inspectBufferedLines = (flush: boolean) => {
+    const lines = buffer.split('\n');
+    buffer = flush ? '' : (lines.pop() || '');
+    for (const line of lines) inspectLine(line);
+  };
+
+  const inspect = (chunk: Uint8Array) => {
+    buffer += decoder.decode(chunk, { stream: true });
+    inspectBufferedLines(false);
+  };
+
+  const flushInspector = () => {
+    buffer += decoder.decode();
+    inspectBufferedLines(true);
   };
 
   return new ReadableStream<Uint8Array>({
@@ -93,14 +109,17 @@ export function trackStreamUsage(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          completeOnce();
+          // Providers occasionally omit the trailing newline. Flush the final
+          // decoder bytes and buffered SSE line before settling the request.
+          flushInspector();
+          completeOnce('complete');
           controller.close();
           return;
         }
         inspect(value);
         controller.enqueue(value);
       } catch (error) {
-        completeOnce();
+        completeOnce('error');
         controller.error(error);
       }
     },
@@ -111,7 +130,7 @@ export function trackStreamUsage(
         // Resolve the usage promise with the tokens observed so far. Cost
         // settlement can then record a conservative partial/fallback estimate
         // and release its account lease instead of hanging until TTL expiry.
-        completeOnce();
+        completeOnce('cancelled');
       }
     },
   });
@@ -134,6 +153,8 @@ export function trackResponseUsage(
         output_tokens: 0,
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
+				usage_complete: false,
+				termination: 'complete',
       }),
     };
   }

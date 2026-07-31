@@ -33,8 +33,10 @@ describe('TIER_CONFIG', () => {
   });
 
   it('should have correct limits for subscribed tier', () => {
-    expect(TIER_CONFIG.subscribed.dailyQueries).toBe(1500);
-    expect(TIER_CONFIG.subscribed.allowedModels).toContain('*');
+    expect(TIER_CONFIG.subscribed.dailyQueries).toBe(60);
+    expect(TIER_CONFIG.subscribed.allowedModels).toContain('claude-fable-5');
+    expect(TIER_CONFIG.subscribed.allowedModels).toContain('claude-opus-5');
+    expect(TIER_CONFIG.subscribed.allowedModels).not.toContain('*');
   });
 
   it('logged_in should have strictly more queries than anonymous', () => {
@@ -90,10 +92,10 @@ describe('isModelAllowed', () => {
     expect(isModelAllowed('glm-5', 'logged_in')).toBe(false);
   });
 
-  it('should allow any model for subscribed users', () => {
-    expect(isModelAllowed('claude-opus-4-6', 'subscribed')).toBe(true);
-    expect(isModelAllowed('gpt-4o', 'subscribed')).toBe(true);
-    expect(isModelAllowed('any-random-model', 'subscribed')).toBe(true);
+  it('allows the reviewed Business catalog but rejects unpriced names', () => {
+    expect(isModelAllowed('claude-fable-5', 'subscribed')).toBe(true);
+    expect(isModelAllowed('gpt-5.6-sol', 'subscribed')).toBe(true);
+    expect(isModelAllowed('any-random-model', 'subscribed')).toBe(false);
   });
 
   it('should deny DeepSeek models for every tier due to Google user-data policy', () => {
@@ -103,15 +105,26 @@ describe('isModelAllowed', () => {
     expect(isModelAllowed('deepseek-r1', 'subscribed', { MODEL_GATING_ENABLED: 'false' } as any)).toBe(false);
   });
 
-  it('should handle partial model name matches', () => {
-    expect(isModelAllowed('gpt-5.6-luna-preview', 'anonymous')).toBe(true);
+  it('requires exact product model IDs for non-Business plans', () => {
+    expect(isModelAllowed('gpt-5.6-luna-preview', 'anonymous')).toBe(false);
+		expect(isModelAllowed('gpt-5.6-luna-preview', 'logged_in', undefined, 'basic')).toBe(false);
+		expect(isModelAllowed('auto-claude-opus-5', 'logged_in', undefined, 'free')).toBe(false);
     expect(isModelAllowed('haiku', 'anonymous')).toBe(false);
   });
 
   it('should be case-insensitive', () => {
-    expect(isModelAllowed('GPT-5.6-LUNA', 'anonymous')).toBe(true);
+    expect(isModelAllowed('GPT-5.6-LUNA', 'anonymous')).toBe(false);
+		expect(isModelAllowed('GPT-5.6-LUNA', 'logged_in', undefined, 'basic')).toBe(true);
     expect(isModelAllowed('CLAUDE-HAIKU-4-5', 'anonymous')).toBe(false);
   });
+
+	it('separates Free and Basic even though both use the logged_in rate tier', () => {
+		expect(isModelAllowed('auto', 'logged_in', undefined, 'free')).toBe(true);
+		expect(isModelAllowed('gpt-5.6-luna', 'logged_in', undefined, 'free')).toBe(false);
+		expect(isModelAllowed('gpt-5.6-luna', 'logged_in', undefined, 'basic')).toBe(true);
+		expect(isModelAllowed('claude-sonnet-5', 'logged_in', undefined, 'basic')).toBe(false);
+		expect(isModelAllowed('claude-fable-5', 'subscribed', undefined, 'business')).toBe(true);
+	});
 
   it('should deny completely unrelated models for non-subscribed', () => {
     expect(isModelAllowed('llama-3-70b', 'anonymous')).toBe(false);
@@ -123,14 +136,13 @@ describe('isModelAllowed', () => {
 		expect(isModelAllowed('gemini-3.1-flash-lite', 'anonymous')).toBe(false);
 	});
 
-  it('should deny gemini pro for logged_in and anonymous (Business-only now)', () => {
+  it('should deny Google models that are not in the current product catalog', () => {
     expect(isModelAllowed('gemini-3-pro', 'logged_in')).toBe(false);
     expect(isModelAllowed('gemini-3.1-pro', 'logged_in')).toBe(false);
     expect(isModelAllowed('gemini-3.1-pro-preview', 'logged_in')).toBe(false);
     expect(isModelAllowed('gemini-3-pro', 'anonymous')).toBe(false);
     expect(isModelAllowed('gemini-3.1-pro', 'anonymous')).toBe(false);
-    // but Business keeps them
-    expect(isModelAllowed('gemini-3.1-pro', 'subscribed')).toBe(true);
+    expect(isModelAllowed('gemini-3.1-pro', 'subscribed')).toBe(false);
   });
 });
 
@@ -149,18 +161,19 @@ describe('MODEL_GATING_ENABLED master kill-switch', () => {
     expect(isModelGatingEnabled({ MODEL_GATING_ENABLED: '' } as any)).toBe(true);
   });
 
-  it('when OFF, every model is allowed for every tier (emergency rollback)', () => {
+  it('when OFF, reviewed models are allowed but unpriced names remain blocked', () => {
     const off = mockEnv({ MODEL_GATING_ENABLED: 'false' });
     expect(isModelAllowed('claude-opus-4-8', 'logged_in', off)).toBe(true);
     expect(isModelAllowed('claude-sonnet-4-5', 'logged_in', off)).toBe(true);
     expect(isModelAllowed('gpt-5.5', 'anonymous', off)).toBe(true);
+		expect(isModelAllowed('future-unpriced-frontier', 'subscribed', off)).toBe(false);
   });
 
   it('when ON, normal tier gating still applies', () => {
     const on = mockEnv({ MODEL_GATING_ENABLED: 'true' });
     expect(isModelAllowed('claude-opus-4-8', 'logged_in', on)).toBe(false);
     expect(isModelAllowed('claude-haiku-4-5', 'logged_in', on)).toBe(false);
-    expect(isModelAllowed('claude-opus-4-8', 'subscribed', on)).toBe(true);
+    expect(isModelAllowed('claude-opus-5', 'subscribed', on)).toBe(true);
   });
 });
 
@@ -172,6 +185,7 @@ describe('getUsageStatus.upsell_banner', () => {
 
   it('false for Business (subscribed) regardless of env', async () => {
     expect((await getUsageStatus(mockEnv(), 'd', 'subscribed')).upsell_banner).toBe(false);
+		expect((await getUsageStatus(mockEnv(), 'd', 'subscribed', undefined, 'team')).upsell_banner).toBe(false);
   });
 
   it('false for everyone when the master kill-switch is off (no app release needed)', async () => {
@@ -187,7 +201,7 @@ describe('resolveModelGate — background downgrades, interactive rejects (the A
   it('allows a model the tier can use (regardless of background)', () => {
     expect(resolveModelGate('gpt-5.6-luna', 'logged_in', on, true)).toBe('allow');
     expect(resolveModelGate('auto', 'logged_in', on, true)).toBe('allow');
-    expect(resolveModelGate('claude-opus-4-8', 'subscribed', on, false)).toBe('allow');
+    expect(resolveModelGate('claude-opus-5', 'subscribed', on, false)).toBe('allow');
   });
 
   it('DOWNGRADES a disallowed model on background traffic — so pipes never break', () => {

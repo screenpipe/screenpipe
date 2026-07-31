@@ -45,6 +45,18 @@ export const FREE_PREVIEW_WATERFALL = [
 ];
 export const FREE_PREVIEW_MAX_UPSTREAM_ATTEMPTS = 2;
 
+const NON_FRONTIER_FALLBACK_MODELS = new Set([
+  'gpt-5.6-luna',
+  'gpt-5.4-mini',
+  'gpt-5.4-nano',
+  'gpt-5-mini',
+  'gpt-5-nano',
+]);
+
+export function efficientModelChain(chain: string[]): string[] {
+  return chain.filter((model) => NON_FRONTIER_FALLBACK_MODELS.has(model));
+}
+
 export function boundedModelChain(chain: string[], maxAttempts: number): string[] {
   return chain.slice(0, Math.max(0, Math.floor(maxAttempts)));
 }
@@ -57,6 +69,7 @@ function isGeminiModel(model: string): boolean {
 // Per-model fallback chains — when a current user-selected model fails with a
 // transient/upstream error, try a comparable model from another provider.
 export const MODEL_FALLBACKS: Record<string, string[]> = {
+  'claude-fable-5': ['claude-opus-5', 'claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-opus-5': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'gpt-5.6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-sonnet-5': ['gpt-5.4-mini'],
@@ -472,7 +485,7 @@ export async function handleChatCompletions(
   latency: 'interactive' | 'background' = 'interactive',
   deviceId: string = '',
   allowFrontierBackground: boolean = false,
-  options: { freePreview?: boolean } = {},
+  options: { freePreview?: boolean; efficientOnly?: boolean } = {},
 ): Promise<Response> {
   // A request with no messages at all can never complete: OpenAI would
   // answer the injected system hint below, and Anthropic 400s outright once
@@ -514,6 +527,7 @@ export async function handleChatCompletions(
   // interactive Gemini too, not just background — see isFlexEligible. tryModel
   // scopes it to Gemini attempts; a flex 429 cascades to a standard sibling.
   const freePreview = options.freePreview === true;
+  const efficientOnly = options.efficientOnly === true;
   // A flex rejection causes a same-model standard-tier retry inside tryModel.
   // Disable flex for the preview so its explicit upstream-attempt ceiling is
   // an actual provider-call ceiling, not merely a model-count ceiling.
@@ -529,12 +543,15 @@ export async function handleChatCompletions(
       : (hasImages(body)
         ? AUTO_WATERFALL_VISION
         : (useBackgroundChain ? AUTO_WATERFALL_BACKGROUND : AUTO_WATERFALL));
+    if (efficientOnly) {
+      chain = efficientModelChain(chain);
+    }
     // Difficulty router (interactive text only). A/B by device: arm 'on' keeps
     // trivial/normal requests on Luna and promotes hard requests to GPT-5.6 Sol;
     // arm 'off' is the control baseline (chain unchanged = today's behavior). We tag
     // router_tier on the response so the cost log can measure ON vs control.
     let routerTier: string | null = null;
-    if (!freePreview && !hasImages(body) && !useBackgroundChain) {
+    if (!freePreview && !efficientOnly && !hasImages(body) && !useBackgroundChain) {
       if (routerArm(deviceId, env) === 'on') {
         const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
         const tier = await routeTier(body.messages, env, { hasTools });
@@ -567,7 +584,9 @@ export async function handleChatCompletions(
   // the user's pick and fall through on transient failure.
   const fallbacks = MODEL_FALLBACKS[body.model];
   if (fallbacks?.length) {
-    const chain = [body.model, ...fallbacks];
+    const chain = efficientOnly
+      ? efficientModelChain([body.model, ...fallbacks])
+      : [body.model, ...fallbacks];
     const result = await runChain(chain, body, env, 'fallback', flexEligible);
     if ('response' in result) {
       return addCorsHeaders(addModelHeader(result.response, result.model));

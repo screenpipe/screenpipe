@@ -468,7 +468,7 @@ this FAQ is organized around the questions people ask support most often: what t
 <Expandable title="my pipe was working but stopped firing after a screenpipe update.">
   app updates can disconnect scheduled pipes, integration tokens, or pi-agent. check in this order:
 
-  1. **settings → pipes** → confirm the toggle is still on.
+  1. **Pipes → My Pipes** → confirm the pipe is still enabled.
   2. open the pipe and run it manually. if it fails, the logs show the actual error.
   3. for Telegram, Slack, Notion, or other integrations: reconnect the account in **settings → connections** — tokens can expire silently.
   4. confirm the local API is healthy: `curl http://localhost:3030/health`.
@@ -732,7 +732,7 @@ this FAQ is organized around the questions people ask support most often: what t
   almost always one of two things:
 
   - **local whisper transcription** is keeping the CPU/Neural Engine hot. switch to cloud transcription in settings → AI models.
-  - **a pipe is in a tight loop** or the embedded chrome timeline is open. open settings → pipes and disable any pipe you do not need; close the timeline tab.
+  - **a pipe is in a tight loop** or the embedded chrome timeline is open. open **Pipes → My Pipes** and disable any pipe you do not need; close the timeline tab.
 
   on Intel Macs, even with these tuned, fans run more than on Apple Silicon. consider cloud-only transcription on Intel.
 </Expandable>

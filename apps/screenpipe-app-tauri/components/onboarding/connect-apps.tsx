@@ -22,6 +22,7 @@ import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import {
   authorizeComposioToolkit,
@@ -629,6 +630,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           await openUrl(redirectUrl);
           const status = await waitForGmailConnection(composioToken);
           await registerComposioMcpServer(composioToken);
+          await foregroundAfterOAuth();
           notifyConnectionsUpdated();
           const account = status.gmail?.accounts?.[0];
           const accountName = account?.alias || account?.email;
