@@ -1853,6 +1853,22 @@ fn is_login_callback_scheme(scheme: &str) -> bool {
     scheme == deep_link_scheme() || scheme == "screenpipe"
 }
 
+#[cfg(not(target_os = "macos"))]
+fn reset_existing_login_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    login_url: tauri::Url,
+) -> Result<(), String> {
+    // A provider flow can leave this reusable webview on GitHub, Google, or
+    // even a failed/blank document. A later login click means "start over",
+    // so never surface whatever navigation state the previous attempt left.
+    window
+        .navigate(login_url)
+        .map_err(|e| format!("failed to reset login window: {e}"))?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// Open the screenpipe.com login page.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
 /// Windows/Linux: in-app WebView that intercepts the screenpipe:// redirect.
@@ -1910,24 +1926,28 @@ pub async fn open_login_window(
             "login-browser".to_string()
         };
 
+        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
+        let parsed_login_url = login_url
+            .parse()
+            .map_err(|e| format!("invalid login URL: {e}"))?;
+
         if fresh_session {
             if let Some(w) = app_handle.get_webview_window("login-browser") {
                 let _ = w.close();
             }
         } else if let Some(w) = app_handle.get_webview_window(&label) {
-            let _ = w.show();
-            let _ = w.set_focus();
+            info!("resetting existing login window");
+            reset_existing_login_window(&w, parsed_login_url)?;
             return Ok(());
         }
 
         let app_for_nav = app_handle.clone();
         let label_for_nav = label.clone();
 
-        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label.clone(),
-            WebviewUrl::External(login_url.parse().unwrap()),
+            WebviewUrl::External(parsed_login_url),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
@@ -1959,6 +1979,31 @@ pub async fn open_login_window(
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod login_window_tests {
+    use super::reset_existing_login_window;
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    #[test]
+    fn reused_login_window_returns_to_login_page() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let stale_url: tauri::Url = "https://github.com/settings/profile".parse().unwrap();
+        let login_url: tauri::Url = "https://screenpipe.com/login?return_scheme=screenpipe"
+            .parse()
+            .unwrap();
+        let window =
+            WebviewWindowBuilder::new(&app, "login-browser", WebviewUrl::External(stale_url))
+                .build()
+                .expect("login webview");
+
+        reset_existing_login_window(&window, login_url.clone()).unwrap();
+
+        assert_eq!(window.url().unwrap(), login_url);
     }
 }
 
