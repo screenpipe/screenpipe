@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   usageState: null as any,
   gateState: false,
   seenEligibility: undefined as boolean | undefined,
-  openUrl: vi.fn(),
+  openBusinessUpgradeSurface: vi.fn(),
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -37,12 +37,11 @@ vi.mock("@/lib/hooks/use-model-upsell-gating", () => ({
   },
 }));
 
-vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.openUrl }));
 vi.mock("@/lib/utils/tauri", () => ({
   commands: { openLoginWindow: vi.fn() },
 }));
-vi.mock("@/lib/web-url", () => ({
-  screenpipeWebUrl: (path: string) => `https://screenpipe.com${path}`,
+vi.mock("@/lib/upgrade-flow", () => ({
+  openBusinessUpgradeSurface: mocks.openBusinessUpgradeSurface,
 }));
 
 describe("UpgradeQuotaBanner", () => {
@@ -58,8 +57,8 @@ describe("UpgradeQuotaBanner", () => {
     };
     mocks.gateState = false;
     mocks.seenEligibility = undefined;
-    mocks.openUrl.mockReset();
-    vi.stubGlobal("fetch", vi.fn());
+    mocks.openBusinessUpgradeSurface.mockReset();
+    mocks.openBusinessUpgradeSurface.mockResolvedValue(undefined);
   });
 
   it("does not render while hydrated eligibility gates are unresolved or false", () => {
@@ -68,21 +67,15 @@ describe("UpgradeQuotaBanner", () => {
     expect(screen.queryByText(/out of premium AI/i)).toBeNull();
   });
 
-  it("renders for exhausted Basic/Lifetime eligibility and opens Business checkout", async () => {
+  it("renders for exhausted Basic/Lifetime eligibility and opens the native Business offer", async () => {
     mocks.gateState = true;
-    vi.mocked(fetch).mockResolvedValue({
-      json: async () => ({ url: "https://checkout.stripe.test/session" }),
-    } as Response);
     render(<UpgradeQuotaBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Go unlimited" }));
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-      "https://screenpipe.com/api/cloud-sync/checkout",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ Authorization: "Bearer basic.jwt" }),
-      }),
-    ));
-    expect(mocks.openUrl).toHaveBeenCalledWith("https://checkout.stripe.test/session");
+    fireEvent.click(screen.getByRole("button", { name: "View Business" }));
+    await waitFor(() =>
+      expect(mocks.openBusinessUpgradeSurface).toHaveBeenCalledWith(
+        "ai-quota-banner",
+      ),
+    );
   });
 });

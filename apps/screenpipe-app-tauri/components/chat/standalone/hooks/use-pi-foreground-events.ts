@@ -12,7 +12,16 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { extractInjectedUserText } from "@/lib/chat-utils";
 import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
-import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, parseRateLimitWaitSeconds, PI_MAX_RATE_LIMIT_RETRIES } from "@/lib/chat/quota-errors";
+import {
+  buildDailyLimitMessage,
+  buildHostedBusyFinalMessage,
+  buildHostedBusyMessage,
+  buildHostedBusyRetryMessage,
+  buildRateLimitMessage,
+  classifyQuotaError,
+  parseRateLimitWaitSeconds,
+  PI_MAX_RATE_LIMIT_RETRIES,
+} from "@/lib/chat/quota-errors";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
@@ -355,11 +364,30 @@ export function usePiForegroundEvents({
               prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
             );
           }
+        } else if (data.type === "auto_retry_start") {
+          // Pi retries transient provider failures inside the same turn. Keep
+          // the turn active so composer submits are routed to the Rust queue,
+          // and replace the raw 429 with progress the user can understand.
+          const attempt = typeof data.attempt === "number" ? data.attempt : 1;
+          const maxAttempts = typeof data.maxAttempts === "number" ? data.maxAttempts : 3;
+          const delayMs = typeof data.delayMs === "number" ? data.delayMs : 1_000;
+          const errorStr = stringValue(data.errorMessage);
+          if (classifyQuotaError(errorStr) === "hosted_busy" && piMessageIdRef.current) {
+            const msgId = piMessageIdRef.current;
+            setMessages((prev) =>
+              prev.map((m) => m.id === msgId
+                ? { ...m, content: buildHostedBusyRetryMessage(attempt, maxAttempts, delayMs) }
+                : m)
+            );
+          }
+          setIsLoading(true);
+          setIsStreaming(true);
+          emitSessionActivity({ status: "streaming" });
         } else if (data.type === "auto_retry_end" && data.success === false) {
           // Pi exhausted retries on a transient error (rate limit, overloaded, etc.)
           const errorStr = stringValue(data.finalError, "Request failed after retries");
           const quotaErrorType = classifyQuotaError(errorStr);
-          const logAutoRetryFailure = quotaErrorType === "daily" || quotaErrorType === "rate" || errorStr.includes("model_not_allowed")
+          const logAutoRetryFailure = quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate" || errorStr.includes("model_not_allowed")
             ? console.warn
             : console.error;
           logAutoRetryFailure("[Pi] Auto-retry failed:", errorStr);
@@ -367,7 +395,7 @@ export function usePiForegroundEvents({
           emitSessionActivity({ status: "error", lastError: errorStr });
 
           // Detect rate limit or daily limit from the error
-          if (quotaErrorType === "daily" || quotaErrorType === "rate") {
+          if (quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate") {
             if (quotaErrorType === "daily") {
               posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
             }
@@ -376,12 +404,13 @@ export function usePiForegroundEvents({
               const msgId = piMessageIdRef.current;
               const content = quotaErrorType === "daily"
                 ? buildDailyLimitMessage(errorStr)
-                : buildRateLimitMessage(errorStr);
+                : quotaErrorType === "hosted_busy"
+                  ? buildHostedBusyFinalMessage()
+                  : buildRateLimitMessage(errorStr);
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content } : m)
               );
             }
-            // Don't clear refs yet — agent_end will follow
           } else if (errorStr.includes("model_not_allowed")) {
             if (piMessageIdRef.current) {
               const msgId = piMessageIdRef.current;
@@ -400,6 +429,15 @@ export function usePiForegroundEvents({
               );
             }
           }
+          // `auto_retry_end(false)` is terminal. Normally the final agent_end
+          // already performed this cleanup; keep it idempotent for SDK versions
+          // that omit that final event.
+          piStreamingTextRef.current = "";
+          piMessageIdRef.current = null;
+          piContentBlocksRef.current = [];
+          piLastErrorRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
         } else if (data.type === "message_update" && data.assistantMessageEvent?.type === "error") {
           // Pi's LLM returned an error (e.g. rate limit, overloaded)
           const reason = stringValue(data.assistantMessageEvent.reason);
@@ -413,10 +451,14 @@ export function usePiForegroundEvents({
             piLastErrorRef.current = fullError;
 
             const quotaErrorType = classifyQuotaError(fullError);
-            if (quotaErrorType === "daily" || quotaErrorType === "rate") {
+            if (quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate") {
               if (quotaErrorType === "daily") {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(fullError) } : m)
+                );
+              } else if (quotaErrorType === "hosted_busy") {
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId ? { ...m, content: buildHostedBusyMessage() } : m)
                 );
               } else {
                 const content = buildRateLimitMessage(fullError);
@@ -616,7 +658,7 @@ export function usePiForegroundEvents({
           // LLM returned an error (credits_exhausted, rate limit, provider error, etc.)
           const errMsg = stringValue(data.message.errorMessage, stringValue(data.message.error, "Unknown error"));
           const quotaErrorType = classifyQuotaError(errMsg);
-          const logLlmError = quotaErrorType === "daily" || quotaErrorType === "rate" || errMsg.includes("model_not_allowed")
+          const logLlmError = quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate" || errMsg.includes("model_not_allowed")
             ? console.warn
             : console.error;
           logLlmError("[Pi] LLM error via", data.type, ":", errMsg);
@@ -640,6 +682,10 @@ export function usePiForegroundEvents({
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errMsg) } : m)
               );
+            } else if (quotaErrorType === "hosted_busy") {
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId ? { ...m, content: buildHostedBusyMessage() } : m)
+              );
             } else if (quotaErrorType === "rate") {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildRateLimitMessage(errMsg) } : m)
@@ -655,17 +701,21 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: `Error: ${errMsg}` } : m)
               );
             }
-            piStreamingTextRef.current = "";
-            piMessageIdRef.current = null;
-            piContentBlocksRef.current = [];
-            piLastErrorRef.current = null;
-            setIsLoading(false);
-            setIsStreaming(false);
+            // Do not clear the active turn here. Pi emits agent_end next, with
+            // `willRetry` telling us whether this is terminal. Clearing early
+            // made composer submissions bypass the queue during retry backoff.
           }
         } else if (data.type === "agent_end") {
           // When watching a pipe, agent_end fires before pipe_done — don't
           // clear pipe refs here, let pipe_done handle cleanup instead.
           const isPipeWatch = piMessageIdRef.current?.startsWith("pipe-");
+
+          if (!isPipeWatch && data.willRetry === true) {
+            setIsLoading(true);
+            setIsStreaming(true);
+            emitSessionActivity({ status: "streaming" });
+            return;
+          }
 
           // Always clear loading/streaming state on agent_end, even if piMessageIdRef is null
           // This fixes the "stuck loading" bug when the ref was cleared prematurely
@@ -699,6 +749,8 @@ export function usePiForegroundEvents({
                 content = buildInvalidatedAuthTokenMessage();
               } else if (quotaErrorType === "daily") {
                 content = buildDailyLimitMessage(errStr);
+              } else if (quotaErrorType === "hosted_busy") {
+                content = buildHostedBusyFinalMessage();
               } else if (quotaErrorType === "rate") {
                 content = buildRateLimitMessage(errStr);
               } else if (errStr.includes("model_not_allowed")) {
@@ -880,7 +932,7 @@ export function usePiForegroundEvents({
               // inject a stale prompt into the wrong place.
               if (!mountedRef.current) return;
               if (piSessionIdRef.current !== retrySession) return;
-              if (piMessageIdRef.current && piMessageIdRef.current !== retryTurnId) return;
+              if (piMessageIdRef.current !== retryTurnId) return;
               commands.piPrompt(retrySession, retryPrompt, null, null).catch(() => {});
             }, waitSecs * 1000);
             return;
@@ -889,10 +941,14 @@ export function usePiForegroundEvents({
             const msgId = piMessageIdRef.current;
 
             const quotaErrorType = classifyQuotaError(errorStr);
-            if (quotaErrorType === "daily" || quotaErrorType === "rate") {
+            if (quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate") {
               if (quotaErrorType === "daily") {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errorStr) } : m)
+                );
+              } else if (quotaErrorType === "hosted_busy") {
+                setMessages((prev) =>
+                  prev.map((m) => m.id === msgId ? { ...m, content: buildHostedBusyFinalMessage() } : m)
                 );
               } else {
                 const content = buildRateLimitMessage(errorStr);
@@ -917,7 +973,7 @@ export function usePiForegroundEvents({
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId ? {
                     ...m,
-                    content: "The AI was mid-response when your message arrived.",
+                    content: "The previous reply was still finishing, so this message was not sent. Retry it in a moment.",
                     retryPrompt: lastUserMessageRef.current || undefined,
                   } : m)
                 );
@@ -939,6 +995,7 @@ export function usePiForegroundEvents({
           }
           const quotaErrorType = classifyQuotaError(errorStr);
           const errorCategory = quotaErrorType === "daily" ? "daily_limit"
+            : quotaErrorType === "hosted_busy" ? "hosted_busy"
             : quotaErrorType === "rate" ? "rate_limit"
             : errorStr.includes("model_not_allowed") ? "model_not_allowed"
             : "other";

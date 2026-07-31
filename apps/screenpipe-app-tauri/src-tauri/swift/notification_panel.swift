@@ -4,6 +4,7 @@
 
 import Foundation
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - Data types bridged from Rust JSON
@@ -269,7 +270,10 @@ struct BrandIconTextButton: View {
                 Text(label)
                     .font(Brand.swiftUIMonoFont(size: 9, weight: .regular))
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
             .foregroundColor(isHovered ? .primary.opacity(0.75) : .primary.opacity(0.34))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
@@ -283,6 +287,148 @@ struct BrandIconTextButton: View {
 }
 
 @available(macOS 13.0, *)
+enum NotificationFeedbackRating: String {
+    case up
+    case down
+}
+
+@available(macOS 13.0, *)
+enum NotificationFeedbackSaveState {
+    case idle
+    case submitted
+}
+
+/// Controller-owned so the rating survives `updateContent()` calls while the
+/// native panel remeasures itself after progressive disclosure.
+@available(macOS 13.0, *)
+final class NotificationFeedbackModel: ObservableObject {
+    @Published var rating: NotificationFeedbackRating?
+    @Published var correction = ""
+    @Published var saveState: NotificationFeedbackSaveState = .idle
+
+    func reset() {
+        rating = nil
+        correction = ""
+        saveState = .idle
+    }
+}
+
+@available(macOS 13.0, *)
+private struct NativeNotificationFeedbackView: View {
+    @ObservedObject var model: NotificationFeedbackModel
+    let onSubmit: (String, String?) -> Void
+    let onLayoutChange: () -> Void
+
+    private var correctionReady: Bool {
+        !model.correction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("useful?")
+                    .font(Brand.swiftUIMonoFont(size: 9))
+                    .foregroundColor(.primary.opacity(0.34))
+                    .padding(.trailing, 2)
+
+                feedbackButton(systemName: "hand.thumbsup", rating: .up) {
+                    model.rating = .up
+                    model.correction = ""
+                    model.saveState = .submitted
+                    onSubmit(NotificationFeedbackRating.up.rawValue, nil)
+                    scheduleLayoutUpdate()
+                }
+
+                feedbackButton(systemName: "hand.thumbsdown", rating: .down) {
+                    model.rating = .down
+                    model.saveState = .idle
+                    scheduleLayoutUpdate()
+                }
+
+                if model.rating == .up && model.saveState == .submitted {
+                    Text("sent")
+                        .font(Brand.swiftUIMonoFont(size: 9))
+                        .foregroundColor(.primary.opacity(0.4))
+                }
+                Spacer(minLength: 0)
+            }
+
+            if model.rating == .down {
+                HStack(spacing: 6) {
+                    TextField("what should improve?", text: $model.correction)
+                        .textFieldStyle(.plain)
+                        .font(Brand.swiftUIMonoFont(size: 10))
+                        .padding(.horizontal, 8)
+                        .frame(height: 28)
+                        .background(Color(nsColor: .windowBackgroundColor).opacity(0.45))
+                        .overlay(Rectangle().stroke(Color.primary.opacity(0.16), lineWidth: 1))
+                        .onSubmit(sendCorrection)
+                        .onChange(of: model.correction) { value in
+                            if value.count > 500 {
+                                model.correction = String(value.prefix(500))
+                            }
+                            if model.saveState == .submitted {
+                                model.saveState = .idle
+                                scheduleLayoutUpdate()
+                            }
+                        }
+
+                    Button(action: sendCorrection) {
+                        Image(systemName: "paperplane")
+                            .font(.system(size: 11, weight: .regular))
+                            .frame(width: 28, height: 28)
+                            .foregroundColor(correctionReady ? Color(nsColor: .windowBackgroundColor) : .primary.opacity(0.22))
+                            .background(Rectangle().fill(correctionReady ? Color.primary.opacity(0.82) : Color.clear))
+                            .overlay(Rectangle().stroke(Color.primary.opacity(0.16), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!correctionReady)
+                    .help("send feedback")
+                    .accessibilityLabel("send feedback")
+                }
+
+                if model.saveState == .submitted {
+                    Text("feedback sent")
+                        .font(Brand.swiftUIMonoFont(size: 9))
+                        .foregroundColor(.primary.opacity(0.4))
+                }
+            }
+        }
+    }
+
+    private func feedbackButton(
+        systemName: String,
+        rating: NotificationFeedbackRating,
+        action: @escaping () -> Void
+    ) -> some View {
+        let selected = model.rating == rating
+        return Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .regular))
+                .frame(width: 24, height: 24)
+                .foregroundColor(selected ? Color(nsColor: .windowBackgroundColor) : .primary.opacity(0.42))
+                .background(Rectangle().fill(selected ? Color.primary.opacity(0.82) : Color.clear))
+                .overlay(Rectangle().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(rating == .up ? "useful notification" : "not useful notification")
+    }
+
+    private func sendCorrection() {
+        let correction = model.correction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !correction.isEmpty else { return }
+        model.correction = correction
+        model.saveState = .submitted
+        onSubmit(NotificationFeedbackRating.down.rawValue, correction)
+        scheduleLayoutUpdate()
+    }
+
+    private func scheduleLayoutUpdate() {
+        DispatchQueue.main.async(execute: onLayoutChange)
+    }
+}
+
+@available(macOS 13.0, *)
 struct NotificationContentView: View {
     let payload: NotificationPayload
     let progress: Double
@@ -290,6 +436,8 @@ struct NotificationContentView: View {
     let onDismiss: () -> Void
     let onAction: (NotificationAction) -> Void
     let onOpenSource: () -> Void
+    @ObservedObject var feedback: NotificationFeedbackModel
+    let onFeedbackLayoutChange: () -> Void
 
     @State private var closeHovered = false
     @State private var copied = false
@@ -409,6 +557,16 @@ struct NotificationContentView: View {
                 .zIndex(1)
             }
 
+            if payload.type == "pipe" || payload.pipe_name != nil || payload.source_session_id != nil {
+                NativeNotificationFeedbackView(
+                    model: feedback,
+                    onSubmit: submitFeedback,
+                    onLayoutChange: onFeedbackLayoutChange
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
+
             // Footer: compact notification actions
             HStack(spacing: 12) {
                 BrandIconTextButton(
@@ -491,7 +649,7 @@ struct NotificationContentView: View {
         }
     }
 
-    private func sendActionPayload(_ payload: [String: String]) {
+    private func sendActionPayload(_ payload: [String: Any]) {
         guard JSONSerialization.isValidJSONObject(payload),
               let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else {
@@ -505,6 +663,36 @@ struct NotificationContentView: View {
            let json = String(data: data, encoding: .utf8) {
             sendActionJson(json)
         }
+    }
+
+    private func submitFeedback(_ rating: String, _ correction: String?) {
+        var action: [String: Any] = [
+            "type": "feedback",
+            "target": [
+                "kind": "notification",
+                "id": payload.id,
+            ],
+            "rating": rating,
+            "snapshot": [
+                "title": payload.title,
+                "body": payload.body,
+            ],
+        ]
+        if let correction = correction {
+            action["comment"] = correction
+        }
+        if let pipeName = payload.pipe_name {
+            action["producer_ref"] = "pipe:\(pipeName)"
+        }
+        var context: [String: String] = [:]
+        if let sessionId = payload.source_session_id {
+            context["source_session_id"] = sessionId
+        }
+        if let messageId = payload.source_message_id {
+            context["source_message_id"] = messageId
+        }
+        action["context"] = context
+        sendActionPayload(action)
     }
 
     private func actionLabel(_ action: NotificationAction) -> String {
@@ -883,6 +1071,7 @@ class NotificationPanelController: NSObject {
     private var elapsedBeforePause: Double = 0
     private var resumedAt: Date = Date()
     private var isHovered: Bool = false
+    private let feedbackModel = NotificationFeedbackModel()
     /// Incremented per notification so rapid-fire notifications each restart the timer
     private var epoch: Int = 0
 
@@ -901,6 +1090,7 @@ class NotificationPanelController: NSObject {
             self.elapsedBeforePause = 0
             self.resumedAt = Date()
             self.isHovered = false
+            self.feedbackModel.reset()
             self.epoch += 1
 
             if panel == nil {
@@ -1022,7 +1212,9 @@ class NotificationPanelController: NSObject {
                 guard let self = self, let url = payload.source_url else { return }
                 self.hide()
                 self.sendActionPayload(["type": "source", "url": url])
-            }
+            },
+            feedback: feedbackModel,
+            onFeedbackLayoutChange: { [weak self] in self?.updateContent() }
         )
         // Fixed width, height determined by content
         let view = innerView

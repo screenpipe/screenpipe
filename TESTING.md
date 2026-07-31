@@ -134,6 +134,7 @@ commits: `28e5c247`
 - [ ] **bluetooth device connect/disconnect** — AirPods connect mid-recording. audio continues without gap.
 - [ ] **no audio device available** — unplug all audio. app continues (vision still works). log shows warning, not crash.
 - [ ] **audio stream timeout recovery** — if audio stream times out (30s no data), it should reconnect automatically.
+- [ ] **per-device audio-timeout recovery** — Force one microphone timeout, then prove that only later usable microphone audio clears `active_no_data`; healthy system output alone must not clear it. Repeat with system output timed out and microphone live. Verify a one-shot timeout expires before the native 90-tick alert, repeated zero-fill/receive timeouts keep the failure active, a recovered device clears immediately, an unresolved current device still raises `recording needs help`, and removing/deselecting the failed device stops it from degrading current capture. Run this after a packaged macOS display/wake transition.
 - [ ] **multiple audio devices simultaneously** — input (mic) + output (speakers) both recording. both show in device list.
 - [ ] **disable audio setting** — toggling "disable audio" stops all audio recording. re-enabling restarts it.
 - [ ] **Metal GPU for whisper** — transcription uses GPU acceleration on macOS (`f882caef`). verify with Activity Monitor GPU tab.

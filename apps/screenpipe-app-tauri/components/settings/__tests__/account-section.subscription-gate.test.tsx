@@ -36,12 +36,10 @@ const mocks = vi.hoisted(() => ({
   capture: vi.fn(),
   openUrl: vi.fn().mockResolvedValue(undefined),
   eventHandlers: new Map<string, (event: any) => unknown>(),
-  listen: vi.fn(
-    async (event: string, handler: (event: any) => unknown) => {
+  listen: vi.fn(async (event: string, handler: (event: any) => unknown) => {
       mocks.eventHandlers.set(event, handler);
       return () => mocks.eventHandlers.delete(event);
-    },
-  ),
+  }),
 }));
 
 // AccountSection reads everything through useSettings + the tauri `commands`
@@ -89,14 +87,40 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 // ReferralCard pulls its own data deps; it is irrelevant to the gate.
-vi.mock("@/components/settings/referral-card", () => ({ ReferralCard: () => null }));
+vi.mock("@/components/settings/referral-card", () => ({
+  ReferralCard: () => null,
+}));
+vi.mock("../business-upgrade-card", () => ({
+  BusinessUpgradeCard: ({
+    onContinue,
+  }: {
+    onContinue: (selection: any) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onContinue({
+          interval: "month",
+          offerVersion: "business-desktop-v1",
+          experimentKey: "desktop-business-upgrade-offer",
+          experimentVariant: "control",
+          source: "app-account-section",
+        })
+      }
+    >
+      upgrade to business
+    </button>
+  ),
+}));
 
 import { AccountSection } from "../account-section";
 
 const ACTIVE_CARD = "account-cloud-active-card";
 
 function loginStatus(): string {
-  return (screen.getByTestId("account-login-status").textContent || "").toLowerCase();
+  return (
+    screen.getByTestId("account-login-status").textContent || ""
+  ).toLowerCase();
 }
 
 describe("AccountSection subscription/login gating", () => {
@@ -166,10 +190,16 @@ describe("AccountSection subscription/login gating", () => {
     };
 
     render(<AccountSection />);
-    fireEvent.click(screen.getByRole("button", { name: /manage subscription/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /manage subscription/i }),
+    );
 
-    expect(screen.getByText("Business plan ends in 14 days")).toBeInTheDocument();
-    expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account/billing");
+    expect(
+      screen.getByText("Business plan ends in 14 days"),
+    ).toBeInTheDocument();
+    expect(mocks.openUrl).toHaveBeenCalledWith(
+      "https://screenpipe.com/account/billing",
+    );
   });
 
   it("hides a stale trial end date after the paid subscription starts", () => {
@@ -238,11 +268,10 @@ describe("AccountSection subscription/login gating", () => {
     );
 
     render(<AccountSection />);
-    const trayUpgrade = mocks.eventHandlers.get("tray-upgrade");
-    expect(trayUpgrade).toBeDefined();
-
     await act(async () => {
-      await trayUpgrade?.({ event: "tray-upgrade", id: 1, payload: null });
+      fireEvent.click(
+        screen.getByRole("button", { name: /upgrade to business/i }),
+      );
       await vi.advanceTimersByTimeAsync(2000);
     });
 
@@ -276,10 +305,13 @@ describe("AccountSection subscription/login gating", () => {
 
   it("sends existing Basic subscribers to billing even with a stale cloud flag", () => {
     const checkoutFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ url: "https://checkout.stripe.test/session" }), {
+      new Response(
+        JSON.stringify({ url: "https://checkout.stripe.test/session" }),
+        {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      }),
+        },
+      ),
     );
     vi.stubGlobal("fetch", checkoutFetch);
     mocks.state.user = {
@@ -292,13 +324,17 @@ describe("AccountSection subscription/login gating", () => {
     };
 
     render(<AccountSection />);
-    fireEvent.click(screen.getByRole("button", { name: /upgrade to business/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /upgrade to business/i }),
+    );
 
     expect(checkoutFetch).not.toHaveBeenCalledWith(
       expect.stringContaining("/api/subscription/checkout"),
       expect.anything(),
     );
-    expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account/billing");
+    expect(mocks.openUrl).toHaveBeenCalledWith(
+      "https://screenpipe.com/account/billing?target_plan=pro&interval=month",
+    );
   });
 
   it("offers Lifetime users Business and starts a separate subscription checkout", async () => {

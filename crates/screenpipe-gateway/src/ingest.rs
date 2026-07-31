@@ -33,6 +33,7 @@
 //! | ui        | `ui_events` | `ui_events.machine_id` |
 //! | snapshot  | JPEG on disk + `frames.snapshot_path` on the matching frame row | via frame row |
 //! | memory    | `memories` upsert on `sync_uuid` | `memories.sync_modified_by` |
+//! | feedback  | `feedback` upsert by device + feedback id | `feedback.device_id` |
 //!
 //! `gw://` (not the cloud sync's `cloud://`) is load-bearing: several
 //! search paths exclude `cloud://%` chunks, which would make gateway rows
@@ -46,8 +47,8 @@ use base64::Engine;
 use screenpipe_db::DatabaseManager;
 use screenpipe_sync::{BlobSource, ListRequest};
 use screenpipe_telemetry_wire::{
-    org_telemetry_prefix, parse_jsonl, parse_telemetry_key, AudioRow, FrameRow, MemoryRow,
-    SnapshotRow, TelemetryRecord, UiEventRow,
+    org_telemetry_prefix, parse_jsonl, parse_telemetry_key, AudioRow, FeedbackRow, FrameRow,
+    MemoryRow, SnapshotRow, TelemetryRecord, UiEventRow,
 };
 use tracing::{debug, info, warn};
 
@@ -427,6 +428,11 @@ impl Ingestor {
                 TelemetryRecord::Memory {
                     device_id, memory, ..
                 } => insert_memory(conn, device_id, memory).await?,
+                TelemetryRecord::Feedback {
+                    device_id,
+                    feedback,
+                    ..
+                } => insert_feedback(conn, device_id, feedback).await?,
             };
             if did_insert {
                 inserted += 1;
@@ -699,12 +705,66 @@ async fn insert_memory(
     Ok(result.rows_affected() > 0)
 }
 
+/// feedback → generic feedback table. A source feedback id is only unique on
+/// its originating device, so the gateway prefixes it before using it as the
+/// org-wide primary key. Re-ratings update in place by `updated_at`.
+async fn insert_feedback(
+    conn: &mut Conn,
+    device_id: &str,
+    feedback: &FeedbackRow,
+) -> Result<bool, GatewayError> {
+    let id = format!("{device_id}:feedback:{}", feedback.feedback_id);
+    let snapshot = feedback
+        .snapshot
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| GatewayError::DbWrite(error.to_string()))?;
+    let context = serde_json::to_string(&feedback.context)
+        .map_err(|error| GatewayError::DbWrite(error.to_string()))?;
+    let result = sqlx::query(
+        r#"INSERT INTO feedback
+           (id, target_kind, target_id, target_version, producer_ref, actor_id,
+            rating, comment, snapshot, context, device_id, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+           ON CONFLICT(id) DO UPDATE SET
+             target_kind = excluded.target_kind,
+             target_id = excluded.target_id,
+             target_version = excluded.target_version,
+             producer_ref = excluded.producer_ref,
+             actor_id = excluded.actor_id,
+             rating = excluded.rating,
+             comment = excluded.comment,
+             snapshot = excluded.snapshot,
+             context = excluded.context,
+             created_at = excluded.created_at,
+             updated_at = excluded.updated_at
+           WHERE excluded.updated_at > feedback.updated_at"#,
+    )
+    .bind(&id)
+    .bind(&feedback.target_kind)
+    .bind(&feedback.target_id)
+    .bind(feedback.target_version.as_deref().unwrap_or(""))
+    .bind(&feedback.producer_ref)
+    .bind(&feedback.actor_id)
+    .bind(&feedback.rating)
+    .bind(&feedback.comment)
+    .bind(snapshot)
+    .bind(context)
+    .bind(device_id)
+    .bind(&feedback.created_at)
+    .bind(&feedback.updated_at)
+    .execute(&mut **conn)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use object_store::memory::InMemory;
     use screenpipe_config::DbConfig;
-    use screenpipe_telemetry_wire::{build_jsonl, direct_batch_key};
+    use screenpipe_telemetry_wire::{build_feedback_jsonl, build_jsonl, direct_batch_key};
 
     use crate::source::S3BlobSource;
 
@@ -886,6 +946,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(audio.len(), 2, "gateway audio rows must not be hidden");
+    }
+
+    #[tokio::test]
+    async fn feedback_ingests_into_the_shared_feedback_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = test_db(&dir).await;
+        let src = Arc::new(S3BlobSource::from_store(Arc::new(InMemory::new()), None));
+        let body = build_feedback_jsonl(
+            "dev-a",
+            "alice-mbp",
+            &[FeedbackRow {
+                feedback_id: "feedback-1".to_string(),
+                target_kind: "notification".to_string(),
+                target_id: "daily-recap".to_string(),
+                target_version: None,
+                producer_ref: Some("pipe:daily-recap".to_string()),
+                actor_id: "local-user".to_string(),
+                rating: "down".to_string(),
+                comment: Some("include project names".to_string()),
+                snapshot: Some(serde_json::json!({"title": "today"})),
+                context: serde_json::json!({"session_id": "s-1"}),
+                created_at: "2026-07-30T10:00:00Z".to_string(),
+                updated_at: "2026-07-30T10:00:00Z".to_string(),
+            }],
+        );
+        src.put_for_tests(&direct_batch_key("lic-1", "dev-a", "feedback-batch"), body)
+            .await
+            .unwrap();
+        let ingestor = Ingestor::new(
+            src as Arc<dyn BlobSource>,
+            db.clone(),
+            "lic-1".to_string(),
+            dir.path().join("snapshots"),
+        )
+        .await
+        .unwrap();
+
+        let report = ingestor.run_once().await.unwrap();
+        assert_eq!(report.records_inserted, 1);
+        let records = db
+            .list_feedback(
+                Some("notification"),
+                None,
+                Some("pipe:daily-recap"),
+                Some("down"),
+                Some("project names"),
+                None,
+                false,
+                20,
+            )
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].device_id.as_deref(), Some("dev-a"));
     }
 
     #[tokio::test]

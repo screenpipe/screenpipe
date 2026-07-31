@@ -123,8 +123,7 @@ function newestUserMessageTimestamp(messages: Message[]): number | undefined {
 
 /** Module-scope guard for AI title generation — survives component remounts
  *  and is shared across all hook instances so two StandaloneChat mounts
- *  (chat window + home page) never both fire for the same conversation.
- *  Entries are removed on failure/null to allow retry. */
+ *  (chat window + home page) never both fire for the same conversation. */
 const aiTitleAttempted = new Set<string>();
 
 export function useChatConversations(opts: UseChatConversationsOpts) {
@@ -703,9 +702,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Only allow AI titles when the user manually renames (titleSource
     // would be "user" at that point, so this gate is a no-op for renames).
     const isPipeChat = existing?.kind === "pipe-run" || existing?.kind === "pipe-watch";
+    const turnIsActive = options.turnState
+      ? options.turnState.isLoading || options.turnState.isStreaming
+      : isLoading || isStreaming;
     if (
       autoTitleEnabled &&
       !isPipeChat &&
+      // Title generation uses a second hosted request. Starting it beside the
+      // first answer competes with the user's chat for the account-wide hosted
+      // request slot, so wait until that answer has actually settled.
+      !turnIsActive &&
       titleSource === "fallback" &&
       rawContent &&
       hasValidPreset &&
@@ -790,16 +796,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
               } catch {}
             }
           } else {
-            // AI returned null — clear streaming state, allow retry.
-            aiTitleAttempted.delete(convId);
+            // AI returned null — clear streaming state. Keep the once-per-chat
+            // guard so later autosaves do not repeatedly consume hosted slots.
             try {
               const { useChatStore } = await import("@/lib/stores/chat-store");
               useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });
             } catch {}
           }
         } catch (error) {
-          // Clear streamingTitle on error, allow retry.
-          aiTitleAttempted.delete(convId);
+          // Clear streamingTitle on error. Keep the once-per-chat guard so an
+          // unavailable title provider cannot retry on every autosave.
           try {
             const { useChatStore } = await import("@/lib/stores/chat-store");
             useChatStore.getState().actions.patch(convId, { streamingTitle: undefined });

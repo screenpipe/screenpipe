@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    core::{device::DeviceType, update_device_capture_time},
+    core::{device::DeviceType, get_device_capture_time_exact, update_device_capture_time},
     meeting_streaming::{MeetingAudioFrame, MeetingAudioTap},
     metrics::AudioPipelineMetrics,
     utils::audio::StreamResampler,
@@ -156,6 +156,12 @@ fn should_reconnect_after_silent_input(
     }
 
     zero_fill_reconnect_enabled_for_platform()
+}
+
+fn last_non_zero_seed_after_restart(device_name: &str, restarted_at: Instant) -> Option<Instant> {
+    get_device_capture_time_exact(device_name)
+        .filter(|captured_at| *captured_at > 0)
+        .map(|_| restarted_at)
 }
 
 fn meeting_frame_from_recorder_output(
@@ -430,7 +436,13 @@ pub async fn run_record_and_transcribe(
         let mut collected_audio = Vec::new();
         let mut segment_start_time = now_epoch_secs();
         let stream_start = Instant::now();
-        let mut last_non_zero_at: Option<Instant> = None;
+        // Preserve the fact that this device produced usable audio before a
+        // watchdog-driven rebuild. If the replacement stream only emits
+        // zero-fill, it must trip the watchdog again after 30s instead of
+        // silently clearing a persistent failure merely because the task was
+        // recreated. A device that has never produced usable audio retains the
+        // existing fail-open behavior for genuinely digital-silent hardware.
+        let mut last_non_zero_at = last_non_zero_seed_after_restart(&device_name, Instant::now());
         let mut sck_watchdog = crate::core::sck_output_watchdog::SckOutputWatchdog::default();
         let mut segment_count: u64 = 0;
 
@@ -593,7 +605,7 @@ async fn recv_audio_chunk(
                          (likely OS device hijack by another app), triggering reconnect",
                         device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
                     );
-                    metrics.record_stream_timeout();
+                    metrics.record_stream_timeout(device_name);
                     audio_stream.is_disconnected.store(true, Ordering::Relaxed);
                     return Err(anyhow!(StreamDeath::ZeroFill {
                         device: device_name.to_string(),
@@ -685,7 +697,7 @@ fn fail_stream_dead(
         "no audio received from {} for {}s - stream dead, triggering reconnect",
         device_name, AUDIO_RECEIVE_TIMEOUT_SECS
     );
-    metrics.record_stream_timeout();
+    metrics.record_stream_timeout(device_name);
     audio_stream.is_disconnected.store(true, Ordering::Relaxed);
     // Typed cause so the VPIO runtime-fallback policy can recognize this death
     // by `downcast_ref` rather than message text. Display is unchanged.
@@ -732,7 +744,7 @@ fn classify_output_recv_timeout(
                      re-anchoring via device_monitor",
                     device_name, healthy, current
                 );
-                metrics.record_stream_timeout();
+                metrics.record_stream_timeout(device_name);
                 audio_stream.is_disconnected.store(true, Ordering::Relaxed);
                 Err(anyhow!(
                     "SCK System Audio stream dead — display invalidation (#3901)"
@@ -922,6 +934,19 @@ mod tests {
             Duration::from_secs(STREAM_STARTUP_GRACE_SECS - 1),
             Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
         ));
+    }
+
+    #[test]
+    fn restarted_stream_keeps_prior_usable_audio_as_zero_fill_baseline() {
+        const DEVICE: &str = "restart-zero-fill-regression (input)";
+        let restarted_at = Instant::now();
+
+        assert_eq!(last_non_zero_seed_after_restart(DEVICE, restarted_at), None);
+        update_device_capture_time(DEVICE);
+        assert_eq!(
+            last_non_zero_seed_after_restart(DEVICE, restarted_at),
+            Some(restarted_at)
+        );
     }
 
     #[cfg(target_os = "windows")]

@@ -11071,6 +11071,7 @@ dependencies = [
  "base64 0.22.1",
  "block",
  "block2 0.6.2",
+ "bytes",
  "cbc 0.1.2",
  "cc",
  "chrono",

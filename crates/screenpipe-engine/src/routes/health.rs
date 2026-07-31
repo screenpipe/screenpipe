@@ -9,6 +9,7 @@ use chrono::{DateTime, TimeZone, Utc};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -119,7 +120,30 @@ const SILENT_AUDIO_RMS_THRESHOLD: f64 = 0.001;
 /// timeout while a stream is dead, so a window comfortably larger than one cycle
 /// keeps a genuinely dead stream flagged, while a stream that recovered (no new
 /// timeouts) clears back to "ok" instead of sticking forever on a stale count.
-const STREAM_TIMEOUT_RECENCY_SECS: u64 = 90;
+/// Keep this below the desktop's 90-tick incident debounce: a one-shot timeout
+/// from a successfully rebuilt but silent stream must expire before it can
+/// raise `recording needs help`. A genuinely dead stream re-fires its 8s/30s
+/// watchdog and refreshes this window.
+const STREAM_TIMEOUT_RECENCY_SECS: u64 = 60;
+
+/// A timeout remains actionable only while its device is still selected, the
+/// timeout is recent, and that same device has not produced usable audio after
+/// the timeout. Activity from another microphone or output cannot clear it.
+fn has_unrecovered_recent_stream_timeout(
+    per_device_timeout_at: &HashMap<String, u64>,
+    current_device_capture_at: &HashMap<String, u64>,
+    now_ts: u64,
+) -> bool {
+    per_device_timeout_at.iter().any(|(device, timeout_at)| {
+        let Some(capture_at) = current_device_capture_at.get(device) else {
+            // Removed/deselected devices are no longer part of current capture.
+            return false;
+        };
+        *timeout_at > 0
+            && now_ts.saturating_sub(*timeout_at) < STREAM_TIMEOUT_RECENCY_SECS
+            && *capture_at <= *timeout_at
+    })
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct MeetingsOnlyAudioIdleState {
@@ -143,9 +167,9 @@ fn meetings_only_audio_idle_state(
 }
 
 /// Classify the raw audio capture status from health signals. Pure so it can be
-/// unit-tested in isolation. `stream_timeout_recent` must reflect a *recent*
-/// stream timeout (see `STREAM_TIMEOUT_RECENCY_SECS`), NOT a cumulative count —
-/// passing "ever had a timeout" here is exactly the bug this extraction fixes.
+/// unit-tested in isolation. `stream_timeout_recent` must mean a recent timeout
+/// that the same current device has not recovered from, NOT a cumulative count
+/// or aggregate activity from some other stream.
 #[allow(clippy::too_many_arguments)]
 fn classify_audio_status(
     audio_disabled: bool,
@@ -180,9 +204,10 @@ fn classify_audio_status(
         "no_input_device"
     } else if audio_never_captured {
         "not_started"
-    } else if stream_timeout_recent && global_audio_active {
-        // Device active but the watchdog fired recently — hijack/dead-stream
-        // recovery in progress. Clears automatically once timeouts stop.
+    } else if stream_timeout_recent {
+        // The watchdog fired on a current device and that same device has not
+        // produced usable audio since. This remains a failure even if another
+        // microphone or system-output stream is healthy.
         "active_no_data"
     } else if global_audio_active {
         "ok"
@@ -256,7 +281,7 @@ fn capture_status(
             "warning",
             "audio capture has not produced data yet",
         )
-    } else if audio_status == "stale" || (audio_status == "active_no_data" && !audio_recent) {
+    } else if audio_status == "stale" || audio_status == "active_no_data" {
         (
             "audio_stalled",
             "warning",
@@ -748,6 +773,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         std::collections::HashSet::new()
     };
     let mut device_statuses = Vec::new();
+    let mut current_device_capture_at = HashMap::new();
     let mut global_audio_active = false;
     let mut most_recent_audio_timestamp = 0; // Track the most recent timestamp
 
@@ -755,6 +781,9 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     for device in &audio_devices {
         let device_name = device.to_string();
         let last_capture = screenpipe_audio::core::get_device_capture_time(&device_name);
+        let exact_last_capture =
+            screenpipe_audio::core::get_device_capture_time_exact(&device_name).unwrap_or(0);
+        current_device_capture_at.insert(device_name.clone(), exact_last_capture);
 
         // Update the most recent timestamp
         most_recent_audio_timestamp = most_recent_audio_timestamp.max(last_capture);
@@ -1047,16 +1076,15 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // watchdog reconnects after 30s of no real audio and keeps re-firing while
     // the stream stays dead.
     //
-    // Gate on the RECENCY of the last timeout, not the cumulative count. The old
-    // `stream_timeouts > 0` check pinned the status to "active_no_data" forever
-    // after a single historical timeout (a wake/display invalidation, a device
-    // switch, a transient glitch) — so a fully recovered mic with chunks flowing
-    // again still read as broken. A healthy-but-silent room never trips this:
-    // raw chunks keep arriving so the watchdog never fires; only a genuinely
-    // dead/hijacked stream keeps refreshing `last_stream_timeout_at`.
+    // Gate on a recent timeout that the SAME current device has not recovered
+    // from. The old global timestamp let a healthy output stream mask a dead
+    // mic, while the older cumulative counter pinned recovered devices forever.
     let now_ts = now.timestamp().max(0) as u64;
-    let stream_timeout_recent = audio_snap.last_stream_timeout_at > 0
-        && now_ts.saturating_sub(audio_snap.last_stream_timeout_at) < STREAM_TIMEOUT_RECENCY_SECS;
+    let stream_timeout_recent = has_unrecovered_recent_stream_timeout(
+        &state.audio_metrics.per_device_stream_timeouts_snapshot(),
+        &current_device_capture_at,
+        now_ts,
+    );
 
     // Only report the intentional pause after the manager has actually
     // released every stream. During the short teardown transition (or if a
@@ -1701,7 +1729,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_status_does_not_show_stalled_for_recovered_active_no_data() {
+    fn capture_status_does_not_let_other_fresh_audio_mask_active_no_data() {
         let state = capture_status(
             false,
             false,
@@ -1720,8 +1748,8 @@ mod tests {
             121,
         );
 
-        assert_eq!(state.status, "waiting_for_voice");
-        assert_eq!(state.severity, "waiting");
+        assert_eq!(state.status, "audio_stalled");
+        assert_eq!(state.severity, "warning");
     }
 
     #[test]
@@ -1746,6 +1774,16 @@ mod tests {
 
         assert_eq!(state.status, "audio_stalled");
         assert_eq!(state.severity, "warning");
+    }
+
+    #[test]
+    fn capture_status_recovers_after_raw_status_clears() {
+        let state = capture_status(
+            false, false, false, false, "ok", 1, 1, 0, 0, false, None, 0.0, 4, 120, 121,
+        );
+
+        assert_eq!(state.status, "waiting_for_voice");
+        assert_eq!(state.severity, "waiting");
     }
 
     #[test]
@@ -2047,10 +2085,141 @@ mod tests {
     }
 
     #[test]
+    fn timeout_recovery_is_correlated_to_the_same_current_device() {
+        let timeouts = HashMap::from([("mic".to_string(), 100)]);
+        let output_live_mic_dead =
+            HashMap::from([("mic".to_string(), 99), ("output".to_string(), 120)]);
+        assert!(has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &output_live_mic_dead,
+            120
+        ));
+
+        let output_live_mic_recovered =
+            HashMap::from([("mic".to_string(), 101), ("output".to_string(), 120)]);
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &output_live_mic_recovered,
+            120
+        ));
+
+        let output_timeouts = HashMap::from([("output".to_string(), 100)]);
+        let mic_live_output_dead =
+            HashMap::from([("mic".to_string(), 120), ("output".to_string(), 99)]);
+        assert!(has_unrecovered_recent_stream_timeout(
+            &output_timeouts,
+            &mic_live_output_dead,
+            120
+        ));
+    }
+
+    #[test]
+    fn timeout_recovery_boundaries_fail_closed_without_sticking_forever() {
+        let timeouts = HashMap::from([("mic".to_string(), 100)]);
+
+        for (capture_at, now_ts, expected) in [
+            (0, 100, true),
+            (99, 120, true),
+            (100, 120, true),
+            (101, 120, false),
+            (99, 159, true),
+            (99, 160, false),
+        ] {
+            let captures = HashMap::from([("mic".to_string(), capture_at)]);
+            assert_eq!(
+                has_unrecovered_recent_stream_timeout(&timeouts, &captures, now_ts),
+                expected,
+                "capture_at={capture_at}, now_ts={now_ts}"
+            );
+        }
+
+        assert!(has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &HashMap::from([("mic".to_string(), 0)]),
+            99
+        ));
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &HashMap::from([("output".to_string(), 120)]),
+            120
+        ));
+    }
+
+    #[test]
+    fn one_unrecovered_device_wins_over_other_recovered_devices() {
+        let timeouts = HashMap::from([("mic".to_string(), 100), ("output".to_string(), 110)]);
+        let captures = HashMap::from([("mic".to_string(), 101), ("output".to_string(), 109)]);
+        assert!(has_unrecovered_recent_stream_timeout(
+            &timeouts, &captures, 120
+        ));
+
+        let all_recovered = HashMap::from([("mic".to_string(), 101), ("output".to_string(), 111)]);
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &all_recovered,
+            120
+        ));
+    }
+
+    #[test]
+    fn a_repeated_timeout_refreshes_the_incident_window() {
+        let captures = HashMap::from([("mic".to_string(), 99)]);
+
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &HashMap::from([("mic".to_string(), 100)]),
+            &captures,
+            160
+        ));
+        assert!(has_unrecovered_recent_stream_timeout(
+            &HashMap::from([("mic".to_string(), 130)]),
+            &captures,
+            160
+        ));
+    }
+
+    #[test]
+    fn timeout_correlation_exhaustively_ignores_other_device_activity() {
+        let timeout_at = 100;
+        for failed_device in ["mic", "output"] {
+            let other_device = if failed_device == "mic" {
+                "output"
+            } else {
+                "mic"
+            };
+            for failed_device_present in [false, true] {
+                for own_capture_at in [99, 100, 101] {
+                    for other_capture_at in [0, 120] {
+                        for now_ts in [159, 160] {
+                            let timeouts = HashMap::from([(failed_device.to_string(), timeout_at)]);
+                            let mut captures =
+                                HashMap::from([(other_device.to_string(), other_capture_at)]);
+                            if failed_device_present {
+                                captures.insert(failed_device.to_string(), own_capture_at);
+                            }
+
+                            let expected = failed_device_present
+                                && own_capture_at <= timeout_at
+                                && now_ts - timeout_at < STREAM_TIMEOUT_RECENCY_SECS;
+                            assert_eq!(
+                                has_unrecovered_recent_stream_timeout(
+                                    &timeouts, &captures, now_ts
+                                ),
+                                expected,
+                                "failed={failed_device}, present={failed_device_present}, own={own_capture_at}, other={other_capture_at}, now={now_ts}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn audio_status_active_no_data_only_while_timeout_is_recent() {
         // Issue #3144: an active device whose zero-fill watchdog fired *recently*
         // is "active_no_data" (hijacked / dead stream, recovery in progress).
         assert_eq!(audio_status_for(true, true), "active_no_data");
+        assert_eq!(audio_status_for(true, false), "active_no_data");
     }
 
     #[test]

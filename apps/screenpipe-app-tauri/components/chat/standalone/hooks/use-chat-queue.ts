@@ -84,6 +84,15 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
     };
   }
 
+  function restoreQueuedPrompt(sessionId: string | null, prompt: PiQueuedPrompt) {
+    if (!sessionId) return;
+    setQueuedPromptsBySession((prev) => {
+      const existing = prev[sessionId] ?? [];
+      if (existing.some((queued) => queued.id === prompt.id)) return prev;
+      return { ...prev, [sessionId]: [...existing, prompt] };
+    });
+  }
+
   function takeQueuedDisplayById(sessionId: string | null, promptId: string): QueuedDisplayPayload | null {
     if (!sessionId) return null;
     const current = queuedDisplayBySessionRef.current[sessionId];
@@ -168,6 +177,7 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
     queuedScrollRef,
     queuedPrompts,
     restoreQueuedDisplay,
+    restoreQueuedPrompt,
     takeQueuedDisplayById,
     consumeQueuedDisplayForStartedMessage,
     getQueuedDisplayBySession,

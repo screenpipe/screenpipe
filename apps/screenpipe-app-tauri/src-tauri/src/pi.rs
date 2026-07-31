@@ -486,29 +486,31 @@ fn sync_queue_state_from_event(
 ) {
     let event_type = event.get("type").and_then(|value| value.as_str());
 
-    if event_type == Some("response") {
-        if let Some(request_id) = event.get("id").and_then(|id| id.as_str()) {
-            let rejected =
-                event.get("success").and_then(|success| success.as_bool()) == Some(false);
-            let error = rejected.then(|| {
-                event
-                    .get("error")
-                    .and_then(|error| error.as_str())
-                    .unwrap_or("Pi rejected the prompt before it started")
-                    .to_string()
-            });
-            queue_state.signal_rpc_response(request_id, error);
-        }
-    }
-
     match event_type {
         Some("agent_start") => {
             queue_state.mark_agent_active();
             queue_state.clear_steer_in_flight();
         }
         Some("agent_end") => {
-            queue_state.mark_agent_idle();
-            queue_state.signal_done_if_idle();
+            // Pi emits agent_end before entering provider retry backoff. The
+            // SDK's `willRetry` flag means this logical turn still owns the
+            // process; releasing the queue here sends the next prompt into a
+            // busy agent and causes the misleading "already processing" loop.
+            if event.get("willRetry").and_then(|value| value.as_bool()) == Some(true) {
+                queue_state.mark_agent_active();
+            } else {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
+        }
+        Some("auto_retry_start") => {
+            queue_state.mark_agent_active();
+        }
+        Some("auto_retry_end") => {
+            if event.get("success").and_then(|value| value.as_bool()) == Some(false) {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
         }
         Some("message_start") => {
             if queue_state.is_steer_in_flight() {
@@ -537,10 +539,21 @@ fn sync_queue_state_from_event(
                 _ => {}
             }
         }
-        Some("message_update") | Some("tool_execution_start") => {
+        Some("message_update") => {
+            // Text/thinking deltas reset the silence idle deadline.
+            queue_state.record_activity();
             for id in event_tool_call_ids(event) {
                 queue_state.mark_tool_active(id);
             }
+        }
+        Some("tool_execution_start") => {
+            for id in event_tool_call_ids(event) {
+                queue_state.mark_tool_active(id);
+            }
+        }
+        Some("tool_execution_progress") => {
+            // Tool progress resets the silence idle deadline.
+            queue_state.record_activity();
         }
         Some("tool_execution_end") => {
             for id in event_tool_call_ids(event) {
@@ -549,14 +562,22 @@ fn sync_queue_state_from_event(
             queue_state.signal_done_if_idle();
         }
         Some("response") => {
-            if !queue_state.has_active_turn_work() {
-                // Non-prompt commands do not emit agent_start/agent_end, so a
-                // successful response remains their completion fallback.
-                let queue_state = queue_state.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    queue_state.signal_done();
-                });
+            // Correlate lifecycle replies by request id, not a shared wakeup.
+            if let Some(id) = event.get("id").and_then(|id| id.as_str()) {
+                let success = event
+                    .get("success")
+                    .and_then(|success| success.as_bool())
+                    .unwrap_or(true);
+                let result = if success {
+                    Ok(())
+                } else {
+                    Err(event
+                        .get("error")
+                        .and_then(|error| error.as_str())
+                        .unwrap_or("Pi command failed")
+                        .to_string())
+                };
+                queue_state.signal_response(id, result);
             }
         }
         _ => {}
@@ -599,6 +620,10 @@ struct PiConversationLease {
 impl PiConversationLease {
     fn prepare_prompt(&self, message: String) -> String {
         prompt_for_pi_session(message, *self.state)
+    }
+
+    fn is_synced(&self) -> bool {
+        matches!(*self.state, PiConversationSyncState::Synced)
     }
 
     fn mark_synced(&mut self) {
@@ -2986,6 +3011,27 @@ pub async fn pi_queue_prompt(
         .await?;
     let state_for_watchdog = state.inner().clone();
     let sid_for_watchdog = sid.clone();
+    if conversation.is_synced() {
+        // Warm process: the history-wrapper decision is already settled, so
+        // holding the lease until this prompt starts would only serialize
+        // later sends behind the whole active turn (one visible queued card
+        // at a time, every other enqueue blocked). Release it now; the
+        // watchdog only needs the receiver for the failure log.
+        drop(conversation);
+        tokio::spawn(async move {
+            if let Err(error) = await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await
+            {
+                warn!(
+                    "queued Pi prompt failed before it started for session {}: {}",
+                    sid_for_watchdog, error
+                );
+            }
+        });
+        return Ok(queue_id);
+    }
+    // Cold process: an immediate follow-up must not decide its wrapper until
+    // this prompt is acknowledged (issue #3636), so the lease rides in the
+    // watchdog and is released by the acknowledgement.
     tokio::spawn(async move {
         match await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await {
             Ok(()) => conversation.mark_synced(),
@@ -4374,6 +4420,44 @@ mod tests {
             super::event_tool_call_ids(&tool_end),
             vec!["tool-1".to_string()]
         );
+    }
+
+    #[test]
+    fn queue_stays_busy_across_provider_retry_backoff() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        super::sync_queue_state_from_event(&state, &json!({ "type": "agent_start" }));
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": true }),
+        );
+        assert!(state.is_agent_active(), "retry backoff still owns the turn");
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({
+                "type": "auto_retry_start",
+                "attempt": 1,
+                "maxAttempts": 3,
+            }),
+        );
+        assert!(state.is_agent_active());
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": false }),
+        );
+        assert!(!state.is_agent_active(), "terminal agent_end releases the queue");
+    }
+
+    #[test]
+    fn exhausted_provider_retry_releases_queue() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        state.mark_agent_active();
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "auto_retry_end", "success": false }),
+        );
+        assert!(!state.is_agent_active());
     }
 
     #[test]

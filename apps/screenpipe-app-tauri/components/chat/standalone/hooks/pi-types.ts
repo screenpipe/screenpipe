@@ -129,6 +129,10 @@ type QueueActions = {
     promptId: string,
     payload: QueuedDisplayPayload | null,
   ) => void;
+  restoreQueuedPrompt: (
+    sessionId: string | null,
+    prompt: PiQueuedPrompt,
+  ) => void;
   takeQueuedDisplayById: (
     sessionId: string | null,
     promptId: string,
@@ -210,6 +214,7 @@ export type PiSendTransportOptions = {
   removeTurnIntent: TurnIntentActions["removeTurnIntent"];
   restartCurrentPiSession: PiStateActions["restartCurrentPiSession"];
   restoreQueuedDisplay: QueueActions["restoreQueuedDisplay"];
+  restoreQueuedPrompt: QueueActions["restoreQueuedPrompt"];
   saveConversation: SaveConversation;
   sendDispatchInFlightRef: PiTransportRefs["sendDispatchInFlightRef"];
   sendMessageRef: PiTransportRefs["sendMessageRef"];

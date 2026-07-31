@@ -7,6 +7,7 @@ import {
 	isTransient,
 	isUserInputTooLarge,
 	isGeoBlocked,
+	isProviderUsageCapped,
 	clientPayloadMessage,
 	MODEL_FALLBACKS,
 	TRANSIENT_STATUSES,
@@ -91,6 +92,22 @@ describe('chat handler — geo-block detection (SCREENPIPE-AI-PROXY-1C)', () => 
 		expect(isGeoBlocked(403, 'The caller does not have permission')).toBe(false);
 		expect(isGeoBlocked(401, 'Country, region, or territory not supported')).toBe(false);
 		expect(isGeoBlocked(401, 'Request not allowed')).toBe(false);
+	});
+});
+
+describe('chat handler — provider usage-cap classification (SCREENPIPE-AI-PROXY-30/-2P)', () => {
+	it('detects the Anthropic monthly spend-cap 400', () => {
+		expect(
+			isProviderUsageCapped(
+				400,
+				'400 {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-08-01 at 00:00 UTC."},"request_id":"req_011CdZwqaamihBfwacKwXY4a"}',
+			),
+		).toBe(true);
+	});
+
+	it('leaves other 400s and non-400 statuses unclassified', () => {
+		expect(isProviderUsageCapped(400, 'invalid tool schema')).toBe(false);
+		expect(isProviderUsageCapped(429, 'You have reached your specified API usage limits.')).toBe(false);
 	});
 });
 

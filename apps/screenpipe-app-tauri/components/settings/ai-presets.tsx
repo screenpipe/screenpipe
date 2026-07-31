@@ -30,7 +30,7 @@ import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
 } from "@/lib/utils/chat-test-body";
-import { screenpipeWebUrl } from "@/lib/web-url";
+import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
 import { ValidatedInput } from "../ui/validated-input";
@@ -1537,24 +1537,13 @@ const AISection = ({
                             value={model.id}
                             className={locked ? "opacity-60" : undefined}
                             onSelect={async () => {
-                              // Locked = above the user's plan. One click -> Business
-                              // checkout (or sign-in first) instead of selecting it.
+                              // Locked = above the user's plan. Review the
+                              // native Business offer instead of selecting it.
                               if (locked) {
-                                if (!settings.user?.token) {
-                                  await commands.openLoginWindow(null);
-                                } else {
-                                  try {
-                                    const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
-                                      method: "POST",
-                                      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.user.token}` },
-                                      body: JSON.stringify({ tier: "pro", billingPeriod: "monthly", userId: settings.user.id, email: settings.user.email }),
-                                    });
-                                    const data = await res.json();
-                                    if (data.url) await openUrl(data.url);
-                                  } catch (e) {
-                                    console.error("checkout failed:", e);
-                                  }
-                                }
+                                setIsModelPickerOpen(false);
+                                await openBusinessUpgradeSurface(
+                                  "locked-model-picker",
+                                );
                                 return;
                               }
                               updateSettingsPreset({ model: model.id });

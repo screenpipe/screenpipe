@@ -566,6 +566,48 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "get-feedback",
+    description:
+      "Search local user ratings and written comments attached to AI-produced notifications, chats, memories, blocks, artifacts, and other targets. " +
+      "Use before generating related work so you preserve what earned up ratings and correct what earned down ratings.",
+    annotations: { title: "Get AI Feedback", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          description: "Optional target kind, such as notification, chat, memory, block, artifact, or structured_output.",
+        },
+        target_id: {
+          type: "string",
+          description: "Optional exact target id.",
+        },
+        producer: {
+          type: "string",
+          description: "Optional producer reference, for example pipe:daily-recap. Pipe tokens are always restricted to themselves.",
+        },
+        rating: {
+          type: "string",
+          enum: ["up", "down"],
+          description: "Optional rating filter.",
+        },
+        q: {
+          type: "string",
+          description: "Optional text search across comments, snapshots, target ids, producers, and context.",
+        },
+        since: {
+          type: "string",
+          description: "Optional RFC3339 lower bound on updated_at.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum records (default 50, max 500).",
+          default: 50,
+        },
+      },
+    },
+  },
+  {
     name: "send-notification",
     description:
       "Send a notification to the screenpipe desktop UI. " +
@@ -943,7 +985,7 @@ const TEAM_TOOLS: Tool[] = [
     name: "team-records",
     description:
       "Chronological dump of the org's data for a time window — both raw " +
-      "telemetry (frame/audio) and the structured outputs of the enterprise-" +
+      "telemetry (frame/audio/feedback) and the structured outputs of the enterprise-" +
       "worker pipes (sop/skill/trajectory/memory/workflow). " +
       "Raw kinds return oldest → newest (vs team-search which is recency-ranked). " +
       "Synthesized kinds return one record per device's latest run by default " +
@@ -960,9 +1002,9 @@ const TEAM_TOOLS: Tool[] = [
         device_id: { type: "string", description: "Restrict to one device (optional). Raw kinds only." },
         kind: {
           type: "string",
-          enum: ["frame", "audio", "all", "sop", "skill", "trajectory", "memory", "workflow"],
+          enum: ["frame", "audio", "feedback", "all", "sop", "skill", "trajectory", "memory", "workflow"],
           description:
-            "What to return. Raw: frame|audio|all (telemetry). " +
+            "What to return. Raw: frame|audio|feedback|all (telemetry and human feedback). " +
             "Synthesized: sop|skill|trajectory|memory|workflow (pipe outputs). " +
             "Default: all.",
           default: "all",
@@ -1961,6 +2003,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const notifResult = await notifResponse.json();
         return {
           content: [{ type: "text", text: `Notification sent: ${notifResult.message}` }],
+        };
+      }
+
+      case "get-feedback": {
+        const params = new URLSearchParams();
+        if (typeof args.kind === "string" && args.kind) {
+          params.set("kind", args.kind);
+        }
+        if (typeof args.target_id === "string" && args.target_id) {
+          params.set("target_id", args.target_id);
+        }
+        if (typeof args.producer === "string" && args.producer) {
+          params.set("producer", args.producer);
+        }
+        if (typeof args.rating === "string" && args.rating) {
+          params.set("rating", args.rating);
+        }
+        if (typeof args.q === "string" && args.q) {
+          params.set("q", args.q);
+        }
+        if (typeof args.since === "string" && args.since) {
+          params.set("since", args.since);
+        }
+        if (args.limit !== undefined) {
+          params.set("limit", String(args.limit));
+        }
+        const response = await callAPI(`/feedback${params.size ? `?${params}` : ""}`);
+        const feedback = await response.json();
+        return {
+          content: [{ type: "text", text: JSON.stringify(feedback, null, 2) }],
         };
       }
 

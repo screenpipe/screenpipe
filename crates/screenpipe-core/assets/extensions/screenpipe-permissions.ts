@@ -40,6 +40,7 @@ const DEFAULT_ALLOWED_ENDPOINTS: string[] = [
   "GET /pipes/info",
   "GET /health",
   "GET /connections/*",
+  "GET /feedback",
 ];
 
 let PERMS: Permissions | null = null;

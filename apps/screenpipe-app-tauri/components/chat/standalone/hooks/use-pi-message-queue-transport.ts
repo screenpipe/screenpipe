@@ -29,6 +29,7 @@ export function createPiMessageQueueTransport(
     queuedPrompts,
     registerTurnIntent,
     restoreQueuedDisplay,
+    restoreQueuedPrompt,
     setInput,
     setPastedImages,
   } = context;
@@ -104,6 +105,11 @@ export function createPiMessageQueueTransport(
         ...(queuedAttachments ? { attachments: queuedAttachments } : {}),
         ...(displayLabel ? { displayContent: displayLabel } : {}),
         turnIntentId: queuedTurnIntentId,
+      });
+      restoreQueuedPrompt(piSessionIdRef.current, {
+        id: result.data,
+        preview: queuedPreviewForText(userMessage),
+        queuedAtMs: Date.now(),
       });
 
       posthog.capture("chat_message_enqueued", {

@@ -5,27 +5,24 @@
 
 import { useState } from "react";
 import { X, Zap } from "lucide-react";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
-import { useSettings } from "@/lib/hooks/use-settings";
 import { useUsageStatus, formatResetTime } from "@/lib/hooks/use-usage-status";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
-import { commands } from "@/lib/utils/tauri";
-import { screenpipeWebUrl } from "@/lib/web-url";
+import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 
 /**
  * At-the-cap upgrade prompt (the "intensity" lever). Appears in the composer
  * only when a non-Business user has spent their full daily premium-message
  * budget (`remaining <= 0`). Free models keep working, so this is a soft,
- * dismissible nudge — not a wall. One click opens Business checkout (or sign-in
- * for logged-out users). Hidden for Business (`subscribed`) and BYOK users
+ * dismissible nudge — not a wall. One click opens the native Business offer so
+ * price and billing cadence are reviewed before sign-in or checkout. Hidden for Business (`subscribed`) and BYOK users
  * (usage is null when the worker is bypassed).
  *
  * To reproduce the exhausted state on demand without burning real quota, see
  * the dev force-flag in use-usage-status.tsx.
  */
 export function UpgradeQuotaBanner() {
-  const { settings } = useSettings();
   const usage = useUsageStatus();
   const upsellEnabled = useModelUpsellGating(usage?.upgrade_eligible);
   const [dismissed, setDismissed] = useState(false);
@@ -40,34 +37,18 @@ export function UpgradeQuotaBanner() {
   if (usage.upsell_banner === false) return null;
   if (usage.remaining > 0) return null;
 
-  const signedIn = Boolean(settings.user?.token);
   const resets = formatResetTime(usage.resets_at);
 
   const onUpgrade = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      if (!signedIn) {
-        await commands.openLoginWindow(null);
-        return;
-      }
-      const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${settings.user!.token}`,
-        },
-        body: JSON.stringify({
-          tier: "pro",
-          billingPeriod: "monthly",
-          userId: settings.user!.id,
-          email: settings.user!.email,
-        }),
+      posthog.capture("desktop_upgrade_entry_clicked", {
+        source: "ai-quota-banner",
       });
-      const data = await res.json();
-      if (data.url) await openUrl(data.url);
+      await openBusinessUpgradeSurface("ai-quota-banner");
     } catch (e) {
-      console.error("checkout failed:", e);
+      console.error("failed to open Business upgrade:", e);
     } finally {
       setBusy(false);
     }
@@ -77,7 +58,9 @@ export function UpgradeQuotaBanner() {
     <div className="flex items-center gap-3 mt-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
       <Zap className="h-4 w-4 shrink-0 text-foreground/70" />
       <div className="flex-1 text-[12px] leading-snug">
-        <span className="font-medium">You're out of premium AI for today.</span>{" "}
+        <span className="font-medium">
+          You&apos;re out of premium AI for today.
+        </span>{" "}
         <span className="text-muted-foreground">
           Free models still work{resets ? ` · resets ${resets}` : ""}.
         </span>
@@ -88,7 +71,7 @@ export function UpgradeQuotaBanner() {
         onClick={onUpgrade}
         disabled={busy}
       >
-        {signedIn ? "Go unlimited" : "Sign in"}
+        View Business
       </Button>
       <button
         type="button"

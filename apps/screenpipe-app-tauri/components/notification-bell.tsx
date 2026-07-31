@@ -27,6 +27,7 @@ import { showChatWithPrefill } from "@/lib/chat-utils";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
+import { NotificationFeedback } from "@/components/notification-feedback";
 
 interface NotificationEntry {
   id: string;
@@ -556,6 +557,7 @@ export function NotificationInboxPanel({
                         ask ai
                       </button>
                     </div>
+                    <NotificationFeedback notification={entry} variant="inbox" />
                   </div>
                 )}
                 </div>

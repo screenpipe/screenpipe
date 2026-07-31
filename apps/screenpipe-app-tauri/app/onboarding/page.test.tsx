@@ -58,7 +58,12 @@ vi.mock("@/lib/hooks/use-settings", () => ({
   }),
 }));
 vi.mock("@/components/onboarding/login-gate", () => ({
-  default: () => <div>regular sign in</div>,
+  default: ({ handleNextSlide }: { handleNextSlide: () => void }) => (
+    <div>
+      regular sign in
+      <button onClick={handleNextSlide}>complete regular sign in</button>
+    </div>
+  ),
 }));
 vi.mock("@/components/enterprise-license-prompt", () => ({
   EnterpriseLicensePrompt: ({ onSignIn }: { onSignIn?: () => void }) => (
@@ -159,6 +164,29 @@ describe("enterprise onboarding authentication", () => {
       funnel_version: "onboarding_ui_v1",
       step: "started",
     });
+  });
+
+  it("leaves login completion analytics to the login gate", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    render(<OnboardingPage />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /complete regular sign in/i }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+    );
+    expect(
+      mocks.capture.mock.calls.filter(
+        ([event]) => event === "onboarding_login_completed",
+      ),
+    ).toHaveLength(0);
+    expect(
+      mocks.capture.mock.calls.filter(
+        ([event]) => event === "onboarding_step_reached",
+      ),
+    ).toHaveLength(1);
   });
 
   it("does not start the standard funnel for managed onboarding", () => {

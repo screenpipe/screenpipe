@@ -365,7 +365,24 @@ Action types: `link` (web URL), `deeplink` (`screenpipe://`), `pipe` (run an ins
 
 ---
 
-## 14. Other Endpoints
+## 14. AI Feedback — `GET /feedback`
+
+Read local human ratings and comments before regenerating recurring AI output. One target contract covers notifications, chats, memories, blocks, artifacts, and exact-version structured outputs. Pipe-scoped tokens only receive records attributed to that Pipe.
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/feedback?limit=20"
+
+# Optional filters
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/feedback?kind=notification&producer=pipe:day-recap&rating=down&q=project&limit=20"
+```
+
+Each record includes `target: { kind, id, version? }`, `rating`, optional `comment`, the bounded local snapshot that was rated, producer attribution, context, and timestamps. Preserve patterns that earned `up`; directly address `down` comments. Do not treat a rating as permission for an unrelated external action.
+
+---
+
+## 15. Other Endpoints
 
 ```bash
 curl http://localhost:3030/health        # health check

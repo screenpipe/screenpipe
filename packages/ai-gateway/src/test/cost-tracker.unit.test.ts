@@ -12,7 +12,30 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { getModelCost, getStreamModelCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+import { getCostReservationMicroUsd, getModelCost, getStreamModelCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+
+describe('getCostReservationMicroUsd', () => {
+	it('prices the default Sonnet hold as a worst-case cache write', () => {
+		expect(getCostReservationMicroUsd('claude-sonnet-5')).toBe(121_440);
+	});
+
+	it('scales with large request bodies and requested output', () => {
+		expect(getCostReservationMicroUsd('claude-sonnet-5', {
+			inputTokens: 200_000,
+			maxOutputTokens: 16_000,
+		})).toBe(990_000);
+	});
+
+	it('uses the expensive routed candidate for auto or unknown models', () => {
+		expect(getCostReservationMicroUsd('auto')).toBe(222_880);
+		expect(getCostReservationMicroUsd('future-priced-model')).toBe(222_880);
+	});
+
+	it('keeps cheap priced work bounded and zero-cost work free', () => {
+		expect(getCostReservationMicroUsd('gemma4-31b')).toBe(50_000);
+		expect(getCostReservationMicroUsd('glm-5')).toBe(0);
+	});
+});
 
 describe('getModelCost — cache-aware pricing', () => {
 	it('uses a conservative estimate when a cancelled stream has partial usage', () => {

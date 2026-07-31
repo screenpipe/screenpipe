@@ -25,7 +25,7 @@ export function FeedbackDialog() {
         <ShareLogsButton
           key={prefillText}
           prefillText={prefillText}
-          onComplete={closeFeedback}
+          onBackgroundStart={closeFeedback}
         />
       </DialogContent>
     </Dialog>

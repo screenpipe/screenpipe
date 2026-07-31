@@ -19,6 +19,8 @@ import {
 } from "@/components/markdown";
 import { timelineTimestampFromDeepLink } from "@/lib/timeline-deeplink";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
+import { isBusinessSubscriptionPurchaseDeepLink } from "@/lib/utils/purchase-deep-link";
+import posthog from "posthog-js";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
 const activeDeepLinks = new Set<string>();
@@ -51,7 +53,8 @@ export function DeeplinkHandler() {
   const { toast } = useToast();
   const { setShowChangelogDialog } = useChangelogDialog();
   const { open: openStatusDialog } = useStatusDialog();
-  const { loadUser, reloadStore } = useSettings();
+  const { settings, loadUser, reloadStore } = useSettings();
+  const userToken = settings.user?.token;
   const setPendingNavigation = useTimelineStore((s) => s.setPendingNavigation);
 
   useEffect(() => {
@@ -101,6 +104,36 @@ export function DeeplinkHandler() {
               description: msg || "unknown error",
             });
           }
+        }
+      }
+
+      // Hosted Stripe Checkout returns through the website, whose "return to
+      // screenpipe" button opens this link. Refresh the authenticated account
+      // against Stripe-backed entitlement immediately instead of relying only
+      // on AccountSection's background poll.
+      if (isBusinessSubscriptionPurchaseDeepLink(parsedUrl)) {
+        await commands.showWindowActivated({ Home: { page: "account" } });
+        posthog.capture("desktop_upgrade_returned_to_app");
+        if (userToken) {
+          try {
+            await loadUser(userToken, true);
+            toast({
+              title: "subscription active",
+              description: "Screenpipe Business is ready",
+            });
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            toast({
+              title: "couldn't refresh subscription",
+              description: msg || "try signing in again",
+              variant: "destructive",
+            });
+          }
+        } else {
+          toast({
+            title: "sign in to finish",
+            description: "open Account and sign in with the email used at checkout",
+          });
         }
       }
 
@@ -400,7 +433,15 @@ export function DeeplinkHandler() {
         unsubscribes.forEach((unsubscribe) => unsubscribe());
       });
     };
-  }, [toast, setShowChangelogDialog, openStatusDialog, loadUser, reloadStore, setPendingNavigation]);
+  }, [
+    toast,
+    setShowChangelogDialog,
+    openStatusDialog,
+    loadUser,
+    reloadStore,
+    setPendingNavigation,
+    userToken,
+  ]);
 
   return null; // This component doesn't render anything
 } 
