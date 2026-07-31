@@ -97,7 +97,10 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
             ),
           ),
         }));
-        return counts.cards >= 12 && counts.firstCardHighlighted;
+        // The client intentionally excludes the newest minute while FTS
+        // catches up, so the one-minute-old fixture can fall on either side
+        // of the rounded cutoff. The other 11 must always remain visible.
+        return counts.cards >= 11 && counts.firstCardHighlighted;
       },
       {
         timeout: t(20_000),
@@ -113,7 +116,7 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
         "[data-search-highlight]",
       ).length,
     }));
-    expect(prefixAudit.cardCount).toBeGreaterThanOrEqual(12);
+    expect(prefixAudit.cardCount).toBeGreaterThanOrEqual(11);
     expect(prefixAudit.highlightCount).toBeGreaterThan(0);
 
     const screenshot = await saveScreenshot(

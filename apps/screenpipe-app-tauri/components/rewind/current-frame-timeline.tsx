@@ -50,6 +50,32 @@ export function timelineSearchHighlightPositions(
 	return activeSearchMatch.text_positions;
 }
 
+export function selectTimelineDisplayDevice<
+	T extends { device_id: string; frame_id: string },
+>(
+	devices: readonly T[] | null | undefined,
+	selectedDeviceId: string | undefined,
+	searchHighlightActive: boolean,
+	highlightFrameId: number | null,
+): T | undefined {
+	if (!devices?.length) return undefined;
+
+	const explicitDeviceSelected =
+		Boolean(selectedDeviceId) && selectedDeviceId !== "all";
+	if (explicitDeviceSelected) {
+		return selectTimelineDevice(devices, selectedDeviceId);
+	}
+
+	if (searchHighlightActive && highlightFrameId !== null) {
+		const highlightedDevice = devices.find(
+			(candidate) => Number(candidate.frame_id) === highlightFrameId,
+		);
+		if (highlightedDevice) return highlightedDevice;
+	}
+
+	return devices[0];
+}
+
 interface CurrentFrameTimelineProps {
 	currentFrame: StreamTimeSeriesResponse;
 	onNavigate?: (direction: "prev" | "next") => void;
@@ -143,20 +169,39 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 	const videoRef = useRef<HTMLVideoElement>(null);
 
-	const device = selectTimelineDevice(currentFrame?.devices, selectedDeviceId);
+	const searchHighlightActive =
+		highlightTerms.length > 0 && !highlightDismissed;
+	const explicitDeviceSelected =
+		Boolean(selectedDeviceId) && selectedDeviceId !== "all";
+	const device = selectTimelineDisplayDevice(
+		currentFrame?.devices,
+		selectedDeviceId,
+		searchHighlightActive,
+		highlightFrameId,
+	);
+	const highlightedDeviceSelected =
+		!explicitDeviceSelected &&
+		searchHighlightActive &&
+		highlightFrameId !== null &&
+		Number(device?.frame_id) === highlightFrameId;
+	const restrictToDevice =
+		explicitDeviceSelected || highlightedDeviceSelected;
 	const displayFrame = useMemo<StreamTimeSeriesResponse>(() => {
-		if (!selectedDeviceId || selectedDeviceId === "all") return currentFrame;
+		if (!restrictToDevice) return currentFrame;
 		return { ...currentFrame, devices: device ? [device] : [] };
-	}, [currentFrame, device, selectedDeviceId]);
+	}, [currentFrame, device, restrictToDevice]);
 	const displayAdjacentFrames = useMemo(() => {
-		if (!adjacentFrames || !selectedDeviceId || selectedDeviceId === "all") {
+		if (!adjacentFrames || !restrictToDevice) {
 			return adjacentFrames;
 		}
 		return adjacentFrames.flatMap((frame) => {
-			const adjacentDevice = selectTimelineDevice(frame.devices, selectedDeviceId);
+			const adjacentDevice = selectTimelineDevice(
+				frame.devices,
+				device?.device_id,
+			);
 			return adjacentDevice ? [{ ...frame, devices: [adjacentDevice] }] : [];
 		});
-	}, [adjacentFrames, selectedDeviceId]);
+	}, [adjacentFrames, device?.device_id, restrictToDevice]);
 	const frameId = device?.frame_id;
 	const filePath = device?.metadata?.file_path?.trim() ?? "";
 	const frameText =
@@ -241,15 +286,14 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	const searchHighlightPositions = useMemo(() => {
 		return timelineSearchHighlightPositions(
 			textPositions,
-			highlightTerms.length > 0 && !highlightDismissed,
+			searchHighlightActive,
 			activeSearchMatch,
 			debouncedFrame?.frameId,
 		);
 	}, [
 		activeSearchMatch,
 		debouncedFrame?.frameId,
-		highlightDismissed,
-		highlightTerms.length,
+		searchHighlightActive,
 		textPositions,
 	]);
 

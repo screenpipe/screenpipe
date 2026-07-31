@@ -7,10 +7,18 @@ import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	CurrentFrameTimeline,
+	selectTimelineDisplayDevice,
 	timelineSearchHighlightPositions,
 } from "../current-frame-timeline";
+import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
 
-const { useFrameContextMock } = vi.hoisted(() => ({
+const { searchHighlightState, useFrameContextMock } = vi.hoisted(() => ({
+	searchHighlightState: {
+		highlightTerms: [] as string[],
+		highlightFrameId: null as number | null,
+		dismissed: false,
+		clear: vi.fn(),
+	},
 	useFrameContextMock: vi.fn(() => ({ context: null, isLoading: false })),
 }));
 
@@ -48,11 +56,7 @@ vi.mock("@/components/rewind/region-ocr-overlay", () => ({
 }));
 
 vi.mock("@/lib/hooks/use-search-highlight", () => ({
-	useSearchHighlight: () => ({
-		highlightTerms: [],
-		dismissed: false,
-		clear: vi.fn(),
-	}),
+	useSearchHighlight: () => searchHighlightState,
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -135,6 +139,11 @@ function frame(frameId: string, filePath: string) {
 describe("CurrentFrameTimeline hook order", () => {
 	beforeEach(() => {
 		useFrameContextMock.mockClear();
+		searchHighlightState.highlightTerms = [];
+		searchHighlightState.highlightFrameId = null;
+		searchHighlightState.dismissed = false;
+		searchHighlightState.clear.mockClear();
+		useKeywordSearchStore.setState({ searchResults: [] });
 	});
 
 	it("does not crash when rerendering from a normal frame to missing frame media states", () => {
@@ -170,9 +179,60 @@ describe("CurrentFrameTimeline hook order", () => {
 
 		expect(useFrameContextMock).toHaveBeenCalledWith(22);
 	});
+
+	it("uses the monitor containing an active search hit when all monitors are selected", () => {
+		const multiDeviceFrame = frame("11", "/tmp/monitor-1.mp4");
+		multiDeviceFrame.devices.push({
+			...multiDeviceFrame.devices[0],
+			device_id: "monitor_2",
+			frame_id: "22",
+			metadata: {
+				...multiDeviceFrame.devices[0].metadata,
+				file_path: "/tmp/monitor-2.mp4",
+			},
+		});
+		const searchMatch = {
+			frame_id: 22,
+			timestamp: multiDeviceFrame.timestamp,
+			text_positions: [{
+				text: "visible secondary-monitor match",
+				confidence: 0.98,
+				bounds: { left: 0.4, top: 0.3, width: 0.2, height: 0.04 },
+			}],
+			app_name: "Safari",
+			window_name: "secondary monitor result",
+			confidence: 0.98,
+			text: "secondarymonitorverify",
+			url: "",
+			text_source: "ocr" as const,
+		};
+		searchHighlightState.highlightTerms = ["secondarymonitorverify"];
+		searchHighlightState.highlightFrameId = 22;
+		useKeywordSearchStore.setState({ searchResults: [searchMatch] });
+
+		render(
+			<CurrentFrameTimeline
+				currentFrame={multiDeviceFrame as any}
+				selectedDeviceId="all"
+			/>,
+		);
+
+		expect(useFrameContextMock).toHaveBeenCalledWith(22);
+	});
 });
 
 describe("CurrentFrameTimeline verified search geometry", () => {
+	it("keeps an explicit monitor selection ahead of an active search hit", () => {
+		const devices = [
+			{ device_id: "monitor_1", frame_id: "11" },
+			{ device_id: "monitor_2", frame_id: "22" },
+		];
+
+		expect(
+			selectTimelineDisplayDevice(devices, "monitor_1", true, 22),
+		).toEqual(devices[0]);
+	});
+
 	it("uses the verified result boxes instead of unrelated frame text", () => {
 		const unrelated = [{
 			text: "hidden accessibility offset",
