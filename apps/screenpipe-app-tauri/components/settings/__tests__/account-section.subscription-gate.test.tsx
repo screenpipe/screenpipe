@@ -343,6 +343,38 @@ describe("AccountSection subscription/login gating", () => {
     );
   });
 
+  it("pitches premium AI models, not cloud transcription, to paid-plan holders", () => {
+    // Cloud transcription ships with every paid app entitlement (Basic and
+    // Lifetime included), so the Business upsell must not re-sell it to them.
+    mocks.state.user = {
+      id: "u1",
+      email: "lifetime@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: true,
+      app_entitled: true,
+      subscription_plan: "lifetime",
+      entitlement: {
+        active: true,
+        plan: "lifetime",
+        source: "lifetime",
+        status: "active",
+      },
+    };
+
+    render(<AccountSection />);
+
+    expect(screen.getByText(/premium AI models/i)).toBeInTheDocument();
+    expect(screen.queryByText(/cloud transcription/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the cloud transcription bullet for signed-out free users", () => {
+    mocks.state.user = { token: null, cloud_subscribed: false };
+
+    render(<AccountSection />);
+
+    expect(screen.getByText(/cloud transcription/i)).toBeInTheDocument();
+  });
+
   it("shows the login-first layout for a signed-out free user", () => {
     mocks.state.user = { token: null, cloud_subscribed: false };
 

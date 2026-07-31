@@ -761,9 +761,15 @@ export function AccountSection() {
                   <Shield className="h-3.5 w-3.5 shrink-0" />
                   encrypted cloud sync — 50GB, 3 devices
                 </div>
+                {/* Cloud transcription ships with every paid app entitlement
+                    (Basic/Lifetime included — see applyProCloudAudioDefaults),
+                    so it's only a Business delta for free accounts. Showing it
+                    to Lifetime holders reads as double-selling what they own. */}
                 <div className="flex items-center gap-2 text-foreground">
                   <Zap className="h-3.5 w-3.5 shrink-0" />
-                  cloud transcription — higher quality, saves 2-3GB RAM
+                  {hasNamedPlan
+                    ? "premium AI models — Claude Opus, Sonnet & more"
+                    : "cloud transcription — higher quality, saves 2-3GB RAM"}
                 </div>
                 <div className="flex items-center gap-2 text-foreground">
                   <Sparkles className="h-3.5 w-3.5 shrink-0" />
