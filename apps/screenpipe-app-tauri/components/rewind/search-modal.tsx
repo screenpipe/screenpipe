@@ -334,10 +334,12 @@ const FrameThumbnail = ({
   frameId,
   alt,
   onUnavailable,
+  exact = false,
 }: {
   frameId: number;
   alt: string;
   onUnavailable?: (frameId: number) => void;
+  exact?: boolean;
 }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -348,7 +350,9 @@ const FrameThumbnail = ({
   // host (localhost:3030) so the screenpipe_auth cookie isn't sent.
   const [retryNonce, setRetryNonce] = useState(0);
   const retryCount = useRef(0);
-  const sources = getFrameThumbnailSources(frameId, retryNonce);
+  const sources = getFrameThumbnailSources(frameId, retryNonce, {
+    fallback: !exact,
+  });
 
   // State resets on a new frameId via `key={frameId}` at each render site —
   // the initializers above already produce the correct fresh values, so no
@@ -2918,6 +2922,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                             frameId={result.frame_id}
                             alt={`${result.app_name} - ${result.window_name}`}
                             onUnavailable={removeSearchResult}
+                            exact
                           />
                           {queryTokens.length > 0 && (
                             <ThumbnailHighlightOverlay

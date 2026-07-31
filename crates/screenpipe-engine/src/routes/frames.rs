@@ -148,6 +148,11 @@ pub struct FrameThumbnailQuery {
     /// JPEG quality from 20 through 95.
     #[serde(default = "default_thumbnail_quality")]
     pub quality: u8,
+    /// Whether a missing/corrupt exact frame may return nearby pixels.
+    /// Timeline callers keep the historical default; truth-sensitive callers
+    /// such as search can opt out with `fallback=false`.
+    #[serde(default = "default_frame_fallback")]
+    pub fallback: bool,
 }
 
 #[derive(Debug, Deserialize, OaSchema)]
@@ -253,10 +258,19 @@ pub async fn get_frame_thumbnail(
     let result = timeout(Duration::from_secs(10), async {
         match thumbnail_for_candidate(&state, &primary, query.width, query.quality).await {
             Ok(result) => return Ok(result),
-            Err(error) => debug!(
-                "Thumbnail source failed for frame {} ({}), trying nearby frames",
-                frame_id, error
-            ),
+            Err(error) => {
+                if !query.fallback {
+                    debug!(
+                        "Exact thumbnail source failed for frame {} ({}), fallback disabled",
+                        frame_id, error
+                    );
+                    return Err(());
+                }
+                debug!(
+                    "Thumbnail source failed for frame {} ({}), trying nearby frames",
+                    frame_id, error
+                );
+            }
         }
 
         const SEARCH_LIMIT: i32 = 3;
@@ -300,7 +314,11 @@ pub async fn get_frame_thumbnail(
         Ok(Err(())) => Err((
             StatusCode::NOT_FOUND,
             JsonResponse(json!({
-                "error": "Frame thumbnail unavailable and no nearby frame available",
+                "error": if query.fallback {
+                    "Frame thumbnail unavailable and no nearby frame available"
+                } else {
+                    "Exact frame thumbnail unavailable"
+                },
                 "error_type": if primary.is_snapshot { "snapshot_missing" } else { "frame_unavailable" },
                 "frame_id": frame_id
             })),

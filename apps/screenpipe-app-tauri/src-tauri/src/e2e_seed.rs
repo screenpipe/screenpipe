@@ -17,8 +17,8 @@ use tracing::{info, warn};
 ///
 /// - 12 frames whose OCR text contains "vector" — enough that the results grid
 ///   is worth reflowing and the 60vh height cap is visible.
-/// - 1 frame for the highlight over-match bug: the token "cat" is a whole word
-///   here AND a substring of "concatenate", with known per-word bounding boxes.
+/// - 1 frame with searchable OCR but a missing snapshot, next to valid frames,
+///   so Search must reject nearby thumbnail fallback.
 ///
 /// `insert_snapshot_frame_with_ocr` writes `full_text` (FTS-indexed by the
 /// `frames_ai` trigger → searchable) and `text_json` (per-word boxes →
@@ -169,5 +169,42 @@ pub async fn seed_search_fixture(db: &DatabaseManager) {
         }
     }
 
-    info!("e2e search-fixture: seeded searchable frames (vector x12 + highlight + visibility x5)");
+    let missing_thumbnail_query = "exactthumbnailverify";
+    let missing_thumbnail_json = r#"[
+        {"text":"exactthumbnailverify","conf":"99","left":"0.15","top":"0.15","width":"0.25","height":"0.04"}
+    ]"#;
+    let missing_thumbnail_path = fixture_dir.join("screenpipe-e2e-missing-thumbnail.jpg");
+    let _ = std::fs::remove_file(&missing_thumbnail_path);
+    if let Err(error) = db
+        .insert_snapshot_frame_with_ocr(
+            "e2e-search",
+            now - Duration::minutes(90),
+            &missing_thumbnail_path.to_string_lossy(),
+            Some("e2e-missing-thumbnail"),
+            Some("exact thumbnail verification fixture"),
+            None,
+            None,
+            true,
+            None,
+            None,
+            Some("ocr"),
+            None,
+            None,
+            None,
+            Some((
+                missing_thumbnail_query,
+                missing_thumbnail_json,
+                "e2e",
+            )),
+            None,
+        )
+        .await
+    {
+        warn!("e2e search-fixture: failed to insert missing-thumbnail frame: {error}");
+    }
+
+    info!(
+        "e2e search-fixture: seeded searchable frames \
+         (vector x12 + highlight + visibility x5 + missing thumbnail)"
+    );
 }

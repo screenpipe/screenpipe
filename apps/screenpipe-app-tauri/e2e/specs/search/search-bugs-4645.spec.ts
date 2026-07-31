@@ -226,4 +226,47 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
       },
     );
   });
+
+  it("removes a search result when its exact thumbnail is unavailable", async () => {
+    await openSearch("exactthumbnailverify");
+
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => document.querySelectorAll("[data-index]").length,
+        )) === 1,
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "missing-thumbnail fixture did not reach the result grid",
+      },
+    );
+
+    expect(await browser.execute(() => document.body?.innerText ?? "")).toContain(
+      "e2e-missing-thumbnail",
+    );
+
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => document.querySelectorAll("[data-index]").length,
+        )) === 0,
+      {
+        timeout: t(15_000),
+        interval: 200,
+        timeoutMsg:
+          "missing exact thumbnail kept a result backed by nearby pixels",
+      },
+    );
+
+    const bodyText = await browser.execute(
+      () => document.body?.innerText ?? "",
+    );
+    expect(bodyText).not.toContain("e2e-missing-thumbnail");
+
+    const screenshot = await saveScreenshot(
+      "search-4645-exact-thumbnail-unavailable",
+    );
+    console.log("search exact-thumbnail screenshot:", screenshot);
+  });
 });

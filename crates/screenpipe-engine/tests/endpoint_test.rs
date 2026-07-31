@@ -162,6 +162,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn frame_thumbnail_endpoint_can_disable_nearby_fallback() {
+        let (app, db) = setup_test_app().await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing_path = temp_dir.path().join("missing.jpg");
+        let nearby_path = temp_dir.path().join("nearby.jpg");
+        RgbImage::from_pixel(640, 360, Rgb([20, 180, 80]))
+            .save(&nearby_path)
+            .unwrap();
+
+        db.insert_video_chunk("thumbnail-placeholder.mp4", "exact-thumbnail-device")
+            .await
+            .unwrap();
+        let missing_frame_id = db
+            .insert_frame(
+                "exact-thumbnail-device",
+                Some(Utc::now()),
+                None,
+                Some("MissingThumbnailFixture"),
+                Some("Missing Thumbnail Fixture"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+        let nearby_frame_id = db
+            .insert_frame(
+                "exact-thumbnail-device",
+                Some(Utc::now() + Duration::seconds(1)),
+                None,
+                Some("NearbyThumbnailFixture"),
+                Some("Nearby Thumbnail Fixture"),
+                true,
+                Some(1),
+            )
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE frames SET snapshot_path = ?1 WHERE id = ?2")
+            .bind(missing_path.to_string_lossy().to_string())
+            .bind(missing_frame_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE frames SET snapshot_path = ?1 WHERE id = ?2")
+            .bind(nearby_path.to_string_lossy().to_string())
+            .bind(nearby_frame_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let fallback_uri = format!("/frames/{missing_frame_id}/thumbnail?width=384&quality=75");
+        let fallback = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&fallback_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fallback.status(), StatusCode::OK);
+        let fallback_body = to_bytes(fallback.into_body(), usize::MAX).await.unwrap();
+        let fallback_image = image::load_from_memory(&fallback_body).unwrap();
+        assert_eq!(fallback_image.dimensions(), (384, 216));
+
+        let exact_uri =
+            format!("/frames/{missing_frame_id}/thumbnail?width=384&quality=75&fallback=false");
+        let exact = app
+            .oneshot(
+                Request::builder()
+                    .uri(&exact_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exact.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn frame_thumbnail_endpoint_caches_legacy_video_frame() {
         let (app, db) = setup_test_app().await;
         let temp_dir = tempfile::tempdir().unwrap();
