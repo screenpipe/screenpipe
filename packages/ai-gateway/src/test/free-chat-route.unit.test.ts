@@ -97,6 +97,38 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		['without credentials', {}],
+		['after an invalid bearer falls back to anonymous', { Authorization: 'Bearer invalid-canary' }],
+	])('returns the Free usage policy %s', async (
+		_label: string,
+		headers: Record<string, string>,
+	) => {
+		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+			headers,
+		}), env, ctx);
+		const body = await response.json() as {
+			tier: string;
+			cost_limit_reached: boolean;
+			hosted_ai: {
+				plan: string;
+				included_credits: number;
+				model_access: string[];
+			};
+		};
+
+		expect(response.status).toBe(200);
+		expect(body).toMatchObject({
+			tier: 'anonymous',
+			cost_limit_reached: false,
+			hosted_ai: {
+				plan: 'free',
+				included_credits: 10,
+			},
+		});
+		expect(body.hosted_ai.model_access).toContain('auto');
+	});
+
 	it('lets the trusted runner bearer reach hosted background inference without a human user id', async () => {
 		const response = await handleRequest(
 			request({

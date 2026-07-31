@@ -294,12 +294,20 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {
+			// Anonymous auth results deliberately carry an `unknown` account plan:
+			// there is no server-verified customer record. The usage endpoint still
+			// represents anonymous traffic as the Free product, so resolve that one
+			// safe fallback explicitly. Keep every authenticated unknown plan
+			// fail-closed instead of accidentally granting paid capacity.
+			const usageAccountPlan = authResult.tier === 'anonymous' && authResult.accountPlan === 'unknown'
+				? 'free'
+				: authResult.accountPlan;
 			const status = await getUsageStatus(
 				env,
 				authResult.deviceId,
 				usageTier,
 				authResult.userId,
-				authResult.accountPlan,
+				usageAccountPlan,
 			);
 			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
 			// are our internal margin and shouldn't leak to any client/user).
@@ -310,12 +318,12 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			let monthlyCap: number;
 			try {
 				maxCost = getPlanDailyCostCap(
-					authResult.accountPlan,
+					usageAccountPlan,
 					env,
 					authResult.hostedAiTrial === true,
 				);
 				monthlyCap = getPlanMonthlyCostCap(
-					authResult.accountPlan,
+					usageAccountPlan,
 					env,
 					authResult.hostedAiTrial === true,
 				);
@@ -339,7 +347,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				// Admission still fails closed. The status route stays available but
 				// marks usage unknown instead of pretending the customer spent zero.
 			}
-			const includedCredits = getHostedAiIncludedCredits(authResult.accountPlan);
+			const includedCredits = getHostedAiIncludedCredits(usageAccountPlan);
 			const usedCredits = monthlyCost === null ? null : Math.ceil(monthlyCost * 100);
 			const enriched = {
 				...status,
@@ -347,14 +355,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				upgrade_eligible: isHostedAiUpgradeEligible(authResult),
 				upsell_banner: status.upsell_banner === true && isHostedAiUpgradeEligible(authResult),
 				hosted_ai: {
-					plan: getHostedAiPlan(authResult.accountPlan) ?? 'unknown',
+					plan: getHostedAiPlan(usageAccountPlan) ?? 'unknown',
 					trial: authResult.hostedAiTrial === true,
 					included_credits: includedCredits,
 					used_credits: usedCredits,
 					remaining_credits: usedCredits === null
 						? null
 						: Math.max(0, includedCredits - usedCredits),
-					model_access: [...getHostedAiAllowedModels(authResult.accountPlan)],
+					model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
 					upgrade_url: isHostedAiUpgradeEligible(authResult)
 						? 'https://screenpi.pe/account/billing'
 						: null,
