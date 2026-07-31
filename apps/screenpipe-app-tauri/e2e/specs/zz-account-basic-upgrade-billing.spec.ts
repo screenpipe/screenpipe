@@ -251,7 +251,7 @@ async function loginStatusText(): Promise<string> {
 
 async function openAccountSettings(): Promise<void> {
   await browser.execute(() => {
-    window.location.href = "/settings?section=account";
+    window.location.href = "/settings";
   });
   await browser.waitUntil(
     async () => {
@@ -264,8 +264,17 @@ async function openAccountSettings(): Promise<void> {
     { timeout: t(10_000), interval: 250, timeoutMsg: "settings route did not load" },
   );
   await forEachWindow(() => patchBillingFlowMocks(FAKE_EMAIL));
-  await seedBasicAccountUser();
+
+  // Use the same navigation control as a user. Assigning a query string during
+  // a full WebView reload can race nuqs hydration and leave the default section
+  // selected even though the URL still says `section=account`.
+  const accountNav = await waitForTestId("settings-nav-account", 12_000);
+  await accountNav.scrollIntoView();
+  await accountNav.waitForClickable({ timeout: t(8_000) });
+  await accountNav.click();
   await waitForTestId("account-login-status", 12_000);
+
+  await seedBasicAccountUser();
 }
 
 describe("Basic subscriber upgrade uses billing, not fresh checkout", function () {
