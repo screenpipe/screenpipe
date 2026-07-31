@@ -173,6 +173,24 @@ pub(crate) fn finish_frontmost_app_focus_session(main_was_key: bool) {
     );
 }
 
+/// Release every retained overlay origin without activating another app.
+/// Used when the UI is being torn down and no individual overlay close path
+/// will run to finish its focus session.
+#[cfg(target_os = "macos")]
+pub(crate) fn clear_all_overlay_focus_sessions() {
+    clear_frontmost_app();
+    finish_focus_session(
+        &SEARCH_PREVIOUS_FRONTMOST_APP,
+        &SEARCH_FOCUS_SESSION_ACTIVE,
+        false,
+    );
+    finish_focus_session(
+        &CHAT_PREVIOUS_FRONTMOST_APP,
+        &CHAT_FOCUS_SESSION_ACTIVE,
+        false,
+    );
+}
+
 /// Save the current frontmost app before activating our overlay.
 #[cfg(target_os = "macos")]
 pub(crate) fn save_frontmost_app() {

@@ -2395,6 +2395,9 @@ pub fn reset_main_window(app_handle: tauri::AppHandle) {
                     panel.order_out(None);
                 }
             }
+            // Mode reset bypasses ShowRewindWindow::Main.close(). Release the
+            // guarded origin so the next show captures the then-current app.
+            crate::window::clear_frontmost_app();
         });
         crate::window::reset_to_regular_and_refresh_tray(&app_handle);
     }

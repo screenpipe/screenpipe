@@ -149,6 +149,9 @@ fn enter_on_main_thread(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
         crate::window::MAIN_PANEL_SHOWN.store(false, Ordering::SeqCst);
+        // Headless teardown destroys retained overlays without their normal
+        // close paths, so release every saved focus origin before destruction.
+        crate::window::clear_all_overlay_focus_sessions();
         crate::window::reset_to_regular_and_refresh_tray(app);
     }
 
