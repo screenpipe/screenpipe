@@ -195,6 +195,20 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
     expect(audit.bodyText).toContain("e2e-visible-a (1)");
     expect(audit.bodyText).toContain("e2e-visible-b (1)");
 
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () =>
+            document.querySelectorAll("[data-thumbnail-ready='true']")
+              .length,
+        )) === 2,
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "visible exact thumbnails did not become selectable",
+      },
+    );
+
     const screenshot = await saveScreenshot(
       "search-4645-visible-results-and-highlights",
     );
@@ -245,6 +259,17 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
     expect(await browser.execute(() => document.body?.innerText ?? "")).toContain(
       "e2e-missing-thumbnail",
     );
+
+    const pendingCard = await $("[data-index='0']");
+    expect(await pendingCard.getAttribute("data-thumbnail-ready")).toBe("false");
+    await pendingCard.click();
+    await browser.pause(250);
+    expect(await browser.execute(() => document.body?.innerText ?? "")).toContain(
+      "e2e-missing-thumbnail",
+    );
+    expect(await browser.execute(
+      () => document.querySelectorAll("[data-index]").length,
+    )).toBe(1);
 
     await browser.waitUntil(
       async () =>
