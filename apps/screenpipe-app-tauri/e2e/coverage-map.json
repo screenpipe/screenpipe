@@ -63,6 +63,12 @@
       "layers": ["settings"]
     },
     {
+      "id": "settings-permissions",
+      "label": "Permissions settings recovery UX",
+      "platforms": ["macos"],
+      "layers": ["settings"]
+    },
+    {
       "id": "notifications",
       "label": "Notification history and viewer paths",
       "platforms": ["windows", "macos", "linux"],
@@ -736,11 +742,11 @@
       "spec": "settings-sections.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "real-ui-e2e", "storage-privacy"],
-      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
+      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "settings-permissions", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard."
+      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
     },
     {
       "spec": "spotlight-exclusion.spec.ts",

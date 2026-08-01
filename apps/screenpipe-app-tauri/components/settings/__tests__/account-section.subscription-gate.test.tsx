@@ -170,7 +170,7 @@ describe("AccountSection subscription/login gating", () => {
     const card = screen.getByTestId(ACTIVE_CARD);
     expect(card).toBeInTheDocument();
     expect(within(card).getByText("active")).toBeInTheDocument();
-    expect(within(card).getByText("400 hosted AI credits / month")).toBeInTheDocument();
+    expect(within(card).getByText("400 AI credits / month")).toBeInTheDocument();
     expect(
       within(card).getByText(
         "frontier Claude + GPT models: Fable, Opus, Sonnet, latest GPT",
@@ -196,6 +196,7 @@ describe("AccountSection subscription/login gating", () => {
 
     render(<AccountSection />);
     const upgrade = screen.getByTestId("account-capacity-upgrade");
+    expect(within(upgrade).getByText("need more AI capacity?")).toBeInTheDocument();
     expect(within(upgrade).getByText(/higher query and request-rate limits/i)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("account-capacity-upgrade-button"));
 

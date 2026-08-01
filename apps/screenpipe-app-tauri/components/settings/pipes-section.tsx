@@ -123,7 +123,7 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import { loadConversationFile, saveConversationFile } from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
-import { PublishDialog } from "@/components/pipe-store";
+import { PipeStoreSubmissionDialog } from "@/components/pipe-store-submission";
 import {
   Dialog,
   DialogContent,
@@ -3529,14 +3529,9 @@ export function PipesSection() {
         />
       )}
 
-      <PublishDialog
+      <PipeStoreSubmissionDialog
         open={!!publishPipeName}
         onOpenChange={(v) => { if (!v) setPublishPipeName(null); }}
-        token={settings.user?.token}
-        onPublished={() => {
-          setPublishPipeName(null);
-          toast({ title: "pipe published to store" });
-        }}
         defaultPipe={publishPipeName || undefined}
       />
 

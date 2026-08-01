@@ -831,8 +831,11 @@ fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<(), String> {
         .as_object_mut()
         .map(|obj| obj.remove("screenpipe").is_some())
         .unwrap_or(false);
+    // Signed-out users keep their BYOK credentials — those need the tagged
+    // shape too, or pi 0.83 rejects them the same way.
+    let upgraded = screenpipe_core::agents::pi::upgrade_legacy_pi_credentials(&mut auth);
 
-    if !removed {
+    if !removed && !upgraded {
         return Ok(());
     }
 
@@ -1856,8 +1859,16 @@ async fn ensure_pi_config(
             json!({})
         };
 
+        // pi >=0.83 rejects any stored credential it cannot tag, with no
+        // fallback to models.json — a bare token string makes the whole
+        // provider resolve to "Provider is not configured: screenpipe".
+        screenpipe_core::agents::pi::upgrade_legacy_pi_credentials(&mut auth);
+
         if let Some(obj) = auth.as_object_mut() {
-            obj.insert("screenpipe".to_string(), json!(token));
+            obj.insert(
+                "screenpipe".to_string(),
+                screenpipe_core::agents::pi::api_key_credential(token),
+            );
         }
 
         let auth_str = serde_json::to_string_pretty(&auth)
@@ -5017,8 +5028,35 @@ printf '%s\n' '{"type":"agent_end"}'
         let auth: Value =
             serde_json::from_str(&std::fs::read_to_string(&auth_path).unwrap()).unwrap();
         assert!(auth.get("screenpipe").is_none());
-        assert_eq!(auth["openai"], json!("sk-keep"));
-        assert_eq!(auth["anthropic"]["apiKey"], json!("anthropic-keep"));
+        // Preserved, and upgraded to the tagged form pi >=0.83 accepts.
+        assert_eq!(auth["openai"], json!({"type": "api_key", "key": "sk-keep"}));
+        assert_eq!(
+            auth["anthropic"],
+            json!({"type": "api_key", "key": "anthropic-keep"})
+        );
+    }
+
+    /// The app has its own auth.json writer for the chat sidecar. It shipped a
+    /// bare token string, which pi 0.83 rejects outright — chat then fails with
+    /// "Provider is not configured: screenpipe" even though core was fixed.
+    #[test]
+    fn app_writer_emits_tagged_screenpipe_credential() {
+        let mut auth = json!({"screenpipe": "bare-jwt", "anthropic": {"apiKey": "sk-ant"}});
+
+        screenpipe_core::agents::pi::upgrade_legacy_pi_credentials(&mut auth);
+        auth.as_object_mut().unwrap().insert(
+            "screenpipe".to_string(),
+            screenpipe_core::agents::pi::api_key_credential("fresh-jwt"),
+        );
+
+        assert_eq!(
+            auth["screenpipe"],
+            json!({"type": "api_key", "key": "fresh-jwt"})
+        );
+        assert_eq!(
+            auth["anthropic"],
+            json!({"type": "api_key", "key": "sk-ant"})
+        );
     }
 
     #[test]

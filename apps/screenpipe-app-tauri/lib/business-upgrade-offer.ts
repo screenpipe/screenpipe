@@ -44,10 +44,10 @@ export const BUSINESS_PLAN_DESCRIPTION =
   "For power users and small teams who live across devices.";
 
 export const BUSINESS_PLAN_FEATURES = [
-  "400 hosted AI credits / month",
+  "400 AI credits / month",
   "frontier Claude + GPT models: Fable, Opus, Sonnet, latest GPT",
   "cloud sync across your devices",
-  "hosted automations on efficient models",
+  "automations on efficient models",
   "use your own provider key for unlimited provider usage",
   "team workspace: one bill, managed seats",
   "priority support",

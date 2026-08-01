@@ -241,7 +241,10 @@ async fn fetch_models_from_gateway(
     let body: serde_json::Value = resp.json().await.ok()?;
     let data = body.get("data")?.as_array()?;
 
-    let models = gateway_models_to_pi_models(data);
+    let Some(models) = selectable_gateway_models(data) else {
+        warn!("gateway /v1/models returned no selectable models");
+        return None;
+    };
 
     info!("fetched {} models from gateway", models.len());
     Some(json!(models))
@@ -282,6 +285,14 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
             })
         })
         .collect()
+}
+
+/// An HTTP-successful catalog can still be unusable after locked entries are
+/// removed. Treat that like an unavailable catalog so callers use the safe
+/// `auto` fallback instead of writing an empty Pi provider.
+fn selectable_gateway_models(data: &[serde_json::Value]) -> Option<Vec<serde_json::Value>> {
+    let models = gateway_models_to_pi_models(data);
+    (!models.is_empty()).then_some(models)
 }
 
 /// Minimal fallback when the gateway is unreachable.
@@ -2368,7 +2379,7 @@ fn seed_from_global(global: &Path, dest: &Path, data_dir: &Path) -> bool {
 }
 
 /// A pi credential in the tagged form pi >=0.83 requires.
-fn api_key_credential(key: &str) -> serde_json::Value {
+pub fn api_key_credential(key: &str) -> serde_json::Value {
     json!({ "type": "api_key", "key": key })
 }
 
@@ -2406,7 +2417,11 @@ fn upgrade_legacy_pi_credential(value: &serde_json::Value) -> Option<serde_json:
 
 /// Upgrade every legacy entry in an `auth.json` value. Returns whether
 /// anything changed.
-fn upgrade_legacy_pi_credentials(auth: &mut serde_json::Value) -> bool {
+///
+/// Public because the Tauri app has its own `auth.json` writer for the chat
+/// sidecar — both must emit the tagged shape or pi 0.83 rejects the whole
+/// provider.
+pub fn upgrade_legacy_pi_credentials(auth: &mut serde_json::Value) -> bool {
     let Some(obj) = auth.as_object_mut() else {
         return false;
     };
@@ -4096,6 +4111,37 @@ mod tests {
             fallback.pointer("/0/compat/sendSessionAffinityHeaders"),
             Some(&json!(true))
         );
+
+        assert!(selectable_gateway_models(&[json!({
+            "id": "gpt-5.6-terra",
+            "locked": true,
+        })])
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn all_locked_gateway_catalog_uses_auto_fallback() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{
+                    "id": "gpt-5.6-terra",
+                    "name": "GPT-5.6 Terra",
+                    "locked": true,
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let models = screenpipe_cloud_models(&server.uri(), None).await;
+        assert_eq!(models.as_array().map(Vec::len), Some(1));
+        assert_eq!(models.pointer("/0/id"), Some(&json!("auto")));
     }
 
     #[test]

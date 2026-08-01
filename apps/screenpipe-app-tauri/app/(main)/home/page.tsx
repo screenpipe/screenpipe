@@ -1188,6 +1188,10 @@ function HomeContent() {
 
               <UpdateBanner variant="sidebar" className="mb-2" />
 
+              {/* Remote surveys use this quiet, non-blocking slot when their
+                  signed payload selects surface=sidebar. */}
+              <div id="announcement-sidebar-slot" />
+
               {/* Bottom items */}
               <div className={cn("space-y-0.5 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
                 {/* Team link — hide invite promo in enterprise (unless team exists) */}
