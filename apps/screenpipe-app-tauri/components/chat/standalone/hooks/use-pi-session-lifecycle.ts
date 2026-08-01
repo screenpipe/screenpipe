@@ -17,6 +17,7 @@ type PiRunningConfig = {
   url: string;
   apiKey: string | null;
   maxTokens: number;
+  maxContextChars: number | null;
   systemPrompt: string | null;
   token: string | null;
 };
@@ -104,6 +105,7 @@ export function usePiSessionLifecycle({
           stillThere.url === prev.url &&
           stillThere.apiKey === prev.apiKey &&
           stillThere.maxTokens === prev.maxTokens &&
+          stillThere.maxContextChars === prev.maxContextChars &&
           stillThere.prompt === prev.prompt
           ? prev
           : stillThere;
@@ -113,21 +115,14 @@ export function usePiSessionLifecycle({
   }, [aiPresets, isSettingsLoaded, setActivePreset, shouldFreezePresetSelection]);
 
   const hasPresets = Boolean(aiPresets && aiPresets.length > 0);
-  // The built-in Claude ACP adapter is API-key-only and has no model field.
-  const hasValidModel = activePreset?.provider === "acp"
-    ? Boolean(activePreset.acpAgent?.id?.trim() && activePreset.apiKey?.trim())
-    : Boolean(activePreset?.model && activePreset.model.trim() !== "");
+  const hasValidModel = Boolean(activePreset?.model && activePreset.model.trim() !== "");
   const needsLogin = activePreset?.provider === "screenpipe-cloud" && !userToken;
   const canChat = hasPresets && hasValidModel && !piStarting;
 
   const disabledReason = (() => {
     if (!hasPresets) return "No AI presets configured";
     if (!activePreset) return "No preset selected";
-    if (!hasValidModel) {
-      return activePreset.provider === "acp"
-        ? `Anthropic API key required in "${activePreset.id}" preset`
-        : `No model selected in "${activePreset.id}" preset`;
-    }
+    if (!hasValidModel) return `No model selected in "${activePreset.id}" preset`;
     if (piStarting) return "Starting Pi agent...";
     return null;
   })();
@@ -142,23 +137,19 @@ export function usePiSessionLifecycle({
       connections: allConnectionItems,
     });
     const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}${appAwarenessCtx}`.trim() || null;
-    const isAcp = p.provider === "acp";
     return {
-      // The acp backend launches the chosen external adapter instead of the
-      // native Pi RPC agent; everything downstream reads the same event stream.
-      backend: isAcp ? "acp" : null,
-      acpAgent: isAcp ? (p.acpAgent ?? null) : null,
       provider: p.provider,
       url: p.url || "",
       model: p.model || "",
       apiKey: p.apiKey || null,
       maxTokens: p.maxTokens ?? 4096,
+      maxContextChars: p.maxContextChars ?? null,
       systemPrompt,
     };
   }, [
-    activePreset?.acpAgent,
     activePreset?.apiKey,
     activePreset?.maxTokens,
+    activePreset?.maxContextChars,
     activePreset?.model,
     activePreset?.prompt,
     activePreset?.provider,
@@ -175,6 +166,7 @@ export function usePiSessionLifecycle({
       url: providerConfig.url,
       apiKey: providerConfig.apiKey,
       maxTokens: providerConfig.maxTokens,
+      maxContextChars: providerConfig.maxContextChars ?? null,
       systemPrompt: providerConfig.systemPrompt,
       token: userToken ?? null,
     };
@@ -297,6 +289,7 @@ export function usePiSessionLifecycle({
       running.url !== providerConfig.url ||
       running.apiKey !== providerConfig.apiKey ||
       running.maxTokens !== providerConfig.maxTokens ||
+      running.maxContextChars !== (providerConfig.maxContextChars ?? null) ||
       running.systemPrompt !== providerConfig.systemPrompt ||
       running.token !== (userToken ?? null);
 

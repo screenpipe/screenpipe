@@ -3,7 +3,7 @@ members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.159"
+version = "2.5.160"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -117,7 +117,6 @@ raw-window-handle = "0.6"
 
 notify = "8.0.0"
 futures = "0.3.30"
-agent-client-protocol = "=1.2.0"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
@@ -144,6 +143,7 @@ screenpipe-vault = { path = "../../../crates/screenpipe-vault" }
 screenpipe-connect = { path = "../../../crates/screenpipe-connect", features = ["specta"] }
 screenpipe-secrets = { path = "../../../crates/screenpipe-secrets" }
 screenpipe-events = { path = "../../../crates/screenpipe-events" }
+sqlx = { version = "=0.9.0", default-features = false, features = ["sqlite", "runtime-tokio"], optional = true }
 eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52787c8435d734ed443e2d5641f45b0177cae", default-features = false, features = ["events"] }
 # Async PII reconciliation (issue #3185 / PR #3188). `onnx-coreml` is
 # the right execution-provider for Apple Silicon (image PII via
@@ -269,7 +269,7 @@ pulseaudio = ["screenpipe-audio/pulseaudio"]
 directml = ["screenpipe-engine/directml"]
 vulkan = ["screenpipe-audio/vulkan"]
 cargo-clippy = []
-e2e = ["tauri-plugin-webdriver"]
+e2e = ["tauri-plugin-webdriver", "dep:sqlx"]
 
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

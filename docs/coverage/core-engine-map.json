@@ -129,6 +129,7 @@
       "label": "Engine capture, frame linking, HD, and timeline cache",
       "crate": "screenpipe-engine",
       "files": [
+        "src/compaction_encoder.rs",
         "src/event_driven_capture.rs",
         "src/focus_aware_controller.rs",
         "src/frame_linker.rs",
@@ -143,6 +144,7 @@
         "src/visual_probe.rs",
         "src/semantic_worker.rs",
         "tests/audio_vision_integration_test.rs",
+        "tests/compaction_encoder_test.rs",
         "tests/first_frames_test.rs",
         "tests/frame_extraction_test.rs",
         "tests/frame_linker_actor_integration.rs",

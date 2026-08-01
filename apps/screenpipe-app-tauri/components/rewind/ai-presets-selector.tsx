@@ -875,21 +875,42 @@ export function AIProviderConfig({
         {showAdvanced && (
           <div className="space-y-1.5">
             {selectedProvider !== "screenpipe-cloud" && (
-            <div className="space-y-1">
-              <Label htmlFor="maxTokens" className="text-xs">max output tokens</Label>
-              <Input
-                id="maxTokens"
-                type="number"
-                min={256}
-                max={128000}
-                step={256}
-                value={(formData as any).maxTokens ?? 4096}
-                onChange={(e) =>
-                  setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 } as any)
-                }
-                className="h-6 text-[10px]"
-              />
-            </div>
+              <>
+                <div className="space-y-1">
+                  <Label htmlFor="maxContextTokens" className="text-xs">model context tokens</Label>
+                  <Input
+                    id="maxContextTokens"
+                    type="number"
+                    min={32768}
+                    max={500000}
+                    step={1024}
+                    value={Math.ceil((formData.maxContextChars || 512000) / 4)}
+                    onChange={(e) => {
+                      const tokens = parseInt(e.target.value) || 128000;
+                      setFormData({ ...formData, maxContextChars: tokens * 4 });
+                    }}
+                    className="h-6 text-[10px]"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    match your provider&apos;s context window (for example, Ollama num_ctx); Screenpipe agents need at least 32,768
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="maxTokens" className="text-xs">max output tokens</Label>
+                  <Input
+                    id="maxTokens"
+                    type="number"
+                    min={256}
+                    max={128000}
+                    step={256}
+                    value={(formData as any).maxTokens ?? 4096}
+                    onChange={(e) =>
+                      setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 } as any)
+                    }
+                    className="h-6 text-[10px]"
+                  />
+                </div>
+              </>
             )}
             <div className="space-y-1">
               <Label htmlFor="prompt" className="text-xs">prompt</Label>

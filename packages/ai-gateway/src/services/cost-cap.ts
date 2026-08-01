@@ -24,6 +24,7 @@ import {
 	getPlanDailyCostCap,
 	resolveHostedAiTextCostLimits,
 } from './hosted-ai-cost-controls';
+import { getHostedAiPlan } from './hosted-ai-policy';
 import { loadHostedAiReservationControls } from './hosted-ai-reservation-controls';
 
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
@@ -286,9 +287,9 @@ export async function reserveDailyCostCap(
 		const baselineKey = baselineEpoch
 			? `daily-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
 			: '__no_daily_cost_baseline__';
-		// Free/Basic Auto is constrained to the efficient waterfall. Reserving it
+		// Non-Business Auto is constrained to the efficient waterfall. Reserving it
 		// against Sol would reject legitimate requests before the provider runs.
-		const reservationModel = model === 'auto' && accountPlan !== 'business'
+		const reservationModel = model === 'auto' && getHostedAiPlan(accountPlan) !== 'business'
 			? 'gpt-5.6-luna'
 			: model;
 		const reservedMicroUsd = getCostReservationMicroUsd(reservationModel, shape);

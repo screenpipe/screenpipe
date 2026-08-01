@@ -31,7 +31,7 @@ use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error, info, warn};
 
-use crate::{Pipeline, Redactor};
+use crate::{DatabaseErrorHook, Pipeline, Redactor};
 
 pub use columns::{keys as column_keys, RedactColumns};
 pub use tables::{TargetTable, ALL_TARGET_TABLES};
@@ -121,6 +121,7 @@ pub struct Worker {
     cfg: WorkerConfig,
     status: Arc<Mutex<WorkerStatus>>,
     paused: Arc<std::sync::atomic::AtomicBool>,
+    database_error_hook: Option<DatabaseErrorHook>,
 }
 
 impl Worker {
@@ -131,7 +132,15 @@ impl Worker {
             cfg,
             status: Arc::new(Mutex::new(WorkerStatus::default())),
             paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            database_error_hook: None,
         }
+    }
+
+    /// Route typed SQLx failures to the database owner. Non-database errors
+    /// never invoke this hook.
+    pub fn with_database_error_hook(mut self, hook: DatabaseErrorHook) -> Self {
+        self.database_error_hook = Some(hook);
+        self
     }
 
     pub fn pause(&self) {
@@ -200,13 +209,18 @@ impl Worker {
         // recovered. Detect it so we log once and back off hard instead of
         // pinning a CPU core retrying every 2s (what users see as a sudden
         // screenpipe CPU spike).
-        fn is_db_corruption<E: std::fmt::Display + ?Sized>(e: &E) -> bool {
+        fn is_db_hard_fault<E: std::fmt::Display + ?Sized>(e: &E) -> bool {
             let msg = e.to_string().to_lowercase();
             msg.contains("malformed")             // database disk image is malformed
                 || msg.contains("disk image")
                 || msg.contains("(code: 11)")     // SQLITE_CORRUPT
                 || msg.contains("not a database") // SQLITE_NOTADB
                 || msg.contains("(code: 26)")
+                || msg.contains("disk i/o error") // SQLITE_IOERR
+                || msg.contains("(code: 10)")
+                || msg.contains("(code: 522)")    // SQLITE_IOERR_SHORT_READ
+                || msg.contains("disk is full")   // SQLITE_FULL
+                || msg.contains("(code: 13)")
         }
         let mut corruption_logged = false;
 
@@ -332,6 +346,7 @@ impl Worker {
                             let mut s = self.status.lock().await;
                             s.last_error = Some(e.to_string());
                         }
+                        crate::notify_database_error(self.database_error_hook.as_ref(), &e);
                         if is_missing_object(&e) {
                             // Non-transient and scoped to this one target: the
                             // table or a column it reads isn't in this schema
@@ -349,7 +364,7 @@ impl Worker {
                             disabled.push(*table);
                             continue;
                         }
-                        if is_db_corruption(&e) {
+                        if is_db_hard_fault(&e) {
                             // Non-transient: the DB is corrupt and every table
                             // shares it, so retrying now just spins a core.
                             // Log once, back off 5 min, and skip the rest of
@@ -358,7 +373,7 @@ impl Worker {
                                 error!(
                                     table = ?table,
                                     error = %e,
-                                    "database corruption detected — backing off reconciliation \
+                                    "database hard fault detected — backing off reconciliation \
                                      (retrying every 5 min); recover the DB to clear this"
                                 );
                                 corruption_logged = true;

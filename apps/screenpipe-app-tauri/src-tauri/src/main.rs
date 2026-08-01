@@ -82,7 +82,6 @@ mod engine_events;
 mod monitor_events;
 mod owned_browser_cookies;
 mod permissions;
-mod acp_runtime;
 mod pi;
 mod pi_command_queue;
 mod power_awake;
@@ -320,36 +319,6 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
-    // The ACP agent runs as a hidden mode of this same signed executable, so no
-    // second sidecar or hand-written protocol ships. These paths must exit
-    // before any Tauri, database, or recording setup.
-    if acp_runtime::is_process_guard_mode() {
-        let exit_code = match acp_runtime::run_process_guard() {
-            Ok(exit_code) => exit_code,
-            Err(error) => {
-                eprintln!("[acp-process-guard] {error}");
-                1
-            }
-        };
-        std::process::exit(exit_code);
-    }
-    if acp_runtime::is_runtime_mode() {
-        let exit_code = match acp_runtime::run_from_env().await {
-            Ok(()) => 0,
-            Err(error) => {
-                use std::io::Write as _;
-                let mut stdout = std::io::stdout().lock();
-                let _ = writeln!(
-                    stdout,
-                    "{}",
-                    serde_json::json!({ "type": "error", "message": error })
-                );
-                1
-            }
-        };
-        std::process::exit(exit_code);
-    }
-
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
 
@@ -1175,6 +1144,17 @@ async fn main() {
             if e2e_flags.iter().any(|f| f == "no-audio") {
                 store.recording.disable_audio = true;
                 info!("E2E seed: audio disabled");
+            }
+            if e2e_flags
+                .iter()
+                .any(|f| f == "recording-health-return-race")
+            {
+                store.show_restart_notifications = true;
+                store.extra.insert(
+                    "restartNotificationsDefaultedOff".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                info!("E2E seed: recording health alerts enabled for return-race regression");
             }
             if e2e_flags.iter().any(|f| f == "event-trigger-capture") {
                 store.recording.capture_on_keystroke = Some(true);

@@ -12,6 +12,7 @@ mod capture_exclusions;
 pub mod cli;
 pub mod cli_reminder;
 pub mod cloud_search;
+pub mod compaction_encoder;
 pub mod connections_api;
 pub mod core;
 pub mod crash_log;

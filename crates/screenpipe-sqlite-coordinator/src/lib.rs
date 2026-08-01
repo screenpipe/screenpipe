@@ -12,6 +12,10 @@ use tokio::sync::Semaphore;
 pub const FIRST_WAL_RESET_SAFE_SQLITE: i32 = 3_051_003;
 
 static SQLITE_WRITE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Semaphore>>>> = OnceLock::new();
+/// Process-lifetime path tombstones. These deliberately outlive individual
+/// DatabaseManager generations so an in-process respawn cannot reopen a path
+/// after SQLite reported IOERR, CORRUPT, FULL, or NOTADB.
+static SQLITE_HARD_FAULTS: OnceLock<Mutex<HashMap<PathBuf, i32>>> = OnceLock::new();
 static SQLITE_RUNTIME_CHECK: OnceLock<Result<SqliteRuntimeIdentity, String>> = OnceLock::new();
 
 #[derive(Debug)]
@@ -22,15 +26,79 @@ pub struct SqliteRuntimeIdentity {
 }
 
 fn lock_key(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| {
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(path)
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+
+    // The database may not exist when its write gate is first requested.
+    // Canonicalize the existing parent so aliases such as macOS `/var` and
+    // `/private/var` still map to one key before and after SQLite creates it.
+    if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
+        if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+            return canonical_parent.join(file_name);
         }
-    })
+    }
+
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+fn is_hard_sqlite_code(code: i32) -> bool {
+    // Extended result codes retain the primary result in the low byte.
+    // 522 is SQLITE_IOERR_SHORT_READ and therefore has primary code 10.
+    matches!(code & 0xff, 10 | 11 | 13 | 26)
+}
+
+/// Permanently quarantine one SQLite path for this process. Returns true only
+/// when this call records the first hard fault for the path.
+pub fn latch_sqlite_hard_fault(db_path: impl AsRef<Path>, code: i32) -> bool {
+    if !is_hard_sqlite_code(code) {
+        return false;
+    }
+
+    let key = lock_key(db_path.as_ref());
+    let inserted = {
+        let faults = SQLITE_HARD_FAULTS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut faults = faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if faults.contains_key(&key) {
+            false
+        } else {
+            faults.insert(key.clone(), code);
+            true
+        }
+    };
+
+    // Closing the shared semaphore stops every screenpipe-controlled writer
+    // and checkpoint owner, not just the manager that observed the error.
+    if let Some(lock) = SQLITE_WRITE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+        .and_then(Weak::upgrade)
+    {
+        lock.close();
+    }
+
+    inserted
+}
+
+/// Return the first hard SQLite code recorded for this path in this process.
+pub fn registered_sqlite_hard_fault(db_path: impl AsRef<Path>) -> Option<i32> {
+    let key = lock_key(db_path.as_ref());
+    SQLITE_HARD_FAULTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+        .copied()
 }
 
 fn sqlite_runtime_string(value: *const std::os::raw::c_char) -> String {
@@ -95,10 +163,16 @@ pub fn sqlite_write_lock(db_path: impl AsRef<Path>) -> Arc<Semaphore> {
 
     locks.retain(|_, lock| lock.strong_count() > 0);
     if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        if registered_sqlite_hard_fault(&key).is_some() {
+            lock.close();
+        }
         return lock;
     }
 
     let lock = Arc::new(Semaphore::new(1));
+    if registered_sqlite_hard_fault(&key).is_some() {
+        lock.close();
+    }
     locks.insert(key, Arc::downgrade(&lock));
     lock
 }
@@ -117,6 +191,29 @@ mod tests {
         let alias = sqlite_write_lock(db.parent().unwrap().join(".").join("db.sqlite"));
 
         assert!(Arc::ptr_eq(&canonical, &alias));
+    }
+
+    #[test]
+    fn hard_fault_survives_writer_generation_replacement() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("db.sqlite");
+        std::fs::File::create(&db).expect("create db placeholder");
+
+        let first = sqlite_write_lock(&db);
+        assert!(!first.is_closed());
+        assert!(latch_sqlite_hard_fault(&db, 522));
+        assert!(first.is_closed());
+        assert_eq!(registered_sqlite_hard_fault(&db), Some(522));
+
+        drop(first);
+        let replacement = sqlite_write_lock(dir.path().join(".").join("db.sqlite"));
+        assert!(replacement.is_closed());
+        assert!(!latch_sqlite_hard_fault(&db, 11));
+        assert_eq!(
+            registered_sqlite_hard_fault(&db),
+            Some(522),
+            "the first hard fault remains the diagnostic source of truth"
+        );
     }
 
     #[test]

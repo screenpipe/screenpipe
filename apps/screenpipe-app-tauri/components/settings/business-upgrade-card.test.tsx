@@ -122,6 +122,53 @@ describe("BusinessUpgradeCard", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps plan claims aligned with the pricing table when remote copy is stale", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ...DEFAULT_BUSINESS_UPGRADE_OFFER,
+            copy: {
+              ...DEFAULT_BUSINESS_UPGRADE_OFFER.copy,
+              description: "cloud transcription and 100x more queries",
+              features: [
+                "cloud transcription — higher quality",
+                "100x more AI queries",
+              ],
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    render(
+      <BusinessUpgradeCard
+        signedIn
+        existingSubscription={false}
+        source="account"
+        busy={false}
+        onContinue={mocks.onContinue}
+      />,
+    );
+
+    expect(
+      await screen.findByText("400 hosted AI credits / month"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "frontier Claude + GPT models: Fable, Opus, Sonnet, latest GPT",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("cloud sync across your devices")).toBeInTheDocument();
+    expect(screen.queryByText(/cloud transcription/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/100x more AI queries/i)).not.toBeInTheDocument();
+  });
+
   it("does not open checkout for an unavailable interval", async () => {
     const offer = {
       ...DEFAULT_BUSINESS_UPGRADE_OFFER,

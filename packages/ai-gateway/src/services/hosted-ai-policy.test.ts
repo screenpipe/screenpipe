@@ -6,6 +6,8 @@ import { describe, expect, it } from 'bun:test';
 import type { AccountPlan, AuthResult, UserTier } from '../types';
 import {
 	getHostedAiAllowedModels,
+	getHostedAiIncludedCredits,
+	getHostedAiIncludedProviderCostUsd,
 	getHostedAiPlan,
 	hasPaidHostedAiPlan,
 	isHostedAiModelAllowed,
@@ -57,5 +59,18 @@ describe('hosted AI model products', () => {
 			expect(isHostedAiModelAllowed('gpt-5.6-sol', plan)).toBe(true);
 			expect(isHostedAiModelAllowed('future-unpriced-frontier', plan)).toBe(false);
 		}
+	});
+
+	it.each([
+		['free', 10, 0.1],
+		['basic', 150, 1.5],
+		['business', 400, 4],
+		['business_max', 400, 4],
+		['business_ultra', 400, 4],
+		['team', 400, 4],
+		['enterprise', 400, 4],
+	] as const)('keeps %s credits and provider-cost allowance aligned', (plan, credits, costUsd) => {
+		expect(getHostedAiIncludedCredits(plan)).toBe(credits);
+		expect(getHostedAiIncludedProviderCostUsd(plan)).toBe(costUsd);
 	});
 });

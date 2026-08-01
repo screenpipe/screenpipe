@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 86
-- Declared test blocks: 245
-- Weighted coverage points: 187.7
+- Mapped specs: 88
+- Declared test blocks: 247
+- Weighted coverage points: 189.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 70 | 219 | 176.2 | 15 | 74 | 90% |
-| macos | 82 | 208 | 158.5 | 17 | 76 | 88% |
-| linux | 60 | 179 | 146.0 | 13 | 69 | 87% |
+| windows | 71 | 220 | 177.2 | 15 | 74 | 91% |
+| macos | 84 | 210 | 160.5 | 17 | 76 | 89% |
+| linux | 61 | 180 | 147.0 | 14 | 69 | 88% |
 
 ## Runtime Results
 
@@ -37,18 +37,18 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 23 specs / 36 tests / 27.1 pts | 29 specs / 48 tests / 31.7 pts | 22 specs / 35 tests / 26.6 pts |
+| chat-ai | 22 specs / 35 tests / 26.1 pts | 29 specs / 48 tests / 31.7 pts | 21 specs / 34 tests / 25.6 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 17 specs / 99 tests / 81.8 pts | 18 specs / 74 tests / 62.8 pts | 13 specs / 70 tests / 61.2 pts |
+| local-api | 18 specs / 100 tests / 82.8 pts | 19 specs / 75 tests / 63.8 pts | 14 specs / 71 tests / 62.2 pts |
 | notifications | 3 specs / 24 tests / 15.3 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts |
-| os-integration | 5 specs / 17 tests / 16.1 pts | 7 specs / 7 tests / 3.7 pts | - |
+| os-integration | 6 specs / 18 tests / 17.1 pts | 8 specs / 8 tests / 4.7 pts | 1 specs / 1 tests / 1.0 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts |
-| real-ui-e2e | 47 specs / 136 tests / 109.0 pts | 50 specs / 123 tests / 99.1 pts | 43 specs / 114 tests / 95.4 pts |
+| real-ui-e2e | 49 specs / 138 tests / 111.0 pts | 53 specs / 126 tests / 102.1 pts | 45 specs / 116 tests / 97.4 pts |
 | settings | 14 specs / 36 tests / 33.0 pts | 16 specs / 31 tests / 26.7 pts | 13 specs / 28 tests / 25.0 pts |
 | storage-privacy | 8 specs / 36 tests / 27.3 pts | 7 specs / 17 tests / 16.1 pts | 5 specs / 15 tests / 14.1 pts |
-| tauri-command | 11 specs / 20 tests / 13.3 pts | 12 specs / 22 tests / 13.8 pts | 10 specs / 19 tests / 12.3 pts |
+| tauri-command | 12 specs / 21 tests / 14.3 pts | 14 specs / 24 tests / 15.8 pts | 11 specs / 20 tests / 13.3 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
 
 ## Critical Feature Matrix
@@ -61,6 +61,7 @@ pass/fail/skip counts.
 | Real capture, OCR, and indexing | capture-ocr | weak (conditional; windows-core-recording, timeline) | weak (conditional; timeline, capture-frequency-floor) | weak (conditional; timeline) |
 | Local API auth enforcement | local-api | covered (strong; api-search-stress, windows-system-integration) | covered (strong; api-search-stress, api) | covered (strong; api-search-stress, api) |
 | Local API search stability | local-api | covered (strong; api-search-stress, windows-core-recording) | covered (strong; api-search-stress, search-request-priority) | covered (strong; api-search-stress, search-request-priority) |
+| Database hard-fault fail-closed containment | local-api, tauri-command | covered (strong; db-hard-fault-fail-closed) | covered (strong; db-hard-fault-fail-closed) | covered (strong; db-hard-fault-fail-closed) |
 | Recording settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, meeting-apps-picker) | covered (strong; settings-sections, meeting-apps-picker) |
 | AI presets and preferences UX | settings | covered (strong; settings-sections) | covered (strong; settings-sections) | covered (strong; settings-sections) |
 | Privacy API auth settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, privacy-api-auth) | covered (strong; settings-sections, privacy-api-auth) |
@@ -96,7 +97,6 @@ pass/fail/skip counts.
 
 | Spec | Platforms | Layers | Features | Criticality | Confidence | UX | Tests | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| acp-text-streaming.spec.ts | windows, macos, linux | chat-ai, tauri-command | chat, acp-runtime, acp-text-streaming | high | strong | command | 1 | A deterministic ACP adapter runs through the packaged Rust desktop runtime and proves ordered assistant text streaming from pi_start through agent_end. |
 | api-key-cold-spawn.spec.ts | windows, macos, linux | local-api, tauri-command | local-api-auth, app-launch | medium | partial | command | 3 | Cold-spawn local API config regression coverage. |
 | api-search-stress.spec.ts | windows, macos, linux | local-api, performance | local-api-auth, local-api-search, health, audio-device-health, local-api-load | high | strong | api | 29 | Broad readonly API, auth, search, and load coverage. |
 | api.spec.ts | windows, macos, linux | local-api | health, audio-device-health, connections, local-api-auth | high | partial | api | 7 | Smoke coverage for local HTTP API shape and auth behavior. |
@@ -111,6 +111,7 @@ pass/fail/skip counts.
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
 | chat-connections-context-duplicate.spec.ts | windows, macos | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | QUARANTINED (#4689): connections-context wrapper stripping regression. The synthetic background-router event path never persists deterministically on Linux/macOS CI; re-enable once it drives a deterministic persisted session. |
+| chat-cost-limit-upgrade.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat | high | strong | real-user-flow | 1 | A local provider returns the gateway's structured daily-cost rejection for a Basic account; the request crosses the real Pi and foreground-event path, then the UI shows account-budget copy and a Business action without depending on the separate query counter. |
 | chat-cross-window-transcript-sync.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, chat-streaming, window-lifecycle | high | strong | mixed | 1 | Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider. |
 | chat-empty-space.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | A real Tauri chat session keeps a short answer at the top of the message rail without exposing a false new-content state. |
 | chat-hosted-retry-feedback.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat, chat-streaming | high | strong | real-user-flow | 1 | A local provider returns priced_request_in_flight twice; Pi retries while the UI remains active, a real composer follow-up enters the Rust queue, and both turns recover without the misleading mid-response error. |
@@ -134,6 +135,7 @@ pass/fail/skip counts.
 | chat-tool-activity.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-tool-activity, progressive-disclosure | high | strong | mixed | 3 | Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, and capture screenshots. |
 | chat-window.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, window-lifecycle | high | strong | real-user-flow | 1 | Opens Chat and focuses the composer for typing. |
 | chat-within-session-context-loss.spec.ts | macos | chat-ai | chat, chat-context | medium | conditional | synthetic | 5 | macOS-only within-chat context retention regression. |
+| db-hard-fault-fail-closed.spec.ts | windows, macos, linux | local-api, tauri-command, real-ui-e2e | database-hard-fault-containment, app-launch | high | strong | mixed | 1 | Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window. |
 | first-run-guide.spec.ts | windows, macos, linux | onboarding, chat-ai, real-ui-e2e | onboarding, chat, first-run-guide | high | strong | real-user-flow | 3 | Replayed first-run guide verifies the composer remains focused and clickable above its scrim, fails open when stacking defeats the lift, and remembers decline across reloads. |
 | focus-server.spec.ts | windows, macos, linux | local-api, window-lifecycle, tauri-command | window-lifecycle, focus-server, deeplink | medium | partial | api | 2 | Focus server opens windows and forwards deeplink args. |
 | hd-recording-pipeline.spec.ts | macos | capture-ocr, local-api, performance | capture-ocr, hd-recording, timeline | high | conditional | api | 1 | Opt-in macOS HD capture and OCR indexing. |
@@ -158,6 +160,7 @@ pass/fail/skip counts.
 | privacy-api-auth-enforcement.spec.ts | windows, macos, linux | settings, local-api, storage-privacy | settings-privacy-api-auth, local-api-auth, restart-flow | high | conditional | mixed | 1 | Opt-in restart smoke toggles API auth and verifies backend behavior. |
 | privacy-api-auth.spec.ts | windows, macos, linux | settings, storage-privacy, real-ui-e2e | settings-privacy-api-auth, local-api-auth | high | strong | real-user-flow | 1 | Privacy settings reveal/copy local API key flow. |
 | privacy-installed-apps.spec.ts | windows, macos, linux | settings, storage-privacy, real-ui-e2e | settings-privacy-filters, installed-apps | medium | strong | real-user-flow | 1 | Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism). |
+| recording-health-return-race.spec.ts | windows, macos, linux | tauri-command, os-integration, real-ui-e2e | app-launch, recording-health-alerts | high | strong | command | 1 | Accelerated app-level replay of the idle-to-attended stale race verifies that return input does not raise the recording-health failure overlay before capture recovery can be observed. |
 | sck-startup-recovery.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr, health, local-api-search | high | conditional | api | 1 | Opt-in macOS fault injection verifies bounded SCK enumeration recovery, same-process capture, and OCR persistence. |
 | search-request-priority.spec.ts | windows, macos, linux | real-ui-e2e, local-api | home-search, local-api-search | medium | partial | synthetic | 1 | Verifies keyword search request fires before secondary search, facet, and speaker requests. |
 | settings-sections.spec.ts | windows, macos, linux | settings, real-ui-e2e, storage-privacy | settings-recording, settings-ai, settings-privacy-api-auth, storage-retention, low-disk-recording-guard, audio-device-health | high | strong | real-user-flow | 11 | Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard. |

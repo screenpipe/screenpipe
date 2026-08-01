@@ -32,9 +32,8 @@ import {
 	type CostReservationShape,
 } from './services/cost-tracker';
 import {
-	getPlanDailyCostCap,
-	getPlanMonthlyCostCap,
 	getTranscriptionDailyCostCap,
+	resolveHostedAiTextCostLimits,
 } from './services/hosted-ai-cost-controls';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
 import { pruneRuntimeState } from './services/runtime-state-maintenance';
@@ -317,16 +316,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			let maxCost: number;
 			let monthlyCap: number;
 			try {
-				maxCost = getPlanDailyCostCap(
+				const limits = resolveHostedAiTextCostLimits(
 					usageAccountPlan,
 					env,
 					authResult.hostedAiTrial === true,
 				);
-				monthlyCap = getPlanMonthlyCostCap(
-					usageAccountPlan,
-					env,
-					authResult.hostedAiTrial === true,
-				);
+				maxCost = limits.daily;
+				monthlyCap = limits.monthly;
 			} catch (error) {
 				console.error('usage cost control configuration unavailable', error);
 				return addCorsHeaders(createErrorResponse(503, JSON.stringify({

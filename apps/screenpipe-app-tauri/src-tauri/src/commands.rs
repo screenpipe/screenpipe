@@ -3196,6 +3196,55 @@ pub async fn get_recording_health_state() -> String {
     crate::overlay_health::current_state_payload()
 }
 
+/// E2E-only accelerated reproduction of an idle capture heartbeat pause that
+/// recovers as the user returns. The real incident accumulated 114 idle stale
+/// checks, then the first input both woke capture and crossed the attended
+/// alert threshold before the next healthy check arrived.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_recording_health_return_race(
+    app_handle: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let seed_enabled = std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .map(|flags| {
+            flags
+                .split(',')
+                .any(|flag| flag.trim() == "recording-health-return-race")
+        })
+        .unwrap_or(false);
+    if !cfg!(feature = "e2e") || !seed_enabled {
+        return Err("recording-health return-race probe requires the e2e feature and seed".into());
+    }
+
+    let mut tier = crate::stale_tier::StaleTier::default();
+    for _ in 0..114 {
+        tier.observe(true, false);
+    }
+    let idle_confirmed = tier.confirmed();
+
+    tier.observe(true, true);
+    let return_confirmed = tier.confirmed();
+    let alerts_enabled = crate::store::SettingsStore::get(&app_handle)
+        .ok()
+        .flatten()
+        .map(|settings| settings.show_restart_notifications)
+        .unwrap_or(false);
+    crate::overlay_health::on_tick(&app_handle, return_confirmed, false, false).await;
+    let overlay_state = crate::overlay_health::current_state_payload();
+
+    let recovered_after = tier.observe(false, true);
+    crate::overlay_health::dismiss_incident(app_handle).await;
+
+    Ok(serde_json::json!({
+        "idleConfirmed": idle_confirmed,
+        "returnConfirmed": return_confirmed,
+        "alertsEnabled": alerts_enabled,
+        "overlayState": overlay_state,
+        "recoveredAfter": recovered_after,
+    }))
+}
+
 /// Restart the recording engine from the overlay's failure state. Runs the
 /// same stop → settle → spawn sequence as the native panel's restart action;
 /// the health loop confirms recovery and pushes "recovered" to the overlay.

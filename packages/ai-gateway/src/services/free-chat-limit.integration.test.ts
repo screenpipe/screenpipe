@@ -281,6 +281,53 @@ describe('usage reservations against workerd D1', () => {
 		)).allowed).toBe(true);
 	});
 
+	it('reserves Auto against the full router for every Business-equivalent plan', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const fullRouterHold = getCostReservationMicroUsd('auto');
+		const efficientRouterHold = getCostReservationMicroUsd('gpt-5.6-luna');
+		expect(fullRouterHold).toBeGreaterThan(efficientRouterHold);
+
+		for (const plan of [
+			'business',
+			'business_max',
+			'business_ultra',
+			'team',
+			'enterprise',
+		] as const) {
+			const result = await reserveDailyCostCap(
+				env,
+				`user-d1-auto-${plan}`,
+				'subscribed',
+				'auto',
+				now,
+				'interactive',
+				{},
+				plan,
+			);
+			expect(result.allowed).toBe(true);
+			if (!result.allowed || !result.reservation) throw new Error(`expected ${plan} reservation`);
+			expect(result.reservation.reservedMicroUsd).toBe(fullRouterHold);
+			await releaseDailyCostReservation(env, result.reservation);
+		}
+
+		for (const plan of ['free', 'basic'] as const) {
+			const result = await reserveDailyCostCap(
+				env,
+				`user-d1-auto-${plan}`,
+				'logged_in',
+				'auto',
+				now,
+				'interactive',
+				{},
+				plan,
+			);
+			expect(result.allowed).toBe(true);
+			if (!result.allowed || !result.reservation) throw new Error(`expected ${plan} reservation`);
+			expect(result.reservation.reservedMicroUsd).toBe(efficientRouterHold);
+			await releaseDailyCostReservation(env, result.reservation);
+		}
+	});
+
 	it('uses the inserted row instead of ambiguous write metadata to prove admission', async () => {
 		const realDb = env.DB;
 		const dbWithAmbiguousWriteMetadata = {
@@ -777,6 +824,62 @@ describe('usage reservations against workerd D1', () => {
 			if (result.allowed && result.reservation) {
 				await releaseDailyCostReservation(env, result.reservation);
 			}
+		}
+	});
+
+	it('does not let private controls expand public monthly or trial credits', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const hold = getCostReservationMicroUsd('gpt-5.6-luna');
+		setUniformTextWindows(env, { request: 10, daily: 10, monthly: 10 });
+		setTrialTextWindows(env, { request: 10, daily: 10, total: 10 });
+
+		await env.DB.prepare(`
+			INSERT INTO usage
+				(device_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, 0, ?, 'public_monthly_cost_test', ?, ?)
+		`).bind(
+			monthlyCostKey('user-d1-public-basic'),
+			utcMonth(now),
+			utcMonth(now),
+			1.5 - (hold / 2_000_000),
+		).run();
+		const monthly = await reserveDailyCostCap(
+			env,
+			'user-d1-public-basic',
+			'logged_in',
+			'gpt-5.6-luna',
+			now,
+			'interactive',
+			{},
+			'basic',
+		);
+		expect(monthly.allowed).toBe(false);
+		if (!monthly.allowed) {
+			expect(await monthly.response.text()).toContain('monthly_cost_limit_exceeded');
+		}
+
+		await env.DB.prepare(`
+			INSERT INTO usage
+				(device_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, 0, 'trial', 'public_trial_cost_test', 'trial', ?)
+		`).bind(
+			trialCostKey('user-d1-public-trial'),
+			4 - (hold / 2_000_000),
+		).run();
+		const trial = await reserveDailyCostCap(
+			env,
+			'user-d1-public-trial',
+			'subscribed',
+			'gpt-5.6-luna',
+			now,
+			'interactive',
+			{},
+			'business',
+			true,
+		);
+		expect(trial.allowed).toBe(false);
+		if (!trial.allowed) {
+			expect(await trial.response.text()).toContain('trial_cost_limit_exceeded');
 		}
 	});
 

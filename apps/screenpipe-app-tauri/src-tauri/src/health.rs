@@ -1029,6 +1029,22 @@ fn apply_capture_session_status(
     }
 }
 
+fn apply_manual_recovery_status(
+    status: RecordingStatus,
+    manual_recovery_required: bool,
+) -> RecordingStatus {
+    if manual_recovery_required {
+        // Once a confirmed SQLite hard fault has stopped every DB owner, the
+        // ordinary connection-error poll must not immediately overwrite the
+        // recovery signal with Stopped. Keep the red/help state stable until
+        // an offline repair and healthy process restart clear the recovery
+        // latch.
+        RecordingStatus::Error
+    } else {
+        status
+    }
+}
+
 /// Map RecordingStatus to tray icon status string
 fn status_to_icon_key(status: RecordingStatus) -> &'static str {
     match status {
@@ -1276,6 +1292,10 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 start_in_progress,
                 schedule_paused,
                 capture_intended,
+            );
+            let status = apply_manual_recovery_status(
+                status,
+                crate::db_relaunch::manual_recovery_required(),
             );
 
             // Bring the embedded engine back if it has crashed while capture
@@ -1604,10 +1624,12 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         }
                     }
 
-                    // Bare "stale" runs on its own user-presence tier: fast
-                    // when UI activity proves someone is losing recording
-                    // right now, slow when the machine is idle and the
-                    // engine's gone-silent watchdog should self-heal first.
+                    // Bare "stale" runs on its own user-presence tier: 90
+                    // attended stale checks when UI activity proves someone is
+                    // losing recording right now, 15 minutes when the machine
+                    // is idle and the engine's gone-silent watchdog should
+                    // self-heal first. Idle checks never carry into the
+                    // attended threshold: return input often wakes capture.
                     let user_active = crate::stale_tier::user_present_for_stale_tier(
                         health.last_ui_timestamp.as_deref(),
                     );
@@ -3031,6 +3053,22 @@ mod tests {
             true, // intended
         );
         assert_eq!(status, RecordingStatus::Stopped);
+    }
+
+    #[test]
+    fn test_manual_db_recovery_keeps_error_status_after_server_stops() {
+        assert_eq!(
+            apply_manual_recovery_status(RecordingStatus::Stopped, true),
+            RecordingStatus::Error
+        );
+        assert_eq!(
+            apply_manual_recovery_status(RecordingStatus::Recording, true),
+            RecordingStatus::Error
+        );
+        assert_eq!(
+            apply_manual_recovery_status(RecordingStatus::Stopped, false),
+            RecordingStatus::Stopped
+        );
     }
 
     #[test]
