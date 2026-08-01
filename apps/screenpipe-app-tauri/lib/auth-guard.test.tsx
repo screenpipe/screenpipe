@@ -50,6 +50,7 @@ vi.mock("@/lib/web-url", () => ({
 
 import {
   AuthGuard,
+  createEntitlementRequiredOnce,
   installAuthInterceptor,
   isScreenpipeApi,
   isScreenpipeAuthApi,
@@ -376,5 +377,29 @@ describe("AuthGuard cold-start app-entitlement-required", () => {
     // Toast may be suppressed by the module-level cooldown from earlier tests;
     // the recovery path must still call verifyToken → loadUser.
     await waitFor(() => expect(mocks.loadUser).toHaveBeenCalled());
+  });
+});
+
+describe("createEntitlementRequiredOnce", () => {
+  it("delivers exactly once for event-before-take interleaving", () => {
+    const onDeliver = vi.fn();
+    const deliver = createEntitlementRequiredOnce(onDeliver);
+
+    // Live event arrives after listen() registers.
+    expect(deliver()).toBe(true);
+    // take() later also returns true — must not double-fire.
+    expect(deliver()).toBe(false);
+    expect(onDeliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers exactly once for take-before-event interleaving", () => {
+    const onDeliver = vi.fn();
+    const deliver = createEntitlementRequiredOnce(onDeliver);
+
+    // Cold-start: take() sees the pending flag first.
+    expect(deliver()).toBe(true);
+    // A late duplicate event must not verify again.
+    expect(deliver()).toBe(false);
+    expect(onDeliver).toHaveBeenCalledTimes(1);
   });
 });

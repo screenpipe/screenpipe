@@ -162,8 +162,6 @@ pub async fn migrate_plaintext_token(data_dir: &Path) -> Option<String> {
 }
 
 async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
-    let store_path = data_dir.join("store.bin");
-
     // Resolve the token, in priority order: SecretStore (already migrated) →
     // store.bin → auth.json. Only read the SecretStore if db.sqlite already
     // exists — never create it here just to check (on a fresh install there's
@@ -201,8 +199,7 @@ async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
     // to protect). auth.json is intentionally left — it's a pi-agent subprocess
     // cache that gets rewritten from the SecretStore; closing it needs a
     // pi-side change (tracked separately).
-    scrub_store_bin_token(&store_path);
-    scrub_store_bin_token(&store_path.with_extension("bin.last-good"));
+    scrub_store_snapshot_tokens(data_dir);
 
     token
 }
@@ -319,8 +316,8 @@ pub fn redact_token_in_store_json(data: &[u8]) -> Option<Vec<u8>> {
 
 /// Rewrite a `store.bin`-shaped file in place with the token fields nulled.
 /// No-op if the file is missing, isn't plain JSON (encrypted), or has no token.
-/// Used for both `store.bin` and `store.bin.last-good`. Atomic (tmp + rename)
-/// so a crash mid-write can't corrupt the file.
+/// Used for `store.bin`, `store.bin.last-good`, and `store.bin.last-good.prev`.
+/// Atomic (tmp + rename) so a crash mid-write can't corrupt the file.
 fn scrub_store_bin_token(path: &Path) {
     let Ok(data) = std::fs::read(path) else {
         return;
@@ -345,6 +342,28 @@ fn scrub_store_bin_token(path: &Path) {
             }
         }
     }
+}
+
+/// Scrub plaintext cloud tokens from every store recovery generation.
+///
+/// `reencrypt_store_file` / `snapshot_last_good` rotates the previous
+/// `.last-good` into `.last-good.prev`, so a fail-then-success strip that only
+/// rewrote `store.bin` (+ `.last-good`) can leave the JWT in `.prev`.
+pub fn scrub_store_snapshot_tokens(data_dir: &Path) {
+    let store_path = data_dir.join("store.bin");
+    scrub_store_bin_token(&store_path);
+    scrub_store_bin_token(&store_path.with_extension("bin.last-good"));
+    scrub_store_bin_token(&store_path.with_extension("bin.last-good.prev"));
+}
+
+/// Frontend entry after a successful secret-store write + settings strip.
+/// Scrubs `store.bin`, `.last-good`, and `.last-good.prev` under the default
+/// data dir so recovery snapshots cannot retain a plaintext JWT.
+#[tauri::command]
+#[specta::specta]
+pub fn scrub_store_plaintext_cloud_tokens() {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    scrub_store_snapshot_tokens(&dir);
 }
 
 /// On sign-out, clear every on-disk fallback a stale token could be read back
@@ -815,6 +834,74 @@ mod tests {
             None,
             ".last-good snapshot must also be scrubbed"
         );
+    }
+
+    #[tokio::test]
+    async fn fail_then_success_scrubs_all_recovery_generations() {
+        // #5603 review: saveAndEncrypt / snapshot_last_good rotates the prior
+        // `.last-good` (still holding a retained JWT) into `.last-good.prev`.
+        // After secret-store success, every generation must be scrubbed.
+        let dir = unique_dir("mig_prev");
+        let with_token = format!(
+            r#"{{"settings":{{"user":{{"token":"{JWT}"}},"aiPresets":[{{"id":"x"}}]}}}}"#
+        );
+        std::fs::write(dir.join("store.bin"), with_token.as_bytes()).unwrap();
+        std::fs::write(dir.join("store.bin.last-good"), with_token.as_bytes()).unwrap();
+        std::fs::write(dir.join("store.bin.last-good.prev"), with_token.as_bytes()).unwrap();
+
+        // First "fail": scrub must NOT run when persist can't succeed.
+        std::fs::create_dir(dir.join("db.sqlite")).unwrap();
+        let _ = migrate_at(&dir, None).await;
+        assert_eq!(
+            token_from_store_bytes(&std::fs::read(dir.join("store.bin")).unwrap()),
+            Some(JWT.to_string()),
+            "retain plaintext on persist failure"
+        );
+        assert_eq!(
+            token_from_store_bytes(&std::fs::read(dir.join("store.bin.last-good.prev")).unwrap()),
+            Some(JWT.to_string()),
+            ".prev must still hold the retained token after a failed persist"
+        );
+
+        // Success path: remove the poisoned db so SecretStore can open, then scrub.
+        std::fs::remove_dir_all(dir.join("db.sqlite")).unwrap();
+        migrate_at(&dir, None).await;
+
+        for name in [
+            "store.bin",
+            "store.bin.last-good",
+            "store.bin.last-good.prev",
+        ] {
+            let bytes = std::fs::read(dir.join(name)).unwrap();
+            assert_eq!(
+                token_from_store_bytes(&bytes),
+                None,
+                "{name} must be scrubbed after fail-then-success"
+            );
+        }
+    }
+
+    #[test]
+    fn scrub_store_snapshot_tokens_covers_prev_generation() {
+        let dir = unique_dir("scrub_prev_only");
+        let with_token = format!(r#"{{"settings":{{"user":{{"token":"{JWT}"}}}}}}"#);
+        std::fs::write(dir.join("store.bin"), with_token.as_bytes()).unwrap();
+        std::fs::write(dir.join("store.bin.last-good"), with_token.as_bytes()).unwrap();
+        std::fs::write(dir.join("store.bin.last-good.prev"), with_token.as_bytes()).unwrap();
+
+        scrub_store_snapshot_tokens(&dir);
+
+        for name in [
+            "store.bin",
+            "store.bin.last-good",
+            "store.bin.last-good.prev",
+        ] {
+            assert_eq!(
+                token_from_store_bytes(&std::fs::read(dir.join(name)).unwrap()),
+                None,
+                "{name}"
+            );
+        }
     }
 
     #[tokio::test]

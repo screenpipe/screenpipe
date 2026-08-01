@@ -13,14 +13,28 @@ type SetCloudTokenResult = Awaited<ReturnType<typeof commands.setCloudToken>>;
  * `setSettingsStripped` may have retained in store.bin when an earlier
  * `setCloudToken` failed (#3943 fail-then-success).
  *
- * Returns true when a plaintext token was present and stripped.
+ * Also asks Rust to scrub `store.bin.last-good` and `store.bin.last-good.prev`:
+ * `saveAndEncrypt` → `reencrypt_store_file` / `snapshot_last_good` rotates the
+ * prior `.last-good` (still holding a retained JWT) into `.prev`.
+ *
+ * Returns true when a plaintext token was present and stripped from settings.
  */
 export async function stripPlaintextCloudTokenIfPresent(deps?: {
   getStore?: () => Promise<Store>;
   saveAndEncrypt?: (store: Store) => Promise<void>;
+  scrubSnapshots?: () => Promise<void>;
 }): Promise<boolean> {
   const resolveStore = deps?.getStore ?? getStore;
   const persist = deps?.saveAndEncrypt ?? saveAndEncrypt;
+  const scrubSnapshots =
+    deps?.scrubSnapshots ??
+    (async () => {
+      try {
+        await commands.scrubStorePlaintextCloudTokens();
+      } catch {
+        // Older builds / jsdom may not expose the command yet.
+      }
+    });
   const store = await resolveStore();
   const settings = await store.get<Settings>("settings");
   const token = settings?.user?.token;
@@ -31,13 +45,16 @@ export async function stripPlaintextCloudTokenIfPresent(deps?: {
     user: { ...settings.user!, token: undefined },
   });
   await persist(store);
+  // Reencrypt may have just rotated a token-bearing last-good into `.prev`.
+  await scrubSnapshots();
   return true;
 }
 
 /**
  * Persist `token` to the encrypted secret store, then strip any leftover
- * plaintext copy from store.bin. Call this (not bare `setCloudToken`) from
- * login / deeplink retry paths so a later success cleans up an earlier retain.
+ * plaintext copy from store.bin (+ recovery snapshots). Call this (not bare
+ * `setCloudToken`) from login / deeplink retry paths so a later success cleans
+ * up an earlier retain.
  */
 export async function persistCloudTokenAndStripPlaintext(
   token: string,

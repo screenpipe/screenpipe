@@ -86,6 +86,20 @@ function showAccountAccessToast() {
   });
 }
 
+/**
+ * Exactly-once delivery for the native `app-entitlement-required` signal.
+ * Covers both interleavings: event-before-take and take-before-event.
+ */
+export function createEntitlementRequiredOnce(onDeliver: () => void) {
+  let delivered = false;
+  return () => {
+    if (delivered) return false;
+    delivered = true;
+    onDeliver();
+    return true;
+  };
+}
+
 function cloudRequestHost(url: string): string | null {
   try {
     const base =
@@ -285,23 +299,25 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   //
   // Listen first, then take the pending native flag. Tauri events are not
   // buffered; setup may emit before React registers, so the AtomicBool covers
-  // cold start without double-firing when the live event also arrives.
+  // cold start. A shared once-guard prevents double verify when the live event
+  // arrives after listen() but before take() resolves.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-
-    const onRequired = () => {
+    const deliverOnce = createEntitlementRequiredOnce(() => {
       showAccountAccessToast();
       void verifyToken();
-    };
+    });
 
-    void listen("app-entitlement-required", onRequired)
+    void listen("app-entitlement-required", () => {
+      deliverOnce();
+    })
       .then(async (fn) => {
         unlisten = fn;
         if (cancelled) return;
         try {
           const pending = await commands.takeAppEntitlementRequired();
-          if (!cancelled && pending) onRequired();
+          if (!cancelled && pending) deliverOnce();
         } catch {
           // Older builds / jsdom may not expose the command yet.
         }

@@ -795,6 +795,12 @@ pub async fn set_cloud_token(
     crate::auth_token::store_cloud_token(normalized.as_deref())
         .await
         .map_err(|e| format!("failed to persist cloud token to secret store: {e}"))?;
+    // After a durable secret-store write, scrub every recovery generation so a
+    // prior retain-on-failure (or last-good rotation into `.prev`) cannot leave
+    // a plaintext JWT on disk.
+    if normalized.is_some() {
+        crate::auth_token::scrub_store_plaintext_cloud_tokens();
+    }
     Ok(())
 }
 

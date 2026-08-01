@@ -14,11 +14,13 @@ describe("stripPlaintextCloudTokenIfPresent", () => {
     set: vi.fn(),
   };
   const saveAndEncrypt = vi.fn().mockResolvedValue(undefined);
+  const scrubSnapshots = vi.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
     store.get.mockReset();
     store.set.mockReset();
     saveAndEncrypt.mockClear();
+    scrubSnapshots.mockClear();
   });
 
   it("no-ops when store.bin has no plaintext token", async () => {
@@ -29,13 +31,15 @@ describe("stripPlaintextCloudTokenIfPresent", () => {
       stripPlaintextCloudTokenIfPresent({
         getStore: async () => store as any,
         saveAndEncrypt,
+        scrubSnapshots,
       }),
     ).resolves.toBe(false);
     expect(store.set).not.toHaveBeenCalled();
     expect(saveAndEncrypt).not.toHaveBeenCalled();
+    expect(scrubSnapshots).not.toHaveBeenCalled();
   });
 
-  it("strips a retained plaintext token after secret-store success", async () => {
+  it("strips settings then scrubs all recovery generations", async () => {
     store.get.mockResolvedValue({
       user: { id: "u1", email: "a@b.c", token: "jwt-retained" },
       other: true,
@@ -44,6 +48,7 @@ describe("stripPlaintextCloudTokenIfPresent", () => {
       stripPlaintextCloudTokenIfPresent({
         getStore: async () => store as any,
         saveAndEncrypt,
+        scrubSnapshots,
       }),
     ).resolves.toBe(true);
     expect(store.set).toHaveBeenCalledWith("settings", {
@@ -51,6 +56,8 @@ describe("stripPlaintextCloudTokenIfPresent", () => {
       other: true,
     });
     expect(saveAndEncrypt).toHaveBeenCalledWith(store);
+    // After reencrypt rotates last-good → .prev, scrub store.bin + both snapshots.
+    expect(scrubSnapshots).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -68,9 +75,13 @@ describe("persistCloudTokenAndStripPlaintext fail-then-success", () => {
   it("strips on-disk plaintext after a later setCloudToken success", async () => {
     // Simulate #5603 review case: first persist failed and store.bin kept the
     // token; a later retry succeeds and must rewrite settings without it.
-    const disk = { user: { id: "u1", token: "jwt-retained" as string | undefined } };
+    const disk = {
+      user: { id: "u1", token: "jwt-retained" as string | undefined },
+      lastGoodPrev: "jwt-retained" as string | undefined,
+    };
     const strip = vi.fn(async () => {
       disk.user.token = undefined;
+      disk.lastGoodPrev = undefined;
       return true;
     });
 
@@ -80,6 +91,7 @@ describe("persistCloudTokenAndStripPlaintext fail-then-success", () => {
     });
     expect(first.status).toBe("error");
     expect(disk.user.token).toBe("jwt-retained");
+    expect(disk.lastGoodPrev).toBe("jwt-retained");
 
     const second = await persistCloudTokenAndStripPlaintext("jwt", {
       setCloudToken: async () => ({ status: "ok", data: null }),
@@ -88,5 +100,6 @@ describe("persistCloudTokenAndStripPlaintext fail-then-success", () => {
     expect(second.status).toBe("ok");
     expect(strip).toHaveBeenCalledTimes(1);
     expect(disk.user.token).toBeUndefined();
+    expect(disk.lastGoodPrev).toBeUndefined();
   });
 });

@@ -684,6 +684,13 @@ async getCloudToken() : Promise<string | null> {
 async takeAppEntitlementRequired() : Promise<boolean> {
     return await TAURI_INVOKE("take_app_entitlement_required");
 },
+/**
+ * Scrub plaintext cloud JWTs from store.bin, store.bin.last-good, and
+ * store.bin.last-good.prev after a successful secret-store write.
+ */
+async scrubStorePlaintextCloudTokens() : Promise<void> {
+    return await TAURI_INVOKE("scrub_store_plaintext_cloud_tokens");
+},
 async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promise<Result<JsonValue, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_disk_usage", { forceRefresh, dataDir }) };
