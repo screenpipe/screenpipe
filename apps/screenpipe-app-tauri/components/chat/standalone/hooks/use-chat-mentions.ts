@@ -10,7 +10,9 @@ import {
   buildTagMentionSuggestions,
   findComposerMention,
   filterMentionSuggestions,
+  mentionSuggestionIdentity,
   parseMentions,
+  resolvePinnedMentionIndex,
   TIME_RANGE_MENTION_SUGGESTIONS,
   type MentionSuggestion as ChatMentionSuggestion,
   type MentionTrigger,
@@ -69,7 +71,7 @@ export function useChatMentions({
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionTrigger, setMentionTrigger] = useState<MentionTrigger>("@");
-  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
+  const [selectedMentionIdentity, setSelectedMentionIdentity] = useState<string | null>(null);
   const [speakerSuggestions, setSpeakerSuggestions] = useState<MentionSuggestion[]>([]);
   const [isLoadingSpeakers, setIsLoadingSpeakers] = useState(false);
   const [tagSearchSuggestions, setTagSearchSuggestions] = useState<MentionSuggestion[]>([]);
@@ -506,6 +508,27 @@ export function useChatMentions({
     tagSearchSuggestions,
   ]);
 
+  const selectedMentionIndex = useMemo(
+    () => resolvePinnedMentionIndex(filteredMentions, selectedMentionIdentity),
+    [filteredMentions, selectedMentionIdentity],
+  );
+
+  const setSelectedMentionIndex = useCallback<
+    React.Dispatch<React.SetStateAction<number>>
+  >((nextIndex) => {
+    setSelectedMentionIdentity((currentIdentity) => {
+      const currentIndex = resolvePinnedMentionIndex(
+        filteredMentions,
+        currentIdentity,
+      );
+      const resolvedIndex = typeof nextIndex === "function"
+        ? nextIndex(currentIndex)
+        : nextIndex;
+      const suggestion = filteredMentions[resolvedIndex];
+      return suggestion ? mentionSuggestionIdentity(suggestion) : null;
+    });
+  }, [filteredMentions]);
+
   useEffect(() => {
     if (!showMentionDropdown || mentionTrigger !== "$") return;
 
@@ -599,7 +622,7 @@ export function useChatMentions({
       setShowMentionDropdown(true);
       setMentionTrigger(mentionMatch.trigger);
       setMentionFilter(mentionMatch.filter);
-      setSelectedMentionIndex(0);
+      setSelectedMentionIdentity(null);
     } else {
       setShowMentionDropdown(false);
       setMentionFilter("");

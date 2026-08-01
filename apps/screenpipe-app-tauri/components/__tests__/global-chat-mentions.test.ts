@@ -11,7 +11,10 @@ import {
   buildTagMentionSuggestions,
   findComposerMention,
   filterMentionSuggestions,
+  mentionSuggestionIdentity,
+  normalizeComposerTimeRangesForModel,
   parseMentions,
+  resolvePinnedMentionIndex,
   TIME_RANGE_MENTION_SUGGESTIONS,
 } from "../../lib/chat-utils";
 
@@ -298,6 +301,45 @@ describe("global chat mentions", () => {
     ]).toEqual(end);
     expect(range.sourceToken).toBe(token);
     expect(parsed.cleanedInput).toBe("summarize activity");
+  });
+
+  it("sends exact ISO boundaries instead of an ambiguous date token", () => {
+    const expectedStart = new Date(2025, 3, 3, 0, 0, 0, 0).toISOString();
+    const expectedEnd = new Date(2025, 3, 3, 23, 59, 59, 999).toISOString();
+    const normalized = normalizeComposerTimeRangesForModel(
+      "summarize activity ~(03/04/2025)",
+      { now: new Date(2026, 6, 30, 12, 0, 0) },
+    );
+
+    expect(normalized.modelInput).not.toContain("~(03/04/2025)");
+    expect(normalized.modelInput).toContain(`start_time: ${expectedStart}`);
+    expect(normalized.modelInput).toContain(`end_time: ${expectedEnd}`);
+    expect(normalized.modelInput).toContain("summarize activity");
+    expect(normalized.timeRanges).toHaveLength(1);
+  });
+
+  it("keeps a keyboard-selected filter pinned when recent chats arrive", () => {
+    const today = {
+      tag: "@today",
+      description: "today's activity",
+      category: "time" as const,
+    };
+    const yesterday = {
+      tag: "@yesterday",
+      description: "yesterday's activity",
+      category: "time" as const,
+    };
+    const pinnedIdentity = mentionSuggestionIdentity(yesterday);
+    const recentChats = buildChatMentionSuggestions(
+      [{ id: "planning", title: "Launch planning" }],
+      null,
+      8,
+    );
+    const reordered = [...recentChats, today, yesterday];
+
+    expect(resolvePinnedMentionIndex([today, yesterday], pinnedIdentity)).toBe(1);
+    expect(resolvePinnedMentionIndex(reordered, pinnedIdentity)).toBe(2);
+    expect(reordered[resolvePinnedMentionIndex(reordered, pinnedIdentity)]).toBe(yesterday);
   });
 
   it("filters ~ suggestions by range syntax", () => {

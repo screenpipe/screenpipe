@@ -571,6 +571,52 @@ function parseExplicitTimeRanges(input: string, now: Date): {
   };
 }
 
+export interface ComposerTimeRangeContext {
+  label: string;
+  startTime: string;
+  endTime: string;
+}
+
+export function normalizeComposerTimeRangesForModel(
+  input: string,
+  options?: { now?: Date },
+): {
+  modelInput: string;
+  timeRanges: ComposerTimeRangeContext[];
+} {
+  const now = options?.now ? new Date(options.now) : new Date();
+  const parsed = parseExplicitTimeRanges(input, now);
+  const timeRanges = parsed.ranges.map((range) => ({
+    label: range.label,
+    startTime: range.start.toISOString(),
+    endTime: range.end.toISOString(),
+  }));
+
+  if (timeRanges.length === 0) {
+    return { modelInput: input, timeRanges };
+  }
+
+  const queryContext = timeRanges.flatMap((range, index) => [
+    `time_range_${index + 1}:`,
+    `  label: ${range.label}`,
+    `  start_time: ${range.startTime}`,
+    `  end_time: ${range.endTime}`,
+  ]);
+
+  return {
+    modelInput: [
+      "<screenpipe_query_context>",
+      "Use these exact ISO 8601 boundaries for screenpipe queries; do not reinterpret the original date token.",
+      ...queryContext,
+      "</screenpipe_query_context>",
+      parsed.cleanedInput,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    timeRanges,
+  };
+}
+
 // Common app name mappings (user-friendly -> actual app name patterns)
 const APP_MAPPINGS: Record<string, string[]> = {
   "chrome": ["Google Chrome", "Chrome"],
@@ -791,6 +837,21 @@ export interface MentionSuggestion {
   label?: string;
   appName?: string;
   conversationId?: string;
+}
+
+export function mentionSuggestionIdentity(suggestion: MentionSuggestion): string {
+  return suggestion.conversationId ?? `${suggestion.category}:${suggestion.tag}`;
+}
+
+export function resolvePinnedMentionIndex(
+  suggestions: MentionSuggestion[],
+  pinnedIdentity: string | null,
+): number {
+  if (!pinnedIdentity) return 0;
+  const index = suggestions.findIndex(
+    (suggestion) => mentionSuggestionIdentity(suggestion) === pinnedIdentity,
+  );
+  return index >= 0 ? index : 0;
 }
 
 type AppAutocompleteItem = {

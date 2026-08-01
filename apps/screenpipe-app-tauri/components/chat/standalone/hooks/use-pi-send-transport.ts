@@ -25,6 +25,7 @@ import {
   promptWithConversationHistory,
 } from "@/components/chat/standalone/hooks/pi-message-preparation";
 import type { ChatSendOptions, Message } from "@/lib/chat/types";
+import { normalizeComposerTimeRangesForModel } from "@/lib/chat-utils";
 import { chatSendTelemetryContext } from "@/lib/chat/response-feedback";
 import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/pi-types";
 
@@ -687,7 +688,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendOptions?: ChatSendOptions,
   ) {
     if ((!canChat && !autoSendBypassRef.current) || (!getActivePreset() && !autoSendBypassRef.current)) return;
-    const trimmed = userMessage.trim();
+    const originalTrimmed = userMessage.trim();
+    const normalizedTimeRanges = normalizeComposerTimeRangesForModel(originalTrimmed);
+    const trimmed = normalizedTimeRanges.modelInput.trim();
+    const resolvedDisplayLabel = normalizedTimeRanges.timeRanges.length > 0
+      ? (displayLabel ?? originalTrimmed)
+      : displayLabel;
     const outgoingImages = imageDataUrls ?? pastedImages;
     const queuedDocs = attachedDocsRef.current;
     if (!trimmed && outgoingImages.length === 0 && queuedDocs.length === 0) return;
@@ -706,7 +712,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       attachmentMetadata,
     } = foldAttachedDocsIntoMessage({
       trimmed,
-      displayLabel,
+      displayLabel: resolvedDisplayLabel,
       docs: queuedDocs,
     });
     if (queuedDocs.length > 0) {
