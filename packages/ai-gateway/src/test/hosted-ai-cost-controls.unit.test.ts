@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { AccountPlan } from '../types';
 import {
+	accountPlanFromTier,
 	getPlanDailyCostCap,
 	loadHostedAiTextCostControls,
 	loadHostedTranscriptionCostControls,
@@ -63,20 +64,47 @@ describe('private hosted AI cost controls', () => {
 		}))).toThrow('misordered private hosted AI cost control: transcription plan ceilings');
 	});
 
-	it('resolves a validated snapshot for the selected plan or trial', () => {
+	it('keeps permissive private controls inside the public credit allowance', () => {
 		expect(resolveHostedAiTextCostLimits('basic', privateCostControls())).toEqual({
-			daily: 102,
-			monthly: 202,
-			request: 52,
+			daily: 1.5,
+			monthly: 1.5,
+			request: 1.5,
 			globalHourly: 401,
 			globalDaily: 402,
 		});
 		expect(resolveHostedAiTextCostLimits('business', privateCostControls(), true)).toEqual({
-			daily: 104,
-			monthly: 301,
-			request: 54,
+			daily: 4,
+			monthly: 4,
+			request: 4,
 			globalHourly: 401,
 			globalDaily: 402,
+		});
+	});
+
+	it('allows private controls to tighten request, daily, and period windows', () => {
+		const env = privateCostControls({
+			MAX_REQUEST_FREE_TEXT_COST: '0.01',
+			MAX_REQUEST_BASIC_TEXT_COST: '0.02',
+			MAX_REQUEST_BUSINESS_TEXT_COST: '0.03',
+			MAX_DAILY_FREE_TEXT_COST: '0.05',
+			MAX_DAILY_BASIC_TEXT_COST: '0.1',
+			MAX_DAILY_BUSINESS_TEXT_COST: '0.2',
+			MAX_MONTHLY_FREE_TEXT_COST: '0.08',
+			MAX_MONTHLY_BASIC_TEXT_COST: '1',
+			MAX_MONTHLY_BUSINESS_TEXT_COST: '3',
+			MAX_REQUEST_TRIAL_TEXT_COST: '0.04',
+			MAX_DAILY_TRIAL_TEXT_COST: '0.3',
+			MAX_TRIAL_TEXT_COST: '2',
+		});
+		expect(resolveHostedAiTextCostLimits('business', env)).toMatchObject({
+			request: 0.03,
+			daily: 0.2,
+			monthly: 3,
+		});
+		expect(resolveHostedAiTextCostLimits('business', env, true)).toMatchObject({
+			request: 0.04,
+			daily: 0.3,
+			monthly: 2,
 		});
 	});
 
@@ -85,5 +113,11 @@ describe('private hosted AI cost controls', () => {
 			'unknown' as AccountPlan,
 			privateCostControls(),
 		)).toThrow('unknown private hosted AI cost control: account plan');
+	});
+
+	it('preserves power-plan identity when deriving a legacy account plan from capacity tier', () => {
+		expect(accountPlanFromTier('business_max')).toBe('business_max');
+		expect(accountPlanFromTier('business_ultra')).toBe('business_ultra');
+		expect(accountPlanFromTier('subscribed')).toBe('business');
 	});
 });

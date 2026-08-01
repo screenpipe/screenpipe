@@ -57,8 +57,8 @@ fn notify(app: &AppHandle, state: DbRecoveryState) {
         ),
         DbRecoveryState::NeedsRecovery => (
             "recording stopped — database needs recovery",
-            "screenpipe hit a database error it couldn't auto-repair. quit screenpipe and \
-             run `screenpipe db recover` to fix it, then reopen the app.",
+            "screenpipe stopped recording to protect your data after a database hard fault. \
+             quit screenpipe and run `screenpipe db recover` to fix it, then reopen the app.",
         ),
     };
 

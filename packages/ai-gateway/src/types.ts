@@ -255,10 +255,9 @@ export interface Env {
 // User tier for rate limiting and model access
 export type UserTier = 'anonymous' | 'logged_in' | 'subscribed';
 
-// Capacity is deliberately separate from model access. All Business plans use
-// the subscribed model policy; Max and Ultra only receive larger usage/RPM
-// buckets. Cash-cost admission remains keyed to UserTier as another independent
-// safety boundary.
+// Capacity is deliberately separate from model access and provider-cost credit.
+// All Business variants use the same reviewed model catalog and included-credit
+// policy; Max and Ultra receive larger usage/RPM buckets only.
 export type UsageTier = UserTier | 'business_max' | 'business_ultra';
 
 // Server-verified commercial plan. This is intentionally separate from

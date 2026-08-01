@@ -1331,8 +1331,11 @@ pub async fn run_frame_ocr(
             }
         }
     } else {
-        // Legacy video-chunk frame — extract via ffmpeg
-        match extract_frame_from_video(&file_path, offset_index, "95").await {
+        // Legacy video-chunk frame — extract via ffmpeg. The quality arg is
+        // mjpeg's -q:v scale (2-31, LOWER is better) — "2" is best quality
+        // for OCR. ("95" here was a percent-scale mixup that ffmpeg clamped
+        // to 31, the WORST quality, silently degrading on-demand OCR.)
+        match extract_frame_from_video(&file_path, offset_index, "2").await {
             Ok(temp_path) => match tokio::task::spawn_blocking({
                 let p = temp_path.clone();
                 move || image::open(&p)

@@ -352,6 +352,7 @@ function providerConfig(preset: AIPreset): PiProviderConfig {
     model: preset.model || "",
     apiKey: preset.apiKey || null,
     maxTokens: Math.max(2_048, Math.min(preset.maxTokens ?? 4_096, 8_192)),
+    maxContextChars: preset.maxContextChars,
     systemPrompt: prompt,
   };
 }

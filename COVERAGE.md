@@ -24,23 +24,23 @@ results and `cargo llvm-cov` data on top when judging release confidence.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 70 | 219 | 176.2 | 15 | 74 | 90% |
-| macos | 82 | 208 | 158.5 | 17 | 76 | 88% |
-| linux | 60 | 179 | 146.0 | 13 | 69 | 87% |
+| windows | 69 | 218 | 175.2 | 15 | 72 | 90% |
+| macos | 82 | 208 | 158.5 | 17 | 74 | 88% |
+| linux | 59 | 178 | 145.0 | 13 | 67 | 87% |
 
 ### Core Engine
 
 - Mapped suites: 30
-- Mapped Rust files: 298
-- Active test blocks: 2796
+- Mapped Rust files: 300
+- Active test blocks: 2807
 - Ignored/manual test blocks: 133
-- Weighted coverage points: 2305.2
+- Weighted coverage points: 2312.9
 
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| windows | 27 | 2669 | 128 | 2246.9 | 21 | 11 | 100% |
-| macos | 27 | 2719 | 108 | 2256.4 | 22 | 11 | 100% |
-| linux | 23 | 2363 | 102 | 1969.2 | 20 | 11 | 100% |
+| windows | 27 | 2680 | 128 | 2254.6 | 21 | 11 | 100% |
+| macos | 27 | 2730 | 108 | 2264.1 | 22 | 11 | 100% |
+| linux | 23 | 2374 | 102 | 1976.9 | 20 | 11 | 100% |
 
 ## Refresh
 

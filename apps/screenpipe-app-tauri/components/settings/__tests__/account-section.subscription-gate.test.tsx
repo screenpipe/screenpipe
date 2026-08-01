@@ -170,6 +170,18 @@ describe("AccountSection subscription/login gating", () => {
     const card = screen.getByTestId(ACTIVE_CARD);
     expect(card).toBeInTheDocument();
     expect(within(card).getByText("active")).toBeInTheDocument();
+    expect(within(card).getByText("400 hosted AI credits / month")).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        "frontier Claude + GPT models: Fable, Opus, Sonnet, latest GPT",
+      ),
+    ).toBeInTheDocument();
+    expect(within(card).getByText("cloud sync across your devices")).toBeInTheDocument();
+    expect(within(card).queryByText(/cloud transcription/i)).not.toBeInTheDocument();
+    expect(within(card).queryByText(/100x more AI queries/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /web account/i }));
+    expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account");
   });
 
   it("shows one quiet next-tier action and opens the exact Max billing target", () => {
@@ -245,6 +257,9 @@ describe("AccountSection subscription/login gating", () => {
     };
 
     render(<AccountSection />);
+    expect(
+      screen.getAllByRole("button", { name: /manage/i }),
+    ).toHaveLength(1);
     fireEvent.click(
       screen.getByRole("button", { name: /manage subscription/i }),
     );

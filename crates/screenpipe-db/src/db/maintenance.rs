@@ -1559,6 +1559,9 @@ impl DatabaseManager {
     /// recover` path (which backs up the original before rebuilding).
     pub(crate) fn spawn_startup_integrity_check(&self, database_path: Arc<str>) {
         let pool = self.pool.clone();
+        let health = self.write_queue_health.clone();
+        let shutdown = self.close_token.clone();
+        let persistent_failure_hook = self.persistent_failure_hook.clone();
         tokio::spawn(async move {
             // Let boot settle so the scan doesn't compete with migrations
             // and the first capture writes for I/O.
@@ -1573,18 +1576,37 @@ impl DatabaseManager {
                     debug!("startup integrity check: ok");
                 }
                 Ok(detail) => {
+                    let error = sqlx::Error::Protocol(format!(
+                        "(code: 11) database disk image is malformed: quick_check: {detail}"
+                    ));
+                    let first_for_manager = health.latch_hard_fault(&error);
+                    shutdown.cancel();
                     error!(
                         db = %database_path,
                         detail = %detail,
-                        "DATABASE CORRUPTION DETECTED at startup. Recording continues but \
-                         some reads/writes may fail. Quit screenpipe and run \
+                        "DATABASE CORRUPTION DETECTED at startup. Recording is stopping to \
+                         protect the database. Quit screenpipe and run \
                          `screenpipe db recover` to rebuild the database (it backs up the \
                          original first)."
                     );
+                    if first_for_manager {
+                        if let Some(hook) = persistent_failure_hook.take_hard_fault_hook() {
+                            hook();
+                        }
+                    }
                 }
                 Err(e) => {
                     // The check itself failing usually means the file is too
                     // damaged to even scan — still actionable.
+                    if crate::sqlite_error::is_sqlite_hard_fault(&e) {
+                        let first_for_manager = health.latch_hard_fault(&e);
+                        shutdown.cancel();
+                        if first_for_manager {
+                            if let Some(hook) = persistent_failure_hook.take_hard_fault_hook() {
+                                hook();
+                            }
+                        }
+                    }
                     error!(
                         db = %database_path,
                         error = %e,
@@ -1763,7 +1785,13 @@ mod wal_maintenance_tests {
         let wal_before = std::fs::read(&wal_path).expect("read WAL before quarantine");
 
         let health = crate::write_queue::WriteQueueHealth::default();
-        assert!(health.latch_hard_fault(), "first fault must set the latch");
+        let hard_fault = sqlx::Error::Protocol(
+            "error returned from database: (code: 522) disk I/O error".into(),
+        );
+        assert!(
+            health.latch_hard_fault(&hard_fault),
+            "first fault must set the latch"
+        );
         let checkpoint = run_guarded_routine_wal_checkpoint(&pool, &health)
             .await
             .expect("guard evaluation");

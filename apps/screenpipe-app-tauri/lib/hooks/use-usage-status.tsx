@@ -16,8 +16,15 @@ import { useSettings } from "@/lib/hooks/use-settings";
  * Null = not fetched yet OR user is on a BYOK provider where the worker
  * is bypassed entirely. UIs should render nothing in either case.
  */
+export type UsageTier =
+  | "anonymous"
+  | "logged_in"
+  | "subscribed"
+  | "business_max"
+  | "business_ultra";
+
 export interface UsageStatus {
-  tier: "anonymous" | "logged_in" | "subscribed";
+  tier: UsageTier;
   used_today: number;
   limit_today: number;
   remaining: number;

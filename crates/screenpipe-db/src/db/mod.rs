@@ -124,13 +124,63 @@ pub struct StripTextResult {
 ///
 /// Holds an `OwnedSemaphorePermit` so writers queue in Rust memory (zero overhead)
 /// instead of each holding a pool connection while waiting for SQLite's busy_timeout.
+#[derive(Clone)]
+struct HardFaultReporter {
+    health: crate::write_queue::WriteQueueHealth,
+    persistent_failure_hook: crate::write_queue::PersistentFailureSlot,
+    close_token: tokio_util::sync::CancellationToken,
+}
+
+impl HardFaultReporter {
+    fn report_error(&self, error: &sqlx::Error) -> bool {
+        let Some(code) = crate::sqlite_error::sqlite_hard_fault_code(error) else {
+            return false;
+        };
+        self.report_code(code)
+    }
+
+    fn report_code(&self, code: i32) -> bool {
+        if !crate::sqlite_error::is_sqlite_hard_fault_code(code) {
+            return false;
+        }
+        let first_for_manager = self.health.latch_hard_fault_code(code);
+        self.close_token.cancel();
+        if first_for_manager {
+            if let Some(hook) = self.persistent_failure_hook.take_hard_fault_hook() {
+                hook();
+            }
+        }
+        true
+    }
+}
+
 pub struct ImmediateTx {
     conn: Option<PoolConnection<Sqlite>>,
     committed: bool,
     _write_permit: Option<OwnedSemaphorePermit>,
+    hard_fault_reporter: HardFaultReporter,
 }
 
 impl ImmediateTx {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        conn: PoolConnection<Sqlite>,
+        write_permit: OwnedSemaphorePermit,
+        health: crate::write_queue::WriteQueueHealth,
+        persistent_failure_hook: crate::write_queue::PersistentFailureSlot,
+    ) -> Self {
+        Self {
+            conn: Some(conn),
+            committed: false,
+            _write_permit: Some(write_permit),
+            hard_fault_reporter: HardFaultReporter {
+                health,
+                persistent_failure_hook,
+                close_token: tokio_util::sync::CancellationToken::new(),
+            },
+        }
+    }
+
     /// Access the underlying connection for executing queries.
     pub fn conn(&mut self) -> &mut PoolConnection<Sqlite> {
         self.conn.as_mut().expect("connection already taken")
@@ -139,7 +189,10 @@ impl ImmediateTx {
     /// Commit the transaction. Must be called explicitly — drop without commit = rollback.
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
         if let Some(ref mut conn) = self.conn {
-            sqlx::query("COMMIT").execute(&mut **conn).await?;
+            if let Err(error) = sqlx::query("COMMIT").execute(&mut **conn).await {
+                self.hard_fault_reporter.report_error(&error);
+                return Err(error);
+            }
         }
         self.committed = true;
         Ok(())
@@ -149,7 +202,10 @@ impl ImmediateTx {
     #[allow(dead_code)]
     pub async fn rollback(mut self) -> Result<(), sqlx::Error> {
         if let Some(ref mut conn) = self.conn {
-            sqlx::query("ROLLBACK").execute(&mut **conn).await?;
+            if let Err(error) = sqlx::query("ROLLBACK").execute(&mut **conn).await {
+                self.hard_fault_reporter.report_error(&error);
+                return Err(error);
+            }
         }
         self.committed = true; // prevent double-rollback in drop
         Ok(())
@@ -185,7 +241,28 @@ impl Drop for ImmediateTx {
                 // slot than poison the pool with a stuck transaction).
                 warn!("ImmediateTx dropped without commit — rolling back");
                 let permit = self._write_permit.take(); // Hold permit until rollback completes
+                let reporter = self.hard_fault_reporter.clone();
                 tokio::spawn(async move {
+                    // The statement that made the caller abandon this transaction
+                    // may have returned through `tx.conn()` and bypassed the manager.
+                    // SQLx does not retain that error on ImmediateTx, but SQLite does.
+                    // Inspect only this already-failing path, before ROLLBACK replaces
+                    // the connection's last extended result code.
+                    match conn.lock_handle().await {
+                        Ok(mut handle) => {
+                            // SAFETY: LockedSqliteHandle exclusively owns this live
+                            // sqlite3 handle for the duration of the FFI call.
+                            let code = unsafe {
+                                libsqlite3_sys::sqlite3_extended_errcode(
+                                    handle.as_raw_handle().as_ptr(),
+                                )
+                            };
+                            reporter.report_code(code);
+                        }
+                        Err(error) => {
+                            reporter.report_error(&error);
+                        }
+                    }
                     match sqlx::query("ROLLBACK").execute(&mut *conn).await {
                         Ok(_) => {
                             // Connection is clean — it returns to the pool when `conn`
@@ -193,6 +270,7 @@ impl Drop for ImmediateTx {
                             debug!("ImmediateTx rollback succeeded, connection returned to pool");
                         }
                         Err(e) => {
+                            reporter.report_error(&e);
                             // ROLLBACK failed — connection is likely broken.
                             // Detach as last resort so it doesn't poison the pool.
                             warn!("ImmediateTx rollback failed ({}), detaching connection", e);

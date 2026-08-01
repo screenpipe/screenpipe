@@ -16,7 +16,6 @@ export const searchIndex: SettingsField[] = [
   { label: "pipe sync across devices", keywords: ["pipe sync", "sync"] },
   { label: "memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
   { label: "connection sync across devices", keywords: ["connection sync", "sync", "slack", "notion"] },
-  { label: "Refer a friend", keywords: ["referral", "invite", "free month"] },
 ];
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -43,7 +42,6 @@ import { Label } from "@/components/ui/label";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { syncFetchOrThrow } from "@/lib/sync-fetch";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
-import { ReferralCard } from "./referral-card";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import posthog from "posthog-js";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
@@ -59,6 +57,7 @@ import {
   savePendingBusinessCheckout,
   type BusinessUpgradeSelection,
 } from "@/lib/upgrade-flow";
+import { BUSINESS_PLAN_FEATURES } from "@/lib/business-upgrade-offer";
 
 const ACCOUNT_URL = screenpipeWebUrl("/account", "https://screenpipe.com");
 const BILLING_URL = screenpipeWebUrl("/account/billing", "https://screenpipe.com");
@@ -470,7 +469,7 @@ export function AccountSection() {
                 onClick={() => openExternalUrl(ACCOUNT_URL)}
               >
                 <UserCog className="w-4 h-4 mr-1.5" />
-                manage
+                web account
               </Button>
               <Button
                 variant="outline"
@@ -520,21 +519,12 @@ export function AccountSection() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <span>✓</span> encrypted cloud archive
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> cloud transcription — higher quality
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> 100x more AI queries
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> priority support
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> encrypted pipe sync across devices
-            </div>
+            {BUSINESS_PLAN_FEATURES.map((feature) => (
+              <div key={feature} className="flex items-start gap-2">
+                <span aria-hidden="true">✓</span>
+                <span>{feature}</span>
+              </div>
+            ))}
           </div>
 
           <PlanExpirationNotice
@@ -897,8 +887,6 @@ export function AccountSection() {
 
         </>
       )}
-
-      <ReferralCard />
     </div>
   );
 }

@@ -22,6 +22,10 @@ import {
   parseRateLimitWaitSeconds,
   PI_MAX_RATE_LIMIT_RETRIES,
 } from "@/lib/chat/quota-errors";
+import {
+  clearQuotaUpgrade,
+  setQuotaUpgradeFromError,
+} from "@/lib/chat/quota-upgrade";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
@@ -95,6 +99,10 @@ export function usePiForegroundEvents({
   turnIntentTextValuesMatch,
 }: PiForegroundEventsOptions) {
   const getActivePreset = () => activePresetRef?.current ?? activePreset;
+  const dailyLimitMessage = (errorStr: string) => {
+    setQuotaUpgradeFromError(errorStr);
+    return buildDailyLimitMessage(errorStr);
+  };
   // Listen for Pi / pipe events.
   //
   // Stage 3 of the events refactor: the panel registers with the
@@ -403,7 +411,7 @@ export function usePiForegroundEvents({
             if (piMessageIdRef.current) {
               const msgId = piMessageIdRef.current;
               const content = quotaErrorType === "daily"
-                ? buildDailyLimitMessage(errorStr)
+                ? dailyLimitMessage(errorStr)
                 : quotaErrorType === "hosted_busy"
                   ? buildHostedBusyFinalMessage()
                   : buildRateLimitMessage(errorStr);
@@ -454,7 +462,7 @@ export function usePiForegroundEvents({
             if (quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate") {
               if (quotaErrorType === "daily") {
                 setMessages((prev) =>
-                  prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(fullError) } : m)
+                  prev.map((m) => m.id === msgId ? { ...m, content: dailyLimitMessage(fullError) } : m)
                 );
               } else if (quotaErrorType === "hosted_busy") {
                 setMessages((prev) =>
@@ -490,6 +498,9 @@ export function usePiForegroundEvents({
             }
           }
         } else if (data.type === "message_start" && data.message?.role === "user") {
+          // A new turn is a fresh admission attempt. Hide the previous blocked
+          // action while it runs; a repeated structured rejection restores it.
+          clearQuotaUpgrade();
           // Pi fires `message_start` for each user turn. When a queued
           // follow-up starts, close the previous streaming target here so the
           // next text_delta creates a fresh assistant bubble instead of
@@ -680,7 +691,7 @@ export function usePiForegroundEvents({
             } else if (quotaErrorType === "daily") {
               posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
               setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errMsg) } : m)
+                prev.map((m) => m.id === msgId ? { ...m, content: dailyLimitMessage(errMsg) } : m)
               );
             } else if (quotaErrorType === "hosted_busy") {
               setMessages((prev) =>
@@ -748,7 +759,7 @@ export function usePiForegroundEvents({
                 void handleInvalidatedAuthToken();
                 content = buildInvalidatedAuthTokenMessage();
               } else if (quotaErrorType === "daily") {
-                content = buildDailyLimitMessage(errStr);
+                content = dailyLimitMessage(errStr);
               } else if (quotaErrorType === "hosted_busy") {
                 content = buildHostedBusyFinalMessage();
               } else if (quotaErrorType === "rate") {
@@ -813,7 +824,7 @@ export function usePiForegroundEvents({
                 const lastErrKind = lastErr ? classifyQuotaError(lastErr) : "none";
                 if (lastErr && lastErrKind === "daily") {
                   posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
-                  content = buildDailyLimitMessage(lastErr);
+                  content = dailyLimitMessage(lastErr);
                 } else if (lastErr && lastErrKind === "rate") {
                   content = buildRateLimitMessage(lastErr);
                 } else if (lastErr) {
@@ -944,7 +955,7 @@ export function usePiForegroundEvents({
             if (quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate") {
               if (quotaErrorType === "daily") {
                 setMessages((prev) =>
-                  prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errorStr) } : m)
+                  prev.map((m) => m.id === msgId ? { ...m, content: dailyLimitMessage(errorStr) } : m)
                 );
               } else if (quotaErrorType === "hosted_busy") {
                 setMessages((prev) =>
@@ -1150,6 +1161,7 @@ export function usePiForegroundEvents({
                     url: providerConfig.url,
                     apiKey: providerConfig.apiKey,
                     maxTokens: providerConfig.maxTokens,
+                    maxContextChars: providerConfig.maxContextChars ?? null,
                     systemPrompt: providerConfig.systemPrompt,
                     token: settings.user?.token ?? null,
                   };
