@@ -81,6 +81,7 @@ import {
   reconcileCanvasDocument,
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
+import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
 import {
   generateLiveViewWithPi,
   type GeneratedLiveViewBlock,
@@ -170,7 +171,6 @@ type PreviewSource =
 
 type PreviewDestination = "new" | "replace";
 
-const MAX_DASHBOARDS = 12;
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;

@@ -7,6 +7,7 @@ import {
   APP_ENTITLEMENT_CLOCK_SKEW_MS,
   APP_ENTITLEMENT_MAX_STALE_MS,
   getLocalPlanPolicy,
+  getBusinessCapacityUpgrade,
   getPaidPlanPolicyDeadlineMs,
   hasAppEntitlement,
   hasCloudEntitlement,
@@ -48,6 +49,22 @@ describe("app entitlement", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  it("maps capacity plans without upselling org or top-tier accounts", () => {
+    expect(getBusinessCapacityUpgrade("pro")).toEqual({
+      targetPlan: "pro_max",
+      name: "Business Max",
+      monthlyPrice: 100,
+    });
+    expect(getBusinessCapacityUpgrade("business_max")).toEqual({
+      targetPlan: "pro_ultra",
+      name: "Business Ultra",
+      monthlyPrice: 200,
+    });
+    expect(getBusinessCapacityUpgrade("pro_ultra")).toBeNull();
+    expect(getBusinessCapacityUpgrade("team")).toBeNull();
+    expect(getBusinessCapacityUpgrade("enterprise")).toBeNull();
   });
 
   it("allows fresh active app access", () => {
@@ -705,6 +722,8 @@ describe("planDisplayName", () => {
   it("maps the self-serve tiers the same on every build", () => {
     expect(planDisplayName("standard")).toBe("Basic");
     expect(planDisplayName("pro")).toBe("Business");
+    expect(planDisplayName("pro_max")).toBe("Business Max");
+    expect(planDisplayName("pro_ultra")).toBe("Business Ultra");
     expect(planDisplayName("lifetime")).toBe("Lifetime");
     expect(planDisplayName("none")).toBe("Free");
     expect(planDisplayName(null)).toBe("Free");

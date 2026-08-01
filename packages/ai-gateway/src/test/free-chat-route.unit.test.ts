@@ -38,9 +38,11 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			}),
 		},
 		DB: {
-			prepare: () => ({
-				bind: () => ({
-					first: async () => null,
+			prepare: (sql: string) => ({
+				bind: (...values: unknown[]) => ({
+					first: async () => sql.includes('INSERT OR IGNORE INTO usage')
+						? { reservation_key: values[0] }
+						: null,
 					run: async () => ({ success: true, meta: { changes: 1 } }),
 				}),
 			}),
@@ -95,6 +97,38 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(401);
 		expect(await errorCode(response)).toBe('authentication_required');
 		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['without credentials', {}],
+		['after an invalid bearer falls back to anonymous', { Authorization: 'Bearer invalid-canary' }],
+	])('returns the Free usage policy %s', async (
+		_label: string,
+		headers: Record<string, string>,
+	) => {
+		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+			headers,
+		}), env, ctx);
+		const body = await response.json() as {
+			tier: string;
+			cost_limit_reached: boolean;
+			hosted_ai: {
+				plan: string;
+				included_credits: number;
+				model_access: string[];
+			};
+		};
+
+		expect(response.status).toBe(200);
+		expect(body).toMatchObject({
+			tier: 'anonymous',
+			cost_limit_reached: false,
+			hosted_ai: {
+				plan: 'free',
+				included_credits: 10,
+			},
+		});
+		expect(body.hosted_ai.model_access).toContain('auto');
 	});
 
 	it('lets the trusted runner bearer reach hosted background inference without a human user id', async () => {
@@ -408,6 +442,35 @@ describe('/v1/chat/completions free-plan route policy', () => {
 
 		expect(response.status).toBe(503);
 		expect(await errorCode(response)).toBe('cost_control_unavailable');
+	});
+
+	it('returns the Max capacity tier from the authenticated usage route', async () => {
+		verifyTokenMock.mockImplementation(async () => ({ sub: 'user_pro_max' }) as any);
+		globalThis.fetch = mock(async () => new Response(JSON.stringify({
+			success: true,
+			user: {
+				clerk_id: 'user_pro_max',
+				cloud_subscribed: true,
+				app_entitled: true,
+				subscription_plan: 'pro_max',
+				entitlement: { active: true, plan: 'pro_max', features: { app: true } },
+			},
+		}), { status: 200 })) as typeof fetch;
+
+		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+			headers: { Authorization: 'Bearer eyJ.pro-max.paid' },
+		}), env, ctx);
+		const body = await response.json() as Record<string, unknown>;
+
+		expect(response.status).toBe(200);
+		expect(body).toMatchObject({
+			tier: 'business_max',
+			limit_today: 120,
+			remaining: 120,
+			upsell_banner: false,
+			upgrade_eligible: false,
+			cost_limit_reached: false,
+		});
 	});
 
 	it('normalizes a removed model before gating and reaches the fallback provider', async () => {

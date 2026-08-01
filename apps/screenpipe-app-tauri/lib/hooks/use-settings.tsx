@@ -799,6 +799,22 @@ export function createDefaultSettingsObject(): Settings {
 	}
 }
 
+export function normalizeSettingsArrays(settings: Settings): boolean {
+	const defaults = {
+		...createDefaultSettingsObject(),
+		aiPresets: makeDefaultPresets(settings.user?.cloud_subscribed === true),
+	};
+	let changed = false;
+
+	for (const [key, fallback] of Object.entries(defaults)) {
+		if (!Array.isArray(fallback) || Array.isArray(settings[key])) continue;
+		settings[key] = [...fallback];
+		changed = true;
+	}
+
+	return changed;
+}
+
 // Store singleton
 let _store: Promise<Store> | undefined;
 
@@ -891,6 +907,8 @@ export const saveAndEncrypt = async (store: Store) => {
  * pre-hydration state can't sign the user out.
  */
 async function setSettingsStripped(store: Store, settings: Settings) {
+	normalizeSettingsArrays(settings);
+
 	const token = settings?.user?.token;
 	// Default to "safe to write as-is" when there's no token to protect.
 	let persisted = !token;
@@ -951,8 +969,9 @@ function createSettingsStore() {
 		// #3943: re-hydrate the cloud token that no longer persists in store.bin.
 		await hydrateCloudToken(settings);
 
+		let needsUpdate = normalizeSettingsArrays(settings);
+
 		// Migration: Ensure existing users have deviceId for free tier tracking
-		let needsUpdate = false;
 		const existingUserGoal = normalizeUserGoalCategory(
 			settings.userGoalCategory,
 		);
@@ -1014,7 +1033,7 @@ function createSettingsStore() {
 		// get() returns directly when there are no stored settings).
 
 		// Migration: Add default presets if user has none
-		if (!settings.aiPresets || settings.aiPresets.length === 0) {
+		if (!Array.isArray(settings.aiPresets) || settings.aiPresets.length === 0) {
 			const isPro = settings.user?.cloud_subscribed === true;
 			settings.aiPresets = makeDefaultPresets(isPro) as any;
 			needsUpdate = true;
@@ -1284,6 +1303,7 @@ function createSettingsStore() {
 			return store.onKeyChange("settings", async (newValue: Settings | null | undefined) => {
 				const mySeq = ++seq;
 				const next = await hydrateCloudToken(newValue || createDefaultSettingsObject());
+				normalizeSettingsArrays(next);
 				if (mySeq === seq) callback(next);
 			});
 		});

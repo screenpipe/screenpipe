@@ -19,6 +19,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::notifications::client;
+use crate::notifications::store::NotificationPriority;
 use crate::store::SettingsStore;
 
 /// How long a calendar prewarm suppresses the audio/UI-driven `meeting_started`
@@ -239,12 +240,13 @@ pub fn start(app: AppHandle) {
             } else {
                 format!("meeting starting in {minutes} min")
             };
-            client::send_typed_with_actions(
+            client::send_typed_with_actions_and_priority(
                 &header,
                 format!("screenpipe is ready to transcribe: {title}"),
                 "meeting",
                 Some(30_000),
                 actions,
+                NotificationPriority::High,
             );
         }
     });
@@ -337,12 +339,13 @@ pub fn start(app: AppHandle) {
                 actions.push(hd);
             }
 
-            client::send_typed_with_actions(
+            client::send_typed_with_actions_and_priority(
                 "meeting detected",
                 format!("screenpipe is saving this meeting for transcription: {title}"),
                 "meeting",
                 Some(30_000),
                 actions,
+                NotificationPriority::High,
             );
         }
     });

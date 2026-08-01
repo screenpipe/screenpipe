@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 85
-- Declared test blocks: 244
-- Weighted coverage points: 186.7
+- Mapped specs: 86
+- Declared test blocks: 245
+- Weighted coverage points: 187.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 69 | 218 | 175.2 | 15 | 72 | 90% |
-| macos | 81 | 207 | 157.5 | 17 | 74 | 88% |
-| linux | 59 | 178 | 145.0 | 13 | 67 | 87% |
+| windows | 70 | 219 | 176.2 | 15 | 74 | 90% |
+| macos | 82 | 208 | 158.5 | 17 | 76 | 88% |
+| linux | 60 | 179 | 146.0 | 13 | 69 | 87% |
 
 ## Runtime Results
 
@@ -47,7 +47,7 @@ pass/fail/skip counts.
 | pipes | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts |
 | real-ui-e2e | 47 specs / 136 tests / 109.0 pts | 50 specs / 123 tests / 99.1 pts | 43 specs / 114 tests / 95.4 pts |
 | settings | 14 specs / 36 tests / 33.0 pts | 16 specs / 31 tests / 26.7 pts | 13 specs / 28 tests / 25.0 pts |
-| storage-privacy | 8 specs / 36 tests / 27.3 pts | 6 specs / 15 tests / 14.1 pts | 5 specs / 15 tests / 14.1 pts |
+| storage-privacy | 8 specs / 36 tests / 27.3 pts | 7 specs / 17 tests / 16.1 pts | 5 specs / 15 tests / 14.1 pts |
 | tauri-command | 11 specs / 20 tests / 13.3 pts | 12 specs / 22 tests / 13.8 pts | 10 specs / 19 tests / 12.3 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
 

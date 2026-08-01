@@ -1351,7 +1351,13 @@ struct InboxEntry: Codable, Identifiable {
     var pipe_name: String?
     var timestamp: String?
     var read: Bool?
+    var priority: String?
     var actions: [NotificationAction]?
+}
+
+private enum InboxViewMode {
+    case priority
+    case all
 }
 
 /// Screen rect of the shortcut pill (bottom-left AppKit coords) so the inbox
@@ -1406,6 +1412,29 @@ fileprivate func inboxRowActions(_ entry: InboxEntry) -> [NotificationAction] {
     }
 }
 
+/// Old history rows predate the explicit priority field. Keep only the narrow
+/// compatibility cases that clearly need human attention; routine completions
+/// remain available in All without interrupting the user.
+fileprivate func inboxIsHighPriority(_ entry: InboxEntry) -> Bool {
+    if let explicit = entry.priority?.lowercased(), ["high", "normal", "low"].contains(explicit) {
+        return explicit == "high"
+    }
+    if !inboxRowActions(entry).isEmpty { return true }
+    let type = (entry.type ?? "").lowercased()
+    if ["capture_stall", "capturestalls", "disk_pressure", "db_recovery"].contains(type) {
+        return true
+    }
+    let title = entry.title.lowercased()
+    return [
+        "recording stopped",
+        "capture paused",
+        "not capturing",
+        "database needs recovery",
+        "live transcript not flowing",
+        "audio paused",
+    ].contains { title.contains($0) }
+}
+
 fileprivate func inboxTimeAgo(_ ts: String?) -> String {
     guard let ts = ts else { return "" }
     let iso = ISO8601DateFormatter()
@@ -1450,10 +1479,22 @@ private struct InboxRowView: View {
                                 .padding(.top, 5)
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.title)
-                                .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
+                            HStack(spacing: 5) {
+                                Text(entry.title)
+                                    .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
+                                    .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                if inboxIsHighPriority(entry) {
+                                    Text("high")
+                                        .font(Brand.swiftUIMonoFont(size: 7, weight: .medium))
+                                        .foregroundColor(.primary.opacity(0.7))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 2)
+                                        .overlay(
+                                            Capsule().stroke(Color.secondary.opacity(0.35), lineWidth: 0.5)
+                                        )
+                                }
+                            }
                             if !isExpanded && !entry.body.isEmpty {
                                 Text(entry.body)
                                     .font(Brand.swiftUIMonoFont(size: 9))
@@ -1519,7 +1560,16 @@ private struct InboxRowView: View {
 
             Divider().opacity(0.4)
         }
-        .background(hovered ? Color.primary.opacity(0.04) : Color.clear)
+        .background(
+            hovered
+                ? Color.primary.opacity(0.05)
+                : (inboxIsHighPriority(entry) ? Color.primary.opacity(0.02) : Color.clear)
+        )
+        .overlay(alignment: .leading) {
+            if inboxIsHighPriority(entry) {
+                Rectangle().fill(Color.primary.opacity(0.55)).frame(width: 2)
+            }
+        }
         .onHover { hovered = $0 }
     }
 }
@@ -1527,43 +1577,113 @@ private struct InboxRowView: View {
 @available(macOS 13.0, *)
 private struct InboxListView: View {
     let entries: [InboxEntry]
+    let viewMode: InboxViewMode
     let expandedId: String?
+    let onViewModeChange: (InboxViewMode) -> Void
     let onToggleExpand: (String) -> Void
     let onRemove: (String) -> Void
     let onClearAll: () -> Void
     let onRunAction: (InboxEntry, NotificationAction) -> Void
 
+    private var priorityEntries: [InboxEntry] {
+        entries.filter(inboxIsHighPriority)
+    }
+
+    private var otherEntries: [InboxEntry] {
+        entries.filter { !inboxIsHighPriority($0) }
+    }
+
+    @ViewBuilder
+    private func sectionLabel(_ label: String) -> some View {
+        Text(label)
+            .font(Brand.swiftUIMonoFont(size: 8))
+            .foregroundColor(.secondary.opacity(0.65))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.top, 7)
+            .padding(.bottom, 3)
+    }
+
+    @ViewBuilder
+    private func row(_ entry: InboxEntry) -> some View {
+        InboxRowView(
+            entry: entry,
+            isExpanded: expandedId == entry.id,
+            onToggleExpand: { onToggleExpand(entry.id) },
+            onRemove: { onRemove(entry.id) },
+            onRunAction: { onRunAction(entry, $0) }
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("notifications")
-                    .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
-                    .foregroundColor(.primary)
-                Spacer()
-                if !entries.isEmpty {
-                    BrandTextButton(label: "clear all", fontSize: 9, action: onClearAll)
+            VStack(spacing: 7) {
+                HStack {
+                    Text("inbox")
+                        .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    if viewMode == .all && !entries.isEmpty {
+                        BrandTextButton(label: "clear all", fontSize: 9, action: onClearAll)
+                    }
                 }
+                HStack(spacing: 2) {
+                    Button(action: { onViewModeChange(.priority) }) {
+                        Text("priority  \(priorityEntries.count)")
+                            .font(Brand.swiftUIMonoFont(size: 9, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .background(viewMode == .priority ? Color.primary.opacity(0.1) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    Button(action: { onViewModeChange(.all) }) {
+                        Text("all  \(entries.count)")
+                            .font(Brand.swiftUIMonoFont(size: 9, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .background(viewMode == .all ? Color.primary.opacity(0.1) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(2)
+                .background(Color.primary.opacity(0.035))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             Divider()
-            if entries.isEmpty {
+            if entries.isEmpty || (viewMode == .priority && priorityEntries.isEmpty) {
                 Spacer()
-                Text("no notifications yet")
-                    .font(Brand.swiftUIMonoFont(size: 10))
-                    .foregroundColor(.secondary)
+                VStack(spacing: 4) {
+                    Text(entries.isEmpty ? "no notifications yet" : "you’re caught up")
+                        .font(Brand.swiftUIMonoFont(size: 10, weight: .medium))
+                        .foregroundColor(.primary.opacity(0.8))
+                    if !entries.isEmpty {
+                        Button(action: { onViewModeChange(.all) }) {
+                            Text("\(entries.count) other \(entries.count == 1 ? "update" : "updates") in all")
+                                .font(Brand.swiftUIMonoFont(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
                 Spacer()
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(entries) { entry in
-                            InboxRowView(
-                                entry: entry,
-                                isExpanded: expandedId == entry.id,
-                                onToggleExpand: { onToggleExpand(entry.id) },
-                                onRemove: { onRemove(entry.id) },
-                                onRunAction: { onRunAction(entry, $0) }
-                            )
+                        if !priorityEntries.isEmpty {
+                            sectionLabel(viewMode == .priority ? "needs your attention" : "high priority")
+                            ForEach(priorityEntries) { entry in
+                                row(entry)
+                            }
+                        }
+                        if viewMode == .all && !otherEntries.isEmpty {
+                            sectionLabel("other updates")
+                            ForEach(otherEntries) { entry in
+                                row(entry)
+                            }
                         }
                     }
                 }
@@ -1579,6 +1699,7 @@ class InboxPanelController: NSObject {
     private var panel: NSPanel?
     private var hostingView: NSHostingView<AnyView>?
     private var entries: [InboxEntry] = []
+    private var viewMode: InboxViewMode = .priority
     private var expandedId: String?
     private var visible = false
     private var globalClickMonitor: Any?
@@ -1731,7 +1852,13 @@ class InboxPanelController: NSObject {
         guard let panel = panel else { return }
         let view = InboxListView(
             entries: entries,
+            viewMode: viewMode,
             expandedId: expandedId,
+            onViewModeChange: { [weak self] mode in
+                guard let self = self else { return }
+                self.viewMode = mode
+                self.updateContent()
+            },
             onToggleExpand: { [weak self] id in
                 guard let self = self else { return }
                 if self.expandedId == id {

@@ -12,7 +12,7 @@ export const searchIndex: SettingsField[] = [
   // doesn't contain the field.
   { label: "Sign in to Screenpipe", keywords: ["login", "log in", "sign in"] },
   { label: "Logout", keywords: ["signout", "sign out", "log out"] },
-  { label: "Screenpipe Business", keywords: ["subscription", "billing", "plan", "pro", "business", "upgrade", "manage"] },
+  { label: "Screenpipe Business", keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
   { label: "pipe sync across devices", keywords: ["pipe sync", "sync"] },
   { label: "memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
   { label: "connection sync across devices", keywords: ["connection sync", "sync", "slack", "notion"] },
@@ -31,6 +31,7 @@ import { toast } from "@/components/ui/use-toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
 import {
+  getBusinessCapacityUpgrade,
   planDisplayName,
   isSignedInCloudSubscriber,
   type AppUser,
@@ -83,9 +84,18 @@ function isBusinessSubscriptionPlan(plan: string | null | undefined): boolean {
   // action. Keep the no-plan fallback for older Business responses that only
   // carried the cloud flag.
   if (!plan) return true;
-  return ["pro", "business", "team", "enterprise", "monthly", "annual"].includes(
-    plan.toLowerCase(),
-  );
+  return [
+    "pro",
+    "business",
+    "pro_max",
+    "business_max",
+    "pro_ultra",
+    "business_ultra",
+    "team",
+    "enterprise",
+    "monthly",
+    "annual",
+  ].includes(plan.toLowerCase());
 }
 
 async function openExternalUrl(url: string): Promise<void> {
@@ -157,6 +167,22 @@ export function AccountSection() {
   const hasExistingSubscription =
     hasExistingStripeSubscriptionPlan(subscriptionPlan) &&
     !hasExpiringProfilePlan;
+  const capacityUpgrade =
+    process.env.NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED === "true"
+      ? getBusinessCapacityUpgrade(subscriptionPlan)
+      : null;
+
+  const openCapacityUpgrade = async () => {
+    if (!capacityUpgrade) return;
+    const billingUrl = new URL(BILLING_URL);
+    billingUrl.searchParams.set("target_plan", capacityUpgrade.targetPlan);
+    billingUrl.searchParams.set("interval", "month");
+    posthog.capture("desktop_business_capacity_upgrade_opened", {
+      current_plan: subscriptionPlan,
+      target_plan: capacityUpgrade.targetPlan,
+    });
+    await openExternalUrl(billingUrl.toString());
+  };
 
   useEffect(() => {
     const setupDeepLink = async () => {
@@ -516,6 +542,31 @@ export function AccountSection() {
             onClick={() => openExternalUrl(BILLING_URL)}
             variant="account"
           />
+
+          {capacityUpgrade && (
+            <div
+              className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/20 px-3.5 py-3"
+              data-testid="account-capacity-upgrade"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium">need more hosted AI capacity?</p>
+                <p className="text-xs text-muted-foreground">
+                  {capacityUpgrade.name} adds higher query and request-rate
+                  limits for ${capacityUpgrade.monthlyPrice}/month.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                data-testid="account-capacity-upgrade-button"
+                onClick={openCapacityUpgrade}
+              >
+                view {capacityUpgrade.name.replace("Business ", "")}
+                <ExternalLinkIcon className="ml-1.5 h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
 
           {/* Pipe sync */}
           <div className="mt-4 pt-4 border-t border-border/50">

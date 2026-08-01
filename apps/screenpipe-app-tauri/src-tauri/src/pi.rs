@@ -7,7 +7,8 @@
 //! Manages the pi coding agent via RPC mode (stdin/stdout JSON protocol).
 
 use screenpipe_core::agents::pi::{
-    screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR, PI_PACKAGE, SCREENPIPE_API_URL,
+    apply_custom_provider_compat, screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR,
+    PI_PACKAGE, SCREENPIPE_API_URL,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1761,12 +1762,15 @@ async fn build_models_json(
                     model_def.insert("compat".into(), serde_json::Value::Object(compat));
                 }
 
-                let user_provider = json!({
+                let mut user_provider = json!({
                     "baseUrl": base_url,
                     "api": wire_api,
                     "apiKey": api_key,
                     "models": [ serde_json::Value::Object(model_def) ]
                 });
+                if provider_name == "custom" {
+                    apply_custom_provider_compat(&mut user_provider);
+                }
 
                 providers_map.insert(provider_name.to_string(), user_provider);
             }
@@ -5848,6 +5852,26 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(providers.len(), 2);
         assert!(providers.contains_key("custom"));
         assert_eq!(providers["custom"]["baseUrl"], "http://my-server:8080/v1");
+        assert_eq!(providers["custom"]["headers"]["User-Agent"], "screenpipe");
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_repairs_ai_genesis_custom_url() {
+        for base_url in [
+            "https://ai.ai-genesis.app",
+            "https://api.ai-genesis.app/",
+        ] {
+            let mut pc = make_provider_config("custom", "glm-5.2");
+            pc.url = base_url.to_string();
+            let config = build_models_json(None, Some(&pc)).await;
+            let custom = &config["providers"]["custom"];
+
+            assert_eq!(
+                custom["baseUrl"],
+                format!("{}/v1", base_url.trim_end_matches('/'))
+            );
+            assert_eq!(custom["headers"]["User-Agent"], "screenpipe");
+        }
     }
 
     #[tokio::test]

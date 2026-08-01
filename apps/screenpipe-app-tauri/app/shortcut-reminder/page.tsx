@@ -16,6 +16,7 @@ import { X, Bell, RotateCw, Loader2, CheckCircle2 } from "lucide-react";
 import { useOverlayData } from "./use-overlay-data";
 import { AudioEqualizer } from "./audio-equalizer";
 import { ScreenMatrix } from "./screen-matrix";
+import { isHighPriorityNotification } from "@/lib/notifications/priority";
 
 type ReminderSettings = {
   disabledShortcuts?: string[];
@@ -41,8 +42,14 @@ function useInboxUnread(): boolean {
           `http://localhost:${config.port || 11435}/notifications`,
         );
         if (res.ok && !cancelled) {
-          const entries: { read: boolean }[] = await res.json();
-          setUnread(entries.some((n) => !n.read));
+          const entries: Array<{
+            read: boolean;
+            priority?: string;
+            type?: string;
+            title?: string;
+            actions?: Array<{ type?: string; label?: string }>;
+          }> = await res.json();
+          setUnread(entries.some((n) => !n.read && isHighPriorityNotification(n)));
         }
       } catch {
         // app server not ready yet

@@ -19,6 +19,7 @@
 //! don't spam.
 
 use crate::notifications::client;
+use crate::notifications::store::NotificationPriority;
 use crate::store::SettingsStore;
 use serde::Deserialize;
 use serde_json::Value;
@@ -141,7 +142,12 @@ pub(super) fn handle(app: &AppHandle, _name: &str, data: &Value) {
         }
     };
 
-    client::send_typed(title, body, "power", None);
+    let priority = if matches!(evt.to.as_str(), "FullPause" | "AudioPaused") {
+        NotificationPriority::High
+    } else {
+        NotificationPriority::Low
+    };
+    client::send_typed_with_priority(title, body, "power", None, priority);
 }
 
 /// Read `notificationPrefs.powerModeChanges` from the settings store.

@@ -191,7 +191,7 @@ After writing, send a notification:
 ```bash
 curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
-  -d '{"title": "AI Prompt Journal", "body": "Captured N new prompts (Tool1: X, Tool2: Y)\n\n[Open journal]({output_path})"}'
+  -d '{"title": "AI Prompt Journal", "body": "Captured N new prompts (Tool1: X, Tool2: Y)\n\n[Open journal]({output_path})", "priority": "low"}'
 ```
 
 If no NEW prompts were found (all duplicates or zero AI usage), end silently — no notification.

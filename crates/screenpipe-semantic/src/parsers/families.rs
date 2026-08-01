@@ -11,7 +11,7 @@ use crate::{
     ParserManifest, ProjectionError, SemanticItem, SemanticKind, SemanticParser, SemanticTree,
 };
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const MAX_STRUCTURAL_CANDIDATES: usize = 256;
 
@@ -165,7 +165,7 @@ fn parse_conversation(
         }
     }
     if messages.is_empty() {
-        return Vec::new();
+        return chromium_chat_list(profile, tree).unwrap_or_default();
     }
 
     let mut conversation = SemanticItem::new(
@@ -368,8 +368,10 @@ fn parse_document(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Seman
     let Some((node, body, _)) = best else {
         return Vec::new();
     };
+    let body = truncate_body(body);
     let title = node_label(tree, node)
         .filter(|label| !looks_like_search_label(label))
+        .or_else(|| first_tab_title(tree))
         .or_else(|| first_root_title(tree))
         .unwrap_or(profile.display_name)
         .trim();
@@ -474,7 +476,7 @@ fn parse_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Seman
     if bodies.is_empty() {
         return Vec::new();
     }
-    let body = bodies.join("\n");
+    let body = truncate_body(&bodies.join("\n")).to_owned();
     let mut terminal = SemanticItem::new(
         "terminal",
         SemanticKind::Document,
@@ -516,7 +518,7 @@ fn parse_windows_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> V
             .value(pane)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_owned)
+            .map(|value| truncate_body(value).to_owned())
             .or_else(|| collect_text(tree, pane));
         if let Some(body) = body {
             bodies.push(body);
@@ -539,7 +541,7 @@ fn parse_windows_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> V
         format!("{}:terminal", profile.id),
         IdentityQuality::Ephemeral,
     );
-    let body = bodies.join("\n");
+    let body = truncate_body(&bodies.join("\n")).to_owned();
     // Until the walker reads TermControl's UIA TextPattern, the only text on
     // the pane is its tab title. Echoing it as the body would advertise
     // buffer content that was never captured, so record identity alone.
@@ -796,6 +798,190 @@ fn labeled_uia_turns(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option
     })
 }
 
+/// Chromium-UIA chat-list surface (Codex desktop and relatives): no open
+/// conversation, but the sidebar lists recent chats as `ListItem` rows whose
+/// row-action buttons carry stable "Pin chat"/"Archive chat" names. Hard gate
+/// on the `RootWebArea` document, a "New chat" button, and per-row archive
+/// controls before extracting; anything else abstains so the surface never
+/// shadows a real conversation view.
+fn chromium_chat_list(
+    profile: &BuiltinAppProfile,
+    tree: &SemanticTree,
+) -> Option<Vec<SemanticItem>> {
+    let root = chromium_document_root(tree)?;
+    let mut new_chat = false;
+    let mut entries: Vec<(NodeId, String, Option<String>)> = Vec::new();
+    for node in tree.descendants(root) {
+        if let Some(label) = button_label(tree, node) {
+            // Any per-turn control means a conversation is open. Listing only
+            // the sidebar would silently mask a drifted conversation layout,
+            // so the open view must keep reporting not_handled instead.
+            if [
+                "Edit user message",
+                "Copy message",
+                "Good response",
+                "Bad response",
+            ]
+            .iter()
+            .any(|anchor| label.eq_ignore_ascii_case(anchor))
+            {
+                return None;
+            }
+            new_chat |= label.eq_ignore_ascii_case("New chat");
+            continue;
+        }
+        if !tree
+            .role(node)
+            .is_some_and(|role| role.eq_ignore_ascii_case("ListItem"))
+        {
+            continue;
+        }
+        if entries.len() == MAX_STRUCTURAL_CANDIDATES {
+            break;
+        }
+        let has_row_actions = tree.descendants(node).skip(1).any(|child| {
+            button_label(tree, child)
+                .is_some_and(|label| contains_ascii_case_insensitive(label, "archive chat"))
+        });
+        if !has_row_actions {
+            continue;
+        }
+        let Some(raw) = node_content(tree, node) else {
+            continue;
+        };
+        let (title, age) = chat_list_title(raw);
+        if title.is_empty() || title.len() > 240 {
+            continue;
+        }
+        entries.push((node, title, age));
+    }
+    if !new_chat || entries.is_empty() {
+        return None;
+    }
+
+    let mut list = SemanticItem::new(
+        "chat-list",
+        SemanticKind::Conversation,
+        format!("{}:chat-list", profile.id),
+        IdentityQuality::Derived,
+    );
+    list.title = Some(profile.display_name.to_owned());
+    list.metadata
+        .insert("app".into(), profile.display_name.into());
+    list.metadata.insert("family".into(), "conversation".into());
+    list.metadata.insert("view".into(), "chat_list".into());
+    list.source_nodes.push(root);
+    let mut items = Vec::with_capacity(entries.len() + 1);
+    items.push(list);
+    for (index, (node, title, age)) in entries.into_iter().enumerate() {
+        let mut chat = SemanticItem::new(
+            format!("chat-{index}"),
+            SemanticKind::Conversation,
+            format!("{}:chat:{}", profile.id, key_component(&title)),
+            IdentityQuality::Derived,
+        );
+        chat.parent_local_id = Some("chat-list".into());
+        chat.title = Some(title);
+        if let Some(age) = age {
+            chat.metadata.insert("last_active".into(), age);
+        }
+        chat.source_nodes.push(node);
+        items.push(chat);
+    }
+    Some(items)
+}
+
+/// Sidebar rows render as one flattened text: the chat title, an optional
+/// tooltip duplicate of the title, and a trailing relative age ("2d", "1mo").
+/// Recover the title deterministically and keep the age separate; ambiguity
+/// keeps the raw text instead of guessing.
+fn chat_list_title(raw: &str) -> (String, Option<String>) {
+    let (text, age) = split_trailing_age(raw.trim());
+    let mut title = text.trim_end_matches('…').trim_end();
+    if let Some(index) = title.find('…') {
+        // "Long title…Long ti…": the first segment before the ellipsis is the
+        // longest rendering of the title.
+        title = title[..index].trim_end();
+    } else {
+        title = collapse_repeated_tail(title);
+    }
+    (title.trim().to_owned(), age)
+}
+
+/// Trailing relative-age token as Codex renders it (unit-capped, one or two
+/// digits). Range validation resolves title-digit collisions: "…731w" cannot
+/// be "31w" (weeks cap at 4), so the age is "1w" and "73" stays in the title.
+fn split_trailing_age(text: &str) -> (&str, Option<String>) {
+    const UNITS: &[(&str, u32)] = &[
+        ("mo", 12),
+        ("y", 9),
+        ("w", 4),
+        ("d", 6),
+        ("h", 23),
+        ("m", 59),
+        ("s", 59),
+    ];
+    for (unit, cap) in UNITS {
+        let Some(before_unit) = text.strip_suffix(unit) else {
+            continue;
+        };
+        let digits: Vec<char> = before_unit
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if digits.is_empty() {
+            continue;
+        }
+        let mut chosen = None;
+        for take in [2usize.min(digits.len()), 1] {
+            let start = before_unit.len() - take;
+            let Ok(value) = before_unit[start..].parse::<u32>() else {
+                continue;
+            };
+            if value == 0 || value > *cap {
+                continue;
+            }
+            let leaves_non_digit_end = !before_unit[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_ascii_digit());
+            if leaves_non_digit_end {
+                chosen = Some(take);
+                break;
+            }
+            if take == 1 {
+                chosen.get_or_insert(take);
+            }
+        }
+        if let Some(take) = chosen {
+            let start = before_unit.len() - take;
+            return (
+                &before_unit[..start],
+                Some(format!("{}{unit}", &before_unit[start..])),
+            );
+        }
+        break;
+    }
+    (text, None)
+}
+
+/// Collapse "Full titleFull tit" tooltip duplication: drop the shortest tail
+/// that is a prefix of the remaining head.
+fn collapse_repeated_tail(text: &str) -> &str {
+    let minimum_tail = 12;
+    let start = text.len().div_ceil(2);
+    for index in start..text.len().saturating_sub(minimum_tail) {
+        if !text.is_char_boundary(index) {
+            continue;
+        }
+        if text[..index].starts_with(&text[index..]) {
+            return &text[..index];
+        }
+    }
+    text
+}
+
 fn joined_buffer_text(tree: &SemanticTree, buffer: &[NodeId]) -> Option<String> {
     let mut lines: Vec<&str> = Vec::new();
     let mut bytes = 0usize;
@@ -823,29 +1009,32 @@ fn joined_buffer_text(tree: &SemanticTree, buffer: &[NodeId]) -> Option<String> 
 
 fn leaf_marker_nodes(tree: &SemanticTree, tokens: &[&str]) -> Vec<NodeId> {
     let mut candidates = Vec::new();
-    for root in tree.roots() {
+    'roots: for root in tree.roots() {
         for node in tree.descendants(root) {
             if signature_has_any(tree, node, tokens) {
                 candidates.push(node);
                 if candidates.len() == MAX_STRUCTURAL_CANDIDATES {
-                    break;
+                    break 'roots;
                 }
             }
         }
-        if candidates.len() == MAX_STRUCTURAL_CANDIDATES {
-            break;
+    }
+    // Keep only leaf-most candidates. One ancestor walk per candidate marks
+    // every candidate that contains another, staying linear in tree depth
+    // where the pairwise check was quadratic on marker-dense trees.
+    let marked: HashSet<NodeId> = candidates.iter().copied().collect();
+    let mut has_candidate_descendant = HashSet::new();
+    for &candidate in &candidates {
+        let mut current = tree.parent(candidate);
+        while let Some(parent) = current {
+            if marked.contains(&parent) {
+                has_candidate_descendant.insert(parent);
+            }
+            current = tree.parent(parent);
         }
     }
+    candidates.retain(|candidate| !has_candidate_descendant.contains(candidate));
     candidates
-        .iter()
-        .copied()
-        .filter(|candidate| {
-            !candidates
-                .iter()
-                .copied()
-                .any(|other| other != *candidate && is_descendant_of(tree, other, *candidate))
-        })
-        .collect()
 }
 
 fn is_descendant_of(tree: &SemanticTree, node: NodeId, ancestor: NodeId) -> bool {
@@ -883,9 +1072,15 @@ fn signature_contains(tree: &SemanticTree, node: NodeId, token: &str) -> bool {
             .any(|class| contains_ascii_case_insensitive(class, token))
 }
 
+/// Per-body byte cap. A single oversized surface (terminal scrollback, a huge
+/// document buffer) must truncate rather than blow the projection text budget
+/// and lose the whole frame.
+const MAX_COLLECTED_BODY_BYTES: usize = 48 * 1024;
+
 fn collect_text(tree: &SemanticTree, root: NodeId) -> Option<String> {
     let mut lines: Vec<&str> = Vec::new();
-    for node in tree.descendants(root) {
+    let mut bytes = 0usize;
+    'nodes: for node in tree.descendants(root) {
         if !is_text_role(tree.role(node)) {
             continue;
         }
@@ -897,10 +1092,25 @@ fn collect_text(tree: &SemanticTree, root: NodeId) -> Option<String> {
             if line.trim().is_empty() || lines.last().is_some_and(|previous| *previous == line) {
                 continue;
             }
+            bytes += line.len() + usize::from(!lines.is_empty());
+            if bytes > MAX_COLLECTED_BODY_BYTES {
+                break 'nodes;
+            }
             lines.push(line);
         }
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn truncate_body(value: &str) -> &str {
+    if value.len() <= MAX_COLLECTED_BODY_BYTES {
+        return value;
+    }
+    let mut end = MAX_COLLECTED_BODY_BYTES;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].trim_end()
 }
 
 fn first_marked_subtree_text(tree: &SemanticTree, root: NodeId, tokens: &[&str]) -> Option<String> {
@@ -926,6 +1136,35 @@ fn first_marked_text_in<'a>(
     tree.descendants(root)
         .find(|node| signature_has_any(tree, *node, tokens))
         .and_then(|node| node_content(tree, node))
+}
+
+/// Tabbed XAML document apps (Windows Notepad) label the open file on a
+/// `TabItem` rather than on the text surface itself. Prefer the tab's inner
+/// text node, which carries the bare name without state suffixes such as
+/// ". Unmodified.".
+fn first_tab_title(tree: &SemanticTree) -> Option<&str> {
+    for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if !tree
+                .role(node)
+                .is_some_and(|role| role.eq_ignore_ascii_case("TabItem"))
+            {
+                continue;
+            }
+            let title = tree
+                .descendants(node)
+                .skip(1)
+                .find(|child| is_text_role(tree.role(*child)))
+                .and_then(|child| node_content(tree, child))
+                .or_else(|| node_content(tree, node));
+            if let Some(title) =
+                title.filter(|title| title.len() <= 240 && !title.contains(['\n', '\r']))
+            {
+                return Some(title);
+            }
+        }
+    }
+    None
 }
 
 fn first_heading(tree: &SemanticTree) -> Option<&str> {

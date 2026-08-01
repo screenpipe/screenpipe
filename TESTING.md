@@ -491,6 +491,7 @@ commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`,
 - [ ] **Windows Defender** — app not blocked by default security.
 - [ ] **Windows default mode** — On Windows, the app should default to window mode on first launch.
 - [ ] **Windows taskbar icon** — The app should display a taskbar icon on Windows.
+- [ ] **Windows login window resets stale OAuth navigation** — Click login, choose GitHub or Google, leave the provider flow open, then click login in Screenpipe again. The existing "sign in to screenpipe" window must return to the Screenpipe login page instead of showing the stale provider page or a blank document.
 - [ ] **Windows audio transcription accuracy** — On Windows, verify improved audio transcription accuracy due to native Silero VAD frame size and lower speech threshold.
 - [ ] **Windows multi-line pipe prompts** — Multi-line pipe prompts should be preserved on Windows.
 - [ ] **Windows ARM64 support** — On a Windows ARM64 device, verify the app installs and runs correctly. (`d62360bc4`)

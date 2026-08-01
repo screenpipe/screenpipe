@@ -12,7 +12,11 @@ vi.mock("posthog-js", () => ({
   default: { capture },
 }));
 
-import { onboardingFunnel, ONBOARDING_FUNNEL_STEPS } from "./onboarding-funnel";
+import {
+  onboardingFunnel,
+  onboardingLiveViewFlowProperties,
+  ONBOARDING_FUNNEL_STEPS,
+} from "./onboarding-funnel";
 
 describe("onboardingFunnel", () => {
   beforeEach(() => capture.mockReset());
@@ -53,12 +57,32 @@ describe("onboardingFunnel", () => {
   });
 
   it("does not allow arbitrary goal text into the event", () => {
-    onboardingFunnel.goalSubmitted("private customer prompt" as never);
+    onboardingFunnel.goalSubmitted(
+      "private customer prompt" as never,
+      onboardingLiveViewFlowProperties(0),
+    );
 
     expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
       funnel_version: "onboarding_ui_v1",
       step: "goal_submitted",
       goal_category: "unknown",
+      live_view_flow_variant: "first_live_view",
+      existing_live_view_count_bucket: "none",
+    });
+  });
+
+  it("separates returning users with existing Live Views", () => {
+    onboardingFunnel.liveViewCreated(
+      "work_memory",
+      onboardingLiveViewFlowProperties(5),
+    );
+
+    expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
+      funnel_version: "onboarding_ui_v1",
+      step: "live_view_created",
+      goal_category: "work_memory",
+      live_view_flow_variant: "existing_live_views",
+      existing_live_view_count_bucket: "multiple",
     });
   });
 

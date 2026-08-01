@@ -14,7 +14,17 @@ mock.module('@clerk/backend', () => ({
   verifyToken: verifyTokenMock,
 }));
 
-const { validateAuth, __resetAuthEntitlementCacheForTests } = await import('./auth');
+const { validateAuth, __resetAuthEntitlementCacheForTests, resolveUsageTier } = await import('./auth');
+
+describe('resolveUsageTier', () => {
+	it('grants power capacity only when the authenticated model tier is subscribed', () => {
+		expect(resolveUsageTier('business_max', 'subscribed')).toBe('business_max');
+		expect(resolveUsageTier('business_ultra', 'subscribed')).toBe('business_ultra');
+		expect(resolveUsageTier('business_max', 'logged_in')).toBe('logged_in');
+		expect(resolveUsageTier('business_ultra', 'anonymous')).toBe('anonymous');
+		expect(resolveUsageTier('business', 'subscribed')).toBe('subscribed');
+	});
+});
 
 // Canceling a subscription must not strip Pro access before the paid period
 // ends. Stripe stamps canceled_at / flips status to canceled the moment a
@@ -122,12 +132,44 @@ describe('validateAuth — verified identities only', () => {
   });
 
   it('does not authenticate an arbitrary Clerk user ID', async () => {
+    const fetchMock = mock(async () => new Response(JSON.stringify([{ id: 'active-subscription' }])));
+    globalThis.fetch = fetchMock as typeof fetch;
+
     expect(await validateAuth(requestFor('user_attackerchosen'), env)).toEqual({
       isValid: true,
       tier: 'anonymous',
       accountPlan: 'unknown',
       deviceId: 'device-from-header',
     });
+    // No subscription lookup may be keyed on an unauthenticated identifier:
+    // the answer would be "yes, that account is subscribed" for any account
+    // name the caller can guess.
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+  });
+
+  // The reported bypass was a code path that read a bare account identifier
+  // and returned a subscription verdict. It is gone; this keeps the module
+  // from re-growing an entry point that skips Clerk verification.
+  it('exposes no identifier-only authentication entry point', async () => {
+    const authModule = await import('./auth');
+
+    expect(Object.keys(authModule).sort()).toEqual([
+      '__resetAuthEntitlementCacheForTests',
+      'resolveUsageTier',
+      'validateAuth',
+      'verifyClerkToken',
+    ]);
+  });
+
+  // `subscription.ts` also held an unreachable `validateSubscription(env,
+  // userId)` that returned `true` — subscribed — for *any* string matching
+  // /^user_[a-zA-Z0-9]+$/, with no lookup at all, and cached that verdict.
+  // Nothing called it, but it was a working bypass waiting to be wired up.
+  // Only the pure PostgREST filter survives.
+  it('leaves no subscription helper that trusts a bare identifier', async () => {
+    const subscriptionModule = await import('./subscription');
+
+    expect(Object.keys(subscriptionModule)).toEqual(['activeSubscriptionFilter']);
   });
 
   it('does not grant the former development test token in any environment', async () => {
@@ -432,6 +474,36 @@ describe('validateAuth — verified identities only', () => {
 			userId: 'user_trial',
 		});
 	});
+
+  it('keeps Max and Ultra on subscribed model access with separate capacity tiers', async () => {
+    for (const [plan, accountPlan, usageTier] of [
+      ['pro_max', 'business_max', 'business_max'],
+      ['pro_ultra', 'business_ultra', 'business_ultra'],
+    ] as const) {
+      __resetAuthEntitlementCacheForTests();
+      const clerkId = `user_${plan}`;
+      verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
+      globalThis.fetch = mock(async () => new Response(JSON.stringify({
+        success: true,
+        user: {
+          clerk_id: clerkId,
+          cloud_subscribed: true,
+          app_entitled: true,
+          subscription_plan: plan,
+          entitlement: { active: true, plan, features: { app: true } },
+        },
+      }), { status: 200 })) as typeof fetch;
+
+      expect(await validateAuth(requestFor(`eyJ.${plan}.clerk`), env)).toEqual({
+        isValid: true,
+        tier: 'subscribed',
+        usageTier,
+        accountPlan,
+        deviceId: clerkId,
+        userId: clerkId,
+      });
+    }
+  });
 
   it('does not trust paid plan data for a different Clerk subject', async () => {
     verifyTokenMock.mockImplementation(async () => ({ sub: 'user_verified_caller' }) as any);

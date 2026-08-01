@@ -41,8 +41,24 @@ describe("send-notification request", () => {
     });
   });
 
+  it("forwards an explicit priority without making routine notifications high", () => {
+    expect(
+      buildNotificationBody({
+        title: "Approval needed",
+        pipe_name: "sharing-review",
+        priority: "high",
+      }),
+    ).toMatchObject({ priority: "high" });
+
+    expect(
+      buildNotificationBody({
+        title: "Sync complete",
+        pipe_name: "daily-sync",
+      }),
+    ).not.toHaveProperty("priority");
+  });
+
   it("uses a short daemon response timeout", () => {
     expect(NOTIFICATION_DAEMON_TIMEOUT_MS).toBeLessThanOrEqual(3000);
   });
 });
-

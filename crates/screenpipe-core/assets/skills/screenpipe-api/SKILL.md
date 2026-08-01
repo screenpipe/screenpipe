@@ -339,6 +339,8 @@ curl -X DELETE http://localhost:3030/memories/1                                 
 
 Notify the desktop UI. This is the Tauri sidecar (port **11435**), not the main API. `body` supports markdown (`**bold**`, `` `code` ``, `[text](url)`).
 
+`priority` is `high`, `normal` (default), or `low`. Only use `high` for a time-sensitive failure or a decision needing the human now; it interrupts and enters the focused Priority view. Routine results and completions belong in normal/low and stay available in All.
+
 ```bash
 curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
   -d '{"title":"3 new voice memos","body":"found recordings from today"}'
@@ -353,15 +355,15 @@ curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
 # Actions persist to the notification bell, so the user can approve later even
 # if the toast already faded. Use `open_in_chat:true` to surface the run live.
 curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
-  -d '{"title":"share meeting notes with the team?","body":"approve to send the adriaan call notes","actions":[{"id":"approve","label":"approve","type":"pipe","primary":true,"pipe":"share-data","context":{"meeting_id":274}},{"id":"no","label":"decline","type":"dismiss"}]}'
+  -d '{"title":"share meeting notes with the team?","body":"approve to send the adriaan call notes","priority":"high","actions":[{"id":"approve","label":"approve","type":"pipe","primary":true,"pipe":"share-data","context":{"meeting_id":274}},{"id":"no","label":"decline","type":"dismiss"}]}'
 
 # No installed pipe? Use `type:"chat"` to run an inline prompt in a fresh chat
 # session — write the whole task in `prompt`, attach data in `context`.
 curl -X POST http://localhost:11435/notify -H "Content-Type: application/json" \
-  -d '{"title":"summarize this call into a CRM note?","body":"approve to draft it","actions":[{"id":"go","label":"draft it","type":"chat","primary":true,"prompt":"summarize meeting 274 into a short CRM follow-up note and save it to output/","context":{"meeting_id":274}},{"id":"no","label":"no","type":"dismiss"}]}'
+  -d '{"title":"summarize this call into a CRM note?","body":"approve to draft it","priority":"high","actions":[{"id":"go","label":"draft it","type":"chat","primary":true,"prompt":"summarize meeting 274 into a short CRM follow-up note and save it to output/","context":{"meeting_id":274}},{"id":"no","label":"no","type":"dismiss"}]}'
 ```
 
-Action types: `link` (web URL), `deeplink` (`screenpipe://`), `pipe` (run an installed pipe — needs `pipe`, optional `context`, optional `open_in_chat`), `chat` (run an inline `prompt` in a fresh chat session, no installed pipe needed — optional `context`, optional `auto_send`), `api` (POST a local endpoint — needs `url`, optional `method`/`body`), `dismiss`. Fields: `title`* , `body`* (markdown), `type` (default "pipe"), `timeout`/`autoDismissMs` (ms, default 20000), `actions` (buttons; up to 5, each needs `id`/`label`/`type`). Body links: web URL → browser, file path (`~/notes.md`, `/var/log/app.log`) → default app, `screenpipe://...` → in-app. Returns `{"success":true}`.
+Action types: `link` (web URL), `deeplink` (`screenpipe://`), `pipe` (run an installed pipe — needs `pipe`, optional `context`, optional `open_in_chat`), `chat` (run an inline `prompt` in a fresh chat session, no installed pipe needed — optional `context`, optional `auto_send`), `api` (POST a local endpoint — needs `url`, optional `method`/`body`), `dismiss`. Fields: `title`* , `body`* (markdown), `type` (default "pipe"), `priority` (`high`/`normal`/`low`, default `normal`), `timeout`/`autoDismissMs` (ms, default 20000), `actions` (buttons; up to 5, each needs `id`/`label`/`type`). Body links: web URL → browser, file path (`~/notes.md`, `/var/log/app.log`) → default app, `screenpipe://...` → in-app. Returns `{"success":true}`.
 
 ---
 

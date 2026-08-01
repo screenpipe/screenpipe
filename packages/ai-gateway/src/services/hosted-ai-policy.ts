@@ -38,6 +38,8 @@ const BUSINESS_HOSTED_MODELS = [
 const PAID_HOSTED_AI_PLANS = new Set<AccountPlan>([
 	'basic',
 	'business',
+	'business_max',
+	'business_ultra',
 	'team',
 	'enterprise',
 ]);
@@ -53,6 +55,8 @@ export function getHostedAiPlan(accountPlan: AccountPlan): HostedAiPlan | null {
 		case 'free': return 'free';
 		case 'basic': return 'basic';
 		case 'business':
+		case 'business_max':
+		case 'business_ultra':
 		case 'team':
 		case 'enterprise':
 			return 'business';

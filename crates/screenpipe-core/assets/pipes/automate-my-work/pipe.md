@@ -95,6 +95,7 @@ This bundled template runs as a one-shot pipe, so never execute the creation ste
 
 - title: `Automation ready for review`
 - a short body naming the workflow and proposed artifact
+- priority: `high` because the proposed action needs an explicit human decision
 - one primary `chat` action labeled `Create and test`
 - a self-contained action prompt stating that the click is explicit approval, embedding the full structured recommendation inside `<approved_recommendation>` data tags, and copying every Stage 2 rule below
 

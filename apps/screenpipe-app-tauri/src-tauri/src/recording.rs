@@ -172,11 +172,12 @@ pub fn notify_audio_engine_fallback(store: &SettingsStore) {
         return;
     };
 
-    crate::notifications::client::send_typed(
+    crate::notifications::client::send_typed_with_priority(
         reason.notification_title(),
         reason.notification_body(),
         "system",
         Some(20000),
+        crate::notifications::store::NotificationPriority::High,
     );
 }
 

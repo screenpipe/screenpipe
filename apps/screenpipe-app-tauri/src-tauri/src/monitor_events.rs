@@ -10,6 +10,7 @@ use tauri::AppHandle;
 use tracing::debug;
 
 use crate::notifications::client;
+use crate::notifications::store::NotificationPriority;
 use crate::store::SettingsStore;
 
 pub fn start(app: AppHandle) {
@@ -24,7 +25,13 @@ pub fn start(app: AppHandle) {
             }
             if let Some((title, body)) = format_event(&event.data) {
                 debug!("monitor topology event → notify: {} | {}", title, body);
-                client::send_typed(title, body, "system", Some(6000));
+                client::send_typed_with_priority(
+                    title,
+                    body,
+                    "system",
+                    Some(6000),
+                    NotificationPriority::Low,
+                );
             }
         }
     });

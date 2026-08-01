@@ -611,7 +611,8 @@ const TOOLS: Tool[] = [
     name: "send-notification",
     description:
       "Send a notification to the screenpipe desktop UI. " +
-      "Use to alert the user about findings, completed tasks, or actions needing attention.",
+      "Use high priority only for time-sensitive failures or decisions needing human attention; " +
+      "routine findings and completed tasks should be normal or low.",
     annotations: { title: "Send Notification", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
@@ -619,6 +620,12 @@ const TOOLS: Tool[] = [
         title: { type: "string", description: "Notification title (short, descriptive)" },
         body: { type: "string", description: "Notification body (markdown supported)" },
         pipe_name: { type: "string", description: "Name of the pipe/tool sending this notification" },
+        priority: {
+          type: "string",
+          enum: ["high", "normal", "low"],
+          description: "High interrupts and appears in the focused Priority view. Normal (default) and low remain available in All without interrupting.",
+          default: "normal",
+        },
         timeout_secs: { type: "integer", description: "Auto-dismiss after N seconds (default 20). Use 0 for persistent.", default: 20 },
         actions: {
           type: "array",

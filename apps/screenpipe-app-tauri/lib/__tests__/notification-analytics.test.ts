@@ -12,6 +12,7 @@ describe("notification analytics properties", () => {
         id: "notification-123",
         type: "pipe",
         pipe_name: "todo-list-assistant",
+        priority: "high",
       },
       "toast",
     );
@@ -20,6 +21,7 @@ describe("notification analytics properties", () => {
       notification_id: "notification-123",
       notification_type: "pipe",
       pipe_name: "todo-list-assistant",
+      notification_priority: "high",
       notification_surface: "toast",
     });
     expect(properties).not.toHaveProperty("title");
@@ -31,6 +33,7 @@ describe("notification analytics properties", () => {
       notification_id: null,
       notification_type: null,
       pipe_name: null,
+      notification_priority: null,
       notification_surface: "bell",
     });
   });

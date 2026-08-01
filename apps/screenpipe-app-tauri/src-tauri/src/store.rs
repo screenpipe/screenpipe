@@ -533,6 +533,24 @@ pub fn reencrypt_store(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn save_store_to_disk<R: tauri::Runtime>(
+    store: &tauri_plugin_store::Store<R>,
+) -> Result<(), String> {
+    store.save().map_err(|e| e.to_string())
+}
+
+/// Flush the process-shared store to durable, encrypted storage before a
+/// restart. Native restart surfaces (for example the tray) cannot drain a
+/// webview-local settings queue, but every frontend and backend store handle
+/// points at this same registered store instance. Saving that instance here
+/// makes any already-applied setting durable before the process exits.
+pub fn persist_store_before_restart(app: &AppHandle) -> Result<(), String> {
+    let store = get_store(app, None).map_err(|e| format!("Failed to get store: {e}"))?;
+    save_store_to_disk(store.as_ref())?;
+    reencrypt_store_file(app);
+    Ok(())
+}
+
 /// Cached store instance — reusable across the process lifetime.
 /// Uses Mutex instead of OnceLock so the cache can be invalidated when the
 /// Tauri resource table drops the underlying store (e.g. after an in-place
@@ -2676,6 +2694,44 @@ mod tests {
             b"new",
             "shorter new content must fully replace the old file"
         );
+    }
+
+    #[test]
+    fn restart_persistence_flushes_latest_shared_store_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("failed to build mock app");
+        let store = StoreBuilder::new(app.handle(), store_path.clone())
+            .disable_auto_save()
+            .build()
+            .expect("failed to build test store");
+
+        store.set(
+            "settings",
+            json!({"aiPresets": presets_n(1), "autoUpdate": false}),
+        );
+        save_store_to_disk(store.as_ref()).expect("failed to seed test store");
+        store.set(
+            "settings",
+            json!({"aiPresets": presets_n(1), "autoUpdate": true}),
+        );
+
+        let before: Value = serde_json::from_slice(
+            &std::fs::read(&store_path).expect("failed to read pre-restart store"),
+        )
+        .expect("pre-restart store is invalid JSON");
+        assert_eq!(before.pointer("/settings/autoUpdate"), Some(&Value::Bool(false)));
+
+        save_store_to_disk(store.as_ref()).expect("restart persistence failed");
+
+        let after: Value = serde_json::from_slice(
+            &std::fs::read(&store_path).expect("failed to read persisted store"),
+        )
+        .expect("persisted store is invalid JSON");
+        assert_eq!(after.pointer("/settings/autoUpdate"), Some(&Value::Bool(true)));
     }
 
     #[test]
