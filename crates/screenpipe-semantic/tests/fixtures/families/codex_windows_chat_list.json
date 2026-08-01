@@ -1,0 +1,89 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "C:\\Program Files\\Codex\\Codex.exe",
+    "display_name": "Codex",
+    "version": "0.4.12",
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Document",
+      "identifier": "RootWebArea",
+      "text": "app://-/index.html",
+      "value": "app://-/index.html",
+      "description": "document"
+    },
+    { "parent": 0, "role": "Button", "text": "Hide sidebar" },
+    { "parent": 0, "role": "Button", "text": "New chat" },
+    { "parent": 0, "role": "Button", "text": "Search" },
+    { "parent": 0, "role": "Button", "text": "Scheduled" },
+    { "parent": 0, "role": "Button", "text": "Pinned" },
+    {
+      "parent": 0,
+      "role": "ListItem",
+      "text": "Ship weekly digest2d",
+      "classes": ["after:block", "after:h-px"]
+    },
+    { "parent": 6, "role": "Button", "text": "Pin chat Archive chat 2d" },
+    { "parent": 7, "role": "Button", "text": "Pin chat" },
+    { "parent": 7, "role": "Button", "text": "Archive chat" },
+    {
+      "parent": 0,
+      "role": "ListItem",
+      "text": "Validate publish 71 to 731w",
+      "classes": ["after:block", "after:h-px"]
+    },
+    { "parent": 10, "role": "Button", "text": "Pin chat Archive chat 1w" },
+    { "parent": 11, "role": "Button", "text": "Pin chat" },
+    { "parent": 11, "role": "Button", "text": "Archive chat" },
+    {
+      "parent": 0,
+      "role": "ListItem",
+      "text": "Review diffs since 2.5.41mo",
+      "classes": ["after:block", "after:h-px"]
+    },
+    { "parent": 14, "role": "Button", "text": "Unpin chat Archive chat 1mo" },
+    { "parent": 15, "role": "Button", "text": "Unpin chat" },
+    { "parent": 15, "role": "Button", "text": "Archive chat" },
+    {
+      "parent": 0,
+      "role": "ListItem",
+      "text": "Fix flaky login test12h",
+      "classes": ["after:block", "after:h-px"]
+    },
+    { "parent": 18, "role": "Button", "text": "Pin chat Archive chat 12h" },
+    { "parent": 19, "role": "Button", "text": "Pin chat" },
+    { "parent": 19, "role": "Button", "text": "Archive chat" },
+    {
+      "parent": 0,
+      "role": "ListItem",
+      "text": "plan the quarterly retro agenda with the platfor…plan the quarterly retro agenda with the p…3w",
+      "classes": ["after:block", "after:h-px"]
+    },
+    { "parent": 22, "role": "Button", "text": "Pin chat Archive chat 3w" },
+    { "parent": 23, "role": "Button", "text": "Pin chat" },
+    { "parent": 23, "role": "Button", "text": "Archive chat" },
+    {
+      "parent": 0,
+      "role": "ListItem",
+      "text": "Tidy the release checklist templateTidy the release checklist temp…1mo",
+      "classes": ["after:block", "after:h-px"]
+    },
+    { "parent": 26, "role": "Button", "text": "Pin chat Archive chat 1mo" },
+    { "parent": 27, "role": "Button", "text": "Pin chat" },
+    { "parent": 27, "role": "Button", "text": "Archive chat" },
+    { "parent": 0, "role": "Button", "text": "Open settings" },
+    { "parent": 0, "role": "Text", "text": "Scheduled" },
+    {
+      "parent": 0,
+      "role": "Text",
+      "text": "Ask the assistant to schedule tasks, set reminders, or monitor for updates."
+    },
+    { "parent": 0, "role": "Text", "text": "Create your first scheduled task" },
+    { "parent": 0, "role": "Button", "text": "Daily brief" },
+    { "parent": 0, "role": "Button", "text": "Weekly review" }
+  ]
+}

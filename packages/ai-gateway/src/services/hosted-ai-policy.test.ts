@@ -6,6 +6,8 @@ import { describe, expect, it } from 'bun:test';
 import type { AccountPlan, AuthResult, UserTier } from '../types';
 import {
 	getHostedAiAllowedModels,
+	getHostedAiIncludedCredits,
+	getHostedAiIncludedProviderCostUsd,
 	getHostedAiPlan,
 	hasPaidHostedAiPlan,
 	isHostedAiModelAllowed,
@@ -21,6 +23,8 @@ describe('hosted AI plan policy', () => {
 		['free', false, true],
 		['basic', true, true],
 		['business', true, false],
+		['business_max', true, false],
+		['business_ultra', true, false],
 		['team', true, false],
 		['enterprise', true, false],
 		['unknown', false, false],
@@ -49,11 +53,24 @@ describe('hosted AI model products', () => {
 	});
 
 	it('maps Business, Team, and Enterprise to frontier access', () => {
-		for (const plan of ['business', 'team', 'enterprise'] as const) {
+		for (const plan of ['business', 'business_max', 'business_ultra', 'team', 'enterprise'] as const) {
 			expect(getHostedAiPlan(plan)).toBe('business');
 			expect(isHostedAiModelAllowed('claude-fable-5', plan)).toBe(true);
 			expect(isHostedAiModelAllowed('gpt-5.6-sol', plan)).toBe(true);
 			expect(isHostedAiModelAllowed('future-unpriced-frontier', plan)).toBe(false);
 		}
+	});
+
+	it.each([
+		['free', 10, 0.1],
+		['basic', 150, 1.5],
+		['business', 400, 4],
+		['business_max', 400, 4],
+		['business_ultra', 400, 4],
+		['team', 400, 4],
+		['enterprise', 400, 4],
+	] as const)('keeps %s credits and provider-cost allowance aligned', (plan, credits, costUsd) => {
+		expect(getHostedAiIncludedCredits(plan)).toBe(credits);
+		expect(getHostedAiIncludedProviderCostUsd(plan)).toBe(costUsd);
 	});
 });

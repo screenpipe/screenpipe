@@ -301,7 +301,6 @@ export const validateApiKey = (apiKey: string, provider: AIProviderType): FieldV
       }
       break;
     case "anthropic":
-    case "acp":
       if (!apiKey.startsWith("sk-ant-")) {
         return { isValid: false, error: "Anthropic API keys should start with 'sk-ant-'" };
       }

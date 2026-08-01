@@ -29,6 +29,32 @@ use screenpipe_sqlite_coordinator::{sqlite_write_lock, verify_sqlite_runtime};
 /// its mutations out of screenpipe's explicit checkpoint windows.
 static SECRET_POOLS: OnceLock<AsyncMutex<HashMap<String, SqlitePool>>> = OnceLock::new();
 
+/// Optional bridge to the owner of the main database. It receives only typed
+/// SQLx failures, never keychain, crypto, serialization, or filesystem errors.
+pub type DatabaseErrorHook = Arc<dyn Fn(&sqlx::Error) + Send + Sync>;
+
+fn observe_database_result<T>(
+    hook: Option<&DatabaseErrorHook>,
+    result: std::result::Result<T, sqlx::Error>,
+) -> std::result::Result<T, sqlx::Error> {
+    if let (Some(hook), Err(error)) = (hook, &result) {
+        hook(error);
+    }
+    result
+}
+
+fn observe_anyhow_database_error(hook: Option<&DatabaseErrorHook>, error: &anyhow::Error) {
+    let Some(hook) = hook else {
+        return;
+    };
+    if let Some(database_error) = error
+        .chain()
+        .find_map(|source| source.downcast_ref::<sqlx::Error>())
+    {
+        hook(database_error);
+    }
+}
+
 fn secret_pools() -> &'static AsyncMutex<HashMap<String, SqlitePool>> {
     SECRET_POOLS.get_or_init(|| AsyncMutex::new(HashMap::new()))
 }
@@ -122,24 +148,41 @@ pub struct SecretStore {
     pool: SqlitePool,
     key: Option<[u8; 32]>, // None = encryption disabled (keychain unavailable)
     write_lock: Option<Arc<Semaphore>>,
+    database_error_hook: Option<DatabaseErrorHook>,
 }
 
 impl SecretStore {
     /// Initialize the secrets table and load the encryption key.
     pub async fn new(pool: SqlitePool, key: Option<[u8; 32]>) -> Result<Self> {
+        Self::new_with_database_error_hook(pool, key, None).await
+    }
+
+    /// Initialize the store and route typed SQLx failures to the database
+    /// owner. Standalone callers can keep using [`Self::new`].
+    pub async fn new_with_database_error_hook(
+        pool: SqlitePool,
+        key: Option<[u8; 32]>,
+        database_error_hook: Option<DatabaseErrorHook>,
+    ) -> Result<Self> {
         verify_sqlite_runtime().map_err(|error| anyhow::anyhow!(error))?;
-        let write_lock = write_lock_for_pool(&pool).await?;
-        Self::new_with_write_lock(pool, key, write_lock).await
+        let write_lock = write_lock_for_pool(&pool).await;
+        if let Err(error) = &write_lock {
+            observe_anyhow_database_error(database_error_hook.as_ref(), error);
+        }
+        Self::new_with_write_lock(pool, key, write_lock?, database_error_hook).await
     }
 
     async fn new_with_write_lock(
         pool: SqlitePool,
         key: Option<[u8; 32]>,
         write_lock: Option<Arc<Semaphore>>,
+        database_error_hook: Option<DatabaseErrorHook>,
     ) -> Result<Self> {
         let _write_permit = acquire_write_permit(&write_lock).await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS secrets (
+        observe_database_result(
+            database_error_hook.as_ref(),
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS secrets (
                 key TEXT PRIMARY KEY,
                 value BLOB NOT NULL,
                 nonce BLOB NOT NULL,
@@ -147,9 +190,10 @@ impl SecretStore {
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                 expires_at TEXT
             )",
+            )
+            .execute(&pool)
+            .await,
         )
-        .execute(&pool)
-        .await
         .report_secret_store_integrity("initialize", None, Some(key.is_some()))
         .context("failed to create secrets table")?;
 
@@ -157,6 +201,7 @@ impl SecretStore {
             pool,
             key,
             write_lock,
+            database_error_hook,
         })
     }
 
@@ -171,7 +216,14 @@ impl SecretStore {
     /// otherwise each spin up their own pool.
     pub async fn open(db_path: &str, key: Option<[u8; 32]>) -> Result<Self> {
         let pool = shared_secret_pool(db_path).await?;
-        Self::new_with_write_lock(pool, key, Some(sqlite_write_lock(db_path))).await
+        Self::new_with_write_lock(pool, key, Some(sqlite_write_lock(db_path)), None).await
+    }
+
+    fn observe<T>(
+        &self,
+        result: std::result::Result<T, sqlx::Error>,
+    ) -> std::result::Result<T, sqlx::Error> {
+        observe_database_result(self.database_error_hook.as_ref(), result)
     }
 
     /// Store a secret value, encrypting it if an encryption key is available.
@@ -189,19 +241,21 @@ impl SecretStore {
             }
         };
 
-        sqlx::query(
-            "INSERT INTO secrets (key, value, nonce, updated_at)
+        self.observe(
+            sqlx::query(
+                "INSERT INTO secrets (key, value, nonce, updated_at)
              VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
              ON CONFLICT(key) DO UPDATE SET
                 value = excluded.value,
                 nonce = excluded.nonce,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            )
+            .bind(key)
+            .bind(&stored_value)
+            .bind(&nonce)
+            .execute(&self.pool)
+            .await,
         )
-        .bind(key)
-        .bind(&stored_value)
-        .bind(&nonce)
-        .execute(&self.pool)
-        .await
         .report_secret_store_integrity("set", Some(key), Some(self.key.is_some()))
         .context("failed to set secret")?;
 
@@ -210,13 +264,15 @@ impl SecretStore {
 
     /// Retrieve and decrypt a secret value. Returns None if the key doesn't exist.
     pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let row: Option<(Vec<u8>, Vec<u8>)> =
-            sqlx::query_as("SELECT value, nonce FROM secrets WHERE key = ?")
-                .bind(key)
-                .fetch_optional(&self.pool)
-                .await
-                .report_secret_store_integrity("get", Some(key), Some(self.key.is_some()))
-                .context("failed to get secret")?;
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .observe(
+                sqlx::query_as("SELECT value, nonce FROM secrets WHERE key = ?")
+                    .bind(key)
+                    .fetch_optional(&self.pool)
+                    .await,
+            )
+            .report_secret_store_integrity("get", Some(key), Some(self.key.is_some()))
+            .context("failed to get secret")?;
 
         match row {
             None => Ok(None),
@@ -250,10 +306,13 @@ impl SecretStore {
 
     /// Get the updated_at timestamp for a secret. Returns None if key doesn't exist.
     pub async fn get_updated_at(&self, key: &str) -> Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT updated_at FROM secrets WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await
+        let row: Option<(String,)> = self
+            .observe(
+                sqlx::query_as("SELECT updated_at FROM secrets WHERE key = ?")
+                    .bind(key)
+                    .fetch_optional(&self.pool)
+                    .await,
+            )
             .report_secret_store_integrity("get_updated_at", Some(key), Some(self.key.is_some()))
             .context("failed to get secret timestamp")?;
         Ok(row.map(|(t,)| t))
@@ -262,22 +321,27 @@ impl SecretStore {
     /// Delete a secret by key.
     pub async fn delete(&self, key: &str) -> Result<()> {
         let _write_permit = acquire_write_permit(&self.write_lock).await?;
-        sqlx::query("DELETE FROM secrets WHERE key = ?")
-            .bind(key)
-            .execute(&self.pool)
-            .await
-            .report_secret_store_integrity("delete", Some(key), Some(self.key.is_some()))
-            .context("failed to delete secret")?;
+        self.observe(
+            sqlx::query("DELETE FROM secrets WHERE key = ?")
+                .bind(key)
+                .execute(&self.pool)
+                .await,
+        )
+        .report_secret_store_integrity("delete", Some(key), Some(self.key.is_some()))
+        .context("failed to delete secret")?;
         Ok(())
     }
 
     /// List all secret keys matching a prefix.
     pub async fn list(&self, prefix: &str) -> Result<Vec<String>> {
         let pattern = format!("{}%", prefix);
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT key FROM secrets WHERE key LIKE ?")
-            .bind(&pattern)
-            .fetch_all(&self.pool)
-            .await
+        let rows: Vec<(String,)> = self
+            .observe(
+                sqlx::query_as("SELECT key FROM secrets WHERE key LIKE ?")
+                    .bind(&pattern)
+                    .fetch_all(&self.pool)
+                    .await,
+            )
             .report_secret_store_integrity("list", Some(prefix), Some(self.key.is_some()))
             .context("failed to list secrets")?;
         Ok(rows.into_iter().map(|(k,)| k).collect())
@@ -306,12 +370,14 @@ impl SecretStore {
     /// running without it. Returns the number of secrets re-encrypted.
     pub async fn reencrypt_unencrypted_secrets(&self, new_key: &[u8; 32]) -> Result<usize> {
         let _write_permit = acquire_write_permit(&self.write_lock).await?;
-        let rows: Vec<(String, Vec<u8>, Vec<u8>)> =
-            sqlx::query_as("SELECT key, value, nonce FROM secrets")
-                .fetch_all(&self.pool)
-                .await
-                .report_secret_store_integrity("reencrypt_list", None, Some(self.key.is_some()))
-                .context("failed to fetch secrets for re-encryption")?;
+        let rows: Vec<(String, Vec<u8>, Vec<u8>)> = self
+            .observe(
+                sqlx::query_as("SELECT key, value, nonce FROM secrets")
+                    .fetch_all(&self.pool)
+                    .await,
+            )
+            .report_secret_store_integrity("reencrypt_list", None, Some(self.key.is_some()))
+            .context("failed to fetch secrets for re-encryption")?;
 
         let mut count = 0;
         for (secret_key, stored_value, nonce) in rows {
@@ -325,14 +391,14 @@ impl SecretStore {
 
             let (ciphertext, new_nonce) = crypto::encrypt(&plaintext, new_key)?;
 
-            sqlx::query(
+            self.observe(sqlx::query(
                 "UPDATE secrets SET value = ?, nonce = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE key = ?",
             )
             .bind(&ciphertext)
             .bind(new_nonce.as_slice())
             .bind(&secret_key)
             .execute(&self.pool)
-            .await
+            .await)
             .report_secret_store_integrity(
                 "reencrypt_update",
                 Some(&secret_key),
@@ -356,12 +422,14 @@ impl SecretStore {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("cannot decrypt secrets without an encryption key"))?;
 
-        let rows: Vec<(String, Vec<u8>, Vec<u8>)> =
-            sqlx::query_as("SELECT key, value, nonce FROM secrets")
-                .fetch_all(&self.pool)
-                .await
-                .report_secret_store_integrity("decrypt_list", None, Some(self.key.is_some()))
-                .context("failed to fetch secrets for decryption")?;
+        let rows: Vec<(String, Vec<u8>, Vec<u8>)> = self
+            .observe(
+                sqlx::query_as("SELECT key, value, nonce FROM secrets")
+                    .fetch_all(&self.pool)
+                    .await,
+            )
+            .report_secret_store_integrity("decrypt_list", None, Some(self.key.is_some()))
+            .context("failed to fetch secrets for decryption")?;
 
         let mut count = 0;
         for (secret_key, stored_value, nonce) in rows {
@@ -377,14 +445,14 @@ impl SecretStore {
             let encoded = BASE64.encode(&plaintext).into_bytes();
             let zero_nonce = vec![0u8; 12];
 
-            sqlx::query(
+            self.observe(sqlx::query(
                 "UPDATE secrets SET value = ?, nonce = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE key = ?",
             )
             .bind(&encoded)
             .bind(&zero_nonce)
             .bind(&secret_key)
             .execute(&self.pool)
-            .await
+            .await)
             .report_secret_store_integrity(
                 "decrypt_update",
                 Some(&secret_key),
@@ -400,13 +468,16 @@ impl SecretStore {
 
     /// Count rows that still require the keychain key to read.
     pub async fn encrypted_secret_count(&self) -> Result<usize> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM secrets WHERE hex(nonce) != '000000000000000000000000'",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .report_secret_store_integrity("encrypted_count", None, Some(self.key.is_some()))
-        .context("failed to count encrypted secrets")?;
+        let row: (i64,) = self
+            .observe(
+                sqlx::query_as(
+                    "SELECT COUNT(*) FROM secrets WHERE hex(nonce) != '000000000000000000000000'",
+                )
+                .fetch_one(&self.pool)
+                .await,
+            )
+            .report_secret_store_integrity("encrypted_count", None, Some(self.key.is_some()))
+            .context("failed to count encrypted secrets")?;
         Ok(row.0.max(0) as usize)
     }
 }
@@ -438,6 +509,7 @@ async fn acquire_write_permit(
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     // Tests that touch the process-wide `SECRET_POOLS` cache run serially so the
     // `close_all_secret_pools` drain test can't close another test's live pool.
     use serial_test::serial;
@@ -445,6 +517,23 @@ mod tests {
     async fn make_store(key: Option<[u8; 32]>) -> SecretStore {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         SecretStore::new(pool, key).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn database_error_hook_observes_secret_queries() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let hook: DatabaseErrorHook = Arc::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let store = SecretStore::new_with_database_error_hook(pool.clone(), None, Some(hook))
+            .await
+            .unwrap();
+        pool.close().await;
+
+        assert!(store.get("test:key").await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

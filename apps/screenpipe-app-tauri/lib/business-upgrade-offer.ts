@@ -37,6 +37,22 @@ export type BusinessUpgradeOffer = {
   };
 };
 
+// Mirrors the current Business column on screenpipe.com/onboarding. Keep the
+// plan claims local and release-versioned while the offer endpoint controls
+// prices, billing availability, and bounded headline/CTA experiments.
+export const BUSINESS_PLAN_DESCRIPTION =
+  "For power users and small teams who live across devices.";
+
+export const BUSINESS_PLAN_FEATURES = [
+  "400 hosted AI credits / month",
+  "frontier Claude + GPT models: Fable, Opus, Sonnet, latest GPT",
+  "cloud sync across your devices",
+  "hosted automations on efficient models",
+  "use your own provider key for unlimited provider usage",
+  "team workspace: one bill, managed seats",
+  "priority support",
+] as const;
+
 export const DEFAULT_BUSINESS_UPGRADE_OFFER: BusinessUpgradeOffer = {
   plan: "pro",
   source: "fallback",
@@ -49,17 +65,10 @@ export const DEFAULT_BUSINESS_UPGRADE_OFFER: BusinessUpgradeOffer = {
   copy: {
     planName: "Screenpipe Business",
     headline: "keep your work available on every device",
-    description:
-      "encrypted sync, cloud transcription, and more room for AI-assisted work",
+    description: BUSINESS_PLAN_DESCRIPTION,
     ctaLabel: "continue to secure checkout",
     annualBadge: "2 months free",
-    features: [
-      "encrypted cloud sync — 50GB, 3 devices",
-      "cloud transcription — higher quality, lower local memory use",
-      "100x more AI queries",
-      "encrypted pipe and connection sync",
-      "priority support",
-    ],
+    features: [...BUSINESS_PLAN_FEATURES],
   },
   prices: {
     month: {

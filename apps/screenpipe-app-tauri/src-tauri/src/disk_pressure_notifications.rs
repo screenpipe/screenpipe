@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager};
 use tracing::{debug, warn};
 
 use crate::notifications::client;
+use crate::notifications::store::NotificationPriority;
 use crate::recording::RecordingState;
 use crate::store::SettingsStore;
 
@@ -62,7 +63,7 @@ pub(crate) async fn handle(
 
     let available = readable_gib(event.available_bytes);
     let threshold = readable_gib(event.threshold_bytes);
-    client::send_typed(
+    client::send_typed_with_priority(
         "recording stopped — disk almost full",
         format!(
             "screenpipe stopped capture because only {available} is free (safety threshold: \
@@ -71,6 +72,7 @@ pub(crate) async fn handle(
         ),
         crate::notifications::gate::DISK_PRESSURE_NOTIFICATION_TYPE,
         None,
+        NotificationPriority::High,
     );
     DiskPressureOutcome::CaptureStopped
 }

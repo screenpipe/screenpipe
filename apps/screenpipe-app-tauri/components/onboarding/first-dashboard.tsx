@@ -21,13 +21,25 @@ import {
   type OnboardingLiveViewProgress,
   type OnboardingLiveViewStage,
 } from "@/lib/live-views/onboarding-live-view";
-import { markOnboardingLiveViewSetupNeedsRetry } from "@/lib/live-views/onboarding-activation";
+import {
+  markOnboardingLiveViewSetupNeedsRetry,
+  selectExistingLiveViewForOnboarding,
+} from "@/lib/live-views/onboarding-activation";
 import {
   ONBOARDING_GOALS,
   type OnboardingGoalCategory,
 } from "@/lib/live-views/onboarding-goals";
-import type { AIPreset } from "@/lib/utils/tauri";
-import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
+import {
+  commands,
+  type AIPreset,
+  type BrainViewDefinition,
+} from "@/lib/utils/tauri";
+import {
+  onboardingFunnel,
+  onboardingLiveViewFlowProperties,
+  type OnboardingLiveViewFlowProperties,
+} from "@/lib/analytics/onboarding-funnel";
 
 const STALLED_BUILD_ESCAPE_DELAY_MS = 12_000;
 const SHELL_PREPARE_TIMEOUT_MS = 8_000;
@@ -175,25 +187,67 @@ export default function FirstDashboard() {
     useState(false);
   const [isContinuingWithoutWaiting, setIsContinuingWithoutWaiting] =
     useState(false);
+  const [existingViews, setExistingViews] = useState<BrainViewDefinition[]>([]);
+  const [existingViewsStatus, setExistingViewsStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [selectedExistingViewId, setSelectedExistingViewId] = useState<
+    string | null
+  >(null);
+  const [creatingAnotherView, setCreatingAnotherView] = useState(false);
   const completingRef = useRef(false);
   const escapeCompletingRef = useRef(false);
   const createAttemptRef = useRef(0);
   const latestStageRef = useRef<OnboardingLiveViewStage | null>(null);
   const mountedAtRef = useRef(Date.now());
-  const dashboardIdRef = useRef(
-    `first-dashboard-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`,
-  );
+  const existingViewsLoadAttemptRef = useRef(0);
+  const viewedFlowRef = useRef<string | null>(null);
+  const dashboardIdRef = useRef<string | null>(null);
 
   const defaultPreset = useMemo(() => {
     const presets = (settings.aiPresets ?? []) as AIPreset[];
     return presets.find((preset) => preset.defaultPreset) ?? presets[0] ?? null;
   }, [settings.aiPresets]);
 
-  useEffect(() => {
-    posthog.capture("onboarding_first_dashboard_viewed");
+  const flowProperties = useMemo<OnboardingLiveViewFlowProperties | null>(
+    () =>
+      existingViewsStatus === "ready"
+        ? onboardingLiveViewFlowProperties(existingViews.length)
+        : null,
+    [existingViews.length, existingViewsStatus],
+  );
+
+  const loadExistingViews = useCallback(async () => {
+    const attemptId = ++existingViewsLoadAttemptRef.current;
+    setExistingViewsStatus("loading");
+    setError(null);
+    try {
+      const result = await commands.listBrainViews();
+      if (existingViewsLoadAttemptRef.current !== attemptId) return;
+      if (result.status === "error") throw new Error(result.error);
+      setExistingViews(result.data);
+      setSelectedExistingViewId(null);
+      setExistingViewsStatus("ready");
+      const properties = onboardingLiveViewFlowProperties(result.data.length);
+      const viewedKey = `${properties.live_view_flow_variant}:${properties.existing_live_view_count_bucket}`;
+      if (viewedFlowRef.current !== viewedKey) {
+        viewedFlowRef.current = viewedKey;
+        posthog.capture("onboarding_first_dashboard_viewed", properties);
+      }
+    } catch {
+      if (existingViewsLoadAttemptRef.current !== attemptId) return;
+      setExistingViewsStatus("error");
+      setError("Could not check your Live Views. Try again before continuing.");
+      posthog.capture("onboarding_first_dashboard_view_load_failed");
+    }
   }, []);
+
+  useEffect(() => {
+    void loadExistingViews();
+    return () => {
+      existingViewsLoadAttemptRef.current += 1;
+    };
+  }, [loadExistingViews]);
 
   const isBuilding = stage !== null;
   useEffect(() => {
@@ -216,6 +270,7 @@ export default function FirstDashboard() {
       if (progress.pipeSlugs) setSelectedPipes(progress.pipeSlugs);
       if (progress.stage === "plan_ready") {
         posthog.capture("onboarding_first_dashboard_plan_generated", {
+          ...flowProperties,
           goal_category: goalCategory,
           pipe_count: progress.pipeCount,
           pipe_slugs: progress.pipeSlugs,
@@ -225,6 +280,7 @@ export default function FirstDashboard() {
       }
       if (progress.stage === "pipe_ready") {
         posthog.capture("onboarding_first_dashboard_pipe_ready", {
+          ...flowProperties,
           goal_category: goalCategory,
           pipe_slug: progress.pipeSlug,
           pipe_index: progress.pipeIndex,
@@ -233,15 +289,16 @@ export default function FirstDashboard() {
         });
       }
     },
-    [goalCategory],
+    [flowProperties, goalCategory],
   );
 
   const handleCreate = useCallback(async () => {
     const normalizedGoal = goal.trim();
-    if (!normalizedGoal || completingRef.current) return;
+    if (!normalizedGoal || completingRef.current || !flowProperties) return;
     if (!defaultPreset) {
       setError("AI is not ready yet. Try again in a moment, or skip for now.");
       posthog.capture("onboarding_first_dashboard_failed", {
+        ...flowProperties,
         failure_reason: "ai_preset_unavailable",
         stage: "planning",
         goal_category: goalCategory,
@@ -251,27 +308,33 @@ export default function FirstDashboard() {
 
     completingRef.current = true;
     const attemptId = ++createAttemptRef.current;
+    const dashboardId =
+      dashboardIdRef.current ??
+      `first-dashboard-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+    dashboardIdRef.current = dashboardId;
     setError(null);
     setSelectedPipes([]);
     setDashboardPrepared(false);
     latestStageRef.current = "planning";
     setStage("planning");
     posthog.capture("onboarding_first_dashboard_goal_submitted", {
+      ...flowProperties,
       goal_category: goalCategory,
       custom_goal: goalCategory === "custom",
       goal_length: lengthBucket(normalizedGoal),
       time_spent_ms: Date.now() - mountedAtRef.current,
     });
-    onboardingFunnel.goalSubmitted(goalCategory);
+    onboardingFunnel.goalSubmitted(goalCategory, flowProperties);
 
     try {
       await updateSettings({
-        userGoalCategory:
-          goalCategory === "custom" ? "default" : goalCategory,
+        userGoalCategory: goalCategory === "custom" ? "default" : goalCategory,
       });
       const preparedView = await withTimeout(
         prepareOnboardingLiveViewShell({
-          dashboardId: dashboardIdRef.current,
+          dashboardId,
           goal: normalizedGoal,
           goalCategory,
           resetProgress: true,
@@ -284,7 +347,7 @@ export default function FirstDashboard() {
       const result = await createOnboardingLiveView({
         goal: normalizedGoal,
         goalCategory,
-        dashboardId: dashboardIdRef.current,
+        dashboardId,
         preparedView,
         preset: defaultPreset,
         userToken: settings.user?.token ?? null,
@@ -295,6 +358,7 @@ export default function FirstDashboard() {
       });
       if (createAttemptRef.current !== attemptId) return;
       posthog.capture("onboarding_first_dashboard_created", {
+        ...flowProperties,
         goal_category: goalCategory,
         pipe_count: result.pipeSlugs.length,
         pipe_slugs: result.pipeSlugs,
@@ -302,8 +366,9 @@ export default function FirstDashboard() {
         refresh_started_count: result.refreshStartedCount,
         time_spent_ms: Date.now() - mountedAtRef.current,
       });
-      onboardingFunnel.liveViewCreated(goalCategory);
+      onboardingFunnel.liveViewCreated(goalCategory, flowProperties);
       posthog.capture("onboarding_path_selected", {
+        ...flowProperties,
         path: "ai_live_view",
         pipes: result.pipeSlugs,
         pipe_count: result.pipeSlugs.length,
@@ -317,12 +382,14 @@ export default function FirstDashboard() {
         pipeCount: result.pipeSlugs.length,
         dashboardBlockCount: result.blockCount,
         goalCategory,
+        ...flowProperties,
       });
     } catch (setupError) {
       if (createAttemptRef.current !== attemptId) return;
       const knownError =
         setupError instanceof OnboardingLiveViewSetupError ? setupError : null;
       posthog.capture("onboarding_first_dashboard_failed", {
+        ...flowProperties,
         failure_reason: knownError?.code ?? "unknown",
         stage: knownError?.stage ?? latestStageRef.current ?? "planning",
         pipe_slug: knownError?.pipeSlug,
@@ -340,6 +407,7 @@ export default function FirstDashboard() {
   }, [
     completeOnboarding,
     defaultPreset,
+    flowProperties,
     goal,
     goalCategory,
     reportProgress,
@@ -355,12 +423,15 @@ export default function FirstDashboard() {
     escapeCompletingRef.current = true;
     // Ignore any progress or result that arrives from the abandoned attempt.
     createAttemptRef.current += 1;
-    markOnboardingLiveViewSetupNeedsRetry(
-      dashboardIdRef.current,
-      "Setup was paused before it finished.",
-    );
+    if (dashboardIdRef.current) {
+      markOnboardingLiveViewSetupNeedsRetry(
+        dashboardIdRef.current,
+        "Setup was paused before it finished.",
+      );
+    }
     setIsContinuingWithoutWaiting(true);
     posthog.capture("onboarding_first_dashboard_build_bypassed", {
+      ...flowProperties,
       goal_category: goalCategory,
       stalled_stage: stage,
       time_spent_ms: Date.now() - mountedAtRef.current,
@@ -370,6 +441,7 @@ export default function FirstDashboard() {
       await completeOnboarding({
         method: "live_view_deferred",
         goalCategory,
+        ...(flowProperties ?? {}),
       });
     } catch {
       escapeCompletingRef.current = false;
@@ -379,25 +451,221 @@ export default function FirstDashboard() {
       setStage(null);
       setError("Could not finish setup. Try again.");
     }
-  }, [canContinueWithoutWaiting, completeOnboarding, goalCategory, stage]);
+  }, [
+    canContinueWithoutWaiting,
+    completeOnboarding,
+    flowProperties,
+    goalCategory,
+    stage,
+  ]);
+
+  const handleOpenExisting = useCallback(async () => {
+    if (completingRef.current || !flowProperties) return;
+    const selected = existingViews.find(
+      (view) => view.id === selectedExistingViewId,
+    );
+    if (!selected) return;
+
+    completingRef.current = true;
+    setError(null);
+    selectExistingLiveViewForOnboarding(selected.id);
+    posthog.capture("onboarding_existing_live_view_selected", {
+      ...flowProperties,
+      time_spent_ms: Date.now() - mountedAtRef.current,
+    });
+    posthog.capture("onboarding_path_selected", {
+      ...flowProperties,
+      path: "existing_live_view",
+      customized: false,
+      time_spent_ms: Date.now() - mountedAtRef.current,
+    });
+
+    try {
+      await completeOnboarding({
+        method: "existing_live_view_selected",
+        dashboardBlockCount: selected.slots.length,
+        ...flowProperties,
+      });
+    } catch {
+      completingRef.current = false;
+      setError("Could not finish setup. Try again.");
+    }
+  }, [
+    completeOnboarding,
+    existingViews,
+    flowProperties,
+    selectedExistingViewId,
+  ]);
 
   const handleSkip = useCallback(async () => {
     if (completingRef.current) return;
     completingRef.current = true;
     posthog.capture("onboarding_first_dashboard_skipped", {
+      ...(flowProperties ?? {}),
       goal_category: goal ? goalCategory : "none",
       time_spent_ms: Date.now() - mountedAtRef.current,
     });
     posthog.capture("onboarding_pipe_skipped", {
+      ...(flowProperties ?? {}),
       replaced_step: "first_dashboard",
     });
     try {
-      await completeOnboarding({ method: "pipe_step_skipped" });
+      await completeOnboarding({
+        method: "pipe_step_skipped",
+        ...(flowProperties ?? {}),
+      });
     } catch {
       completingRef.current = false;
       setError("Could not finish setup. Try again.");
     }
-  }, [completeOnboarding, goal, goalCategory]);
+  }, [completeOnboarding, flowProperties, goal, goalCategory]);
+
+  if (existingViewsStatus === "loading") {
+    return (
+      <div className="flex min-h-64 flex-col items-center justify-center py-3">
+        <div
+          role="status"
+          className="font-mono text-[11px] lowercase text-muted-foreground"
+        >
+          checking your Live Views...
+        </div>
+      </div>
+    );
+  }
+
+  if (existingViewsStatus === "error") {
+    return (
+      <div className="flex flex-col items-center py-3">
+        <div className="w-full max-w-sm border border-border p-4 text-center">
+          <h2 className="font-mono text-lg font-semibold lowercase">
+            we could not load your Live Views
+          </h2>
+          {error && (
+            <p className="mt-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+              {error}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={loadExistingViews}
+            className="mt-4 w-full border border-foreground bg-foreground px-3 py-3 font-mono text-xs font-semibold uppercase tracking-wide text-background transition-colors hover:bg-background hover:text-foreground"
+          >
+            try again
+          </button>
+          <button
+            type="button"
+            onClick={handleSkip}
+            className="mt-3 w-full py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            skip for now
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const isAdditionalViewFlow = existingViews.length > 0;
+  if (isAdditionalViewFlow && !creatingAnotherView && !stage) {
+    const count = existingViews.length;
+    const selectedView = existingViews.find(
+      (view) => view.id === selectedExistingViewId,
+    );
+    return (
+      <div className="flex flex-col items-center py-2">
+        <div className="w-full max-w-sm">
+          <h2 className="text-center font-mono text-lg font-semibold lowercase">
+            we found {count} Live {count === 1 ? "View" : "Views"}
+          </h2>
+          <p className="mx-auto mt-2 max-w-xs text-center font-mono text-[11px] leading-relaxed text-muted-foreground">
+            {count >= MAX_DASHBOARDS
+              ? `choose one to continue. you can keep up to ${MAX_DASHBOARDS} Live Views.`
+              : "choose one to continue, or create another Live View."}
+          </p>
+
+          <div
+            className="mt-5 max-h-72 space-y-2 overflow-y-auto"
+            aria-label="your Live Views"
+          >
+            {existingViews.map((view) => {
+              const selected = view.id === selectedExistingViewId;
+              const sectionCount = view.slots.length;
+              return (
+                <button
+                  key={view.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => {
+                    setSelectedExistingViewId(view.id);
+                    setError(null);
+                  }}
+                  className={`w-full border p-3 text-left transition-colors duration-150 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 ${
+                    selected
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border hover:border-foreground"
+                  }`}
+                >
+                  <span className="block truncate font-mono text-xs font-semibold">
+                    {view.title}
+                  </span>
+                  <span
+                    className={`mt-1 block font-mono text-[9px] lowercase ${
+                      selected ? "text-background/70" : "text-muted-foreground"
+                    }`}
+                  >
+                    {sectionCount} {sectionCount === 1 ? "section" : "sections"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {error && (
+            <p
+              role="alert"
+              className="mt-3 font-mono text-[10px] text-foreground"
+            >
+              {error}
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={handleOpenExisting}
+            disabled={!selectedView}
+            className="mt-4 w-full border border-foreground bg-foreground px-3 py-3 font-mono text-xs font-semibold uppercase tracking-wide text-background transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            open selected Live View
+          </button>
+          {count < MAX_DASHBOARDS && (
+            <button
+              type="button"
+              onClick={() => {
+                setCreatingAnotherView(true);
+                setError(null);
+                posthog.capture(
+                  "onboarding_create_another_live_view_selected",
+                  {
+                    ...(flowProperties ?? {}),
+                    time_spent_ms: Date.now() - mountedAtRef.current,
+                  },
+                );
+              }}
+              className="mt-3 w-full border border-foreground px-3 py-3 font-mono text-xs font-semibold uppercase tracking-wide text-foreground transition-colors hover:bg-foreground hover:text-background"
+            >
+              create another Live View
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleSkip}
+            className="mt-3 w-full py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            skip for now
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (stage) {
     const currentIndex = stageIndex(stage);
@@ -406,7 +674,7 @@ export default function FirstDashboard() {
     return (
       <div className="flex flex-col items-center py-3">
         <h2 className="font-mono text-lg font-semibold lowercase">
-          building your first Live View
+          building {isAdditionalViewFlow ? "another" : "your first"} Live View
         </h2>
         <p className="mt-2 max-w-sm text-center font-mono text-[11px] leading-relaxed text-muted-foreground">
           local context in. a useful view out.
@@ -480,12 +748,26 @@ export default function FirstDashboard() {
   return (
     <div className="flex flex-col items-center py-2">
       <div className="w-full max-w-sm">
+        {isAdditionalViewFlow && (
+          <button
+            type="button"
+            onClick={() => {
+              setCreatingAnotherView(false);
+              setError(null);
+            }}
+            className="mb-4 font-mono text-[10px] lowercase text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
+          >
+            back to my Live Views
+          </button>
+        )}
         <h2 className="text-center font-mono text-lg font-semibold lowercase">
-          what should screenpipe help you do first?
+          what should screenpipe help you do
+          {isAdditionalViewFlow ? " next" : " first"}?
         </h2>
         <p className="mx-auto mt-2 max-w-xs text-center font-mono text-[11px] leading-relaxed text-muted-foreground">
-          choose one useful outcome. screenpipe will set up a Live View that
-          starts with real activity, never sample data.
+          choose one useful outcome. screenpipe will set up
+          {isAdditionalViewFlow ? " another" : " a"} Live View that starts with
+          real activity, never sample data.
         </p>
 
         <div className="mt-5 space-y-2">
@@ -553,7 +835,9 @@ export default function FirstDashboard() {
           disabled={!goal.trim() || !isSettingsLoaded}
           className="mt-4 w-full border border-foreground bg-foreground px-3 py-3 font-mono text-xs font-semibold uppercase tracking-wide text-background transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
         >
-          {isSettingsLoaded ? "build my first Live View" : "loading AI"}
+          {isSettingsLoaded
+            ? `build ${isAdditionalViewFlow ? "another" : "my first"} Live View`
+            : "loading AI"}
         </button>
         <button
           type="button"

@@ -1853,6 +1853,22 @@ fn is_login_callback_scheme(scheme: &str) -> bool {
     scheme == deep_link_scheme() || scheme == "screenpipe"
 }
 
+#[cfg(not(target_os = "macos"))]
+fn reset_existing_login_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    login_url: tauri::Url,
+) -> Result<(), String> {
+    // A provider flow can leave this reusable webview on GitHub, Google, or
+    // even a failed/blank document. A later login click means "start over",
+    // so never surface whatever navigation state the previous attempt left.
+    window
+        .navigate(login_url)
+        .map_err(|e| format!("failed to reset login window: {e}"))?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// Open the screenpipe.com login page.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
 /// Windows/Linux: in-app WebView that intercepts the screenpipe:// redirect.
@@ -1910,24 +1926,28 @@ pub async fn open_login_window(
             "login-browser".to_string()
         };
 
+        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
+        let parsed_login_url = login_url
+            .parse()
+            .map_err(|e| format!("invalid login URL: {e}"))?;
+
         if fresh_session {
             if let Some(w) = app_handle.get_webview_window("login-browser") {
                 let _ = w.close();
             }
         } else if let Some(w) = app_handle.get_webview_window(&label) {
-            let _ = w.show();
-            let _ = w.set_focus();
+            info!("resetting existing login window");
+            reset_existing_login_window(&w, parsed_login_url)?;
             return Ok(());
         }
 
         let app_for_nav = app_handle.clone();
         let label_for_nav = label.clone();
 
-        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label.clone(),
-            WebviewUrl::External(login_url.parse().unwrap()),
+            WebviewUrl::External(parsed_login_url),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
@@ -1959,6 +1979,31 @@ pub async fn open_login_window(
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod login_window_tests {
+    use super::reset_existing_login_window;
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    #[test]
+    fn reused_login_window_returns_to_login_page() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let stale_url: tauri::Url = "https://github.com/settings/profile".parse().unwrap();
+        let login_url: tauri::Url = "https://screenpipe.com/login?return_scheme=screenpipe"
+            .parse()
+            .unwrap();
+        let window =
+            WebviewWindowBuilder::new(&app, "login-browser", WebviewUrl::External(stale_url))
+                .build()
+                .expect("login webview");
+
+        reset_existing_login_window(&window, login_url.clone()).unwrap();
+
+        assert_eq!(window.url().unwrap(), login_url);
     }
 }
 
@@ -3181,6 +3226,55 @@ pub async fn get_recording_health_state() -> String {
     crate::overlay_health::current_state_payload()
 }
 
+/// E2E-only accelerated reproduction of an idle capture heartbeat pause that
+/// recovers as the user returns. The real incident accumulated 114 idle stale
+/// checks, then the first input both woke capture and crossed the attended
+/// alert threshold before the next healthy check arrived.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_recording_health_return_race(
+    app_handle: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let seed_enabled = std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .map(|flags| {
+            flags
+                .split(',')
+                .any(|flag| flag.trim() == "recording-health-return-race")
+        })
+        .unwrap_or(false);
+    if !cfg!(feature = "e2e") || !seed_enabled {
+        return Err("recording-health return-race probe requires the e2e feature and seed".into());
+    }
+
+    let mut tier = crate::stale_tier::StaleTier::default();
+    for _ in 0..114 {
+        tier.observe(true, false);
+    }
+    let idle_confirmed = tier.confirmed();
+
+    tier.observe(true, true);
+    let return_confirmed = tier.confirmed();
+    let alerts_enabled = crate::store::SettingsStore::get(&app_handle)
+        .ok()
+        .flatten()
+        .map(|settings| settings.show_restart_notifications)
+        .unwrap_or(false);
+    crate::overlay_health::on_tick(&app_handle, return_confirmed, false, false).await;
+    let overlay_state = crate::overlay_health::current_state_payload();
+
+    let recovered_after = tier.observe(false, true);
+    crate::overlay_health::dismiss_incident(app_handle).await;
+
+    Ok(serde_json::json!({
+        "idleConfirmed": idle_confirmed,
+        "returnConfirmed": return_confirmed,
+        "alertsEnabled": alerts_enabled,
+        "overlayState": overlay_state,
+        "recoveredAfter": recovered_after,
+    }))
+}
+
 /// Restart the recording engine from the overlay's failure state. Runs the
 /// same stop → settle → spawn sequence as the native panel's restart action;
 /// the health loop confirms recovery and pushes "recovered" to the overlay.
@@ -3227,14 +3321,17 @@ pub async fn show_notification_inbox(app_handle: tauri::AppHandle) -> Result<(),
                     app_handle.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
                 {
                     let analytics = std::sync::Arc::clone(&analytics);
-                    let unread = entries.iter().filter(|e| !e.read).count();
+                    let unread = entries
+                        .iter()
+                        .filter(|entry| !entry.read && entry.is_high_priority())
+                        .count();
                     let total = entries.len();
                     tauri::async_runtime::spawn(async move {
                         let _ = analytics
                             .send_event(
                                 "notification_bell_opened",
                                 Some(serde_json::json!({
-                                    "unread_count": unread,
+                                    "high_priority_unread_count": unread,
                                     "total_count": total,
                                     "surface": "native_overlay",
                                 })),

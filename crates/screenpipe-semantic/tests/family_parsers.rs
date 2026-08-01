@@ -307,6 +307,123 @@ fn codex_windows_fixture_extracts_labeled_uia_turns() {
 }
 
 #[test]
+fn candidate_chain_walks_app_override_into_family_fallback() {
+    // Claude desktop identity, but the tree is a plain dialog: the Claude app
+    // parser and the conversation family must abstain, and the chain must land
+    // on family.document with every prior candidate attempted and no failures.
+    let source = r#"{
+        "app": {
+            "platform": "windows",
+            "app_id": "com.anthropic.claudefordesktop",
+            "executable": "Claude.exe",
+            "display_name": "Claude",
+            "version": null,
+            "browser_url": null
+        },
+        "nodes": [
+            { "parent": null, "role": "Text", "text": "Claude is still working" },
+            {
+                "parent": null,
+                "role": "Text",
+                "text": "Claude is working in 1 session. Quitting now will interrupt that work."
+            },
+            { "parent": null, "role": "Button", "text": "Quit anyway" },
+            { "parent": null, "role": "Button", "text": "Wait for Claude" }
+        ]
+    }"#;
+    let result = parse_fixture(source);
+    assert_eq!(
+        result.attempts, 3,
+        "app override plus two family candidates"
+    );
+    assert!(result.failures.is_empty());
+    assert_eq!(
+        result.selected_parser_id.as_deref(),
+        Some("family.document")
+    );
+    assert!(matches!(result.outcome, ValidatedParseOutcome::Handled(_)));
+}
+
+#[test]
+fn notepad_windows_fixture_titles_document_from_the_tab_label() {
+    let items = handled(
+        include_str!("fixtures/families/notepad_windows_document.json"),
+        "family.document",
+    );
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].kind, SemanticKind::Document);
+    assert_eq!(items[0].title.as_deref(), Some("meeting-notes.txt"));
+    let body = items[0].body.as_deref().unwrap_or_default();
+    assert!(body.contains("agenda item one"));
+    assert!(!body.contains("Close Tab"), "tab chrome must stay out");
+}
+
+#[test]
+fn powershell_console_fixture_captures_visible_buffer() {
+    let items = handled(
+        include_str!("fixtures/families/powershell_console_session.json"),
+        "family.terminal",
+    );
+    assert_eq!(items.len(), 1);
+    let body = items[0].body.as_deref().unwrap_or_default();
+    assert!(body.contains("cargo test"));
+    assert!(body.contains("4 passed"));
+    assert!(!body.contains("Minimize"), "window chrome must stay out");
+}
+
+#[test]
+fn codex_windows_chat_list_fixture_extracts_sidebar_titles() {
+    let items = handled(
+        include_str!("fixtures/families/codex_windows_chat_list.json"),
+        "family.conversation",
+    );
+    assert_eq!(items[0].kind, SemanticKind::Conversation);
+    assert_eq!(
+        items[0].metadata.get("view").map(String::as_str),
+        Some("chat_list")
+    );
+    let chats: Vec<(&str, Option<&str>)> = items[1..]
+        .iter()
+        .map(|item| {
+            (
+                item.title.as_deref().unwrap_or(""),
+                item.metadata.get("last_active").map(String::as_str),
+            )
+        })
+        .collect();
+    assert_eq!(
+        chats,
+        vec![
+            ("Ship weekly digest", Some("2d")),
+            ("Validate publish 71 to 73", Some("1w")),
+            ("Review diffs since 2.5.4", Some("1mo")),
+            ("Fix flaky login test", Some("12h")),
+            (
+                "plan the quarterly retro agenda with the platfor",
+                Some("3w")
+            ),
+            ("Tidy the release checklist template", Some("1mo")),
+        ]
+    );
+    for item in &items[1..] {
+        assert_eq!(item.kind, SemanticKind::Conversation);
+        assert_eq!(item.parent_local_id.as_deref(), Some("chat-list"));
+        assert!(item.body.is_none(), "chat rows carry no message content");
+    }
+}
+
+#[test]
+fn chat_list_requires_the_new_chat_button() {
+    let source = include_str!("fixtures/families/codex_windows_chat_list.json")
+        .replace("\"New chat\"", "\"Some feature\"");
+    let result = parse_fixture(&source);
+    assert!(matches!(
+        result.outcome,
+        ValidatedParseOutcome::NotHandled | ValidatedParseOutcome::Empty
+    ));
+}
+
+#[test]
 fn codex_windows_abstains_without_the_response_button_trio() {
     // Remove the rating anchors: the tree is still a Chromium document with
     // plenty of text, and must not produce a conversation.

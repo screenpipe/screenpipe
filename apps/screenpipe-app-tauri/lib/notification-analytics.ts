@@ -6,6 +6,7 @@ export type NotificationAnalyticsContext = {
   id?: string | null;
   type?: string | null;
   pipe_name?: string | null;
+  priority?: string | null;
 };
 
 export type NotificationAnalyticsSurface = "toast" | "bell";
@@ -24,6 +25,7 @@ export function notificationAnalyticsProperties(
     notification_id: notification?.id ?? null,
     notification_type: notification?.type ?? null,
     pipe_name: notification?.pipe_name ?? null,
+    notification_priority: notification?.priority ?? null,
     notification_surface: surface,
   };
 }

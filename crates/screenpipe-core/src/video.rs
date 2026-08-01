@@ -175,7 +175,17 @@ pub async fn write_frame_to_ffmpeg(
     Ok(())
 }
 
-pub async fn finish_ffmpeg_process(child: Child, stdin: Option<ChildStdin>) {
+/// Close stdin and wait for ffmpeg to exit, logging its stderr.
+///
+/// Returns the exit status (`None` if waiting failed). Callers that repoint
+/// database rows or delete source files based on the produced output MUST
+/// check this: with fragmented-MP4 flags ffmpeg leaves a non-empty, decodable
+/// *prefix* file when it dies mid-encode, so "file exists and is non-empty"
+/// does not imply the encode succeeded.
+pub async fn finish_ffmpeg_process(
+    child: Child,
+    stdin: Option<ChildStdin>,
+) -> Option<std::process::ExitStatus> {
     drop(stdin); // Ensure stdin is closed
     match child.wait_with_output().await {
         Ok(output) => {
@@ -187,7 +197,11 @@ pub async fn finish_ffmpeg_process(child: Child, stdin: Option<ChildStdin>) {
                 // FFmpeg writes metadata/codec info to stderr by design — not an error
                 debug!("FFmpeg stderr (info): {}", stderr);
             }
+            Some(output.status)
         }
-        Err(e) => error!("Failed to wait for FFmpeg process: {}", e),
+        Err(e) => {
+            error!("Failed to wait for FFmpeg process: {}", e);
+            None
+        }
     }
 }

@@ -20,6 +20,7 @@ use futures::StreamExt;
 use tauri::AppHandle;
 
 use crate::notifications::client;
+use crate::notifications::store::NotificationPriority;
 use crate::store::SettingsStore;
 use screenpipe_events::{DbRecoveryEvent, DbRecoveryState};
 
@@ -56,12 +57,12 @@ fn notify(app: &AppHandle, state: DbRecoveryState) {
         ),
         DbRecoveryState::NeedsRecovery => (
             "recording stopped — database needs recovery",
-            "screenpipe hit a database error it couldn't auto-repair. quit screenpipe and \
-             run `screenpipe db recover` to fix it, then reopen the app.",
+            "screenpipe stopped recording to protect your data after a database hard fault. \
+             quit screenpipe and run `screenpipe db recover` to fix it, then reopen the app.",
         ),
     };
 
-    client::send_typed(title, body, "system", None);
+    client::send_typed_with_priority(title, body, "system", None, NotificationPriority::High);
 }
 
 fn pref_enabled(app: &AppHandle, key: &str) -> bool {

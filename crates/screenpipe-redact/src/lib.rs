@@ -94,6 +94,51 @@ pub use span::{RedactedSpan, SpanLabel, TextRedactionPolicy};
 pub use tree_json::{redact_tree_json, redact_tree_json_with_redactor, TreeRedactError};
 
 use async_trait::async_trait;
+use std::sync::Arc;
+
+/// Optional bridge for database-owning applications to observe SQLx errors
+/// from background redaction workers. The worker only invokes this for a
+/// typed `sqlx::Error` in the anyhow source chain, never for model, network,
+/// image-file, or generic I/O failures.
+pub type DatabaseErrorHook = Arc<dyn Fn(&sqlx::Error) + Send + Sync>;
+
+pub(crate) fn notify_database_error(hook: Option<&DatabaseErrorHook>, error: &anyhow::Error) {
+    let Some(hook) = hook else {
+        return;
+    };
+    if let Some(database_error) = error
+        .chain()
+        .find_map(|source| source.downcast_ref::<sqlx::Error>())
+    {
+        hook(database_error);
+    }
+}
+
+#[cfg(test)]
+mod database_error_hook_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn hook_receives_only_typed_sqlx_errors() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let hook: DatabaseErrorHook = Arc::new(move |error| {
+            assert!(error.to_string().contains("code: 522"));
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let sqlx_error = anyhow::Error::new(sqlx::Error::Protocol(
+            "error returned from database: (code: 522) disk I/O error".into(),
+        ))
+        .context("redaction query failed");
+        notify_database_error(Some(&hook), &sqlx_error);
+
+        let unrelated_file_error = anyhow::anyhow!("image file disk I/O error");
+        notify_database_error(Some(&hook), &unrelated_file_error);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
 
 /// A single text input + the redacted text the [`Redactor`] returned
 /// + the spans that were redacted (so callers can keep an audit trail).

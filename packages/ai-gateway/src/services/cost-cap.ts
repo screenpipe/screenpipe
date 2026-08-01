@@ -4,7 +4,7 @@
 
 import { Env, type AccountPlan } from '../types';
 import { addCorsHeaders, createErrorResponse } from '../utils/cors';
-import { withResponseFinalizer } from '../utils/response-finalizer';
+import { withResponseLifecycle } from '../utils/response-finalizer';
 import {
 	getCostReservationMicroUsd,
 	getCostAccumulatorOrThrow,
@@ -24,13 +24,11 @@ import {
 	getPlanDailyCostCap,
 	resolveHostedAiTextCostLimits,
 } from './hosted-ai-cost-controls';
+import { getHostedAiPlan } from './hosted-ai-policy';
+import { loadHostedAiReservationControls } from './hosted-ai-reservation-controls';
 
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
 const COST_RESERVATION_TIER_PREFIX = 'daily_cost_reservation_v3';
-export const DAILY_COST_RESERVATION_SECONDS = 10 * 60;
-export const MAX_ACTIVE_INTERACTIVE_RESERVATIONS = 2;
-export const MAX_ACTIVE_BACKGROUND_RESERVATIONS = 4;
-export const MAX_BACKGROUND_RESERVED_FRACTION = 0.5;
 
 export type DailyCostHold = {
 	key: string;
@@ -38,6 +36,8 @@ export type DailyCostHold = {
 	tier: string;
 	reservedMicroUsd: number;
 	expiresAt: string;
+	reservationTtlSeconds: number;
+	capacityActivitySeconds: number;
 };
 
 export type DailyCostLane = 'interactive' | 'background';
@@ -221,6 +221,38 @@ export async function releaseDailyCostReservation(
 	}
 }
 
+/** Extend an actively consumed response while preserving exact-release semantics. */
+async function refreshDailyCostReservation(
+	env: Env,
+	reservation: DailyCostHold,
+	now: Date = new Date(),
+): Promise<void> {
+	const nextExpiresAt = new Date(
+		now.getTime() + reservation.reservationTtlSeconds * 1000,
+	).toISOString();
+	try {
+		const result = await env.DB.prepare(`
+			UPDATE usage
+			SET last_reset = ?, updated_at = ?
+			WHERE device_id = ? AND user_id = ? AND tier = ?
+				AND daily_count = ? AND last_reset = ?
+		`).bind(
+			nextExpiresAt,
+			now.toISOString(),
+			reservation.key,
+			reservation.deviceId,
+			reservation.tier,
+			reservation.reservedMicroUsd,
+			reservation.expiresAt,
+		).run();
+		if (changed(result)) reservation.expiresAt = nextExpiresAt;
+	} catch (error) {
+		// A missed refresh only shortens this hold. The request's final settlement
+		// still writes actual or conservative cost, so never break the response.
+		console.error('daily cost reservation refresh failed', error);
+	}
+}
+
 /** Atomically enforce request, plan-day, plan-month, and global spend limits. */
 export async function reserveDailyCostCap(
 	env: Env,
@@ -236,6 +268,7 @@ export async function reserveDailyCostCap(
 	if (isZeroCostModel(model)) return { allowed: true, reservation: null };
 
 	try {
+		const reservationControls = loadHostedAiReservationControls(env);
 		// Establish and read the immutable incident-epoch baseline before admission.
 		await getDailyUserCostForCapOrThrow(env, deviceId, now);
 
@@ -244,16 +277,19 @@ export async function reserveDailyCostCap(
 		const hour = utcHour(now);
 		const nowIso = now.toISOString();
 		const expiresAt = new Date(
-			now.getTime() + DAILY_COST_RESERVATION_SECONDS * 1000,
+			now.getTime() + reservationControls.reservationTtlSeconds * 1000,
+		).toISOString();
+		const capacityCutoffIso = new Date(
+			now.getTime() - reservationControls.capacityActivitySeconds * 1000,
 		).toISOString();
 		const holdTier = await reservationTier(env);
 		const baselineEpoch = configuredCostCapEpoch(env);
 		const baselineKey = baselineEpoch
 			? `daily-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
 			: '__no_daily_cost_baseline__';
-		// Free/Basic Auto is constrained to the efficient waterfall. Reserving it
+		// Non-Business Auto is constrained to the efficient waterfall. Reserving it
 		// against Sol would reject legitimate requests before the provider runs.
-		const reservationModel = model === 'auto' && accountPlan !== 'business'
+		const reservationModel = model === 'auto' && getHostedAiPlan(accountPlan) !== 'business'
 			? 'gpt-5.6-luna'
 			: model;
 		const reservedMicroUsd = getCostReservationMicroUsd(reservationModel, shape);
@@ -266,12 +302,12 @@ export async function reserveDailyCostCap(
 		const monthKey = hostedAiTrial ? trialCostKey(deviceId) : monthlyCostKey(deviceId);
 		const monthPeriod = hostedAiTrial ? 'trial' : month;
 		const laneLimit = lane === 'background'
-			? MAX_ACTIVE_BACKGROUND_RESERVATIONS
-			: MAX_ACTIVE_INTERACTIVE_RESERVATIONS;
+			? reservationControls.maxActiveBackground
+			: reservationControls.maxActiveInteractive;
 		const lanePrefix = `${reservationKeyPrefix(lane)}%`;
 		const backgroundPrefix = `${reservationKeyPrefix('background')}%`;
 		const backgroundBudgetMicroUsd = Math.floor(
-			dailyCapMicroUsd * MAX_BACKGROUND_RESERVED_FRACTION,
+			dailyCapMicroUsd * reservationControls.maxBackgroundReservedFraction,
 		);
 		const key = `${reservationKeyPrefix(lane)}${crypto.randomUUID()}`;
 
@@ -283,10 +319,12 @@ export async function reserveDailyCostCap(
 
 		// D1/SQLite serializes this write. Every concurrent request observes the
 		// previously committed holds, so global and account caps cannot race open.
-		const claimed = changed(await env.DB.prepare(`
+		// RETURNING is the admission proof; D1 write metadata can report an
+		// ambiguous change count even when the row was inserted.
+		const claimed = await env.DB.prepare(`
 			INSERT OR IGNORE INTO usage
-				(device_id, user_id, daily_count, last_reset, tier)
-			SELECT ?, ?, ?, ?, ?
+				(device_id, user_id, daily_count, last_reset, tier, updated_at)
+			SELECT ?, ?, ?, ?, ?, ?
 			WHERE (
 				MAX(0, (
 					COALESCE((
@@ -341,6 +379,7 @@ export async function reserveDailyCostCap(
 			AND COALESCE((
 				SELECT COUNT(*) FROM usage
 				WHERE user_id = ? AND tier = ? AND last_reset > ?
+					AND datetime(updated_at) > datetime(?)
 					AND device_id LIKE ?
 			), 0) < ?
 			AND (
@@ -351,12 +390,14 @@ export async function reserveDailyCostCap(
 						AND device_id LIKE ?
 				), 0) + ? <= ?
 			)
+			RETURNING device_id AS reservation_key
 		`).bind(
 			key,
 			deviceId,
 			reservedMicroUsd,
 			expiresAt,
 			holdTier,
+			nowIso,
 			day,
 			deviceId,
 			day,
@@ -390,6 +431,7 @@ export async function reserveDailyCostCap(
 			deviceId,
 			holdTier,
 			nowIso,
+			capacityCutoffIso,
 			lanePrefix,
 			laneLimit,
 			lane,
@@ -399,12 +441,20 @@ export async function reserveDailyCostCap(
 			backgroundPrefix,
 			reservedMicroUsd,
 			backgroundBudgetMicroUsd,
-		).run());
+		).first<{ reservation_key: string }>();
 
-		if (claimed) {
+		if (claimed?.reservation_key === key) {
 			return {
 				allowed: true,
-				reservation: { key, deviceId, tier: holdTier, reservedMicroUsd, expiresAt },
+				reservation: {
+					key,
+					deviceId,
+					tier: holdTier,
+					reservedMicroUsd,
+					expiresAt,
+					reservationTtlSeconds: reservationControls.reservationTtlSeconds,
+					capacityActivitySeconds: reservationControls.capacityActivitySeconds,
+				},
 			};
 		}
 
@@ -461,6 +511,20 @@ export function withDailyCostSettlement(
 ): Response {
 	if (!reservation) return response;
 	let finalized = false;
+	const refreshIntervalMs = Math.max(
+		1_000,
+		Math.floor(Math.min(
+			reservation.reservationTtlSeconds,
+			reservation.capacityActivitySeconds,
+		) * 500),
+	);
+	let nextRefreshAt = Date.now() + refreshIntervalMs;
+	const refreshIfDue = async () => {
+		const nowMs = Date.now();
+		if (nowMs < nextRefreshAt) return;
+		nextRefreshAt = nowMs + refreshIntervalMs;
+		await refreshDailyCostReservation(env, reservation, new Date(nowMs));
+	};
 	const finalize = async () => {
 		if (finalized) return;
 		finalized = true;
@@ -477,8 +541,12 @@ export function withDailyCostSettlement(
 			console.error('daily cost was not recorded; retaining request reservation until expiry');
 		}
 	};
-	return withResponseFinalizer(response, finalize, (error) => {
-		console.error('daily cost response finalization failed', error);
+	return withResponseLifecycle(response, {
+		onActivity: refreshIfDue,
+		onFinalize: finalize,
+		onError: (error) => {
+			console.error('daily cost response lifecycle failed', error);
+		},
 	});
 }
 

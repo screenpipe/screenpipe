@@ -169,7 +169,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud" | "acp";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud";
   title: string;
   description: string;
   imageSrc: string;
@@ -370,15 +370,10 @@ const AISection = ({
 
 
   const isFormValid = useMemo(() => {
-    if (Object.keys(validationErrors).length !== 0 ||
-        !settingsPreset?.id ||
-        !settingsPreset.provider) {
-      return false;
-    }
-    if (settingsPreset.provider === "acp") {
-      return Boolean(settingsPreset.acpAgent?.id?.trim() && settingsPreset.apiKey?.trim());
-    }
-    return Boolean(settingsPreset.model);
+    return Object.keys(validationErrors).length === 0 &&
+           settingsPreset?.id &&
+           settingsPreset?.provider &&
+           settingsPreset?.model;
   }, [validationErrors, settingsPreset]);
 
   const updateStoreSettings = async () => {
@@ -531,7 +526,7 @@ const AISection = ({
     if (!model) return;
     if (model === prevModelRef.current) return; // no change — preserve saved value
     prevModelRef.current = model;
-    if (settingsPreset?.provider === "screenpipe-cloud" || settingsPreset?.provider === "acp") return;
+    if (settingsPreset?.provider === "screenpipe-cloud") return;
     const tokens = getDefaultMaxTokens(model);
     if (tokens) {
       updateSettingsPreset({ maxTokens: tokens } as any);
@@ -564,7 +559,6 @@ const AISection = ({
       "anthropic": "claude",
       "native-ollama": "ollama",
       "screenpipe-cloud": "screenpipe-cloud",
-      "acp": "claude code",
     };
 
     let newUrl = "";
@@ -592,20 +586,9 @@ const AISection = ({
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "auto";
         break;
-      case "acp":
-        // The external adapter owns its own model/endpoint; the preset only
-        // records which adapter to launch.
-        newUrl = "";
-        newModel = "";
-        break;
     }
 
-    const updates: Partial<AIPreset> = {
-      provider: newValue,
-      url: newUrl,
-      model: newModel,
-      acpAgent: newValue === "acp" ? { id: "claude-acp", args: [], env: {} } : undefined,
-    };
+    const updates: Partial<AIPreset> = { provider: newValue, url: newUrl, model: newModel };
     // Auto-fill name only when creating a new preset (no existing id)
     if (!settingsPreset?.id && defaultNames[newValue]) {
       updates.id = defaultNames[newValue];
@@ -1272,15 +1255,6 @@ const AISection = ({
           />
 
           <AIProviderCard
-            type="acp"
-            title="Claude Code"
-            description="Stream a local Claude Code coding agent. It can edit files and run commands with approval."
-            imageSrc="/images/claude-ai.svg"
-            selected={settingsPreset?.provider === "acp"}
-            onClick={() => handleAiProviderChange("acp")}
-          />
-
-          <AIProviderCard
             type="native-ollama"
             title="Ollama"
             description="Run AI models locally using your existing Ollama installation"
@@ -1303,14 +1277,6 @@ const AISection = ({
           )}
 
         </div>
-        {settingsPreset?.provider === "acp" && (
-          <div
-            data-testid="claude-acp-security-note"
-            className="mb-4 rounded-md border p-3 text-xs text-muted-foreground"
-          >
-            Claude Code is a local coding agent. It can read and write files and run terminal commands in this chat&apos;s workspace; protected actions surface approval requests. It uses your Anthropic API key, and Claude subscription sign-in is disabled.
-          </div>
-        )}
       </div>
 
       <ValidatedInput
@@ -1341,7 +1307,7 @@ const AISection = ({
       )}
 
 
-      {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "acp" || settingsPreset?.provider === "custom" || (isApiKeyRequired &&
+      {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "custom" || (isApiKeyRequired &&
         settingsPreset?.provider === "openai")) && (
           <div className="w-full">
             <div className="flex flex-col gap-4 mb-4 w-full">
@@ -1377,7 +1343,7 @@ const AISection = ({
                   )}
                 </Button>
               </div>
-              {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "acp") && (
+              {settingsPreset?.provider === "anthropic" && (
                 <button
                   type="button"
                   className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 w-fit"
@@ -1464,7 +1430,6 @@ const AISection = ({
         </div>
       )}
 
-      {settingsPreset?.provider !== "acp" && (
       <div className="w-full">
         <div className="flex flex-col gap-4 mb-4 w-full">
           <Label htmlFor="aiModel" className="flex items-center gap-1">
@@ -1680,7 +1645,6 @@ const AISection = ({
           )}
         </div>
       </div>
-      )}
 
       <ValidatedTextarea
         id="customPrompt"
@@ -1701,7 +1665,7 @@ const AISection = ({
         helperText="This prompt will be used to guide the AI's responses"
       />
 
-      {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && (
         <div className="w-full">
           <Label htmlFor="maxTokens" className="text-sm font-medium">
             Max Output Tokens
@@ -1746,7 +1710,7 @@ const AISection = ({
         </div>
       )}
 
-      {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && (
         <div className="w-full border rounded-lg">
           <button
             type="button"
@@ -1888,8 +1852,6 @@ const AISection = ({
               <TooltipContent>
                 {!settingsPreset?.id
                   ? "Enter a preset name to continue"
-                  : settingsPreset?.provider === "acp" && !settingsPreset?.apiKey?.trim()
-                  ? "Enter an Anthropic API key to continue"
                   : !settingsPreset?.model
                   ? "Select a model to continue"
                   : "Fix validation errors to continue"}

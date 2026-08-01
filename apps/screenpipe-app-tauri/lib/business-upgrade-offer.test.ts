@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  BUSINESS_PLAN_FEATURES,
   DEFAULT_BUSINESS_UPGRADE_OFFER,
   formatOfferAmount,
   parseBusinessUpgradeOffer,
@@ -15,6 +16,12 @@ describe("business upgrade offer", () => {
       DEFAULT_BUSINESS_UPGRADE_OFFER,
     );
     expect(DEFAULT_BUSINESS_UPGRADE_OFFER.defaultInterval).toBe("month");
+    expect(DEFAULT_BUSINESS_UPGRADE_OFFER.copy.features).toEqual([
+      ...BUSINESS_PLAN_FEATURES,
+    ]);
+    expect(DEFAULT_BUSINESS_UPGRADE_OFFER.copy.features.join(" ")).not.toMatch(
+      /cloud transcription|100x more AI queries/i,
+    );
   });
 
   it("accepts a Stripe-backed annual amount and remote copy", () => {

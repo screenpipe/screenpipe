@@ -5,7 +5,9 @@
 export const NOTIFICATION_DAEMON_URL = "http://127.0.0.1:11435/notify";
 export const NOTIFICATION_DAEMON_TIMEOUT_MS = 3000;
 
-export function buildNotificationBody(args: Record<string, any>): Record<string, unknown> {
+export function buildNotificationBody(
+  args: Record<string, any>,
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     title: args.title,
     body: args.body || "",
@@ -17,7 +19,9 @@ export function buildNotificationBody(args: Record<string, any>): Record<string,
   if (args.timeout_secs !== undefined && args.timeout_secs !== null) {
     body.timeout = Number(args.timeout_secs) * 1000;
   }
+  if (["high", "normal", "low"].includes(args.priority)) {
+    body.priority = args.priority;
+  }
   if (args.actions) body.actions = args.actions;
   return body;
 }
-

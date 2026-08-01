@@ -17,6 +17,7 @@ import {
   markOnboardingLiveViewSetupReady,
   startOnboardingLiveViewActivation,
 } from "@/lib/live-views/onboarding-activation";
+import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
 import {
   buildLiveViewTimeContext,
   DEFAULT_LIVE_VIEW_PERIOD_POLICY,
@@ -31,7 +32,6 @@ import {
 const FIRST_DASHBOARD_ID = "first-dashboard";
 const MAX_STORE_CANDIDATES = 20;
 const MAX_SELECTED_PIPES = 2;
-const MAX_DASHBOARDS = 12;
 
 export type OnboardingPipeCandidate = LiveViewPipeSummary & {
   slug: string;

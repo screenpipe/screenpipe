@@ -1,0 +1,47 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "C:\\Windows\\System32\\Notepad.exe",
+    "display_name": "Notepad.exe",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Document",
+      "classes": ["RichEditD2DPT"],
+      "text": "Meeting notes\nagenda item one\nagenda item two",
+      "value": "Meeting notes\nagenda item one\nagenda item two"
+    },
+    {
+      "parent": null,
+      "role": "TabItem",
+      "classes": ["ListViewItem"],
+      "text": "meeting-notes.txt. Unmodified."
+    },
+    { "parent": 1, "role": "Text", "classes": ["TextBlock"], "text": "meeting-notes.txt" },
+    { "parent": 1, "role": "Button", "identifier": "CloseButton", "text": "Close Tab" },
+    { "parent": null, "role": "Button", "identifier": "AddButton", "text": "Add New Tab" },
+    { "parent": null, "role": "MenuItem", "identifier": "File", "text": "File" },
+    { "parent": null, "role": "MenuItem", "identifier": "Edit", "text": "Edit" },
+    { "parent": null, "role": "MenuItem", "identifier": "View", "text": "View" },
+    {
+      "parent": null,
+      "role": "Text",
+      "identifier": "ContentTextBlock",
+      "classes": ["TextBlock"],
+      "text": "Line 1,\nColumn 1"
+    },
+    {
+      "parent": null,
+      "role": "Text",
+      "identifier": "ContentTextBlock",
+      "classes": ["TextBlock"],
+      "text": "45 characters"
+    },
+    { "parent": null, "role": "Button", "text": "Minimize" },
+    { "parent": null, "role": "Button", "text": "Close" }
+  ]
+}

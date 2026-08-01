@@ -55,6 +55,7 @@ export class PiConversationHarness {
   private baseUrl = "";
   private responseDelayMs = 0;
   private remainingRetryFailures = 0;
+  private gatewayErrorResponse: unknown | null = null;
   private readonly requests: unknown[] = [];
 
   constructor(private readonly sessionId: string) {}
@@ -153,6 +154,11 @@ export class PiConversationHarness {
 
   setRetryFailures(count: number): void {
     this.remainingRetryFailures = Math.max(0, Math.floor(count));
+  }
+
+  /** Return a stable gateway-shaped error until the spec clears it. */
+  setGatewayErrorResponse(body: unknown | null): void {
+    this.gatewayErrorResponse = body;
   }
 
   async waitForRequestCount(expectedCount: number, label: string): Promise<void> {
@@ -298,6 +304,14 @@ export class PiConversationHarness {
           body = JSON.parse(rawBody);
         } catch {}
         this.requests.push(body);
+
+        if (this.gatewayErrorResponse !== null) {
+          response.writeHead(429, {
+            "content-type": "application/json",
+          });
+          response.end(JSON.stringify(this.gatewayErrorResponse));
+          return;
+        }
 
         if (this.remainingRetryFailures > 0) {
           this.remainingRetryFailures -= 1;

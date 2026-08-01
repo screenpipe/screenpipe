@@ -19,6 +19,7 @@ import {
 } from "@/components/markdown";
 import { timelineTimestampFromDeepLink } from "@/lib/timeline-deeplink";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
+import { rememberSelectedLiveViewDashboard } from "@/lib/live-views/onboarding-activation";
 import { isBusinessSubscriptionPurchaseDeepLink } from "@/lib/utils/purchase-deep-link";
 import posthog from "posthog-js";
 
@@ -188,6 +189,26 @@ export function DeeplinkHandler() {
 
       if (url.includes("settings") || url.includes("home")) {
         await openSettingsWindow();
+      }
+
+      // A Live View follow-up notification points directly at the dashboard
+      // created during onboarding. Persisting the selection before opening
+      // Home also covers a cold-started Settings window.
+      if (
+        parsedUrl.host === "live-view" ||
+        parsedUrl.pathname?.startsWith("/live-view/")
+      ) {
+        const viewId = decodeURIComponent(
+          parsedUrl.host === "live-view"
+            ? (parsedUrl.pathname.replace(/^\/+/, "").split("/")[0] ?? "")
+            : (parsedUrl.pathname
+                .replace(/^\/live-view\/?/, "")
+                .split("/")[0] ?? ""),
+        );
+        if (viewId) {
+          rememberSelectedLiveViewDashboard(viewId);
+          await openSettingsWindow("brain");
+        }
       }
 
       if (url.includes("changelog")) {

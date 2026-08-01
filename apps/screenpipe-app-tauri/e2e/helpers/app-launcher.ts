@@ -86,6 +86,9 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // opt-in capture-loop liveness spec; the first visual-change probe hangs far
 // past VISUAL_PROBE_TIMEOUT so the spec can assert the loop stays live
 // (attempts keep advancing, /health stays "ok") instead of freezing.
+// `recording-health-return-race` enables alerts for an accelerated app-level
+// replay of 114 idle stale ticks followed by user input and immediate capture
+// recovery. It verifies the return input cannot itself raise the failure pill.
 // `hd-writer-stall-once` is a debug-only macOS fault injection used by the HD
 // duration spec; the writer pauses once so artifact time can be checked against
 // wall time after a missed timer window.

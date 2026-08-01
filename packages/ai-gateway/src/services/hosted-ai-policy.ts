@@ -38,6 +38,8 @@ const BUSINESS_HOSTED_MODELS = [
 const PAID_HOSTED_AI_PLANS = new Set<AccountPlan>([
 	'basic',
 	'business',
+	'business_max',
+	'business_ultra',
 	'team',
 	'enterprise',
 ]);
@@ -47,12 +49,14 @@ export function hasPaidHostedAiPlan(auth: AuthResult): boolean {
 	return PAID_HOSTED_AI_PLANS.has(auth.accountPlan);
 }
 
-/** Collapse commercial variants to the three hosted-AI products we sell. */
+/** Collapse commercial variants to the three model-access and credit policies. */
 export function getHostedAiPlan(accountPlan: AccountPlan): HostedAiPlan | null {
 	switch (accountPlan) {
 		case 'free': return 'free';
 		case 'basic': return 'basic';
 		case 'business':
+		case 'business_max':
+		case 'business_ultra':
 		case 'team':
 		case 'enterprise':
 			return 'business';
@@ -79,6 +83,11 @@ export function getHostedAiIncludedCredits(accountPlan: AccountPlan): number {
 		case 'business': return 400;
 		default: return 0;
 	}
+}
+
+/** One hosted-AI credit is one cent of screenpipe-paid provider usage. */
+export function getHostedAiIncludedProviderCostUsd(accountPlan: AccountPlan): number {
+	return getHostedAiIncludedCredits(accountPlan) / 100;
 }
 
 export function isHostedAiModelAllowed(model: string, accountPlan: AccountPlan): boolean {

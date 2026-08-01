@@ -12,13 +12,15 @@
 //! idle machine (the incident that motivated this module).
 //!
 //! The tier: while a user is present (real input flowing while no frames
-//! land — recording genuinely being lost) staleness confirms on the same
-//! fast cadence as hard failures; while the machine is idle it must outlast
-//! the engine's self-heal window first. Presence comes primarily from OS
-//! input idle time — no engine cooperation needed — with the engine's
-//! `last_ui_timestamp` kept as a secondary path for a future engine that
-//! emits it. Every unknown fails toward *idle*: for an incident detector the
-//! conservative direction is the longer debounce (never a false incident).
+//! land — recording genuinely being lost) staleness confirms after the same
+//! 90 attended checks as hard failures; while the machine is idle it must
+//! outlast the engine's self-heal window first. Idle checks never count toward
+//! the attended threshold: the first return input often wakes a paused capture
+//! loop, so alerting on that same tick races the recovery check. Presence comes
+//! primarily from OS input idle time — no engine cooperation needed — with the
+//! engine's `last_ui_timestamp` kept as a secondary path for a future engine
+//! that emits it. Every unknown fails toward *idle*: for an incident detector
+//! the conservative direction is the longer debounce (never a false incident).
 
 use crate::health::CAPTURE_STALL_THRESHOLD;
 use std::time::Duration;
@@ -124,14 +126,11 @@ pub(crate) fn user_present_for_stale_tier(last_ui_timestamp: Option<&str>) -> bo
 /// Debounce threshold for the bare-"stale" signal, tiered by user presence.
 ///
 /// - User present (UI activity flowing while no frames land): real recording
-///   loss happening right now — alert on the same 90s cadence as hard
-///   failures.
+///   loss happening right now — alert after 90 attended stale checks, the same
+///   cadence as hard failures. Idle stale checks do not carry into this tier.
 /// - User idle: nothing on screen is changing, so nothing is being missed;
 ///   the engine's own gone-silent watchdog restarts the VisionManager at
-///   ~240s. Only alert if staleness survives all of that (15 min). When the
-///   user returns while the wedge persists, the threshold drops to 90 and the
-///   already-accumulated counter crosses it immediately — the incident
-///   surfaces exactly when someone is present to act on it.
+///   ~240s. Only alert if staleness survives all of that (15 min).
 pub(crate) fn stale_stall_threshold(user_active: bool) -> u32 {
     if user_active {
         CAPTURE_STALL_THRESHOLD
@@ -152,6 +151,7 @@ pub(crate) fn stale_stall_threshold(user_active: bool) -> u32 {
 #[derive(Default)]
 pub(crate) struct StaleTier {
     consecutive: u32,
+    attended_consecutive: u32,
     confirmed: bool,
     notified: bool,
 }
@@ -163,11 +163,19 @@ impl StaleTier {
     pub(crate) fn observe(&mut self, stale_now: bool, user_active: bool) -> Option<u32> {
         if stale_now {
             self.consecutive = self.consecutive.saturating_add(1);
-            self.confirmed = self.consecutive >= stale_stall_threshold(user_active);
+            if user_active {
+                self.attended_consecutive = self.attended_consecutive.saturating_add(1);
+            } else {
+                self.attended_consecutive = 0;
+            }
+            self.confirmed = self.confirmed
+                || self.consecutive >= stale_stall_threshold(false)
+                || self.attended_consecutive >= stale_stall_threshold(true);
             None
         } else {
             let recovered_after = (self.consecutive > 0).then_some(self.consecutive);
             self.consecutive = 0;
+            self.attended_consecutive = 0;
             self.confirmed = false;
             self.notified = false;
             recovered_after
@@ -287,7 +295,7 @@ mod tests {
     /// ticks; the tiered detector must stay quiet through the engine
     /// watchdog's self-heal window, then still alert an *attended* wedge fast.
     #[test]
-    fn idle_stale_run_stays_quiet_then_alerts_promptly_when_user_returns() {
+    fn idle_stale_run_does_not_alert_on_the_input_that_wakes_capture() {
         let mut tier = StaleTier::default();
 
         // 160 seconds of idle staleness — the observed false-positive window.
@@ -300,13 +308,14 @@ mod tests {
         );
         assert!(!tier.take_notification(true, true));
 
-        // User returns while the wedge persists: the threshold drops to the
-        // attended tier and the accumulated run crosses it on the next tick.
+        // User returns while the wedge persists. That input commonly wakes the
+        // capture loop, so the idle run must not cross the attended threshold.
         tier.observe(true, true);
-        assert!(tier.confirmed());
-        assert!(tier.take_notification(true, true));
+        assert!(!tier.confirmed());
+        assert!(!tier.take_notification(true, true));
 
-        // Recovery (frames flow again) resets the run.
+        // The incident recovered on the next health check without ever showing
+        // the failure pill.
         assert_eq!(tier.observe(false, true), Some(161));
         assert!(!tier.confirmed());
         assert_eq!(tier.consecutive(), 0);
@@ -317,7 +326,37 @@ mod tests {
             tier.observe(true, true);
         }
         assert!(tier.confirmed());
-        assert!(!tier.confirmed() || tier.consecutive() < stale_stall_threshold(false));
+        assert!(tier.take_notification(true, true));
+    }
+
+    #[test]
+    fn persistent_wedge_after_return_earns_a_fresh_attended_threshold() {
+        let mut tier = StaleTier::default();
+        for _ in 0..160 {
+            tier.observe(true, false);
+        }
+
+        for _ in 1..CAPTURE_STALL_THRESHOLD {
+            tier.observe(true, true);
+            assert!(!tier.confirmed());
+        }
+        tier.observe(true, true);
+        assert!(tier.confirmed());
+        assert!(tier.take_notification(true, true));
+
+        // A return that is not sustained resets the attended confirmation run.
+        tier.reset();
+        for _ in 0..160 {
+            tier.observe(true, false);
+        }
+        for _ in 0..45 {
+            tier.observe(true, true);
+        }
+        tier.observe(true, false);
+        for _ in 0..45 {
+            tier.observe(true, true);
+        }
+        assert!(!tier.confirmed());
     }
 
     /// The notification is once per run: neither a still-confirmed later tick
@@ -387,6 +426,7 @@ mod tests {
     fn counter_saturates() {
         let mut tier = StaleTier {
             consecutive: u32::MAX,
+            attended_consecutive: u32::MAX,
             confirmed: true,
             notified: true,
         };

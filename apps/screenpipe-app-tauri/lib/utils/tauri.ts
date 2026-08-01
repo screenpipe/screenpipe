@@ -401,6 +401,17 @@ async e2eCaptureSessionRunning() : Promise<Result<boolean, string>> {
 }
 },
 /**
+ * Read-only lifecycle snapshot for the packaged desktop regression.
+ */
+async e2eDbHardFaultState() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_db_hard_fault_state") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: emit a deterministic chat stream from the Rust side.
  *
  * This keeps chat performance tests close to production's Pi stdout path:
@@ -462,6 +473,18 @@ async e2eEmitSettledAgentFollowUp(sessionId: string) : Promise<Result<null, stri
 async e2eHandleDiskSpaceLow(availableBytes: number) : Promise<Result<DiskPressureOutcome, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_handle_disk_space_low", { availableBytes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Damage only an E2E-owned table in the disposable database, then route the
+ * real SQLITE_CORRUPT result through the production manager and app hook.
+ */
+async e2eInjectDbHardFault() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_inject_db_hard_fault") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -538,6 +561,20 @@ async e2eOwnedBrowserDetach() : Promise<Result<null, string>> {
  */
 async e2eOwnedBrowserVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_owned_browser_visible");
+},
+/**
+ * E2E-only accelerated reproduction of an idle capture heartbeat pause that
+ * recovers as the user returns. The real incident accumulated 114 idle stale
+ * checks, then the first input both woke capture and crossed the attended
+ * alert threshold before the next healthy check arrived.
+ */
+async e2eRecordingHealthReturnRace() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_recording_health_return_race") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * E2E helper: update the native store without depending on a mounted settings
@@ -2708,33 +2745,8 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number;
-/**
- * The external adapter to launch when `provider` is `acp`.
- */
-acpAgent?: AcpAgentConfig | null }
-export type AcpAgentConfig = {
-/**
- * Catalog id (for example `claude-acp`) or `custom`.
- */
-id: string;
-/**
- * Executable for a custom adapter; built-in ids resolve by id when absent.
- */
-command?: string | null;
-/**
- * Arguments passed to the adapter verbatim, without a shell.
- */
-args?: string[];
-/**
- * Environment passed only to the supervised adapter process.
- */
-env?: { [key in string]: string } }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic" |
-/**
- * External Agent Client Protocol adapter, launched via the ACP runtime.
- */
-"acp"
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -2948,17 +2960,7 @@ export type PiInfo = { running: boolean; projectDir: string | null; pid: number 
 /**
  * Configuration for which AI provider Pi should use
  */
-export type PiBackend = "acp"
 export type PiProviderConfig = {
-/**
- * Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
- * external adapter through the hidden ACP runtime.
- */
-backend?: PiBackend | null;
-/**
- * Adapter configuration, required when `backend` is `acp`.
- */
-acpAgent?: AcpAgentConfig | null;
 /**
  * Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
  */
@@ -2980,6 +2982,11 @@ apiKey: string | null;
  */
 maxTokens?: number;
 /**
+ * Approximate input context size in characters. Pi model metadata uses
+ * tokens, so Screenpipe converts this value using four characters/token.
+ */
+maxContextChars?: number | null;
+/**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
 systemPrompt?: string | null }
@@ -2996,12 +3003,12 @@ export type PiQueuedPrompt = {
  */
 id: string;
 /**
- * First ~200 chars of the user message — enough for the UI to show a
+ * First ~200 chars of the user message, enough for the UI to show a
  * readable preview without round-tripping the full prompt over IPC.
  */
 preview: string;
 /**
- * Unix epoch milliseconds for "queued at" — drives the relative-time
+ * Unix epoch milliseconds for "queued at", drives the relative-time
  * label in the UI ("queued 4s ago").
  */
 queuedAtMs: number }

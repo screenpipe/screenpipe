@@ -12,6 +12,8 @@ import { Card } from "@/components/ui/card";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import {
+  BUSINESS_PLAN_DESCRIPTION,
+  BUSINESS_PLAN_FEATURES,
   DEFAULT_BUSINESS_UPGRADE_OFFER,
   formatOfferAmount,
   parseBusinessUpgradeOffer,
@@ -167,7 +169,7 @@ export function BusinessUpgradeCard({
             {offer.copy.headline}
           </h3>
           <p className="mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground">
-            {offer.copy.description}
+            {BUSINESS_PLAN_DESCRIPTION}
           </p>
         </div>
       </div>
@@ -240,7 +242,7 @@ export function BusinessUpgradeCard({
 
       <div className="grid gap-8 px-6 py-5 md:grid-cols-[1fr_18rem]">
         <div className="grid content-start gap-2 sm:grid-cols-2">
-          {offer.copy.features.map((feature) => (
+          {BUSINESS_PLAN_FEATURES.map((feature) => (
             <div key={feature} className="flex items-start gap-2 text-sm">
               <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>{feature}</span>

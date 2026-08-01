@@ -33,6 +33,7 @@ use tracing::{debug, info, warn};
 
 use super::frame_redactor::{redact_frame, FrameRedactionOutcome};
 use super::{ImageRedactionPolicy, ImageRedactor};
+use crate::DatabaseErrorHook;
 
 /// Knobs for the image reconciliation worker.
 ///
@@ -96,6 +97,7 @@ pub struct ImageWorker {
     cfg: ImageWorkerConfig,
     status: Arc<Mutex<ImageWorkerStatus>>,
     paused: Arc<AtomicBool>,
+    database_error_hook: Option<DatabaseErrorHook>,
 }
 
 impl ImageWorker {
@@ -106,7 +108,15 @@ impl ImageWorker {
             cfg,
             status: Arc::new(Mutex::new(ImageWorkerStatus::default())),
             paused: Arc::new(AtomicBool::new(false)),
+            database_error_hook: None,
         }
+    }
+
+    /// Route typed SQLx failures to the database owner. Image/model errors do
+    /// not invoke this hook even when their text happens to mention I/O.
+    pub fn with_database_error_hook(mut self, hook: DatabaseErrorHook) -> Self {
+        self.database_error_hook = Some(hook);
+        self
     }
 
     pub fn pause(&self) {
@@ -232,6 +242,7 @@ impl ImageWorker {
                 }
                 Some(Err(e)) => {
                     drop(cpu_permit);
+                    crate::notify_database_error(self.database_error_hook.as_ref(), &e);
                     warn!(error = %e, "image reconciliation error; backing off");
                     let mut s = self.status.lock().await;
                     s.last_error = Some(e.to_string());

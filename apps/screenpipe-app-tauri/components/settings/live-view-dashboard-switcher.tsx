@@ -40,9 +40,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
 import type { BrainViewDefinition } from "@/lib/utils/tauri";
-
-const MAX_DASHBOARDS = 12;
 
 export function LiveViewDashboardSwitcher({
   views,

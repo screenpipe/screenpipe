@@ -39,6 +39,7 @@ const EXPECTED_TARGETS: &[&str] = &[
     "microsofttodo",
     "microsoftword",
     "microsoftwordweb",
+    "notepad",
     "notes",
     "notion",
     "obsidian",
@@ -56,6 +57,7 @@ const EXPECTED_TARGETS: &[&str] = &[
     "warp",
     "whatsapp",
     "whatsapp_web",
+    "windowsconsole",
     "windowsterminal",
     "windsurf",
     "xcode",
@@ -81,14 +83,14 @@ fn identity_for(profile: &screenpipe_semantic::parsers::BuiltinAppProfile) -> Ap
 }
 
 #[test]
-fn catalog_exactly_matches_all_49_targets() {
+fn catalog_exactly_matches_all_51_targets() {
     let actual: BTreeSet<_> = builtin_app_profiles()
         .iter()
         .map(|profile| profile.id)
         .collect();
     let expected: BTreeSet<_> = EXPECTED_TARGETS.iter().copied().collect();
-    assert_eq!(builtin_app_profiles().len(), 49);
-    assert_eq!(actual.len(), 49, "profile ids must be unique");
+    assert_eq!(builtin_app_profiles().len(), 51);
+    assert_eq!(actual.len(), 51, "profile ids must be unique");
     assert_eq!(actual, expected);
 }
 

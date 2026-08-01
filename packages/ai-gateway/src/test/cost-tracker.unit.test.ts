@@ -14,17 +14,23 @@
 import { describe, it, expect } from 'bun:test';
 import type { Env } from '../types';
 import { getCostReservationMicroUsd, getModelCost, getNonStreamSettlementCost, getStreamModelCost, getStreamSettlementCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
-import { getGlobalDailyCostCap, getGlobalHourlyCostCap, getPlanDailyCostCap, getPlanMonthlyCostCap, getPlanRequestCostCap } from '../services/hosted-ai-cost-controls';
+import { getGlobalDailyCostCap, getGlobalHourlyCostCap, getPlanDailyCostCap, getPlanMonthlyCostCap, getPlanRequestCostCap, loadHostedAiTextCostControls } from '../services/hosted-ai-cost-controls';
 import { TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
 
 describe('hosted AI plan budget math', () => {
-	it('reads every operational ceiling from private bindings', () => {
-		expect(getPlanDailyCostCap('free', TEST_PRIVATE_COST_CONTROLS)).toBe(101);
-		expect(getPlanMonthlyCostCap('basic', TEST_PRIVATE_COST_CONTROLS)).toBe(202);
-		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS)).toBe(53);
-		expect(getPlanMonthlyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(301);
-		expect(getPlanDailyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(104);
-		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(54);
+	it('reads private controls while keeping effective limits inside public credits', () => {
+		const privateControls = loadHostedAiTextCostControls(TEST_PRIVATE_COST_CONTROLS);
+		expect(privateControls.daily.free).toBe(101);
+		expect(privateControls.monthly.basic).toBe(202);
+		expect(privateControls.request.business).toBe(53);
+		expect(privateControls.trial).toEqual({ total: 301, daily: 104, request: 54 });
+
+		expect(getPlanDailyCostCap('free', TEST_PRIVATE_COST_CONTROLS)).toBe(0.1);
+		expect(getPlanMonthlyCostCap('basic', TEST_PRIVATE_COST_CONTROLS)).toBe(1.5);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS)).toBe(4);
+		expect(getPlanMonthlyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(4);
+		expect(getPlanDailyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(4);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(4);
 		expect(getGlobalHourlyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(401);
 		expect(getGlobalDailyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(402);
 	});

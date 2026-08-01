@@ -6,13 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Miniflare } from 'miniflare';
 import type { Env } from '../types';
 import {
-	DAILY_COST_RESERVATION_SECONDS,
-	MAX_ACTIVE_BACKGROUND_RESERVATIONS,
-	MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
 	releaseDailyCostReservation,
 	reserveDailyCostCap,
 	withDailyCostSettlement,
 } from './cost-cap';
+import { loadHostedAiReservationControls } from './hosted-ai-reservation-controls';
 import {
 	GLOBAL_DAILY_COST_KEY,
 	GLOBAL_HOURLY_COST_KEY,
@@ -256,6 +254,7 @@ describe('usage reservations against workerd D1', () => {
 
 	it('atomically admits only the bounded number of parallel interactive requests', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
+		const controls = loadHostedAiReservationControls(env);
 		const results = await Promise.all(
 			Array.from({ length: 16 }, () =>
 				reserveDailyCostCap(env, 'user-d1-cost', 'subscribed', 'gpt-5.6-sol', now),
@@ -263,10 +262,10 @@ describe('usage reservations against workerd D1', () => {
 		);
 
 		expect(results.filter((result) => result.allowed)).toHaveLength(
-			MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
+			controls.maxActiveInteractive,
 		);
 		expect(results.filter((result) => !result.allowed)).toHaveLength(
-			16 - MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
+			16 - controls.maxActiveInteractive,
 		);
 		await Promise.all(results.map(async (result) => {
 			if (result.allowed && result.reservation) {
@@ -282,26 +281,150 @@ describe('usage reservations against workerd D1', () => {
 		)).allowed).toBe(true);
 	});
 
+	it('reserves Auto against the full router for every Business-equivalent plan', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const fullRouterHold = getCostReservationMicroUsd('auto');
+		const efficientRouterHold = getCostReservationMicroUsd('gpt-5.6-luna');
+		expect(fullRouterHold).toBeGreaterThan(efficientRouterHold);
+
+		for (const plan of [
+			'business',
+			'business_max',
+			'business_ultra',
+			'team',
+			'enterprise',
+		] as const) {
+			const result = await reserveDailyCostCap(
+				env,
+				`user-d1-auto-${plan}`,
+				'subscribed',
+				'auto',
+				now,
+				'interactive',
+				{},
+				plan,
+			);
+			expect(result.allowed).toBe(true);
+			if (!result.allowed || !result.reservation) throw new Error(`expected ${plan} reservation`);
+			expect(result.reservation.reservedMicroUsd).toBe(fullRouterHold);
+			await releaseDailyCostReservation(env, result.reservation);
+		}
+
+		for (const plan of ['free', 'basic'] as const) {
+			const result = await reserveDailyCostCap(
+				env,
+				`user-d1-auto-${plan}`,
+				'logged_in',
+				'auto',
+				now,
+				'interactive',
+				{},
+				plan,
+			);
+			expect(result.allowed).toBe(true);
+			if (!result.allowed || !result.reservation) throw new Error(`expected ${plan} reservation`);
+			expect(result.reservation.reservedMicroUsd).toBe(efficientRouterHold);
+			await releaseDailyCostReservation(env, result.reservation);
+		}
+	});
+
+	it('uses the inserted row instead of ambiguous write metadata to prove admission', async () => {
+		const realDb = env.DB;
+		const dbWithAmbiguousWriteMetadata = {
+			prepare(sql: string) {
+				const statement = realDb.prepare(sql);
+				if (!sql.includes('INSERT OR IGNORE INTO usage')) return statement;
+				return {
+					bind(...values: unknown[]) {
+						const bound = statement.bind(...values);
+						return {
+							first: <T>() => bound.first<T>(),
+							// Reproduce the production symptom: a successful write path whose
+							// metadata cannot be used as the admission source of truth.
+							run: async () => ({ success: true, meta: { changes: 0 }, results: [] }),
+						};
+					},
+				};
+			},
+		} as unknown as D1Database;
+		const result = await reserveDailyCostCap(
+			{ ...env, DB: dbWithAmbiguousWriteMetadata },
+			'user-d1-returning-proof',
+			'subscribed',
+			'gpt-5.6-sol',
+			new Date('2026-07-14T12:00:00.000Z'),
+		);
+
+		expect(result.allowed).toBe(true);
+		if (!result.allowed || !result.reservation) throw new Error('expected reservation');
+		const stored = await realDb.prepare(
+			'SELECT device_id FROM usage WHERE device_id = ?',
+		).bind(result.reservation.key).first<{ device_id: string }>();
+		expect(stored?.device_id).toBe(result.reservation.key);
+	});
+
+	it('stops stale disconnects from occupying capacity while retaining their spend holds', async () => {
+		const start = new Date('2026-07-14T12:00:00.000Z');
+		const controls = loadHostedAiReservationControls(env);
+		const admitted = await Promise.all(Array.from(
+			{ length: controls.maxActiveInteractive },
+			() => reserveDailyCostCap(
+				env, 'user-d1-stale-capacity', 'subscribed', 'gpt-5.6-sol', start,
+			),
+		));
+		expect(admitted.every((result) => result.allowed)).toBe(true);
+		expect((await reserveDailyCostCap(
+			env, 'user-d1-stale-capacity', 'subscribed', 'gpt-5.6-sol', start,
+		)).allowed).toBe(false);
+
+		const afterActivityWindow = new Date(
+			start.getTime() + (controls.capacityActivitySeconds + 1) * 1000,
+		);
+		const replacement = await reserveDailyCostCap(
+			env,
+			'user-d1-stale-capacity',
+			'subscribed',
+			'gpt-5.6-sol',
+			afterActivityWindow,
+		);
+		expect(replacement.allowed).toBe(true);
+
+		const retained = await env.DB.prepare(`
+			SELECT COUNT(*) AS count FROM usage
+			WHERE user_id = ? AND tier LIKE 'daily_cost_reservation_v3:%'
+				AND last_reset > ?
+		`).bind('user-d1-stale-capacity', afterActivityWindow.toISOString())
+			.first<{ count: number }>();
+		expect(retained?.count).toBe(controls.maxActiveInteractive + 1);
+
+		for (const result of [...admitted, replacement]) {
+			if (result.allowed && result.reservation) {
+				await releaseDailyCostReservation(env, result.reservation);
+			}
+		}
+	});
+
 	it('allows multiple Pipes while preserving independent foreground capacity', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
+		const controls = loadHostedAiReservationControls(env);
 		const backgrounds = await Promise.all(Array.from(
-			{ length: MAX_ACTIVE_BACKGROUND_RESERVATIONS + 1 },
+			{ length: controls.maxActiveBackground + 1 },
 			() => reserveDailyCostCap(
 				env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
 			),
 		));
 		const interactives = await Promise.all(Array.from(
-			{ length: MAX_ACTIVE_INTERACTIVE_RESERVATIONS + 1 },
+			{ length: controls.maxActiveInteractive + 1 },
 			() => reserveDailyCostCap(
 				env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'interactive',
 			),
 		));
 
 		expect(backgrounds.filter((result) => result.allowed)).toHaveLength(
-			MAX_ACTIVE_BACKGROUND_RESERVATIONS,
+			controls.maxActiveBackground,
 		);
 		expect(interactives.filter((result) => result.allowed)).toHaveLength(
-			MAX_ACTIVE_INTERACTIVE_RESERVATIONS,
+			controls.maxActiveInteractive,
 		);
 		for (const result of [...backgrounds, ...interactives].filter((value) => !value.allowed)) {
 			if (!result.allowed) {
@@ -310,13 +433,16 @@ describe('usage reservations against workerd D1', () => {
 		}
 	});
 
-	it('reserves half the account budget for foreground Chat', async () => {
+	it('reserves the configured account-budget fraction for foreground Chat', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
+		const controls = loadHostedAiReservationControls(env);
 		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const dailyForOneBackgroundHold = holdUsd * 1.5
+			/ controls.maxBackgroundReservedFraction;
 		setUniformTextWindows(env, {
-			request: holdUsd * 3,
-			daily: holdUsd * 3,
-			monthly: holdUsd * 6,
+			request: dailyForOneBackgroundHold,
+			daily: dailyForOneBackgroundHold,
+			monthly: dailyForOneBackgroundHold * 2,
 		});
 		const firstPipe = await reserveDailyCostCap(
 			env, 'user-d1-chat-headroom', 'subscribed', 'claude-sonnet-5', now, 'background',
@@ -332,6 +458,14 @@ describe('usage reservations against workerd D1', () => {
 		expect(secondPipe.allowed).toBe(false);
 		expect(chat.allowed).toBe(true);
 
+		const largeShape = { inputTokens: 40_000, maxOutputTokens: 4_096 };
+		const largeHoldUsd = getCostReservationMicroUsd('claude-sonnet-5', largeShape)
+			/ 1_000_000;
+		setUniformTextWindows(env, {
+			request: largeHoldUsd * 1.1,
+			daily: largeHoldUsd * 1.1,
+			monthly: largeHoldUsd * 2.2,
+		});
 		const largePipe = await reserveDailyCostCap(
 			env,
 			'user-d1-large-pipe-headroom',
@@ -339,7 +473,7 @@ describe('usage reservations against workerd D1', () => {
 			'claude-sonnet-5',
 			now,
 			'background',
-			{ inputTokens: 40_000, maxOutputTokens: 4_096 },
+			largeShape,
 		);
 		const separateChat = await reserveDailyCostCap(
 			env, 'user-d1-large-pipe-headroom', 'subscribed', 'claude-sonnet-5', now, 'interactive',
@@ -492,6 +626,44 @@ describe('usage reservations against workerd D1', () => {
 		expect(hold).toBeNull();
 	});
 
+	it('refreshes the private spend lease while a response is actively consumed', async () => {
+		env.PRIVATE_COST_RESERVATION_TTL_SECONDS = '6';
+		env.PRIVATE_CAPACITY_ACTIVITY_SECONDS = '2';
+		const reservation = await reserveDailyCostCap(
+			env,
+			'user-d1-active-refresh',
+			'subscribed',
+			'gemini-2.5-flash',
+			new Date(),
+		);
+		if (!reservation.allowed || !reservation.reservation) {
+			throw new Error('expected active reservation');
+		}
+		const hold = reservation.reservation;
+		const originalExpiry = hold.expiresAt;
+		const response = withDailyCostSettlement(
+			new Response(new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode('a'));
+					setTimeout(() => {
+						controller.enqueue(new TextEncoder().encode('b'));
+						controller.close();
+					}, 1_100);
+				},
+			})),
+			env,
+			hold,
+			Promise.resolve(false),
+		);
+		expect(await response.text()).toBe('ab');
+		expect(hold.expiresAt).not.toBe(originalExpiry);
+		const row = await env.DB.prepare(
+			'SELECT last_reset FROM usage WHERE device_id = ?',
+		).bind(hold.key).first<{ last_reset: string }>();
+		expect(row?.last_reset).toBe(hold.expiresAt);
+		await releaseDailyCostReservation(env, hold);
+	});
+
 	it('charges and releases a hold when the provider throws after admission', async () => {
 		const deviceId = 'user-d1-provider-exception';
 		const model = 'claude-sonnet-5';
@@ -577,6 +749,7 @@ describe('usage reservations against workerd D1', () => {
 
 	it('reclaims an expired priced-request reservation without accepting its stale release', async () => {
 		const start = new Date('2026-07-14T12:00:00.000Z');
+		const controls = loadHostedAiReservationControls(env);
 		const model = 'gemini-2.5-flash';
 		const holdUsd = getCostReservationMicroUsd(model) / 1_000_000;
 		setUniformTextWindows(env, {
@@ -590,7 +763,9 @@ describe('usage reservations against workerd D1', () => {
 			env, 'user-d1-cost-expired', 'subscribed', model, start,
 		)).allowed).toBe(false);
 
-		const afterExpiry = new Date(start.getTime() + (DAILY_COST_RESERVATION_SECONDS + 1) * 1000);
+		const afterExpiry = new Date(
+			start.getTime() + (controls.reservationTtlSeconds + 1) * 1000,
+		);
 		const replacement = await reserveDailyCostCap(
 			env,
 			'user-d1-cost-expired',
@@ -649,6 +824,62 @@ describe('usage reservations against workerd D1', () => {
 			if (result.allowed && result.reservation) {
 				await releaseDailyCostReservation(env, result.reservation);
 			}
+		}
+	});
+
+	it('does not let private controls expand public monthly or trial credits', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const hold = getCostReservationMicroUsd('gpt-5.6-luna');
+		setUniformTextWindows(env, { request: 10, daily: 10, monthly: 10 });
+		setTrialTextWindows(env, { request: 10, daily: 10, total: 10 });
+
+		await env.DB.prepare(`
+			INSERT INTO usage
+				(device_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, 0, ?, 'public_monthly_cost_test', ?, ?)
+		`).bind(
+			monthlyCostKey('user-d1-public-basic'),
+			utcMonth(now),
+			utcMonth(now),
+			1.5 - (hold / 2_000_000),
+		).run();
+		const monthly = await reserveDailyCostCap(
+			env,
+			'user-d1-public-basic',
+			'logged_in',
+			'gpt-5.6-luna',
+			now,
+			'interactive',
+			{},
+			'basic',
+		);
+		expect(monthly.allowed).toBe(false);
+		if (!monthly.allowed) {
+			expect(await monthly.response.text()).toContain('monthly_cost_limit_exceeded');
+		}
+
+		await env.DB.prepare(`
+			INSERT INTO usage
+				(device_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, 0, 'trial', 'public_trial_cost_test', 'trial', ?)
+		`).bind(
+			trialCostKey('user-d1-public-trial'),
+			4 - (hold / 2_000_000),
+		).run();
+		const trial = await reserveDailyCostCap(
+			env,
+			'user-d1-public-trial',
+			'subscribed',
+			'gpt-5.6-luna',
+			now,
+			'interactive',
+			{},
+			'business',
+			true,
+		);
+		expect(trial.allowed).toBe(false);
+		if (!trial.allowed) {
+			expect(await trial.response.text()).toContain('trial_cost_limit_exceeded');
 		}
 	});
 

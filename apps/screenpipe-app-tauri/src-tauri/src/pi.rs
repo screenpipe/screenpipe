@@ -7,13 +7,14 @@
 //! Manages the pi coding agent via RPC mode (stdin/stdout JSON protocol).
 
 use screenpipe_core::agents::pi::{
-    screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR, PI_PACKAGE, SCREENPIPE_API_URL,
+    apply_custom_provider_compat, screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR,
+    PI_PACKAGE, SCREENPIPE_API_URL,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use tauri::Manager;
@@ -155,6 +156,56 @@ use tracing::{debug, error, info, warn};
 static PI_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
 static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
     std::sync::OnceLock::new();
+static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+const MANAGED_PI_EXTENSION_FILES: [&str; 5] = [
+    "web-search.ts",
+    "mcp-bridge.ts",
+    "save-artifact.ts",
+    "live-views.ts",
+    "connection-gate.ts",
+];
+
+fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
+    PI_EXTENSION_SAFE_MODE_PROJECTS.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+}
+
+fn is_pi_extension_startup_failure(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("failed to load extension")
+        || lower.contains("start without extensions using \"pi -ne\"")
+}
+
+fn enable_pi_extension_safe_mode(project_dir: &str) -> bool {
+    extension_safe_mode_projects()
+        .lock()
+        .map(|mut projects| projects.insert(project_dir.to_string()))
+        .unwrap_or(false)
+}
+
+fn pi_extension_safe_mode_enabled(project_dir: &str) -> bool {
+    extension_safe_mode_projects()
+        .lock()
+        .map(|projects| projects.contains(project_dir))
+        .unwrap_or(false)
+}
+
+fn managed_pi_extension_paths(project_dir: &str) -> Vec<PathBuf> {
+    let extension_dir = Path::new(project_dir).join(".pi").join("extensions");
+    MANAGED_PI_EXTENSION_FILES
+        .iter()
+        .map(|name| extension_dir.join(name))
+        .filter(|path| path.exists())
+        .collect()
+}
+
+fn apply_pi_extension_safe_mode(command: &mut Command, project_dir: &str) {
+    command.arg("--no-extensions");
+    for path in managed_pi_extension_paths(project_dir) {
+        command.arg("--extension").arg(path);
+    }
+}
 
 /// Captures the last bun-install error so `pi_start` can surface it to the UI
 /// when the install silently failed (e.g. Windows EPERM on bun's atomic rename).
@@ -1475,45 +1526,10 @@ fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Which transport backend Pi uses. Absent means the native Pi RPC agent;
-/// `acp` runs an external Agent Client Protocol adapter through the hidden
-/// runtime (see acp_runtime.rs).
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "lowercase")]
-pub enum PiBackend {
-    Acp,
-}
-
-/// The external ACP adapter to launch when `backend` is `acp`.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpAgentConfig {
-    /// Catalog id (for example `claude-acp`) or `custom`.
-    pub id: String,
-    /// Executable for a custom adapter; built-in ids resolve by id when absent.
-    #[serde(default)]
-    pub command: Option<String>,
-    /// Arguments passed to the adapter verbatim, without a shell.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Environment passed only to the supervised adapter process.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-}
-
-/// Configuration for which AI provider Pi should use.
-/// Not `Hash`: the ACP agent config carries an `env` map, so the launch
-/// fingerprint hashes a canonical serialization instead.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+/// Configuration for which AI provider Pi should use
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PiProviderConfig {
-    /// Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
-    /// external adapter through the hidden ACP runtime.
-    #[serde(default)]
-    pub backend: Option<PiBackend>,
-    /// Adapter configuration, required when `backend` is `acp`.
-    #[serde(default)]
-    pub acp_agent: Option<AcpAgentConfig>,
     /// Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
     pub provider: String,
     /// Base URL for the provider API
@@ -1525,6 +1541,10 @@ pub struct PiProviderConfig {
     /// Max output tokens (default 4096)
     #[serde(default = "default_max_tokens")]
     pub max_tokens: i32,
+    /// Approximate input context size in characters. Pi model metadata uses
+    /// tokens, so Screenpipe converts this value using four characters/token.
+    #[serde(default)]
+    pub max_context_chars: Option<i32>,
     /// Optional system prompt from AI preset (appended to Pi's built-in system prompt)
     #[serde(default)]
     pub system_prompt: Option<String>,
@@ -1534,12 +1554,10 @@ fn default_max_tokens() -> i32 {
     4096
 }
 
-/// True when the preset selects the ACP transport backend.
-fn uses_acp_backend(config: Option<&PiProviderConfig>) -> bool {
-    matches!(
-        config.and_then(|value| value.backend.as_ref()),
-        Some(PiBackend::Acp)
-    )
+fn context_window_tokens(max_context_chars: Option<i32>) -> Option<i32> {
+    max_context_chars
+        .filter(|value| *value > 0)
+        .map(|value| value.saturating_add(3) / 4)
 }
 
 fn pi_launch_fingerprint(
@@ -1563,16 +1581,11 @@ fn pi_launch_fingerprint(
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        // PiProviderConfig is not Hash (the ACP env map), so hash a canonical
-        // serialization. Cloned configs serialize identically, so concurrent
-        // identical launches still share a fingerprint.
-        let normalized = PiProviderConfig {
+        PiProviderConfig {
             system_prompt: normalized_system_prompt,
             ..config.clone()
-        };
-        serde_json::to_string(&normalized)
-            .unwrap_or_default()
-            .hash(&mut hasher);
+        }
+        .hash(&mut hasher);
     } else {
         Option::<u8>::None.hash(&mut hasher);
     }
@@ -1729,6 +1742,9 @@ async fn build_models_json(
                 );
                 model_def.insert("input".into(), json!(["text", "image"]));
                 model_def.insert("maxTokens".into(), json!(config.max_tokens));
+                if let Some(context_window) = context_window_tokens(config.max_context_chars) {
+                    model_def.insert("contextWindow".into(), json!(context_window));
+                }
                 model_def.insert(
                     "cost".into(),
                     json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}),
@@ -1761,12 +1777,15 @@ async fn build_models_json(
                     model_def.insert("compat".into(), serde_json::Value::Object(compat));
                 }
 
-                let user_provider = json!({
+                let mut user_provider = json!({
                     "baseUrl": base_url,
                     "api": wire_api,
                     "apiKey": api_key,
                     "models": [ serde_json::Value::Object(model_def) ]
                 });
+                if provider_name == "custom" {
+                    apply_custom_provider_compat(&mut user_provider);
+                }
 
                 providers_map.insert(provider_name.to_string(), user_provider);
             }
@@ -2049,7 +2068,7 @@ pub async fn pi_start_inner(
         user_token.as_deref(),
         provider_config.as_ref(),
     );
-    let use_acp = uses_acp_backend(provider_config.as_ref());
+    let extension_safe_mode = pi_extension_safe_mode_enabled(&project_dir);
     let sid = session_id.to_string();
 
     // Fast path before provider discovery/config writes. Home and standalone
@@ -2075,16 +2094,25 @@ pub async fn pi_start_inner(
     // Ensure screenpipe skills exist in project
     ensure_screenpipe_skill(&project_dir)?;
 
-    if !use_acp {
-        // These extensions and package/config checks belong to the native Pi
-        // runtime. ACP adapters have their own tool surface and must not wait
-        // for an unrelated Pi install or gateway model discovery.
-        ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
-        ensure_mcp_bridge_extension(&project_dir)?;
-        ensure_save_artifact_extension(&project_dir)?;
-        ensure_live_views_extension(&project_dir)?;
-        ensure_connection_gate_extension(&project_dir)?;
-        ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
+    // Install web-search extension only for screenpipe-cloud presets
+    ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
+
+    // MCP bridge: lets the agent reach user-registered MCP servers.
+    ensure_mcp_bridge_extension(&project_dir)?;
+
+    // Save artifact: lets the agent register deliverables in the Artifacts library.
+    ensure_save_artifact_extension(&project_dir)?;
+
+    // Live Views: lazy read/edit access for normal chat and focused composers.
+    ensure_live_views_extension(&project_dir)?;
+
+    // Connection gate: lets Pi block on inline app authorization before
+    // continuing app-dependent tasks.
+    ensure_connection_gate_extension(&project_dir)?;
+
+    // Ensure Pi is configured with the user's provider
+    ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
+    if !extension_safe_mode {
         ensure_required_pi_extension_package().await?;
     }
 
@@ -2206,160 +2234,61 @@ pub async fn pi_start_inner(
     pool.sessions
         .insert(sid.clone(), PiManager::new(app.clone()));
 
-    // ACP re-enters this executable directly; only the native backend needs a
-    // Pi install and must wait for its background installer.
-    let pi_path = if use_acp {
-        None
-    } else {
-        Some(match find_pi_executable() {
-            Some(p) => p,
-            None => {
-                if !PI_INSTALL_DONE.load(Ordering::SeqCst) {
-                    info!("Pi not found yet, waiting for background install to finish...");
-                    for _ in 0..60 {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        if PI_INSTALL_DONE.load(Ordering::SeqCst) {
-                            break;
-                        }
+    // Find pi executable — if not found, wait for background install (up to 60s)
+    let pi_path = match find_pi_executable() {
+        Some(p) => p,
+        None => {
+            if !PI_INSTALL_DONE.load(Ordering::SeqCst) {
+                info!("Pi not found yet, waiting for background install to finish...");
+                for _ in 0..60 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    if PI_INSTALL_DONE.load(Ordering::SeqCst) {
+                        break;
                     }
                 }
-                find_pi_executable()
-                    .ok_or_else(|| {
-                        let bun_found = find_bun_executable().is_some();
-                        if bun_found {
-                            let install_err = take_pi_install_error()
-                                .map(|e| format!(" Install error: {}", e))
-                                .unwrap_or_default();
-                            format!("Pi not found after install attempt.{} Try restarting the app or delete ~/.screenpipe/pi-agent and restart.", install_err)
-                        } else {
-                            format!("Pi not found: bun is not installed. Screenpipe needs bun to run the AI assistant. Expected bundled bun next to the app executable.")
-                        }
-                    })?
             }
-        })
+            find_pi_executable()
+                .ok_or_else(|| {
+                    let bun_found = find_bun_executable().is_some();
+                    if bun_found {
+                        let install_err = take_pi_install_error()
+                            .map(|e| format!(" Install error: {}", e))
+                            .unwrap_or_default();
+                        format!("Pi not found after install attempt.{} Try restarting the app or delete ~/.screenpipe/pi-agent and restart.", install_err)
+                    } else {
+                        format!("Pi not found: bun is not installed. Screenpipe needs bun to run the AI assistant. Expected bundled bun next to the app executable.")
+                    }
+                })?
+        }
     };
 
     let bun_path = find_bun_executable().unwrap_or_else(|| "NOT FOUND".to_string());
-    if use_acp {
-        info!("Starting ACP runtime in dir: {}", project_dir);
-    } else {
-        info!(
-            "Starting pi from {} in dir: {} with provider: {} model: {} bun: {}",
-            pi_path.as_deref().unwrap_or("NOT FOUND"), project_dir, pi_provider, pi_model, bun_path
-        );
-    }
+    info!(
+        "Starting pi from {} in dir: {} with provider: {} model: {} bun: {}",
+        pi_path, project_dir, pi_provider, pi_model, bun_path
+    );
 
     // Build command — use cmd.exe /C wrapper for .cmd files on Windows (Rust 1.77+ CVE fix)
-    // ACP re-enters this same executable in the hidden runtime mode, which
-    // supervises the selected external adapter and speaks the same stdin
-    // commands / stdout JSON events the native Pi RPC agent does, so the reader
-    // and command queue below drive both without change. Native Pi stays direct.
-    let mut cmd = if use_acp {
-        if bun_path == "NOT FOUND" {
-            return Err("ACP requires the bundled Bun runtime, but it was not found".to_string());
-        }
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("Failed to locate the screenpipe ACP runtime: {error}"))?;
-        // This is the native Screenpipe executable, not a Pi JavaScript shim.
-        // Running it through `build_command_for_path` on Unix would prepend Bun
-        // and make Bun try to parse the Mach-O/ELF binary as JavaScript.
-        let mut command = Command::new(executable);
-        command.arg(crate::acp_runtime::RUNTIME_ARG);
-        command.current_dir(&project_dir);
-        command
-    } else {
-        let mut command = build_command_for_path(
-            pi_path.as_deref().ok_or("Pi executable unavailable")?,
+    let mut cmd = build_command_for_path(&pi_path);
+    cmd.current_dir(&project_dir).args([
+        "--mode",
+        "rpc",
+        // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
+        // rpc mode can never answer — without --approve, mcp-bridge and
+        // connection-gate silently don't load. The project dir is created and
+        // populated exclusively by screenpipe, so it is trusted by definition.
+        "--approve",
+        "--provider",
+        &pi_provider,
+        "--model",
+        &pi_model,
+    ]);
+    if extension_safe_mode {
+        warn!(
+            "Starting Pi in extension safe mode for '{}'; third-party extension packages are disabled",
+            project_dir
         );
-        command.current_dir(&project_dir).args([
-            "--mode",
-            "rpc",
-            // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
-            // rpc mode can never answer — without --approve, mcp-bridge and
-            // connection-gate silently don't load. The project dir is created and
-            // populated exclusively by screenpipe, so it is trusted by definition.
-            "--approve",
-            "--provider",
-            &pi_provider,
-            "--model",
-            &pi_model,
-        ]);
-        command
-    };
-
-    // Isolate the hidden runtime into its own process group so a crash cleans up
-    // the adapter it supervises without touching the desktop process group.
-    #[cfg(unix)]
-    if use_acp {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-
-    // Tell the runtime which adapter to launch and with what environment. Only
-    // the launch inputs are passed here; the runtime resolves the rest. Secret
-    // runtime-only vars are stripped from the adapter's environment by the
-    // runtime itself before it spawns the adapter.
-    if use_acp {
-        // The built-in Claude adapter is API-key-only. Do not let a token from
-        // the desktop's inherited environment silently select subscription
-        // authentication inside the hidden runtime.
-        cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
-        let acp = provider_config
-            .as_ref()
-            .and_then(|config| config.acp_agent.as_ref())
-            .ok_or("ACP backend requires an acpAgent configuration")?;
-        let mut resolved_env = acp
-            .env
-            .iter()
-            .filter(|(name, _)| !crate::acp_runtime::is_forbidden_acp_env(name))
-            .filter_map(|(name, value)| {
-                let resolved = if value.is_empty() {
-                    std::env::var(name).ok()?
-                } else {
-                    value.clone()
-                };
-                Some((name.clone(), resolved))
-            })
-            .collect::<HashMap<_, _>>();
-        if acp.id.trim() == "claude-acp" {
-            let api_key = provider_config
-                .as_ref()
-                .and_then(|config| config.api_key.as_deref())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or("Claude Code ACP requires an Anthropic API key")?;
-            resolved_env.insert("ANTHROPIC_API_KEY".into(), api_key.to_owned());
-        }
-        cmd.env("SCREENPIPE_ACP_ID", acp.id.trim())
-            .env("SCREENPIPE_ACP_CWD", &project_dir)
-            .env("SCREENPIPE_BUN_PATH", &bun_path)
-            .env(
-                "SCREENPIPE_ACP_ARGS_JSON",
-                serde_json::to_string(&acp.args).map_err(|e| e.to_string())?,
-            )
-            .env(
-                "SCREENPIPE_ACP_ENV_JSON",
-                serde_json::to_string(&resolved_env).map_err(|e| e.to_string())?,
-            );
-        if let Some(system_prompt) = provider_config
-            .as_ref()
-            .and_then(|config| config.system_prompt.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            cmd.env("SCREENPIPE_ACP_SYSTEM_PROMPT", system_prompt);
-        } else {
-            cmd.env_remove("SCREENPIPE_ACP_SYSTEM_PROMPT");
-        }
-        if let Some(command) = acp
-            .command
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            cmd.env("SCREENPIPE_ACP_COMMAND", command);
-        } else {
-            cmd.env_remove("SCREENPIPE_ACP_COMMAND");
-        }
+        apply_pi_extension_safe_mode(&mut cmd, &project_dir);
     }
 
     // Ensure bun is discoverable by pi.exe shim: the bun global-install shim (pi.exe)
@@ -2451,27 +2380,21 @@ pub async fn pi_start_inner(
         }
     }
 
-    // `--append-system-prompt` is a native Pi RPC flag; the ACP runtime takes
-    // its inputs via env, so these only apply to the native path.
-    if !use_acp {
-        // For local/small models (Ollama, custom), explicitly tell them to read
-        // the screenpipe-api skill file — they often skip reading skills on
-        // their own.
-        let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
-        if is_local_model {
-            let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
-            cmd.args(["--append-system-prompt", api_hint]);
-        }
+    // For local/small models (Ollama, custom), explicitly tell them to read the
+    // screenpipe-api skill file — they often skip reading skills on their own.
+    let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
+    if is_local_model {
+        let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
+        cmd.args(["--append-system-prompt", api_hint]);
+    }
 
-        // Append the user's AI preset system prompt (enables Anthropic prompt
-        // caching — Pi's built-in system prompt + this text form the cached
-        // prefix, reducing input costs on subsequent messages in the same
-        // conversation).
-        if let Some(ref config) = provider_config {
-            if let Some(ref prompt) = config.system_prompt {
-                if !prompt.is_empty() {
-                    cmd.args(["--append-system-prompt", prompt]);
-                }
+    // Append the user's AI preset system prompt (enables Anthropic prompt caching —
+    // Pi's built-in system prompt + this text form the cached prefix, reducing
+    // input costs by 90% on subsequent messages in the same conversation)
+    if let Some(ref config) = provider_config {
+        if let Some(ref prompt) = config.system_prompt {
+            if !prompt.is_empty() {
+                cmd.args(["--append-system-prompt", prompt]);
             }
         }
     }
@@ -2837,11 +2760,20 @@ pub async fn pi_start_inner(
     if let Some(stderr) = stderr {
         let app_handle = app.clone();
         let sid_stderr = sid.clone();
+        let project_dir_stderr = project_dir.clone();
         let first_stderr_for_error = first_stderr_line.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stderr);
             info!("Pi stderr reader started (session: {})", sid_stderr);
             while let Some(line) = read_lines_lossy(&mut reader) {
+                if is_pi_extension_startup_failure(&line)
+                    && enable_pi_extension_safe_mode(&project_dir_stderr)
+                {
+                    warn!(
+                        "Pi extension startup failed for '{}'; the next automatic restart will load only Screenpipe-managed extensions",
+                        project_dir_stderr
+                    );
+                }
                 if !line.trim().is_empty() {
                     if let Ok(mut first) = first_stderr_for_error.lock() {
                         if first.is_none() {
@@ -4472,13 +4404,12 @@ mod tests {
     #[test]
     fn identical_pi_launches_share_a_fingerprint() {
         let config = super::PiProviderConfig {
-            backend: None,
-            acp_agent: None,
             provider: "screenpipe-cloud".to_string(),
             url: String::new(),
             model: "auto".to_string(),
             api_key: None,
             max_tokens: 4096,
+            max_context_chars: Some(512_000),
             system_prompt: Some("system context".to_string()),
         };
         let first = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
@@ -4602,7 +4533,10 @@ mod tests {
             &state,
             &json!({ "type": "agent_end", "willRetry": false }),
         );
-        assert!(!state.is_agent_active(), "terminal agent_end releases the queue");
+        assert!(
+            !state.is_agent_active(),
+            "terminal agent_end releases the queue"
+        );
     }
 
     #[test]
@@ -5651,13 +5585,12 @@ error: InstallFailed extracting tarball"#;
 
     fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
         PiProviderConfig {
-            backend: None,
-            acp_agent: None,
             provider: provider.to_string(),
             url: String::new(),
             model: model.to_string(),
             api_key: None,
             max_tokens: 4096,
+            max_context_chars: Some(512_000),
             system_prompt: None,
         }
     }
@@ -5729,6 +5662,57 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["id"], "gpt-4o");
         assert_eq!(models[0]["reasoning"], false);
+        assert_eq!(models[0]["contextWindow"], 128_000);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_uses_preset_context_window() {
+        let mut pc = make_provider_config("custom", "qwen3.5");
+        pc.url = "http://localhost:8080/v1".to_string();
+        pc.max_context_chars = Some(32_768);
+
+        let config = build_models_json(None, Some(&pc)).await;
+        assert_eq!(
+            config["providers"]["custom"]["models"][0]["contextWindow"],
+            8_192
+        );
+    }
+
+    #[test]
+    fn test_extension_startup_failure_detection_is_specific() {
+        assert!(super::is_pi_extension_startup_failure(
+            "Error: Failed to load extension /tmp/pi-subagents/index.ts: Tool conflict"
+        ));
+        assert!(super::is_pi_extension_startup_failure(
+            "Hint: Start without extensions using \"pi -ne\"."
+        ));
+        assert!(!super::is_pi_extension_startup_failure(
+            "Error: provider request timed out"
+        ));
+    }
+
+    #[test]
+    fn test_extension_safe_mode_loads_only_managed_project_extensions() {
+        let temp = tempfile::tempdir().unwrap();
+        let extension_dir = temp.path().join(".pi").join("extensions");
+        std::fs::create_dir_all(&extension_dir).unwrap();
+        let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
+        std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
+        std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
+        std::fs::write(extension_dir.join("third-party.ts"), header).unwrap();
+
+        let mut command = Command::new("pi");
+        super::apply_pi_extension_safe_mode(&mut command, temp.path().to_str().unwrap());
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args[0], "--no-extensions");
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 2);
+        assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
+        assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
+        assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
     }
 
     #[tokio::test]
@@ -5848,6 +5832,23 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(providers.len(), 2);
         assert!(providers.contains_key("custom"));
         assert_eq!(providers["custom"]["baseUrl"], "http://my-server:8080/v1");
+        assert_eq!(providers["custom"]["headers"]["User-Agent"], "screenpipe");
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_repairs_ai_genesis_custom_url() {
+        for base_url in ["https://ai.ai-genesis.app", "https://api.ai-genesis.app/"] {
+            let mut pc = make_provider_config("custom", "glm-5.2");
+            pc.url = base_url.to_string();
+            let config = build_models_json(None, Some(&pc)).await;
+            let custom = &config["providers"]["custom"];
+
+            assert_eq!(
+                custom["baseUrl"],
+                format!("{}/v1", base_url.trim_end_matches('/'))
+            );
+            assert_eq!(custom["headers"]["User-Agent"], "screenpipe");
+        }
     }
 
     #[tokio::test]
