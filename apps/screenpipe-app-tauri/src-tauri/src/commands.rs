@@ -225,6 +225,27 @@ pub fn get_app_identifier(app_handle: tauri::AppHandle) -> String {
     app_handle.config().identifier.clone()
 }
 
+/// Stable low-disk safety values shared with the settings UI.
+///
+/// Keeping the threshold and monitor cadence in Rust prevents user-facing copy
+/// from drifting away from the values enforced by the capture engine.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LowDiskGuardConfig {
+    pub threshold_bytes: u64,
+    pub check_interval_seconds: u64,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_low_disk_guard_config() -> LowDiskGuardConfig {
+    LowDiskGuardConfig {
+        threshold_bytes: screenpipe_events::LOW_DISK_THRESHOLD_BYTES,
+        check_interval_seconds:
+            screenpipe_engine::disk_pressure::LOW_DISK_CHECK_INTERVAL_SECS,
+    }
+}
+
 /// Get the local API auth key and port for the frontend to use.
 /// Returns the local API config (key, port, auth flag).
 ///
@@ -1159,6 +1180,118 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+/// E2E helper: model an active capture intent without requiring physical
+/// screen/audio devices on the CI runner.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_mark_capture_intended(
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    state.set_capture_intent(true);
+    Ok(())
+}
+
+/// E2E helper: publish the same typed core event as the real disk probe.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_emit_disk_space_low(available_bytes: u64) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let event = screenpipe_events::DiskSpaceLowEvent::new(
+        available_bytes,
+        ".e2e".to_string(),
+    );
+    screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
+}
+
+/// E2E helper: execute the production policy handler directly and return its
+/// explicit outcome. This avoids sleep-based assertions; the settings E2E also
+/// publishes through the typed event bus to cover the production subscription.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_handle_disk_space_low(
+    app_handle: tauri::AppHandle,
+    available_bytes: u64,
+) -> Result<crate::disk_pressure_notifications::DiskPressureOutcome, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let event = screenpipe_events::DiskSpaceLowEvent::new(
+        available_bytes,
+        ".e2e".to_string(),
+    );
+    Ok(crate::disk_pressure_notifications::handle(&app_handle, event).await)
+}
+
+/// E2E helper: distinguish a real CaptureSession from capture intent alone.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_capture_session_running(
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    Ok(state.capture.lock().await.is_some())
+}
+
+/// E2E helper: update the native store without depending on a mounted settings
+/// webview. Used by the recording-enabled Windows lane.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_set_low_disk_guard_enabled(
+    app_handle: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    settings.stop_recording_on_low_disk = enabled;
+    settings.save(&app_handle)
+}
+
+/// E2E helper: prove critical recording-stopped alerts bypass the user's
+/// ordinary notification master switch.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_set_notification_master_enabled(
+    app_handle: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let prefs = settings
+        .extra
+        .entry("notificationPrefs".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !prefs.is_object() {
+        *prefs = serde_json::json!({});
+    }
+    prefs["notificationsEnabled"] = serde_json::Value::Bool(enabled);
+    settings.save(&app_handle)
+}
+
+/// E2E helper: read back the persisted guard value before publishing an event.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_low_disk_guard_enabled(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    Ok(SettingsStore::get(&app_handle)?
+        .unwrap_or_default()
+        .stop_recording_on_low_disk)
+}
+
 /// E2E helper: drive the health-to-native-tray status transition.
 #[tauri::command]
 #[specta::specta]
@@ -1720,6 +1853,22 @@ fn is_login_callback_scheme(scheme: &str) -> bool {
     scheme == deep_link_scheme() || scheme == "screenpipe"
 }
 
+#[cfg(not(target_os = "macos"))]
+fn reset_existing_login_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    login_url: tauri::Url,
+) -> Result<(), String> {
+    // A provider flow can leave this reusable webview on GitHub, Google, or
+    // even a failed/blank document. A later login click means "start over",
+    // so never surface whatever navigation state the previous attempt left.
+    window
+        .navigate(login_url)
+        .map_err(|e| format!("failed to reset login window: {e}"))?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// Open the screenpipe.com login page.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
 /// Windows/Linux: in-app WebView that intercepts the screenpipe:// redirect.
@@ -1777,24 +1926,28 @@ pub async fn open_login_window(
             "login-browser".to_string()
         };
 
+        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
+        let parsed_login_url = login_url
+            .parse()
+            .map_err(|e| format!("invalid login URL: {e}"))?;
+
         if fresh_session {
             if let Some(w) = app_handle.get_webview_window("login-browser") {
                 let _ = w.close();
             }
         } else if let Some(w) = app_handle.get_webview_window(&label) {
-            let _ = w.show();
-            let _ = w.set_focus();
+            info!("resetting existing login window");
+            reset_existing_login_window(&w, parsed_login_url)?;
             return Ok(());
         }
 
         let app_for_nav = app_handle.clone();
         let label_for_nav = label.clone();
 
-        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label.clone(),
-            WebviewUrl::External(login_url.parse().unwrap()),
+            WebviewUrl::External(parsed_login_url),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
@@ -1826,6 +1979,31 @@ pub async fn open_login_window(
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod login_window_tests {
+    use super::reset_existing_login_window;
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    #[test]
+    fn reused_login_window_returns_to_login_page() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let stale_url: tauri::Url = "https://github.com/settings/profile".parse().unwrap();
+        let login_url: tauri::Url = "https://screenpipe.com/login?return_scheme=screenpipe"
+            .parse()
+            .unwrap();
+        let window =
+            WebviewWindowBuilder::new(&app, "login-browser", WebviewUrl::External(stale_url))
+                .build()
+                .expect("login webview");
+
+        reset_existing_login_window(&window, login_url.clone()).unwrap();
+
+        assert_eq!(window.url().unwrap(), login_url);
     }
 }
 
@@ -3064,14 +3242,17 @@ pub async fn show_notification_inbox(app_handle: tauri::AppHandle) -> Result<(),
                     app_handle.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
                 {
                     let analytics = std::sync::Arc::clone(&analytics);
-                    let unread = entries.iter().filter(|e| !e.read).count();
+                    let unread = entries
+                        .iter()
+                        .filter(|entry| !entry.read && entry.is_high_priority())
+                        .count();
                     let total = entries.len();
                     tauri::async_runtime::spawn(async move {
                         let _ = analytics
                             .send_event(
                                 "notification_bell_opened",
                                 Some(serde_json::json!({
-                                    "unread_count": unread,
+                                    "high_priority_unread_count": unread,
                                     "total_count": total,
                                     "surface": "native_overlay",
                                 })),

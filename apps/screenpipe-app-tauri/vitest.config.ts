@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { collectBunTestFiles } from "./scripts/bun-test-files";
 
 export default defineConfig({
 	plugins: [react()],
@@ -16,10 +17,10 @@ export default defineConfig({
 		// running. `.e2e/` is the WebdriverIO suite (run via `test:e2e`,
 		// not vitest).
 		//
-		// The bun:test files (test runner is Bun-native, not vitest) are
-		// listed below — they import from `bun:test` which vitest can't
-		// resolve. They run via `bun run test:bun` instead. Keep this
-		// list in sync with package.json's test:bun glob.
+		// Files importing from "bun:test" run under the Bun-native runner
+		// (`bun run test:bun`), not vitest — they are discovered and
+		// excluded automatically by scripts/bun-test-files.ts, which is
+		// also what test:bun executes. No hand-maintained list.
 		exclude: [
 			"**/node_modules/**",
 			"**/.next/**",
@@ -27,23 +28,7 @@ export default defineConfig({
 			".e2e/**",
 			"e2e/**",
 			"src-tauri/target/**",
-			"lib/utils/html-sandbox.test.ts",
-			"lib/utils/meeting-state.test.ts",
-			"lib/utils/sanitize-tool-call-xml.test.ts",
-			"lib/__tests__/team-crypto.test.ts",
-			"lib/__tests__/team-api-contract.test.ts",
-			"lib/__tests__/team-pipes.test.ts",
-			"components/__tests__/url-detection-benchmark.test.ts",
-			"lib/hooks/__tests__/timeline-reconnection.test.ts",
-			"lib/hooks/__tests__/timeline-liveness.test.ts",
-			"lib/hooks/__tests__/timeline-store-logic.test.ts",
-			"lib/hooks/__tests__/server-push-old-frames.test.ts",
-			"lib/hooks/__tests__/window-focus-refresh.test.ts",
-			"lib/hooks/__tests__/timeline-ui-issues.test.ts",
-			"lib/hooks/__tests__/use-meetings.test.ts",
-			"lib/events/__tests__/types.test.ts",
-			"lib/hooks/__tests__/server-poll-logic.test.ts",
-			"lib/events/__tests__/bus.test.ts",
+			...collectBunTestFiles(__dirname),
 			// KNOWN-BROKEN: pre-existing failures surfaced when wiring tests
 			// into CI. Each is a real assertion failure (component drifted
 			// from its test) — excluded so we can ship the CI gate now and
@@ -51,10 +36,8 @@ export default defineConfig({
 			//   - text-overlay.test.tsx: container.firstChild null + missing
 			//     "solid" underline on link blocks
 			//   - pipe-run-recorder.test.ts: vi.mock factory hoist issue
-			//   - use-frame-ocr-data.test.ts: fetch flow drifted
 			"components/__tests__/text-overlay.test.tsx",
 			"lib/events/__tests__/pipe-run-recorder.test.ts",
-			"lib/hooks/__tests__/use-frame-ocr-data.test.ts",
 		],
 	},
 	resolve: {

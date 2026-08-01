@@ -11,6 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use screenpipe_a11y::tree::{AccessibilityTreeNode, TreeSnapshot};
+use screenpipe_config::SemanticContextMode;
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::DatabaseManager;
 use screenpipe_semantic::{
@@ -74,11 +75,26 @@ impl SemanticProjectionSender {
 pub(crate) fn spawn_semantic_projection_worker(
     db: Arc<DatabaseManager>,
     runtime: &Handle,
+    mode: SemanticContextMode,
 ) -> SemanticProjectionSender {
     let (tx, rx) = semantic_projection_channel();
-    runtime.spawn(run_semantic_projection_worker(db, rx, tx.tx.clone()));
+    runtime.spawn(run_semantic_projection_worker(
+        db,
+        rx,
+        tx.tx.clone(),
+        semantic_mode_label(mode),
+    ));
     info!("semantic projection worker enabled");
     tx
+}
+
+/// Static rollout dimension for telemetry; never derived from capture content.
+const fn semantic_mode_label(mode: SemanticContextMode) -> &'static str {
+    match mode {
+        SemanticContextMode::Memory => "memory",
+        SemanticContextMode::ComputerUse => "computer_use",
+        SemanticContextMode::Both => "both",
+    }
 }
 
 fn semantic_projection_channel() -> (
@@ -93,6 +109,7 @@ async fn run_semantic_projection_worker(
     db: Arc<DatabaseManager>,
     mut rx: watch::Receiver<Option<Arc<SemanticProjectionJob>>>,
     tx: watch::Sender<Option<Arc<SemanticProjectionJob>>>,
+    mode_label: &'static str,
 ) {
     let registry = match builtin_parser_registry() {
         Ok(registry) => registry,
@@ -120,7 +137,7 @@ async fn run_semantic_projection_worker(
                 false
             }
         });
-        if let Err(error) = process_semantic_job(&db, &registry, &job).await {
+        if let Err(error) = process_semantic_job(&db, &registry, &job, mode_label).await {
             warn!(
                 frame_id = job.frame_id,
                 %error,
@@ -134,6 +151,7 @@ async fn process_semantic_job(
     db: &DatabaseManager,
     registry: &ParserRegistry,
     job: &SemanticProjectionJob,
+    mode_label: &'static str,
 ) -> anyhow::Result<()> {
     let app = AppIdentity {
         platform: current_platform(),
@@ -157,6 +175,7 @@ async fn process_semantic_job(
             None,
             "no_candidate",
             0,
+            mode_label,
         );
         return Ok(());
     }
@@ -168,7 +187,14 @@ async fn process_semantic_job(
     // copies before parsing and database work.
     drop(nodes);
     if adapted.tree.is_empty() {
-        emit_sampled_semantic_telemetry(job.frame_id, &candidate_parser_ids, None, "empty", 0);
+        emit_sampled_semantic_telemetry(
+            job.frame_id,
+            &candidate_parser_ids,
+            None,
+            "empty",
+            0,
+            mode_label,
+        );
         return Ok(());
     }
 
@@ -231,6 +257,7 @@ async fn process_semantic_job(
                 Some(parser_id),
                 "handled",
                 parse_duration_us,
+                mode_label,
             );
             debug!(
                 frame_id = job.frame_id,
@@ -252,6 +279,7 @@ async fn process_semantic_job(
             result.selected_parser_id.as_deref(),
             "empty",
             parse_duration_us,
+            mode_label,
         ),
         ValidatedParseOutcome::NotHandled => emit_sampled_semantic_telemetry(
             job.frame_id,
@@ -259,6 +287,7 @@ async fn process_semantic_job(
             None,
             "not_handled",
             parse_duration_us,
+            mode_label,
         ),
     }
     Ok(())
@@ -273,6 +302,7 @@ fn emit_sampled_semantic_telemetry(
     selected_parser_id: Option<&str>,
     outcome: &'static str,
     parse_duration_us: u64,
+    mode_label: &'static str,
 ) {
     if !should_sample_semantic_telemetry(frame_id) {
         return;
@@ -285,6 +315,7 @@ fn emit_sampled_semantic_telemetry(
             selected_parser_id,
             outcome,
             parse_duration_us,
+            mode_label,
         ),
     );
 }
@@ -298,13 +329,24 @@ fn semantic_telemetry_properties(
     selected_parser_id: Option<&str>,
     outcome: &'static str,
     parse_duration_us: u64,
+    mode_label: &'static str,
 ) -> Value {
     json!({
         "semantic_candidate_parser_ids": candidate_parser_ids,
         "semantic_selected_parser_id": selected_parser_id,
         "semantic_outcome": outcome,
         "semantic_parse_duration_us": parse_duration_us,
+        "semantic_platform": platform_label(current_platform()),
+        "semantic_mode": mode_label,
     })
+}
+
+const fn platform_label(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Macos => "macos",
+        Platform::Windows => "windows",
+        Platform::Linux => "linux",
+    }
 }
 
 fn captured_semantic_nodes(
@@ -546,11 +588,17 @@ mod tests {
             Some("family.conversation"),
             "handled",
             73,
+            "memory",
         );
 
         assert_eq!(properties["semantic_outcome"], "handled");
         assert_eq!(properties["semantic_parse_duration_us"], 73);
-        assert_eq!(properties.as_object().map(|object| object.len()), Some(4));
+        assert_eq!(
+            properties["semantic_platform"],
+            platform_label(current_platform())
+        );
+        assert_eq!(properties["semantic_mode"], "memory");
+        assert_eq!(properties.as_object().map(|object| object.len()), Some(6));
         let serialized = properties.to_string();
         assert!(!serialized.contains("app_identifier"));
         assert!(!serialized.contains("display_name"));
@@ -595,7 +643,7 @@ mod tests {
             true,
         );
 
-        process_semantic_job(&db, &registry, &projection_job)
+        process_semantic_job(&db, &registry, &projection_job, "memory")
             .await
             .expect("process semantic projection");
 

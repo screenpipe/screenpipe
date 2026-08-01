@@ -19,6 +19,8 @@ env:
 jobs:
   test-windows:
     runs-on: windows-2022
+    # A hung recording session otherwise burns the 6-hour GitHub default.
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@v4
 

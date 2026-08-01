@@ -162,7 +162,7 @@ if you notice gaps in transcription or missing audio segments, the transcription
 4. **use cloud transcription:** switch to **deepgram** or **screenpipe-cloud** for remote processing, which doesn't block your local system
 5. **reduce system load:** close heavy apps or run screenpipe on a machine with better CPU/RAM
 
-if the issue persists, check logs: settings → pipes → view logs to see "dropping audio segment" warnings.
+if the issue persists, check the app logs for “dropping audio segment” warnings.
 
 ### bluetooth headphone audio quality drops
 
@@ -204,7 +204,7 @@ if your chat window freezes, try these fixes in order:
 2. **check health:** `curl http://localhost:3030/health` — if it fails, backend is stuck
 3. **verify you have data** — screenpipe needs screen/audio history; wait 1-2 minutes after startup
 4. **verify AI provider connection** — settings → model selector. for ChatGPT/Claude, sign out/back in
-5. **reduce load** — disable unused pipes (settings → pipes), switch to a faster, lighter model in your configured provider, check logs for "timeout" errors
+5. **reduce load** — disable unused pipes under **Pipes → My Pipes**, switch to a faster, lighter model in your configured provider, and check logs for “timeout” errors
 
 ### chat messages disappear
 
@@ -224,7 +224,7 @@ if assistant replies vanish when navigating away, **update to the latest version
 
 this usually means the pipe started and crashed immediately.
 
-1. open **settings -> pipes**.
+1. open **Pipes → My Pipes**.
 2. select the pipe and open logs.
 3. run the pipe manually.
 4. check that `pipe.md` exists in the pipe folder and has valid frontmatter.
@@ -235,7 +235,7 @@ include the log output when asking for help. "the command window flashes" is the
 
 ### pipe runs but produces no output
 
-1. check logs: go to **settings → pipes** → click your pipe → view logs
+1. check logs: go to **Pipes → My Pipes** → open your pipe → view logs
 2. make sure your prompt includes concrete instructions to write output or send notifications
 3. test manually: click "run" in the pipe UI and watch the logs in real-time
 4. verify screenpipe has data to work with: `curl "http://localhost:3030/search?limit=5"`
@@ -243,7 +243,7 @@ include the log output when asking for help. "the command window flashes" is the
 
 ### pipe doesn't run on schedule
 
-- make sure the pipe is enabled (toggle is on in **settings → pipes**)
+- make sure the pipe is enabled under **Pipes → My Pipes**
 - check that the schedule format is correct: `every 30m`, `every 2h`, `daily`, or a cron expression
 - only one pipe runs at a time — if another pipe is running, yours will wait in the queue
 - start with manual run; only debug the schedule after manual run works

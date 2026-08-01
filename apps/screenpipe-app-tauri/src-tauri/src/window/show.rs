@@ -18,7 +18,10 @@ use super::content_process::setup_content_process_handler;
 #[cfg(target_os = "macos")]
 use super::first_responder::{make_nswindow_webview_first_responder, make_webview_first_responder};
 #[cfg(target_os = "macos")]
-use super::focus::{restore_frontmost_app, restore_frontmost_app_if_external_with_app};
+use super::focus::{
+    begin_search_focus_session, finish_search_focus_session, restore_frontmost_app,
+    restore_frontmost_app_if_external_with_app,
+};
 use super::panel::{main_label_for_mode, MAIN_CREATED_MODE};
 #[cfg(target_os = "macos")]
 use super::panel::{show_panel_visible, MAIN_PANEL_SHOWN};
@@ -575,9 +578,14 @@ impl ShowRewindWindow {
                         if let Ok(ns_win) = window_clone.ns_window() {
                             let ns_win = ns_win as id;
                             unsafe {
+                                begin_search_focus_session();
                                 let _: () = msg_send![ns_win, setLevel: 1002_i64];
-                                let _: () = msg_send![ns_win, orderFrontRegardless];
+                                let current: i32 = msg_send![ns_win, styleMask];
+                                let _: () = msg_send![ns_win, setStyleMask: current | 128];
+                                let _: () = msg_send![ns_win, setBecomesKeyOnlyIfNeeded: true];
+                                let _: () = msg_send![ns_win, orderFront: std::ptr::null::<objc::runtime::Object>()];
                                 let _: () = msg_send![ns_win, makeKeyWindow];
+                                make_nswindow_webview_first_responder(ns_win);
                             }
                         }
                     });
@@ -925,15 +933,11 @@ impl ShowRewindWindow {
                                         }
                                         #[cfg(not(target_os = "macos"))]
                                         {
-                                            // Only keep Escape when the overlay is still visible.
-                                            // Otherwise Home (or another app window) can hold focus while
-                                            // the overlay is already gone — returning here would skip
-                                            // blur unregister and leave the global Escape hook stuck on.
-                                            if crate::commands::any_screenpipe_webview_has_focus(&app)
-                                                && crate::commands::main_overlay_is_visible(&app)
-                                            {
+                                            // Keep Escape registered whenever the main overlay is visible,
+                                            // even if focus shifts temporarily (#5346).
+                                            if crate::commands::main_overlay_is_visible(&app) {
                                                 info!(
-                                                    "main-window blur: another screenpipe window has focus, keep Escape registered"
+                                                    "main-window blur: main overlay is visible, keeping Escape shortcut registered"
                                                 );
                                                 let _ = app.emit("window-focused", false);
                                                 return;
@@ -1335,11 +1339,11 @@ impl ShowRewindWindow {
                                     }
                                     #[cfg(target_os = "windows")]
                                     {
-                                        if crate::commands::any_screenpipe_webview_has_focus(&app)
-                                            && crate::commands::main_overlay_is_visible(&app)
-                                        {
+                                        // Keep Escape registered whenever the main overlay is visible,
+                                        // even if focus shifts temporarily (#5346).
+                                        if crate::commands::main_overlay_is_visible(&app) {
                                             info!(
-                                                "Main overlay blur: another screenpipe window has focus, keep Escape registered"
+                                                "Main overlay blur: main overlay is visible, keeping Escape shortcut registered"
                                             );
                                             let _ = app.emit("window-focused", false).ok();
                                             return;
@@ -1764,7 +1768,7 @@ impl ShowRewindWindow {
             let window_clone = window.clone();
             run_on_main_thread_safe(app, move || {
                 use objc::{msg_send, sel, sel_impl};
-                use tauri_nspanel::cocoa::base::id;
+                use tauri_nspanel::cocoa::base::{id, nil};
                 use tauri_nspanel::objc_foundation::INSObject;
                 use tauri_nspanel::raw_nspanel::object_setClass;
                 if let Ok(ns_win) = window_clone.ns_window() {
@@ -1786,12 +1790,15 @@ impl ShowRewindWindow {
                         let _: () = msg_send![ns_win, setCollectionBehavior: 257_u64];
 
                         let _: () = msg_send![ns_win, setHidesOnDeactivate: false];
+                        let _: () = msg_send![ns_win, setBecomesKeyOnlyIfNeeded: true];
 
                         // Only activate for a real open. Pre-warm leaves the
                         // window ordered-out so startup never steals focus.
                         if focus {
-                            let _: () = msg_send![ns_win, orderFrontRegardless];
+                            begin_search_focus_session();
+                            let _: () = msg_send![ns_win, orderFront: nil];
                             let _: () = msg_send![ns_win, makeKeyWindow];
+                            make_nswindow_webview_first_responder(ns_win);
                         }
                     }
                 }
@@ -1965,12 +1972,15 @@ impl ShowRewindWindow {
                     run_on_main_thread_safe(app, move || {
                         use objc::{msg_send, sel, sel_impl};
                         use tauri_nspanel::cocoa::base::{id, nil};
+                        let mut search_was_key = false;
                         if let Ok(ns_win) = window_clone.ns_window() {
                             let ns_win = ns_win as id;
                             unsafe {
+                                search_was_key = msg_send![ns_win, isKeyWindow];
                                 let _: () = msg_send![ns_win, orderOut: nil];
                             }
                         }
+                        finish_search_focus_session(search_was_key);
                     });
                 }
                 #[cfg(not(target_os = "macos"))]

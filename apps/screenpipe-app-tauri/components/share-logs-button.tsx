@@ -17,7 +17,11 @@ import {
 import { readFile } from "@tauri-apps/plugin-fs";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { commands } from "@/lib/utils/tauri";
+import { listen } from "@tauri-apps/api/event";
+import {
+  commands,
+  type FeedbackUploadRequest,
+} from "@/lib/utils/tauri";
 import { useState, useEffect, useRef } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
@@ -44,7 +48,6 @@ import {
   mimeFromName,
   type VideoExt,
 } from "@/lib/utils/feedback-attachments";
-import { screenpipeWebBase } from "@/lib/web-url";
 
 // Read an image File and return a compressed JPEG data URL (max 1920px wide).
 // Shared by the file-picker, clipboard paste, and drag-drop entry points.
@@ -73,41 +76,15 @@ async function compressImageFile(file: File): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 
-// Every await in sendLogs must be bounded: one stalled call with no timeout
-// leaves `phase` stuck on "sending" forever (#5360).
-const TIMEOUT_API_MS = 30_000; // JSON endpoints and IPC listings
-const TIMEOUT_UPLOAD_MS = 60_000; // log text / screenshot PUTs
-const TIMEOUT_VIDEO_MS = 300_000; // must cover the Rust retry budget (280s)
-const TIMEOUT_REDACT_MS = 60_000; // must exceed Rust's 45s enclave budget
-// Backstop above the sum of all per-step budgets, so a step added later
-// without its own deadline still can't strand the dialog.
-const TIMEOUT_SEND_TOTAL_MS = 720_000;
+// Webview preparation must settle before Rust can own the background job.
+// Once `startFeedbackUpload` acknowledges, every network step is Rust-owned.
+const TIMEOUT_PREPARE_MS = 30_000;
 
 function timeoutError(label: string): Error {
   return new Error(`${label} timed out — check your connection and try again`);
 }
 
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  ms: number,
-  label: string,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } catch (err) {
-    // Surface a readable message instead of the raw AbortError.
-    if (controller.signal.aborted) throw timeoutError(label);
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// For Tauri command awaits — the IPC promise can hang even when the Rust
-// side is internally bounded.
+// Bound IndexedDB and attachment preparation before the Rust handoff.
 export function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -122,30 +99,12 @@ export function withTimeout<T>(
   ]);
 }
 
-// PUT with real upload progress — fetch() has no upload progress events, and
-// the design shows a live "uploading… n%" line for dropped files.
-function putWithProgress(
-  url: string,
-  body: Blob,
-  contentType: string,
-  onProgress?: (pct: number) => void,
-): Promise<void> {
+function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url);
-    xhr.setRequestHeader("Content-Type", contentType);
-    xhr.timeout = TIMEOUT_VIDEO_MS;
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress)
-        onProgress(Math.round((e.loaded / e.total) * 100));
-    };
-    xhr.onload = () =>
-      xhr.status >= 200 && xhr.status < 300
-        ? resolve()
-        : reject(new Error(`upload failed with status ${xhr.status}`));
-    xhr.onerror = () => reject(new Error("upload failed"));
-    xhr.ontimeout = () => reject(timeoutError("video upload"));
-    xhr.send(body);
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -184,11 +143,24 @@ type VideoAttachment =
 
 type SendPhase = "idle" | "sending" | "sent";
 
+export const FEEDBACK_UPLOAD_COMPLETED_EVENT = "feedback-upload-completed";
+
+export interface FeedbackUploadCompleted {
+  jobId: string;
+  status: "sent" | "failed";
+  message: string;
+  supportId: string | null;
+  screenshotUploaded: boolean;
+  videoUploaded: boolean;
+}
+
 export const ShareLogsButton = ({
   onComplete,
+  onBackgroundStart,
   prefillText,
 }: {
   onComplete?: () => void;
+  onBackgroundStart?: () => void;
   prefillText?: string;
 }) => {
   const { toast } = useToast();
@@ -198,8 +170,6 @@ export const ShareLogsButton = ({
   const [image, setImage] = useState<ImageAttachment | null>(null);
   const [video, setVideo] = useState<VideoAttachment | null>(null);
   const [phase, setPhase] = useState<SendPhase>("idle");
-  // Real upload percentage for dropped files during send (null = no live pct).
-  const [uploadPct, setUploadPct] = useState<number | null>(null);
   // dragenter/dragleave fire for every child element crossed, so track depth
   // instead of a boolean to avoid the drag-active style flickering off.
   const [dragDepth, setDragDepth] = useState(0);
@@ -208,6 +178,7 @@ export const ShareLogsButton = ({
   const { health } = useHealthCheck();
   const formRef = useRef<HTMLDivElement>(null);
   const sentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const loadMachineId = async () => {
@@ -229,6 +200,49 @@ export const ShareLogsButton = ({
     };
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<FeedbackUploadCompleted>(
+      FEEDBACK_UPLOAD_COMPLETED_EVENT,
+      ({ payload }) => {
+        if (payload.jobId !== activeJobIdRef.current) return;
+        activeJobIdRef.current = null;
+        if (payload.status === "failed") {
+          setPhase("idle");
+          toast({
+            title: "sharing failed",
+            description: payload.message,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        toast({
+          title: "feedback sent",
+          description: payload.message,
+        });
+        setPhase("sent");
+        sentTimerRef.current = setTimeout(() => {
+          setFeedbackText("");
+          setImage(null);
+          setVideo(null);
+          setPhase("idle");
+          onComplete?.();
+        }, 1500);
+      },
+    )
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [onComplete, toast]);
+
   const isProcessing =
     image?.status === "processing" || video?.status === "processing";
   const readyCount =
@@ -243,25 +257,6 @@ export const ShareLogsButton = ({
       ? "last 5 min unavailable — screen capture is disabled by your organization."
       : "last 5 min unavailable — screen recording is off."
     : null;
-
-  const getLogFiles = async () => {
-    try {
-      const result = await commands.getLogFiles();
-      if (result.status === "ok") {
-        return result.data.map((file) => ({
-          name: file.name,
-          path: file.path,
-          modified_at: Number(file.modified_at),
-        }));
-      } else {
-        console.error("failed to get log files:", result.error);
-        return [];
-      }
-    } catch (error) {
-      console.error("failed to get log files:", error);
-      return [];
-    }
-  };
 
   const captureLastFiveMinutes = async () => {
     setPhase("idle");
@@ -513,89 +508,15 @@ export const ShareLogsButton = ({
 
   const sendLogs = async () => {
     setPhase("sending");
-    setUploadPct(null);
-    const send = async () => {
-      // Log files are best-effort. If none are found (fresh install, or an
-      // unreadable/misconfigured data dir — common on Windows), we still send
-      // the feedback text, screenshot, settings and console logs, which are
-      // valuable on their own. Bailing here silently was the original bug:
-      // clicking the button did nothing, with no toast and no spinner.
-      // Same policy for a hung listing: proceed without log files rather
-      // than fail the whole report.
-      const logFiles = await withTimeout(
-        getLogFiles(),
-        TIMEOUT_API_MS,
-        "log listing",
-      ).catch(() => [] as Awaited<ReturnType<typeof getLogFiles>>);
-
-      const BASE_URL = screenpipeWebBase("https://screenpipe.com");
-      const identifier = settings.user?.id || machineId;
-      const type = settings.user?.id ? "user" : "machine";
-
-      // Tail-read in Rust: a runaway log can be hundreds of MB, and pulling
-      // it whole across IPC just to slice 100KB froze the dialog (#5360).
-      const MAX_LOG_SIZE = 100 * 1024;
-      const logContents = await Promise.all(
-        logFiles.slice(0, 5).map(async (file) => {
-          const result = await withTimeout(
-            commands.readLogTail(file.path, MAX_LOG_SIZE),
-            TIMEOUT_REDACT_MS,
-            "log read",
-          ).catch((e) => ({ status: "error" as const, error: String(e) }));
-          return {
-            name: file.name,
-            content:
-              result.status === "ok"
-                ? result.data
-                : `[Error reading file: ${result.error}]`,
-          };
-        }),
-      );
-
-      let consoleLog = "";
-      try {
-        consoleLog = (localStorage?.getItem("console_logs") || "").slice(
-          -50000,
-        );
-      } catch {}
-
-      const signedRes = await fetchWithTimeout(
-        `${BASE_URL}/api/logs`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            identifier,
-            type,
-            // Ask for a video slot matching the attachment's real container so
-            // QuickTime bytes are never stored under a `.mp4` key.
-            video_ext: video?.source === "file" ? video.ext : "mp4",
-          }),
-        },
-        TIMEOUT_API_MS,
-        "upload request",
-      );
-      if (!signedRes.ok) {
-        throw new Error(`upload request failed with status ${signedRes.status}`);
-      }
-
-      const {
-        data: {
-          signedUrl,
-          path,
-          signedUrlScreenshot,
-          signedUrlVideo,
-          screenshotPath,
-          videoPath,
-        },
-      } = await signedRes.json();
-
+    const jobId = crypto.randomUUID();
+    activeJobIdRef.current = jobId;
+    try {
       let chatSection = "";
       if (includeChatHistory) {
         try {
           const conversations = await withTimeout(
             loadAllConversations(),
-            TIMEOUT_API_MS,
+            TIMEOUT_PREPARE_MS,
             "chat history",
           );
           const MAX_CHAT_SIZE = 200 * 1024;
@@ -618,9 +539,6 @@ export const ShareLogsButton = ({
         }
       }
 
-      // Settings are included raw here and redacted in Rust (see below) — the
-      // settings snapshot is invaluable for debugging ("did they change the
-      // transcription engine / a privacy filter?"), which logs alone don't show.
       const settingsJson = (() => {
         try {
           return JSON.stringify(settings);
@@ -629,166 +547,71 @@ export const ShareLogsButton = ({
           return "";
         }
       })();
-
-      // Raw bundle (chat first so the enclave budget is spent on the PII-dense
-      // content before the bulk logs). ALL redaction happens in Rust — the
-      // `redact_pii_for_feedback` command strips config secrets by field name
-      // and runs the text through the screenpipe-redact pipeline (regex + the
-      // Tinfoil enclave model). No redaction is done here in the webview.
-      const rawBundle =
-        chatSection +
-        logContents
-          .map((log) => `\n\n=== ${log.name} ===\n${log.content}`)
-          .join("") +
-        "\n\n=== Browser Console Logs ===\n" +
-        consoleLog;
-
-      const redaction = await withTimeout(
-        commands.redactPiiForFeedback(rawBundle, settingsJson),
-        TIMEOUT_REDACT_MS,
-        "redaction",
-      );
-      if (redaction.status !== "ok") {
-        // The command never returns Err (worst case is regex-only redaction), so
-        // this means the call itself failed. Don't upload unredacted content.
-        throw new Error(`redaction failed: ${redaction.error}`);
-      }
-      const redactedLogs = redaction.data;
-
-      await fetchWithTimeout(
-        signedUrl,
-        {
-          method: "PUT",
-          body: redactedLogs,
-          headers: { "Content-Type": "text/plain" },
-        },
-        TIMEOUT_UPLOAD_MS,
-        "log upload",
-      );
-
-      const imageReady = image?.status === "ready" && image.dataUrl;
-      if (imageReady && signedUrlScreenshot) {
-        const response = await fetch(image.dataUrl!);
-        const blob = await response.blob();
-
-        await fetchWithTimeout(
-          signedUrlScreenshot,
-          {
-            method: "PUT",
-            body: blob,
-            headers: { "Content-Type": blob.type },
-          },
-          TIMEOUT_UPLOAD_MS,
-          "screenshot upload",
+      let consoleLog = "";
+      try {
+        consoleLog = (localStorage?.getItem("console_logs") || "").slice(
+          -50000,
         );
-      }
+      } catch {}
 
-      let videoUploaded = false;
-      if (video?.status === "ready" && signedUrlVideo) {
-        if (video.source === "recording" && video.localPath) {
-          const videoResult = await withTimeout(
-            commands.uploadFileToS3(video.localPath, signedUrlVideo),
-            TIMEOUT_VIDEO_MS,
-            "video upload",
+      let videoDataUrl: string | null = null;
+      let videoPath: string | null = null;
+      let videoExt: string | null = null;
+      if (video?.status === "ready") {
+        if (video.source === "file") {
+          videoDataUrl = await withTimeout(
+            readFileAsDataUrl(video.file),
+            TIMEOUT_PREPARE_MS,
+            "video preparation",
           );
-          if (videoResult.status !== "ok")
-            throw new Error("Failed to upload video");
-          videoUploaded = true;
-        } else if (
-          video.source === "file" &&
-          typeof videoPath === "string" &&
-          videoPath.endsWith(`.${video.ext}`)
-        ) {
-          await putWithProgress(
-            signedUrlVideo,
-            video.file,
-            video.file.type ||
-              (video.ext === "mov" ? "video/quicktime" : "video/mp4"),
-            setUploadPct,
-          );
-          videoUploaded = true;
-        } else if (video.source === "file") {
-          // Server predates `video_ext` and provisioned a `.mp4` key for a
-          // `.mov` attachment — skip the video rather than store mislabeled
-          // bytes. The rest of the report still goes out.
-          toast({
-            title: "video not attached",
-            description:
-              "mov isn't accepted by the server yet — convert to mp4 and try again. the rest of your report was sent.",
-            variant: "destructive",
-          });
+          videoExt = video.ext;
+        } else if (video.localPath) {
+          videoPath = video.localPath;
+          videoExt = "mp4";
         }
       }
-      setUploadPct(null);
 
-      const os = osPlatform();
-      const os_version = osVersion();
-      const app_version = await getVersion();
+      const request: FeedbackUploadRequest = {
+        jobId,
+        identifier: settings.user?.id || machineId,
+        reportType: settings.user?.id ? "user" : "machine",
+        feedbackText,
+        settingsJson,
+        chatHistory: chatSection,
+        consoleLog,
+        analyticsId: settings.analyticsId ?? null,
+        os: osPlatform(),
+        osVersion: osVersion(),
+        appVersion: await getVersion(),
+        screenshotDataUrl:
+          image?.status === "ready" ? image.dataUrl : null,
+        videoDataUrl,
+        videoPath,
+        videoExt,
+      };
 
-      const confirmResponse = await fetchWithTimeout(
-        `${BASE_URL}/api/logs/confirm`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            path,
-            identifier,
-            type,
-            os,
-            os_version,
-            app_version,
-            feedback_text: feedbackText,
-            screenshot_url: imageReady ? screenshotPath : undefined,
-            video_url: videoUploaded ? videoPath : undefined,
-            screenpipe_id: settings.analyticsId,
-          }),
-        },
-        TIMEOUT_API_MS,
-        "confirmation",
-      );
-      if (!confirmResponse.ok) {
-        throw new Error("failed to confirm log upload");
+      const started = await commands.startFeedbackUpload(request);
+      if (started.status !== "ok") {
+        throw new Error(started.error);
       }
-      const confirmPayload = await confirmResponse.json().catch(() => null);
-      const supportId = confirmPayload?.data?.id;
-      const followUpChannel = confirmPayload?.data?.follow_up;
-      const reference = supportId ? ` #${supportId}` : "";
+      if (started.data !== jobId) {
+        throw new Error("feedback job acknowledgement did not match");
+      }
 
-      // Receipt states what was actually included so a user never believes a
-      // video went out when it didn't.
-      const attachedParts = [
-        imageReady ? "screenshot" : null,
-        videoUploaded ? "video" : null,
-      ].filter(Boolean);
-      const attachedNote = attachedParts.length
-        ? ` included: ${attachedParts.join(" + ")}.`
-        : "";
-
-      toast({
-        title: "feedback sent",
-        description:
-          (followUpChannel === "email"
-            ? `we emailed you a receipt${reference} and will reply there.`
-            : `we posted it to support${reference}; mention that ID in Discord if you need an update.`) +
-          attachedNote,
-      });
-      setPhase("sent");
-      // Hold the "sent ✓" state briefly so the receipt registers, then reset
-      // and let the dialog close.
-      sentTimerRef.current = setTimeout(() => {
-        setFeedbackText("");
-        setImage(null);
-        setVideo(null);
-        setPhase("idle");
-        if (onComplete) onComplete();
-      }, 1500);
-    };
-    try {
-      await withTimeout(send(), TIMEOUT_SEND_TOTAL_MS, "sending feedback");
+      if (onBackgroundStart) {
+        toast({
+          title: "thanks — sending in background",
+          description:
+            video?.status === "ready"
+              ? "you can keep using screenpipe. keep the app running while the video uploads; we'll notify you when it's sent."
+              : "you can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent.",
+        });
+        onBackgroundStart();
+      }
     } catch (err) {
       console.error("log sharing failed:", err);
+      activeJobIdRef.current = null;
       setPhase("idle");
-      setUploadPct(null);
       toast({
         title: "sharing failed",
         description: String(err),
@@ -822,7 +645,7 @@ export const ShareLogsButton = ({
   } else if (sending) {
     status = {
       icon: <Loader className="h-4 w-4 animate-spin text-muted-foreground" />,
-      text: uploadPct !== null ? `uploading… ${uploadPct}%` : "sending…",
+      text: "sending…",
     };
   } else if (isProcessing) {
     status = {

@@ -224,6 +224,9 @@ pub struct Cursor {
     /// before memory sync was added.
     #[serde(default)]
     pub last_memory_ts: Option<String>,
+    /// ISO-8601 UTC. Latest feedback update successfully uploaded.
+    #[serde(default)]
+    pub last_feedback_ts: Option<String>,
 }
 
 impl Cursor {
@@ -326,6 +329,17 @@ pub trait LocalApiClient: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Fetch feedback updated since `since_ts`, ordered ascending. Feedback
+    /// is off by default and the policy decides whether only ratings or the
+    /// full comment/snapshot leave the device.
+    async fn fetch_feedback_since(
+        &self,
+        _since_ts: Option<&str>,
+        _limit: u32,
+    ) -> Result<Vec<FeedbackRow>, EnterpriseSyncError> {
+        Ok(Vec::new())
+    }
+
     /// Fetch one frame's full-resolution JPEG by id — the same image the
     /// local `/frames/{id}` route serves, which means capture-time PII
     /// redaction has already been applied when the org policy enables it.
@@ -347,7 +361,7 @@ pub trait LocalApiClient: Send + Sync {
 // same types — so it lives in `screenpipe-telemetry-wire`. Re-exported here
 // so the desktop shim keeps importing everything from `ee_sync::`.
 pub use screenpipe_telemetry_wire::{
-    AudioRow, FrameRow, MemoryRow, SnapshotRow, TelemetryRecord, UiEventRow,
+    AudioRow, FeedbackRow, FrameRow, MemoryRow, SnapshotRow, TelemetryRecord, UiEventRow,
 };
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
@@ -518,6 +532,10 @@ pub async fn run_one_sync(
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_memory_ts = Some(cutoff.to_rfc3339());
     }
+    if cursor.last_feedback_ts.is_none() {
+        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
+        cursor.last_feedback_ts = Some(cutoff.to_rfc3339());
+    }
 
     // Per-stream sync policy is fetched fresh on every tick — the admin can
     // flip toggles in the dashboard and the device picks them up on the next
@@ -589,18 +607,43 @@ pub async fn run_one_sync(
     } else {
         Vec::new()
     };
+    let mut feedback = if streams.feedback != crate::enterprise_policy::FeedbackSyncMode::Off {
+        match local
+            .fetch_feedback_since(cursor.last_feedback_ts.as_deref(), PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                warn!(
+                    "enterprise sync: feedback fetch failed (skipping): {}",
+                    error
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    if streams.feedback == crate::enterprise_policy::FeedbackSyncMode::Ratings {
+        for row in &mut feedback {
+            row.comment = None;
+            row.snapshot = None;
+            row.context = serde_json::json!({});
+        }
+    }
 
     if frames.is_empty()
         && audio.is_empty()
         && ui.is_empty()
         && snapshots.is_empty()
         && memories.is_empty()
+        && feedback.is_empty()
     {
         debug!("enterprise sync: nothing new since last tick");
         return Ok(SyncTickReport::default());
     }
 
-    let body = build_jsonl(
+    let mut body = build_jsonl(
         &cfg.device_id,
         &cfg.device_label,
         &frames,
@@ -609,6 +652,11 @@ pub async fn run_one_sync(
         &snapshots,
         &memories,
     );
+    body.extend_from_slice(&screenpipe_telemetry_wire::build_feedback_jsonl(
+        &cfg.device_id,
+        &cfg.device_label,
+        &feedback,
+    ));
     let bytes = body.len();
 
     let mut next_cursor = cursor.clone();
@@ -624,6 +672,9 @@ pub async fn run_one_sync(
     if let Some(latest) = memories.last() {
         next_cursor.last_memory_ts = Some(latest.created_at.clone());
     }
+    if let Some(latest) = feedback.last() {
+        next_cursor.last_feedback_ts = Some(latest.updated_at.clone());
+    }
 
     match &cfg.upload_mode {
         EnterpriseUploadMode::HostedIngest => {
@@ -638,6 +689,7 @@ pub async fn run_one_sync(
                 ui: ui.len(),
                 snapshots: snapshots.len(),
                 memories: memories.len(),
+                feedback: feedback.len(),
             };
             upload_direct_write_only_batch(
                 http,
@@ -656,6 +708,7 @@ pub async fn run_one_sync(
                 ui: ui.len(),
                 snapshots: snapshots.len(),
                 memories: memories.len(),
+                feedback: feedback.len(),
             };
             upload_direct_readable_batch(
                 http,
@@ -682,6 +735,7 @@ pub async fn run_one_sync(
         ui: ui.len(),
         snapshots: snapshots.len(),
         memories: memories.len(),
+        feedback: feedback.len(),
         bytes,
     })
 }
@@ -693,6 +747,7 @@ pub struct SyncTickReport {
     pub ui: usize,
     pub snapshots: usize,
     pub memories: usize,
+    pub feedback: usize,
     pub bytes: usize,
 }
 
@@ -1394,14 +1449,16 @@ pub async fn run(
                     || report.ui > 0
                     || report.snapshots > 0
                     || report.memories > 0
+                    || report.feedback > 0
                 {
                     info!(
-                        "enterprise sync: pushed {} frames, {} audio, {} ui, {} snapshots, {} memories ({} bytes)",
+                        "enterprise sync: pushed {} frames, {} audio, {} ui, {} snapshots, {} memories, {} feedback ({} bytes)",
                         report.frames,
                         report.audio,
                         report.ui,
                         report.snapshots,
                         report.memories,
+                        report.feedback,
                         report.bytes
                     );
                 }
@@ -1766,6 +1823,23 @@ mod tests {
         }
     }
 
+    fn feedback(id: &str, ts: &str) -> FeedbackRow {
+        FeedbackRow {
+            feedback_id: id.to_string(),
+            target_kind: "notification".to_string(),
+            target_id: "daily-recap".to_string(),
+            target_version: None,
+            producer_ref: Some("pipe:daily-recap".to_string()),
+            actor_id: "local-user".to_string(),
+            rating: "down".to_string(),
+            comment: Some("include project names".to_string()),
+            snapshot: Some(serde_json::json!({"title": "today"})),
+            context: serde_json::json!({"session_id": "s-1"}),
+            created_at: ts.to_string(),
+            updated_at: ts.to_string(),
+        }
+    }
+
     // ─── truncate_on_char_boundary (UTF-8 safety) ───────────────────────
 
     #[test]
@@ -1995,6 +2069,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:30:00Z".to_string()),
             last_memory_ts: Some("2026-05-07T09:15:00Z".to_string()),
+            last_feedback_ts: None,
         };
         c.save(&p).unwrap();
         let loaded = Cursor::load(&p);
@@ -2012,6 +2087,7 @@ mod tests {
             last_audio_ts: None,
             last_ui_ts: None,
             last_memory_ts: None,
+            last_feedback_ts: None,
         }
         .save(&p)
         .unwrap();
@@ -2160,9 +2236,11 @@ mod tests {
         frames_to_yield: Mutex<Vec<Vec<FrameRow>>>,
         audio_to_yield: Mutex<Vec<Vec<AudioRow>>>,
         memories_to_yield: Mutex<Vec<Vec<MemoryRow>>>,
+        feedback_to_yield: Mutex<Vec<Vec<FeedbackRow>>>,
         last_frames_since: Mutex<Option<String>>,
         last_audio_since: Mutex<Option<String>>,
         last_memories_since: Mutex<Option<String>>,
+        last_feedback_since: Mutex<Option<String>>,
     }
 
     impl MockLocal {
@@ -2171,14 +2249,21 @@ mod tests {
                 frames_to_yield: Mutex::new(frames),
                 audio_to_yield: Mutex::new(audio),
                 memories_to_yield: Mutex::new(Vec::new()),
+                feedback_to_yield: Mutex::new(Vec::new()),
                 last_frames_since: Mutex::new(None),
                 last_audio_since: Mutex::new(None),
                 last_memories_since: Mutex::new(None),
+                last_feedback_since: Mutex::new(None),
             }
         }
 
         fn with_memories(mut self, memories: Vec<Vec<MemoryRow>>) -> Self {
             self.memories_to_yield = Mutex::new(memories);
+            self
+        }
+
+        fn with_feedback(mut self, feedback: Vec<Vec<FeedbackRow>>) -> Self {
+            self.feedback_to_yield = Mutex::new(feedback);
             self
         }
     }
@@ -2221,6 +2306,20 @@ mod tests {
             *self.last_memories_since.lock().unwrap() = since_ts.map(|s| s.to_string());
             Ok(self
                 .memories_to_yield
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap_or_default())
+        }
+
+        async fn fetch_feedback_since(
+            &self,
+            since_ts: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<FeedbackRow>, EnterpriseSyncError> {
+            *self.last_feedback_since.lock().unwrap() = since_ts.map(str::to_string);
+            Ok(self
+                .feedback_to_yield
                 .lock()
                 .unwrap()
                 .pop()
@@ -2315,6 +2414,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_memory_ts: Some("2026-05-07T10:00:00Z".to_string()),
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(vec![vec![]], vec![vec![]]);
         let http = reqwest::Client::new();
@@ -2368,6 +2468,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![
@@ -2412,6 +2513,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let mut cursor = original_cursor.clone();
         let large_text = "x".repeat(2 * 1024 * 1024);
@@ -2472,6 +2574,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let before = cursor.clone();
         let large_text = "x".repeat(2 * 1024 * 1024);
@@ -2514,6 +2617,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(vec![vec![]], vec![vec![]]).with_memories(vec![vec![
             memory(1, "2026-05-07T10:00:00Z", "first"),
@@ -2538,6 +2642,63 @@ mod tests {
         );
         let loaded = Cursor::load(&cfg.cursor_path);
         assert_eq!(loaded.last_memory_ts, cursor.last_memory_ts);
+    }
+
+    #[tokio::test]
+    async fn ratings_only_feedback_strips_human_text_and_advances_its_cursor() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        crate::enterprise_policy::set_sync_streams(
+            false,
+            false,
+            false,
+            false,
+            false,
+            "ratings".to_string(),
+            "off".to_string(),
+        );
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_feedback_ts: Some("2026-05-07T09:00:00Z".to_string()),
+        };
+        let local = MockLocal::new(vec![], vec![])
+            .with_feedback(vec![vec![feedback("feedback-1", "2026-05-07T10:00:00Z")]]);
+
+        let report = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+        assert_eq!(report.feedback, 1);
+        assert_eq!(
+            cursor.last_feedback_ts.as_deref(),
+            Some("2026-05-07T10:00:00Z")
+        );
+        let requests = server.received_requests().await.unwrap();
+        let line: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(line["kind"], "feedback");
+        assert_eq!(line["rating"], "down");
+        assert!(line.get("comment").is_none());
+        assert!(line.get("snapshot").is_none());
+        assert_eq!(line["context"], serde_json::json!({}));
+
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "off".to_string(),
+        );
     }
 
     #[tokio::test]
@@ -2592,6 +2753,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
@@ -2663,6 +2825,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(
@@ -2725,6 +2888,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
@@ -2758,6 +2922,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -2790,6 +2955,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -2828,6 +2994,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: None,
+            last_feedback_ts: None,
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -2943,6 +3110,7 @@ mod tests {
             true,
             false,
             "off".to_string(),
+            "off".to_string(),
         );
 
         // Capture the POST body so we can assert what actually crossed the
@@ -2968,6 +3136,7 @@ mod tests {
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_feedback_ts: None,
         };
         let local = CallCountingLocal::new();
         let http = reqwest::Client::new();
@@ -3030,7 +3199,15 @@ mod tests {
 
         // Reset to defaults so the binary-wide static doesn't leak into
         // other tests that may run later in the same process.
-        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "off".to_string(),
+        );
     }
 
     // ─── On-demand frame fulfillment (P3) ───────────────────────────────────
@@ -3193,6 +3370,7 @@ mod tests {
             true,
             true,
             true,
+            "off".to_string(),
             "cited".to_string(),
         );
 
@@ -3255,13 +3433,29 @@ mod tests {
         assert_eq!(frames[1]["error"], "not_found");
         assert_eq!(frames[2]["error"], "fetch_failed");
 
-        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "off".to_string(),
+        );
     }
 
     #[tokio::test]
     async fn fulfill_frame_requests_splits_large_manifest_without_dropping_ids() {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
-        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "all".to_string());
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "all".to_string(),
+        );
 
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -3309,14 +3503,30 @@ mod tests {
         }
         assert_eq!(uploaded_ids, (1..=21).collect::<Vec<_>>());
 
-        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "off".to_string(),
+        );
     }
 
     #[tokio::test]
     async fn fulfill_skips_when_stream_disabled() {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
         // frame_images=false is the default; set explicitly for clarity.
-        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "off".to_string(),
+        );
 
         let server = wiremock::MockServer::start().await;
         // Zero expected requests — the policy gate short-circuits before HTTP.
@@ -3342,6 +3552,7 @@ mod tests {
             true,
             true,
             true,
+            "off".to_string(),
             "cited".to_string(),
         );
 
@@ -3365,7 +3576,15 @@ mod tests {
         let report = fulfill_frame_requests(&cfg, &FrameMock, &http).await;
         assert_eq!(report, FrameFulfillReport::default());
 
-        crate::enterprise_policy::set_sync_streams(true, true, true, true, true, "off".to_string());
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "off".to_string(),
+        );
     }
 }
 // (frame_batch_max tests live with the rest of the ee_sync tests above; this

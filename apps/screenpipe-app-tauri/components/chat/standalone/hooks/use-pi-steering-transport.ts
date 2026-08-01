@@ -102,6 +102,7 @@ export function usePiSteeringTransport(
     void saveConversation(nextRows, {
       refreshHistory: false,
       syncActiveConversation: false,
+      turnState: { isLoading: true, isStreaming: true },
     });
     const sidNow = piSessionIdRef.current;
     if (sidNow) {
@@ -214,6 +215,7 @@ export function usePiSteeringTransport(
         void saveConversation(nextRowsAfterLabels, {
           refreshHistory: false,
           syncActiveConversation: false,
+          turnState: { isLoading: true, isStreaming: true },
         });
         useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterLabels as any);
       }
@@ -251,6 +253,7 @@ export function usePiSteeringTransport(
         void saveConversation(nextRowsAfterAssistant, {
           refreshHistory: false,
           syncActiveConversation: false,
+          turnState: { isLoading: true, isStreaming: true },
         });
         useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterAssistant as any);
       }
@@ -416,6 +419,7 @@ export function usePiSteeringTransport(
       void saveConversation(nextRowsAfterOptimisticAppend, {
         refreshHistory: false,
         syncActiveConversation: false,
+        turnState: { isLoading: true, isStreaming: true },
       });
     }
     const sidNow = piSessionIdRef.current;
@@ -585,6 +589,7 @@ export function usePiSteeringTransport(
         void saveConversation(nextRowsAfterQueuedSteer, {
           refreshHistory: false,
           syncActiveConversation: false,
+          turnState: { isLoading: true, isStreaming: true },
         });
         const sidNow = piSessionIdRef.current;
         if (sidNow) {

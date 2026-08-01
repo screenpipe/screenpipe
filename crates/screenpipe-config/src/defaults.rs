@@ -18,9 +18,9 @@ const PARAKEET_MIN_MACOS_MAJOR: u32 = 26;
 pub enum DeviceTier {
     /// High-end: ≥24 GB RAM and ≥8 cores (safe for parakeet ~2GB)
     High,
-    /// Mid-range: ≥12 GB or (≥8 GB and ≥6 cores)
+    /// Mid-range: ≥12 GB or (>8 GB and ≥6 cores)
     Mid,
-    /// Low-end: <8 GB or <6 cores
+    /// Low-end: hardware below the Mid threshold
     Low,
 }
 
@@ -60,29 +60,47 @@ pub fn classify_tier(ram_gb: u64, cores: u64) -> DeviceTier {
     }
 }
 
+/// Classify detected measurements without turning missing hardware data into a
+/// low-tier result. An ambiguous reading falls back to Mid, while a confirmed
+/// RAM measurement of at most 8 GB is sufficient evidence for Low regardless
+/// of whether CPU topology is available.
+fn classify_detected_tier(ram_gb: Option<u64>, cores: Option<u64>) -> DeviceTier {
+    let ram_gb = ram_gb.filter(|value| *value > 0);
+    let cores = cores.filter(|value| *value > 0);
+
+    match (ram_gb, cores) {
+        (Some(ram_gb), Some(cores)) => classify_tier(ram_gb, cores),
+        (Some(ram_gb), None) if ram_gb <= 8 => DeviceTier::Low,
+        // Missing RAM is always ambiguous because enough memory qualifies a
+        // device for Mid even with a small CPU. Likewise, 9–11 GB needs a CPU
+        // reading to distinguish Mid from Low. Fail closed for the onboarding
+        // intervention by choosing Mid in every ambiguous case.
+        _ => DeviceTier::Mid,
+    }
+}
+
 /// Detect the device tier based on available RAM and CPU cores.
 ///
 /// | Tier | Criteria                              |
 /// |------|---------------------------------------|
 /// | High | ≥24 GB RAM and ≥8 cores               |
-/// | Mid  | ≥12 GB or (≥8 GB and ≥6 cores)        |
-/// | Low  | everything else                        |
+/// | Mid  | ≥12 GB or (>8 GB and ≥6 cores)        |
+/// | Low  | below Mid, with enough data to prove it |
+///
+/// Missing or ambiguous measurements fall back to Mid so callers never treat
+/// a telemetry failure as positive evidence that the device is low-end.
 pub fn detect_tier() -> DeviceTier {
     let mut sys = System::new();
     sys.refresh_memory();
+    sys.refresh_cpu();
 
-    let ram_gb = sys.total_memory() / (1024 * 1024 * 1024);
-    let cores = sys.cpus().len() as u64;
+    let total_memory = sys.total_memory();
+    let ram_gb = (total_memory > 0).then_some(total_memory / (1024 * 1024 * 1024));
+    let cores = (!sys.cpus().is_empty())
+        .then_some(sys.cpus().len() as u64)
+        .or_else(|| sys.physical_core_count().map(|count| count as u64));
 
-    // Re-query CPU count via sysinfo's physical core count if cpus() is empty
-    // (can happen before refresh_cpu)
-    let cores = if cores == 0 {
-        sys.physical_core_count().unwrap_or(1) as u64
-    } else {
-        cores
-    };
-
-    classify_tier(ram_gb, cores)
+    classify_detected_tier(ram_gb, cores)
 }
 
 /// Database configuration tuned per device tier.
@@ -472,10 +490,25 @@ mod tests {
 
     #[test]
     fn classify_zero_ram_or_cores() {
-        // Container edge case: sysinfo returns 0
+        // The pure classifier treats its inputs as actual measurements.
         assert_eq!(classify_tier(0, 0), DeviceTier::Low);
         assert_eq!(classify_tier(0, 16), DeviceTier::Low);
         assert_eq!(classify_tier(32, 0), DeviceTier::Mid); // ≥12 GB → Mid even with 0 cores
+    }
+
+    #[test]
+    fn detected_tier_fails_closed_when_measurements_are_missing() {
+        assert_eq!(classify_detected_tier(None, None), DeviceTier::Mid);
+        assert_eq!(classify_detected_tier(Some(0), Some(0)), DeviceTier::Mid);
+        assert_eq!(classify_detected_tier(None, Some(2)), DeviceTier::Mid);
+        assert_eq!(classify_detected_tier(Some(10), None), DeviceTier::Mid);
+        assert_eq!(classify_detected_tier(Some(32), None), DeviceTier::Mid);
+    }
+
+    #[test]
+    fn detected_tier_accepts_ram_only_when_it_proves_low_tier() {
+        assert_eq!(classify_detected_tier(Some(8), None), DeviceTier::Low);
+        assert_eq!(classify_detected_tier(Some(10), Some(4)), DeviceTier::Low);
     }
 
     #[test]

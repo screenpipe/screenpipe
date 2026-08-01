@@ -24,6 +24,7 @@ use tauri_plugin_notification::NotificationExt;
 use tracing::{debug, error, warn};
 
 use crate::notifications::client;
+use crate::notifications::store::NotificationPriority;
 use crate::store::SettingsStore;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -101,12 +102,13 @@ fn handle_transcript_stall(app: &AppHandle, event: StallEvent) {
         event.meeting_id, event.provider, elapsed
     );
 
-    client::send_typed_with_actions(
+    client::send_typed_with_actions_and_priority(
         "live transcript not flowing",
         format!("audio is still being captured, but the transcript is delayed by {elapsed}s — keep the meeting open while screenpipe retries"),
         "meeting",
         Some(30_000),
         Vec::new(),
+        NotificationPriority::High,
     );
 }
 

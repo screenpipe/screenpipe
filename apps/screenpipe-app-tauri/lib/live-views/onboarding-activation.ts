@@ -8,6 +8,8 @@ export const SELECTED_DASHBOARD_STORAGE_KEY =
   "screenpipe.live-view.selected-dashboard";
 export const ONBOARDING_BRAIN_HANDOFF_EVENT =
   "screenpipe:open-onboarding-live-view";
+export const ONBOARDING_LIVE_VIEW_FOLLOW_UP_EVENT =
+  "screenpipe:onboarding-live-view-follow-up";
 
 const ACTIVATIONS_STORAGE_KEY =
   "screenpipe.live-view.onboarding-activations.v1";
@@ -18,8 +20,7 @@ const LEGACY_HOME_FOCUS_STORAGE_KEY = "screenpipe.home.focus.v1";
 const MAX_STORED_ACTIVATIONS = 12;
 
 export type UserGoalCategory =
-  | Exclude<OnboardingGoalCategory, "custom">
-  | "default";
+  Exclude<OnboardingGoalCategory, "custom"> | "default";
 
 const USER_GOAL_CATEGORIES = new Set<UserGoalCategory>([
   "default",
@@ -41,6 +42,15 @@ export type OnboardingLiveViewActivation = {
   createdAt: string;
   firstResultAt: string | null;
   completedAt: string | null;
+  followUp: OnboardingLiveViewFollowUp | null;
+};
+
+export type OnboardingLiveViewFollowUp = {
+  dueAt: string;
+  status: "scheduled" | "running" | "sent";
+  retryAt: string | null;
+  startedAt: string | null;
+  sentAt: string | null;
 };
 
 type ActivationMap = Record<string, OnboardingLiveViewActivation>;
@@ -66,6 +76,31 @@ function normalizeActivation(
     createdAt: value.createdAt,
     firstResultAt: value.firstResultAt ?? null,
     completedAt: value.completedAt ?? null,
+    followUp: normalizeFollowUp(value.followUp),
+  };
+}
+
+function normalizeFollowUp(value: unknown): OnboardingLiveViewFollowUp | null {
+  if (!value || typeof value !== "object") return null;
+  const followUp = value as Partial<OnboardingLiveViewFollowUp>;
+  if (!followUp.dueAt || Number.isNaN(Date.parse(followUp.dueAt))) return null;
+  const status =
+    followUp.status === "running" ||
+    followUp.status === "sent" ||
+    followUp.status === "scheduled"
+      ? followUp.status
+      : "scheduled";
+  const runningIsStale =
+    status === "running" &&
+    (!followUp.startedAt ||
+      Date.now() - Date.parse(followUp.startedAt) > 10 * 60 * 1_000);
+
+  return {
+    dueAt: followUp.dueAt,
+    status: runningIsStale ? "scheduled" : status,
+    retryAt: runningIsStale ? null : (followUp.retryAt ?? null),
+    startedAt: runningIsStale ? null : (followUp.startedAt ?? null),
+    sentAt: followUp.sentAt ?? null,
   };
 }
 
@@ -197,6 +232,7 @@ export function startOnboardingLiveViewActivation(
   options: {
     goal?: string | null;
     setupStatus?: OnboardingLiveViewActivation["setupStatus"];
+    guideStep?: OnboardingLiveViewActivation["guideStep"];
     resetProgress?: boolean;
   } = {},
 ): OnboardingLiveViewActivation {
@@ -208,9 +244,11 @@ export function startOnboardingLiveViewActivation(
     goal: options.goal ?? existing?.goal ?? null,
     setupStatus: options.setupStatus ?? existing?.setupStatus ?? "building",
     setupError: null,
-    guideStep: options.resetProgress
-      ? "dashboard"
-      : (existing?.guideStep ?? "dashboard"),
+    guideStep:
+      options.guideStep ??
+      (options.resetProgress
+        ? "dashboard"
+        : (existing?.guideStep ?? "dashboard")),
     createdAt:
       options.resetProgress || !existing
         ? new Date().toISOString()
@@ -219,6 +257,7 @@ export function startOnboardingLiveViewActivation(
       ? null
       : (existing?.firstResultAt ?? null),
     completedAt: options.resetProgress ? null : (existing?.completedAt ?? null),
+    followUp: existing?.followUp ?? null,
   };
   activations[viewId] = activation;
   writeActivations(activations);
@@ -230,11 +269,31 @@ export function startOnboardingLiveViewActivation(
 export function markOnboardingLiveViewSetupReady(
   viewId: string,
 ): OnboardingLiveViewActivation | null {
-  return updateActivation(viewId, (current) => ({
+  const activation = updateActivation(viewId, (current) => ({
     ...current,
     setupStatus: "ready",
     setupError: null,
+    followUp: current.followUp ?? {
+      dueAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      status: "scheduled",
+      retryAt: null,
+      startedAt: null,
+      sentAt: null,
+    },
   }));
+  if (activation) dispatchOnboardingLiveViewFollowUp();
+  return activation;
+}
+
+/** Selects an existing view without replaying the first-view product guide. */
+export function selectExistingLiveViewForOnboarding(
+  viewId: string,
+): OnboardingLiveViewActivation | null {
+  startOnboardingLiveViewActivation(viewId, "custom", {
+    setupStatus: "ready",
+    guideStep: "done",
+  });
+  return markOnboardingLiveViewSetupReady(viewId);
 }
 
 export function markOnboardingLiveViewSetupNeedsRetry(
@@ -261,6 +320,10 @@ export function getOnboardingLiveViewActivation(
   return readActivations()[viewId] ?? null;
 }
 
+export function listOnboardingLiveViewActivations(): OnboardingLiveViewActivation[] {
+  return Object.values(readActivations());
+}
+
 function updateActivation(
   viewId: string,
   update: (
@@ -274,6 +337,23 @@ function updateActivation(
   activations[viewId] = next;
   writeActivations(activations);
   return next;
+}
+
+export function updateOnboardingLiveViewFollowUp(
+  viewId: string,
+  update: (current: OnboardingLiveViewFollowUp) => OnboardingLiveViewFollowUp,
+): OnboardingLiveViewActivation | null {
+  const activation = updateActivation(viewId, (current) => {
+    if (!current.followUp) return current;
+    return { ...current, followUp: update(current.followUp) };
+  });
+  if (activation) dispatchOnboardingLiveViewFollowUp();
+  return activation;
+}
+
+function dispatchOnboardingLiveViewFollowUp(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(ONBOARDING_LIVE_VIEW_FOLLOW_UP_EVENT));
 }
 
 export function markOnboardingLiveViewFirstResult(

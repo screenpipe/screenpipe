@@ -1,0 +1,359 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "C:\\Program Files\\Codex\\Codex.exe",
+    "display_name": "Codex",
+    "version": "0.4.12",
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Document",
+      "identifier": "RootWebArea",
+      "text": "app://-/index.html",
+      "value": "app://-/index.html",
+      "description": "document"
+    },
+    {
+      "parent": 0,
+      "role": "Button",
+      "text": "Hide sidebar",
+      "classes": [
+        "border-token-border",
+        "no-drag",
+        "cursor-interaction"
+      ]
+    },
+    {
+      "parent": 0,
+      "role": "Button",
+      "text": "New chat",
+      "classes": [
+        "focus-visible:outline-token-border",
+        "relative"
+      ]
+    },
+    {
+      "parent": 0,
+      "role": "Button",
+      "text": "Pinned",
+      "classes": [
+        "group/section-toggle",
+        "flex",
+        "min-w-0"
+      ]
+    },
+    {
+      "parent": 3,
+      "role": "ListItem",
+      "text": "Refactor billing scripts1mo",
+      "classes": [
+        "after:block",
+        "after:h-px"
+      ]
+    },
+    {
+      "parent": 4,
+      "role": "Button",
+      "text": "Unpin chat Archive chat 1mo",
+      "classes": [
+        "cursor-grab"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Unpin chat",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Archive chat",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 3,
+      "role": "ListItem",
+      "text": "Draft trip checklist2w",
+      "classes": [
+        "after:block",
+        "after:h-px"
+      ]
+    },
+    {
+      "parent": 8,
+      "role": "Button",
+      "text": "Pin chat Archive chat 2w",
+      "classes": [
+        "group",
+        "relative"
+      ]
+    },
+    {
+      "parent": 9,
+      "role": "Button",
+      "text": "Pin chat",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 9,
+      "role": "Button",
+      "text": "Archive chat",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 0,
+      "role": "Button",
+      "text": "Open settings",
+      "identifier": "radix-_r_54_",
+      "classes": [
+        "outline-hidden",
+        "cursor-interaction"
+      ]
+    },
+    {
+      "parent": 12,
+      "role": "Text",
+      "text": "A"
+    },
+    {
+      "parent": 12,
+      "role": "Text",
+      "text": "acme workspace"
+    },
+    {
+      "parent": 0,
+      "role": "Button",
+      "text": "Update",
+      "classes": [
+        "no-drag",
+        "ease-basic",
+        "relative"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "Plan weekend trip"
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Chat actions",
+      "identifier": "radix-_r_4e0_",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Toggle pinned summary",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Edit user message",
+      "classes": [
+        "bg-token-foreground/5",
+        "max-w-[77%]",
+        "min-w-0",
+        "overflow-hidden",
+        "break-words",
+        "rounded-2xl"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "10:57 AM"
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Copy message",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Edit message",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Worked for 1m 12s",
+      "classes": [
+        "text-size-chat",
+        "inline-flex"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "Here is a simple two-day plan for the coast trip."
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "Day one focuses on the drive and a short hike."
+    },
+    {
+      "parent": 15,
+      "role": "ListItem",
+      "text": "Morning: leave by 8 AM and stop at the overlook.",
+      "classes": [
+        "_markdownText_ab1cd_171",
+        "_listItem_ab1cd_335"
+      ]
+    },
+    {
+      "parent": 26,
+      "role": "Text",
+      "text": "Morning"
+    },
+    {
+      "parent": 15,
+      "role": "ListItem",
+      "text": "Afternoon: check in, then walk the harbor loop.",
+      "classes": [
+        "_markdownText_ab1cd_171",
+        "_listItem_ab1cd_335"
+      ]
+    },
+    {
+      "parent": 28,
+      "role": "Text",
+      "text": "Afternoon"
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "Pack light layers because evenings get cold."
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Scheduled task",
+      "classes": [
+        "w-full",
+        "cursor-interaction",
+        "text-left"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Copy",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Good response",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Bad response",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Fork from this point",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "10:59 AM"
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "Ask for follow-up changes"
+    },
+    {
+      "parent": 15,
+      "role": "Button",
+      "text": "Dictate",
+      "classes": [
+        "border-token-border",
+        "no-drag"
+      ]
+    },
+    {
+      "parent": 15,
+      "role": "Text",
+      "text": "No artifacts yet"
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Minimize",
+      "identifier": "view_1",
+      "classes": [
+        "ChromeNodeCaptionButton"
+      ]
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Restore",
+      "identifier": "view_3",
+      "classes": [
+        "ChromeNodeCaptionButton"
+      ]
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Close",
+      "identifier": "view_4",
+      "classes": [
+        "ChromeNodeCaptionButton"
+      ]
+    }
+  ]
+}

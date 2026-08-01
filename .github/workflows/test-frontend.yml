@@ -64,9 +64,10 @@ jobs:
         run: bun run test:vitest
 
       - name: bun:test (Bun-native runner)
-        # 13 of the 27 test files use `import { describe, ... } from "bun:test"`
-        # — vitest can't resolve `bun:test` so they run via `bun test` instead.
-        # Both runners must pass for CI green.
+        # Test files importing from "bun:test" can't run under vitest, so
+        # scripts/run-bun-tests.ts discovers them and runs them via `bun test`
+        # (vitest.config.ts excludes the same discovered set). Both runners
+        # must pass for CI green.
         run: bun run test:bun
 
       - name: Biome lint (root config)

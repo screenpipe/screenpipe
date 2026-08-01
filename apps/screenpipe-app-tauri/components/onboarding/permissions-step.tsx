@@ -12,6 +12,7 @@ import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
 interface PermissionsStepProps {
   handleNextSlide: () => void;
@@ -316,6 +317,7 @@ export default function PermissionsStep({
         time_spent_ms: Date.now() - mountTimeRef.current,
         statuses,
       });
+      onboardingFunnel.permissionsGranted();
       // Small delay so the user sees the last checkmark animate
       setTimeout(() => handleNextSlide(), 600);
     }

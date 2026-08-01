@@ -11,8 +11,10 @@
 use serde_json::json;
 use tracing::warn;
 
+use super::store::NotificationPriority;
+
 pub fn send(title: impl Into<String>, body: impl Into<String>) {
-    send_typed(title, body, "system", None);
+    send_typed_with_priority(title, body, "system", None, NotificationPriority::High);
 }
 
 pub fn send_typed(
@@ -21,7 +23,30 @@ pub fn send_typed(
     notification_type: &'static str,
     auto_dismiss_ms: Option<u64>,
 ) {
-    send_typed_with_actions(title, body, notification_type, auto_dismiss_ms, Vec::new());
+    send_typed_with_priority(
+        title,
+        body,
+        notification_type,
+        auto_dismiss_ms,
+        NotificationPriority::Normal,
+    );
+}
+
+pub fn send_typed_with_priority(
+    title: impl Into<String>,
+    body: impl Into<String>,
+    notification_type: &'static str,
+    auto_dismiss_ms: Option<u64>,
+    priority: NotificationPriority,
+) {
+    send_typed_with_actions_and_priority(
+        title,
+        body,
+        notification_type,
+        auto_dismiss_ms,
+        Vec::new(),
+        priority,
+    );
 }
 
 pub fn send_typed_with_actions(
@@ -31,19 +56,42 @@ pub fn send_typed_with_actions(
     auto_dismiss_ms: Option<u64>,
     actions: Vec<serde_json::Value>,
 ) {
+    send_typed_with_actions_and_priority(
+        title,
+        body,
+        notification_type,
+        auto_dismiss_ms,
+        actions,
+        NotificationPriority::Normal,
+    );
+}
+
+pub fn send_typed_with_actions_and_priority(
+    title: impl Into<String>,
+    body: impl Into<String>,
+    notification_type: &'static str,
+    auto_dismiss_ms: Option<u64>,
+    actions: Vec<serde_json::Value>,
+    priority: NotificationPriority,
+) {
     let mut payload = json!({
         "title": title.into(),
         "body": body.into(),
         "type": notification_type,
         "actions": actions,
+        "priority": priority,
     });
     if let Some(ms) = auto_dismiss_ms {
         payload["autoDismissMs"] = json!(ms);
     }
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::new();
+        let port = std::env::var("SCREENPIPE_FOCUS_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(11435);
         if let Err(e) = client
-            .post("http://127.0.0.1:11435/notify")
+            .post(format!("http://127.0.0.1:{port}/notify"))
             .json(&payload)
             .send()
             .await

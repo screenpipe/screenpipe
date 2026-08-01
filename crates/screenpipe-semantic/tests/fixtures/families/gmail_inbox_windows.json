@@ -1,0 +1,255 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "chrome.exe",
+    "display_name": "Chrome",
+    "version": null,
+    "browser_url": "https://mail.google.com/mail/u/0/#inbox"
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Minimize",
+      "description": "button",
+      "identifier": "view_1",
+      "classes": [
+        "WindowsCaptionButton"
+      ]
+    },
+    {
+      "parent": 0,
+      "role": "TabItem",
+      "text": "Inbox (2) - alex@example.com - Gmail",
+      "description": "tab",
+      "identifier": "view_20",
+      "classes": [
+        "Tab"
+      ]
+    },
+    {
+      "parent": 1,
+      "role": "Edit",
+      "text": "mail.google.com/mail/u/0/#inbox",
+      "description": "edit",
+      "classes": [
+        "OmniboxViewViews"
+      ]
+    },
+    {
+      "parent": 2,
+      "role": "Text",
+      "text": "Primary",
+      "description": "heading",
+      "classes": [
+        "aRz",
+        "J-KU"
+      ]
+    },
+    {
+      "parent": 3,
+      "role": "DataItem",
+      "text": "unread, Alex Rivera , Quarterly metrics review , 9:14 AM , Hi team, the Q3 dashboard numbers are ready for your review.",
+      "description": "row",
+      "identifier": ":r1",
+      "classes": [
+        "zA",
+        "zE",
+        "s00Hgd"
+      ]
+    },
+    {
+      "parent": 4,
+      "role": "DataItem",
+      "text": "unread, Alex Rivera , Quarterly metrics review , 9:14 AM , Hi team, the Q3 dashboard numbers are ready for your review.",
+      "description": "item",
+      "identifier": ":r1c",
+      "classes": [
+        "oZ-x3",
+        "xY"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "CheckBox",
+      "text": "unread, Alex Rivera , Quarterly metrics review , 9:14 AM , Hi team, the Q3 dashboard numbers are ready for your review.",
+      "description": "check box",
+      "identifier": ":r1d",
+      "classes": [
+        "oZ-jc",
+        "T-Jo",
+        "J-J5-Ji"
+      ]
+    },
+    {
+      "parent": 4,
+      "role": "DataItem",
+      "text": "Not starred",
+      "description": "item",
+      "classes": [
+        "apU",
+        "xY"
+      ]
+    },
+    {
+      "parent": 7,
+      "role": "Button",
+      "text": "Not starred",
+      "description": "button",
+      "identifier": ":r1e",
+      "classes": [
+        "aXw",
+        "T-KT"
+      ]
+    },
+    {
+      "parent": 4,
+      "role": "DataItem",
+      "text": "Not important",
+      "description": "item",
+      "classes": [
+        "WA",
+        "xY"
+      ]
+    },
+    {
+      "parent": 4,
+      "role": "DataItem",
+      "text": "Alex Rivera",
+      "description": "item",
+      "classes": [
+        "yX",
+        "xY",
+        "ulKHrd"
+      ]
+    },
+    {
+      "parent": 4,
+      "role": "DataItem",
+      "text": "Quarterly metrics review  -  Hi team, the Q3 dashboard numbers are ready for your review.",
+      "description": "item",
+      "identifier": ":r1s",
+      "classes": [
+        "xY",
+        "a4W"
+      ]
+    },
+    {
+      "parent": 11,
+      "role": "Hyperlink",
+      "text": "Quarterly metrics review  -  Hi team, the Q3 dashboard numbers are ready for your review.",
+      "description": "link",
+      "classes": [
+        "xS"
+      ]
+    },
+    {
+      "parent": 4,
+      "role": "DataItem",
+      "text": "Mon, Jul 27, 2026, 9:14 AM",
+      "description": "item",
+      "classes": [
+        "xW",
+        "xY"
+      ]
+    },
+    {
+      "parent": 3,
+      "role": "DataItem",
+      "text": "unread, Priya Shah , Lunch on Thursday? , 8:02 AM , Want to try the new ramen place near the office?",
+      "description": "row",
+      "identifier": ":r2",
+      "classes": [
+        "zA",
+        "zE",
+        "s00Hgd"
+      ]
+    },
+    {
+      "parent": 14,
+      "role": "DataItem",
+      "text": "Priya Shah",
+      "description": "item",
+      "classes": [
+        "yX",
+        "xY"
+      ]
+    },
+    {
+      "parent": 14,
+      "role": "DataItem",
+      "text": "Lunch on Thursday?  -  Want to try the new ramen place near the office?",
+      "description": "item",
+      "identifier": ":r2s",
+      "classes": [
+        "xY",
+        "a4W"
+      ]
+    },
+    {
+      "parent": 14,
+      "role": "DataItem",
+      "text": "Mon, Jul 27, 2026, 8:02 AM",
+      "description": "item",
+      "classes": [
+        "xW",
+        "xY"
+      ]
+    },
+    {
+      "parent": 3,
+      "role": "DataItem",
+      "text": "Sam Okafor , Invoice 0042 paid , Jul 26 , Payment received, receipt attached for your records.",
+      "description": "row",
+      "identifier": ":r3",
+      "classes": [
+        "zA",
+        "yO"
+      ]
+    },
+    {
+      "parent": 18,
+      "role": "DataItem",
+      "text": "Sam Okafor",
+      "description": "item",
+      "classes": [
+        "yX",
+        "xY"
+      ]
+    },
+    {
+      "parent": 18,
+      "role": "DataItem",
+      "text": "Invoice 0042 paid  -  Payment received, receipt attached for your records.",
+      "description": "item",
+      "identifier": ":r3s",
+      "classes": [
+        "xY",
+        "a4W"
+      ]
+    },
+    {
+      "parent": 18,
+      "role": "DataItem",
+      "text": "Sun, Jul 26, 2026, 4:40 PM",
+      "description": "item",
+      "classes": [
+        "xW",
+        "xY"
+      ]
+    },
+    {
+      "parent": 3,
+      "role": "Button",
+      "text": "Show more messages",
+      "description": "button",
+      "identifier": ":ls",
+      "classes": [
+        "J-J5-Ji",
+        "amH",
+        "J-JN-I"
+      ]
+    }
+  ]
+}

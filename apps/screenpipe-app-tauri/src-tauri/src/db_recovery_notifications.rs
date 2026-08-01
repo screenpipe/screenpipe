@@ -20,6 +20,7 @@ use futures::StreamExt;
 use tauri::AppHandle;
 
 use crate::notifications::client;
+use crate::notifications::store::NotificationPriority;
 use crate::store::SettingsStore;
 use screenpipe_events::{DbRecoveryEvent, DbRecoveryState};
 
@@ -61,7 +62,7 @@ fn notify(app: &AppHandle, state: DbRecoveryState) {
         ),
     };
 
-    client::send_typed(title, body, "system", None);
+    client::send_typed_with_priority(title, body, "system", None, NotificationPriority::High);
 }
 
 fn pref_enabled(app: &AppHandle, key: &str) -> bool {

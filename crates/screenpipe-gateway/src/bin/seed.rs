@@ -139,12 +139,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui: 1,
             snapshots: 0,
             memories: 1,
+            feedback: 0,
         };
         let cursors = DirectUploadCursors {
             last_frame_ts: Some(format!("2026-07-22T{:02}:05:00Z", device.hour)),
             last_audio_ts: Some(format!("2026-07-22T{:02}:02:00Z", device.hour)),
             last_ui_ts: Some(format!("2026-07-22T{:02}:03:00Z", device.hour)),
             last_memory_ts: Some(format!("2026-07-22T{:02}:08:00Z", device.hour)),
+            last_feedback_ts: None,
         };
         let sha = {
             use sha2::{Digest, Sha256};

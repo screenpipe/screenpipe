@@ -151,6 +151,8 @@ pub enum ProxyAuth {
         username_key: &'static str,
         password_key: &'static str,
     },
+    /// HTTP Basic Auth using one credential field as the username and an empty password.
+    BasicAuthEmptyPassword { username_key: &'static str },
     /// No auth needed (e.g. webhook-based integrations where the URL is the secret).
     None,
 }

@@ -12,9 +12,150 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { getModelCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+import type { Env } from '../types';
+import { getCostReservationMicroUsd, getModelCost, getNonStreamSettlementCost, getStreamModelCost, getStreamSettlementCost, logCost, isZeroCostModel, inferProvider, isFrontierModel } from '../services/cost-tracker';
+import { getGlobalDailyCostCap, getGlobalHourlyCostCap, getPlanDailyCostCap, getPlanMonthlyCostCap, getPlanRequestCostCap } from '../services/hosted-ai-cost-controls';
+import { TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
+
+describe('hosted AI plan budget math', () => {
+	it('reads every operational ceiling from private bindings', () => {
+		expect(getPlanDailyCostCap('free', TEST_PRIVATE_COST_CONTROLS)).toBe(101);
+		expect(getPlanMonthlyCostCap('basic', TEST_PRIVATE_COST_CONTROLS)).toBe(202);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS)).toBe(53);
+		expect(getPlanMonthlyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(301);
+		expect(getPlanDailyCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(104);
+		expect(getPlanRequestCostCap('business', TEST_PRIVATE_COST_CONTROLS, true)).toBe(54);
+		expect(getGlobalHourlyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(401);
+		expect(getGlobalDailyCostCap(TEST_PRIVATE_COST_CONTROLS)).toBe(402);
+	});
+
+	it('fails closed instead of using a public fallback', () => {
+		expect(() => getPlanDailyCostCap('free', {} as Env)).toThrow('MAX_DAILY_FREE_TEXT_COST');
+		expect(() => getPlanMonthlyCostCap('basic', {
+			...TEST_PRIVATE_COST_CONTROLS,
+			MAX_MONTHLY_BASIC_TEXT_COST: 'invalid',
+		})).toThrow('MAX_MONTHLY_BASIC_TEXT_COST');
+		expect(() => getGlobalDailyCostCap({
+			...TEST_PRIVATE_COST_CONTROLS,
+			MAX_GLOBAL_DAILY_TEXT_COST: undefined,
+		} as Env)).toThrow('MAX_GLOBAL_DAILY_TEXT_COST');
+	});
+});
+
+describe('getCostReservationMicroUsd', () => {
+	it('prices the default Sonnet hold as a worst-case cache write', () => {
+		expect(getCostReservationMicroUsd('claude-sonnet-5')).toBe(121_440);
+	});
+
+	it('scales with large request bodies and requested output', () => {
+		expect(getCostReservationMicroUsd('claude-sonnet-5', {
+			inputTokens: 200_000,
+			maxOutputTokens: 16_000,
+		})).toBe(990_000);
+	});
+
+	it('uses the expensive routed candidate for auto or unknown models', () => {
+		expect(getCostReservationMicroUsd('auto')).toBe(222_880);
+		expect(getCostReservationMicroUsd('future-priced-model')).toBe(222_880);
+	});
+
+	it('keeps cheap priced work bounded and zero-cost work free', () => {
+		expect(getCostReservationMicroUsd('gemma4-31b')).toBe(50_000);
+		expect(getCostReservationMicroUsd('glm-5')).toBe(0);
+	});
+});
+
+describe('getStreamSettlementCost', () => {
+	const incompleteUsage = {
+		input_tokens: 0,
+		output_tokens: 0,
+		cache_read_tokens: 0,
+		cache_creation_tokens: 0,
+		usage_complete: false,
+	};
+
+	it('charges at least the reservation when terminal usage is missing', () => {
+		const reserved = getCostReservationMicroUsd('claude-fable-5');
+		expect(getStreamSettlementCost('claude-fable-5', incompleteUsage, reserved))
+			.toBe(reserved / 1_000_000);
+	});
+
+	it('uses terminal provider usage instead of the reservation', () => {
+		const usage = {
+			input_tokens: 1_000,
+			output_tokens: 10,
+			cache_read_tokens: 0,
+			cache_creation_tokens: 0,
+			usage_complete: true,
+		};
+		expect(getStreamSettlementCost('claude-fable-5', usage, 900_000))
+			.toBe(getModelCost('claude-fable-5', 1_000, 10));
+	});
+
+	it('never discards a partial observation larger than the reservation', () => {
+		const usage = {
+			...incompleteUsage,
+			input_tokens: 200_000,
+		};
+		expect(getStreamSettlementCost('claude-fable-5', usage, 50_000))
+			.toBe(getStreamModelCost('claude-fable-5', 200_000, 0));
+	});
+});
+
+describe('getNonStreamSettlementCost', () => {
+	it('uses complete provider usage even when it is below the reservation', () => {
+		const expected = getModelCost('claude-fable-5', 1_000, 10);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			1_000,
+			10,
+			{},
+			900_000,
+		)).toBe(expected);
+	});
+
+	it('charges at least the reservation when either terminal counter is absent', () => {
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			undefined,
+			10,
+			{},
+			900_000,
+		)).toBe(0.9);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			1_000,
+			null,
+			{},
+			900_000,
+		)).toBe(0.9);
+	});
+
+	it('keeps a partial observation when it exceeds the reservation', () => {
+		const observed = getModelCost('claude-fable-5', 200_000, null);
+		expect(getNonStreamSettlementCost(
+			'claude-fable-5',
+			200_000,
+			null,
+			{},
+			50_000,
+		)).toBe(observed);
+	});
+});
 
 describe('getModelCost — cache-aware pricing', () => {
+	it('uses a conservative estimate when a cancelled stream has partial usage', () => {
+		expect(getStreamModelCost('gpt-5.6-sol', 321, 0)).toBe(
+			getModelCost('gpt-5.6-sol', null, null),
+		);
+		expect(getStreamModelCost('gpt-5.6-sol', 0, 0)).toBeGreaterThan(0);
+		expect(getStreamModelCost('gpt-5.6-sol', 100_000, 0)).toBe(
+			getModelCost('gpt-5.6-sol', 100_000, 500),
+		);
+		expect(getStreamModelCost('gpt-5.6-sol', 100_000, 0)).toBeGreaterThan(
+			getModelCost('gpt-5.6-sol', null, null),
+		);
+	});
 	it('uses the exact Opus 5 standard price and cache rates', () => {
 		const uncached = getModelCost('claude-opus-5', 100_000, 1_000);
 		const cached = getModelCost('claude-opus-5', 100_000, 1_000, {
@@ -155,8 +296,8 @@ describe('getModelCost — cache-aware pricing', () => {
 	});
 });
 
-describe('logCost — cache columns with legacy fallback', () => {
-	function makeMockDB(shouldFail: (sql: string) => boolean = () => false) {
+describe('logCost — bounded daily aggregation', () => {
+	function makeMockDB() {
 		const calls: Array<{ sql: string; bindings: any[] }> = [];
 		const db = {
 			prepare(sql: string) {
@@ -165,7 +306,6 @@ describe('logCost — cache columns with legacy fallback', () => {
 						return {
 							async run() {
 								calls.push({ sql, bindings });
-								if (shouldFail(sql)) throw new Error(`no such column (simulated): ${sql.slice(0, 40)}`);
 								return { success: true };
 							},
 						};
@@ -175,8 +315,6 @@ describe('logCost — cache columns with legacy fallback', () => {
 		};
 		return { db, calls };
 	}
-	const failCache = (sql: string) => sql.includes('cache_read_tokens');
-	const failRouterCols = (sql: string) => sql.includes('latency_ms');
 
 	const entry = {
 		device_id: 'dev1',
@@ -192,54 +330,51 @@ describe('logCost — cache columns with legacy fallback', () => {
 		stream: true,
 	};
 
-	// logCost also bumps the usage-table daily-cost accumulator (migration
-	// 0006) before the cost_log insert — assertions below filter to the
-	// cost_log inserts they're actually about (accumulator behavior is
-	// covered in daily-cost.unit.test.ts).
-	const costLogInserts = (calls: Array<{ sql: string; bindings: any[] }>) =>
-		calls.filter((c) => c.sql.includes('INSERT INTO cost_log'));
+	const costDailyInserts = (calls: Array<{ sql: string; bindings: any[] }>) =>
+		calls.filter((c) => c.sql.includes('INSERT INTO cost_daily'));
 
-	it('writes the full column set (cache + router/latency) when the schema has them', async () => {
+	it('updates the quota accumulator and one aggregate row', async () => {
 		const { db, calls } = makeMockDB();
 		await logCost({ DB: db } as any, { ...entry, latency_ms: 1234, router_tier: 'hard' } as any);
-		const inserts = costLogInserts(calls);
+		expect(calls.filter((call) => call.sql.includes('INSERT INTO usage')).length).toBe(4);
+		const inserts = costDailyInserts(calls);
 		expect(inserts.length).toBe(1);
-		expect(inserts[0].sql).toContain('cache_read_tokens');
-		expect(inserts[0].sql).toContain('latency_ms');
-		expect(inserts[0].sql).toContain('router_tier');
-		expect(inserts[0].bindings).toContain(800);   // cache_read
-		expect(inserts[0].bindings).toContain(1234);  // latency_ms
-		expect(inserts[0].bindings).toContain('hard'); // router_tier
+		expect(inserts[0].sql).toContain('ON CONFLICT');
+		expect(inserts[0].bindings[3]).toBe('claude-sonnet-4-6');
+		expect(inserts[0].bindings[9]).toBe(800);
+		expect(inserts[0].bindings[12]).toBe(1234);
+		expect(inserts[0].bindings[13]).toBe(1);
 	});
 
-	it('falls back to cache-only insert when migration 0007 is not applied (router cols missing)', async () => {
-		const { db, calls } = makeMockDB(failRouterCols);
-		await logCost({ DB: db } as any, { ...entry, latency_ms: 99, router_tier: 'control' } as any);
-		const inserts = costLogInserts(calls);
-		expect(inserts.length).toBe(2);                       // router-insert fails → cache-insert
-		expect(inserts[1].sql).toContain('cache_read_tokens');
-		expect(inserts[1].sql).not.toContain('latency_ms');
-		expect(inserts[1].bindings).toContain(800);           // cache row still lands
-	});
-
-	it('falls back to legacy columns when migration 0004 is not applied (no dropped rows)', async () => {
-		const { db, calls } = makeMockDB(failCache);
-		await logCost({ DB: db } as any, entry as any);
-		const inserts = costLogInserts(calls);
-		expect(inserts.length).toBe(3);                       // router → cache → legacy
-		expect(inserts[2].sql).not.toContain('cache_read_tokens');
-		// the row still landed with token + cost data
-		expect(inserts[2].bindings).toContain(1000);
-		expect(inserts[2].bindings).toContain(0.001);
-	});
-
-	it('omitted cache fields bind as null (pre-cache callers unchanged)', async () => {
+	it('does not persist request-level user or device identifiers', async () => {
 		const { db, calls } = makeMockDB();
-		const { cache_read_tokens, cache_creation_tokens, ...legacyEntry } = entry;
-		await logCost({ DB: db } as any, legacyEntry as any);
-		const inserts = costLogInserts(calls);
+		await logCost({ DB: db } as any, { ...entry, user_id: 'user-private' } as any);
+		const inserts = costDailyInserts(calls);
 		expect(inserts.length).toBe(1);
-		expect(inserts[0].bindings[7]).toBeNull();
-		expect(inserts[0].bindings[8]).toBeNull();
+		expect(inserts[0].sql).not.toContain('device_id');
+		expect(inserts[0].sql).not.toContain('user_id');
+		expect(inserts[0].bindings).not.toContain('dev1');
+		expect(inserts[0].bindings).not.toContain('user-private');
+	});
+
+	it('coalesces unknown and oversized dimensions to bounded labels', async () => {
+		const { db, calls } = makeMockDB();
+		await logCost({ DB: db } as any, {
+			...entry,
+			model: 'attacker-controlled-model',
+			endpoint: 'x'.repeat(129),
+			latency_ms: Number.NaN,
+		} as any);
+		const insert = costDailyInserts(calls)[0];
+		expect(insert.bindings[3]).toBe('unknown');
+		expect(insert.bindings[4]).toBe('unknown');
+		expect(insert.bindings[12]).toBe(0);
+		expect(insert.bindings[13]).toBe(0);
+	});
+
+	it('keeps Deepgram Nova traffic distinct without accepting arbitrary labels', async () => {
+		const { db, calls } = makeMockDB();
+		await logCost({ DB: db } as any, { ...entry, model: 'nova-3-general' } as any);
+		expect(costDailyInserts(calls)[0].bindings[3]).toBe('nova-3');
 	});
 });

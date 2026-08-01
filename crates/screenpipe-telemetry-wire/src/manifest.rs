@@ -36,6 +36,8 @@ pub struct DirectUploadRecordCounts {
     pub snapshots: usize,
     #[serde(default)]
     pub memories: usize,
+    #[serde(default)]
+    pub feedback: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -45,6 +47,8 @@ pub struct DirectUploadCursors {
     pub last_ui_ts: Option<String>,
     #[serde(default)]
     pub last_memory_ts: Option<String>,
+    #[serde(default)]
+    pub last_feedback_ts: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -106,12 +110,14 @@ mod tests {
                 ui: 0,
                 snapshots: 0,
                 memories: 0,
+                feedback: 0,
             },
             DirectUploadCursors {
                 last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
                 last_audio_ts: None,
                 last_ui_ts: None,
                 last_memory_ts: None,
+                last_feedback_ts: None,
             },
         )
     }

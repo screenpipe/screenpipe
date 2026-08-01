@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   loadUser: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
   state: { isSettingsLoaded: true, user: null as any },
+  enterpriseResolutionError: false,
   enterprise: {
     isManagedDeployment: false,
     isManagedDeploymentResolved: true,
@@ -65,6 +66,7 @@ vi.mock("@/lib/hooks/use-managed-policy", () => ({
   useManagedPolicy: () => ({
     isManagedDeployment: mocks.enterprise.isManagedDeployment,
     isManagedDeploymentResolved: mocks.enterprise.isManagedDeploymentResolved,
+    managedDeploymentResolutionError: mocks.enterpriseResolutionError,
     authenticationState: mocks.enterprise.authenticationState,
     authenticationError: mocks.enterprise.authenticationError,
     isManagedAuthenticated: mocks.enterprise.isManagedAuthenticated,
@@ -126,6 +128,7 @@ describe("AppEntitlementGate", () => {
     vi.stubEnv("TAURI_ENV_DEBUG", "false");
     vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_DEV_BILLING_BYPASS", "false");
     mocks.state = { isSettingsLoaded: true, user: null };
+    mocks.enterpriseResolutionError = false;
     mocks.windowLabel = "home";
     mocks.enterprise = {
       isManagedDeployment: false,
@@ -174,6 +177,19 @@ describe("AppEntitlementGate", () => {
     mocks.enterprise.isManagedDeploymentResolved = true;
     rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
     await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
+  });
+
+  it("surfaces a recoverable error when build detection cannot finish", () => {
+    mocks.enterprise.isManagedDeploymentResolved = false;
+    mocks.enterpriseResolutionError = true;
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByText(/couldn't check access/i)).toBeInTheDocument();
+    expect(screen.getByText(/retry automatically/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /reload and retry/i }),
+    ).toBeInTheDocument();
   });
 
   it("keeps recording while enterprise authentication is still checking", async () => {

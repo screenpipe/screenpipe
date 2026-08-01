@@ -30,6 +30,7 @@ import {
   waitForLocalApi,
   type LocalApiConfig,
 } from "../helpers/api-utils.js";
+import { invokeOrThrow } from "../helpers/tauri.js";
 
 const seedFlags = E2E_SEED_FLAGS.split(",").map((s) => s.trim().toLowerCase());
 const recordingDisabled = seedFlags.includes("no-recording");
@@ -37,6 +38,12 @@ const canRun = process.platform === "win32" && !recordingDisabled;
 const eventTriggerCaptureEnabled = seedFlags.includes("event-trigger-capture");
 const canRunEventTriggerCapture = canRun && eventTriggerCaptureEnabled;
 const keyboardDbCaptureEnabled = seedFlags.includes("keyboard-db-capture");
+const FOCUS_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? "11436");
+
+type NotificationHistoryEntry = {
+  title?: string;
+  body?: string;
+};
 
 type HealthBody = {
   status?: string;
@@ -761,6 +768,13 @@ async function openTimeline(): Promise<void> {
   await timelineSection.waitForExist({ timeout: t(20_000) });
 }
 
+async function readNotificationHistory(): Promise<NotificationHistoryEntry[]> {
+  const result = await fetchJson(`http://127.0.0.1:${FOCUS_PORT}/notifications`);
+  return Array.isArray(result.body)
+    ? (result.body as NotificationHistoryEntry[])
+    : [];
+}
+
 describe("Windows core recording pipeline", function () {
   this.timeout(180_000);
   this.retries(0);
@@ -1098,5 +1112,74 @@ describe("Windows core recording pipeline", function () {
 
     const scrubScreenshot = await saveScreenshot("windows-core-recording-timeline-scrub");
     expect(existsSync(scrubScreenshot)).toBe(true);
+  });
+
+  it("stops a real capture session on low disk while keeping search available", async function () {
+    if (!canRun || !cfg) this.skip();
+    const activeCfg = cfg;
+
+    // This assertion is deliberately not frame-dependent: even hosted runners
+    // without capturable desktop pixels must have constructed the real
+    // CaptureSession in this recording-enabled lane.
+    expect(
+      await invokeOrThrow<boolean>("e2e_capture_session_running"),
+    ).toBe(true);
+    const initialLowDiskNotifications = (await readNotificationHistory()).filter(
+      (entry) => entry.title === "recording stopped — disk almost full",
+    ).length;
+
+    try {
+      await invokeOrThrow("e2e_set_low_disk_guard_enabled", { enabled: true });
+      await invokeOrThrow("e2e_set_notification_master_enabled", {
+        enabled: false,
+      });
+
+      expect(
+        await invokeOrThrow<string>("e2e_handle_disk_space_low", {
+          availableBytes: 1024 * 1024 * 1024,
+        }),
+      ).toBe("capture_stopped");
+      expect(
+        await invokeOrThrow<boolean>("e2e_capture_session_running"),
+      ).toBe(false);
+      expect(await invokeOrThrow<boolean>("is_capture_paused")).toBe(true);
+
+      await browser.waitUntil(
+        async () =>
+          (await readNotificationHistory()).filter(
+            (entry) => entry.title === "recording stopped — disk almost full",
+          ).length > initialLowDiskNotifications,
+        {
+          timeout: t(15_000),
+          interval: 250,
+          timeoutMsg:
+            "critical low-disk notification was not persisted with notifications disabled",
+        },
+      );
+
+      const health = await requireHealthyLocalApi(activeCfg);
+      expect(typeof health.status).toBe("string");
+      await browser.waitUntil(
+        async () => {
+          const search = await fetchJson(
+            apiUrl(activeCfg, "/search?limit=1&content_type=ocr"),
+            authHeaders(activeCfg.key),
+          );
+          return search.ok && typeof search.body === "object" && search.body !== null
+            ? Object.hasOwn(search.body, "data")
+            : false;
+        },
+        {
+          timeout: t(30_000),
+          interval: 500,
+          timeoutMsg: "authenticated search did not stay available after capture stopped",
+        },
+      );
+    } finally {
+      await invokeOrThrow("e2e_set_low_disk_guard_enabled", { enabled: false });
+      await invokeOrThrow("e2e_set_notification_master_enabled", {
+        enabled: true,
+      });
+    }
   });
 });

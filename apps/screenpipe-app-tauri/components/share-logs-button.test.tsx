@@ -11,6 +11,7 @@ import { ShareLogsButton, withTimeout } from "./share-logs-button";
 const {
   toastMock,
   commandsMock,
+  feedbackEventHandlers,
   loadAllConversationsMock,
   fsMock,
   openFileDialogMock,
@@ -19,11 +20,9 @@ const {
 } = vi.hoisted(() => ({
   toastMock: vi.fn(),
   commandsMock: {
-    getLogFiles: vi.fn(),
-    readLogTail: vi.fn(),
-    redactPiiForFeedback: vi.fn(),
-    uploadFileToS3: vi.fn(),
+    startFeedbackUpload: vi.fn(),
   },
+  feedbackEventHandlers: new Set<(event: { payload: any }) => void>(),
   loadAllConversationsMock: vi.fn(),
   fsMock: {
     readTextFile: vi.fn(),
@@ -43,6 +42,12 @@ vi.mock("./ui/use-toast", () => ({
   useToast: () => ({ toast: toastMock }),
 }));
 vi.mock("@/lib/utils/tauri", () => ({ commands: commandsMock }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (_event: string, handler: (event: { payload: any }) => void) => {
+    feedbackEventHandlers.add(handler);
+    return () => feedbackEventHandlers.delete(handler);
+  }),
+}));
 vi.mock("@tauri-apps/plugin-fs", () => fsMock);
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openFileDialogMock }));
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -108,82 +113,36 @@ function stubImagePipeline() {
   );
 }
 
-// The video PUT goes through XMLHttpRequest for real upload progress.
-class FakeXHR {
-  static requests: {
-    method: string;
-    url: string;
-    headers: Record<string, string>;
-    body: unknown;
-  }[] = [];
-  method = "";
-  url = "";
-  headers: Record<string, string> = {};
-  status = 200;
-  upload: { onprogress: ((e: unknown) => void) | null } = { onprogress: null };
-  onload: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  open(method: string, url: string) {
-    this.method = method;
-    this.url = url;
-  }
-  setRequestHeader(key: string, value: string) {
-    this.headers[key] = value;
-  }
-  send(body: unknown) {
-    FakeXHR.requests.push({
-      method: this.method,
-      url: this.url,
-      headers: this.headers,
-      body,
-    });
-    this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 });
-    setTimeout(() => this.onload?.(), 0);
-  }
-}
-
-// Fake server for sendLogs. `videoPath` lets tests simulate an old server
-// that ignores video_ext and always provisions a .mp4 key.
-function stubServer({ videoPath }: { videoPath: string }) {
-  const calls: { url: string; init?: RequestInit }[] = [];
-  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    calls.push({ url, init });
-    if (url.endsWith("/api/logs")) {
-      return {
-        ok: true,
-        json: async () => ({
-          data: {
-            signedUrl: "https://storage.test/log",
-            path: "logs/machine/m1/t.log",
-            signedUrlScreenshot: "https://storage.test/screenshot",
-            signedUrlVideo: "https://storage.test/video",
-            screenshotPath: "logs/machine/m1/t_screenshot.png",
-            videoPath,
-          },
-        }),
-      };
-    }
-    if (url.endsWith("/api/logs/confirm")) {
-      return {
-        ok: true,
-        json: async () => ({ data: { id: 42, follow_up: "discord" } }),
-      };
-    }
-    return { ok: true, json: async () => ({}) };
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, calls };
-}
-
 const dropZone = () => screen.getByTestId("feedback-form");
 const sendButton = () =>
   screen.getByRole("button", { name: /send logs & feedback/i });
 
+async function emitFeedbackCompleted(payload: {
+  jobId: string;
+  status: "sent" | "failed";
+  message: string;
+  supportId?: string | null;
+  screenshotUploaded?: boolean;
+  videoUploaded?: boolean;
+}) {
+  await act(async () => {
+    for (const handler of feedbackEventHandlers) {
+      handler({
+        payload: {
+          supportId: null,
+          screenshotUploaded: false,
+          videoUploaded: false,
+          ...payload,
+        },
+      });
+    }
+  });
+}
+
 describe("ShareLogsButton attachments", () => {
   beforeEach(() => {
     settingsMockRef.current = { analyticsId: "test-analytics" };
-    FakeXHR.requests = [];
-    vi.stubGlobal("XMLHttpRequest", FakeXHR);
+    feedbackEventHandlers.clear();
     dragDropHandlerRef.current = null;
     // jsdom has no layout, so offsetParent is always null — the component uses
     // it as a visibility guard for Tauri drops; make it truthy for tests.
@@ -197,26 +156,20 @@ describe("ShareLogsButton attachments", () => {
     fsMock.readFile.mockResolvedValue(new Uint8Array([1, 2, 3]));
     fsMock.stat.mockResolvedValue({ size: 3 });
     loadAllConversationsMock.mockResolvedValue([]);
-    commandsMock.getLogFiles.mockResolvedValue({ status: "ok", data: [] });
-    commandsMock.readLogTail.mockResolvedValue({ status: "ok", data: "" });
-    commandsMock.redactPiiForFeedback.mockResolvedValue({
-      status: "ok",
-      data: "redacted",
-    });
-    commandsMock.uploadFileToS3.mockResolvedValue({
-      status: "ok",
-      data: true,
-    });
+    commandsMock.startFeedbackUpload.mockImplementation(
+      async (request: { jobId: string }) => ({
+        status: "ok",
+        data: request.jobId,
+      }),
+    );
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     toastMock.mockReset();
-    commandsMock.getLogFiles.mockReset();
-    commandsMock.readLogTail.mockReset();
-    commandsMock.redactPiiForFeedback.mockReset();
-    commandsMock.uploadFileToS3.mockReset();
+    commandsMock.startFeedbackUpload.mockReset();
+    feedbackEventHandlers.clear();
   });
 
   it("attaches a dropped png and shows name, size and remove control", async () => {
@@ -468,10 +421,7 @@ describe("ShareLogsButton attachments", () => {
     expect(screen.queryByTestId("video-attachment")).toBeNull();
   });
 
-  it("uploads a dropped mp4 with the right content type and confirms video_url", async () => {
-    const { calls } = stubServer({
-      videoPath: "logs/machine/m1/t_video.mp4",
-    });
+  it("hands a dropped mp4 to the Rust background job", async () => {
     const onComplete = vi.fn();
     render(<ShareLogsButton onComplete={onComplete} />);
 
@@ -480,37 +430,25 @@ describe("ShareLogsButton attachments", () => {
 
     fireEvent.click(sendButton());
 
-    await waitFor(() =>
-      expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "feedback sent" }),
-      ),
-    );
-
-    const provision = calls.find((c) => c.url.endsWith("/api/logs"));
-    expect(JSON.parse(provision!.init!.body as string)).toMatchObject({
-      video_ext: "mp4",
+    await waitFor(() => expect(commandsMock.startFeedbackUpload).toHaveBeenCalled());
+    const request = commandsMock.startFeedbackUpload.mock.calls[0][0];
+    expect(request).toMatchObject({
+      videoExt: "mp4",
+      videoPath: null,
+      screenshotDataUrl: null,
     });
+    expect(request.videoDataUrl).toMatch(/^data:video\/mp4;base64,/);
 
-    const videoPut = FakeXHR.requests.find(
-      (r) => r.url === "https://storage.test/video",
+    await emitFeedbackCompleted({
+      jobId: request.jobId,
+      status: "sent",
+      message: "we posted it to support #42. included: video.",
+      supportId: "42",
+      videoUploaded: true,
+    });
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "feedback sent" }),
     );
-    expect(videoPut).toBeTruthy();
-    expect(videoPut!.method).toBe("PUT");
-    expect(videoPut!.headers["Content-Type"]).toBe("video/mp4");
-
-    const confirm = calls.find((c) => c.url.endsWith("/api/logs/confirm"));
-    expect(JSON.parse(confirm!.init!.body as string).video_url).toBe(
-      "logs/machine/m1/t_video.mp4",
-    );
-
-    const sentToast = toastMock.mock.calls.find(
-      (c) => c[0].title === "feedback sent",
-    );
-    expect(sentToast![0].description).toContain("included: video");
-    // rust upload path is only for the generated last-5-min recording
-    expect(commandsMock.uploadFileToS3).not.toHaveBeenCalled();
-
-    // sent phase: button flips to "sent", status confirms, dialog closes after
     expect(screen.getByRole("button", { name: /sent/i })).toBeDisabled();
     expect(screen.getByTestId("attachment-status")).toHaveTextContent(
       "report sent — attachment included",
@@ -520,10 +458,7 @@ describe("ShareLogsButton attachments", () => {
     });
   });
 
-  it("skips a mov upload when an old server provisions a .mp4 key", async () => {
-    const { calls } = stubServer({
-      videoPath: "logs/machine/m1/t_video.mp4",
-    });
+  it("preserves the mov container in the Rust handoff", async () => {
     render(<ShareLogsButton />);
 
     fireEvent.drop(
@@ -533,58 +468,10 @@ describe("ShareLogsButton attachments", () => {
     await screen.findByTestId("video-attachment");
 
     fireEvent.click(sendButton());
-
-    await waitFor(() =>
-      expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "feedback sent" }),
-      ),
-    );
-
-    // never store quicktime bytes under a .mp4 key
-    expect(
-      FakeXHR.requests.find((r) => r.url === "https://storage.test/video"),
-    ).toBeUndefined();
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "video not attached" }),
-    );
-    const confirm = calls.find((c) => c.url.endsWith("/api/logs/confirm"));
-    expect(
-      JSON.parse(confirm!.init!.body as string).video_url,
-    ).toBeUndefined();
-  });
-
-  it("uploads a mov when the server provisions a .mov key", async () => {
-    const { calls } = stubServer({
-      videoPath: "logs/machine/m1/t_video.mov",
-    });
-    render(<ShareLogsButton />);
-
-    fireEvent.drop(
-      dropZone(),
-      transfer(makeFile("bug-report.mov", "video/quicktime")),
-    );
-    await screen.findByTestId("video-attachment");
-
-    fireEvent.click(sendButton());
-
-    await waitFor(() =>
-      expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "feedback sent" }),
-      ),
-    );
-
-    const provision = calls.find((c) => c.url.endsWith("/api/logs"));
-    expect(JSON.parse(provision!.init!.body as string)).toMatchObject({
-      video_ext: "mov",
-    });
-    const videoPut = FakeXHR.requests.find(
-      (r) => r.url === "https://storage.test/video",
-    );
-    expect(videoPut!.headers["Content-Type"]).toBe("video/quicktime");
-    const confirm = calls.find((c) => c.url.endsWith("/api/logs/confirm"));
-    expect(JSON.parse(confirm!.init!.body as string).video_url).toBe(
-      "logs/machine/m1/t_video.mov",
-    );
+    await waitFor(() => expect(commandsMock.startFeedbackUpload).toHaveBeenCalled());
+    const request = commandsMock.startFeedbackUpload.mock.calls[0][0];
+    expect(request.videoExt).toBe("mov");
+    expect(request.videoDataUrl).toMatch(/^data:video\/quicktime;base64,/);
   });
 
   it("disables send while an image is compressing", async () => {
@@ -602,87 +489,141 @@ describe("ShareLogsButton attachments", () => {
     expect(sendButton()).toBeEnabled();
   });
 
-  it("reads log tails via rust instead of pulling whole files into the webview", async () => {
-    stubServer({ videoPath: "logs/machine/m1/t_video.mp4" });
-    commandsMock.getLogFiles.mockResolvedValue({
-      status: "ok",
-      data: [{ name: "screenpipe.log", path: "/logs/screenpipe.log", modified_at: 1 }],
+  it("hands log collection, redaction, upload, and confirmation to one Rust job", async () => {
+    render(<ShareLogsButton />);
+
+    fireEvent.click(sendButton());
+
+    await waitFor(() => expect(commandsMock.startFeedbackUpload).toHaveBeenCalled());
+    const request = commandsMock.startFeedbackUpload.mock.calls[0][0];
+    expect(request).toMatchObject({
+      reportType: "machine",
+      analyticsId: "test-analytics",
+      screenshotDataUrl: null,
+      videoDataUrl: null,
+      videoPath: null,
     });
-    commandsMock.readLogTail.mockResolvedValue({ status: "ok", data: "tail" });
+    expect(request.jobId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("passes the compressed screenshot to the Rust job", async () => {
+    stubImagePipeline();
+    render(<ShareLogsButton />);
+
+    fireEvent.drop(dropZone(), transfer(makeFile("shot.png", "image/png")));
+    await screen.findByTestId("image-attachment");
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    fireEvent.click(sendButton());
+
+    await waitFor(() => expect(commandsMock.startFeedbackUpload).toHaveBeenCalled());
+    const request = commandsMock.startFeedbackUpload.mock.calls[0][0];
+    expect(request.screenshotDataUrl).toBe(
+      "data:image/jpeg;base64,dGVzdA==",
+    );
+  });
+
+  it("dismisses only after Rust accepts ownership of the background job", async () => {
+    let acceptJob: (() => void) | undefined;
+    commandsMock.startFeedbackUpload.mockImplementation(
+      (request: { jobId: string }) =>
+        new Promise((resolve) => {
+          acceptJob = () => resolve({ status: "ok", data: request.jobId });
+        }),
+    );
+
+    function DialogHarness() {
+      const [open, setOpen] = React.useState(true);
+      return open ? (
+        <ShareLogsButton onBackgroundStart={() => setOpen(false)} />
+      ) : (
+        <div>dialog closed</div>
+      );
+    }
+
+    render(<DialogHarness />);
+    fireEvent.click(sendButton());
+
+    await waitFor(() => expect(commandsMock.startFeedbackUpload).toHaveBeenCalled());
+    expect(screen.queryByText("dialog closed")).toBeNull();
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    await act(async () => acceptJob?.());
+    expect(await screen.findByText("dialog closed")).toBeInTheDocument();
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "thanks — sending in background",
+      description:
+        "you can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent.",
+    });
+  });
+
+  it("ignores other jobs and recovers when its Rust job fails later", async () => {
+    render(<ShareLogsButton />);
+    await waitFor(() => expect(feedbackEventHandlers.size).toBe(1));
+
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(commandsMock.startFeedbackUpload).toHaveBeenCalled());
+    const request = commandsMock.startFeedbackUpload.mock.calls[0][0];
+
+    await emitFeedbackCompleted({
+      jobId: crypto.randomUUID(),
+      status: "failed",
+      message: "another report failed",
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    await emitFeedbackCompleted({
+      jobId: request.jobId,
+      status: "failed",
+      message: "feedback could not be sent; try again.",
+    });
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "sharing failed",
+      description: "feedback could not be sent; try again.",
+      variant: "destructive",
+    });
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it("still starts the Rust job when optional chat history stalls", async () => {
+    vi.useFakeTimers();
+    loadAllConversationsMock.mockReturnValue(new Promise(() => {}));
+    render(<ShareLogsButton />);
+
+    fireEvent.click(sendButton());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // still waiting on the optional IndexedDB preparation
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    // 30s: chat preparation times out, then Rust takes over without it
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    expect(commandsMock.startFeedbackUpload).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("keeps the dialog open when Rust rejects the handoff", async () => {
+    commandsMock.startFeedbackUpload.mockResolvedValue({
+      status: "error",
+      error: "native start failed",
+    });
     render(<ShareLogsButton />);
 
     fireEvent.click(sendButton());
 
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "feedback sent" }),
+        expect.objectContaining({
+          title: "sharing failed",
+          description: expect.stringContaining("native start failed"),
+        }),
       ),
     );
-    expect(commandsMock.readLogTail).toHaveBeenCalledWith(
-      "/logs/screenpipe.log",
-      100 * 1024,
-    );
-  });
-
-  it("still sends the report when the log-file listing never settles", async () => {
-    vi.useFakeTimers();
-    stubServer({ videoPath: "logs/machine/m1/t_video.mp4" });
-    // A stalled filesystem/IPC call: the Tauri command never resolves.
-    commandsMock.getLogFiles.mockReturnValue(new Promise(() => {}));
-    render(<ShareLogsButton />);
-
-    fireEvent.click(sendButton());
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    // still waiting on the hung listing
-    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
-
-    // 30s: listing times out, and the send proceeds without log files
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(31_000);
-    });
-
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "feedback sent" }),
-    );
-    vi.useRealTimers();
-  });
-
-  it("recovers from a hung request instead of sticking on sending forever (#5360)", async () => {
-    vi.useFakeTimers();
-    // A stalled connection: fetch never settles, but honors abort like the
-    // real implementation does.
-    const hungFetch = vi.fn(
-      (_url: string, init?: RequestInit) =>
-        new Promise((_, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
-          );
-        }),
-    );
-    vi.stubGlobal("fetch", hungFetch);
-    render(<ShareLogsButton />);
-
-    fireEvent.click(sendButton());
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    // stuck mid-send: button shows the sending state and is disabled
-    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(31_000);
-    });
-
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "sharing failed",
-        description: expect.stringContaining("timed out"),
-      }),
-    );
     expect(sendButton()).toBeEnabled();
-    vi.useRealTimers();
   });
 });
 

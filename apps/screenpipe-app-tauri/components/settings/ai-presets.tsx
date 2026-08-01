@@ -30,7 +30,7 @@ import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
 } from "@/lib/utils/chat-test-body";
-import { screenpipeWebUrl } from "@/lib/web-url";
+import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
 import { ValidatedInput } from "../ui/validated-input";
@@ -169,7 +169,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud" | "acp";
   title: string;
   description: string;
   imageSrc: string;
@@ -274,10 +274,9 @@ const AISection = ({
   // models. Null on BYOK providers; we render nothing in that case.
   const usage = useUsageStatus();
   // Whether to surface the proactive "Business" lock UI. Off unless the PostHog
-  // flag is on and the user has no persisted entitlement evidence (fail-open so
-  // a tier flicker never false-locks a paying customer). The gateway's `locked`
-  // flag only takes visual effect when this is true.
-  const showUpsell = useModelUpsellGating();
+  // flag, hydrated local entitlement, and gateway eligibility all agree. The
+  // gateway's `locked` flag only takes visual effect when this is true.
+  const showUpsell = useModelUpsellGating(usage?.upgrade_eligible);
   const [settingsPreset, setSettingsPreset] = useState<
     Partial<AIPreset> | undefined
   >(preset);
@@ -371,10 +370,15 @@ const AISection = ({
 
 
   const isFormValid = useMemo(() => {
-    return Object.keys(validationErrors).length === 0 && 
-           settingsPreset?.id && 
-           settingsPreset?.provider && 
-           settingsPreset?.model;
+    if (Object.keys(validationErrors).length !== 0 ||
+        !settingsPreset?.id ||
+        !settingsPreset.provider) {
+      return false;
+    }
+    if (settingsPreset.provider === "acp") {
+      return Boolean(settingsPreset.acpAgent?.id?.trim() && settingsPreset.apiKey?.trim());
+    }
+    return Boolean(settingsPreset.model);
   }, [validationErrors, settingsPreset]);
 
   const updateStoreSettings = async () => {
@@ -527,7 +531,7 @@ const AISection = ({
     if (!model) return;
     if (model === prevModelRef.current) return; // no change — preserve saved value
     prevModelRef.current = model;
-    if (settingsPreset?.provider === "screenpipe-cloud") return;
+    if (settingsPreset?.provider === "screenpipe-cloud" || settingsPreset?.provider === "acp") return;
     const tokens = getDefaultMaxTokens(model);
     if (tokens) {
       updateSettingsPreset({ maxTokens: tokens } as any);
@@ -560,6 +564,7 @@ const AISection = ({
       "anthropic": "claude",
       "native-ollama": "ollama",
       "screenpipe-cloud": "screenpipe-cloud",
+      "acp": "claude code",
     };
 
     let newUrl = "";
@@ -587,9 +592,20 @@ const AISection = ({
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "auto";
         break;
+      case "acp":
+        // The external adapter owns its own model/endpoint; the preset only
+        // records which adapter to launch.
+        newUrl = "";
+        newModel = "";
+        break;
     }
 
-    const updates: Partial<AIPreset> = { provider: newValue, url: newUrl, model: newModel };
+    const updates: Partial<AIPreset> = {
+      provider: newValue,
+      url: newUrl,
+      model: newModel,
+      acpAgent: newValue === "acp" ? { id: "claude-acp", args: [], env: {} } : undefined,
+    };
     // Auto-fill name only when creating a new preset (no existing id)
     if (!settingsPreset?.id && defaultNames[newValue]) {
       updates.id = defaultNames[newValue];
@@ -1256,6 +1272,15 @@ const AISection = ({
           />
 
           <AIProviderCard
+            type="acp"
+            title="Claude Code"
+            description="Stream a local Claude Code coding agent. It can edit files and run commands with approval."
+            imageSrc="/images/claude-ai.svg"
+            selected={settingsPreset?.provider === "acp"}
+            onClick={() => handleAiProviderChange("acp")}
+          />
+
+          <AIProviderCard
             type="native-ollama"
             title="Ollama"
             description="Run AI models locally using your existing Ollama installation"
@@ -1278,6 +1303,14 @@ const AISection = ({
           )}
 
         </div>
+        {settingsPreset?.provider === "acp" && (
+          <div
+            data-testid="claude-acp-security-note"
+            className="mb-4 rounded-md border p-3 text-xs text-muted-foreground"
+          >
+            Claude Code is a local coding agent. It can read and write files and run terminal commands in this chat&apos;s workspace; protected actions surface approval requests. It uses your Anthropic API key, and Claude subscription sign-in is disabled.
+          </div>
+        )}
       </div>
 
       <ValidatedInput
@@ -1308,7 +1341,7 @@ const AISection = ({
       )}
 
 
-      {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "custom" || (isApiKeyRequired &&
+      {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "acp" || settingsPreset?.provider === "custom" || (isApiKeyRequired &&
         settingsPreset?.provider === "openai")) && (
           <div className="w-full">
             <div className="flex flex-col gap-4 mb-4 w-full">
@@ -1344,7 +1377,7 @@ const AISection = ({
                   )}
                 </Button>
               </div>
-              {settingsPreset?.provider === "anthropic" && (
+              {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "acp") && (
                 <button
                   type="button"
                   className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 w-fit"
@@ -1431,6 +1464,7 @@ const AISection = ({
         </div>
       )}
 
+      {settingsPreset?.provider !== "acp" && (
       <div className="w-full">
         <div className="flex flex-col gap-4 mb-4 w-full">
           <Label htmlFor="aiModel" className="flex items-center gap-1">
@@ -1538,24 +1572,13 @@ const AISection = ({
                             value={model.id}
                             className={locked ? "opacity-60" : undefined}
                             onSelect={async () => {
-                              // Locked = above the user's plan. One click -> Business
-                              // checkout (or sign-in first) instead of selecting it.
+                              // Locked = above the user's plan. Review the
+                              // native Business offer instead of selecting it.
                               if (locked) {
-                                if (!settings.user?.token) {
-                                  await commands.openLoginWindow(null);
-                                } else {
-                                  try {
-                                    const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
-                                      method: "POST",
-                                      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.user.token}` },
-                                      body: JSON.stringify({ tier: "pro", billingPeriod: "monthly", userId: settings.user.id, email: settings.user.email }),
-                                    });
-                                    const data = await res.json();
-                                    if (data.url) await openUrl(data.url);
-                                  } catch (e) {
-                                    console.error("checkout failed:", e);
-                                  }
-                                }
+                                setIsModelPickerOpen(false);
+                                await openBusinessUpgradeSurface(
+                                  "locked-model-picker",
+                                );
                                 return;
                               }
                               updateSettingsPreset({ model: model.id });
@@ -1657,6 +1680,7 @@ const AISection = ({
           )}
         </div>
       </div>
+      )}
 
       <ValidatedTextarea
         id="customPrompt"
@@ -1677,7 +1701,7 @@ const AISection = ({
         helperText="This prompt will be used to guide the AI's responses"
       />
 
-      {settingsPreset?.provider !== "screenpipe-cloud" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
         <div className="w-full">
           <Label htmlFor="maxTokens" className="text-sm font-medium">
             Max Output Tokens
@@ -1722,7 +1746,7 @@ const AISection = ({
         </div>
       )}
 
-      {settingsPreset?.provider !== "screenpipe-cloud" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
         <div className="w-full border rounded-lg">
           <button
             type="button"
@@ -1864,6 +1888,8 @@ const AISection = ({
               <TooltipContent>
                 {!settingsPreset?.id
                   ? "Enter a preset name to continue"
+                  : settingsPreset?.provider === "acp" && !settingsPreset?.apiKey?.trim()
+                  ? "Enter an Anthropic API key to continue"
                   : !settingsPreset?.model
                   ? "Select a model to continue"
                   : "Fix validation errors to continue"}

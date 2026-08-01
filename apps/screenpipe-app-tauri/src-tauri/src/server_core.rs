@@ -136,11 +136,12 @@ fn monitor_openai_compatible_transcription_failures(
                 last_notification,
                 now,
             ) {
-                crate::notifications::client::send_typed(
+                crate::notifications::client::send_typed_with_priority(
                     "OpenAI Compatible transcription is failing",
                     "Screenpipe is still recording audio, but the endpoint is failing or returning empty transcripts, so new audio may not be searchable. Check Settings and run Test and enable again.",
                     "system",
                     Some(20_000),
+                    crate::notifications::store::NotificationPriority::High,
                 );
                 last_notification = Some(now);
             }

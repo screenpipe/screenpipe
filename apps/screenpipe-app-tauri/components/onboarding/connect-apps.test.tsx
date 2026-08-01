@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   registerComposioMcpServer: vi.fn(async () => undefined),
   openUrl: vi.fn(async () => undefined),
   notifyConnectionsUpdated: vi.fn(),
+  activateAppAfterOauth: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/lib/ai-tools-mcp", () => ({
@@ -59,6 +60,7 @@ vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     oauthStatus: mocks.oauthStatus,
     oauthConnect: mocks.oauthConnect,
+    activateAppAfterOauth: mocks.activateAppAfterOauth,
   },
 }));
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -198,6 +200,7 @@ describe("onboarding connect apps", () => {
       expect(within(card as HTMLElement).getByText("work")).toBeInTheDocument();
     });
     expect(mocks.notifyConnectionsUpdated).toHaveBeenCalledOnce();
+    expect(mocks.activateAppAfterOauth).toHaveBeenCalledOnce();
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_integration_connected",
       expect.objectContaining({

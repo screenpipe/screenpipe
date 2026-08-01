@@ -96,6 +96,7 @@ pub fn render_semantic_items_context_with_actor_names(
                 key.as_str(),
                 "app"
                     | "family"
+                    | "surface"
                     | "actor_evidence"
                     | "message_id"
                     | "message_identity_quality"

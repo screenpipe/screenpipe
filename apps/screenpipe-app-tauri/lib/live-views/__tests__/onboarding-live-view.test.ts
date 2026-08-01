@@ -212,6 +212,7 @@ describe("createOnboardingLiveView", () => {
           ...slot,
           value: null,
           feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
         })),
         createdAt: "2026-07-24T00:00:00Z",
         updatedAt: "2026-07-24T00:00:00Z",

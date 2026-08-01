@@ -11,9 +11,13 @@ icon: "terminal"
 
 screenpipe runs a local API on `localhost:3030`. use these recipes when you want useful answers fast, then open the API reference for every parameter and response shape.
 
-<Tip>
-if API auth is enabled, add `-H "Authorization: Bearer $SCREENPIPE_API_KEY"` to requests. get the key with `npx -y screenpipe@latest auth token` or from settings -> privacy -> API security.
-</Tip>
+protected endpoints require API authentication. retrieve the local key once per shell:
+
+```bash
+export SCREENPIPE_API_KEY="$(npx -y screenpipe@latest auth token)"
+```
+
+you can also reveal it in **Settings → Privacy → API security**. the examples below include the required bearer header. `/health` is the exception.
 
 ## 1. check that screenpipe is alive
 
@@ -23,10 +27,11 @@ curl http://localhost:3030/health
 
 use this before debugging MCP, pipes, or chat. if it fails, the app is not serving the local API yet.
 
-## 2. search everything recent
+## 2. search the last 24 hours
 
 ```bash
-curl "http://localhost:3030/search?limit=20&content_type=all"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/search?limit=20&content_type=all&start_time=24h+ago&end_time=now"
 ```
 
 `content_type=all` can return accessibility text, OCR fallback text, audio transcripts, input events, app names, window titles, and browser URLs.
@@ -34,8 +39,10 @@ curl "http://localhost:3030/search?limit=20&content_type=all"
 ## 3. search one app or website
 
 ```bash
-curl "http://localhost:3030/search?q=deployment&app_name=Slack&limit=20"
-curl "http://localhost:3030/search?browser_url=github.com&limit=20"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/search?q=deployment&app_name=Slack&limit=20&start_time=24h+ago&end_time=now"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/search?browser_url=github.com&limit=20&start_time=24h+ago&end_time=now"
 ```
 
 use `app_name` for desktop app names and `browser_url` for web activity captured through browser metadata.
@@ -43,16 +50,19 @@ use `app_name` for desktop app names and `browser_url` for web activity captured
 ## 4. search a precise time window
 
 ```bash
-curl "http://localhost:3030/search?start_time=2026-05-14T09:00:00Z&end_time=2026-05-14T12:00:00Z&limit=50"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/search?start_time=3h+ago&end_time=now&limit=50"
 ```
 
-time filters use ISO 8601 UTC. this is the safest way to debug "what happened during that call" or "what did I do before lunch?"
+time filters accept relative values such as `3h ago` and `now`, or ISO 8601 UTC for an exact historical window. an explicit start and end is the safest way to debug “what happened during that call?”
 
 ## 5. search meeting audio
 
 ```bash
-curl "http://localhost:3030/search?q=budget&content_type=audio&limit=20"
-curl "http://localhost:3030/search?content_type=audio&speaker_name=Sarah&limit=20"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/search?q=budget&content_type=audio&limit=20&start_time=7d+ago&end_time=now"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/search?content_type=audio&speaker_name=Sarah&limit=20&start_time=7d+ago&end_time=now"
 ```
 
 speaker filters work best after you name or merge speakers in the meeting transcript sidebar or through the speaker APIs.
@@ -60,7 +70,8 @@ speaker filters work best after you name or merge speakers in the meeting transc
 ## 6. summarize activity for an agent
 
 ```bash
-curl "http://localhost:3030/activity-summary?start_time=2026-05-14T16:00:00Z&end_time=2026-05-14T18:00:00Z"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/activity-summary?start_time=2h+ago&end_time=now"
 ```
 
 use this when an AI agent needs a compact readout of a time range instead of raw search results.
@@ -68,13 +79,16 @@ use this when an AI agent needs a compact readout of a time range instead of raw
 ## 7. manage speakers
 
 ```bash
-curl "http://localhost:3030/speakers/unnamed?limit=10"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  "http://localhost:3030/speakers/unnamed?limit=10"
 
 curl -X POST http://localhost:3030/speakers/update \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"id": 1, "name": "Sarah Chen"}'
 
 curl -X POST http://localhost:3030/speakers/merge \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"speaker_to_keep_id": 1, "speaker_to_merge_id": 2}'
 ```
@@ -84,10 +98,11 @@ speaker cleanup improves meeting search, transcript readability, and calendar-as
 ## 8. list and update meetings
 
 ```bash
-curl "http://localhost:3030/meetings?limit=20"
-curl "http://localhost:3030/meetings/status"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/meetings?limit=20"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/meetings/status"
 
 curl -X POST http://localhost:3030/meetings/merge \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"meeting_ids": [12, 13]}'
 ```
@@ -97,9 +112,9 @@ meetings are higher-level objects built from audio, transcript, timeline, and op
 ## 9. fetch frame text and context
 
 ```bash
-curl "http://localhost:3030/frames/123/text"
-curl "http://localhost:3030/frames/123/context"
-curl "http://localhost:3030/frames/123/metadata"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/frames/123/text"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/frames/123/context"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/frames/123/metadata"
 ```
 
 use frame endpoints when you already have a `frame_id` from search and need the captured text, surrounding accessibility context, OCR fallback data, or metadata.
@@ -107,8 +122,8 @@ use frame endpoints when you already have a `frame_id` from search and need the 
 ## 10. search structured UI elements
 
 ```bash
-curl "http://localhost:3030/elements?q=submit&limit=20"
-curl "http://localhost:3030/frames/123/elements"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/elements?q=submit&limit=20"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/frames/123/elements"
 ```
 
 elements come from the accessibility tree. they are useful for finding buttons, links, fields, and UI labels directly, instead of relying on visual OCR.
@@ -117,6 +132,7 @@ elements come from the accessibility tree. they are useful for finding buttons, 
 
 ```bash
 curl -X POST http://localhost:3030/raw_sql \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"query":"select app_name, count(*) as n from frames group by app_name order by n desc limit 20"}'
 ```
@@ -126,9 +142,10 @@ curl -X POST http://localhost:3030/raw_sql \
 ## 12. work with memories
 
 ```bash
-curl "http://localhost:3030/memories?limit=20"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/memories?limit=20"
 
 curl -X POST http://localhost:3030/memories \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"content":"Important product insight from today", "source":"manual"}'
 ```
@@ -138,9 +155,10 @@ memories are durable notes that AI workflows can search later.
 ## 13. manage retention
 
 ```bash
-curl "http://localhost:3030/retention/status"
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/retention/status"
 
 curl -X POST http://localhost:3030/retention/configure \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"enabled": true, "days": 30}'
 ```
@@ -150,8 +168,9 @@ retention keeps disk usage bounded. pair it with archive if you want old recordi
 ## 14. archive old data
 
 ```bash
-curl "http://localhost:3030/archive/status"
-curl -X POST http://localhost:3030/archive/run
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" "http://localhost:3030/archive/status"
+curl -X POST http://localhost:3030/archive/run \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY"
 ```
 
 archive is for moving older media to encrypted storage while keeping the local timeline searchable.
@@ -160,12 +179,13 @@ archive is for moving older media to encrypted storage while keeping the local t
 
 ```bash
 curl -X POST http://localhost:3030/data/delete-range \
+  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"start_time":"2026-05-14T09:00:00Z","end_time":"2026-05-14T10:00:00Z"}'
+  -d '{"start_time":"<START_UTC>","end_time":"<END_UTC>"}'
 ```
 
 <Warning>
-data deletion is permanent. export or archive anything you need before deleting a range or device.
+replace both placeholders with reviewed ISO 8601 UTC timestamps. data deletion is permanent; export or archive anything you need before deleting a range or device.
 </Warning>
 
 ## filter cheat sheet

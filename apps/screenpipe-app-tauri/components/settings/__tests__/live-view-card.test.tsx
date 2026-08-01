@@ -27,6 +27,7 @@ const listSlot: BrainViewSlot = {
   intent: "Show the review process",
   binding: { pipeName: "workflow-discovery" },
   feedback: { upCount: 0, downCount: 0, current: null },
+  itemActions: { items: [] },
   value: {
     payload: {
       items: [

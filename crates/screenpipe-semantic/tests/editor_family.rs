@@ -147,11 +147,19 @@ fn unmatched_editor_screen_abstains_for_generic_accessibility() {
 }
 
 #[test]
-fn inaccessible_buffer_abstains_instead_of_emitting_placeholder_text() {
+fn inaccessible_buffer_yields_document_identity_without_placeholder_text() {
+    let items = handled_items(include_str!(
+        "fixtures/editor/vscode_inaccessible_buffer.json"
+    ));
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title.as_deref(), Some("main.rs"));
+    assert_eq!(items[0].body, None, "placeholder text must never be a body");
     assert_eq!(
-        parse_fixture(include_str!(
-            "fixtures/editor/vscode_inaccessible_buffer.json"
-        )),
-        ValidatedParseOutcome::NotHandled
+        items[0].metadata.get("content").map(String::as_str),
+        Some("unavailable")
+    );
+    assert_eq!(
+        items[0].metadata.get("editor_group").map(String::as_str),
+        Some("1")
     );
 }

@@ -146,7 +146,7 @@ export function shouldHandleChatLoadConversationForWindow(
   payload: ChatLoadConversationPayload | null | undefined,
   windowLabel: ChatTargetWindow,
 ): boolean {
-  return !payload?.targetWindow || payload.targetWindow === windowLabel;
+  return (payload?.targetWindow ?? "home") === windowLabel;
 }
 
 export function shouldActivateHomeSectionForChatLoadConversation(

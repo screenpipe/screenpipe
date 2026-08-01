@@ -1,0 +1,187 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "Claude.exe",
+    "display_name": "Claude",
+    "version": "1.0.0",
+    "browser_url": "https://claude.ai/epitaxy/local_00000000-0000-0000-0000-000000000000"
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Minimize",
+      "classes": [
+        "WinCaptionButton"
+      ]
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Restore",
+      "classes": [
+        "WinCaptionButton"
+      ]
+    },
+    {
+      "parent": null,
+      "role": "Button",
+      "text": "Close",
+      "classes": [
+        "WinCaptionButton"
+      ]
+    },
+    {
+      "parent": 2,
+      "role": "Document",
+      "identifier": "RootWebArea",
+      "text": "file:///app/resources/app.asar/.vite/renderer/main_window/index.html"
+    },
+    {
+      "parent": 3,
+      "role": "Button",
+      "text": "New",
+      "classes": [
+        "w-full",
+        "shrink-0",
+        "border-none",
+        "text-left"
+      ]
+    },
+    {
+      "parent": 3,
+      "role": "Button",
+      "text": "Session actions, new activity",
+      "identifier": "base-ui-_r_1_",
+      "classes": [
+        "cds-reset",
+        "group/btn",
+        "relative",
+        "isolate",
+        "inline-flex"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Ran a command, used a tool",
+      "classes": [
+        "relative",
+        "group/tool",
+        "flex",
+        "self-start"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Show message actions",
+      "classes": [
+        "sr-only"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Text",
+      "text": "You said: /plan draft the beach cleanup email",
+      "classes": [
+        "sr-only",
+        "select-none"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "plan",
+      "identifier": "base-ui-_r_2_",
+      "classes": [
+        "group",
+        "inline-flex",
+        "relative",
+        "text-accent-100"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Text",
+      "text": "draft the beach cleanup email"
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Show message actions",
+      "classes": [
+        "sr-only"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Text",
+      "text": "Claude responded: Drafted the note for Alex Rivera and",
+      "classes": [
+        "sr-only",
+        "select-none"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Wrote the draft",
+      "classes": [
+        "relative",
+        "group/tool",
+        "flex",
+        "self-start"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Text",
+      "text": "Drafted the note for Alex Rivera and set the reply address to alex@example.com. Ready to send tomorrow."
+    },
+    {
+      "parent": 14,
+      "role": "Text",
+      "text": "cleanup-draft.md"
+    },
+    {
+      "parent": 14,
+      "role": "Button",
+      "text": "Copy message",
+      "classes": [
+        "group/btn",
+        "relative",
+        "isolate"
+      ]
+    },
+    {
+      "parent": 14,
+      "role": "Text",
+      "text": "7 hours ago"
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Show message actions",
+      "classes": [
+        "sr-only"
+      ]
+    },
+    {
+      "parent": 5,
+      "role": "Text",
+      "text": "Chat mode"
+    },
+    {
+      "parent": 5,
+      "role": "Button",
+      "text": "Send",
+      "classes": [
+        "group/btn",
+        "relative",
+        "isolate"
+      ]
+    }
+  ]
+}

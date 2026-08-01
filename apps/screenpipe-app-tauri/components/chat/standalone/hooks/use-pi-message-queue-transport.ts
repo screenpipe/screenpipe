@@ -29,6 +29,7 @@ export function createPiMessageQueueTransport(
     queuedPrompts,
     registerTurnIntent,
     restoreQueuedDisplay,
+    restoreQueuedPrompt,
     setInput,
     setPastedImages,
   } = context;
@@ -57,6 +58,8 @@ export function createPiMessageQueueTransport(
     if (inputRef.current) inputRef.current.style.height = "auto";
     if (hadPastedImages) setPastedImages([]);
 
+    // Same recovery contract as normal sends. Rust strips the wrapper for a
+    // warm Pi subprocess and retains it after a restart.
     const queuedPrompt = withConversationHistory(userMessage, messages);
 
     {
@@ -102,6 +105,11 @@ export function createPiMessageQueueTransport(
         ...(queuedAttachments ? { attachments: queuedAttachments } : {}),
         ...(displayLabel ? { displayContent: displayLabel } : {}),
         turnIntentId: queuedTurnIntentId,
+      });
+      restoreQueuedPrompt(piSessionIdRef.current, {
+        id: result.data,
+        preview: queuedPreviewForText(userMessage),
+        queuedAtMs: Date.now(),
       });
 
       posthog.capture("chat_message_enqueued", {

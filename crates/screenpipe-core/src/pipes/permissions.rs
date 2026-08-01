@@ -136,6 +136,9 @@ pub const DEFAULT_ALLOWED_ENDPOINTS: &[&str] = &[
     "GET /pipes/info",
     "GET /health",
     "GET /connections/*",
+    // Human ratings and corrections attributed to this authenticated pipe.
+    // The handler filters by pipe identity; write access stays desktop-only.
+    "GET /feedback",
     // A pipe may discover and fill only generic targets bound to its
     // authenticated name. The handlers validate identity and payload schema.
     "GET /outputs/targets",
@@ -730,6 +733,7 @@ mod tests {
         assert!(p.is_endpoint_allowed("GET", "/search"));
         assert!(p.is_endpoint_allowed("GET", "/meetings/42"));
         assert!(p.is_endpoint_allowed("POST", "/notify"));
+        assert!(p.is_endpoint_allowed("GET", "/feedback"));
         assert!(p.is_endpoint_allowed("GET", "/outputs/targets"));
         assert!(p.is_endpoint_allowed(
             "POST",

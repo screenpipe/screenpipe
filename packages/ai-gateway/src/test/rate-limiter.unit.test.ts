@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'bun:test';
 import { RateLimiter, checkRateLimit } from '../utils/rate-limiter';
 import { isFreeModel, getTierConfig } from '../services/usage-tracker';
-import type { AuthResult, Env, UserTier } from '../types';
+import type { AuthResult, Env, UsageTier, UserTier } from '../types';
 
 // In-memory fake of the RATE_LIMITER Durable Object namespace. One RateLimiter
 // instance per id-name (the device id), so counters persist across calls exactly
@@ -91,15 +91,51 @@ describe('isFreeModel — weight-0 models classified as free', () => {
 describe('getTierConfig — freeRpm bucket', () => {
 	it('defaults freeRpm well above the paid rpm for every tier', () => {
 		const cfg = getTierConfig();
-		for (const tier of ['anonymous', 'logged_in', 'subscribed'] as UserTier[]) {
+		for (const tier of ['anonymous', 'logged_in', 'subscribed', 'business_max', 'business_ultra'] as UsageTier[]) {
 			expect(cfg[tier].freeRpm).toBeGreaterThan(cfg[tier].rpm);
 		}
 		expect(cfg.logged_in.freeRpm).toBe(120);
+		expect(cfg.business_max).toMatchObject({ dailyQueries: 120, rpm: 120, freeRpm: 480 });
+		expect(cfg.business_ultra).toMatchObject({ dailyQueries: 240, rpm: 240, freeRpm: 960 });
 	});
 
 	it('honors the LIMIT_*_FREE_RPM env override', () => {
 		const cfg = getTierConfig({ LIMIT_LOGGED_IN_FREE_RPM: '200' } as unknown as Env);
 		expect(cfg.logged_in.freeRpm).toBe(200);
+	});
+
+	it('honors Max and Ultra env overrides independently', () => {
+		const cfg = getTierConfig({
+			LIMIT_BUSINESS_MAX_DAILY: '121',
+			LIMIT_BUSINESS_MAX_RPM: '121',
+			LIMIT_BUSINESS_ULTRA_DAILY: '241',
+			LIMIT_BUSINESS_ULTRA_FREE_RPM: '999',
+		} as unknown as Env);
+		expect(cfg.business_max.dailyQueries).toBe(121);
+		expect(cfg.business_max.rpm).toBe(121);
+		expect(cfg.business_ultra.dailyQueries).toBe(241);
+		expect(cfg.business_ultra.freeRpm).toBe(999);
+	});
+
+	it('fails closed to safe defaults for malformed or non-positive overrides', () => {
+		const cfg = getTierConfig({ LIMIT_BUSINESS_MAX_DAILY: '-1', LIMIT_BUSINESS_MAX_RPM: '0', LIMIT_BUSINESS_MAX_FREE_RPM: '120rpm', LIMIT_BUSINESS_ULTRA_DAILY: '1.5', LIMIT_BUSINESS_ULTRA_RPM: '9007199254740993' } as unknown as Env);
+		expect(cfg.business_max).toMatchObject({ dailyQueries: 120, rpm: 120, freeRpm: 480 });
+		expect(cfg.business_ultra).toMatchObject({ dailyQueries: 240, rpm: 240 });
+	});
+});
+
+describe('checkRateLimit — capacity tier separation', () => {
+	it('uses the Max bucket without changing subscribed model access', async () => {
+		const env = makeEnv({ LIMIT_BUSINESS_MAX_RPM: '2' });
+		const a: AuthResult = {
+			...auth('subscribed'),
+			accountPlan: 'business_max',
+			usageTier: 'business_max',
+		};
+		expect((await fire(env, a, { freeModel: false }, 2)).allowed).toBe(true);
+		const over = await checkRateLimit(chatReq(), env, a, { freeModel: false });
+		expect(over.allowed).toBe(false);
+		expect(JSON.stringify(await over.response!.json())).toContain('2 requests per minute');
 	});
 });
 

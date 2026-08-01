@@ -9,6 +9,7 @@ use chrono::{DateTime, TimeZone, Utc};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -16,7 +17,7 @@ use std::sync::{
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
-use screenpipe_audio::audio_manager::builder::TranscriptionMode;
+use screenpipe_audio::audio_manager::builder::{AudioCaptureMode, TranscriptionMode};
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 
 use crate::recording_coverage::{coverage_snapshot, CoverageSnapshot};
@@ -119,16 +120,62 @@ const SILENT_AUDIO_RMS_THRESHOLD: f64 = 0.001;
 /// timeout while a stream is dead, so a window comfortably larger than one cycle
 /// keeps a genuinely dead stream flagged, while a stream that recovered (no new
 /// timeouts) clears back to "ok" instead of sticking forever on a stale count.
-const STREAM_TIMEOUT_RECENCY_SECS: u64 = 90;
+/// Keep this below the desktop's 90-tick incident debounce: a one-shot timeout
+/// from a successfully rebuilt but silent stream must expire before it can
+/// raise `recording needs help`. A genuinely dead stream re-fires its 8s/30s
+/// watchdog and refreshes this window.
+const STREAM_TIMEOUT_RECENCY_SECS: u64 = 60;
+
+/// A timeout remains actionable only while its device is still selected, the
+/// timeout is recent, and that same device has not produced usable audio after
+/// the timeout. Activity from another microphone or output cannot clear it.
+fn has_unrecovered_recent_stream_timeout(
+    per_device_timeout_at: &HashMap<String, u64>,
+    current_device_capture_at: &HashMap<String, u64>,
+    now_ts: u64,
+) -> bool {
+    per_device_timeout_at.iter().any(|(device, timeout_at)| {
+        let Some(capture_at) = current_device_capture_at.get(device) else {
+            // Removed/deselected devices are no longer part of current capture.
+            return false;
+        };
+        *timeout_at > 0
+            && now_ts.saturating_sub(*timeout_at) < STREAM_TIMEOUT_RECENCY_SECS
+            && *capture_at <= *timeout_at
+    })
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MeetingsOnlyAudioIdleState {
+    waiting_for_meeting: bool,
+    detector_unavailable: bool,
+}
+
+fn meetings_only_audio_idle_state(
+    configured: bool,
+    meeting_detected: Option<bool>,
+    detector_probe_timed_out: bool,
+    streams_released: bool,
+) -> MeetingsOnlyAudioIdleState {
+    MeetingsOnlyAudioIdleState {
+        waiting_for_meeting: configured && meeting_detected == Some(false) && streams_released,
+        detector_unavailable: configured
+            && !detector_probe_timed_out
+            && meeting_detected.is_none()
+            && streams_released,
+    }
+}
 
 /// Classify the raw audio capture status from health signals. Pure so it can be
-/// unit-tested in isolation. `stream_timeout_recent` must reflect a *recent*
-/// stream timeout (see `STREAM_TIMEOUT_RECENCY_SECS`), NOT a cumulative count —
-/// passing "ever had a timeout" here is exactly the bug this extraction fixes.
+/// unit-tested in isolation. `stream_timeout_recent` must mean a recent timeout
+/// that the same current device has not recovered from, NOT a cumulative count
+/// or aggregate activity from some other stream.
 #[allow(clippy::too_many_arguments)]
 fn classify_audio_status(
     audio_disabled: bool,
     audio_paused_for_screen_lock: bool,
+    meeting_detector_unavailable: bool,
+    audio_waiting_for_meeting: bool,
     audio_never_captured: bool,
     has_input_device: bool,
     stream_timeout_recent: bool,
@@ -145,6 +192,10 @@ fn classify_audio_status(
         // screen-lock exemption, not as a stalled recorder. Keep the stable
         // top-level status contract; capture_status carries the specific state.
         "ok"
+    } else if meeting_detector_unavailable {
+        "meeting_detector_unavailable"
+    } else if audio_waiting_for_meeting {
+        "waiting_for_meeting"
     } else if audio_never_captured && !has_input_device {
         // Audio is on but there is no microphone to capture from — expected
         // idle, not a failure. Distinct from "not_started" so /health stays 200
@@ -153,9 +204,10 @@ fn classify_audio_status(
         "no_input_device"
     } else if audio_never_captured {
         "not_started"
-    } else if stream_timeout_recent && global_audio_active {
-        // Device active but the watchdog fired recently — hijack/dead-stream
-        // recovery in progress. Clears automatically once timeouts stop.
+    } else if stream_timeout_recent {
+        // The watchdog fired on a current device and that same device has not
+        // produced usable audio since. This remains a failure even if another
+        // microphone or system-output stream is healthy.
         "active_no_data"
     } else if global_audio_active {
         "ok"
@@ -172,6 +224,8 @@ fn classify_audio_status(
 fn capture_status(
     audio_disabled: bool,
     audio_paused_for_screen_lock: bool,
+    meeting_detector_unavailable: bool,
+    audio_waiting_for_meeting: bool,
     audio_status: &str,
     active_audio_devices: usize,
     active_input_devices: usize,
@@ -197,6 +251,18 @@ fn capture_status(
             "waiting",
             "audio capture is paused while the screen is locked",
         )
+    } else if meeting_detector_unavailable {
+        (
+            "meeting_detector_unavailable",
+            "warning",
+            "meeting detection is unavailable; audio devices are closed to protect meetings-only privacy",
+        )
+    } else if audio_waiting_for_meeting {
+        (
+            "waiting_for_meeting",
+            "waiting",
+            "configured audio devices are released until a meeting is detected",
+        )
     } else if paused_input_devices > 0 && active_input_devices == 0 {
         (
             "mic_paused",
@@ -215,7 +281,7 @@ fn capture_status(
             "warning",
             "audio capture has not produced data yet",
         )
-    } else if audio_status == "stale" || (audio_status == "active_no_data" && !audio_recent) {
+    } else if audio_status == "stale" || audio_status == "active_no_data" {
         (
             "audio_stalled",
             "warning",
@@ -707,6 +773,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         std::collections::HashSet::new()
     };
     let mut device_statuses = Vec::new();
+    let mut current_device_capture_at = HashMap::new();
     let mut global_audio_active = false;
     let mut most_recent_audio_timestamp = 0; // Track the most recent timestamp
 
@@ -714,6 +781,9 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     for device in &audio_devices {
         let device_name = device.to_string();
         let last_capture = screenpipe_audio::core::get_device_capture_time(&device_name);
+        let exact_last_capture =
+            screenpipe_audio::core::get_device_capture_time_exact(&device_name).unwrap_or(0);
+        current_device_capture_at.insert(device_name.clone(), exact_last_capture);
 
         // Update the most recent timestamp
         most_recent_audio_timestamp = most_recent_audio_timestamp.max(last_capture);
@@ -791,30 +861,50 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // misreads that intentional deferral as a broken pipeline and flips the
     // whole response to degraded/503. 500ms bound on the RwLock read so a
     // contended writer can never stall /health.
-    let (meeting_detected, meeting_app) = if !state.audio_disabled {
+    let (meeting_detected, meeting_app, meeting_detector_probe_timed_out) = if !state.audio_disabled
+    {
         match tokio::time::timeout(
             std::time::Duration::from_millis(500),
             state.audio_manager.meeting_detector(),
         )
         .await
         {
-            Ok(Some(detector)) => (Some(detector.is_in_meeting()), None),
-            Ok(None) => (None, None),
+            Ok(Some(detector)) => (Some(detector.is_in_meeting()), None, false),
+            Ok(None) => (None, None, false),
             Err(_) => {
                 warn!(
                     "health_check: audio_manager.meeting_detector() RwLock contended >500ms, skipping meeting fields"
                 );
-                (None, None)
+                (None, None, true)
             }
         }
     } else {
-        (None, None)
+        (None, None, false)
     };
     // True when the audio pipeline is *intentionally* holding the batch
     // queue (live meeting / audio session absorbing the engine). Used to
     // suppress false-positive stall warnings — see comments at the
     // audio_db_write_stalled and audio_degraded gates below.
     let intentionally_deferring = meeting_detected.unwrap_or(false);
+    // Report intentional meetings-only idleness only after every configured
+    // stream has actually been released. During teardown, health continues to
+    // describe the observed active streams instead of claiming an early pause.
+    let meetings_only_configured = cfg!(any(target_os = "macos", target_os = "windows"))
+        && matches!(
+            state.audio_manager.configured_audio_capture_mode(),
+            Some(AudioCaptureMode::MeetingsOnly)
+        );
+    // Detector absence is not ordinary idle: the device gate fails closed, and
+    // health must make the missing prerequisite visible. A timed-out health
+    // probe is kept as unknown so lock contention cannot manufacture an error.
+    let meetings_only_idle = meetings_only_audio_idle_state(
+        meetings_only_configured,
+        meeting_detected,
+        meeting_detector_probe_timed_out,
+        audio_devices.is_empty(),
+    );
+    let audio_waiting_for_meeting = meetings_only_idle.waiting_for_meeting;
+    let meeting_detector_unavailable = meetings_only_idle.detector_unavailable;
 
     // 60 seconds — tight enough to detect real stalls, loose enough to
     // tolerate adaptive FPS (0.1-0.5 fps) and brief DB contention spikes.
@@ -986,16 +1076,15 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // watchdog reconnects after 30s of no real audio and keeps re-firing while
     // the stream stays dead.
     //
-    // Gate on the RECENCY of the last timeout, not the cumulative count. The old
-    // `stream_timeouts > 0` check pinned the status to "active_no_data" forever
-    // after a single historical timeout (a wake/display invalidation, a device
-    // switch, a transient glitch) — so a fully recovered mic with chunks flowing
-    // again still read as broken. A healthy-but-silent room never trips this:
-    // raw chunks keep arriving so the watchdog never fires; only a genuinely
-    // dead/hijacked stream keeps refreshing `last_stream_timeout_at`.
+    // Gate on a recent timeout that the SAME current device has not recovered
+    // from. The old global timestamp let a healthy output stream mask a dead
+    // mic, while the older cumulative counter pinned recovered devices forever.
     let now_ts = now.timestamp().max(0) as u64;
-    let stream_timeout_recent = audio_snap.last_stream_timeout_at > 0
-        && now_ts.saturating_sub(audio_snap.last_stream_timeout_at) < STREAM_TIMEOUT_RECENCY_SECS;
+    let stream_timeout_recent = has_unrecovered_recent_stream_timeout(
+        &state.audio_metrics.per_device_stream_timeouts_snapshot(),
+        &current_device_capture_at,
+        now_ts,
+    );
 
     // Only report the intentional pause after the manager has actually
     // released every stream. During the short teardown transition (or if a
@@ -1006,6 +1095,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let audio_status = classify_audio_status(
         state.audio_disabled,
         audio_paused_for_screen_lock,
+        meeting_detector_unavailable,
+        audio_waiting_for_meeting,
         audio_never_captured,
         has_input_device,
         stream_timeout_recent,
@@ -1037,6 +1128,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let capture_status = capture_status(
         state.audio_disabled,
         audio_paused_for_screen_lock,
+        meeting_detector_unavailable,
+        audio_waiting_for_meeting,
         &audio_status,
         active_audio_devices,
         active_input_devices,
@@ -1138,7 +1231,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     let (overall_status, message, verbose_instructions, status_code) = if (frame_status == "ok"
         || frame_status == "disabled")
-        && (audio_status == "ok" || audio_status == "disabled" || audio_status == "no_input_device")
+        && (audio_status == "ok"
+            || audio_status == "disabled"
+            || audio_status == "no_input_device"
+            || audio_status == "waiting_for_meeting")
         && !vision_degraded
         && !audio_degraded
     {
@@ -1156,7 +1252,11 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         if vision_degraded && !unhealthy_systems.contains(&"vision") {
             unhealthy_systems.push("vision");
         }
-        if audio_status != "ok" && audio_status != "disabled" && audio_status != "no_input_device" {
+        if audio_status != "ok"
+            && audio_status != "disabled"
+            && audio_status != "no_input_device"
+            && audio_status != "waiting_for_meeting"
+        {
             // active_no_data is a degraded state (device hijacked but watchdog recovering).
             // no_input_device is benign (no mic present) and stays out of this list.
             unhealthy_systems.push("audio");
@@ -1629,8 +1729,10 @@ mod tests {
     }
 
     #[test]
-    fn capture_status_does_not_show_stalled_for_recovered_active_no_data() {
+    fn capture_status_does_not_let_other_fresh_audio_mask_active_no_data() {
         let state = capture_status(
+            false,
+            false,
             false,
             false,
             "active_no_data",
@@ -1646,13 +1748,15 @@ mod tests {
             121,
         );
 
-        assert_eq!(state.status, "waiting_for_voice");
-        assert_eq!(state.severity, "waiting");
+        assert_eq!(state.status, "audio_stalled");
+        assert_eq!(state.severity, "warning");
     }
 
     #[test]
     fn capture_status_still_warns_for_active_no_data_without_fresh_audio() {
         let state = capture_status(
+            false,
+            false,
             false,
             false,
             "active_no_data",
@@ -1673,9 +1777,19 @@ mod tests {
     }
 
     #[test]
+    fn capture_status_recovers_after_raw_status_clears() {
+        let state = capture_status(
+            false, false, false, false, "ok", 1, 1, 0, 0, false, None, 0.0, 4, 120, 121,
+        );
+
+        assert_eq!(state.status, "waiting_for_voice");
+        assert_eq!(state.severity, "waiting");
+    }
+
+    #[test]
     fn capture_status_reports_intentional_screen_lock_pause() {
         let state = capture_status(
-            false, true, "ok", 0, 0, 0, 0, false, None, 0.0, 0, 0, 10_000,
+            false, true, false, false, "ok", 0, 0, 0, 0, false, None, 0.0, 0, 0, 10_000,
         );
 
         assert_eq!(state.status, "screen_locked");
@@ -1683,6 +1797,90 @@ mod tests {
         assert_eq!(
             state.reason,
             "audio capture is paused while the screen is locked"
+        );
+    }
+
+    #[test]
+    fn capture_status_reports_intentional_meetings_only_idle() {
+        let state = capture_status(
+            false,
+            false,
+            false,
+            true,
+            "waiting_for_meeting",
+            0,
+            0,
+            0,
+            0,
+            false,
+            None,
+            0.0,
+            0,
+            0,
+            10_000,
+        );
+
+        assert_eq!(state.status, "waiting_for_meeting");
+        assert_eq!(state.severity, "waiting");
+        assert_eq!(
+            state.reason,
+            "configured audio devices are released until a meeting is detected"
+        );
+    }
+
+    #[test]
+    fn capture_status_reports_missing_meeting_detector() {
+        let state = capture_status(
+            false,
+            false,
+            true,
+            false,
+            "meeting_detector_unavailable",
+            0,
+            0,
+            0,
+            0,
+            false,
+            None,
+            0.0,
+            0,
+            0,
+            10_000,
+        );
+
+        assert_eq!(state.status, "meeting_detector_unavailable");
+        assert_eq!(state.severity, "warning");
+        assert_eq!(
+            state.reason,
+            "meeting detection is unavailable; audio devices are closed to protect meetings-only privacy"
+        );
+    }
+
+    #[test]
+    fn meetings_only_idle_health_distinguishes_absence_from_probe_timeout() {
+        assert_eq!(
+            meetings_only_audio_idle_state(true, Some(false), false, true),
+            MeetingsOnlyAudioIdleState {
+                waiting_for_meeting: true,
+                detector_unavailable: false,
+            }
+        );
+        assert_eq!(
+            meetings_only_audio_idle_state(true, None, false, true),
+            MeetingsOnlyAudioIdleState {
+                waiting_for_meeting: false,
+                detector_unavailable: true,
+            }
+        );
+        assert_eq!(
+            meetings_only_audio_idle_state(true, None, true, true),
+            MeetingsOnlyAudioIdleState::default(),
+            "a contended health probe must not manufacture detector failure"
+        );
+        assert_eq!(
+            meetings_only_audio_idle_state(true, None, false, false),
+            MeetingsOnlyAudioIdleState::default(),
+            "health must not claim devices are protected before teardown finishes"
         );
     }
 
@@ -1874,6 +2072,8 @@ mod tests {
         classify_audio_status(
             false, // audio_disabled
             false, // audio_paused_for_screen_lock
+            false, // meeting_detector_unavailable
+            false, // audio_waiting_for_meeting
             false, // audio_never_captured
             true,  // has_input_device
             stream_timeout_recent,
@@ -1885,10 +2085,141 @@ mod tests {
     }
 
     #[test]
+    fn timeout_recovery_is_correlated_to_the_same_current_device() {
+        let timeouts = HashMap::from([("mic".to_string(), 100)]);
+        let output_live_mic_dead =
+            HashMap::from([("mic".to_string(), 99), ("output".to_string(), 120)]);
+        assert!(has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &output_live_mic_dead,
+            120
+        ));
+
+        let output_live_mic_recovered =
+            HashMap::from([("mic".to_string(), 101), ("output".to_string(), 120)]);
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &output_live_mic_recovered,
+            120
+        ));
+
+        let output_timeouts = HashMap::from([("output".to_string(), 100)]);
+        let mic_live_output_dead =
+            HashMap::from([("mic".to_string(), 120), ("output".to_string(), 99)]);
+        assert!(has_unrecovered_recent_stream_timeout(
+            &output_timeouts,
+            &mic_live_output_dead,
+            120
+        ));
+    }
+
+    #[test]
+    fn timeout_recovery_boundaries_fail_closed_without_sticking_forever() {
+        let timeouts = HashMap::from([("mic".to_string(), 100)]);
+
+        for (capture_at, now_ts, expected) in [
+            (0, 100, true),
+            (99, 120, true),
+            (100, 120, true),
+            (101, 120, false),
+            (99, 159, true),
+            (99, 160, false),
+        ] {
+            let captures = HashMap::from([("mic".to_string(), capture_at)]);
+            assert_eq!(
+                has_unrecovered_recent_stream_timeout(&timeouts, &captures, now_ts),
+                expected,
+                "capture_at={capture_at}, now_ts={now_ts}"
+            );
+        }
+
+        assert!(has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &HashMap::from([("mic".to_string(), 0)]),
+            99
+        ));
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &HashMap::from([("output".to_string(), 120)]),
+            120
+        ));
+    }
+
+    #[test]
+    fn one_unrecovered_device_wins_over_other_recovered_devices() {
+        let timeouts = HashMap::from([("mic".to_string(), 100), ("output".to_string(), 110)]);
+        let captures = HashMap::from([("mic".to_string(), 101), ("output".to_string(), 109)]);
+        assert!(has_unrecovered_recent_stream_timeout(
+            &timeouts, &captures, 120
+        ));
+
+        let all_recovered = HashMap::from([("mic".to_string(), 101), ("output".to_string(), 111)]);
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &timeouts,
+            &all_recovered,
+            120
+        ));
+    }
+
+    #[test]
+    fn a_repeated_timeout_refreshes_the_incident_window() {
+        let captures = HashMap::from([("mic".to_string(), 99)]);
+
+        assert!(!has_unrecovered_recent_stream_timeout(
+            &HashMap::from([("mic".to_string(), 100)]),
+            &captures,
+            160
+        ));
+        assert!(has_unrecovered_recent_stream_timeout(
+            &HashMap::from([("mic".to_string(), 130)]),
+            &captures,
+            160
+        ));
+    }
+
+    #[test]
+    fn timeout_correlation_exhaustively_ignores_other_device_activity() {
+        let timeout_at = 100;
+        for failed_device in ["mic", "output"] {
+            let other_device = if failed_device == "mic" {
+                "output"
+            } else {
+                "mic"
+            };
+            for failed_device_present in [false, true] {
+                for own_capture_at in [99, 100, 101] {
+                    for other_capture_at in [0, 120] {
+                        for now_ts in [159, 160] {
+                            let timeouts = HashMap::from([(failed_device.to_string(), timeout_at)]);
+                            let mut captures =
+                                HashMap::from([(other_device.to_string(), other_capture_at)]);
+                            if failed_device_present {
+                                captures.insert(failed_device.to_string(), own_capture_at);
+                            }
+
+                            let expected = failed_device_present
+                                && own_capture_at <= timeout_at
+                                && now_ts - timeout_at < STREAM_TIMEOUT_RECENCY_SECS;
+                            assert_eq!(
+                                has_unrecovered_recent_stream_timeout(
+                                    &timeouts, &captures, now_ts
+                                ),
+                                expected,
+                                "failed={failed_device}, present={failed_device_present}, own={own_capture_at}, other={other_capture_at}, now={now_ts}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn audio_status_active_no_data_only_while_timeout_is_recent() {
         // Issue #3144: an active device whose zero-fill watchdog fired *recently*
         // is "active_no_data" (hijacked / dead stream, recovery in progress).
         assert_eq!(audio_status_for(true, true), "active_no_data");
+        assert_eq!(audio_status_for(true, false), "active_no_data");
     }
 
     #[test]
@@ -1931,32 +2262,52 @@ mod tests {
     fn audio_status_non_timeout_branches_unchanged() {
         // Guard the unrelated branches against accidental regressions.
         assert_eq!(
-            classify_audio_status(true, true, false, true, true, true, 1000, 1010, 60),
+            classify_audio_status(
+                true, true, false, false, false, true, true, true, 1000, 1010, 60
+            ),
             "disabled"
         );
         // intentional lock pause wins over stale/not-started signals
         assert_eq!(
-            classify_audio_status(false, true, true, true, false, false, 0, 1010, 60),
+            classify_audio_status(false, true, false, false, true, true, false, false, 0, 1010, 60),
             "ok"
+        );
+        // a missing prerequisite fails closed and is visible, not benign idle
+        assert_eq!(
+            classify_audio_status(false, false, true, false, true, true, false, false, 0, 1010, 60),
+            "meeting_detector_unavailable"
+        );
+        // intentional meetings-only idle is distinct and benign
+        assert_eq!(
+            classify_audio_status(false, false, false, true, true, true, false, false, 0, 1010, 60),
+            "waiting_for_meeting"
         );
         // never captured + no mic -> benign no_input_device (stays 200)
         assert_eq!(
-            classify_audio_status(false, false, true, false, false, false, 0, 1010, 60),
+            classify_audio_status(
+                false, false, false, false, true, false, false, false, 0, 1010, 60
+            ),
             "no_input_device"
         );
         // never captured but a mic exists -> not_started
         assert_eq!(
-            classify_audio_status(false, false, true, true, false, false, 0, 1010, 60),
+            classify_audio_status(
+                false, false, false, false, true, true, false, false, 0, 1010, 60
+            ),
             "not_started"
         );
         // not active, last audio within threshold -> ok
         assert_eq!(
-            classify_audio_status(false, false, false, true, false, false, 1000, 1030, 60),
+            classify_audio_status(
+                false, false, false, false, false, true, false, false, 1000, 1030, 60
+            ),
             "ok"
         );
         // not active, last audio stale -> stale
         assert_eq!(
-            classify_audio_status(false, false, false, true, false, false, 1000, 2000, 60),
+            classify_audio_status(
+                false, false, false, false, false, true, false, false, 1000, 2000, 60
+            ),
             "stale"
         );
     }

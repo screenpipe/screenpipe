@@ -176,16 +176,20 @@ lto = "thin"
 codegen-units = 16
 incremental = true
 
-# Faster dev builds - optimize dependencies but keep local code debuggable
+# Default non-release builds retain complete Screenpipe symbols while omitting
+# DWARF from third-party crates.
 [profile.dev]
 opt-level = 0
+debug = true
+split-debuginfo = "packed"
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2      # Optimize all dependencies (faster runtime, same compile time)
 debug = false      # deps don't need debug symbols — keeps target/ from ballooning
 
-# Space-efficient debugging: retain complete symbols for Screenpipe while
-# omitting DWARF from third-party crates. Use `cargo … --profile dev-debug`.
+# Kept for explicit invocations; default non-release builds use these settings
+# through the `dev` profile above.
 [profile.dev-debug]
 inherits = "dev"
 debug = true

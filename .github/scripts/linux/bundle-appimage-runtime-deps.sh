@@ -107,11 +107,24 @@ bundle_named_lib() {
 }
 
 install_screenpipe_launcher() {
-  local desktop="${APPDIR}/usr/share/applications/screenpipe.desktop"
+  local applications_dir="${APPDIR}/usr/share/applications"
+  local desktop=""
+  local candidate
   local launcher="${APPDIR}/usr/bin/screenpipe-app-launcher"
 
-  if [ ! -f "${desktop}" ]; then
-    echo "::error::screenpipe desktop entry is missing: ${desktop}" >&2
+  # Tauri derives the desktop filename from the product name, so enterprise
+  # bundles use "screenpipe enterprise.desktop" while community bundles use
+  # "screenpipe.desktop". Select by executable contract instead of branding.
+  for candidate in "${applications_dir}"/*.desktop; do
+    [ -f "${candidate}" ] || continue
+    if grep -Eq '^Exec=screenpipe-app([[:space:]]|$)' "${candidate}"; then
+      desktop="${candidate}"
+      break
+    fi
+  done
+
+  if [ -z "${desktop}" ]; then
+    echo "::error::screenpipe desktop entry is missing from: ${applications_dir}" >&2
     return 1
   fi
   if [ ! -x "${APPDIR}/usr/bin/screenpipe-app" ]; then

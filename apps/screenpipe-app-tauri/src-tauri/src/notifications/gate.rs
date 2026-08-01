@@ -11,9 +11,8 @@
 //!   2. snooze       — paused until a timestamp (`snoozeUntil`, epoch ms)
 //!   3. quiet hours  — a recurring daily window (`quietHours`, local wall-clock)
 //!
-//! Two things punch through a *temporary* pause (snooze / quiet hours) — but
-//! never a hard master-off:
-//!   - `capture_stall` — the critical "recording stopped — restart" alert.
+//! Two things punch through a *temporary* pause (snooze / quiet hours):
+//!   - `capture_stall` / `disk_pressure` — critical recording-stopped alerts.
 //!     screenpipe's whole job is to keep recording, so no reduced state hides
 //!     it (not even master-off).
 //!   - VIP pipes — pipes the user marked "always notify" (`allowDuringPause`).
@@ -29,7 +28,12 @@ use tauri::AppHandle;
 
 /// Notification `type`s that ignore *every* reduced state, master-off included.
 /// Keep this list tiny — it exists to prevent silent recording failure.
-pub const CRITICAL_TYPES: &[&str] = &["capture_stall"];
+pub const CAPTURE_STALL_NOTIFICATION_TYPE: &str = "capture_stall";
+pub const DISK_PRESSURE_NOTIFICATION_TYPE: &str = "disk_pressure";
+pub const CRITICAL_TYPES: &[&str] = &[
+    CAPTURE_STALL_NOTIFICATION_TYPE,
+    DISK_PRESSURE_NOTIFICATION_TYPE,
+];
 
 pub fn is_critical_type(notification_type: &str) -> bool {
     CRITICAL_TYPES.contains(&notification_type)
@@ -305,18 +309,20 @@ mod tests {
 
     // ── critical exemption ───────────────────────────────────────────
     #[test]
-    fn capture_stall_passes_through_every_reduced_state() {
+    fn recording_stopped_alerts_pass_through_every_reduced_state() {
         let q = Some(QuietHours {
             start_min: 0,
             end_min: 1439,
         });
-        assert!(!suppressed(
-            &guard(false, Some(i64::MAX), q),
-            Some("capture_stall"),
-            None,
-            100,
-            12
-        ));
+        for notification_type in CRITICAL_TYPES {
+            assert!(!suppressed(
+                &guard(false, Some(i64::MAX), q),
+                Some(notification_type),
+                None,
+                100,
+                12
+            ));
+        }
     }
 
     // ── snooze ───────────────────────────────────────────────────────
@@ -522,6 +528,13 @@ mod tests {
     fn suppressed_by_master_alias_matches() {
         assert!(suppressed_by_master(false, Some("pipe")));
         assert!(!suppressed_by_master(true, Some("pipe")));
-        assert!(!suppressed_by_master(false, Some("capture_stall")));
+        assert!(!suppressed_by_master(
+            false,
+            Some(CAPTURE_STALL_NOTIFICATION_TYPE)
+        ));
+        assert!(!suppressed_by_master(
+            false,
+            Some(DISK_PRESSURE_NOTIFICATION_TYPE)
+        ));
     }
 }
