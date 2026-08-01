@@ -288,6 +288,19 @@ export const validateUrl = (url: string): FieldValidationResult => {
   }
 };
 
+// Providers whose presets cannot work without an API key: pi resolves the
+// key from the spawn env, so a preset saved without one fails every chat
+// message with a raw CLI error (see the BYOK spawn guard in pi.rs).
+// `custom` is deliberately absent — keyless OpenAI-compatible endpoints
+// (LM Studio, llama.cpp, proxies) are legitimate. Every preset editor must
+// enforce this, so it lives here rather than in any single form.
+export const presetMissingRequiredApiKey = (preset: {
+  provider?: AIProviderType;
+  apiKey?: string | null;
+}): boolean =>
+  (preset.provider === "openai" || preset.provider === "anthropic") &&
+  !preset.apiKey?.trim();
+
 // API key validation
 export const validateApiKey = (apiKey: string, provider: AIProviderType): FieldValidationResult => {
   if (!apiKey.trim()) {

@@ -61,6 +61,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { AIPreset, commands } from "@/lib/utils/tauri";
+import { presetMissingRequiredApiKey } from "@/lib/utils/validation";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import {
   DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
@@ -404,6 +405,14 @@ export function AIProviderConfig({
       return;
     }
 
+    // Guard alongside the submit-button disable: an openai/anthropic preset
+    // saved without a key spawns pi that fails every message (pi.rs BYOK
+    // spawn guard). Selecting Claude prepopulates the model, so id+model
+    // alone don't prove the preset is usable.
+    if (presetMissingRequiredApiKey(formData)) {
+      return;
+    }
+
     setIsLoading(true);
     try {
       onSubmit({
@@ -588,6 +597,9 @@ export function AIProviderConfig({
                   )}
                 </Button>
               </div>
+              {presetMissingRequiredApiKey(formData) && (
+                <p className="text-xs text-destructive">api key is required for this provider</p>
+              )}
             </div>
             <div className="space-y-1">
               <Label htmlFor="model" className="text-xs">model</Label>
@@ -794,6 +806,9 @@ export function AIProviderConfig({
                     {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </Button>
                 </div>
+                {presetMissingRequiredApiKey(formData) && (
+                  <p className="text-xs text-destructive">api key is required for this provider</p>
+                )}
               </div>
             )}
 
@@ -932,7 +947,8 @@ export function AIProviderConfig({
           className="w-full h-7 text-xs"
           disabled={
             isLoading ||
-            Boolean(!formData.id?.length || !formData.model?.length)
+            Boolean(!formData.id?.length || !formData.model?.length) ||
+            presetMissingRequiredApiKey(formData)
           }
         >
           {isLoading ? (

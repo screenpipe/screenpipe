@@ -117,6 +117,7 @@ import {
   validatePresetName,
   validateUrl,
   validateApiKey,
+  presetMissingRequiredApiKey,
   debounce,
   FieldValidationResult
 } from "@/lib/utils/validation";
@@ -335,14 +336,7 @@ const AISection = ({
         }
       }
 
-      // openai/anthropic hard-require a key — a preset saved without one
-      // spawns pi that fails every message with a raw CLI error (see the
-      // BYOK spawn guard in pi.rs). custom stays optional for keyless
-      // OpenAI-compatible endpoints (LM Studio, llama.cpp, proxies).
-      if (
-        (presetData.provider === "openai" || presetData.provider === "anthropic") &&
-        !presetData.apiKey
-      ) {
+      if (presetMissingRequiredApiKey(presetData)) {
         errors.apiKey = "API key is required for this provider";
       }
       
