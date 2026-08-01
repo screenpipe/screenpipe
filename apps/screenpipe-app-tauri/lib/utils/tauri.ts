@@ -2417,13 +2417,16 @@ async setTrayUnhealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_unhealth_icon");
 },
 /**
- * Programmatically adjust a window's always-on-top level after creation.
+ * Temporarily lower a window for a permission flow, then restore its native
+ * level. The command name and boolean are retained for binding compatibility:
+ * `false` begins the temporary lowering and `true` restores the captured
+ * level.
  *
  * Tauri's JS `setAlwaysOnTop` can be unreliable for macOS panel-style
- * windows. For permission flows we need Screenpipe to stay normally
- * always-on-top, but temporarily drop below System Settings while the user is
- * granting permissions. On macOS this directly sets the underlying NSWindow
- * level: floating when enabled, normal when disabled.
+ * windows. The old implementation restored every window to a hardcoded
+ * floating level, which permanently elevated the normal Home/Settings window
+ * after it regained focus. Capture-once/restore-exactly mirrors the native
+ * focus-session lifecycle used to preserve external-app focus.
  */
 async setWindowAlwaysOnTopNative(label: string, alwaysOnTop: boolean) : Promise<Result<null, string>> {
     try {

@@ -267,6 +267,7 @@ commits: `d9d43d31`, `620c89a5`, `14acf6f0`
 - [ ] **startup permission gate** — on first launch, permissions are requested before recording starts (`d9d43d31`).
 - [ ] **faster permission polling** — permission status checked every 5-10 seconds, not 30 (`d9d43d31`).
 - [ ] **improved permission recovery UX** — Verify that the user experience for recovering from denied permissions is clear and intuitive. (`57cca740`)
+- [ ] **Settings returns to normal window level after permission flow** — From the full Home/Settings window, open any macOS Privacy & Security pane, return to Screenpipe, then focus another app. The other app must be able to appear above Screenpipe; only intentional overlay surfaces may remain floating. (`#5753`)
 
 ### 8. app lifecycle & updates
 
