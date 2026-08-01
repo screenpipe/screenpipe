@@ -78,9 +78,12 @@ function writeConversation(
                               toolName: "read",
                               args: { path: "SKILL.md" },
                               result: "instructions loaded",
-                              isRunning: false,
+                              // Must stay running: expectActiveToolState waits
+                              // for the running indicator; a completed toolCall
+                              // never shows it.
+                              isRunning: true,
                               startedAtMs: updatedAt - 2_000,
-                              endedAtMs: updatedAt - 1_000,
+                              endedAtMs: null,
                             },
                           },
                         ],
