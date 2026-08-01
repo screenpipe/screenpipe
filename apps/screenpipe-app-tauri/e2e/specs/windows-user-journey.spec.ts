@@ -118,7 +118,9 @@ async function clickFirstButtonWithText(text: string, timeoutMs = t(15_000)): Pr
       if (!(await button.isDisplayed().catch(() => false))) continue;
 
       const label = (await button.getText().catch(() => "")).trim().toLowerCase();
-      const ariaLabel = (await button.getAttribute("aria-label").catch(() => ""))
+      const ariaLabel = (
+        (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+      )
         .trim()
         .toLowerCase();
       if (
@@ -295,7 +297,9 @@ async function stopMeetingIfVisible(): Promise<void> {
     if (!(await button.isDisplayed().catch(() => false))) continue;
 
     const label = (await button.getText().catch(() => "")).trim().toLowerCase();
-    const ariaLabel = (await button.getAttribute("aria-label").catch(() => ""))
+    const ariaLabel = (
+      (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+    )
       .trim()
       .toLowerCase();
     if (label !== "stop" && !ariaLabel.startsWith("stop ")) continue;
