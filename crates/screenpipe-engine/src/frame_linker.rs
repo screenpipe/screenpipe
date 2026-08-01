@@ -138,9 +138,13 @@ pub struct FrameLinker {
     /// Events seen but not yet paired with a frame.
     pending_events: HashMap<CorrelationId, PendingEvent>,
     /// Frames seen but with at least one unmatched correlation id.
-    /// Stored unkeyed because a frame may have N correlation ids; we
-    /// scan on event arrival. N is bounded by `capacity`.
-    pending_frames: Vec<PendingFrame>,
+    /// Keyed by `frame_id` for O(1) lookup during TTL and capacity
+    /// eviction. The reverse index below provides O(1) lookup from
+    /// correlation_id → frame_id on the event-arrival hot path.
+    pending_frames: HashMap<i64, PendingFrame>,
+    /// Reverse index from correlation_id → frame_id, pointing into
+    /// `pending_frames`. Eliminates the O(n) linear scan on event arrival.
+    pending_frames_by_corr: HashMap<CorrelationId, i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -162,24 +166,27 @@ impl FrameLinker {
         Self {
             config,
             pending_events: HashMap::new(),
-            pending_frames: Vec::new(),
+            pending_frames: HashMap::new(),
+            pending_frames_by_corr: HashMap::new(),
         }
     }
 
     /// Called by the recorder side after a `ui_events` row has been
     /// persisted. Returns any update that becomes possible.
     pub fn on_event_persisted(&mut self, e: EventPersisted, now: Instant) -> Option<LinkUpdate> {
-        // Fast path: is there a pending frame already waiting on this corr id?
-        for pf in self.pending_frames.iter_mut() {
-            if let Some(pos) = pf.unmatched.iter().position(|c| *c == e.correlation_id) {
-                pf.unmatched.swap_remove(pos);
-                let frame_id = pf.frame_id;
-                self.compact_pending_frames();
-                return Some(LinkUpdate {
-                    row_id: e.row_id,
-                    frame_id,
-                });
+        // O(1) lookup: is there a pending frame already waiting on this corr id?
+        if let Some(&frame_id) = self.pending_frames_by_corr.get(&e.correlation_id) {
+            self.pending_frames_by_corr.remove(&e.correlation_id);
+            if let Some(pf) = self.pending_frames.get_mut(&frame_id) {
+                pf.unmatched.retain(|c| *c != e.correlation_id);
+                if pf.unmatched.is_empty() {
+                    self.pending_frames.remove(&frame_id);
+                }
             }
+            return Some(LinkUpdate {
+                row_id: e.row_id,
+                frame_id,
+            });
         }
         // No match yet — stash and wait for the frame.
         self.evict_if_full_events(now);
@@ -210,11 +217,17 @@ impl FrameLinker {
         }
         if !unmatched.is_empty() {
             self.evict_if_full_frames(now);
-            self.pending_frames.push(PendingFrame {
-                frame_id: c.frame_id,
-                unmatched,
-                inserted_at: now,
-            });
+            for &corr_id in &unmatched {
+                self.pending_frames_by_corr.insert(corr_id, c.frame_id);
+            }
+            self.pending_frames.insert(
+                c.frame_id,
+                PendingFrame {
+                    frame_id: c.frame_id,
+                    unmatched,
+                    inserted_at: now,
+                },
+            );
         }
         updates
     }
@@ -230,8 +243,15 @@ impl FrameLinker {
             self.pending_events.retain(|_, pe| pe.inserted_at >= cutoff);
             evicted += before_events - self.pending_events.len();
             let before_frames = self.pending_frames.len();
-            self.pending_frames.retain(|pf| pf.inserted_at >= cutoff);
+            self.pending_frames.retain(|_, pf| pf.inserted_at >= cutoff);
             evicted += before_frames - self.pending_frames.len();
+            // Rebuild the reverse index from surviving frames.
+            self.pending_frames_by_corr.clear();
+            for pf in self.pending_frames.values() {
+                for &corr_id in &pf.unmatched {
+                    self.pending_frames_by_corr.insert(corr_id, pf.frame_id);
+                }
+            }
         }
         evicted
     }
@@ -261,19 +281,15 @@ impl FrameLinker {
         if self.pending_frames.len() < self.config.capacity {
             return;
         }
-        if let Some(idx) = self
-            .pending_frames
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, pf)| pf.inserted_at)
-            .map(|(i, _)| i)
+        if let Some((&oldest_frame_id, _)) =
+            self.pending_frames.iter().min_by_key(|(_, pf)| pf.inserted_at)
         {
-            self.pending_frames.swap_remove(idx);
+            if let Some(pf) = self.pending_frames.remove(&oldest_frame_id) {
+                for corr_id in &pf.unmatched {
+                    self.pending_frames_by_corr.remove(corr_id);
+                }
+            }
         }
-    }
-
-    fn compact_pending_frames(&mut self) {
-        self.pending_frames.retain(|pf| !pf.unmatched.is_empty());
     }
 }
 
@@ -690,5 +706,108 @@ mod tests {
                 frame_id: 999
             })
         );
+    }
+
+    #[test]
+    fn event_matched_among_many_pending_frames_is_o1_lookup() {
+        let mut linker = FrameLinker::new(FrameLinkerConfig {
+            ttl: Duration::from_secs(60),
+            capacity: 4096,
+        });
+        let t0 = Instant::now();
+
+        // Create 1000 pending frames, each waiting on a unique corr id
+        // with no matching event row yet.
+        for frame_num in 0..1000i64 {
+            let corr_id = frame_num as CorrelationId;
+            let updates = linker.on_frame_captured(
+                FrameCaptured {
+                    frame_id: 10000 + frame_num,
+                    correlation_ids: vec![corr_id],
+                },
+                t0,
+            );
+            assert!(updates.is_empty());
+        }
+        assert_eq!(linker.pending_len(), (0, 1000));
+
+        // Match events in reverse order — with the reverse index this
+        // is O(1) per event regardless of how many frames are pending.
+        for frame_num in (0..1000i64).rev() {
+            let corr_id = frame_num as CorrelationId;
+            let update = linker.on_event_persisted(
+                EventPersisted {
+                    correlation_id: corr_id,
+                    row_id: 50000 + frame_num,
+                },
+                t0,
+            );
+            assert_eq!(
+                update,
+                Some(LinkUpdate {
+                    row_id: 50000 + frame_num,
+                    frame_id: 10000 + frame_num,
+                }),
+                "event for corr_id={} should match frame_id={}",
+                corr_id,
+                10000 + frame_num
+            );
+        }
+        assert_eq!(linker.pending_len(), (0, 0));
+    }
+
+    #[test]
+    fn ttl_eviction_rebuilds_reverse_index() {
+        let mut linker = FrameLinker::new(FrameLinkerConfig {
+            ttl: Duration::from_secs(60),
+            capacity: 4096,
+        });
+        let t0 = Instant::now();
+
+        // Two pending frames, each waiting on a corr id.
+        linker.on_frame_captured(
+            FrameCaptured {
+                frame_id: 1,
+                correlation_ids: vec![100],
+            },
+            t0,
+        );
+        linker.on_frame_captured(
+            FrameCaptured {
+                frame_id: 2,
+                correlation_ids: vec![200],
+            },
+            t0 + Duration::from_secs(70),
+        );
+        assert_eq!(linker.pending_len(), (0, 2));
+
+        // Tick at t0+1s: frame 1 is still valid, frame 2 is still valid
+        // (inserted at t0+70s, TTL 60s → expires at t0+130s).
+        let evicted = linker.tick(t0 + Duration::from_secs(1));
+        assert_eq!(evicted, 0);
+        assert_eq!(linker.pending_len(), (0, 2));
+
+        // Tick at t0+80s: frame 1 (inserted at t0) is now past TTL.
+        let evicted = linker.tick(t0 + Duration::from_secs(80));
+        assert_eq!(evicted, 1);
+        assert_eq!(linker.pending_len(), (0, 1));
+
+        // corr_id 100 should no longer be in the reverse index, but 200
+        // should still resolve to frame 2.
+        let update = linker.on_event_persisted(
+            EventPersisted {
+                correlation_id: 200,
+                row_id: 300,
+            },
+            t0 + Duration::from_secs(80),
+        );
+        assert_eq!(
+            update,
+            Some(LinkUpdate {
+                row_id: 300,
+                frame_id: 2
+            })
+        );
+        assert_eq!(linker.pending_len(), (0, 0));
     }
 }
