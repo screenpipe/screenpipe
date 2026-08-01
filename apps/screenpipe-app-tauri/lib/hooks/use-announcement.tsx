@@ -31,22 +31,11 @@ import {
  *   {
  *     "id": "tip-pipes-2026-06",          // bump to re-show after dismissal
  *     "kind": "tip",                       // news | tip | reminder
- *     "surface": "sidebar",                // modal | banner | card | sidebar
+ *     "surface": "bubble",                 // modal | banner | card | bubble | sidebar
+ *     "anchor": "sidebar-pipes",           // required for bubble
+ *     "position": "right",                 // top | right | bottom | left
  *     "title": "pipes run on a schedule",
- *     "body": "help us understand what brought you to screenpipe.",
- *     "survey": {
- *       "submitLabel": "send",
- *       "questions": [{
- *         "id": "discovery_source",
- *         "type": "single-choice",
- *         "prompt": "where did you first hear about screenpipe?",
- *         "required": true,
- *         "choices": [
- *           { "id": "hacker_news", "label": "Hacker News" },
- *           { "id": "friend", "label": "A friend or colleague" }
- *         ]
- *       }]
- *     },
+ *     "body": "create one once and it keeps working.",
  *     "cta": { "label": "create a pipe", "route": "/home?section=pipes" },
  *     "expiresAt": "2026-07-01T00:00:00Z", // optional
  *     "dismissible": true                   // optional, default true
@@ -56,6 +45,7 @@ import {
  * rendering; it cannot name code, components, scripts, or arbitrary events.
  */
 export const ANNOUNCEMENT_FLAG_KEY = "app-announcement";
+export const ANNOUNCEMENT_REFRESH_INTERVAL_MS = 60_000;
 
 interface UseAnnouncementResult {
   announcement: Announcement | null;
@@ -109,6 +99,7 @@ export function useAnnouncement(): UseAnnouncementResult {
 
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
+    let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
     const read = () => {
       if (cancelled) return;
@@ -123,6 +114,22 @@ export function useAnnouncement(): UseAnnouncementResult {
       } catch {
         setPayload(null);
       }
+    };
+
+    const refresh = () => {
+      if (cancelled || document.visibilityState === "hidden") return;
+      try {
+        if (!posthog.has_opted_out_capturing?.()) {
+          posthog.reloadFeatureFlags();
+        }
+      } catch {
+        // PostHog is not initialized or the network is unavailable. The
+        // cached one-shot read still keeps the UI usable.
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
     };
 
     const start = async () => {
@@ -142,6 +149,13 @@ export function useAnnouncement(): UseAnnouncementResult {
       } catch {
         // posthog not ready / disabled — the one-shot read above is enough.
       }
+      // A release webview can stay open for days. Refresh on foreground and
+      // once per minute so a newly enabled PostHog payload reaches an already
+      // running app instead of requiring a restart.
+      window.addEventListener("focus", refresh);
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      refreshTimer = setInterval(refresh, ANNOUNCEMENT_REFRESH_INTERVAL_MS);
+      refresh();
     };
 
     start().catch(() => {
@@ -151,6 +165,9 @@ export function useAnnouncement(): UseAnnouncementResult {
     return () => {
       cancelled = true;
       unsubscribe?.();
+      if (refreshTimer) clearInterval(refreshTimer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, []);
 

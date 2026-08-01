@@ -82,6 +82,7 @@ mod engine_events;
 mod monitor_events;
 mod owned_browser_cookies;
 mod permissions;
+mod acp_runtime;
 mod pi;
 mod pi_command_queue;
 mod power_awake;
@@ -319,6 +320,36 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    // The ACP agent runs as a hidden mode of this same signed executable, so no
+    // second sidecar or hand-written protocol ships. These paths must exit
+    // before any Tauri, database, or recording setup.
+    if acp_runtime::is_process_guard_mode() {
+        let exit_code = match acp_runtime::run_process_guard() {
+            Ok(exit_code) => exit_code,
+            Err(error) => {
+                eprintln!("[acp-process-guard] {error}");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+    if acp_runtime::is_runtime_mode() {
+        let exit_code = match acp_runtime::run_from_env().await {
+            Ok(()) => 0,
+            Err(error) => {
+                use std::io::Write as _;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::json!({ "type": "error", "message": error })
+                );
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
 
@@ -382,6 +413,39 @@ async fn main() {
     // macOS/Linux. Must run before Pi, PortableGit download, and pipe
     // subprocesses are touched.
     windows_ca_bundle::install();
+
+    // Detect pre-AVX2 CPUs once, before the engine boots. The exe itself is
+    // baseline-safe; whisper/qwen3 kernels are AVX2-compiled and gated at
+    // runtime in screenpipe-audio. This flag drives the "compatibility mode"
+    // notice in onboarding via the boot-phase snapshot. tracing isn't
+    // initialized yet — eprintln! here, warn! again after logging init.
+    {
+        let cpu = screenpipe_core::cpu_features::snapshot();
+        if !cpu.avx2 {
+            eprintln!(
+                "screenpipe: cpu lacks AVX2 ({}); running in compatibility mode — local whisper/qwen3 STT disabled",
+                cpu.as_log_string()
+            );
+            health::set_cpu_compat_mode(true);
+        }
+
+        // Hidden CI probe: `screenpipe-app.exe --cpu-smoke` exits 0 here,
+        // after every static initializer and the CPU detection above have
+        // run but before any Tauri/WebView/window work. release-app.yml runs
+        // this natively post-build so the GUI binary itself — its static
+        // init + import table (onnxruntime.dll → MSVCP/VCRUNTIME) — is
+        // proven to reach main() (issue #3125: the old /arch:AVX2 builds
+        // died in static init with 0xC000001D before any code here could
+        // run). Non-AVX2 (Intel SDE) coverage lives in release-cli.yml's
+        // smoke-windows job, which compiles the identical workspace crates
+        // under the identical flags. A GUI binary can't be probed with
+        // --version: it has no console output path, and booting the full
+        // app headless in CI is flaky by design.
+        if std::env::args().any(|a| a == "--cpu-smoke") {
+            eprintln!("cpu-smoke: static init ok; {}", cpu.as_log_string());
+            std::process::exit(0);
+        }
+    }
 
     // Handle --check-arc-automation / --trigger-arc-automation flags early,
     // before any Tauri initialization. Used by the permission system to run
@@ -1097,6 +1161,15 @@ async fn main() {
                 registry.init();
             }
 
+            // Repeat the pre-logging compatibility-mode eprintln! now that the
+            // subscriber is up, so it lands in the log files users send us.
+            if !screenpipe_core::cpu_features::has_avx2() {
+                warn!(
+                    "cpu lacks AVX2 ({}); running in compatibility mode — local whisper/qwen3 STT disabled, parakeet/cloud engines still available",
+                    screenpipe_core::cpu_features::snapshot().as_log_string()
+                );
+            }
+
             #[cfg(target_os = "windows")]
             windows_webview_env::log_diagnostics();
 
@@ -1414,15 +1487,22 @@ async fn main() {
                         }
                     };
 
-                    // Download whisper model (834MB default) — biggest download, start first
+                    // Download whisper model (834MB default) — biggest download, start first.
+                    // Skipped on non-AVX2 CPUs: whisper can never run there (the runtime
+                    // gate in screenpipe-audio disables it), so don't burn 834MB of
+                    // bandwidth/disk on a model that can't load.
                     if let Some(engine) = engine {
-                        let engine_clone = engine.clone();
-                        tokio::task::spawn_blocking(move || {
-                            match screenpipe_audio::transcription::whisper::model::download_whisper_model(engine_clone) {
-                                Ok(path) => info!("whisper model pre-download complete: {:?}", path),
-                                Err(e) => warn!("whisper model pre-download failed (will retry at server start): {}", e),
-                            }
-                        });
+                        if screenpipe_core::cpu_features::has_avx2() {
+                            let engine_clone = engine.clone();
+                            tokio::task::spawn_blocking(move || {
+                                match screenpipe_audio::transcription::whisper::model::download_whisper_model(engine_clone) {
+                                    Ok(path) => info!("whisper model pre-download complete: {:?}", path),
+                                    Err(e) => warn!("whisper model pre-download failed (will retry at server start): {}", e),
+                                }
+                            });
+                        } else {
+                            warn!("skipping whisper model pre-download: CPU lacks AVX2 (whisper disabled)");
+                        }
                     }
 
                     // Download small ONNX models in parallel — these complete in seconds
@@ -2172,11 +2252,17 @@ async fn main() {
                     let app_handle = app_handle.app_handle().clone();
                     tauri::async_runtime::spawn(async move {
                         if let Some(analytics) = app_handle.try_state::<Arc<AnalyticsManager>>() {
+                            // cpu_avx2/cpu_features size the pre-AVX2 population
+                            // running in compatibility mode (local whisper/qwen3
+                            // STT disabled) — see cpu_features in screenpipe-core.
+                            let cpu = screenpipe_core::cpu_features::snapshot();
                             let _ = analytics
                                 .send_event(
                                     "app_started",
                                     Some(json!({
-                                        "startup_type": "normal"
+                                        "startup_type": "normal",
+                                        "cpu_avx2": cpu.avx2,
+                                        "cpu_features": cpu.as_log_string()
                                     })),
                                 )
                                 .await;

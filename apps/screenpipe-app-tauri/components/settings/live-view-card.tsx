@@ -26,6 +26,7 @@ import {
   InteractiveLiveViewListItem,
 } from "@/components/settings/live-view-interactive-list";
 import { LiveViewListItemText } from "@/components/settings/live-view-list-item-text";
+import { LiveViewLineChart } from "@/components/settings/live-view-line-chart";
 import type {
   LiveViewItemActionRequest,
   LiveViewListItem,
@@ -268,62 +269,7 @@ function LiveViewCardBody({
       label: stringValue(item.label),
       value: typeof item.value === "number" ? item.value : 0,
     }));
-    const values = points.map((point) => point.value);
-    const minimum = values.length > 0 ? Math.min(...values) : 0;
-    const maximum = values.length > 0 ? Math.max(...values) : 0;
-    const spread = maximum > minimum ? maximum - minimum : 1;
-    const polyline = points
-      .map((point, index) => {
-        const x = points.length <= 1 ? 50 : (index / (points.length - 1)) * 100;
-        const y = 92 - ((point.value - minimum) / spread) * 84;
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
-      })
-      .join(" ");
-    return (
-      <div className="space-y-3">
-        <div className="flex items-baseline justify-between gap-3 text-xs">
-          <span className="text-muted-foreground">
-            {points[0]?.label || points[0]?.timestamp}
-          </span>
-          <span className="tabular-nums">
-            {minimum.toLocaleString()} to {maximum.toLocaleString()}
-          </span>
-        </div>
-        <svg
-          role="img"
-          aria-label={`${slot.title} time series`}
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          className="h-44 w-full overflow-visible"
-        >
-          {[8, 36, 64, 92].map((y) => (
-            <line
-              key={y}
-              x1="0"
-              x2="100"
-              y1={y}
-              y2={y}
-              className="stroke-border"
-              strokeWidth="0.5"
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-          <polyline
-            points={polyline}
-            fill="none"
-            className="stroke-foreground"
-            strokeWidth="2"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
-        <div className="flex justify-between gap-3 text-[10px] text-muted-foreground">
-          <span>{points[0]?.timestamp}</span>
-          <span>{points.at(-1)?.timestamp}</span>
-        </div>
-      </div>
-    );
+    return <LiveViewLineChart title={slot.title} points={points} />;
   }
 
   if (slot.component === "table.v1") {

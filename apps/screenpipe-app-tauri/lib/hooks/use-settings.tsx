@@ -39,6 +39,7 @@ import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
 } from "./managed-settings";
+import { isResolvedConsumerBuild } from "./use-is-enterprise-build";
 import {
 	clearLegacyUserGoalCategory,
 	DEFAULT_USER_GOAL_CATEGORY,
@@ -957,6 +958,30 @@ async function hydrateCloudToken(settings: Settings): Promise<Settings> {
 	return settings;
 }
 
+/**
+ * The managed values that should actually be enforced right now, or `undefined`
+ * on a confirmed consumer build.
+ *
+ * Enterprise and consumer installs share `~/.screenpipe`, so a machine that ran
+ * the enterprise binary once keeps its `enterpriseManagedSettings` blob. The UI
+ * layer gates on `isEnterprise` (`use-enterprise-policy`), but this persistence
+ * layer did not — so on a consumer build the switch rendered as a normal,
+ * interactive control while every write was clamped straight back on both write
+ * and read, with no lock shown and no way to clear the blob. Toggling
+ * "screenshot images" off simply did nothing, forever.
+ *
+ * Fails closed: `isResolvedConsumerBuild` only reports true on an authoritative
+ * `false` from Rust, so an unresolved or failed check keeps enforcing policy and
+ * a managed device cannot escape it by racing the IPC.
+ */
+async function activeManagedValues(
+	settings: Partial<Settings>
+): Promise<Record<string, ManagedSettingValue> | undefined> {
+	const managed = settings.enterpriseManagedSettings;
+	if (!managed) return undefined;
+	return (await isResolvedConsumerBuild()) ? undefined : managed;
+}
+
 // Store utilities similar to Cap's implementation
 function createSettingsStore() {
 	const get = async (): Promise<Settings> => {
@@ -1225,7 +1250,7 @@ function createSettingsStore() {
 
 			// Migrations may touch recording defaults. Enterprise values are the
 			// final authority and must survive reads as well as explicit writes.
-			const managedValues = settings.enterpriseManagedSettings;
+			const managedValues = await activeManagedValues(settings);
 			if (managedValues) {
 				const managedChanged = Object.entries(managedValues).some(
 					([key, value]) => JSON.stringify(settings[key]) !== JSON.stringify(value)
@@ -1234,6 +1259,11 @@ function createSettingsStore() {
 					Object.assign(settings, applyManagedOverrides(settings, managedValues));
 					needsUpdate = true;
 				}
+			} else if (settings.enterpriseManagedSettings) {
+				// Confirmed consumer build carrying a stale policy blob: drop it so
+				// the machine stops re-clamping on every read.
+				delete settings.enterpriseManagedSettings;
+				needsUpdate = true;
 			}
 
 		// Save migrations if needed
@@ -1254,7 +1284,7 @@ function createSettingsStore() {
 		enqueueSettingsStoreWrite(async () => {
 			const store = await getStore();
 			const current = await get();
-			const managedValues = current.enterpriseManagedSettings;
+			const managedValues = await activeManagedValues(current);
 			let newSettings = { ...current, ...value } as Settings;
 			if ("user" in value) {
 				// On logout / Pro→non-Pro transition, clear the V2 marker so a future
@@ -1269,6 +1299,7 @@ function createSettingsStore() {
 				managedValues
 			) as Settings;
 			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
+			else delete newSettings.enterpriseManagedSettings;
 			await setSettingsStripped(store, newSettings);
 			await saveAndEncrypt(store);
 		});
@@ -1277,7 +1308,7 @@ function createSettingsStore() {
 		enqueueSettingsStoreWrite(async () => {
 			const store = await getStore();
 			const current = await get();
-			const managedValues = current.enterpriseManagedSettings;
+			const managedValues = await activeManagedValues(current);
 			const defaults = applyManagedOverrides(
 				createDefaultSettingsObject() as Record<string, unknown>,
 				managedValues

@@ -558,11 +558,13 @@ impl DatabaseManager {
     /// separate until an explicit merge chooses the authoritative identity.
     pub async fn create_semantic_actor(&self, name: &str) -> Result<SemanticActor, sqlx::Error> {
         let name = validated_actor_name(name)?;
+        let mut tx = self.begin_immediate_with_retry().await?;
         let id = sqlx::query("INSERT INTO semantic_actors (name) VALUES (?1)")
             .bind(name)
-            .execute(&self.pool)
+            .execute(&mut **tx.conn())
             .await?
             .last_insert_rowid();
+        tx.commit().await?;
         self.get_semantic_actor(id).await
     }
 
@@ -574,6 +576,7 @@ impl DatabaseManager {
         name: &str,
     ) -> Result<SemanticActor, sqlx::Error> {
         let name = validated_actor_name(name)?;
+        let mut tx = self.begin_immediate_with_retry().await?;
         let updated = sqlx::query(
             r#"UPDATE semantic_actors
                SET name = ?1,
@@ -582,11 +585,12 @@ impl DatabaseManager {
         )
         .bind(name)
         .bind(actor_id)
-        .execute(&self.pool)
+        .execute(&mut **tx.conn())
         .await?;
         if updated.rows_affected() != 1 {
             return Err(sqlx::Error::RowNotFound);
         }
+        tx.commit().await?;
         self.get_semantic_actor(actor_id).await
     }
 

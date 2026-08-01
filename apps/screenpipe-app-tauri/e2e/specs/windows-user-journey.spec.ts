@@ -118,7 +118,18 @@ async function clickFirstButtonWithText(text: string, timeoutMs = t(15_000)): Pr
       if (!(await button.isDisplayed().catch(() => false))) continue;
 
       const label = (await button.getText().catch(() => "")).trim().toLowerCase();
-      if (label !== expected) continue;
+      const ariaLabel = (
+        (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+      )
+        .trim()
+        .toLowerCase();
+      if (
+        label !== expected &&
+        ariaLabel !== expected &&
+        !ariaLabel.startsWith(`${expected} `)
+      ) {
+        continue;
+      }
 
       await button.scrollIntoView();
       await button.waitForEnabled({ timeout: t(5_000) });
@@ -128,7 +139,7 @@ async function clickFirstButtonWithText(text: string, timeoutMs = t(15_000)): Pr
     await browser.pause(t(250));
   }
 
-  throw new Error(`No displayed button found with text "${text}"`);
+  throw new Error(`No displayed button found with text or accessible label "${text}"`);
 }
 
 // The palette publishes what it is showing as data-search-state on the results
@@ -286,7 +297,12 @@ async function stopMeetingIfVisible(): Promise<void> {
     if (!(await button.isDisplayed().catch(() => false))) continue;
 
     const label = (await button.getText().catch(() => "")).trim().toLowerCase();
-    if (label !== "stop") continue;
+    const ariaLabel = (
+      (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+    )
+      .trim()
+      .toLowerCase();
+    if (label !== "stop" && !ariaLabel.startsWith("stop ")) continue;
 
     await button.scrollIntoView();
     await button.click();

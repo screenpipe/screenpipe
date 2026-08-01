@@ -161,10 +161,11 @@ async fn coordinated_engine_secret_writes_and_checkpoints_keep_integrity_ok() {
             .expect("secret store"),
     );
 
-    sqlx::query("CREATE TABLE IF NOT EXISTS chaos_engine (id INTEGER PRIMARY KEY, v TEXT)")
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    db.execute_raw_sql_write(
+        "CREATE TABLE IF NOT EXISTS chaos_engine (id INTEGER PRIMARY KEY, v TEXT)",
+    )
+    .await
+    .unwrap();
     let mut tasks = Vec::new();
 
     const WRITERS_PER_POOL: usize = 2;

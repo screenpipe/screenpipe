@@ -1082,6 +1082,9 @@ pub enum AIProviderType {
     Pi,
     #[serde(rename = "anthropic")]
     Anthropic,
+    /// External Agent Client Protocol adapter, launched via the ACP runtime.
+    #[serde(rename = "acp")]
+    Acp,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -1102,6 +1105,9 @@ pub struct AIPreset {
     pub max_context_chars: i32,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     pub max_tokens: i32,
+    /// The external adapter to launch when `provider` is `acp`.
+    #[serde(rename = "acpAgent", default)]
+    pub acp_agent: Option<crate::pi::AcpAgentConfig>,
 }
 
 fn default_max_tokens() -> i32 {
@@ -1120,6 +1126,7 @@ impl Default for AIPreset {
             api_key: None,
             max_context_chars: 512000,
             max_tokens: 4096,
+            acp_agent: None,
         }
     }
 }
@@ -1224,6 +1231,19 @@ fn entitlement_is_lifetime(entitlement: &serde_json::Value) -> bool {
             .unwrap_or("")
     };
     field("plan") == "lifetime" || field("source") == "lifetime"
+}
+
+fn is_verified_paid_plan_id(plan: &str) -> bool {
+    matches!(
+        plan.trim().to_ascii_lowercase().as_str(),
+        "standard"
+            | "pro"
+            | "pro_max"
+            | "pro_ultra"
+            | "team"
+            | "enterprise"
+            | "lifetime"
+    )
 }
 
 fn entitlement_feature(entitlement: &serde_json::Value, feature: &str) -> bool {
@@ -1375,6 +1395,7 @@ Rules:
             api_key: None,
             max_context_chars: 128000,
             max_tokens: 4096,
+            acp_agent: None,
         };
 
         Self {
@@ -1699,11 +1720,7 @@ impl SettingsStore {
         else {
             return false;
         };
-        let account_plan_is_paid = matches!(
-            account_plan.to_ascii_lowercase().as_str(),
-            "standard" | "pro" | "team" | "enterprise" | "lifetime"
-        );
-        if !account_plan_is_paid {
+        if !is_verified_paid_plan_id(account_plan) {
             return false;
         }
         let Some(entitlement) = self.user.entitlement.as_ref() else {
@@ -1720,11 +1737,7 @@ impl SettingsStore {
         else {
             return false;
         };
-        let entitlement_plan_is_paid = matches!(
-            entitlement_plan.to_ascii_lowercase().as_str(),
-            "standard" | "pro" | "team" | "enterprise" | "lifetime"
-        );
-        if !entitlement_plan_is_paid {
+        if !is_verified_paid_plan_id(entitlement_plan) {
             return false;
         }
         if !account_plan.eq_ignore_ascii_case(entitlement_plan) {
@@ -2492,6 +2505,31 @@ mod tests {
             "features": { "app": true }
         }));
         assert!(!store.requires_enterprise_app_for_consumer());
+    }
+
+    #[test]
+    fn business_capacity_plans_override_enterprise_app_requirement() {
+        for plan in ["pro_max", "pro_ultra"] {
+            let mut store = SettingsStore::default();
+            store.user.id = Some("consumer_capacity_paid".to_string());
+            store.user.app_entitled = Some(true);
+            store.user.cloud_subscribed = Some(true);
+            store.user.subscription_plan = Some(plan.to_string());
+            store.user.enterprise_account = Some(json!({ "requires_enterprise_app": true }));
+            store.user.entitlement = Some(json!({
+                "active": true,
+                "plan": plan,
+                "source": "manual",
+                "checked_at": chrono::Utc::now().to_rfc3339(),
+                "features": { "app": true, "cloud": true, "enterprise": false }
+            }));
+
+            assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
+            assert!(!store.restricts_paid_local_features());
+            assert!(!store.requires_enterprise_app_for_consumer());
+            let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
+            assert_eq!(config.max_non_template_pipes, None);
+        }
     }
 
     #[test]

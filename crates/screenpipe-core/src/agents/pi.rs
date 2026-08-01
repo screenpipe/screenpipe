@@ -2500,6 +2500,22 @@ fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<()> {
 }
 
 pub fn find_bun_executable() -> Option<String> {
+    // Pre-AVX2 CPU: the bundled/stock bun.exe requires AVX2 and dies with
+    // 0xC000001D (STATUS_ILLEGAL_INSTRUCTION) at spawn. Prefer the
+    // runtime-downloaded baseline build; if it isn't on disk yet, kick off
+    // the download in the background and fall through to the stock bun for
+    // this run (its failure is diagnosed by describe_exit_status_code; the
+    // next spawn picks up the baseline).
+    #[cfg(windows)]
+    if !crate::cpu_features::has_avx2() {
+        if let Some(baseline) = baseline_bun_path() {
+            if baseline.exists() {
+                return Some(baseline.to_string_lossy().to_string());
+            }
+        }
+        spawn_baseline_bun_download();
+    }
+
     // Check next to our own executable (bundled bun)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_folder) = exe_path.parent() {
@@ -2539,7 +2555,7 @@ pub fn find_bun_executable() -> Option<String> {
 /// the OOM killer) — exactly the case that used to log as an empty error.
 pub fn describe_exit_status(status: &std::process::ExitStatus) -> String {
     if let Some(code) = status.code() {
-        return format!("exit code {}", code);
+        return describe_exit_status_code(code);
     }
     #[cfg(unix)]
     {
@@ -2557,6 +2573,26 @@ pub fn describe_exit_status(status: &std::process::ExitStatus) -> String {
         }
     }
     "terminated without exit code".to_string()
+}
+
+/// Code→string mapping, factored out of [`describe_exit_status`] so it can
+/// be unit-tested (`ExitStatus` isn't constructible portably in tests) —
+/// mirrors the unix signal mapping above.
+pub fn describe_exit_status_code(code: i32) -> String {
+    #[cfg(windows)]
+    {
+        // 0xC000001D == STATUS_ILLEGAL_INSTRUCTION == exit code -1073741795.
+        // The stock bun.exe requires AVX2; on pre-AVX2 CPUs it dies with this
+        // code before writing a single byte to stderr — exactly the case that
+        // used to surface as an empty error. find_bun_executable downloads
+        // bun's official baseline build in the background on such CPUs.
+        if code == -1073741795i32 {
+            return format!(
+                "exit code {code} (0xC000001D, illegal instruction; this CPU may lack AVX2 — the stock bun build requires it; the baseline bun variant will be used after download)"
+            );
+        }
+    }
+    format!("exit code {code}")
 }
 
 /// Last `max` bytes of a captured process stream, lossy-decoded and
@@ -3241,42 +3277,9 @@ fn download_portable_git() -> std::result::Result<String, String> {
         }
     }
 
-    // Verify SHA256 using certutil (built into Windows)
-    let digest = {
-        let mut cmd = std::process::Command::new("certutil");
-        cmd.args(["-hashfile", &temp_file.to_string_lossy(), "SHA256"]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // certutil output: line 0 = header, line 1 = hex hash, line 2 = status
-                stdout
-                    .lines()
-                    .nth(1)
-                    .map(|l| l.trim().replace(' ', "").to_lowercase())
-                    .unwrap_or_default()
-            }
-            _ => {
-                warn!("Could not verify SHA256 (certutil failed), proceeding with caution");
-                String::new()
-            }
-        }
-    };
-
-    if !digest.is_empty() && digest != PORTABLE_GIT_SHA256 {
-        let _ = std::fs::remove_file(&temp_file);
-        return Err(format!(
-            "SHA256 mismatch: expected {}, got {}. Download may be corrupted.",
-            PORTABLE_GIT_SHA256, digest
-        ));
-    }
-    if !digest.is_empty() {
-        info!("SHA256 verified: {}", digest);
-    }
+    // Mandatory in-process SHA256 verification; deletes the archive on any
+    // failure. We're about to execute this file — never run it unverified.
+    verify_sha256_or_delete(&temp_file, PORTABLE_GIT_SHA256)?;
 
     // Extract: PortableGit .7z.exe is a self-extracting archive.
     // Run it with -o<dir> -y to extract silently.
@@ -3371,6 +3374,220 @@ fn download_portable_git() -> std::result::Result<String, String> {
     Ok(final_bash.to_string_lossy().to_string())
 }
 
+/// Hash `temp_file` with in-process SHA-256 and require it to equal
+/// `expected` (hex, case-insensitive). On ANY failure — unreadable file or
+/// mismatch — the file is deleted before returning Err, so a bad archive can
+/// never be extracted by this run or silently picked up by a later one.
+///
+/// Deliberately NOT certutil: parsing its localized output line-by-line was
+/// fragile, and treating "certutil failed" as "proceed" made the whole check
+/// fail-open. These downloads are executables we run — verification is
+/// mandatory.
+#[cfg(windows)]
+fn verify_sha256_or_delete(temp_file: &Path, expected: &str) -> std::result::Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let compute = || -> std::io::Result<String> {
+        let mut file = std::fs::File::open(temp_file)?;
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        Ok(hasher
+            .finalize()
+            .iter()
+            .fold(String::with_capacity(64), |mut hex, byte| {
+                use std::fmt::Write;
+                let _ = write!(hex, "{:02x}", byte);
+                hex
+            }))
+    };
+    let digest = match compute() {
+        Ok(digest) => digest,
+        Err(e) => {
+            let _ = std::fs::remove_file(temp_file);
+            return Err(format!(
+                "SHA256 verification failed (couldn't hash {}): {}. Deleted the download.",
+                temp_file.display(),
+                e
+            ));
+        }
+    };
+    if !digest.eq_ignore_ascii_case(expected) {
+        let _ = std::fs::remove_file(temp_file);
+        return Err(format!(
+            "SHA256 mismatch: expected {}, got {}. Deleted the download.",
+            expected, digest
+        ));
+    }
+    info!("SHA256 verified: {}", digest);
+    Ok(())
+}
+
+/// Location of the runtime-downloaded baseline (non-AVX2) bun.exe. Preferred
+/// by [`find_bun_executable`] on CPUs without AVX2, where the stock/bundled
+/// bun dies with 0xC000001D. Cleaned up by the NSIS uninstall hook.
+#[cfg(windows)]
+pub fn baseline_bun_path() -> Option<PathBuf> {
+    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+    Some(
+        PathBuf::from(local_app_data)
+            .join("screenpipe")
+            .join("bun-baseline")
+            .join("bun.exe"),
+    )
+}
+
+/// One-shot guard for the background baseline-bun download (per process).
+#[cfg(windows)]
+static BASELINE_BUN_DOWNLOAD_ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Kick off (at most once per process) a background download of bun's
+/// official baseline Windows build. Non-blocking on purpose: the caller
+/// falls through to the stock bun for the current run, and the next spawn
+/// picks up the baseline from disk.
+#[cfg(windows)]
+pub fn spawn_baseline_bun_download() {
+    BASELINE_BUN_DOWNLOAD_ONCE.get_or_init(|| {
+        std::thread::spawn(|| match download_baseline_bun() {
+            Ok(path) => info!("baseline bun installed at: {}", path),
+            Err(e) => warn!(
+                "baseline bun download failed (pipes/AI chat may not work on this pre-AVX2 CPU): {}",
+                e
+            ),
+        });
+    });
+}
+
+/// Download bun's official `windows-x64-baseline` build (runs on any x86-64,
+/// no AVX2 required) to `%LOCALAPPDATA%\screenpipe\bun-baseline\bun.exe`.
+/// Same structure as [`download_portable_git`], with one crucial difference:
+/// download via curl.exe ONLY — the bun-based download path is useless here
+/// because the whole point is that the stock bun cannot execute on this CPU.
+#[cfg(windows)]
+fn download_baseline_bun() -> std::result::Result<String, String> {
+    // Keep the version in lockstep with the Linux baseline sidecar pinned in
+    // apps/screenpipe-app-tauri/scripts/pre_build.js (bunVersion) — bump both
+    // together and refresh the SHA256 from the release's SHASUMS256.txt.
+    const BASELINE_BUN_VERSION: &str = "1.3.10";
+    const BASELINE_BUN_URL: &str =
+        "https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-windows-x64-baseline.zip";
+    const BASELINE_BUN_SHA256: &str =
+        "715709c69b176e20994533d3292bd0b7c32de9c0c5575b916746ec6b2aa38346";
+
+    let local_app_data =
+        std::env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA env var not set".to_string())?;
+    let screenpipe_dir = PathBuf::from(&local_app_data).join("screenpipe");
+    let bun_dir = screenpipe_dir.join("bun-baseline");
+    let bun_path = bun_dir.join("bun.exe");
+
+    // Already downloaded
+    if bun_path.exists() {
+        info!("baseline bun already present at {}", bun_dir.display());
+        return Ok(bun_path.to_string_lossy().to_string());
+    }
+
+    info!(
+        "Downloading baseline bun {} for non-AVX2 CPU support...",
+        BASELINE_BUN_VERSION
+    );
+
+    std::fs::create_dir_all(&screenpipe_dir)
+        .map_err(|e| format!("Failed to create screenpipe data dir: {}", e))?;
+
+    let temp_file = std::env::temp_dir().join(format!(
+        "bun-windows-x64-baseline-v{}.zip",
+        BASELINE_BUN_VERSION
+    ));
+
+    // curl.exe ships with Windows 10 1803+.
+    let download_result = {
+        let mut cmd = std::process::Command::new("curl.exe");
+        cmd.args(["-fSL", "-o", &temp_file.to_string_lossy(), BASELINE_BUN_URL]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.output()
+    };
+
+    match download_result {
+        Ok(output) if output.status.success() => {
+            info!("baseline bun downloaded to {}", temp_file.display());
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let _ = std::fs::remove_file(&temp_file);
+            return Err(format!("baseline bun download failed: {}", stderr));
+        }
+        Err(e) => {
+            return Err(format!("Failed to run curl.exe: {}", e));
+        }
+    }
+
+    // Mandatory in-process SHA256 verification; deletes the archive on any
+    // failure. We're about to execute this file — never run it unverified.
+    verify_sha256_or_delete(&temp_file, BASELINE_BUN_SHA256)?;
+
+    // Extract with tar.exe (bsdtar ships with Windows 10 1803+; handles zip),
+    // into a temp dir first (atomic: rename on success).
+    let extract_temp = screenpipe_dir.join("bun-baseline-extracting");
+    let _ = std::fs::remove_dir_all(&extract_temp);
+    std::fs::create_dir_all(&extract_temp)
+        .map_err(|e| format!("Failed to create extraction dir: {}", e))?;
+
+    {
+        let mut cmd = std::process::Command::new("tar.exe");
+        cmd.args([
+            "-xf",
+            &temp_file.to_string_lossy(),
+            "-C",
+            &extract_temp.to_string_lossy(),
+        ]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                info!("baseline bun extracted successfully");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let _ = std::fs::remove_dir_all(&extract_temp);
+                let _ = std::fs::remove_file(&temp_file);
+                return Err(format!("baseline bun extraction failed: {}", stderr));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&extract_temp);
+                let _ = std::fs::remove_file(&temp_file);
+                return Err(format!("Failed to run tar.exe: {}", e));
+            }
+        }
+    }
+
+    // The zip contains a bun-windows-x64-baseline/ folder holding bun.exe.
+    let extracted_dir = extract_temp.join("bun-windows-x64-baseline");
+    if !extracted_dir.join("bun.exe").exists() {
+        let _ = std::fs::remove_dir_all(&extract_temp);
+        let _ = std::fs::remove_file(&temp_file);
+        return Err("Extraction completed but bun.exe not found in expected location".to_string());
+    }
+
+    // Atomic rename: move extracted dir to final location
+    let _ = std::fs::remove_dir_all(&bun_dir);
+    std::fs::rename(&extracted_dir, &bun_dir).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&extract_temp);
+        format!("Failed to move baseline bun to final location: {}", e)
+    })?;
+
+    // Clean up temp artifacts
+    let _ = std::fs::remove_dir_all(&extract_temp);
+    let _ = std::fs::remove_file(&temp_file);
+
+    info!("baseline bun setup complete: {}", bun_path.display());
+    Ok(bun_path.to_string_lossy().to_string())
+}
+
 /// Global guard: ensures only one download runs at a time and caches the result.
 /// `None` inside means download was attempted but failed.
 #[cfg(windows)]
@@ -3417,6 +3634,62 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn describe_exit_status_flags_illegal_instruction() {
+        // 0xC000001D == STATUS_ILLEGAL_INSTRUCTION == exit code -1073741795
+        let s = describe_exit_status_code(-1073741795);
+        assert!(s.contains("illegal instruction"));
+        assert!(s.to_lowercase().contains("avx2"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_accepts_matching_digest_case_insensitively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.bin");
+        std::fs::write(&file, b"abc").unwrap();
+        // NIST test vector: SHA-256("abc")
+        const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        verify_sha256_or_delete(&file, ABC).expect("exact-case match");
+        assert!(file.exists(), "matching digest must not delete the file");
+        verify_sha256_or_delete(&file, &ABC.to_uppercase()).expect("uppercase pin matches too");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_rejects_mismatch_and_deletes_the_download() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.bin");
+        std::fs::write(&file, b"tampered").unwrap();
+        let err = verify_sha256_or_delete(
+            &file,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .expect_err("mismatch must fail");
+        assert!(err.contains("SHA256 mismatch"));
+        assert!(!file.exists(), "mismatched download must be deleted");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_fails_closed_when_the_file_is_unreadable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("never-downloaded.bin");
+        let err = verify_sha256_or_delete(
+            &missing,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .expect_err("unreadable file must fail, not proceed");
+        assert!(err.contains("couldn't hash"));
+    }
+
+    #[test]
+    fn describe_exit_status_code_plain_codes_unchanged() {
+        assert_eq!(describe_exit_status_code(0), "exit code 0");
+        assert_eq!(describe_exit_status_code(1), "exit code 1");
+    }
 
     #[test]
     fn structured_output_extension_keeps_screen_text_out_of_system_state() {

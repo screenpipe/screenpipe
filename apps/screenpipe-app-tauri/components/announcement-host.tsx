@@ -4,10 +4,14 @@
 
 "use client";
 
-import { Clock, Lightbulb, Megaphone, X, type LucideIcon } from "lucide-react";
+import { X } from "lucide-react";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { AnnouncementBody } from "@/components/announcement-body";
+import { AnnouncementBubble } from "@/components/announcement-bubble";
+import {
+  ANNOUNCEMENT_KIND_META,
+  AnnouncementKindChip,
+} from "@/components/announcement-kind-chip";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import {
@@ -18,69 +22,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { notificationUrlTransform } from "@/components/markdown";
 import { cn } from "@/lib/utils";
-import {
-  type Announcement,
-  type AnnouncementKind,
-  type SurveyAnswers,
-} from "@/lib/announcements";
+import { type Announcement, type SurveyAnswers } from "@/lib/announcements";
 import { useAnnouncement } from "@/lib/hooks/use-announcement";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
-
-const KIND_META: Record<AnnouncementKind, { icon: LucideIcon; label: string }> =
-  {
-    // grayscale, differentiated by shape not color (DESIGN.md).
-    news: { icon: Megaphone, label: "news" },
-    tip: { icon: Lightbulb, label: "tip" },
-    reminder: { icon: Clock, label: "reminder" },
-  };
-
-function openExternal(url: string) {
-  import("@tauri-apps/plugin-shell")
-    .then((m) => m.open(url))
-    .catch((err) => console.error("failed to open url:", url, err));
-}
-
-/** Markdown body with sanitized, externally-opened links — matches the
- *  notification surface so authors get the same affordances. */
-function AnnouncementBody({
-  body,
-  className,
-}: {
-  body: string;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "text-sm leading-relaxed text-muted-foreground [&_p]:mb-2 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_a]:text-foreground [&_a]:underline [&_code]:bg-muted [&_code]:px-1 [&_code]:text-xs [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-1 [&_li]:my-0.5",
-        className,
-      )}
-    >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        urlTransform={notificationUrlTransform}
-        components={{
-          a: ({ href, children }) => (
-            <a
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (href) openExternal(href);
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {body}
-      </ReactMarkdown>
-    </div>
-  );
-}
 
 /** Auto-close the surface after `ms`, if set. Used by banner/card (not modal).
  *  Re-arms only when the announcement id or the duration changes. */
@@ -90,16 +35,6 @@ function useAutoDismiss(ms: number | undefined, onDismiss: () => void) {
     const t = setTimeout(onDismiss, ms);
     return () => clearTimeout(t);
   }, [ms, onDismiss]);
-}
-
-function KindChip({ kind }: { kind: AnnouncementKind }) {
-  const { icon: Icon, label } = KIND_META[kind];
-  return (
-    <span className="inline-flex w-fit items-center gap-1.5 border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-      <Icon className="h-3 w-3" />
-      {label}
-    </span>
-  );
 }
 
 function AnnouncementModal({
@@ -138,7 +73,7 @@ function AnnouncementModal({
         }}
       >
         <DialogHeader className="space-y-3 text-left">
-          <KindChip kind={announcement.kind} />
+          <AnnouncementKindChip kind={announcement.kind} />
           <DialogTitle>{announcement.title}</DialogTitle>
         </DialogHeader>
         {/* screen-reader description (and silences radix's missing-description
@@ -333,7 +268,7 @@ function AnnouncementBanner({
   onDismiss: () => void;
   onCta: () => void;
 }) {
-  const { icon: Icon, label } = KIND_META[announcement.kind];
+  const { icon: Icon, label } = ANNOUNCEMENT_KIND_META[announcement.kind];
   const { dismissible, cta } = announcement;
   // never trap the user: keep the close affordance unless there's a cta to act on.
   const showClose = dismissible || !cta;
@@ -398,9 +333,11 @@ const CARD_POSITION_CLASS: Record<
   "top-right": "top-4 right-4",
   "bottom-left": "bottom-4 left-4",
   "bottom-right": "bottom-4 right-4",
-  // banner positions never reach the card, but the map must be total.
+  // banner/bubble positions never reach the card, but the map must be total.
   top: "top-4 right-4",
   bottom: "bottom-4 right-4",
+  left: "bottom-4 right-4",
+  right: "bottom-4 right-4",
 };
 
 function AnnouncementCard({
@@ -427,7 +364,7 @@ function AnnouncementCard({
       )}
     >
       <div className="mb-2 flex items-start justify-between gap-2">
-        <KindChip kind={announcement.kind} />
+        <AnnouncementKindChip kind={announcement.kind} />
         {showClose && (
           <button
             type="button"
@@ -464,8 +401,8 @@ function AnnouncementCard({
  * Global host for remote announcements. Reads the current announcement (from
  * the PostHog `app-announcement` flag, a `POST /notify` push, or a QA preview)
  * and renders it as a centered modal, a full-width banner (top/bottom), or a
- * corner card — driven by the payload's `surface` + `position`. Mounted once in
- * app/layout.tsx.
+ * corner card / anchored bubble — driven by the payload's `surface` +
+ * `position`. Mounted once in app/layout.tsx.
  *
  * Only the primary window participates: the root layout also mounts in the
  * `chat` and hidden `notification-panel` webviews, so rendering everywhere
@@ -496,7 +433,12 @@ function AnnouncementHostInner() {
   } = useAnnouncement();
   const [openedSidebarId, setOpenedSidebarId] = useState<string | null>(null);
   useEffect(() => {
-    if (announcement && announcement.surface !== "sidebar") reportShown();
+    if (
+      announcement &&
+      announcement.surface !== "sidebar" &&
+      announcement.surface !== "bubble"
+    )
+      reportShown();
   }, [announcement, reportShown]);
   if (!announcement) return null;
 
@@ -540,6 +482,16 @@ function AnnouncementHostInner() {
         announcement={announcement}
         onDismiss={dismiss}
         onCta={activateCta}
+      />
+    );
+  }
+  if (announcement.surface === "bubble") {
+    return (
+      <AnnouncementBubble
+        announcement={announcement}
+        onDismiss={dismiss}
+        onCta={activateCta}
+        onShown={reportShown}
       />
     );
   }

@@ -9,8 +9,10 @@
 //! deadlocks at 0% CPU on some platforms — Windows x86_64 (#4173) and, by the
 //! same code path, Windows ARM64 (#4176). A build that merely *compiles* does
 //! not catch this; the hang is at runtime. This runs the real init path on a
-//! worker thread under a 60s deadline and exits with a distinct code so CI can
-//! tell a hang apart from a missing-runtime setup error:
+//! worker thread under a deadline (60s default; ORT_SMOKE_DEADLINE_SECS
+//! overrides — Intel SDE emulation needs a longer budget) and exits with a
+//! distinct code so CI can tell a hang apart from a missing-runtime setup
+//! error:
 //!
 //!   0 — ONNX Runtime initialized (good)
 //!   1 — HANG: init did not return within 60s (the regression)
@@ -21,8 +23,18 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 fn main() {
+    // Default 60s. ORT_SMOKE_DEADLINE_SECS overrides: the non-AVX2 probe in
+    // release-cli.yml runs this under Intel SDE emulation (~50x slower than
+    // native), where a fixed 60s would misreport slow-but-healthy init as a
+    // hang.
+    let deadline_secs = std::env::var("ORT_SMOKE_DEADLINE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60);
     let t = Instant::now();
-    eprintln!("ort-smoke: building Session (load onnxruntime + create global env)...");
+    eprintln!(
+        "ort-smoke: building Session (load onnxruntime + create global env, {deadline_secs}s deadline)..."
+    );
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -32,7 +44,7 @@ fn main() {
         let _ = tx.send(r);
     });
 
-    match rx.recv_timeout(Duration::from_secs(60)) {
+    match rx.recv_timeout(Duration::from_secs(deadline_secs)) {
         Ok(Ok(())) => {
             eprintln!("OK: ONNX Runtime initialized in {:?}", t.elapsed());
             std::process::exit(0);
@@ -43,7 +55,7 @@ fn main() {
             std::process::exit(3);
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            eprintln!("HANG: ONNX Runtime init did not return within 60s.");
+            eprintln!("HANG: ONNX Runtime init did not return within {deadline_secs}s.");
             eprintln!("This is the ort load-dynamic regression (see #4173 / #4176).");
             std::process::exit(1);
         }

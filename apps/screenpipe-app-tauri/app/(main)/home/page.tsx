@@ -1042,6 +1042,7 @@ function HomeContent() {
                 <button
                   onClick={toggleSidebar}
                   aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+                  data-announcement-anchor="top-sidebar-toggle"
                   className={cn(
                     "p-1 rounded-md transition-colors",
                     sidebarCollapsed && activeSection === "timeline"
@@ -1067,6 +1068,7 @@ function HomeContent() {
                       void commands.showWindow({ Search: { query: null } });
                     }}
                     aria-label="search"
+                    data-announcement-anchor="top-search"
                     className={cn(
                       "p-1 rounded-md transition-colors",
                       isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -1120,6 +1122,7 @@ function HomeContent() {
                     <button
                       key={section.id}
                       data-testid={`nav-${section.id}`}
+                      data-announcement-anchor={`sidebar-${section.id}`}
                       onClick={() => {
                         setActiveSection(section.id);
                         // The "home" slot is the New Chat affordance —
@@ -1236,6 +1239,7 @@ function HomeContent() {
                   const btn = (
                     <button
                       data-testid="nav-settings"
+                      data-announcement-anchor="sidebar-settings"
                       onClick={() => openSettings("general")}
                       className={cn(
                         "w-full flex items-center space-x-2.5 px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
@@ -1262,6 +1266,7 @@ function HomeContent() {
                   const btn = (
                     <button
                       data-testid="nav-help"
+                      data-announcement-anchor="sidebar-help"
                       onClick={() => {
                         setActiveSection("help");
                       }}
