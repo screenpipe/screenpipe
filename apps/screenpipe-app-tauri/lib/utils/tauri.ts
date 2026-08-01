@@ -412,6 +412,23 @@ async e2eDbHardFaultState() : Promise<Result<JsonValue, string>> {
 }
 },
 /**
+ * E2E helper: remove a window so a test can exercise a first-open path.
+ *
+ * Tests must never call `plugin:window|destroy` on main/main-window/chat/search:
+ * those are class-swizzled NSPanels, and destroying one raises an Objective-C
+ * exception that aborts the whole suite ("Rust cannot catch foreign
+ * exceptions"). This routes through the same panel-safe teardown headless
+ * dormancy uses, on the main thread.
+ */
+async e2eDestroyWindow(label: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_destroy_window", { label }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: emit a deterministic chat stream from the Rust side.
  *
  * This keeps chat performance tests close to production's Pi stdout path:

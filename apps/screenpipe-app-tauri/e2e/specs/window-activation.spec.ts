@@ -44,16 +44,37 @@ async function waitForAnyMainHandle(timeoutMs = t(12_000)): Promise<MainLabel> {
   throw new Error(`Main window handle did not appear (${MAIN_LABELS.join(", ")})`);
 }
 
-async function destroyChatWindowIfPresent(): Promise<void> {
-  if (!(await browser.getWindowHandles()).includes("chat")) return;
+/**
+ * Guarantee Chat does not exist, so the caller exercises the real first-open
+ * path — and guarantee the panel teardown itself runs on every host.
+ *
+ * Do NOT make this conditional on a prewarmed window being present. Startup
+ * prewarm is a 3s-delayed spawn and does not fire on every machine; when it
+ * doesn't, an `if (present) destroy()` helper silently no-ops and the spec goes
+ * green without ever touching the teardown it exists to guard. Create Chat
+ * first when it is missing, so the destroy below always executes.
+ *
+ * Teardown order mirrors headless dormancy: close (order_out + focus-session
+ * cleanup) before destroy. `plugin:window|destroy` must never be used here —
+ * Chat is a class-swizzled NSPanel and destroying it that way raises an
+ * Objective-C exception that aborts the process with "Rust cannot catch
+ * foreign exceptions", killing the entire suite. e2e_destroy_window undoes the
+ * class swap first.
+ */
+async function destroyChatWindow(): Promise<void> {
+  if (!(await browser.getWindowHandles()).includes("chat")) {
+    await showWindowActivated("Chat");
+    await waitForWindowHandle("chat", t(15_000));
+  }
 
-  await invokeOrThrow("plugin:window|destroy", { label: "chat" });
+  await invokeOrThrow("close_window", { window: "Chat" });
+  await invokeOrThrow("e2e_destroy_window", { label: "chat" });
   await browser.waitUntil(
     async () => !(await browser.getWindowHandles()).includes("chat"),
     {
       timeout: t(10_000),
       interval: 200,
-      timeoutMsg: "Prewarmed Chat window was not destroyed",
+      timeoutMsg: "Chat window was not destroyed by the panel-safe teardown",
     },
   );
 }
@@ -147,7 +168,8 @@ async function destroyChatWindowIfPresent(): Promise<void> {
     it("show_window_activated(Chat) focuses the composer for immediate typing", async () => {
       // Exercise explicit first-open rather than relying on startup prewarm.
       // This also models reopening Chat after headless teardown.
-      await destroyChatWindowIfPresent();
+      await destroyChatWindow();
+      expect(await browser.getWindowHandles()).not.toContain("chat");
 
       await showWindowActivated("Chat");
       await waitForWindowHandle("chat", t(15_000));

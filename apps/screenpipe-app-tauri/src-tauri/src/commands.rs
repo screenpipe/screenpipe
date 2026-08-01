@@ -1180,6 +1180,32 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+/// E2E helper: remove a window so a test can exercise a first-open path.
+///
+/// Tests must never call `plugin:window|destroy` on main/main-window/chat/search:
+/// those are class-swizzled NSPanels, and destroying one raises an Objective-C
+/// exception that aborts the whole suite ("Rust cannot catch foreign
+/// exceptions"). This routes through the same panel-safe teardown headless
+/// dormancy uses, on the main thread.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_destroy_window(app_handle: tauri::AppHandle, label: String) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app = app_handle.clone();
+    app_handle
+        .run_on_main_thread(move || {
+            let _ = tx.send(crate::headless::destroy_window_safely(&app, &label));
+        })
+        .map_err(|e| format!("failed to schedule window teardown: {}", e))?;
+
+    rx.recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|e| format!("window teardown did not complete: {}", e))?
+}
+
 /// E2E helper: model an active capture intent without requiring physical
 /// screen/audio devices on the CI runner.
 #[tauri::command]

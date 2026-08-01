@@ -89,6 +89,26 @@ fn prepare_window_for_destroy(
     Ok(())
 }
 
+/// Destroy one webview through the same panel-safe teardown dormancy uses.
+///
+/// `plugin:window|destroy` (and a bare `WebviewWindow::destroy`) on a
+/// class-swizzled NSPanel — main, main-window, chat, search — raises an
+/// Objective-C exception that unwinds into Rust and aborts the process with
+/// "Rust cannot catch foreign exceptions". Undoing the class swap first is the
+/// only supported way to remove those windows.
+///
+/// Must be called on the main thread. Missing windows are a no-op.
+pub(crate) fn destroy_window_safely(app: &AppHandle, label: &str) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(label) else {
+        return Ok(());
+    };
+
+    #[cfg(target_os = "macos")]
+    prepare_window_for_destroy(app, label, &window)?;
+
+    window.destroy().map_err(|error| error.to_string())
+}
+
 pub fn should_suppress_pipe_runs(dormant: bool, record_only: bool) -> bool {
     dormant && record_only
 }

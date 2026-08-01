@@ -832,6 +832,25 @@ jobs:
         bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/spotlight-exclusion.spec.ts
         sleep 2
 
+    - name: Run window activation regression
+      # BLOCKING, like the Spotlight canary above. The full-suite step below is
+      # advisory, so it cannot gate anything: a panel-teardown crash in this spec
+      # aborts the whole suite ("Rust cannot catch foreign exceptions") and still
+      # shows green. Overlay focus + first-open panel lifecycle regress silently
+      # otherwise, so this spec runs on its own and fails the job.
+      #
+      # The step timeout must stay well below the job timeout: a step that runs
+      # past the JOB limit is a cancellation, and cancellation is not covered by
+      # continue-on-error on the advisory step below — it reddens the whole
+      # workflow. Failing this step at 15 min still leaves the advisory suite
+      # its full budget.
+      timeout-minutes: 15
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      run: |
+        bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/window-activation.spec.ts
+        sleep 2
+
     - name: Run E2E Tests
       # ADVISORY (non-blocking): the full serial suite (maxInstances:1) with
       # specFileRetries:3 on the slow macos-15 image exceeds the job budget and

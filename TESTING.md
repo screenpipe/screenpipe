@@ -50,6 +50,8 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **shortcut reminder doesn't steal focus** — showing reminder never takes keyboard focus from active app.
 - [ ] **chat on non-primary Space** — switch to Space 3 (normal desktop), press chat shortcut. chat appears on Space 3, not Space 1. no Space transition animation.
 - [ ] **chat re-show on fullscreen Space** — show chat on fullscreen Space, hide it, show again. must reappear on same fullscreen Space.
+- [ ] **overlay close restores the app you came from** — from App A, open chat/timeline, press Escape. App A stays frontmost; no Space switch (#5697).
+- [ ] **overlay origin follows an app switch** — from App A open chat, click App B, open chat again from App B, close it. focus returns to App B, NOT App A. the saved origin is refreshed whenever a *different external* app is frontmost at reopen; it is kept when screenpipe itself is frontmost (`should_refresh_focus_origin` in `window/focus.rs`) (#5697).
 - [ ] **space monitor only hides main overlay** — swipe Spaces. main overlay hides. chat window and shortcut reminder are unaffected.
 - [ ] **space monitor doesn't race with show** — show overlay via shortcut. the `activateIgnoringOtherApps` call must not trigger space monitor's hide callback.
 - [ ] **Chat streaming UX** — Verify that chat streaming uses a state-aware grid dissolve loader for a smooth user experience.
