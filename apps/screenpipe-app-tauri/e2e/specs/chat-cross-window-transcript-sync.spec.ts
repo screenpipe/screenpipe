@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
+import { PiConversationHarness } from "../helpers/pi-conversation-harness.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
 import {
@@ -25,6 +26,7 @@ const CHATS_DIR = join(E2E_DATA_DIR, "chats");
 const CHAT_FILE = join(CHATS_DIR, `${CHAT_ID}.json`);
 const USER_MARKER = "E2E-CROSS-WINDOW-USER-7Q3M9K";
 const ASSISTANT_MARKER = "E2E-CROSS-WINDOW-ANSWER-4P8V2N";
+const piConversation = new PiConversationHarness(CHAT_ID);
 
 function writeConversation(
   updatedAt: number,
@@ -219,9 +221,9 @@ async function expectSynchronizedActiveTurn(): Promise<void> {
 async function expectActiveToolState(): Promise<void> {
   const summary = await $('[data-testid="tool-activity-summary"]');
   await summary.waitForDisplayed({ timeout: t(10_000) });
-  expect((await summary.getText()).toLowerCase()).not.toContain("done");
   const indicator = await summary.$('[data-testid="tool-activity-running-indicator"]');
   await indicator.waitForDisplayed({ timeout: t(10_000) });
+  expect((await summary.getText()).toLowerCase()).not.toContain("done");
   expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);
 }
 
@@ -234,9 +236,14 @@ describe("Cross-window chat transcript sync", function () {
     await openHomeWindow();
     await showWindow("Chat");
     await waitForWindowHandle("chat", t(15_000));
+    await browser.switchToWindow("home");
+    await piConversation.initialize();
+    await piConversation.configureAppPreset();
+    await piConversation.restartPi();
   });
 
   after(async () => {
+    await piConversation.dispose().catch(() => {});
     rmSync(CHAT_FILE, { force: true });
     const handles = await browser.getWindowHandles();
     if (handles.includes("chat")) {
@@ -249,10 +256,12 @@ describe("Cross-window chat transcript sync", function () {
   });
 
   it("shows pending feedback, then hydrates the completed disk turn in both WebViews", async () => {
-    let lastFixtureUpdatedAt = Date.now();
+    // The fixture owns this synthetic save stream. Keep its logical clock well
+    // ahead of unrelated title/settings saves from sibling WebViews so the
+    // production stale-event guard evaluates only the ordering under test.
+    let lastFixtureUpdatedAt = Date.now() + 60 * 60 * 1000;
     const nextFixtureUpdatedAt = () => {
-      lastFixtureUpdatedAt = Math.max(Date.now(), lastFixtureUpdatedAt + 1);
-      return lastFixtureUpdatedAt;
+      return ++lastFixtureUpdatedAt;
     };
     writeConversation(lastFixtureUpdatedAt);
 
@@ -289,6 +298,7 @@ describe("Cross-window chat transcript sync", function () {
       titleSource: "fallback",
       updatedAt: activeAt,
       turnState: { isLoading: true, isStreaming: true },
+      activeAssistantMessageId: "cross-window-assistant",
     });
     await expectSynchronizedActiveTurn();
 
@@ -319,6 +329,7 @@ describe("Cross-window chat transcript sync", function () {
       titleSource: "fallback",
       updatedAt: toolAt,
       turnState: { isLoading: true, isStreaming: true },
+      activeAssistantMessageId: "cross-window-assistant",
     });
     await expectActiveToolState();
 

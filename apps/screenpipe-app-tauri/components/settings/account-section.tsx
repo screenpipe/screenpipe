@@ -539,7 +539,7 @@ export function AccountSection() {
               data-testid="account-capacity-upgrade"
             >
               <div className="min-w-0">
-                <p className="text-sm font-medium">need more hosted AI capacity?</p>
+                <p className="text-sm font-medium">need more AI capacity?</p>
                 <p className="text-xs text-muted-foreground">
                   {capacityUpgrade.name} adds higher query and request-rate
                   limits for ${capacityUpgrade.monthlyPrice}/month.
