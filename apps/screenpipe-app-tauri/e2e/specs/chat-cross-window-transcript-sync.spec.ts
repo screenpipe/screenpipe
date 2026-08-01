@@ -162,6 +162,18 @@ async function loadConversationInForeground(
       timeoutMsg: `${await browser.getWindowHandle()} did not foreground ${id}`,
     },
   );
+  await browser.waitUntil(
+    async () => Boolean(await browser.execute(
+      () => (window as unknown as {
+        __e2eChatConversationSavedListenerReady?: boolean;
+      }).__e2eChatConversationSavedListenerReady,
+    )),
+    {
+      timeout: t(10_000),
+      interval: 100,
+      timeoutMsg: `${await browser.getWindowHandle()} did not register the conversation save listener`,
+    },
+  );
 }
 
 async function expectActiveEmptyState(): Promise<void> {
