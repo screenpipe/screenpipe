@@ -334,6 +334,17 @@ const AISection = ({
           errors.apiKey = apiKeyValidation.error;
         }
       }
+
+      // openai/anthropic hard-require a key — a preset saved without one
+      // spawns pi that fails every message with a raw CLI error (see the
+      // BYOK spawn guard in pi.rs). custom stays optional for keyless
+      // OpenAI-compatible endpoints (LM Studio, llama.cpp, proxies).
+      if (
+        (presetData.provider === "openai" || presetData.provider === "anthropic") &&
+        !presetData.apiKey
+      ) {
+        errors.apiKey = "API key is required for this provider";
+      }
       
       setValidationErrors(errors);
     }, 300),
