@@ -73,6 +73,7 @@ this takes you straight to where you need to be — no more hunting through docs
 | app | description |
 |-----|-------------|
 | **HubSpot** | sync contacts, deals, and activities |
+| **Attio** | sync records, lists, notes, and tasks |
 | **Salesforce** | access CRM data and records |
 | **Pipedrive** | sync deals and contacts |
 | **Intercom** | access conversations and contacts |
@@ -147,6 +148,7 @@ connections can expose a local proxy endpoint so pipes can call third-party APIs
 ```bash
 curl "http://localhost:3030/connections/google-calendar/events?hours_ahead=8"
 curl "http://localhost:3030/connections/hubspot/proxy/crm/v3/objects/contacts?limit=1"
+curl "http://localhost:3030/connections/attio/proxy/v2/objects"
 curl "http://localhost:3030/connections/notion/proxy/v1/users/me"
 ```
 

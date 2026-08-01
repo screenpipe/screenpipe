@@ -73,6 +73,7 @@ const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
   ["google docs", "/images/google-docs.svg"],
   ["granola", "/images/granola.png"],
   ["hubspot", "/images/hubspot.png"],
+  ["attio", "/images/attio.svg"],
   ["jira", "/images/jira.png"],
   ["limitless", "/images/limitless.svg"],
   ["linear", "/images/linear.svg"],

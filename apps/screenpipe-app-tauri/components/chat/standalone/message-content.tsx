@@ -553,6 +553,7 @@ const STATIC_APP_ICONS: Record<string, string> = {
   asana: "/images/asana.svg",
   jira: "/images/jira.png",
   hubspot: "/images/hubspot.png",
+  attio: "/images/attio.svg",
   monday: "/images/monday.png",
   bitrix24: "/images/bitrix24.png",
   financialsense: "/images/financialsense.png",

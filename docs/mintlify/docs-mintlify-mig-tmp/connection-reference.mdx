@@ -28,7 +28,7 @@ this works for all API key, webhook, and custom credential fields.
 
 | pattern | examples | notes |
 | --- | --- | --- |
-| OAuth | Outlook, Google Calendar, Google Docs, Notion, Jira, Microsoft 365, Teams, Vercel, Supabase, Zoom, HubSpot | best user experience; tokens are stored locally; no API key needed |
+| OAuth | Outlook, Google Calendar, Google Docs, Notion, Jira, Microsoft 365, Teams, Vercel, Supabase, Zoom, HubSpot, Attio | best user experience; tokens are stored locally; no API key needed |
 | API key | Linear, PostHog, Sentry, Stripe, Toggl, Pipedrive, Glean, Mochi | simple and reliable; help links guide you to API settings pages; rotate keys if a device is lost |
 | webhook URL | n8n, Make, Zapier, Pushover, ntfy, Resend | best for one-way notifications or workflow triggers |
 | app password | Email Inbox (IMAP) | read-only inbox access without OAuth; for Gmail, create one at myaccount.google.com/apppasswords (requires 2-Step Verification) |
@@ -57,7 +57,7 @@ The app registry currently includes these connection IDs:
 | communication | Slack, Discord, Email (SMTP), Email Inbox (IMAP), Gmail (via Composio), Outlook, Telegram, WhatsApp, Microsoft Teams, Zoom (via Composio) |
 | productivity | Notion, Obsidian, Google Calendar, Google Docs, Google Drive (via Composio), Google Sheets (via Composio), Microsoft 365, Logseq, Workflowy, Airtable, Confluence, Odoo, Mochi, Hermes |
 | project management | Linear, Jira, Asana, Monday.com, Trello, ClickUp, Todoist, Cal.com, Calendly |
-| CRM and support | HubSpot, Salesforce, Pipedrive, Intercom, Zendesk, Bitrix24 |
+| CRM and support | HubSpot, Attio, Salesforce, Pipedrive, Intercom, Zendesk, Bitrix24 |
 | developer and ops | GitHub, Sentry, Vercel, Supabase, PostHog |
 | finance | Stripe, Brex, QuickBooks Online, Financial Sense |
 | meeting and voice | Granola, Fireflies.ai, Otter.ai, Limitless, Bee, Pocket, Leexi |
@@ -87,6 +87,7 @@ after connecting, run a tiny request before relying on a pipe:
 curl "http://localhost:3030/connections/google-calendar/events?hours_ahead=8"
 curl "http://localhost:3030/connections/notion/proxy/v1/users/me"
 curl "http://localhost:3030/connections/hubspot/proxy/crm/v3/objects/contacts?limit=1"
+curl "http://localhost:3030/connections/attio/proxy/v2/objects"
 curl "http://localhost:3030/connections/linear/proxy/graphql"
 curl "http://localhost:3030/connections/readwise/proxy/api/v2/auth/"
 curl "http://localhost:3030/connections/imap/messages?limit=5"

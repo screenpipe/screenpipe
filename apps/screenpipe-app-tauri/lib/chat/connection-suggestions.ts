@@ -226,7 +226,7 @@ function suggestionForConnection(connection: ConnectedIntegration): Suggestion |
   if (lower.includes("posthog")) {
     return { ...base, text: `Find the trend behind recent ${name} activity` };
   }
-  if (lower.includes("hubspot") || lower.includes("salesforce") || lower.includes("intercom") || lower.includes("zendesk") || lower.includes("pipedrive")) {
+  if (lower.includes("hubspot") || lower.includes("salesforce") || lower.includes("intercom") || lower.includes("zendesk") || lower.includes("pipedrive") || lower.includes("attio")) {
     return { ...base, text: `Prep customer call briefs from ${name}` };
   }
   if (lower.includes("zoom") || lower.includes("granola") || lower.includes("fireflies") || lower.includes("otter") || lower.includes("bee") || lower.includes("limitless")) {

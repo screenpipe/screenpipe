@@ -948,6 +948,24 @@ async fn fetch_provider_identity(
                 .ok()?;
             resp["name"].as_str().map(String::from)
         }
+        "attio" => {
+            // Token response carries no identity; /v2/self names the workspace.
+            let resp: serde_json::Value = client
+                .get("https://api.attio.com/v2/self")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            resp["workspace_name"]
+                .as_str()
+                .or_else(|| resp["workspace_slug"].as_str())
+                .map(String::from)
+        }
         "vercel" => {
             let resp: serde_json::Value = client
                 .get("https://api.vercel.com/v2/user")

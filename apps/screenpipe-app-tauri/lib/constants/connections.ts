@@ -107,6 +107,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   // CRM — CRM, sales & business suites
   salesforce: "CRM",
   hubspot: "CRM",
+  attio: "CRM",
   pipedrive: "CRM",
   odoo: "CRM",
   bitrix24: "CRM",

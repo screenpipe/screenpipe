@@ -10,6 +10,7 @@
 
 pub mod airtable;
 pub mod asana;
+pub mod attio;
 pub mod bee;
 pub mod bitrix24;
 pub mod brex;
@@ -371,6 +372,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(jira::Jira),
         Box::new(granola::Granola),
         Box::new(hubspot::HubSpot),
+        Box::new(attio::Attio),
         Box::new(bitrix24::Bitrix24),
         Box::new(limitless::Limitless),
         Box::new(bee::Bee),
@@ -1142,6 +1144,38 @@ mod tests {
             ids.contains(&"openclaw"),
             "openclaw integration must be registered"
         );
+    }
+
+    #[test]
+    fn attio_is_registered_with_oauth_and_proxy() {
+        let integrations = all_integrations();
+        let attio = integrations
+            .iter()
+            .find(|i| i.def().id == "attio")
+            .expect("attio integration must be registered");
+
+        assert!(attio.oauth_config().is_some(), "attio must be OAuth-first");
+        assert!(
+            attio.supports_oauth_instances(),
+            "attio must support multiple workspaces"
+        );
+        // Attio issues non-expiring tokens with no refresh_token — nothing to keep alive.
+        assert!(attio.refresh_policy().keep_alive.is_none());
+
+        let cfg = attio.proxy_config().expect("attio must expose a proxy");
+        assert_eq!(cfg.base_url, "https://api.attio.com");
+        assert!(matches!(
+            cfg.auth,
+            ProxyAuth::Bearer {
+                credential_key: "api_token"
+            }
+        ));
+
+        // The manual-token fallback field is what unlocks the advanced disclosure in the UI.
+        let fields = attio.def().fields;
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, "api_token");
+        assert!(fields[0].secret);
     }
 
     #[tokio::test]
