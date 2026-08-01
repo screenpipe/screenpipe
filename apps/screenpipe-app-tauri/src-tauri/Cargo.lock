@@ -11189,7 +11189,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11266,7 +11266,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11278,7 +11278,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -11324,7 +11324,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11375,7 +11375,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11403,7 +11403,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11471,7 +11471,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11487,7 +11487,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11523,7 +11523,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "serde",
  "sysinfo",
@@ -11543,7 +11543,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11611,7 +11611,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "libsqlite3-sys",
  "tokio",
@@ -11620,7 +11620,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11640,7 +11640,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-telemetry-wire"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "serde",
  "serde_json",
@@ -11650,7 +11650,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "argon2",
  "chacha20poly1305",
