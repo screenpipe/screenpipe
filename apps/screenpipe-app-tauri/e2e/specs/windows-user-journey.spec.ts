@@ -59,6 +59,7 @@ async function postNotification(id: string, title: string, body: string): Promis
       title,
       body,
       type: "pipe",
+      priority: "high",
       autoDismissMs: 2_000,
     }),
   });

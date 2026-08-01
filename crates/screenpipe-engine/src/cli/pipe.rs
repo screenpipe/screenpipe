@@ -17,10 +17,9 @@ pub async fn handle_pipe_command(command: &PipeCommand) -> anyhow::Result<()> {
     let pipes_dir = data_dir.join("pipes");
     std::fs::create_dir_all(&pipes_dir)?;
 
-    // In-app agent shells intentionally hide SCREENPIPE_API_KEY so the cloud
-    // JWT cannot be mistaken for the local API bearer. Pipe subcommands still
-    // need the desktop's cloud credential for screenpipe-hosted presets, so
-    // resolve the shared SecretStore fallback used by the running engine.
+    // SCREENPIPE_API_KEY is also the local HTTP bearer returned by `auth token`.
+    // The resolver accepts it here only when it is a cloud-session JWT; a local
+    // `sp-*` key cannot override the desktop's shared SecretStore session.
     let user_token = if matches!(command, PipeCommand::Run { .. }) {
         crate::auth_key::resolve_cloud_token(&data_dir, std::env::var("SCREENPIPE_API_KEY").ok())
             .await
@@ -168,24 +167,10 @@ pub fn api_base_url() -> String {
         .unwrap_or_else(|_| "https://screenpipe.com".to_string())
 }
 
-/// Get the auth token, checking in order:
-/// 1. SCREENPIPE_API_KEY env var
-/// 2. ~/.screenpipe/store.bin (settings.user.token — written by desktop app or `screenpipe login`)
-pub fn get_auth_token() -> Option<String> {
-    if let Ok(key) = std::env::var("SCREENPIPE_API_KEY") {
-        return Some(key);
-    }
-
-    if let Ok(parsed) = super::store_file::read_store() {
-        return parsed
-            .pointer("/state/settings/user/token")
-            .or_else(|| parsed.pointer("/settings/user/token"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-    }
-
-    None
+/// Resolve the cloud session from a JWT override or the shared SecretStore.
+pub async fn get_cloud_auth_token() -> Option<String> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    crate::auth_key::resolve_cloud_token(&data_dir, std::env::var("SCREENPIPE_API_KEY").ok()).await
 }
 
 /// Publish a local pipe to the registry.
@@ -220,11 +205,9 @@ async fn handle_publish_command(name: &str, pipes_dir: &std::path::Path) -> anyh
     let title = title.unwrap_or_else(|| name.to_string());
     let description = description.unwrap_or_default();
 
-    let token = get_auth_token().ok_or_else(|| {
-        anyhow::anyhow!(
-            "no auth token found. set SCREENPIPE_API_KEY env var or create ~/.screenpipe/auth.json"
-        )
-    })?;
+    let token = get_cloud_auth_token()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no cloud session found. run `screenpipe login`"))?;
 
     let base = api_base_url();
     let client = reqwest::Client::new();
@@ -439,11 +422,9 @@ async fn handle_info_command(slug: &str) -> anyhow::Result<()> {
 
 /// Check the publish/review status of a pipe you own.
 async fn handle_status_command(slug: &str) -> anyhow::Result<()> {
-    let token = get_auth_token().ok_or_else(|| {
-        anyhow::anyhow!(
-            "no auth token found. set SCREENPIPE_API_KEY env var or create ~/.screenpipe/auth.json"
-        )
-    })?;
+    let token = get_cloud_auth_token()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no cloud session found. run `screenpipe login`"))?;
 
     let base = api_base_url();
     let client = reqwest::Client::new();
