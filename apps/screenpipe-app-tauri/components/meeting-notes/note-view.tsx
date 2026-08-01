@@ -1087,15 +1087,17 @@ export function NoteView({
             <ArrowLeft className="h-3.5 w-3.5" />
           </Button>
           <div className="flex items-center gap-1 border border-border bg-background p-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShareOpen(true)}
-              title="send meeting notes"
-              className="h-8 rounded-none px-2 text-xs"
-            >
-              <Send className="mr-1.5 h-3.5 w-3.5" /> send
-            </Button>
+            {shareArtifact.sections.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShareOpen(true)}
+                title="send meeting notes"
+                className="h-8 rounded-none px-2 text-xs"
+              >
+                <Send className="mr-1.5 h-3.5 w-3.5" /> send
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

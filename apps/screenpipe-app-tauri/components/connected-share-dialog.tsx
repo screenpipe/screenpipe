@@ -41,6 +41,7 @@ import { localFetch } from "@/lib/api";
 import {
   buildConnectedShareChatPrompt,
   renderConnectedShareArtifact,
+  renderSlackMessage,
   shareConnectionAvailability,
   type ConnectedShareArtifact,
   type ShareConnectionAvailability,
@@ -133,6 +134,7 @@ export function ConnectedShareDialog({
   );
   const [selectedSectionIds, setSelectedSectionIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
+  const [slackMessage, setSlackMessage] = useState("");
   const [destination, setDestination] = useState<Destination>("copy");
   const [availability, setAvailability] = useState(EMPTY_AVAILABILITY);
   const [connectionsLoading, setConnectionsLoading] = useState(false);
@@ -159,8 +161,10 @@ export function ConnectedShareDialog({
 
   const resetPreview = useCallback(
     (ids: string[]) => {
+      const rendered = renderConnectedShareArtifact(artifact, ids);
       setSelectedSectionIds(ids);
-      setMessage(renderConnectedShareArtifact(artifact, ids));
+      setMessage(rendered);
+      setSlackMessage(renderSlackMessage(rendered));
       setReceipt(null);
       setActionError(null);
     },
@@ -214,17 +218,7 @@ export function ConnectedShareDialog({
         const ready = shareConnectionAvailability(entries);
         if (cancelled) return;
         setAvailability(ready);
-        setDestination(
-          ready.direct.slack
-            ? "slack"
-            : ready.direct.linear
-              ? "linear"
-              : ready.chat.linear
-                ? "chat-linear"
-                : ready.chat.notion
-                  ? "chat-notion"
-                  : "copy",
-        );
+        setDestination("copy");
       })
       .catch((error) => {
         if (cancelled) return;
@@ -400,6 +394,8 @@ export function ConnectedShareDialog({
     setActionError(null);
   };
 
+  const outgoingMessage = destination === "slack" ? slackMessage : message;
+
   const openConnection = (connectionId: "slack" | "linear" | "notion") => {
     posthog.capture("connected_share_connection_requested", {
       surface: artifact.surface,
@@ -437,7 +433,7 @@ export function ConnectedShareDialog({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text: message,
+        text: slackMessage,
         ...(channel ? { channel: channel.id } : {}),
         ...(slackInstance !== DEFAULT_SLACK_INSTANCE
           ? { instance: slackInstance }
@@ -511,7 +507,7 @@ export function ConnectedShareDialog({
   };
 
   const submit = async () => {
-    if (!message.trim() || sending) return;
+    if (!outgoingMessage.trim() || sending) return;
     setSending(true);
     setReceipt(null);
     setActionError(null);
@@ -557,17 +553,18 @@ export function ConnectedShareDialog({
   };
 
   const canSubmit =
-    message.trim().length > 0 &&
-    message.length <= 39_000 &&
+    outgoingMessage.trim().length > 0 &&
+    outgoingMessage.length <= 39_000 &&
     selectedSectionIds.length > 0 &&
     !receipt &&
     (destination !== "linear" || Boolean(linearTeamId && linearTitle.trim()));
 
-  const noConnectedShareApps =
-    !availability.direct.slack &&
-    !availability.direct.linear &&
-    !availability.chat.linear &&
-    !availability.chat.notion;
+  const missingConnectionIds = [
+    !availability.direct.slack ? "slack" : null,
+    !availability.direct.linear && !availability.chat.linear ? "linear" : null,
+    !availability.chat.notion ? "notion" : null,
+  ].filter((id): id is "slack" | "linear" | "notion" => id !== null);
+  const noConnectedShareApps = missingConnectionIds.length === 3;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -741,68 +738,77 @@ export function ConnectedShareDialog({
           </div>
         )}
 
-        {!connectionsLoading && !connectionsError && noConnectedShareApps && (
-          <div
-            className="space-y-3 border border-border p-3"
-            data-testid="connected-share-empty"
-          >
-            <div>
-              <p className="text-xs font-medium">add a sharing destination</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Nothing is connected for sharing yet. Clipboard works now, or
-                connect an app for the next snapshot.
-              </p>
+        {!connectionsLoading &&
+          !connectionsError &&
+          missingConnectionIds.length > 0 && (
+            <div
+              className="space-y-3 border border-border p-3"
+              data-testid="connected-share-empty"
+            >
+              <div>
+                <p className="text-xs font-medium">add a sharing destination</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {noConnectedShareApps
+                    ? "Nothing is connected for sharing yet. Clipboard works now, or connect an app for the next snapshot."
+                    : "Connect another app for future snapshots. Your connected destinations stay available above."}
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {[
+                  {
+                    id: "slack" as const,
+                    name: "Slack",
+                    icon: <SlackMark />,
+                    detail: "send directly · no AI",
+                  },
+                  {
+                    id: "linear" as const,
+                    name: "Linear",
+                    icon: (
+                      <img
+                        src="/images/linear.svg"
+                        alt=""
+                        className="h-4 w-4"
+                      />
+                    ),
+                    detail: "review with Chat",
+                  },
+                  {
+                    id: "notion" as const,
+                    name: "Notion",
+                    icon: (
+                      <img
+                        src="/images/notion.svg"
+                        alt=""
+                        className="h-4 w-4 dark:invert"
+                      />
+                    ),
+                    detail: "review with Chat",
+                  },
+                ]
+                  .filter((item) => missingConnectionIds.includes(item.id))
+                  .map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      data-testid={`connected-share-connect-${item.id}`}
+                      className="border border-border p-2 text-left hover:bg-muted"
+                      onClick={() => openConnection(item.id)}
+                    >
+                      <span className="flex items-center gap-2 text-xs font-medium">
+                        {item.icon} {item.name}
+                      </span>
+                      <span className="mt-1 block text-[10px] text-muted-foreground">
+                        {item.detail}
+                      </span>
+                      <span className="mt-2 block text-[10px] underline">
+                        connect
+                      </span>
+                    </button>
+                  ))}
+              </div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {[
-                {
-                  id: "slack" as const,
-                  name: "Slack",
-                  icon: <SlackMark />,
-                  detail: "send directly · no AI",
-                },
-                {
-                  id: "linear" as const,
-                  name: "Linear",
-                  icon: (
-                    <img src="/images/linear.svg" alt="" className="h-4 w-4" />
-                  ),
-                  detail: "review with Chat",
-                },
-                {
-                  id: "notion" as const,
-                  name: "Notion",
-                  icon: (
-                    <img
-                      src="/images/notion.svg"
-                      alt=""
-                      className="h-4 w-4 dark:invert"
-                    />
-                  ),
-                  detail: "review with Chat",
-                },
-              ].map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  data-testid={`connected-share-connect-${item.id}`}
-                  className="border border-border p-2 text-left hover:bg-muted"
-                  onClick={() => openConnection(item.id)}
-                >
-                  <span className="flex items-center gap-2 text-xs font-medium">
-                    {item.icon} {item.name}
-                  </span>
-                  <span className="mt-1 block text-[10px] text-muted-foreground">
-                    {item.detail}
-                  </span>
-                  <span className="mt-2 block text-[10px] underline">
-                    connect
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+          )}
 
         {destination === "slack" && (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -989,31 +995,44 @@ export function ConnectedShareDialog({
             >
               {destination.startsWith("chat-")
                 ? "snapshot Chat will review"
-                : "what will be sent"}
+                : destination === "slack"
+                  ? "what Slack will receive"
+                  : "what will be sent"}
             </label>
             <span
-              className={`text-[10px] tabular-nums ${message.length > 39_000 ? "text-destructive" : "text-muted-foreground"}`}
+              className={`text-[10px] tabular-nums ${outgoingMessage.length > 39_000 ? "text-destructive" : "text-muted-foreground"}`}
             >
-              {message.length.toLocaleString()} / 39,000
+              {outgoingMessage.length.toLocaleString()} / 39,000
             </span>
           </div>
           <Textarea
             id="connected-share-preview"
-            value={message}
+            value={outgoingMessage}
             maxLength={39_000}
             onChange={(event) => {
-              setMessage(event.target.value);
+              if (destination === "slack") {
+                setSlackMessage(event.target.value);
+              } else {
+                setMessage(event.target.value);
+                setSlackMessage(renderSlackMessage(event.target.value));
+              }
               setReceipt(null);
               setActionError(null);
             }}
             className="min-h-56 rounded-none font-mono text-xs"
           />
+          {destination === "slack" && (
+            <p className="text-[11px] text-muted-foreground">
+              This is the exact Slack-formatted message. Edits here apply only
+              to Slack.
+            </p>
+          )}
           {selectedSectionIds.length === 0 && artifact.sections.length > 0 && (
             <p className="text-[11px] text-destructive" role="alert">
               Choose at least one block to share.
             </p>
           )}
-          {message.length > 39_000 && (
+          {outgoingMessage.length > 39_000 && (
             <p className="text-[11px] text-destructive" role="alert">
               This snapshot is too long. Remove some text or blocks before
               sharing.
