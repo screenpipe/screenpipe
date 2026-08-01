@@ -219,9 +219,9 @@ async function expectSynchronizedActiveTurn(): Promise<void> {
 async function expectActiveToolState(): Promise<void> {
   const summary = await $('[data-testid="tool-activity-summary"]');
   await summary.waitForDisplayed({ timeout: t(10_000) });
-  expect((await summary.getText()).toLowerCase()).not.toContain("done");
   const indicator = await summary.$('[data-testid="tool-activity-running-indicator"]');
   await indicator.waitForDisplayed({ timeout: t(10_000) });
+  expect((await summary.getText()).toLowerCase()).not.toContain("done");
   expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);
 }
 
