@@ -2470,22 +2470,35 @@ pub async fn pi_start_inner(
             }
         }
 
-        if let Some(ref api_key) = config.api_key {
-            if !api_key.is_empty() {
-                // Pi resolves apiKey from env vars, so set it
-                match config.provider.as_str() {
-                    "openai" => {
-                        cmd.env("OPENAI_API_KEY", api_key);
-                    }
-                    "anthropic" => {
-                        cmd.env("ANTHROPIC_API_KEY", api_key);
-                    }
-                    "custom" => {
-                        cmd.env("CUSTOM_API_KEY", api_key);
-                    }
-                    _ => {}
+        // Pi resolves the provider's `apiKey` ("$OPENAI_API_KEY" /
+        // "$ANTHROPIC_API_KEY" in models.json) from this process env. OpenAI
+        // and Anthropic BYOK hard-require a key: silently spawning without one
+        // boots pi fine but fails every message with pi's raw CLI error
+        // ("No API key found for anthropic-byok. Use /login …" — advice that
+        // doesn't apply inside the app). Fail the spawn with an actionable
+        // message instead, mirroring the ChatGPT OAuth branch above. `custom`
+        // stays optional: keyless OpenAI-compatible endpoints (LM Studio,
+        // llama.cpp, corporate proxies) are legitimate.
+        let api_key = config.api_key.as_deref().unwrap_or("");
+        match config.provider.as_str() {
+            "openai" | "anthropic" => {
+                if api_key.is_empty() {
+                    return Err(format!(
+                        "Your {} preset has no API key. Add one in Settings → AI presets, or switch to a different preset.",
+                        config.provider
+                    ));
                 }
+                let env_name = if config.provider == "openai" {
+                    "OPENAI_API_KEY"
+                } else {
+                    "ANTHROPIC_API_KEY"
+                };
+                cmd.env(env_name, api_key);
             }
+            "custom" if !api_key.is_empty() => {
+                cmd.env("CUSTOM_API_KEY", api_key);
+            }
+            _ => {}
         }
     }
 
