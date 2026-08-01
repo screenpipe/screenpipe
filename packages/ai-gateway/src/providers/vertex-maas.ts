@@ -346,22 +346,45 @@ export class VertexMaasProvider implements AIProvider {
 			model: resolved.vertexId,
 			messages: this.formatMessages(body.messages),
 			stream: true,
+			// Without include_usage an OpenAI-compatible stream carries NO usage
+			// frame, so every request settles usage-incomplete instead of at its
+			// real (zero-dollar) token counts. openai.ts and openrouter.ts already
+			// request it; this lane was the odd one out (#5721).
+			stream_options: { include_usage: true },
 		};
 		if (body.temperature !== undefined) payload.temperature = body.temperature;
 		if (body.max_tokens !== undefined) payload.max_tokens = body.max_tokens;
 		if (body.tools) payload.tools = body.tools;
 		if (body.tool_choice) payload.tool_choice = body.tool_choice;
 
-		const fetchInit: RequestInit = {
+		const requestInit = (p: Record<string, unknown>): RequestInit => ({
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
 				'Content-Type': 'application/json',
 			},
-			body: JSON.stringify(payload),
-		};
+			body: JSON.stringify(p),
+		});
 
-		const response = await fetchWithRetry(url, fetchInit, `Vertex MaaS streaming ${resolved.vertexId}`);
+		let response = await fetchWithRetry(
+			url,
+			requestInit(payload),
+			`Vertex MaaS streaming ${resolved.vertexId}`,
+		);
+
+		// Degrade gracefully if this endpoint rejects the optional param (same
+		// strip-and-retry contract as the OpenAI provider).
+		if (!response.ok && response.status === 400) {
+			const error = await response.clone().text();
+			if (/stream_options/i.test(error)) {
+				const { stream_options: _dropped, ...withoutUsage } = payload;
+				response = await fetchWithRetry(
+					url,
+					requestInit(withoutUsage),
+					`Vertex MaaS streaming ${resolved.vertexId} (no stream_options)`,
+				);
+			}
+		}
 
 		if (!response.ok) {
 			const error = await response.text();

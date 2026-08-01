@@ -118,7 +118,7 @@ async function readBoundedJson(request: Request, maxBytes: number): Promise<Boun
 }
 
 /** Scale the pre-inference hold with the actual JSON request shape. */
-function costReservationShape(body: unknown, knownBytes = 0): CostReservationShape {
+export function costReservationShape(body: unknown, knownBytes = 0): CostReservationShape {
 	let bytes = knownBytes;
 	if (bytes <= 0) {
 		try {
@@ -134,9 +134,16 @@ function costReservationShape(body: unknown, knownBytes = 0): CostReservationSha
 		.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
 		.reduce((maximum, value) => Math.max(maximum, value), 0);
 	return {
-		// Two UTF-8 bytes per estimated token is conservative for normal prompts;
-		// the hard lane ceiling bounds tokenizer variance and adversarial bodies.
-		inputTokens: Math.ceil(bytes / 2),
+		// Four UTF-8 bytes per estimated token tracks real tokenizers (English
+		// prose and JSON average ~4 bytes/token) while still over-estimating
+		// most bodies; the hard lane ceiling bounds tokenizer variance and
+		// adversarial bodies. The previous bytes/2 estimate DOUBLED every hold,
+		// and because interrupted streams settle at no less than their hold,
+		// a single cancelled background-pipe call recorded ~2x its plausible
+		// worst-case cost and exhausted small daily budgets long before real
+		// usage did (#5721). The cache-write premium and the output allowance
+		// in getCostReservationMicroUsd keep the hold conservative.
+		inputTokens: Math.ceil(bytes / 4),
 		maxOutputTokens: requestedOutput > 0 ? Math.ceil(requestedOutput) : undefined,
 	};
 }

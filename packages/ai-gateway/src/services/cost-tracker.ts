@@ -297,6 +297,12 @@ export function getStreamSettlementCost(
 	usage: StreamSettlementUsage,
 	reservedMicroUsd = 0,
 ): number {
+	// A $0-priced served model bills us nothing no matter how the stream ended,
+	// so a missing terminal usage frame must not convert the paid-model hold
+	// into recorded cash spend against the account's daily budget (#5721).
+	// Mirrors the zero-cost bypasses in reserveDailyCostCap and
+	// getCostReservationMicroUsd.
+	if (isZeroCostModel(model)) return 0;
 	const observedCost = getStreamModelCost(
 		model,
 		usage.input_tokens,
@@ -323,6 +329,9 @@ export function getNonStreamSettlementCost(
 	cache: CacheUsage = {},
 	reservedMicroUsd = 0,
 ): number {
+	// Same zero-cost rule as getStreamSettlementCost: absent provider usage on
+	// a free-lane model must not settle at the paid-model reservation (#5721).
+	if (isZeroCostModel(model)) return 0;
 	const observedCost = getModelCost(
 		model,
 		inputTokens ?? null,

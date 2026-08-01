@@ -106,6 +106,14 @@ describe('getStreamSettlementCost', () => {
 		expect(getStreamSettlementCost('claude-fable-5', usage, 50_000))
 			.toBe(getStreamModelCost('claude-fable-5', 200_000, 0));
 	});
+
+	it('settles a zero-cost served model at zero even without terminal usage', () => {
+		// An auto request reserves against a PAID model, but when the served
+		// model is a $0 lane the provider bills nothing — a cancelled stream
+		// must not convert the hold into recorded daily spend (#5721).
+		expect(getStreamSettlementCost('glm-4.7', incompleteUsage, 900_000)).toBe(0);
+		expect(getStreamSettlementCost('kimi-k2.5', incompleteUsage, 50_000)).toBe(0);
+	});
 });
 
 describe('getNonStreamSettlementCost', () => {
@@ -146,6 +154,10 @@ describe('getNonStreamSettlementCost', () => {
 			{},
 			50_000,
 		)).toBe(observed);
+	});
+
+	it('settles a zero-cost served model at zero when usage is absent', () => {
+		expect(getNonStreamSettlementCost('glm-5', null, null, {}, 900_000)).toBe(0);
 	});
 });
 
