@@ -242,6 +242,7 @@
         "src/capture_exclusions.rs",
         "src/cli/agent.rs",
         "src/cli/install.rs",
+        "src/cli/login.rs",
         "src/cli/mod.rs",
         "src/cli/presets.rs",
         "src/cli/profile.rs",

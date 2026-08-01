@@ -243,6 +243,16 @@ pub async fn find_api_auth_key() -> Option<String> {
 /// `auth_token` module (`apps/screenpipe-app-tauri/src-tauri/src/auth_token.rs`).
 const CLOUD_AUTH_TOKEN_KEY: &str = "cloud.auth_token";
 
+/// Clerk cloud-session tokens are JWTs. The local HTTP bearer returned by
+/// `screenpipe auth token` is deliberately not accepted here: both credentials
+/// historically used `SCREENPIPE_API_KEY`, and treating the local `sp-*` key as
+/// a cloud session turns an otherwise recoverable login into a hosted-AI 401.
+pub(crate) fn is_cloud_session_token(value: &str) -> bool {
+    (value.starts_with("eyJ") && value.matches('.').count() == 2)
+        || (std::env::var_os("SCREENPIPE_E2E_SEED").is_some()
+            && value.starts_with("e2e-fake-token-"))
+}
+
 /// Resolve a cloud token for a short-lived CLI command without minting or
 /// persisting credentials. An explicit process token wins; desktop and
 /// headless persisted stores are read only as fallbacks.
@@ -250,26 +260,83 @@ pub async fn resolve_cloud_token(
     data_dir: &Path,
     explicit_token: Option<String>,
 ) -> Option<String> {
-    if let Some(token) = explicit_token.filter(|token| !token.is_empty()) {
+    if let Some(token) = explicit_token.filter(|token| is_cloud_session_token(token)) {
         return Some(token);
     }
     find_cloud_token(data_dir).await
 }
 
+/// Persist a cloud-session token in the same SecretStore used by the desktop
+/// app. This is the durable write path for `screenpipe login`; writing the JWT
+/// back to `store.bin` would race the app's plaintext-token migration and make
+/// the next CLI process appear signed out again.
+pub async fn set_cloud_token(data_dir: &Path, token: &str) -> Result<()> {
+    anyhow::ensure!(
+        is_cloud_session_token(token),
+        "screenpipe cloud login returned an invalid session token"
+    );
+
+    let key = if screenpipe_secrets::is_encryption_requested(data_dir) {
+        match screenpipe_secrets::keychain::get_key() {
+            screenpipe_secrets::keychain::KeyResult::Found(key) => Some(key),
+            screenpipe_secrets::keychain::KeyResult::AccessDenied => {
+                anyhow::bail!(
+                    "keychain access denied; refusing to persist the cloud session unencrypted"
+                )
+            }
+            screenpipe_secrets::keychain::KeyResult::NotFound
+            | screenpipe_secrets::keychain::KeyResult::Unavailable => None,
+        }
+    } else {
+        None
+    };
+
+    std::fs::create_dir_all(data_dir).map_err(|error| {
+        anyhow::anyhow!(
+            "could not create screenpipe data directory {}: {error}",
+            data_dir.display()
+        )
+    })?;
+    let db_path = data_dir.join("db.sqlite");
+    let store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), key)
+        .await
+        .map_err(|error| anyhow::anyhow!("could not open cloud session store: {error}"))?;
+    store
+        .set(CLOUD_AUTH_TOKEN_KEY, token.as_bytes())
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to persist cloud session: {error}"))
+}
+
+/// Clear the authoritative cloud-session row. Deleting a row does not require
+/// decrypting its value, so logout still works if keychain access was revoked.
+pub async fn clear_cloud_token(data_dir: &Path) -> Result<()> {
+    let db_path = data_dir.join("db.sqlite");
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let store = open_secret_store(data_dir)
+        .await
+        .map_err(|error| anyhow::anyhow!("could not open cloud session store: {error}"))?;
+    store
+        .delete(CLOUD_AUTH_TOKEN_KEY)
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to clear cloud session: {error}"))
+}
+
 /// Read the cloud auth token. Priority:
 ///   1. The shared encrypted SecretStore key `cloud.auth_token` — written by
 ///      the desktop app (`auth_token.rs`).
-///   2. Fallback: `store.bin` `settings.user.token` — where the `screenpipe
-///      login` CLI persists the token. The desktop app is the only writer of
-///      the SecretStore key, so without this fallback a CLI-only / headless
-///      login (e.g. `screenpipe login` on a VPS, no app) leaves the engine
-///      with no cloud token and cloud features like the `/v1/chat/completions`
-///      proxy stay disabled — exactly the "screenpipe on the go" case.
+///   2. Legacy fallback: `store.bin` `settings.user.token` — where older
+///      versions of `screenpipe login` persisted the token. Current CLI and
+///      desktop versions both write the SecretStore key.
 /// Returns `None` if neither source has a usable token.
 pub async fn find_cloud_token(data_dir: &Path) -> Option<String> {
     if let Ok(store) = open_secret_store(data_dir).await {
         if let Ok(Some(bytes)) = store.get(CLOUD_AUTH_TOKEN_KEY).await {
-            if let Some(tok) = String::from_utf8(bytes).ok().filter(|s| !s.is_empty()) {
+            if let Some(tok) = String::from_utf8(bytes)
+                .ok()
+                .filter(|token| is_cloud_session_token(token))
+            {
                 return Some(tok);
             }
         }
@@ -278,8 +345,8 @@ pub async fn find_cloud_token(data_dir: &Path) -> Option<String> {
 }
 
 /// Read the cloud token from `store.bin`'s `settings.user.token` (the location
-/// the `screenpipe login` CLI writes). Skips app-managed encrypted stores
-/// (SPSTORE1 magic) — those resolve via the SecretStore path instead.
+/// older `screenpipe login` versions wrote). Skips app-managed encrypted
+/// stores (SPSTORE1 magic) — those resolve via the SecretStore path instead.
 fn cloud_token_from_store_json(data_dir: &Path) -> Option<String> {
     let bytes = std::fs::read(data_dir.join("store.bin")).ok()?;
     if bytes.starts_with(b"SPSTORE1") {
@@ -288,13 +355,16 @@ fn cloud_token_from_store_json(data_dir: &Path) -> Option<String> {
     let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     v.pointer("/settings/user/token")?
         .as_str()
-        .filter(|s| !s.is_empty())
+        .filter(|token| is_cloud_session_token(token))
         .map(|s| s.to_string())
 }
 
 #[cfg(test)]
 mod cloud_token_tests {
     use super::*;
+
+    const JWT: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig";
+    const JWT_ALT: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvdGhlciJ9.sig";
 
     #[tokio::test]
     async fn resolve_cloud_token_reads_desktop_secret_store() {
@@ -304,22 +374,43 @@ mod cloud_token_tests {
             .await
             .unwrap();
         store
-            .set(CLOUD_AUTH_TOKEN_KEY, b"desktop-cloud-token")
+            .set(CLOUD_AUTH_TOKEN_KEY, JWT.as_bytes())
             .await
             .unwrap();
 
         let token = resolve_cloud_token(dir.path(), None).await;
 
-        assert_eq!(token.as_deref(), Some("desktop-cloud-token"));
+        assert_eq!(token.as_deref(), Some(JWT));
     }
 
     #[tokio::test]
     async fn resolve_cloud_token_prefers_explicit_token() {
         let dir = tempfile::tempdir().unwrap();
 
-        let token = resolve_cloud_token(dir.path(), Some("explicit-cloud-token".to_string())).await;
+        let token = resolve_cloud_token(dir.path(), Some(JWT.to_string())).await;
 
-        assert_eq!(token.as_deref(), Some("explicit-cloud-token"));
+        assert_eq!(token.as_deref(), Some(JWT));
+    }
+
+    #[tokio::test]
+    async fn local_api_key_does_not_override_persisted_cloud_session() {
+        let dir = tempfile::tempdir().unwrap();
+        set_cloud_token(dir.path(), JWT).await.unwrap();
+
+        let token = resolve_cloud_token(dir.path(), Some("sp-1a2b3c4d".to_string())).await;
+
+        assert_eq!(token.as_deref(), Some(JWT));
+    }
+
+    #[tokio::test]
+    async fn cloud_session_round_trips_and_clears() {
+        let dir = tempfile::tempdir().unwrap();
+
+        set_cloud_token(dir.path(), JWT_ALT).await.unwrap();
+        assert_eq!(find_cloud_token(dir.path()).await.as_deref(), Some(JWT_ALT));
+
+        clear_cloud_token(dir.path()).await.unwrap();
+        assert_eq!(find_cloud_token(dir.path()).await, None);
     }
 
     #[test]
@@ -331,13 +422,10 @@ mod cloud_token_tests {
         // CLI-login style plaintext store.bin → token resolves.
         std::fs::write(
             dir.join("store.bin"),
-            r#"{"settings":{"user":{"token":"jwt-abc-123","email":"x@y.z"}}}"#,
+            format!(r#"{{"settings":{{"user":{{"token":"{JWT}","email":"x@y.z"}}}}}}"#),
         )
         .unwrap();
-        assert_eq!(
-            cloud_token_from_store_json(&dir).as_deref(),
-            Some("jwt-abc-123")
-        );
+        assert_eq!(cloud_token_from_store_json(&dir).as_deref(), Some(JWT));
 
         // App-managed encrypted store → None (SecretStore path handles it).
         std::fs::write(dir.join("store.bin"), b"SPSTORE1\x00\x01junk").unwrap();
