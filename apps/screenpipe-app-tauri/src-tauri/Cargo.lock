@@ -11059,7 +11059,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.151"
+version = "2.5.161"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11071,6 +11071,7 @@ dependencies = [
  "base64 0.22.1",
  "block",
  "block2 0.6.2",
+ "bytes",
  "cbc 0.1.2",
  "cc",
  "chrono",
@@ -11137,6 +11138,7 @@ dependencies = [
  "sha2 0.10.9",
  "specta",
  "specta-typescript",
+ "sqlx",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -11187,7 +11189,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -11264,7 +11266,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -11276,7 +11278,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -11322,7 +11324,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -11373,7 +11375,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11401,7 +11403,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11469,7 +11471,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11485,7 +11487,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -11521,7 +11523,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "serde",
  "sysinfo",
@@ -11541,7 +11543,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11609,7 +11611,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "libsqlite3-sys",
  "tokio",
@@ -11618,7 +11620,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -11638,7 +11640,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-telemetry-wire"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "serde",
  "serde_json",
@@ -11648,7 +11650,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -11660,6 +11662,13 @@ dependencies = [
  "tracing",
  "walkdir",
  "zeroize",
+]
+
+[[package]]
+name = "screenpipe-wer-dump-helper"
+version = "0.1.0"
+dependencies = [
+ "windows 0.58.0",
 ]
 
 [[package]]

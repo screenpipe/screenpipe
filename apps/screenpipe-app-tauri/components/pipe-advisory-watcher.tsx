@@ -5,14 +5,12 @@
 
 import { useEffect } from "react";
 import { useFeatureFlagEnabled } from "posthog-js/react";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { localFetch } from "@/lib/api";
 import { parsePipeError, isActionablePipeError } from "@/lib/pipe-errors";
 import { useAdvisoryStore } from "@/lib/advisories";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
-import { commands } from "@/lib/utils/tauri";
-import { screenpipeWebUrl } from "@/lib/web-url";
+import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 
 /**
  * Watches scheduled pipes for the silent failure modes a background automation
@@ -45,9 +43,6 @@ export function PipeAdvisoryWatcher() {
   // via the PostHog `pipe_advisories` flag.
   const enabled = flag !== false && isPrimaryWindow();
   const subscribed = settings.user?.cloud_subscribed === true;
-  const token = settings.user?.token;
-  const userId = settings.user?.id;
-  const email = settings.user?.email;
 
   useEffect(() => {
     if (!enabled) {
@@ -59,19 +54,9 @@ export function PipeAdvisoryWatcher() {
 
     const startUpgrade = async () => {
       try {
-        if (!token) {
-          await commands.openLoginWindow(null);
-          return;
-        }
-        const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ tier: "pro", billingPeriod: "monthly", userId, email }),
-        });
-        const data = await res.json();
-        if (data.url) await openUrl(data.url);
+        await openBusinessUpgradeSurface("pipe-advisory");
       } catch (e) {
-        console.error("pipe-advisory upgrade checkout failed:", e);
+        console.error("pipe-advisory upgrade surface failed:", e);
       }
     };
 
@@ -80,7 +65,9 @@ export function PipeAdvisoryWatcher() {
         const res = await localFetch("/pipes");
         if (res.ok) {
           const data = await res.json();
-          const rows: PipeRow[] = Array.isArray(data) ? data : (data?.data ?? data?.pipes ?? []);
+          const rows: PipeRow[] = Array.isArray(data)
+            ? data
+            : (data?.data ?? data?.pipes ?? []);
           const advisories = rows
             .filter(
               (p) =>
@@ -101,7 +88,9 @@ export function PipeAdvisoryWatcher() {
               severity: "warn" as const,
               // Only offer "upgrade" to non-Business users — a Business pipe that
               // hit the cost cap can't fix it by upgrading.
-              ...(subscribed ? {} : { action: { label: "upgrade", run: startUpgrade } }),
+              ...(subscribed
+                ? {}
+                : { action: { label: "upgrade", run: startUpgrade } }),
             }));
           if (alive) reconcile(ADVISORY_PREFIX, advisories);
         }
@@ -116,7 +105,7 @@ export function PipeAdvisoryWatcher() {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [enabled, subscribed, token, userId, email, reconcile]);
+  }, [enabled, subscribed, reconcile]);
 
   return null;
 }

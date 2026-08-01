@@ -9,6 +9,13 @@
 
 export const commands = {
 /**
+ * Frontend hook for browser OAuth flows that complete by polling (MCP and
+ * Composio). Generic integration OAuth calls the same mechanism directly.
+ */
+async activateAppAfterOauth() : Promise<void> {
+    await TAURI_INVOKE("activate_app_after_oauth");
+},
+/**
  * Reconcile the live app + the next-boot config with the current enterprise
  * hidden-UI policy. The frontend calls this right after pushing a freshly
  * fetched policy via `set_enterprise_policy`, so the moment an admin turns on
@@ -383,6 +390,28 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check", { initialCheck });
 },
 /**
+ * E2E helper: distinguish a real CaptureSession from capture intent alone.
+ */
+async e2eCaptureSessionRunning() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_capture_session_running") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read-only lifecycle snapshot for the packaged desktop regression.
+ */
+async e2eDbHardFaultState() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_db_hard_fault_state") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: emit a deterministic chat stream from the Rust side.
  *
  * This keeps chat performance tests close to production's Pi stdout path:
@@ -393,6 +422,17 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async e2eEmitAgentStream(sessionId: string, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_emit_agent_stream", { sessionId, deltaCount }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper: publish the same typed core event as the real disk probe.
+ */
+async e2eEmitDiskSpaceLow(availableBytes: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_disk_space_low", { availableBytes }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -426,12 +466,48 @@ async e2eEmitSettledAgentFollowUp(sessionId: string) : Promise<Result<null, stri
 }
 },
 /**
+ * E2E helper: execute the production policy handler directly and return its
+ * explicit outcome. This avoids sleep-based assertions; the settings E2E also
+ * publishes through the typed event bus to cover the production subscription.
+ */
+async e2eHandleDiskSpaceLow(availableBytes: number) : Promise<Result<DiskPressureOutcome, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_handle_disk_space_low", { availableBytes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Damage only an E2E-owned table in the disposable database, then route the
+ * real SQLITE_CORRUPT result through the production manager and app hook.
+ */
+async e2eInjectDbHardFault() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_inject_db_hard_fault") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: read the status text from the menu that was successfully
  * installed into the native tray, not merely the desired health state.
  */
 async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_installed_tray_recording_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper: read back the persisted guard value before publishing an event.
+ */
+async e2eLowDiskGuardEnabled() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_low_disk_guard_enabled") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -446,6 +522,18 @@ async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>>
  */
 async e2eMainOverlayVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_main_overlay_visible");
+},
+/**
+ * E2E helper: model an active capture intent without requiring physical
+ * screen/audio devices on the CI runner.
+ */
+async e2eMarkCaptureIntended() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_mark_capture_intended") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * E2E-only: detach and close the owned-browser child webview, resetting the
@@ -473,6 +561,44 @@ async e2eOwnedBrowserDetach() : Promise<Result<null, string>> {
  */
 async e2eOwnedBrowserVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_owned_browser_visible");
+},
+/**
+ * E2E-only accelerated reproduction of an idle capture heartbeat pause that
+ * recovers as the user returns. The real incident accumulated 114 idle stale
+ * checks, then the first input both woke capture and crossed the attended
+ * alert threshold before the next healthy check arrived.
+ */
+async e2eRecordingHealthReturnRace() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_recording_health_return_race") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper: update the native store without depending on a mounted settings
+ * webview. Used by the recording-enabled Windows lane.
+ */
+async e2eSetLowDiskGuardEnabled(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_set_low_disk_guard_enabled", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper: prove critical recording-stopped alerts bypass the user's
+ * ordinary notification master switch.
+ */
+async e2eSetNotificationMasterEnabled(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_set_notification_master_enabled", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * E2E helper: drive the health-to-native-tray status transition.
@@ -772,6 +898,9 @@ async getLogFiles() : Promise<Result<LogFile[], string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getLowDiskGuardConfig() : Promise<LowDiskGuardConfig> {
+    return await TAURI_INVOKE("get_low_disk_guard_config");
 },
 async getMediaFile(filePath: string) : Promise<Result<JsonValue, string>> {
     try {
@@ -1735,8 +1864,8 @@ async readViewerFile(path: string) : Promise<Result<ViewerContent, string>> {
  *
  * `text` is the raw logs + chat (PII-dense chat first); `settings_json` is the
  * raw settings store. Config secrets are stripped by field name, then the whole
- * thing goes through the crate's redaction pipeline (enclave model under a time
- * budget, regex for the overflow). Never returns `Err` — worst case is
+ * thing goes through the crate's deterministic local pipeline before bounded,
+ * concurrent enclave enrichment. Never returns `Err` — worst case is
  * regex-only redaction — so feedback submission is never blocked.
  */
 async redactPiiForFeedback(text: string, settingsJson: string) : Promise<Result<string, string>> {
@@ -2277,8 +2406,8 @@ async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
  * string ("off" | "cited" | "all"; legacy "true" accepted) — parsed
  * fail-closed by FrameImagesMode::parse.
  */
-async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, frameImages: string) : Promise<void> {
-    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots, frameImages });
+async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, feedback: string, frameImages: string) : Promise<void> {
+    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots, feedback, frameImages });
 },
 async setTrayHealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_health_icon");
@@ -2420,6 +2549,14 @@ async startCapture() : Promise<Result<null, string>> {
 async startExportRecording(meetingId: number | null, start: string | null, end: string | null, outputPath: string) : Promise<Result<StartExportRecordingResponse, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("start_export_recording", { meetingId, start, end, outputPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async startFeedbackUpload(request: FeedbackUploadRequest) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_feedback_upload", { request }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2762,6 +2899,7 @@ export type DiscoveredHost = { host: string; port: number; user: string | null; 
  * Only set when `HostName` resolves to an IP different from the alias.
  */
 alias?: string | null }
+export type DiskPressureOutcome = "guard_disabled" | "capture_already_stopped" | "capture_stopped" | "stop_failed"
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type EngineEvent = { name: string; data: JsonValue }
@@ -2770,6 +2908,7 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
 export type ExportRequestInfo = { meetingId: number | null; start: string | null; end: string | null; outputPath: string }
+export type FeedbackUploadRequest = { jobId: string; identifier: string; reportType: string; feedbackText: string; settingsJson: string; chatHistory: string; consoleLog: string; analyticsId: string | null; os: string; osVersion: string; appVersion: string; screenshotDataUrl: string | null; videoDataUrl: string | null; videoPath: string | null; videoExt: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 /**
@@ -2785,6 +2924,13 @@ export type JobEvent = { kind: "started"; jobId: string; label: string; message:
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
+/**
+ * Stable low-disk safety values shared with the settings UI.
+ *
+ * Keeping the threshold and monitor cadence in Rust prevents user-facing copy
+ * from drifting away from the values enforced by the capture engine.
+ */
+export type LowDiskGuardConfig = { thresholdBytes: number; checkIntervalSeconds: number }
 export type MeetingExportSummary = { job_id: string; output_path: string; frame_count: number; audio_chunk_count: number; duration_secs: number; file_size_bytes: number }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type NotificationActionEvent = { actionType: string | null; rawJson: string; payload: JsonValue }
@@ -2852,6 +2998,11 @@ apiKey: string | null;
  */
 maxTokens?: number;
 /**
+ * Approximate input context size in characters. Pi model metadata uses
+ * tokens, so Screenpipe converts this value using four characters/token.
+ */
+maxContextChars?: number | null;
+/**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
 systemPrompt?: string | null }
@@ -2868,12 +3019,12 @@ export type PiQueuedPrompt = {
  */
 id: string;
 /**
- * First ~200 chars of the user message — enough for the UI to show a
+ * First ~200 chars of the user message, enough for the UI to show a
  * readable preview without round-tripping the full prompt over IPC.
  */
 preview: string;
 /**
- * Unix epoch milliseconds for "queued at" — drives the relative-time
+ * Unix epoch milliseconds for "queued at", drives the relative-time
  * label in the UI ("queued 4s ago").
  */
 queuedAtMs: number }
@@ -3576,6 +3727,11 @@ chatAlwaysOnTop?: boolean;
  * detector is more reliable.
  */
 showRestartNotifications?: boolean;
+/**
+ * Stop capture before the data volume is completely full. Search, pipes,
+ * and the local API remain available. Explicitly opt-in for now.
+ */
+stopRecordingOnLowDisk?: boolean;
 /**
  * When true, apply macOS vibrancy effect to the sidebar for a translucent look.
  */

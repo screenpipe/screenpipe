@@ -831,8 +831,10 @@ function main(): void {
     if (!existsSync(args.outPath)) {
       throw new Error(`Coverage report is missing: ${args.outPath}`);
     }
-    const current = readFileSync(args.outPath, "utf8");
-    if (current !== report) {
+    // Normalize line endings: git autocrlf checks the report out with CRLF on
+    // Windows while the generator emits LF, so a byte comparison false-fails.
+    const current = readFileSync(args.outPath, "utf8").replace(/\r\n/g, "\n");
+    if (current !== report.replace(/\r\n/g, "\n")) {
       throw new Error(
         `Coverage report is stale. Run: bun e2e/scripts/generate-coverage-report.ts`,
       );

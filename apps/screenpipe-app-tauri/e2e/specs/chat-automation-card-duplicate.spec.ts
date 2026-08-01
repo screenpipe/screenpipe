@@ -41,7 +41,12 @@ const CARD_DISPLAY_LABELS: Record<string, string> = {
   "missed-todos": "✅ Missed To-Dos",
 };
 
-function chatFilesForDisplayLabel(displayLabel: string): string[] {
+interface MatchingChat {
+  name: string;
+  matchingUserMessages: number;
+}
+
+function chatsForDisplayLabel(displayLabel: string): MatchingChat[] {
   let names: string[];
   try {
     names = readdirSync(CHATS_DIR);
@@ -49,19 +54,24 @@ function chatFilesForDisplayLabel(displayLabel: string): string[] {
     return [];
   }
 
-  return names.filter((name) => {
-    if (!name.endsWith(".json")) return false;
+  return names.flatMap((name) => {
+    if (!name.endsWith(".json")) return [];
     try {
       const conversation = JSON.parse(readFileSync(join(CHATS_DIR, name), "utf8")) as {
         messages?: Array<{ role?: string; displayContent?: string }>;
       };
-      return (conversation.messages ?? []).some(
+      const matchingUserMessages = (conversation.messages ?? []).filter(
         (message) => message.role === "user" && message.displayContent === displayLabel,
-      );
+      ).length;
+      return matchingUserMessages > 0 ? [{ name, matchingUserMessages }] : [];
     } catch {
-      return false;
+      return [];
     }
   });
+}
+
+function chatFilesForDisplayLabel(displayLabel: string): string[] {
+  return chatsForDisplayLabel(displayLabel).map((chat) => chat.name);
 }
 
 function cleanupCardChats(displayLabel: string): void {
@@ -159,6 +169,14 @@ describe("Automation cards create exactly one chat each (#4719)", function () {
         );
       }
       expect(matches).toHaveLength(1);
+      const [persisted] = chatsForDisplayLabel(displayLabel);
+      if (persisted?.matchingUserMessages !== 1) {
+        throw new Error(
+          `BUG REPRODUCED: '${slug}' persisted the same user turn ` +
+            `${persisted?.matchingUserMessages ?? 0} times in ${persisted?.name ?? "unknown file"}`,
+        );
+      }
+      expect(persisted.matchingUserMessages).toBe(1);
     });
   }
 });

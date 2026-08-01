@@ -107,6 +107,7 @@ commits: `28e5c247`
 
 ### 4. audio device handling
 
+- [ ] **meetings-only releases configured audio devices outside meetings** — Run `bun run test:e2e:meetings-only-audio` on macOS and Windows. The isolated real-audio lane must observe `0` running devices before a manual meeting, `>=1` while it is active, then `0` within one monitor tick after stop. `/health` must report `waiting_for_meeting` rather than a capture fault while idle. (#5611)
 - [ ] **CoreAudio Process Tap (experimental)** — with `experimentalCoreaudioSystemAudio` ON on macOS 14.4+, System Audio uses the CoreAudio Process Tap and rebuilds if silence is detected; with the flag OFF (default) System Audio uses SCK. (`75a52603b`, `5634664da`)
 - [ ] **meeting piggyback OFF (default)** — with `experimentalMeetingPiggyback` off, a meeting starts/ends with zero device-set changes: no "Meeting Tap" device, no suspensions, logs contain no `meeting_piggyback` actions.
 - [ ] **meeting piggyback ON, detected meeting** — flag on ("Smart recording" in settings), ANY capture mode, macOS 14.4+: join a Zoom call with a NON-default mic selected in Zoom → within ~4s a "Meeting Tap (output)" session stream starts, and within ~6s (two confirmation ticks — we never race the app's own device acquisition) the Zoom-selected mic is capturing; the global "System Audio (output)" stream and non-resolved mics are suspended; transcripts attribute to "Meeting Tap"/the resolved mic; on meeting end everything reverts and the resolved mic is NOT left in enabled devices (settings unchanged).
@@ -133,6 +134,7 @@ commits: `28e5c247`
 - [ ] **bluetooth device connect/disconnect** — AirPods connect mid-recording. audio continues without gap.
 - [ ] **no audio device available** — unplug all audio. app continues (vision still works). log shows warning, not crash.
 - [ ] **audio stream timeout recovery** — if audio stream times out (30s no data), it should reconnect automatically.
+- [ ] **per-device audio-timeout recovery** — Force one microphone timeout, then prove that only later usable microphone audio clears `active_no_data`; healthy system output alone must not clear it. Repeat with system output timed out and microphone live. Verify a one-shot timeout expires before the native 90-tick alert, repeated zero-fill/receive timeouts keep the failure active, a recovered device clears immediately, an unresolved current device still raises `recording needs help`, and removing/deselecting the failed device stops it from degrading current capture. Run this after a packaged macOS display/wake transition.
 - [ ] **multiple audio devices simultaneously** — input (mic) + output (speakers) both recording. both show in device list.
 - [ ] **disable audio setting** — toggling "disable audio" stops all audio recording. re-enabling restarts it.
 - [ ] **Metal GPU for whisper** — transcription uses GPU acceleration on macOS (`f882caef`). verify with Activity Monitor GPU tab.
@@ -304,6 +306,7 @@ commits: `eea0c865`, `cc09de61`, `e61501da`, `d25191d7`, `60096fb9`
 - [ ] **event listener race condition** — Tauri event listener setup during rapid window creation. no crash (`cc09de61`).
 - [ ] **UTF-8 boundary panic** — search with special characters, non-ASCII text in OCR results. no panic on string slicing (`eea0c865`).
 - [ ] **low disk space** — with <1GB free, app should warn user. no crash from failed writes.
+- [ ] **opt-in low-disk recording guard** — the Storage toggle defaults off and persists across restart. With it off, a low-disk event leaves capture running. With it on, crossing the engine threshold stops the real capture session, leaves `/health` and authenticated search available, and persists the critical in-app notification even when ordinary notifications are disabled. Verify the data volume is selected correctly when `SCREENPIPE_DATA_DIR` is a symlink, junction, or nested mount.
 - [ ] **large database (>10GB)** — search still returns results within 2 seconds. app doesn't freeze on startup.
 - [ ] **Snapshot compaction integrity** — Verify compaction doesn't result in NULL offset_index or pool exhaustion. (`09245af5f`)
 - [ ] **Audio chunk timestamps** — `start_time` and `end_time` are correctly set for reconciled and retranscribed audio chunks in the database.
@@ -488,6 +491,7 @@ commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`,
 - [ ] **Windows Defender** — app not blocked by default security.
 - [ ] **Windows default mode** — On Windows, the app should default to window mode on first launch.
 - [ ] **Windows taskbar icon** — The app should display a taskbar icon on Windows.
+- [ ] **Windows login window resets stale OAuth navigation** — Click login, choose GitHub or Google, leave the provider flow open, then click login in Screenpipe again. The existing "sign in to screenpipe" window must return to the Screenpipe login page instead of showing the stale provider page or a blank document.
 - [ ] **Windows audio transcription accuracy** — On Windows, verify improved audio transcription accuracy due to native Silero VAD frame size and lower speech threshold.
 - [ ] **Windows multi-line pipe prompts** — Multi-line pipe prompts should be preserved on Windows.
 - [ ] **Windows ARM64 support** — On a Windows ARM64 device, verify the app installs and runs correctly. (`d62360bc4`)

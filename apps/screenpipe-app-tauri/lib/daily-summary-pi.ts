@@ -40,6 +40,7 @@ function providerConfig(preset: AIPreset): PiProviderConfig {
         ? preset.apiKey
         : null,
     maxTokens: Math.max(2_048, Math.min(preset.maxTokens ?? 4_096, 8_192)),
+    maxContextChars: preset.maxContextChars,
     systemPrompt: [presetPrompt, DAILY_SUMMARY_AGENT_SYSTEM_PROMPT]
       .filter(Boolean)
       .join("\n\n"),

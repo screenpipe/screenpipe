@@ -9,6 +9,7 @@ use axum::{
     Extension,
 };
 use screenpipe_core::pipes::permissions::PipePermissions;
+use screenpipe_db::FeedbackRecord as DbFeedbackRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -244,15 +245,86 @@ pub(crate) async fn set_structured_output_feedback_handler(
             Json(json!({ "error": "pipes cannot rate their own structured outputs" })),
         ));
     }
+    let target_version = format!(
+        "{}:{}",
+        payload.artifact_output_id, payload.artifact_version
+    );
+    let rating = payload.rating;
     let feedback = set_output_feedback(
         &state.screenpipe_dir,
         &target_id,
         payload.artifact_output_id,
         payload.artifact_version,
-        payload.rating,
+        rating,
         payload.correction,
     )
     .map_err(api_error)?;
+
+    if let Some(rating) = rating {
+        let target = crate::structured_outputs::list_output_targets(&state.screenpipe_dir)
+            .map_err(api_error)?
+            .into_iter()
+            .find(|target| target.id == target_id)
+            .ok_or_else(|| internal_error("structured output target disappeared after rating"))?;
+        let current = feedback
+            .current
+            .as_ref()
+            .ok_or_else(|| internal_error("structured output rating was not persisted"))?;
+        let snapshot = current
+            .output_payload
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| {
+                internal_error(format!("failed to encode feedback snapshot: {error}"))
+            })?;
+        let context = serde_json::to_string(&json!({
+            "artifact_output_id": payload.artifact_output_id,
+            "artifact_version": payload.artifact_version,
+        }))
+        .map_err(|error| internal_error(format!("failed to encode feedback context: {error}")))?;
+        state
+            .db
+            .upsert_feedback(&DbFeedbackRecord {
+                id: format!(
+                    "structured_output:{}:{}:{}",
+                    target_id, payload.artifact_output_id, payload.artifact_version
+                ),
+                target_kind: "structured_output".to_string(),
+                target_id: target_id.clone(),
+                target_version: Some(target_version.clone()),
+                producer_ref: Some(format!("pipe:{}", target.bound_pipe)),
+                actor_id: "local-user".to_string(),
+                rating: match rating {
+                    OutputFeedbackRating::Up => "up",
+                    OutputFeedbackRating::Down => "down",
+                }
+                .to_string(),
+                comment: current.correction.clone(),
+                snapshot,
+                context,
+                device_id: None,
+                created_at: current.created_at.clone(),
+                updated_at: current.created_at.clone(),
+            })
+            .await
+            .map_err(|error| {
+                internal_error(format!("failed to persist unified feedback: {error}"))
+            })?;
+    } else {
+        state
+            .db
+            .delete_feedback(
+                "structured_output",
+                &target_id,
+                Some(&target_version),
+                "local-user",
+            )
+            .await
+            .map_err(|error| {
+                internal_error(format!("failed to clear unified feedback: {error}"))
+            })?;
+    }
     Ok(Json(SetStructuredOutputFeedbackResponse {
         target_id,
         feedback,

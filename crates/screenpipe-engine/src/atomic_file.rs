@@ -56,10 +56,7 @@ pub(crate) fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     temporary.flush()?;
     temporary.as_file().sync_all()?;
 
-    temporary
-        .persist(path)
-        .map(|_| ())
-        .map_err(|error| error.error)?;
+    persist_replace(temporary, path)?;
 
     // The file contents are durable above. Syncing the directory also makes
     // the name replacement durable on Unix filesystems that support it.
@@ -72,6 +69,43 @@ pub(crate) fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn persist_replace(temporary: tempfile::NamedTempFile, path: &Path) -> io::Result<()> {
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+
+#[cfg(windows)]
+fn persist_replace(mut temporary: tempfile::NamedTempFile, path: &Path) -> io::Result<()> {
+    // MoveFileExW(MOVEFILE_REPLACE_EXISTING) fails with ACCESS_DENIED while a
+    // concurrent replace of the same destination is mid-flight (delete-pending
+    // window) or an external scanner (Defender, indexer) briefly holds the
+    // destination handle. The desktop app, engine, and CLI all replace the
+    // same state files, so a transient loser must retry instead of surfacing a
+    // spurious error. Contention windows are short, so retry often with small
+    // sleeps under a wall-clock deadline; a genuine ACL error still surfaces
+    // once the deadline passes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut delay = std::time::Duration::from_millis(1);
+    loop {
+        match temporary.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                if error.error.kind() != io::ErrorKind::PermissionDenied
+                    || std::time::Instant::now() >= deadline
+                {
+                    return Err(error.error);
+                }
+                temporary = error.file;
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ type PiRunningConfig = {
   url: string;
   apiKey: string | null;
   maxTokens: number;
+  maxContextChars: number | null;
   systemPrompt: string | null;
   token: string | null;
 };
@@ -104,6 +105,7 @@ export function usePiSessionLifecycle({
           stillThere.url === prev.url &&
           stillThere.apiKey === prev.apiKey &&
           stillThere.maxTokens === prev.maxTokens &&
+          stillThere.maxContextChars === prev.maxContextChars &&
           stillThere.prompt === prev.prompt
           ? prev
           : stillThere;
@@ -141,11 +143,13 @@ export function usePiSessionLifecycle({
       model: p.model || "",
       apiKey: p.apiKey || null,
       maxTokens: p.maxTokens ?? 4096,
+      maxContextChars: p.maxContextChars ?? null,
       systemPrompt,
     };
   }, [
     activePreset?.apiKey,
     activePreset?.maxTokens,
+    activePreset?.maxContextChars,
     activePreset?.model,
     activePreset?.prompt,
     activePreset?.provider,
@@ -162,6 +166,7 @@ export function usePiSessionLifecycle({
       url: providerConfig.url,
       apiKey: providerConfig.apiKey,
       maxTokens: providerConfig.maxTokens,
+      maxContextChars: providerConfig.maxContextChars ?? null,
       systemPrompt: providerConfig.systemPrompt,
       token: userToken ?? null,
     };
@@ -284,6 +289,7 @@ export function usePiSessionLifecycle({
       running.url !== providerConfig.url ||
       running.apiKey !== providerConfig.apiKey ||
       running.maxTokens !== providerConfig.maxTokens ||
+      running.maxContextChars !== (providerConfig.maxContextChars ?? null) ||
       running.systemPrompt !== providerConfig.systemPrompt ||
       running.token !== (userToken ?? null);
 

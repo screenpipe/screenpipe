@@ -10,6 +10,8 @@ export type LiveCaptureKind =
   | "input-paused"
   | "audio-not-started"
   | "audio-stalled"
+  | "waiting-for-meeting"
+  | "meeting-detector-unavailable"
   | "waiting-for-voice"
   | "transcript-paused"
   | "transcript-pending";
@@ -139,6 +141,28 @@ const STATES: Record<LiveCaptureKind, LiveCaptureState> = {
       "audio is not reaching screenpipe — check your microphone or resume capture",
     recordingContinues: false,
   },
+  "waiting-for-meeting": {
+    kind: "waiting-for-meeting",
+    severity: "waiting",
+    label: "Waiting for meeting",
+    shortLabel: "detecting meeting",
+    description:
+      "Meeting detection is active; audio devices stay closed until a meeting starts.",
+    transcriptEmptyCopy:
+      "detecting a meeting — audio capture starts only after one is confirmed",
+    recordingContinues: false,
+  },
+  "meeting-detector-unavailable": {
+    kind: "meeting-detector-unavailable",
+    severity: "warning",
+    label: "Meeting detection unavailable",
+    shortLabel: "detection unavailable",
+    description:
+      "Audio devices are closed because meetings-only capture cannot confirm a meeting.",
+    transcriptEmptyCopy:
+      "meeting detection is unavailable — audio stays off to protect your privacy",
+    recordingContinues: false,
+  },
   "waiting-for-voice": {
     kind: "waiting-for-voice",
     severity: "waiting",
@@ -179,6 +203,8 @@ const BACKEND_STATUS_TO_KIND: Record<string, LiveCaptureKind> = {
   mic_paused: "input-paused",
   audio_not_started: "audio-not-started",
   audio_stalled: "audio-stalled",
+  waiting_for_meeting: "waiting-for-meeting",
+  meeting_detector_unavailable: "meeting-detector-unavailable",
   waiting_for_voice: "waiting-for-voice",
   transcript_paused: "transcript-paused",
   transcript_pending: "transcript-pending",
@@ -207,6 +233,12 @@ export function computeLiveCaptureState({
 
   if (audioStatus === "disabled") return STATES["audio-disabled"];
   if (audioStatus === "no_input_device") return STATES["no-input-device"];
+  if (audioStatus === "waiting_for_meeting") {
+    return STATES["waiting-for-meeting"];
+  }
+  if (audioStatus === "meeting_detector_unavailable") {
+    return STATES["meeting-detector-unavailable"];
+  }
 
   if (inputDevices.length > 0 && pausedInputs.length === inputDevices.length) {
     return STATES["input-paused"];

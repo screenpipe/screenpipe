@@ -24,6 +24,7 @@ import {
 } from "@tauri-apps/plugin-os";
 import { ParticleStream, ProgressSteps } from "./particle-stream";
 import { screenpipeWebBase } from "@/lib/web-url";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
 interface EngineStartupProps {
   handleNextSlide: () => void;
@@ -287,6 +288,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
       posthog.capture("onboarding_engine_started", {
         time_spent_ms: Date.now() - mountTimeRef.current,
       });
+      onboardingFunnel.engineReady();
     }
 
     // Keep the completed progress visible briefly before advancing.

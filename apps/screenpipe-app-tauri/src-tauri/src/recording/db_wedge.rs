@@ -87,11 +87,18 @@ const DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 enum DbWedgeShutdownAction {
     RespawnInProcess,
     RelaunchApp,
+    QuitApp,
 }
 
-fn db_wedge_shutdown_action(outcome: TeardownOutcome) -> DbWedgeShutdownAction {
+fn db_wedge_shutdown_action(
+    outcome: TeardownOutcome,
+    hard_faulted: bool,
+) -> DbWedgeShutdownAction {
     match outcome {
         TeardownOutcome::Completed => DbWedgeShutdownAction::RespawnInProcess,
+        TeardownOutcome::Failed(_) | TeardownOutcome::TimedOut if hard_faulted => {
+            DbWedgeShutdownAction::QuitApp
+        }
         TeardownOutcome::Failed(_) | TeardownOutcome::TimedOut => {
             DbWedgeShutdownAction::RelaunchApp
         }
@@ -187,37 +194,40 @@ async fn recover_from_db_wedge(
         return;
     }
 
-    // Circuit breaker: a DB that stays broken after a restart is on-disk
-    // corruption a restart can't repair, so cap auto-restarts per window.
-    // Decide while the exact generation is still claimed; a skipped stale
-    // signal must not consume restart budget.
-    let action = {
-        let mut state = breaker.lock().unwrap();
-        state.decide(
-            std::time::Instant::now(),
-            DB_WEDGE_BREAKER_WINDOW,
-            DB_WEDGE_MAX_RESTARTS,
-        )
-    };
-    if let WedgeAction::GiveUp { notify } = action {
-        drop(server_guard);
-        drop(capture_guard);
-        error!(
-            "db wedge auto-recovery: {} restarts within {:?} did not clear the write wedge — \
-             in-process restarts can't fix this (poisoned WAL-index pinned by a leaked \
-             connection, or on-disk damage). Surfacing manual recovery.",
-            DB_WEDGE_MAX_RESTARTS, DB_WEDGE_BREAKER_WINDOW
-        );
-        if notify {
-            // In-process restarts are proven futile for this episode. Do not
-            // surprise-relaunch the app on broad DB-shaped errors; surface a
-            // user-visible recovery state instead.
-            crate::db_relaunch::surface_manual_recovery(
-                "db wedge persisted across in-process engine restarts",
+    let hard_faulted = signaled_health.is_hard_faulted();
+    if !hard_faulted {
+        // Circuit breaker: a DB that stays broken after a restart is on-disk
+        // corruption a restart can't repair, so cap auto-restarts per window.
+        // A confirmed SQLite hard fault takes the fail-closed path below and
+        // never consumes restart budget.
+        let action = {
+            let mut state = breaker.lock().unwrap();
+            state.decide(
+                std::time::Instant::now(),
+                DB_WEDGE_BREAKER_WINDOW,
+                DB_WEDGE_MAX_RESTARTS,
             )
-            .await;
+        };
+        if let WedgeAction::GiveUp { notify } = action {
+            drop(server_guard);
+            drop(capture_guard);
+            error!(
+                "db wedge auto-recovery: {} restarts within {:?} did not clear the write wedge — \
+                 in-process restarts can't fix this (poisoned WAL-index pinned by a leaked \
+                 connection, or on-disk damage). Surfacing manual recovery.",
+                DB_WEDGE_MAX_RESTARTS, DB_WEDGE_BREAKER_WINDOW
+            );
+            if notify {
+                // In-process restarts are proven futile for this episode. Do not
+                // surprise-relaunch the app on broad DB-shaped errors; surface a
+                // user-visible recovery state instead.
+                crate::db_relaunch::surface_manual_recovery(
+                    "db wedge persisted across in-process engine restarts",
+                )
+                .await;
+            }
+            return;
         }
-        return;
     }
 
     let capture = capture_guard.take();
@@ -239,28 +249,47 @@ async fn recover_from_db_wedge(
         Ok(())
     })
     .await;
-    if db_wedge_shutdown_action(shutdown_outcome) == DbWedgeShutdownAction::RelaunchApp {
+    match db_wedge_shutdown_action(shutdown_outcome, hard_faulted) {
+        DbWedgeShutdownAction::RespawnInProcess => {}
+        DbWedgeShutdownAction::RelaunchApp => {
+            // Preserve the existing recovery path for transient connection
+            // wedges: a process relaunch is allowed when no SQLite hard fault
+            // has quarantined the physical database path.
+            error!(
+                "db wedge auto-recovery: transient-wedge server shutdown exceeded {:?}; \
+                 relaunching app to release every SQLite connection",
+                DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT
+            );
+            drop(server_guard);
+            drop(capture_guard);
+            recording_state.is_starting.store(false, Ordering::SeqCst);
+            recording_state.last_spawn_epoch.store(0, Ordering::SeqCst);
+            crate::process_exit::request_app_relaunch(
+                app.clone(),
+                "DB transient-wedge server shutdown timed out",
+                Duration::from_millis(250),
+            );
+            return;
+        }
+        DbWedgeShutdownAction::QuitApp => {
         // This is deliberately narrower than the broad DB-init error policy in
         // `db_relaunch`: the current database generation has already raised a
         // confirmed SQLite hard fault, all writer admission is closed, and its
-        // shutdown has failed to prove all old pools are closed. Trying to
-        // respawn in-process could reopen the file while an old connection
-        // still pins `-shm`.
+        // shutdown has failed to prove all old pools are closed. A relaunch is
+        // also unsafe because a fresh process would immediately reopen the
+        // possibly damaged file. Exit fully and require offline recovery.
         error!(
             "db wedge auto-recovery: hard-fault server shutdown exceeded {:?}; \
-             relaunching app to guarantee every SQLite connection is released",
+             quitting app to guarantee every SQLite connection is released before recovery",
             DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT
         );
         drop(server_guard);
         drop(capture_guard);
         recording_state.is_starting.store(false, Ordering::SeqCst);
         recording_state.last_spawn_epoch.store(0, Ordering::SeqCst);
-        crate::process_exit::request_app_relaunch(
-            app.clone(),
-            "DB hard-fault server shutdown timed out",
-            Duration::from_millis(250),
-        );
+        crate::process_exit::request_app_quit(app.clone());
         return;
+        }
     }
     // Keep the state guards until shutdown completes. The dedicated server
     // runtime exits when it can lock `server` and observe None; releasing the
@@ -279,6 +308,26 @@ async fn recover_from_db_wedge(
     // in-process restart and recording stays down until a full process exit.
     // Pools recreate lazily on the next secret access after spawn reopens.
     screenpipe_secrets::close_all_secret_pools().await;
+
+    if hard_faulted {
+        // IOERR/CORRUPT/FULL/NOTADB is not a transient connection wedge. The
+        // path is now quarantined process-wide, so creating another manager in
+        // this process is both futile and unsafe. Keep the desktop alive for
+        // recovery guidance while every capture/DB owner stays stopped.
+        recording_state.set_capture_intent(false);
+        recording_state
+            .is_starting_capture
+            .store(false, Ordering::SeqCst);
+        crate::health::set_boot_error(
+            "database recovery required after a SQLite hard fault; recording was stopped to protect your data",
+        );
+        crate::health::set_recording_status(crate::health::RecordingStatus::Error);
+        crate::db_relaunch::surface_manual_recovery(
+            "SQLite hard fault quarantined the database for this process",
+        )
+        .await;
+        return;
+    }
 
     // Preserve the latest user capture intent. In particular, stop_capture can
     // run during the debounce/teardown: the server still needs rebuilding, but
@@ -406,17 +455,24 @@ mod tests {
     }
 
     #[test]
-    fn stuck_hard_fault_shutdown_escalates_to_app_relaunch() {
+    fn stuck_hard_fault_shutdown_quits_without_reopening_database() {
         assert_eq!(
-            db_wedge_shutdown_action(TeardownOutcome::Completed),
+            db_wedge_shutdown_action(TeardownOutcome::Completed, true),
             DbWedgeShutdownAction::RespawnInProcess
         );
         assert_eq!(
-            db_wedge_shutdown_action(TeardownOutcome::TimedOut),
-            DbWedgeShutdownAction::RelaunchApp
+            db_wedge_shutdown_action(TeardownOutcome::TimedOut, true),
+            DbWedgeShutdownAction::QuitApp
         );
         assert_eq!(
-            db_wedge_shutdown_action(TeardownOutcome::Failed("shutdown failed".to_string())),
+            db_wedge_shutdown_action(
+                TeardownOutcome::Failed("shutdown failed".to_string()),
+                true,
+            ),
+            DbWedgeShutdownAction::QuitApp
+        );
+        assert_eq!(
+            db_wedge_shutdown_action(TeardownOutcome::TimedOut, false),
             DbWedgeShutdownAction::RelaunchApp
         );
     }

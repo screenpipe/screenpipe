@@ -19,7 +19,20 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
 | local search and API access | install, record for a few minutes, then try [API recipes](/api-recipes) | `/search` returns recent screen or audio results |
 | recurring automations | install your first pipe, then read [pipe debugging](/pipe-debugging) | the pipe runs manually, logs clearly, and writes a useful output |
 
-<img src="https://docs.screenpi.pe/public/app-screenshots/home-home.png" alt="screenpipe home window after setup" width="1200" />
+<CardGroup cols={2}>
+  <Card title="Ask Home" icon="comments">
+    ask what you were working on after a few minutes of recording
+  </Card>
+  <Card title="Day Recap" icon="calendar-days">
+    create a private draft of accomplishments and unfinished work
+  </Card>
+  <Card title="Pipes" icon="diagram-project">
+    install a Store pipe or describe a custom automation
+  </Card>
+  <Card title="Timeline" icon="clock-rotate-left">
+    verify that the expected screen and audio periods were captured
+  </Card>
+</CardGroup>
 
 ## the 5-minute setup
 
@@ -40,7 +53,7 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
     curl http://localhost:3030/health
     ```
 
-    <Note>the local API needs no auth by default. if you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to any `localhost:3030` request.</Note>
+    <Note>`/health` does not need a token. when **Require API Authentication** is enabled, retrieve the token with `npx -y screenpipe@latest auth token` and add a bearer header to protected requests.</Note>
   </Step>
 
   <Step title="connect your AI (1 min)">
@@ -83,7 +96,7 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
   <Step title="install your first pipe (30 sec)">
     pipes are AI automations that run on a schedule. click **Pipes** in the sidebar to open the pipe store.
 
-    browse the catalog — try installing **Digital Clone** or **Day Recap**. click **GET** to install, then go to **settings → pipes** to enable and run it.
+    browse **Pipes → Discover** — try installing **Digital Clone** or **Obsidian Daily Summary**. click **GET**; the app switches to **My Pipes**, where you can review and run it. **Day Recap** is already available as a built-in Home shortcut.
 
     popular first pipes:
 
@@ -92,7 +105,6 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
     | **Digital Clone** | builds a persistent AI memory of who you are |
     | **Obsidian Daily Summary** | writes daily summaries to your Obsidian vault |
     | **Focus Assistant** | notifies you when you're distracted |
-    | **Daily Claude Code Summary** | summarizes your AI coding sessions |
     | **Todo List Assistant** | tracks tasks and reminds you of what's due |
 
     [browse all pipes →](/pipe-store)

@@ -9,31 +9,67 @@ import {
 
 /**
  * PostHog flag that gates the *proactive* model-gating upsell UI — the greyed
- * "Business" model picker and the at-the-cap banner. Default OFF until turned
- * on in PostHog, so the gate ships dark and can be rolled out gradually, scoped
- * to cohorts, or killed instantly from the dashboard with NO app release.
+ * "Business" model picker and the at-the-cap banner. The UI waits for the
+ * flag to resolve; an explicit false kills it with no app release.
  *
  * Note: this only controls the *display*. The hard enforcement (the gateway's
  * 403 model_not_allowed) is separate and controlled by the gateway's
- * MODEL_GATING_ENABLED env. Display fails open; enforcement stays strict.
+ * MODEL_GATING_ENABLED env. Display waits for affirmative truth; enforcement
+ * stays strict.
  */
 export const MODEL_UPSELL_FLAG = "model_gating_upsell";
+
+/** Never flash an upsell while PostHog is still resolving the flag. */
+export function isModelUpsellFlagEnabled(flag: boolean | undefined): boolean {
+  return flag === true;
+}
 
 /**
  * Pure decision: should the proactive upsell UI render for this user?
  *
- * Fails OPEN on two axes so we never nag a paying customer:
- *   1. Off entirely unless the PostHog flag is on.
- *   2. Never shown to a user carrying persisted evidence of a paid plan
- *      (app_entitled / entitlement), so a transient tier flicker — the
- *      exact failure mode behind past "gate fired on payers" complaints —
- *      can't false-lock them even if the live signal momentarily says free.
+ * Basic and Lifetime are upgrade-eligible: Lifetime is the non-expiring app
+ * license whose hosted-AI allowance is Basic. Business, Team, and Enterprise
+ * stay hidden. Unknown persisted paid evidence also stays hidden so transient
+ * or partial entitlement hydration never nags a customer we cannot classify.
  */
 export function shouldShowModelUpsell(
   user: AppUser | null | undefined,
   flagEnabled: boolean,
+  gatewayEligible: boolean | null | undefined,
 ): boolean {
-  if (!flagEnabled) return false;
+  if (!flagEnabled || gatewayEligible !== true) return false;
+
+  if (user?.cloud_subscribed === true) return false;
+
+  const enterpriseAccount = user?.enterprise_account;
+  if (
+    enterpriseAccount &&
+    typeof enterpriseAccount === "object" &&
+    !Array.isArray(enterpriseAccount)
+  ) {
+    return false;
+  }
+
+  const entitlement =
+    user?.entitlement &&
+    typeof user.entitlement === "object" &&
+    !Array.isArray(user.entitlement)
+      ? user.entitlement
+      : null;
+  const plans = [
+    user?.subscription_plan,
+    entitlement && "plan" in entitlement ? entitlement.plan : null,
+  ]
+    .filter((plan): plan is string => typeof plan === "string")
+    .map((plan) => plan.trim().toLowerCase());
+
+  if (plans.some((plan) => ["pro", "business", "team", "enterprise"].includes(plan))) {
+    return false;
+  }
+  if (plans.some((plan) => ["standard", "basic", "lifetime"].includes(plan))) {
+    return true;
+  }
+
   if (hasPersistedEntitlementEvidence(user)) return false;
   return true;
 }

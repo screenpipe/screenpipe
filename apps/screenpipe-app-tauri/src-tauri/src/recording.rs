@@ -68,7 +68,8 @@ impl LocalApiContext {
 /// Build a `RecordingConfig` from the current settings store.
 fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
-    let (data_dir, _) = config::resolve_data_dir(&store.data_dir);
+    let (data_dir, _) = config::resolve_data_dir(&store.data_dir)
+        .map_err(|e| format!("failed to prepare recording data directory: {e}"))?;
     Ok(store.to_recording_config(data_dir))
 }
 
@@ -190,11 +191,12 @@ pub fn notify_audio_engine_fallback(store: &SettingsStore) {
         return;
     };
 
-    crate::notifications::client::send_typed(
+    crate::notifications::client::send_typed_with_priority(
         reason.notification_title(),
         reason.notification_body(),
         "system",
         Some(20000),
+        crate::notifications::store::NotificationPriority::High,
     );
 }
 
@@ -288,6 +290,18 @@ pub struct RecordingState {
     /// Restart-storm guard for DB-wedge auto-recovery. Shared across server
     /// restarts so a DB that stays broken after N restarts stops retrying.
     pub db_wedge_breaker: DbWedgeBreaker,
+}
+
+/// Install a fully constructed capture session before activating any monitor
+/// that can synchronously request its teardown.
+pub(crate) fn install_capture_session(
+    slot: &mut Option<CaptureSession>,
+    session: CaptureSession,
+) {
+    *slot = Some(session);
+    slot.as_ref()
+        .expect("capture session was just installed")
+        .start_disk_pressure_monitor();
 }
 
 impl RecordingState {
@@ -693,7 +707,7 @@ pub async fn start_capture(
     let session = CaptureSession::start(server, &config, false).await?;
     drop(server_guard);
 
-    *capture_guard = Some(session);
+    install_capture_session(&mut capture_guard, session);
 
     info!("Capture session started");
     Ok(())
@@ -1109,7 +1123,8 @@ async fn spawn_screenpipe_inner(
         permissions_check.microphone
     );
 
-    let (data_dir, fell_back) = config::resolve_data_dir(&store.data_dir);
+    let (data_dir, fell_back) = config::resolve_data_dir(&store.data_dir)
+        .map_err(|e| format!("failed to prepare recording data directory: {e}"))?;
     if fell_back {
         warn!(
             "Custom data dir '{}' unavailable, using default: {}",
@@ -1260,7 +1275,7 @@ async fn spawn_screenpipe_inner(
                     *guard = Some(server);
                 }
                 if let Some(capture) = capture {
-                    *capture_guard = Some(capture);
+                    install_capture_session(&mut capture_guard, capture);
                     info!("Server + capture started successfully on dedicated runtime");
                 } else {
                     info!("Server started with capture deliberately stopped");
@@ -1350,7 +1365,7 @@ async fn start_capture_internal(
     let session = CaptureSession::start(server, &config, false).await?;
     drop(server_guard);
 
-    *capture_guard = Some(session);
+    install_capture_session(&mut capture_guard, session);
     state.is_starting.store(false, Ordering::SeqCst);
 
     info!("Capture started on existing server");

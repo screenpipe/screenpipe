@@ -1,0 +1,113 @@
+-- screenpipe onboarding UI funnel v1
+-- Canonical forward-only PostHog query. Steps must happen in order within 7x24h.
+-- This measures the in-app onboarding path. Repeat Value by D7 remains the
+-- separate qualified_value_event KPI because it also includes MCP/API use.
+
+WITH contract AS (
+  SELECT
+    addDays(
+      toStartOfWeek(
+        toDate(
+          toTimeZone(
+            minIf(timestamp, toString(properties.step) = 'started'),
+            'America/Los_Angeles'
+          )
+        ),
+        1
+      ),
+      7
+    ) AS first_full_week,
+    countIf(toString(properties.step) = 'started') AS contract_events
+  FROM events
+  WHERE event = 'onboarding_funnel_step'
+    AND toString(properties.funnel_version) = 'onboarding_ui_v1'
+),
+per_person AS (
+  SELECT
+    person_id,
+    minIf(timestamp, toString(properties.step) = 'started') AS started_at,
+    windowFunnel(604800)(
+      timestamp,
+      toString(properties.step) = 'started',
+      toString(properties.step) = 'permissions_granted',
+      toString(properties.step) = 'engine_ready',
+      toString(properties.step) = 'connections_screen_completed',
+      toString(properties.step) = 'goal_submitted',
+      toString(properties.step) = 'live_view_created',
+      toString(properties.step) = 'brain_handoff_viewed',
+      toString(properties.step) = 'first_result_visible',
+      toString(properties.step) = 'first_result_accepted'
+    ) AS funnel_level
+  FROM events
+  WHERE event = 'onboarding_funnel_step'
+    AND toString(properties.funnel_version) = 'onboarding_ui_v1'
+    AND timestamp >= addDays(now(), -180)
+    AND person.properties.email IS NOT NULL
+    AND person.properties.email != ''
+    AND person.properties.email NOT LIKE '%@screenpipe.test'
+    AND person.properties.email NOT LIKE '%@screenpipe.com'
+    AND person.properties.email NOT LIKE '%@screenpi.pe'
+  GROUP BY person_id
+  HAVING countIf(toString(properties.step) = 'started') > 0
+),
+eligible AS (
+  SELECT
+    person_id,
+    started_at,
+    funnel_level,
+    toStartOfWeek(
+      toDate(toTimeZone(started_at, 'America/Los_Angeles')),
+      1
+    ) AS cohort_week
+  FROM per_person
+  CROSS JOIN contract
+  WHERE contract.contract_events > 0
+    AND toStartOfWeek(
+      toDate(toTimeZone(started_at, 'America/Los_Angeles')),
+      1
+    ) >= contract.first_full_week
+    AND toStartOfWeek(
+      toDate(toTimeZone(started_at, 'America/Los_Angeles')),
+      1
+    ) < addDays(
+      toStartOfWeek(toDate(toTimeZone(now(), 'America/Los_Angeles')), 1),
+      -7
+    )
+),
+latest_weeks AS (
+  SELECT cohort_week
+  FROM eligible
+  GROUP BY cohort_week
+  ORDER BY cohort_week DESC
+  LIMIT 2
+),
+cohorts AS (
+  SELECT *
+  FROM eligible
+  WHERE cohort_week IN (SELECT cohort_week FROM latest_weeks)
+)
+SELECT
+  cohort_week,
+  arrayJoin(range(1, 10)) AS step_index,
+  multiIf(
+    step_index = 1, 'started',
+    step_index = 2, 'permissions_granted',
+    step_index = 3, 'engine_ready',
+    step_index = 4, 'connections_screen_completed',
+    step_index = 5, 'goal_submitted',
+    step_index = 6, 'live_view_created',
+    step_index = 7, 'brain_handoff_viewed',
+    step_index = 8, 'first_result_visible',
+    'first_result_accepted'
+  ) AS step,
+  countIf(funnel_level >= step_index) AS users,
+  count() AS started_users,
+  round(100.0 * users / nullIf(started_users, 0), 1) AS conversion_from_start_pct,
+  round(
+    100.0 * users /
+      nullIf(countIf(funnel_level >= greatest(step_index - 1, 1)), 0),
+    1
+  ) AS conversion_from_previous_step_pct
+FROM cohorts
+GROUP BY cohort_week, step_index
+ORDER BY cohort_week, step_index

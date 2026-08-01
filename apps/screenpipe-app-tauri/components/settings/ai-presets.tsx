@@ -30,7 +30,7 @@ import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
 } from "@/lib/utils/chat-test-body";
-import { screenpipeWebUrl } from "@/lib/web-url";
+import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
 import { ValidatedInput } from "../ui/validated-input";
@@ -274,10 +274,9 @@ const AISection = ({
   // models. Null on BYOK providers; we render nothing in that case.
   const usage = useUsageStatus();
   // Whether to surface the proactive "Business" lock UI. Off unless the PostHog
-  // flag is on and the user has no persisted entitlement evidence (fail-open so
-  // a tier flicker never false-locks a paying customer). The gateway's `locked`
-  // flag only takes visual effect when this is true.
-  const showUpsell = useModelUpsellGating();
+  // flag, hydrated local entitlement, and gateway eligibility all agree. The
+  // gateway's `locked` flag only takes visual effect when this is true.
+  const showUpsell = useModelUpsellGating(usage?.upgrade_eligible);
   const [settingsPreset, setSettingsPreset] = useState<
     Partial<AIPreset> | undefined
   >(preset);
@@ -371,9 +370,9 @@ const AISection = ({
 
 
   const isFormValid = useMemo(() => {
-    return Object.keys(validationErrors).length === 0 && 
-           settingsPreset?.id && 
-           settingsPreset?.provider && 
+    return Object.keys(validationErrors).length === 0 &&
+           settingsPreset?.id &&
+           settingsPreset?.provider &&
            settingsPreset?.model;
   }, [validationErrors, settingsPreset]);
 
@@ -1538,24 +1537,13 @@ const AISection = ({
                             value={model.id}
                             className={locked ? "opacity-60" : undefined}
                             onSelect={async () => {
-                              // Locked = above the user's plan. One click -> Business
-                              // checkout (or sign-in first) instead of selecting it.
+                              // Locked = above the user's plan. Review the
+                              // native Business offer instead of selecting it.
                               if (locked) {
-                                if (!settings.user?.token) {
-                                  await commands.openLoginWindow(null);
-                                } else {
-                                  try {
-                                    const res = await fetch(screenpipeWebUrl("/api/cloud-sync/checkout", "https://screenpipe.com"), {
-                                      method: "POST",
-                                      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.user.token}` },
-                                      body: JSON.stringify({ tier: "pro", billingPeriod: "monthly", userId: settings.user.id, email: settings.user.email }),
-                                    });
-                                    const data = await res.json();
-                                    if (data.url) await openUrl(data.url);
-                                  } catch (e) {
-                                    console.error("checkout failed:", e);
-                                  }
-                                }
+                                setIsModelPickerOpen(false);
+                                await openBusinessUpgradeSurface(
+                                  "locked-model-picker",
+                                );
                                 return;
                               }
                               updateSettingsPreset({ model: model.id });

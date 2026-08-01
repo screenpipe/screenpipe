@@ -977,6 +977,14 @@ impl SCServer {
                     crate::routes::structured_outputs::set_structured_output_item_action_handler,
                 ),
             )
+            // One local read contract for user feedback across AI surfaces.
+            // Writes retain their surface-specific conflict checks; the
+            // notification panel posts new feedback through this route.
+            .route(
+                "/feedback",
+                get(crate::routes::ai_feedback::list_ai_feedback_handler)
+                    .post(crate::routes::ai_feedback::set_ai_feedback_handler),
+            )
             // Live View Templates are a versioned cross-surface protocol.
             // Local app/API clients can edit them; pipe tokens can only fill
             // their assigned structured output targets above.

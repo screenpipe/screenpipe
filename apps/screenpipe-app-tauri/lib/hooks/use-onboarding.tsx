@@ -12,6 +12,7 @@ import {
   setFirstRunGuidePending,
   setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
+import type { OnboardingLiveViewFlowProperties } from "@/lib/analytics/onboarding-funnel";
 
 export type OnboardingCompletionContext = {
   method:
@@ -19,12 +20,13 @@ export type OnboardingCompletionContext = {
     | "pipe_step_skipped"
     | "live_view_deferred"
     | "hidden_enterprise"
-    | "live_view_created";
+    | "live_view_created"
+    | "existing_live_view_selected";
   pipeCount?: number;
   customized?: boolean;
   dashboardBlockCount?: number;
   goalCategory?: string;
-};
+} & Partial<OnboardingLiveViewFlowProperties>;
 
 interface OnboardingState {
   onboardingData: OnboardingStore;
@@ -94,6 +96,13 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
             : {}),
           ...(context.goalCategory
             ? { goal_category: context.goalCategory }
+            : {}),
+          ...(context.live_view_flow_variant
+            ? {
+                live_view_flow_variant: context.live_view_flow_variant,
+                existing_live_view_count_bucket:
+                  context.existing_live_view_count_bucket,
+              }
             : {}),
         });
         // Rust routes a newly created Home to Brain. This covers a reused Home.

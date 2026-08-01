@@ -25,8 +25,8 @@ mod imp {
     use crate::recording::local_api_context_from_app;
     use base64::Engine;
     use ee_sync::{
-        AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FrameRow, LocalApiClient, MemoryRow,
-        SnapshotRow, UiEventRow,
+        AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FeedbackRow, FrameRow, LocalApiClient,
+        MemoryRow, SnapshotRow, UiEventRow,
     };
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
@@ -161,6 +161,33 @@ mod imp {
         tags: Vec<String>,
         importance: f64,
         frame_id: Option<i64>,
+        created_at: String,
+        updated_at: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct LocalFeedbackResponse {
+        data: Vec<LocalFeedbackItem>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct LocalFeedbackTarget {
+        kind: String,
+        id: String,
+        version: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct LocalFeedbackItem {
+        id: String,
+        target: LocalFeedbackTarget,
+        producer_ref: Option<String>,
+        actor_id: String,
+        rating: String,
+        comment: Option<String>,
+        snapshot: Option<serde_json::Value>,
+        #[serde(default)]
+        context: serde_json::Value,
         created_at: String,
         updated_at: String,
     }
@@ -535,6 +562,51 @@ mod imp {
                 .collect();
             Ok(out)
         }
+
+        async fn fetch_feedback_since(
+            &self,
+            since_ts: Option<&str>,
+            limit: u32,
+        ) -> Result<Vec<FeedbackRow>, EnterpriseSyncError> {
+            let mut url = format!("{}/feedback?limit={}&order=asc", self.api_url_base, limit);
+            if let Some(ts) = since_ts {
+                url.push_str(&format!("&since={}", urlencoding::encode(ts)));
+            }
+            let resp = self
+                .auth(self.http.get(&url))
+                .send()
+                .await
+                .map_err(|error| EnterpriseSyncError::LocalApi(error.to_string()))?;
+            if !resp.status().is_success() {
+                return Err(EnterpriseSyncError::LocalApi(format!(
+                    "GET {} -> {}",
+                    url,
+                    resp.status()
+                )));
+            }
+            let body: LocalFeedbackResponse = resp
+                .json()
+                .await
+                .map_err(|error| EnterpriseSyncError::LocalApi(format!("decode: {error}")))?;
+            Ok(body
+                .data
+                .into_iter()
+                .map(|item| FeedbackRow {
+                    feedback_id: item.id,
+                    target_kind: item.target.kind,
+                    target_id: item.target.id,
+                    target_version: item.target.version,
+                    producer_ref: item.producer_ref,
+                    actor_id: item.actor_id,
+                    rating: item.rating,
+                    comment: item.comment,
+                    snapshot: item.snapshot,
+                    context: item.context,
+                    created_at: item.created_at,
+                    updated_at: item.updated_at,
+                })
+                .collect())
+        }
     }
 
     // ─── Spawn ─────────────────────────────────────────────────────────
@@ -575,7 +647,8 @@ mod imp {
             // Match the frontend policy normalization: locked setting keys also
             // hide their corresponding settings surface. `referral` is always
             // hidden in enterprise builds but is irrelevant to UI dormancy.
-            self.hidden_sections.extend(self.locked_settings.into_keys());
+            self.hidden_sections
+                .extend(self.locked_settings.into_keys());
             self.hidden_sections.sort();
             self.hidden_sections.dedup();
             self.hidden_sections
@@ -642,31 +715,25 @@ mod imp {
                 if crate::enterprise_policy::is_app_ui_hidden() {
                     match current_policy_credential() {
                         Some(credential) => {
-                            let device_id = settings_device_id(&app)
-                                .unwrap_or_else(|| "unknown".to_string());
-                            match fetch_hidden_ui_policy(
-                                &http,
-                                &policy_url,
-                                &device_id,
-                                credential,
-                            )
-                            .await
+                            let device_id =
+                                settings_device_id(&app).unwrap_or_else(|| "unknown".to_string());
+                            match fetch_hidden_ui_policy(&http, &policy_url, &device_id, credential)
+                                .await
                             {
                                 Ok(hidden_sections) => {
                                     crate::enterprise_policy::set_enterprise_policy(
                                         hidden_sections,
                                     );
-                                    if !crate::commands::apply_enterprise_ui_visibility(
-                                        app.clone(),
-                                    ) {
+                                    if !crate::commands::apply_enterprise_ui_visibility(app.clone())
+                                    {
                                         info!(
                                             "enterprise: native policy watcher restored visible UI"
                                         );
                                     }
                                 }
-                                Err(error) => warn!(
-                                    "enterprise: hidden-UI policy refresh failed: {error}"
-                                ),
+                                Err(error) => {
+                                    warn!("enterprise: hidden-UI policy refresh failed: {error}")
+                                }
                             }
                         }
                         None => warn!(
@@ -810,10 +877,8 @@ mod imp {
                     let url = crate::enterprise::device_config::device_config_url(
                         file_cfg.ingest_url.as_deref(),
                     );
-                    match crate::enterprise::device_config::fetch_remote_device_config(
-                        &url, &token,
-                    )
-                    .await
+                    match crate::enterprise::device_config::fetch_remote_device_config(&url, &token)
+                        .await
                     {
                         Ok(remote) => {
                             info!(

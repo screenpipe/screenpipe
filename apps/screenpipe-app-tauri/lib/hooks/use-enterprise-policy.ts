@@ -840,6 +840,11 @@ export function useEnterprisePolicyRuntime() {
             : rawMode === true
             ? "cited"
             : "off";
+        const rawFeedback = streams.feedback;
+        const feedback =
+          rawFeedback === "ratings" || rawFeedback === "full"
+            ? rawFeedback
+            : "off";
         await withTimeout(
           "enterprise setSyncStreams",
           commands.setSyncStreams(
@@ -848,6 +853,7 @@ export function useEnterprisePolicyRuntime() {
             pickBool("ui_events"),
             pickBool("memories"),
             pickBool("snapshots"),
+            feedback,
             frameImages,
           ),
           LOCAL_POLICY_COMMAND_TIMEOUT_MS

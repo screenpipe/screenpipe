@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
+    "test": "bun test --timeout=10000",
     "deploy": "bash scripts/deploy.sh",
     "deploy:no-sourcemaps": "wrangler deploy",
     "dev": "wrangler dev",

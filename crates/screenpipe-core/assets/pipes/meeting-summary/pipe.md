@@ -81,7 +81,7 @@ rank the connected targets by relevance — an app used during the meeting first
 
   curl -s -X POST "http://localhost:11435/notify" \
     -H "Content-Type: application/json" \
-    -d '{"title": "<TITLE> summarized", "body": "<one-line recap> — push it somewhere?", "actions": [
+    -d '{"title": "<TITLE> summarized", "body": "<one-line recap> — push it somewhere?", "priority": "high", "actions": [
           {"label": "push to notion", "type": "api", "method": "POST", "url": "http://localhost:3030/connections/notion/proxy/v1/pages", "body": { /* page payload built from the summary */ }},
           {"label": "review in chat", "type": "pipe", "pipe": "meeting-summary", "open_in_chat": true, "context": {"meeting_id": <ID>}},
           {"label": "dismiss", "type": "dismiss"}

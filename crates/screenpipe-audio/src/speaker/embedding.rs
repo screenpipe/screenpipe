@@ -32,7 +32,7 @@ pub struct EmbeddingExtractor {
 
 impl EmbeddingExtractor {
     pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self> {
-        let session = super::create_session(&model_path)?;
+        let session = super::create_embedding_session(&model_path)?;
         let output_name =
             super::resolve_output_name(&super::session_output_names(&session), "embs")?;
         Ok(Self {

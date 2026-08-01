@@ -50,6 +50,7 @@ mod db_recovery_notifications;
 mod db_relaunch;
 mod diagnostic_logs;
 mod disk_usage;
+mod disk_pressure_notifications;
 mod e2e_seed;
 mod embedded_server;
 mod enterprise;
@@ -59,6 +60,7 @@ mod enterprise_policy;
 mod enterprise_sync;
 mod events;
 mod feedback_redact;
+mod feedback_upload;
 mod google_calendar;
 mod hardware;
 mod ics_calendar;
@@ -106,6 +108,8 @@ mod updates;
 mod voice_training;
 mod window;
 mod windows_ca_bundle;
+#[cfg(target_os = "windows")]
+mod windows_crash_dump;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
 #[cfg(target_os = "windows")]
@@ -271,6 +275,15 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
     Ok(response.is_ok())
 }
 
+// `tauri_collect_commands!` historically degraded to an empty handler when
+// its generated registry was missing. Make the same compile-time view a hard
+// build invariant so a commandless native app can never be published again.
+const TAURI_COMMAND_COUNT: usize = tauri_helper::array_collect_commands!(false).len();
+const _: () = assert!(
+    TAURI_COMMAND_COUNT > 0,
+    "generated Tauri command registry must not be empty"
+);
+
 /// Shared tauri-specta registry body.
 macro_rules! define_specta_builder {
     () => {{
@@ -424,6 +437,12 @@ async fn main() {
             }
         }
     }
+
+    // Register the WER helper DLL that writes a local minidump for fail-fast
+    // crashes such as 0xc0000409, which bypass Rust panic/Sentry hooks, and
+    // recover dumps produced by a previous run.
+    #[cfg(target_os = "windows")]
+    windows_crash_dump::install();
 
     // Check if telemetry is disabled via store setting (analyticsEnabled)
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
@@ -1015,11 +1034,7 @@ async fn main() {
             }
 
             // Logging setup
-            let base_dir = get_base_dir(app_handle, None)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to get base dir, using fallback: {}", e);
-                    screenpipe_core::paths::default_screenpipe_data_dir()
-                });
+            let base_dir = get_base_dir(app_handle, None)?;
 
             // Set up rolling file appender
             let log_dir = get_screenpipe_data_dir(app.handle())
@@ -1130,6 +1145,17 @@ async fn main() {
                 store.recording.disable_audio = true;
                 info!("E2E seed: audio disabled");
             }
+            if e2e_flags
+                .iter()
+                .any(|f| f == "recording-health-return-race")
+            {
+                store.show_restart_notifications = true;
+                store.extra.insert(
+                    "restartNotificationsDefaultedOff".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                info!("E2E seed: recording health alerts enabled for return-race regression");
+            }
             if e2e_flags.iter().any(|f| f == "event-trigger-capture") {
                 store.recording.capture_on_keystroke = Some(true);
                 store.recording.capture_on_clipboard = Some(true);
@@ -1155,6 +1181,20 @@ async fn main() {
                     .insert("_proCloudMigrationDone".to_string(), json!(true));
                 info!("E2E seed: screenpipe cloud audio fallback");
             }
+            if e2e_flags.iter().any(|f| f == "meetings-only-audio") {
+                // Real audio lifecycle lane for meetings-only capture. Keep
+                // vision and transcription disabled so the spec isolates OS
+                // device ownership without loading OCR/STT models.
+                store.recording.disable_audio = false;
+                store.recording.disable_vision = true;
+                store.recording.audio_capture_mode = "meetings-only".to_string();
+                store.recording.audio_transcription_engine = "disabled".to_string();
+                // Emit a real segment quickly enough for the lifecycle spec to
+                // verify the first capture callback without a 30-second wait.
+                store.recording.audio_chunk_duration = 5;
+                store.recording.experimental_meeting_piggyback = false;
+                info!("E2E seed: meetings-only audio device lifecycle");
+            }
 
             // The frontend reads settings from the Tauri store rather than the
             // managed Rust copy below. Persist E2E mutations so both sides see
@@ -1176,7 +1216,7 @@ async fn main() {
             }
 
             // Resolve data directory from user setting (custom dir or ~/.screenpipe)
-            let (data_dir, data_dir_fell_back) = config::resolve_data_dir(&store.data_dir);
+            let (data_dir, data_dir_fell_back) = config::resolve_data_dir(&store.data_dir)?;
             info!("Recording data directory: {}", data_dir.display());
 
             // Pin SCREENPIPE_DATA_DIR to the *resolved* dir so every consumer of
@@ -1813,7 +1853,10 @@ async fn main() {
                                 *guard = Some(server);
                             }
                             if let Some(capture) = capture {
-                                *capture_guard = Some(capture);
+                                crate::recording::install_capture_session(
+                                    &mut capture_guard,
+                                    capture,
+                                );
                                 info!("Server + capture started successfully on dedicated runtime");
                             } else {
                                 info!("Server started without capture");
@@ -1946,6 +1989,7 @@ async fn main() {
             crate::meeting_live_notes::start(app_handle.clone());
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
+            crate::disk_pressure_notifications::start(app_handle.clone());
 
             // Background ChatGPT OAuth token refresh — keeps access tokens
             // fresh so the lazy path in get_valid_token() rarely needs to

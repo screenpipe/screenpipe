@@ -136,11 +136,12 @@ fn monitor_openai_compatible_transcription_failures(
                 last_notification,
                 now,
             ) {
-                crate::notifications::client::send_typed(
+                crate::notifications::client::send_typed_with_priority(
                     "OpenAI Compatible transcription is failing",
                     "Screenpipe is still recording audio, but the endpoint is failing or returning empty transcripts, so new audio may not be searchable. Check Settings and run Test and enable again.",
                     "system",
                     Some(20_000),
+                    crate::notifications::store::NotificationPriority::High,
                 );
                 last_notification = Some(now);
             }
@@ -596,7 +597,19 @@ impl ServerCore {
                     None
                 }
             };
-            match screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await {
+            let database_error_hook: screenpipe_secrets::DatabaseErrorHook = {
+                let db = Arc::clone(&db);
+                Arc::new(move |error| {
+                    db.report_sqlite_error(error);
+                })
+            };
+            match screenpipe_secrets::SecretStore::new_with_database_error_hook(
+                db.pool.clone(),
+                secret_key,
+                Some(database_error_hook),
+            )
+            .await
+            {
                 Ok(store) => {
                     let fixed = screenpipe_secrets::fix_secret_file_permissions(&config.data_dir);
                     if fixed > 0 {
@@ -1028,6 +1041,12 @@ impl ServerCore {
         // One shutdown signal, shared across both worker spawn paths and
         // stored on Self for `shutdown()` to fire on app quit.
         let redact_shutdown = Arc::new(Notify::new());
+        let redact_database_error_hook: screenpipe_redact::DatabaseErrorHook = {
+            let db = Arc::clone(&db);
+            Arc::new(move |error| {
+                db.report_sqlite_error(error);
+            })
+        };
 
         // Opt-in (Settings → Privacy → "redact secrets in agent logs", default
         // off): strip secrets the pi agent persists into its session logs (bash
@@ -1128,6 +1147,7 @@ impl ServerCore {
                     ..Default::default()
                 };
                 let _ = Worker::new(db.pool.clone(), pipeline_arc, cfg)
+                    .with_database_error_hook(redact_database_error_hook.clone())
                     .spawn_with_shutdown(redact_shutdown.clone());
             } else {
                 // Local mode: spawn the download+load off the boot path
@@ -1138,6 +1158,7 @@ impl ServerCore {
                 let shutdown = redact_shutdown.clone();
                 let labels = pii_labels.clone();
                 let pseudonymizer = pseudonymizer.clone();
+                let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
                     let policy = TextRedactionPolicy::from_labels(&labels);
                     // Prefer the local ONNX text redactor (~278 MB INT8,
@@ -1215,7 +1236,9 @@ impl ServerCore {
                         tables: ALL_TARGET_TABLES.to_vec(),
                         ..Default::default()
                     };
-                    let _ = Worker::new(pool, pipeline_arc, cfg).spawn_with_shutdown(shutdown);
+                    let _ = Worker::new(pool, pipeline_arc, cfg)
+                        .with_database_error_hook(database_error_hook)
+                        .spawn_with_shutdown(shutdown);
                 });
             }
         }
@@ -1250,6 +1273,7 @@ impl ServerCore {
                         ..Default::default()
                     },
                 )
+                .with_database_error_hook(redact_database_error_hook.clone())
                 .spawn_with_shutdown(redact_shutdown.clone());
             } else {
                 // Local mode: rfdetr ONNX. First-run downloads ~108 MB
@@ -1259,6 +1283,7 @@ impl ServerCore {
                 // loads, so they never drift on a model bump.
                 let shutdown = redact_shutdown.clone();
                 let labels = pii_labels.clone();
+                let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
                     match RfdetrRedactor::load_or_download(RfdetrConfig::default()).await {
                         Ok(detector) => {
@@ -1276,6 +1301,7 @@ impl ServerCore {
                                     ..Default::default()
                                 },
                             )
+                            .with_database_error_hook(database_error_hook)
                             .spawn_with_shutdown(shutdown);
                         }
                         Err(e) => {

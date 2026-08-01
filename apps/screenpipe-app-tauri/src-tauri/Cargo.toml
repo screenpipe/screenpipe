@@ -1,8 +1,9 @@
 [workspace]
+members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.151"
+version = "2.5.161"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -55,6 +56,7 @@ tauri-plugin-permission-flow = { git = "https://github.com/EzraEllette/permissio
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"
+bytes = "1"
 plist = "1"
 arc-swap = "1"
 
@@ -141,6 +143,7 @@ screenpipe-vault = { path = "../../../crates/screenpipe-vault" }
 screenpipe-connect = { path = "../../../crates/screenpipe-connect", features = ["specta"] }
 screenpipe-secrets = { path = "../../../crates/screenpipe-secrets" }
 screenpipe-events = { path = "../../../crates/screenpipe-events" }
+sqlx = { version = "=0.9.0", default-features = false, features = ["sqlite", "runtime-tokio"], optional = true }
 eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52787c8435d734ed443e2d5641f45b0177cae", default-features = false, features = ["events"] }
 # Async PII reconciliation (issue #3185 / PR #3188). `onnx-coreml` is
 # the right execution-provider for Apple Silicon (image PII via
@@ -238,6 +241,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
     "Win32_System_Com",
+    "Win32_System_ErrorReporting",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_Security_Cryptography",
     # GetLastInputInfo/GetTickCount for the recording-health user-presence tier
@@ -264,7 +269,7 @@ pulseaudio = ["screenpipe-audio/pulseaudio"]
 directml = ["screenpipe-engine/directml"]
 vulkan = ["screenpipe-audio/vulkan"]
 cargo-clippy = []
-e2e = ["tauri-plugin-webdriver"]
+e2e = ["tauri-plugin-webdriver", "dep:sqlx"]
 
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
@@ -357,10 +362,12 @@ incremental = true
 opt-level = 1
 debug = false
 
-# Faster dev builds
+# Default non-release builds retain complete Screenpipe symbols while omitting
+# debuginfo from third-party crates.
 [profile.dev]
 opt-level = 0
-debug = false
+debug = true
+split-debuginfo = "packed"
 # Per-worktree incremental state cannot help a cold target and prevents the
 # shared compiler cache from reusing screenpipe's path crates across worktrees.
 incremental = false
@@ -376,9 +383,8 @@ debug = false
 opt-level = 0
 debug = false
 
-# Space-efficient debugging: the app and Screenpipe retain complete symbols,
-# while third-party crates carry no debuginfo. Invoke through
-# `bun run tauri:dev:debug` (or `tauri dev -- --profile dev-debug`).
+# Kept for explicit invocations; default non-release builds use these settings
+# through the `dev` profile above.
 [profile.dev-debug]
 inherits = "dev"
 debug = true

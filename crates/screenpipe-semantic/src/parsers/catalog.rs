@@ -20,7 +20,7 @@ pub enum AppFamily {
 
 /// Public app identity and family membership for one built-in parser profile.
 ///
-/// The catalog describes 47 supported app targets using public app identities,
+/// The catalog describes 51 supported app targets using public app identities,
 /// URL patterns, and stable accessibility contracts.
 #[derive(Debug, Clone, Copy)]
 pub struct BuiltinAppProfile {
@@ -162,6 +162,16 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[r"^https://app\.clickup\.com/"],
         &["app.clickup.com/"],
         Some("https://app.clickup.com/123/v/l/456"),
+    ),
+    profile(
+        "codex",
+        "Codex",
+        &[C],
+        &[],
+        &["Codex", "Codex.exe", "codex"],
+        &[],
+        &[],
+        None,
     ),
     profile(
         "cursor",
@@ -345,6 +355,16 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         Some("https://word.cloud.microsoft/documents/example"),
     ),
     profile(
+        "notepad",
+        "Notepad",
+        &[D],
+        &[],
+        &["Notepad.exe", "notepad"],
+        &[],
+        &[],
+        None,
+    ),
+    profile(
         "notes",
         "Notes",
         &[D],
@@ -520,6 +540,32 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[r"^https://web\.whatsapp\.com/"],
         &["web.whatsapp.com/"],
         Some("https://web.whatsapp.com/"),
+    ),
+    profile(
+        "windowsconsole",
+        "Console",
+        &[R],
+        &[],
+        &[
+            "conhost.exe",
+            "powershell.exe",
+            "pwsh.exe",
+            "cmd.exe",
+            "OpenConsole.exe",
+        ],
+        &[],
+        &[],
+        None,
+    ),
+    profile(
+        "windowsterminal",
+        "Windows Terminal",
+        &[R],
+        &[],
+        &["WindowsTerminal.exe", "wt", "wt.exe"],
+        &[],
+        &[],
+        None,
     ),
     profile(
         "windsurf",

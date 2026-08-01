@@ -27,6 +27,9 @@ const sessionRecorder = shouldRecordDesktopSession ? new TestRecorder() : null;
 const sessionVideoDir = resolve(__dirname, 'videos', 'session');
 const isCi = Boolean(process.env.CI);
 const isWindowsCi = isCi && process.platform === 'win32';
+const isDestructiveDbFaultRun = (process.env.SCREENPIPE_E2E_SEED ?? '')
+  .split(',')
+  .some((flag) => flag.trim().toLowerCase() === 'db-hard-fault');
 const allSpecs = [resolve(__dirname, 'specs', '**', '*.spec.ts')];
 const windowsCiSpecs = [
   'brain-overview.spec.ts',
@@ -77,7 +80,9 @@ export const config: TestrunnerConfig = {
   // make a genuine flake (which passes most of the time) very unlikely to
   // survive, while a truly broken spec still fails every attempt.
   // Local runs skip retries so flakes surface immediately during development.
-  specFileRetries: isCi ? 3 : 0,
+  // A destructive DB-fault spec cannot reuse the same quarantined process for
+  // a file retry. Focused fault runs start clean once and fail directly.
+  specFileRetries: isCi && !isDestructiveDbFaultRun ? 3 : 0,
   specFileRetriesDelay: 5,
   framework: 'mocha',
   reporters: getReporters() as Options.Testrunner['reporters'],

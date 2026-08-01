@@ -7,12 +7,15 @@
 //! Manages the pi coding agent via RPC mode (stdin/stdout JSON protocol).
 
 use screenpipe_core::agents::pi::{
-    screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR, PI_PACKAGE, SCREENPIPE_API_URL,
+    apply_custom_provider_compat, screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR,
+    PI_PACKAGE, SCREENPIPE_API_URL,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
-use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use tauri::Manager;
 use tokio::sync::oneshot;
@@ -153,6 +156,56 @@ use tracing::{debug, error, info, warn};
 static PI_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
 static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
     std::sync::OnceLock::new();
+static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+const MANAGED_PI_EXTENSION_FILES: [&str; 5] = [
+    "web-search.ts",
+    "mcp-bridge.ts",
+    "save-artifact.ts",
+    "live-views.ts",
+    "connection-gate.ts",
+];
+
+fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
+    PI_EXTENSION_SAFE_MODE_PROJECTS.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+}
+
+fn is_pi_extension_startup_failure(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("failed to load extension")
+        || lower.contains("start without extensions using \"pi -ne\"")
+}
+
+fn enable_pi_extension_safe_mode(project_dir: &str) -> bool {
+    extension_safe_mode_projects()
+        .lock()
+        .map(|mut projects| projects.insert(project_dir.to_string()))
+        .unwrap_or(false)
+}
+
+fn pi_extension_safe_mode_enabled(project_dir: &str) -> bool {
+    extension_safe_mode_projects()
+        .lock()
+        .map(|projects| projects.contains(project_dir))
+        .unwrap_or(false)
+}
+
+fn managed_pi_extension_paths(project_dir: &str) -> Vec<PathBuf> {
+    let extension_dir = Path::new(project_dir).join(".pi").join("extensions");
+    MANAGED_PI_EXTENSION_FILES
+        .iter()
+        .map(|name| extension_dir.join(name))
+        .filter(|path| path.exists())
+        .collect()
+}
+
+fn apply_pi_extension_safe_mode(command: &mut Command, project_dir: &str) {
+    command.arg("--no-extensions");
+    for path in managed_pi_extension_paths(project_dir) {
+        command.arg("--extension").arg(path);
+    }
+}
 
 /// Captures the last bun-install error so `pi_start` can surface it to the UI
 /// when the install silently failed (e.g. Windows EPERM on bun's atomic rename).
@@ -484,29 +537,31 @@ fn sync_queue_state_from_event(
 ) {
     let event_type = event.get("type").and_then(|value| value.as_str());
 
-    if event_type == Some("response") {
-        if let Some(request_id) = event.get("id").and_then(|id| id.as_str()) {
-            let rejected =
-                event.get("success").and_then(|success| success.as_bool()) == Some(false);
-            let error = rejected.then(|| {
-                event
-                    .get("error")
-                    .and_then(|error| error.as_str())
-                    .unwrap_or("Pi rejected the prompt before it started")
-                    .to_string()
-            });
-            queue_state.signal_rpc_response(request_id, error);
-        }
-    }
-
     match event_type {
         Some("agent_start") => {
             queue_state.mark_agent_active();
             queue_state.clear_steer_in_flight();
         }
         Some("agent_end") => {
-            queue_state.mark_agent_idle();
-            queue_state.signal_done_if_idle();
+            // Pi emits agent_end before entering provider retry backoff. The
+            // SDK's `willRetry` flag means this logical turn still owns the
+            // process; releasing the queue here sends the next prompt into a
+            // busy agent and causes the misleading "already processing" loop.
+            if event.get("willRetry").and_then(|value| value.as_bool()) == Some(true) {
+                queue_state.mark_agent_active();
+            } else {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
+        }
+        Some("auto_retry_start") => {
+            queue_state.mark_agent_active();
+        }
+        Some("auto_retry_end") => {
+            if event.get("success").and_then(|value| value.as_bool()) == Some(false) {
+                queue_state.mark_agent_idle();
+                queue_state.signal_done_if_idle();
+            }
         }
         Some("message_start") => {
             if queue_state.is_steer_in_flight() {
@@ -535,10 +590,21 @@ fn sync_queue_state_from_event(
                 _ => {}
             }
         }
-        Some("message_update") | Some("tool_execution_start") => {
+        Some("message_update") => {
+            // Text/thinking deltas reset the silence idle deadline.
+            queue_state.record_activity();
             for id in event_tool_call_ids(event) {
                 queue_state.mark_tool_active(id);
             }
+        }
+        Some("tool_execution_start") => {
+            for id in event_tool_call_ids(event) {
+                queue_state.mark_tool_active(id);
+            }
+        }
+        Some("tool_execution_progress") => {
+            // Tool progress resets the silence idle deadline.
+            queue_state.record_activity();
         }
         Some("tool_execution_end") => {
             for id in event_tool_call_ids(event) {
@@ -547,14 +613,22 @@ fn sync_queue_state_from_event(
             queue_state.signal_done_if_idle();
         }
         Some("response") => {
-            if !queue_state.has_active_turn_work() {
-                // Non-prompt commands do not emit agent_start/agent_end, so a
-                // successful response remains their completion fallback.
-                let queue_state = queue_state.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    queue_state.signal_done();
-                });
+            // Correlate lifecycle replies by request id, not a shared wakeup.
+            if let Some(id) = event.get("id").and_then(|id| id.as_str()) {
+                let success = event
+                    .get("success")
+                    .and_then(|success| success.as_bool())
+                    .unwrap_or(true);
+                let result = if success {
+                    Ok(())
+                } else {
+                    Err(event
+                        .get("error")
+                        .and_then(|error| error.as_str())
+                        .unwrap_or("Pi command failed")
+                        .to_string())
+                };
+                queue_state.signal_response(id, result);
             }
         }
         _ => {}
@@ -599,6 +673,10 @@ impl PiConversationLease {
         prompt_for_pi_session(message, *self.state)
     }
 
+    fn is_synced(&self) -> bool {
+        matches!(*self.state, PiConversationSyncState::Synced)
+    }
+
     fn mark_synced(&mut self) {
         *self.state = PiConversationSyncState::Synced;
     }
@@ -613,6 +691,9 @@ pub struct PiManager {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     project_dir: Option<String>,
+    /// Hash of the spawn-time inputs. Multiple WebViews can request the same
+    /// session concurrently; identical starts must reuse the live child.
+    launch_fingerprint: Option<u64>,
     app_handle: AppHandle,
     last_activity: std::time::Instant,
     /// Guard: ensures only one `pi_terminated` event is emitted per session.
@@ -635,6 +716,7 @@ impl PiManager {
             child: None,
             stdin: None,
             project_dir: None,
+            launch_fingerprint: None,
             app_handle,
             last_activity: std::time::Instant::now(),
             terminated_emitted: Arc::new(AtomicBool::new(false)),
@@ -712,6 +794,7 @@ impl PiManager {
         self.stdin = None;
         self.project_dir = None;
         self.conversation_sync = PiConversationSync::new();
+        self.launch_fingerprint = None;
         // Drop all pending response channels so waiting callers get an error
         self.pending_responses.lock().unwrap().clear();
     }
@@ -1444,7 +1527,7 @@ fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
 }
 
 /// Configuration for which AI provider Pi should use
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PiProviderConfig {
     /// Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
@@ -1458,6 +1541,10 @@ pub struct PiProviderConfig {
     /// Max output tokens (default 4096)
     #[serde(default = "default_max_tokens")]
     pub max_tokens: i32,
+    /// Approximate input context size in characters. Pi model metadata uses
+    /// tokens, so Screenpipe converts this value using four characters/token.
+    #[serde(default)]
+    pub max_context_chars: Option<i32>,
     /// Optional system prompt from AI preset (appended to Pi's built-in system prompt)
     #[serde(default)]
     pub system_prompt: Option<String>,
@@ -1465,6 +1552,44 @@ pub struct PiProviderConfig {
 
 fn default_max_tokens() -> i32 {
     4096
+}
+
+fn context_window_tokens(max_context_chars: Option<i32>) -> Option<i32> {
+    max_context_chars
+        .filter(|value| *value > 0)
+        .map(|value| value.saturating_add(3) / 4)
+}
+
+fn pi_launch_fingerprint(
+    project_dir: &str,
+    user_token: Option<&str>,
+    provider_config: Option<&PiProviderConfig>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    project_dir.hash(&mut hasher);
+    user_token.hash(&mut hasher);
+    if let Some(config) = provider_config {
+        // buildSystemPrompt adds exact wall-clock lines. Home and standalone
+        // Chat build those a few milliseconds apart, but that is not a real
+        // configuration change and must not churn the shared Pi child.
+        let normalized_system_prompt = config.system_prompt.as_deref().map(|prompt| {
+            prompt
+                .lines()
+                .filter(|line| {
+                    !line.starts_with("Current time: ") && !line.starts_with("User's local time: ")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        PiProviderConfig {
+            system_prompt: normalized_system_prompt,
+            ..config.clone()
+        }
+        .hash(&mut hasher);
+    } else {
+        Option::<u8>::None.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn model_supports_reasoning(provider: &str, model: &str) -> bool {
@@ -1484,6 +1609,24 @@ fn model_supports_reasoning(provider: &str, model: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// GPT-5.5 and GPT-5.6 reject function tools on OpenAI's Chat Completions
+/// endpoint unless `reasoning_effort` is explicitly `none`. Pi receives the
+/// model metadata we generate here, so map every selectable thinking level to
+/// `none` for this narrow endpoint/model combination. This preserves Pi's
+/// tool loop without guessing about other OpenAI-compatible providers.
+fn requires_openai_chat_tools_reasoning_none(base_url: &str, wire_api: &str, model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    let is_affected_model = ["gpt-5.5", "gpt-5.6"]
+        .iter()
+        .any(|prefix| model == *prefix || model.starts_with(&format!("{prefix}-")));
+
+    wire_api == "openai-completions"
+        && base_url
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case("https://api.openai.com/v1")
+        && is_affected_model
 }
 
 /// Claude's newer reasoning models reject the legacy
@@ -1599,6 +1742,9 @@ async fn build_models_json(
                 );
                 model_def.insert("input".into(), json!(["text", "image"]));
                 model_def.insert("maxTokens".into(), json!(config.max_tokens));
+                if let Some(context_window) = context_window_tokens(config.max_context_chars) {
+                    model_def.insert("contextWindow".into(), json!(context_window));
+                }
                 model_def.insert(
                     "cost".into(),
                     json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}),
@@ -1606,6 +1752,21 @@ async fn build_models_json(
                 let mut compat = serde_json::Map::new();
                 if requires_max_completion_tokens && wire_api == "openai-completions" {
                     compat.insert("maxTokensField".into(), json!("max_completion_tokens"));
+                }
+                if requires_openai_chat_tools_reasoning_none(&base_url, wire_api, &resolved_model) {
+                    compat.insert("supportsReasoningEffort".into(), json!(true));
+                    model_def.insert(
+                        "thinkingLevelMap".into(),
+                        json!({
+                            "off": "none",
+                            "minimal": "none",
+                            "low": "none",
+                            "medium": "none",
+                            "high": "none",
+                            "xhigh": "none",
+                            "max": "none",
+                        }),
+                    );
                 }
                 if wire_api == "anthropic-messages"
                     && anthropic_model_requires_adaptive_thinking(&resolved_model)
@@ -1616,12 +1777,15 @@ async fn build_models_json(
                     model_def.insert("compat".into(), serde_json::Value::Object(compat));
                 }
 
-                let user_provider = json!({
+                let mut user_provider = json!({
                     "baseUrl": base_url,
                     "api": wire_api,
                     "apiKey": api_key,
                     "models": [ serde_json::Value::Object(model_def) ]
                 });
+                if provider_name == "custom" {
+                    apply_custom_provider_compat(&mut user_provider);
+                }
 
                 providers_map.insert(provider_name.to_string(), user_provider);
             }
@@ -1899,6 +2063,29 @@ pub async fn pi_start_inner(
     if project_dir.is_empty() {
         return Err("Project directory is required".to_string());
     }
+    let launch_fingerprint = pi_launch_fingerprint(
+        &project_dir,
+        user_token.as_deref(),
+        provider_config.as_ref(),
+    );
+    let extension_safe_mode = pi_extension_safe_mode_enabled(&project_dir);
+    let sid = session_id.to_string();
+
+    // Fast path before provider discovery/config writes. Home and standalone
+    // Chat can both observe a stale local `piInfo` and request the same start;
+    // once either WebView has spawned the child, the other should return it.
+    {
+        let mut pool = state.0.lock().await;
+        if let Some(manager) = pool.sessions.get_mut(&sid) {
+            if manager.is_running() && manager.launch_fingerprint == Some(launch_fingerprint) {
+                info!(
+                    "Reusing existing pi instance for identical start of session '{}'",
+                    sid
+                );
+                return Ok(manager.snapshot(&sid));
+            }
+        }
+    }
 
     // Create project directory if it doesn't exist
     std::fs::create_dir_all(&project_dir)
@@ -1925,7 +2112,9 @@ pub async fn pi_start_inner(
 
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
-    ensure_required_pi_extension_package().await?;
+    if !extension_safe_mode {
+        ensure_required_pi_extension_package().await?;
+    }
 
     // Determine which Pi provider and model to use
     let (pi_provider, pi_model) = match &provider_config {
@@ -1945,7 +2134,6 @@ pub async fn pi_start_inner(
         None => ("screenpipe".to_string(), "auto".to_string()),
     };
 
-    let sid = session_id.to_string();
     let mut pool = state.0.lock().await;
 
     // Stop existing instance for this session if running
@@ -1953,6 +2141,13 @@ pub async fn pi_start_inner(
     if let Some(m) = pool.sessions.get_mut(&sid) {
         if m.is_running() {
             let old_pid = m.child.as_ref().map(|c| c.id());
+            if m.launch_fingerprint == Some(launch_fingerprint) {
+                info!(
+                    "Reusing existing pi instance (pid {:?}) for identical start of session '{}'",
+                    old_pid, sid
+                );
+                return Ok(m.snapshot(&sid));
+            }
             if m.has_in_flight_work() {
                 warn!(
                     "Refusing to restart busy pi instance (pid {:?}) for session '{}'",
@@ -2088,6 +2283,13 @@ pub async fn pi_start_inner(
         "--model",
         &pi_model,
     ]);
+    if extension_safe_mode {
+        warn!(
+            "Starting Pi in extension safe mode for '{}'; third-party extension packages are disabled",
+            project_dir
+        );
+        apply_pi_extension_safe_mode(&mut cmd, &project_dir);
+    }
 
     // Ensure bun is discoverable by pi.exe shim: the bun global-install shim (pi.exe)
     // needs to find bun.exe to execute the actual JS. If bun isn't in PATH (common on
@@ -2336,6 +2538,7 @@ pub async fn pi_start_inner(
         m.child = Some(child);
         m.stdin = None; // stdin is now owned by the queue
         m.project_dir = Some(project_dir.clone());
+        m.launch_fingerprint = Some(launch_fingerprint);
         m.last_activity = std::time::Instant::now();
         // Fresh flag for this session — old reader threads keep their own Arc
         m.terminated_emitted = terminated_emitted.clone();
@@ -2557,11 +2760,20 @@ pub async fn pi_start_inner(
     if let Some(stderr) = stderr {
         let app_handle = app.clone();
         let sid_stderr = sid.clone();
+        let project_dir_stderr = project_dir.clone();
         let first_stderr_for_error = first_stderr_line.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stderr);
             info!("Pi stderr reader started (session: {})", sid_stderr);
             while let Some(line) = read_lines_lossy(&mut reader) {
+                if is_pi_extension_startup_failure(&line)
+                    && enable_pi_extension_safe_mode(&project_dir_stderr)
+                {
+                    warn!(
+                        "Pi extension startup failed for '{}'; the next automatic restart will load only Screenpipe-managed extensions",
+                        project_dir_stderr
+                    );
+                }
                 if !line.trim().is_empty() {
                     if let Ok(mut first) = first_stderr_for_error.lock() {
                         if first.is_none() {
@@ -2885,6 +3097,27 @@ pub async fn pi_queue_prompt(
         .await?;
     let state_for_watchdog = state.inner().clone();
     let sid_for_watchdog = sid.clone();
+    if conversation.is_synced() {
+        // Warm process: the history-wrapper decision is already settled, so
+        // holding the lease until this prompt starts would only serialize
+        // later sends behind the whole active turn (one visible queued card
+        // at a time, every other enqueue blocked). Release it now; the
+        // watchdog only needs the receiver for the failure log.
+        drop(conversation);
+        tokio::spawn(async move {
+            if let Err(error) = await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await
+            {
+                warn!(
+                    "queued Pi prompt failed before it started for session {}: {}",
+                    sid_for_watchdog, error
+                );
+            }
+        });
+        return Ok(queue_id);
+    }
+    // Cold process: an immediate follow-up must not decide its wrapper until
+    // this prompt is acknowledged (issue #3636), so the lease rides in the
+    // watchdog and is released by the acknowledgement.
     tokio::spawn(async move {
         match await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await {
             Ok(()) => conversation.mark_synced(),
@@ -4169,6 +4402,44 @@ mod tests {
     }
 
     #[test]
+    fn identical_pi_launches_share_a_fingerprint() {
+        let config = super::PiProviderConfig {
+            provider: "screenpipe-cloud".to_string(),
+            url: String::new(),
+            model: "auto".to_string(),
+            api_key: None,
+            max_tokens: 4096,
+            max_context_chars: Some(512_000),
+            system_prompt: Some("system context".to_string()),
+        };
+        let first = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
+        let duplicate = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
+        assert_eq!(first, duplicate);
+
+        let mut changed = config.clone();
+        changed.system_prompt = Some("new system context".to_string());
+        assert_ne!(
+            first,
+            super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&changed),)
+        );
+
+        let mut first_time = config.clone();
+        first_time.system_prompt = Some(
+            "stable context\nCurrent time: 2026-07-29T23:55:01.000Z\nUser's timezone: America/Los_Angeles (UTC-7)\nUser's local time: 7/29/2026, 4:55:01 PM"
+                .to_string(),
+        );
+        let mut second_time = config;
+        second_time.system_prompt = Some(
+            "stable context\nCurrent time: 2026-07-29T23:55:02.000Z\nUser's timezone: America/Los_Angeles (UTC-7)\nUser's local time: 7/29/2026, 4:55:02 PM"
+                .to_string(),
+        );
+        assert_eq!(
+            super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&first_time),),
+            super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&second_time),)
+        );
+    }
+
+    #[test]
     fn parses_tool_call_ids_from_pi_events() {
         let assistant_tool_call = json!({
             "type": "message_end",
@@ -4236,6 +4507,47 @@ mod tests {
             super::event_tool_call_ids(&tool_end),
             vec!["tool-1".to_string()]
         );
+    }
+
+    #[test]
+    fn queue_stays_busy_across_provider_retry_backoff() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        super::sync_queue_state_from_event(&state, &json!({ "type": "agent_start" }));
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": true }),
+        );
+        assert!(state.is_agent_active(), "retry backoff still owns the turn");
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({
+                "type": "auto_retry_start",
+                "attempt": 1,
+                "maxAttempts": 3,
+            }),
+        );
+        assert!(state.is_agent_active());
+
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "agent_end", "willRetry": false }),
+        );
+        assert!(
+            !state.is_agent_active(),
+            "terminal agent_end releases the queue"
+        );
+    }
+
+    #[test]
+    fn exhausted_provider_retry_releases_queue() {
+        let state = crate::pi_command_queue::PiQueueState::new();
+        state.mark_agent_active();
+        super::sync_queue_state_from_event(
+            &state,
+            &json!({ "type": "auto_retry_end", "success": false }),
+        );
+        assert!(!state.is_agent_active());
     }
 
     #[test]
@@ -4412,12 +4724,76 @@ mod tests {
     /// accepts a prompt but never emits RPC stdout, its queue closes after the
     /// start watchdog, then a fresh child acknowledges a retry and runs longer
     /// than that watchdog before completing normally.
-    #[cfg(unix)]
     #[tokio::test]
     async fn pi_prompt_watchdog_recovers_with_fresh_process_e2e() {
         use std::process::{ChildStdout, Command as StdCommand};
         use std::sync::Arc;
         use tokio::sync::Mutex;
+
+        /// Fake Pi that reads stdin forever and never emits RPC stdout.
+        fn spawn_silent_fake_pi() -> std::process::Child {
+            #[cfg(unix)]
+            let mut cmd = {
+                let mut c = StdCommand::new("sh");
+                c.args(["-c", "while IFS= read -r _line; do :; done"]);
+                c
+            };
+            #[cfg(windows)]
+            let mut cmd = {
+                let mut c = StdCommand::new("powershell");
+                c.args([
+                    "-NoProfile",
+                    "-Command",
+                    "while ($null -ne [Console]::In.ReadLine()) {}",
+                ]);
+                c
+            };
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn silent fake Pi process")
+        }
+
+        /// Fake Pi that acks the first prompt, starts a 2s turn, then ends it.
+        fn spawn_healthy_fake_pi() -> std::process::Child {
+            #[cfg(unix)]
+            let mut cmd = {
+                let mut c = StdCommand::new("sh");
+                c.args([
+                    "-c",
+                    r#"
+IFS= read -r _line
+printf '%s\n' '{"type":"response","id":"req_1","success":true}'
+printf '%s\n' '{"type":"agent_start"}'
+sleep 2
+printf '%s\n' '{"type":"agent_end"}'
+"#,
+                ]);
+                c
+            };
+            #[cfg(windows)]
+            let mut cmd = {
+                let mut c = StdCommand::new("powershell");
+                c.args([
+                    "-NoProfile",
+                    "-Command",
+                    concat!(
+                        "$null = [Console]::In.ReadLine(); ",
+                        "[Console]::Out.WriteLine('{\"type\":\"response\",\"id\":\"req_1\",\"success\":true}'); ",
+                        "[Console]::Out.WriteLine('{\"type\":\"agent_start\"}'); ",
+                        "Start-Sleep -Seconds 2; ",
+                        "[Console]::Out.WriteLine('{\"type\":\"agent_end\"}')",
+                    ),
+                ]);
+                c
+            };
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn healthy fake Pi process")
+        }
 
         fn spawn_reader(
             stdout: ChildStdout,
@@ -4434,14 +4810,15 @@ mod tests {
             })
         }
 
-        let start_timeout = Duration::from_secs(1);
-        let mut silent_child = StdCommand::new("sh")
-            .args(["-c", "while IFS= read -r _line; do :; done"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn silent fake Pi process");
+        // Windows gets a longer watchdog: the PowerShell fake Pi needs longer
+        // to boot on loaded CI runners than `sh` does, and a boot slower than
+        // the watchdog would trip it and fail the healthy-path half below.
+        let start_timeout = if cfg!(windows) {
+            Duration::from_secs(3)
+        } else {
+            Duration::from_secs(1)
+        };
+        let mut silent_child = spawn_silent_fake_pi();
         let silent_stdin = Arc::new(Mutex::new(
             silent_child.stdin.take().expect("silent child stdin"),
         ));
@@ -4477,10 +4854,11 @@ mod tests {
             .await
             .expect("enqueue follow-up behind silent prompt");
 
-        let silent_result = tokio::time::timeout(Duration::from_secs(3), silent_reply)
-            .await
-            .expect("silent prompt must hit the start watchdog")
-            .expect("silent reply channel stayed open");
+        let silent_result =
+            tokio::time::timeout(start_timeout + Duration::from_secs(3), silent_reply)
+                .await
+                .expect("silent prompt must hit the start watchdog")
+                .expect("silent reply channel stayed open");
         assert_eq!(
             silent_result,
             Err(crate::pi_command_queue::PROMPT_START_TIMEOUT_ERROR.to_string())
@@ -4500,20 +4878,7 @@ mod tests {
         silent_child.wait().expect("reap silent fake Pi process");
         silent_reader.join().expect("join silent stdout reader");
 
-        let healthy_script = r#"
-IFS= read -r _line
-printf '%s\n' '{"type":"response","id":"req_1","success":true}'
-printf '%s\n' '{"type":"agent_start"}'
-sleep 2
-printf '%s\n' '{"type":"agent_end"}'
-"#;
-        let mut healthy_child = StdCommand::new("sh")
-            .args(["-c", healthy_script])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn healthy fake Pi process");
+        let mut healthy_child = spawn_healthy_fake_pi();
         let healthy_stdin = Arc::new(Mutex::new(
             healthy_child.stdin.take().expect("healthy child stdin"),
         ));
@@ -4539,10 +4904,11 @@ printf '%s\n' '{"type":"agent_end"}'
             )
             .await
             .expect("enqueue retry on fresh process");
-        let retry_result = tokio::time::timeout(Duration::from_secs(2), retry_reply)
-            .await
-            .expect("fresh process must acknowledge retry")
-            .expect("retry reply channel stayed open");
+        let retry_result =
+            tokio::time::timeout(start_timeout + Duration::from_secs(2), retry_reply)
+                .await
+                .expect("fresh process must acknowledge retry")
+                .expect("retry reply channel stayed open");
         assert_eq!(retry_result, Ok(()));
 
         tokio::time::sleep(Duration::from_millis(1_200)).await;
@@ -5224,6 +5590,7 @@ error: InstallFailed extracting tarball"#;
             model: model.to_string(),
             api_key: None,
             max_tokens: 4096,
+            max_context_chars: Some(512_000),
             system_prompt: None,
         }
     }
@@ -5295,6 +5662,57 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["id"], "gpt-4o");
         assert_eq!(models[0]["reasoning"], false);
+        assert_eq!(models[0]["contextWindow"], 128_000);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_uses_preset_context_window() {
+        let mut pc = make_provider_config("custom", "qwen3.5");
+        pc.url = "http://localhost:8080/v1".to_string();
+        pc.max_context_chars = Some(32_768);
+
+        let config = build_models_json(None, Some(&pc)).await;
+        assert_eq!(
+            config["providers"]["custom"]["models"][0]["contextWindow"],
+            8_192
+        );
+    }
+
+    #[test]
+    fn test_extension_startup_failure_detection_is_specific() {
+        assert!(super::is_pi_extension_startup_failure(
+            "Error: Failed to load extension /tmp/pi-subagents/index.ts: Tool conflict"
+        ));
+        assert!(super::is_pi_extension_startup_failure(
+            "Hint: Start without extensions using \"pi -ne\"."
+        ));
+        assert!(!super::is_pi_extension_startup_failure(
+            "Error: provider request timed out"
+        ));
+    }
+
+    #[test]
+    fn test_extension_safe_mode_loads_only_managed_project_extensions() {
+        let temp = tempfile::tempdir().unwrap();
+        let extension_dir = temp.path().join(".pi").join("extensions");
+        std::fs::create_dir_all(&extension_dir).unwrap();
+        let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
+        std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
+        std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
+        std::fs::write(extension_dir.join("third-party.ts"), header).unwrap();
+
+        let mut command = Command::new("pi");
+        super::apply_pi_extension_safe_mode(&mut command, temp.path().to_str().unwrap());
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args[0], "--no-extensions");
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 2);
+        assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
+        assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
+        assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
     }
 
     #[tokio::test]
@@ -5414,6 +5832,23 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(providers.len(), 2);
         assert!(providers.contains_key("custom"));
         assert_eq!(providers["custom"]["baseUrl"], "http://my-server:8080/v1");
+        assert_eq!(providers["custom"]["headers"]["User-Agent"], "screenpipe");
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_repairs_ai_genesis_custom_url() {
+        for base_url in ["https://ai.ai-genesis.app", "https://api.ai-genesis.app/"] {
+            let mut pc = make_provider_config("custom", "glm-5.2");
+            pc.url = base_url.to_string();
+            let config = build_models_json(None, Some(&pc)).await;
+            let custom = &config["providers"]["custom"];
+
+            assert_eq!(
+                custom["baseUrl"],
+                format!("{}/v1", base_url.trim_end_matches('/'))
+            );
+            assert_eq!(custom["headers"]["User-Agent"], "screenpipe");
+        }
     }
 
     #[tokio::test]
@@ -5470,6 +5905,44 @@ error: InstallFailed extracting tarball"#;
         let config = build_models_json(None, Some(&pc)).await;
         let model = &config["providers"]["custom"]["models"][0];
         assert_eq!(model["compat"]["maxTokensField"], "max_completion_tokens");
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_openai_gpt55_maps_reasoning_to_none_for_tools() {
+        for provider in ["openai", "custom"] {
+            let mut pc = make_provider_config(provider, "gpt-5.5");
+            pc.url = "https://api.openai.com/v1".to_string();
+            let config = build_models_json(None, Some(&pc)).await;
+            let provider_name = if provider == "openai" {
+                "openai-byok"
+            } else {
+                "custom"
+            };
+            let model = &config["providers"][provider_name]["models"][0];
+
+            assert_eq!(
+                model["reasoning"], true,
+                "{provider} remains a reasoning model"
+            );
+            assert_eq!(model["compat"]["supportsReasoningEffort"], true);
+            for level in ["off", "minimal", "low", "medium", "high", "xhigh", "max"] {
+                assert_eq!(
+                    model["thinkingLevelMap"][level], "none",
+                    "{provider} {level}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_does_not_override_reasoning_for_other_custom_endpoints() {
+        let mut pc = make_provider_config("custom", "gpt-5.5");
+        pc.url = "https://example.com/v1".to_string();
+        let config = build_models_json(None, Some(&pc)).await;
+        let model = &config["providers"]["custom"]["models"][0];
+
+        assert!(model.get("thinkingLevelMap").is_none());
+        assert!(model["compat"].get("supportsReasoningEffort").is_none());
     }
 
     #[tokio::test]

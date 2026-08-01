@@ -17,6 +17,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import { enterpriseUpdateAuthHeaders } from "@/lib/enterprise-auth-recovery";
+import { flushPendingSettingsWrites } from "@/lib/hooks/use-settings";
 
 interface UpdateInfo {
   version: string;
@@ -107,6 +108,26 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
     const os = platform();
 
     try {
+      // A user can enable Auto-update and immediately click this banner. The
+      // switch save is asynchronous, while restart_for_update exits the process;
+      // drain queued settings writes so the relaunch cannot preserve the old
+      // `false` value even though the update itself succeeds.
+      await flushPendingSettingsWrites();
+
+      // The real updater relaunch destroys WebDriver. E2E builds can stop at
+      // this handoff and expose its timestamp, after exercising the real UI and
+      // settings-store write; production builds compile this branch out.
+      if (
+        process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+        document.documentElement.dataset.e2eSuppressUpdateRestart === "true"
+      ) {
+        document.documentElement.dataset.e2eUpdateRestartReadyAt = String(
+          performance.now(),
+        );
+        setIsInstalling(false);
+        return;
+      }
+
       // Windows: NSIS installer calls process::exit directly, bypassing our
       // ExitRequested handler — plain relaunch is fine. macOS/Linux go through
       // restart_for_update which sets QUIT_REQUESTED so the exit isn't blocked

@@ -104,6 +104,10 @@ import {
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import { copyMeetingToClipboard } from "./copy-meeting";
+import {
+  resolveTranscriptOpen,
+  type TranscriptOpenIntent,
+} from "./transcript-open-state";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -121,7 +125,7 @@ interface NoteViewProps {
   captureDevices?: LiveCaptureDevice[];
   onCaptureDevicesRefresh?: () => void | Promise<void>;
   calendarEvents?: CalendarEvent[];
-  initialTranscriptOpen?: boolean;
+  transcriptOpenIntent?: TranscriptOpenIntent;
   transcriptOpenRequestKey?: number;
 }
 
@@ -167,7 +171,7 @@ export function NoteView({
   captureDevices = [],
   onCaptureDevicesRefresh,
   calendarEvents = [],
-  initialTranscriptOpen = false,
+  transcriptOpenIntent,
   transcriptOpenRequestKey,
 }: NoteViewProps) {
   const { toast } = useToast();
@@ -184,7 +188,10 @@ export function NoteView({
   const [savingBeforeStop, setSavingBeforeStop] = useState(false);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
   const [transcriptOpen, setTranscriptOpenState] = useState(() =>
-    initialTranscriptOpen || readTranscriptOpenPreference(meeting.id),
+    resolveTranscriptOpen(
+      transcriptOpenIntent,
+      readTranscriptOpenPreference(meeting.id),
+    ),
   );
   const [transcriptRefreshKey, setTranscriptRefreshKey] = useState(0);
   const [audioStatusDevices, setAudioStatusDevices] = useState<
@@ -368,8 +375,7 @@ export function NoteView({
   // in components/meeting-notes/index.tsx (selected === the `meeting` prop).
   // A fresh mount re-runs the useState initializers and lastSavedRef above,
   // which reproduce exactly what a reset effect would set — so no reset effect
-  // is needed. (A dedicated effect below opens the transcript when
-  // initialTranscriptOpen is requested.)
+  // is needed. (A dedicated effect below applies explicit transcript intent.)
 
   useEffect(() => {
     posthog.capture("meeting_note_opened", {
@@ -414,8 +420,9 @@ export function NoteView({
   }, [meeting.id]);
 
   useEffect(() => {
-    if (initialTranscriptOpen) setTranscriptOpen(true);
-  }, [initialTranscriptOpen, setTranscriptOpen, transcriptOpenRequestKey]);
+    if (transcriptOpenIntent === undefined) return;
+    setTranscriptOpen(transcriptOpenIntent === "open");
+  }, [transcriptOpenIntent, setTranscriptOpen, transcriptOpenRequestKey]);
 
   useEffect(() => {
     let cancelled = false;

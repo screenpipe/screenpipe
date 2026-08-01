@@ -158,6 +158,25 @@ fn find_ffmpeg_path_internal() -> Option<PathBuf> {
         }
     }
 
+    // Windows: prefer the app-bundled ffmpeg+ffprobe pair next to the
+    // executable before anything on PATH — same rationale as the macOS block
+    // above. A user's PATH install (WinGet/choco, possibly a minimal build
+    // with different encoders, possibly stale) would otherwise silently
+    // replace the tested bundled binary. The pair requirement keeps dev
+    // builds unaffected: target/debug has no ffmpeg, so we fall through.
+    #[cfg(windows)]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_folder) = exe_path.parent() {
+                let bundled = exe_folder.join(EXECUTABLE_NAME);
+                if bundled.exists() && has_matching_ffprobe(&bundled) {
+                    debug!("Found bundled ffmpeg next to executable: {:?}", bundled);
+                    return Some(bundled);
+                }
+            }
+        }
+    }
+
     // macOS: a prior auto-install lands ffmpeg in ~/.local/bin
     // (get_ffmpeg_install_dir). That dir is appended to shell rc files for
     // future shells but is NOT on this process's PATH, so the `which` check
