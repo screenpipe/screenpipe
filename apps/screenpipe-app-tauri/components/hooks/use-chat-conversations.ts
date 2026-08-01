@@ -561,9 +561,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         },
       );
       unlistenFns.push(unlistenSaved);
-      (window as unknown as {
-        __e2eChatConversationSavedListenerReady?: boolean;
-      }).__e2eChatConversationSavedListenerReady = true;
 
       const unlistenRenamed = await listen<{ id: string; title: string }>(
         "chat-renamed",
@@ -593,9 +590,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
     return () => {
       cancelled = true;
-      (window as unknown as {
-        __e2eChatConversationSavedListenerReady?: boolean;
-      }).__e2eChatConversationSavedListenerReady = false;
       for (const unlisten of unlistenFns) unlisten();
     };
   }, [
