@@ -24,6 +24,7 @@
 
 import { waitForAppReady, openHomeWindow, t } from "../../helpers/test-utils.js";
 import { saveScreenshot } from "../../helpers/screenshot-utils.js";
+import { invokeOrThrow } from "../../helpers/tauri.js";
 import {
   HAS_SEARCH_FIXTURE,
   openSearch,
@@ -52,21 +53,9 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
   it("keeps fuzzy-prefix results while reflowing the wide grid", async () => {
     await openSearch("vect");
 
-    await browser.execute(async () => {
-      const tauri = (
-        window as typeof window & {
-          __TAURI_INTERNALS__?: {
-            invoke: (
-              command: string,
-              args: Record<string, number>,
-            ) => Promise<unknown>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      await tauri?.invoke("resize_search_window", {
-        width: 1680,
-        height: 1000,
-      });
+    await invokeOrThrow("resize_search_window", {
+      width: 1680,
+      height: 1000,
     });
     await browser.waitUntil(
       async () =>

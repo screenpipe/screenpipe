@@ -180,7 +180,7 @@ describe("CurrentFrameTimeline hook order", () => {
 		expect(useFrameContextMock).toHaveBeenCalledWith(22);
 	});
 
-	it("uses the monitor containing an active search hit when all monitors are selected", () => {
+	it("uses the monitor containing an active search hit over an explicit monitor filter", () => {
 		const multiDeviceFrame = frame("11", "/tmp/monitor-1.mp4");
 		multiDeviceFrame.devices.push({
 			...multiDeviceFrame.devices[0],
@@ -213,7 +213,7 @@ describe("CurrentFrameTimeline hook order", () => {
 		render(
 			<CurrentFrameTimeline
 				currentFrame={multiDeviceFrame as any}
-				selectedDeviceId="all"
+				selectedDeviceId="monitor_1"
 			/>,
 		);
 
@@ -222,7 +222,7 @@ describe("CurrentFrameTimeline hook order", () => {
 });
 
 describe("CurrentFrameTimeline verified search geometry", () => {
-	it("keeps an explicit monitor selection ahead of an active search hit", () => {
+	it("keeps an active search hit ahead of an explicit monitor selection", () => {
 		const devices = [
 			{ device_id: "monitor_1", frame_id: "11" },
 			{ device_id: "monitor_2", frame_id: "22" },
@@ -230,7 +230,7 @@ describe("CurrentFrameTimeline verified search geometry", () => {
 
 		expect(
 			selectTimelineDisplayDevice(devices, "monitor_1", true, 22),
-		).toEqual(devices[0]);
+		).toEqual(devices[1]);
 	});
 
 	it("uses the verified result boxes instead of unrelated frame text", () => {

@@ -60,17 +60,19 @@ export function selectTimelineDisplayDevice<
 ): T | undefined {
 	if (!devices?.length) return undefined;
 
-	const explicitDeviceSelected =
-		Boolean(selectedDeviceId) && selectedDeviceId !== "all";
-	if (explicitDeviceSelected) {
-		return selectTimelineDevice(devices, selectedDeviceId);
-	}
-
+	// Search navigation targets an exact frame. Prefer the device containing that
+	// frame even when Timeline was previously filtered to another monitor.
 	if (searchHighlightActive && highlightFrameId !== null) {
 		const highlightedDevice = devices.find(
 			(candidate) => Number(candidate.frame_id) === highlightFrameId,
 		);
 		if (highlightedDevice) return highlightedDevice;
+	}
+
+	const explicitDeviceSelected =
+		Boolean(selectedDeviceId) && selectedDeviceId !== "all";
+	if (explicitDeviceSelected) {
+		return selectTimelineDevice(devices, selectedDeviceId);
 	}
 
 	return devices[0];
