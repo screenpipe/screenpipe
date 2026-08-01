@@ -2086,6 +2086,12 @@ pub async fn show_window_activated(
                 } else if is_chat_overlay {
                     crate::window::begin_chat_focus_session();
                 }
+                // Activating screenpipe can emit a Space-change notification.
+                // Keep the monitor from clearing the origin captured above or
+                // hiding Main while this explicit show is still in progress.
+                if is_main_overlay || is_chat_overlay {
+                    crate::space_monitor::suppress_space_monitor(500);
+                }
                 unsafe {
                     let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
                     let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];

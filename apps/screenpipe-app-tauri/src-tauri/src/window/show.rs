@@ -36,6 +36,19 @@ use tauri_nspanel::ManagerExt;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::WebviewWindowExt;
 
+#[cfg(target_os = "macos")]
+fn run_chat_show_on_main_thread<F: FnOnce() + Send + 'static>(
+    app: &AppHandle,
+    show: F,
+) -> tauri::Result<()> {
+    app.run_on_main_thread(move || {
+        if let Err(error) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(show)) {
+            finish_chat_focus_session(false);
+            error!("panic while showing Chat panel: {:?}", error);
+        }
+    })
+}
+
 /// Apply the chat window's always-on-top panel behaviour. Single source of
 /// truth shared by the show path and the live settings toggle
 /// (`commands::set_chat_always_on_top`). The panel remains non-activating in
@@ -453,6 +466,26 @@ impl ShowRewindWindow {
     }
 
     pub fn show(&self, app: &AppHandle) -> tauri::Result<WebviewWindow> {
+        self.show_internal(app, true)
+    }
+
+    /// Pre-create Chat hidden without treating startup prewarm as an explicit show.
+    pub fn prewarm_chat(app: &AppHandle) -> tauri::Result<()> {
+        if app
+            .get_webview_window(RewindWindowId::Chat.label())
+            .is_none()
+        {
+            ShowRewindWindow::Chat.show_internal(app, false)?;
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    fn show_internal(
+        &self,
+        app: &AppHandle,
+        show_created_chat: bool,
+    ) -> tauri::Result<WebviewWindow> {
         let id = self.id();
         let onboarding_store = OnboardingStore::get(app)
             .unwrap_or_else(|_| None)
@@ -680,7 +713,7 @@ impl ShowRewindWindow {
                         crate::config::is_e2e_mode() || settings.show_overlay_in_screen_recording;
                     let chat_on_top = settings.chat_always_on_top;
                     let app_clone = app.clone();
-                    run_on_main_thread_safe(app, move || {
+                    run_chat_show_on_main_thread(app, move || {
                         use objc::{msg_send, sel, sel_impl};
                         use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
 
@@ -717,8 +750,11 @@ impl ShowRewindWindow {
                             panel.set_collection_behaviour(
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                             );
+                        } else {
+                            finish_chat_focus_session(false);
+                            error!("Chat panel disappeared before it could be shown");
                         }
-                    });
+                    })?;
 
                     return Ok(window);
                 }
@@ -1693,6 +1729,11 @@ impl ShowRewindWindow {
 
         #[cfg(target_os = "macos")]
         setup_content_process_handler(&window);
+
+        #[cfg(target_os = "macos")]
+        if show_created_chat && id.label() == RewindWindowId::Chat.label() {
+            return self.show_internal(app, true);
+        }
 
         Ok(window)
     }

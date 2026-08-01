@@ -1527,8 +1527,8 @@ async fn main() {
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                     if app_handle_chat.get_webview_window("chat").is_none() {
                         info!("Pre-creating chat panel for fullscreen Space support");
-                        match ShowRewindWindow::Chat.show(&app_handle_chat) {
-                            Ok(_window) => {
+                        match ShowRewindWindow::prewarm_chat(&app_handle_chat) {
+                            Ok(()) => {
                                 info!("Chat panel pre-created (hidden, panel configured)");
                             }
                             Err(e) => {

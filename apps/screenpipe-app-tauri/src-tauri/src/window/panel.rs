@@ -42,6 +42,10 @@ pub(crate) unsafe fn show_panel_visible(
         let _: () = msg_send![&*panel, setAlphaValue: 1.0f64];
 
         if activate_app {
+            // Internal activation may emit NSWorkspaceActiveSpaceDidChange.
+            // Suppress the monitor so it cannot clear this focus session and
+            // immediately hide the panel we are showing.
+            crate::space_monitor::suppress_space_monitor(500);
             let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
             let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
         }
