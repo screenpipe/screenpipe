@@ -2482,18 +2482,23 @@ pub async fn pi_start_inner(
         let api_key = config.api_key.as_deref().unwrap_or("");
         match config.provider.as_str() {
             "openai" | "anthropic" => {
-                if api_key.is_empty() {
-                    return Err(format!(
-                        "Your {} preset has no API key. Add one in Settings → AI presets, or switch to a different preset.",
-                        config.provider
-                    ));
-                }
                 let env_name = if config.provider == "openai" {
                     "OPENAI_API_KEY"
                 } else {
                     "ANTHROPIC_API_KEY"
                 };
-                cmd.env(env_name, api_key);
+                if !api_key.is_empty() {
+                    cmd.env(env_name, api_key);
+                } else if std::env::var(env_name).map_or(true, |v| v.trim().is_empty()) {
+                    // No key in the preset AND none inherited from the app's
+                    // environment (pi resolves `$NAME` from the child process
+                    // env, so a globally-exported key kept working before this
+                    // guard — preserve that).
+                    return Err(format!(
+                        "Your {} preset has no API key. Add one in Settings → AI presets, or switch to a different preset.",
+                        config.provider
+                    ));
+                }
             }
             "custom" if !api_key.is_empty() => {
                 cmd.env("CUSTOM_API_KEY", api_key);
