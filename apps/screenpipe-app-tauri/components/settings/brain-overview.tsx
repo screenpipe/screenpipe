@@ -2761,7 +2761,7 @@ export function BrainOverview({
           )}
           {!onboardingColdStart && (
             <Button
-              data-testid="overview-edit"
+              data-testid="overview-customize"
               variant="outline"
               size="sm"
               className="h-9 flex-1 rounded-none px-3 sm:flex-none"
