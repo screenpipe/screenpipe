@@ -1100,4 +1100,74 @@ describe('usage reservations against workerd D1', () => {
 			await releaseDailyCostReservation(env, nextEpoch.reservation);
 		}
 	});
+
+	it('starts a fresh bounded monthly allowance when the cost epoch changes', async () => {
+		const deviceId = 'user-d1-monthly-cost-epoch';
+		const now = new Date();
+		const month = utcMonth(now);
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const monthlyCap = holdUsd * 3;
+		const historicalSpend = 40;
+		env.PRIVATE_COST_CAP_EPOCH = 'monthly-incident-v2';
+		setUniformTextWindows(env, {
+			request: monthlyCap,
+			daily: monthlyCap,
+			monthly: monthlyCap,
+		});
+		await env.DB.prepare(`
+			INSERT INTO usage (device_id, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, ?, 'monthly_cost_test', ?, ?)
+		`).bind(monthlyCostKey(deviceId), month, month, historicalSpend).run();
+
+		const first = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+		);
+		expect(first.allowed).toBe(true);
+		if (!first.allowed || !first.reservation) {
+			throw new Error('expected fresh monthly epoch reservation');
+		}
+		await releaseDailyCostReservation(env, first.reservation);
+
+		const baseline = await env.DB.prepare(`
+			SELECT daily_cost_usd, cost_day FROM usage
+			WHERE tier = 'monthly_cost_baseline_v1' AND user_id = ?
+		`).bind(deviceId).first<{ daily_cost_usd: number; cost_day: string }>();
+		expect(baseline).toEqual({ daily_cost_usd: historicalSpend, cost_day: month });
+
+		await env.DB.prepare('UPDATE usage SET daily_cost_usd = ? WHERE device_id = ?')
+			.bind(historicalSpend + monthlyCap, monthlyCostKey(deviceId)).run();
+		const atCap = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+		);
+		expect(atCap.allowed).toBe(false);
+		if (!atCap.allowed) {
+			expect(await atCap.response.text()).toContain('monthly_cost_limit_exceeded');
+		}
+
+		const preserved = await env.DB.prepare(`
+			SELECT daily_cost_usd FROM usage WHERE device_id = ?
+		`).bind(monthlyCostKey(deviceId)).first<{ daily_cost_usd: number }>();
+		expect(preserved?.daily_cost_usd).toBe(historicalSpend + monthlyCap);
+
+		env.PRIVATE_COST_CAP_EPOCH = 'monthly-incident-v3';
+		const nextEpoch = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+		);
+		expect(nextEpoch.allowed).toBe(true);
+		if (nextEpoch.allowed && nextEpoch.reservation) {
+			await releaseDailyCostReservation(env, nextEpoch.reservation);
+		}
+	});
 });

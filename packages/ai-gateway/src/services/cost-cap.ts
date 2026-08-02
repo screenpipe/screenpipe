@@ -28,6 +28,7 @@ import { getHostedAiPlan } from './hosted-ai-policy';
 import { loadHostedAiReservationControls } from './hosted-ai-reservation-controls';
 
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
+const MONTHLY_COST_BASELINE_TIER = 'monthly_cost_baseline_v1';
 const COST_RESERVATION_TIER_PREFIX = 'daily_cost_reservation_v3';
 
 export type DailyCostHold = {
@@ -112,6 +113,54 @@ export async function getDailyUserCostForCapOrThrow(
 		baselineKey, deviceId, day, COST_BASELINE_TIER, day, currentCost,
 	).first<{ baseline: number }>();
 	if (!baselineRow) throw new Error('daily cost baseline unavailable');
+
+	return Math.max(0, currentCost - Number(baselineRow.baseline || 0));
+}
+
+/** Return monthly spend incurred after the configured incident epoch. */
+async function getMonthlyUserCostForCapOrThrow(
+	env: Env,
+	deviceId: string,
+	now: Date = new Date(),
+): Promise<number> {
+	const month = utcMonth(now);
+	const currentCost = await getCostAccumulatorOrThrow(
+		env,
+		monthlyCostKey(deviceId),
+		month,
+	);
+	const epoch = configuredCostCapEpoch(env);
+	if (!epoch) return currentCost;
+
+	const baselineKey = `monthly-cost:baseline:v1:${await sha256Hex(`${epoch}:${deviceId}`)}`;
+	const baselineRow = await env.DB.prepare(`
+		INSERT INTO usage
+			(device_id, user_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+		VALUES (?, ?, 0, ?, ?, ?, ?)
+		ON CONFLICT(device_id) DO UPDATE SET
+			user_id = excluded.user_id,
+			daily_count = 0,
+			last_reset = excluded.last_reset,
+			tier = excluded.tier,
+			daily_cost_usd = CASE
+				WHEN usage.cost_day = excluded.cost_day THEN usage.daily_cost_usd
+				ELSE excluded.daily_cost_usd
+			END,
+			updated_at = CASE
+				WHEN usage.cost_day = excluded.cost_day THEN usage.updated_at
+				ELSE CURRENT_TIMESTAMP
+			END,
+			cost_day = excluded.cost_day
+		RETURNING daily_cost_usd AS baseline
+	`).bind(
+		baselineKey,
+		deviceId,
+		month,
+		MONTHLY_COST_BASELINE_TIER,
+		month,
+		currentCost,
+	).first<{ baseline: number }>();
+	if (!baselineRow) throw new Error('monthly cost baseline unavailable');
 
 	return Math.max(0, currentCost - Number(baselineRow.baseline || 0));
 }
@@ -269,8 +318,11 @@ export async function reserveDailyCostCap(
 
 	try {
 		const reservationControls = loadHostedAiReservationControls(env);
-		// Establish and read the immutable incident-epoch baseline before admission.
+		// Establish immutable incident-epoch baselines before admission.
 		await getDailyUserCostForCapOrThrow(env, deviceId, now);
+		if (!hostedAiTrial) {
+			await getMonthlyUserCostForCapOrThrow(env, deviceId, now);
+		}
 
 		const day = utcDay(now);
 		const month = utcMonth(now);
@@ -287,6 +339,9 @@ export async function reserveDailyCostCap(
 		const baselineKey = baselineEpoch
 			? `daily-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
 			: '__no_daily_cost_baseline__';
+		const monthlyBaselineKey = baselineEpoch && !hostedAiTrial
+			? `monthly-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
+			: '__no_monthly_cost_baseline__';
 		// Non-Business Auto is constrained to the efficient waterfall. Reserving it
 		// against Sol would reject legitimate requests before the provider runs.
 		const reservationModel = model === 'auto' && getHostedAiPlan(accountPlan) !== 'business'
@@ -343,10 +398,16 @@ export async function reserveDailyCostCap(
 				+ ?
 			) <= ?
 			AND (
-				COALESCE((
-					SELECT CASE WHEN cost_day = ? THEN daily_cost_usd ELSE 0 END
-					FROM usage WHERE device_id = ?
-				), 0) * 1000000
+				MAX(0, (
+					COALESCE((
+						SELECT CASE WHEN cost_day = ? THEN daily_cost_usd ELSE 0 END
+						FROM usage WHERE device_id = ?
+					), 0)
+					- COALESCE((
+						SELECT CASE WHEN cost_day = ? THEN daily_cost_usd ELSE 0 END
+						FROM usage WHERE device_id = ?
+					), 0)
+				) * 1000000)
 				+ COALESCE((
 					SELECT SUM(daily_count) FROM usage
 					WHERE user_id = ? AND tier = ? AND last_reset > ?
@@ -409,6 +470,8 @@ export async function reserveDailyCostCap(
 			dailyCapMicroUsd,
 			monthPeriod,
 			monthKey,
+			monthPeriod,
+			monthlyBaselineKey,
 			deviceId,
 			holdTier,
 			nowIso,
@@ -460,7 +523,9 @@ export async function reserveDailyCostCap(
 
 		const [dailyCost, monthlyCost, globalDailyCost, globalHourlyCost, accountHolds, globalHolds] = await Promise.all([
 			getDailyUserCostForCapOrThrow(env, deviceId, now),
-			getCostAccumulatorOrThrow(env, monthKey, monthPeriod),
+			hostedAiTrial
+				? getCostAccumulatorOrThrow(env, monthKey, monthPeriod)
+				: getMonthlyUserCostForCapOrThrow(env, deviceId, now),
 			getCostAccumulatorOrThrow(env, GLOBAL_DAILY_COST_KEY, day),
 			getCostAccumulatorOrThrow(env, GLOBAL_HOURLY_COST_KEY, hour),
 			env.DB.prepare(`
