@@ -50,7 +50,10 @@ async fn secret_store_over_injected_pool_can_round_trip_on_file_backed_db() {
         .await
         .expect("set secret through the injected pool");
 
-    let loaded = store.get("mcp-oauth-pending:test").await.expect("get secret");
+    let loaded = store
+        .get("mcp-oauth-pending:test")
+        .await
+        .expect("get secret");
     assert_eq!(
         loaded.as_deref(),
         Some(&b"pending-state"[..]),
