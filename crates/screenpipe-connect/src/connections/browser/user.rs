@@ -79,4 +79,37 @@ impl Browser for UserBrowser {
     ) -> Result<EvalResult, EvalError> {
         self.bridge.eval(code, url, timeout).await
     }
+
+    /// Prefer the extension's dedicated background work tab over the default
+    /// `location.href` eval, which hijacked whatever tab the user was looking
+    /// at — and followed them across windows as focus changed (issue #5510).
+    /// The work tab is created unfocused and never activated, so automation
+    /// runs quietly while the user keeps using their browser.
+    async fn navigate(&self, url: &str) -> Result<(), EvalError> {
+        if self.bridge.has_capability("navigate").await {
+            let result = self.bridge.navigate(url, Duration::from_secs(10)).await?;
+            if result.ok {
+                return Ok(());
+            }
+            return Err(EvalError::SendFailed(
+                result
+                    .error
+                    .unwrap_or_else(|| "extension rejected navigate".to_string()),
+            ));
+        }
+
+        // Extensions that predate the `navigate` capability only understand
+        // eval frames — keep the old active-tab behavior for them rather than
+        // sending an action they'd silently drop (a guaranteed timeout).
+        let escaped = serde_json::to_string(url)
+            .map_err(|e| EvalError::SendFailed(format!("encode url: {e}")))?;
+        self.bridge
+            .eval(
+                &format!("location.href = {escaped}"),
+                None,
+                Duration::from_secs(5),
+            )
+            .await
+            .map(|_| ())
+    }
 }

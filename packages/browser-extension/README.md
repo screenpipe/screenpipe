@@ -9,6 +9,16 @@ Chrome/Chromium extension that connects your browser to Screenpipe, enabling pip
 3. Extension executes the code in the matching tab using `chrome.scripting.executeScript`
 4. Results flow back through the same path
 
+### The work tab
+
+Server-driven navigation happens in a single dedicated **work tab** that the
+extension creates in the background (`active: false`) and never focuses.
+Follow-up evals stay pinned to that tab, so automation keeps running quietly
+while you use any Chrome window — it never takes over the tab you're looking
+at. Closing the work tab simply stops the session; the next navigation opens a
+fresh one. Evals that arrive when no work tab exists (e.g. "summarize this
+page") still target your active tab, matching the old behavior.
+
 ## Development
 
 ```bash

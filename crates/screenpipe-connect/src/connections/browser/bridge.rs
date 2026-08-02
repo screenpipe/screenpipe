@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{oneshot, Mutex, RwLock};
@@ -48,6 +48,16 @@ struct WsCookieRequest<'a> {
     id: &'a str,
     action: &'static str,
     host: &'a str,
+}
+
+/// Outgoing navigate frame — the extension opens `url` in its dedicated
+/// background work tab instead of hijacking the user's active tab. Only sent
+/// to extensions that advertised the `navigate` capability in their hello.
+#[derive(Debug, Serialize)]
+struct WsNavigateRequest<'a> {
+    id: &'a str,
+    action: &'static str,
+    url: &'a str,
 }
 
 /// Why an eval call returned without a useful answer.
@@ -90,6 +100,11 @@ pub struct BrowserBridge {
     transport: RwLock<Option<Arc<dyn ExtensionTransport>>>,
     /// Pending eval requests keyed by request ID.
     pending: Mutex<HashMap<String, oneshot::Sender<EvalResult>>>,
+    /// Wire features the connected extension advertised in its hello frame
+    /// (e.g. "navigate"). Reset on every attach — until the new session's
+    /// hello arrives we assume the lowest common denominator, so old
+    /// extensions are never sent frames they'd silently drop.
+    capabilities: RwLock<HashSet<String>>,
 }
 
 impl BrowserBridge {
@@ -97,6 +112,7 @@ impl BrowserBridge {
         Arc::new(Self {
             transport: RwLock::new(None),
             pending: Mutex::new(HashMap::new()),
+            capabilities: RwLock::new(HashSet::new()),
         })
     }
 
@@ -111,8 +127,22 @@ impl BrowserBridge {
         &self,
         transport: Arc<dyn ExtensionTransport>,
     ) -> Option<Arc<dyn ExtensionTransport>> {
+        // Capabilities belong to a session, not the bridge — the replacing
+        // extension re-advertises its own in the hello that follows.
+        self.capabilities.write().await.clear();
         let mut slot = self.transport.write().await;
         (*slot).replace(transport)
+    }
+
+    /// Record the capability set from an extension hello frame.
+    pub async fn set_capabilities(&self, caps: impl IntoIterator<Item = String>) {
+        let mut slot = self.capabilities.write().await;
+        slot.clear();
+        slot.extend(caps);
+    }
+
+    pub async fn has_capability(&self, cap: &str) -> bool {
+        self.capabilities.read().await.contains(cap)
     }
 
     /// Detach the given transport — but only if it's still the registered one.
@@ -150,12 +180,13 @@ impl BrowserBridge {
         }
     }
 
-    /// High-level: register, send, await with timeout. The bridge owns the
-    /// whole correlation so callers don't have to think about IDs or maps.
-    pub async fn eval(
+    /// Shared request/response round-trip: register the pending entry, send
+    /// the frame (built by `frame_for` from the generated request id), await
+    /// the reply with timeout. The bridge owns the whole correlation so
+    /// callers don't have to think about IDs or maps.
+    async fn round_trip(
         &self,
-        code: &str,
-        url: Option<&str>,
+        frame_for: impl FnOnce(&str) -> String,
         timeout: Duration,
     ) -> Result<EvalResult, EvalError> {
         // Snapshot the transport — if we lose it after this point, the send
@@ -169,13 +200,7 @@ impl BrowserBridge {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id.clone(), tx);
 
-        let frame = serde_json::to_string(&WsEvalRequest {
-            id: &id,
-            action: "eval",
-            code,
-            url,
-        })
-        .expect("serialize eval request");
+        let frame = frame_for(&id);
 
         if let Err(e) = transport.send_text(frame).await {
             self.pending.lock().await.remove(&id);
@@ -194,41 +219,63 @@ impl BrowserBridge {
         }
     }
 
+    pub async fn eval(
+        &self,
+        code: &str,
+        url: Option<&str>,
+        timeout: Duration,
+    ) -> Result<EvalResult, EvalError> {
+        self.round_trip(
+            |id| {
+                serde_json::to_string(&WsEvalRequest {
+                    id,
+                    action: "eval",
+                    code,
+                    url,
+                })
+                .expect("serialize eval request")
+            },
+            timeout,
+        )
+        .await
+    }
+
     pub async fn get_cookies(
         &self,
         host: &str,
         timeout: Duration,
     ) -> Result<EvalResult, EvalError> {
-        let transport = {
-            let guard = self.transport.read().await;
-            guard.as_ref().cloned().ok_or(EvalError::NotConnected)?
-        };
+        self.round_trip(
+            |id| {
+                serde_json::to_string(&WsCookieRequest {
+                    id,
+                    action: "get_cookies",
+                    host,
+                })
+                .expect("serialize cookie request")
+            },
+            timeout,
+        )
+        .await
+    }
 
-        let id = uuid::Uuid::new_v4().to_string();
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id.clone(), tx);
-
-        let frame = serde_json::to_string(&WsCookieRequest {
-            id: &id,
-            action: "get_cookies",
-            host,
-        })
-        .expect("serialize cookie request");
-
-        if let Err(e) = transport.send_text(frame).await {
-            self.pending.lock().await.remove(&id);
-            self.detach_transport(&transport).await;
-            return Err(EvalError::SendFailed(e));
-        }
-
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(_)) => Err(EvalError::Disconnected),
-            Err(_) => {
-                self.pending.lock().await.remove(&id);
-                Err(EvalError::Timeout(timeout.as_secs()))
-            }
-        }
+    /// Ask the extension to open `url` in its dedicated background work tab.
+    /// Callers must gate on `has_capability("navigate")` — extensions that
+    /// predate the capability silently drop unknown actions, which would turn
+    /// this call into a guaranteed timeout.
+    pub async fn navigate(&self, url: &str, timeout: Duration) -> Result<EvalResult, EvalError> {
+        self.round_trip(
+            |id| {
+                serde_json::to_string(&WsNavigateRequest {
+                    id,
+                    action: "navigate",
+                    url,
+                })
+                .expect("serialize navigate request")
+            },
+            timeout,
+        )
+        .await
     }
 }
 
@@ -367,6 +414,58 @@ mod tests {
         let result = eval_fut.await.unwrap().unwrap();
         assert!(!result.ok);
         assert_eq!(result.error.as_deref(), Some("test cancel"));
+    }
+
+    #[tokio::test]
+    async fn navigate_round_trip_sends_navigate_frame() {
+        let bridge = BrowserBridge::new();
+        let transport = MockTransport::new();
+        bridge.attach_transport(transport.clone()).await;
+
+        let bridge_clone = bridge.clone();
+        let nav_fut = tokio::spawn(async move {
+            bridge_clone
+                .navigate("https://example.com", Duration::from_secs(2))
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let sent = transport.sent.lock().await.clone();
+        assert_eq!(sent.len(), 1);
+        let frame: serde_json::Value = serde_json::from_str(&sent[0]).unwrap();
+        let id = frame["id"].as_str().unwrap().to_string();
+        assert_eq!(frame["action"], "navigate");
+        assert_eq!(frame["url"], "https://example.com");
+
+        bridge
+            .dispatch_response(
+                &id,
+                EvalResult {
+                    ok: true,
+                    result: None,
+                    error: None,
+                },
+            )
+            .await;
+
+        let result = nav_fut.await.unwrap().unwrap();
+        assert!(result.ok);
+    }
+
+    #[tokio::test]
+    async fn capabilities_reset_on_attach() {
+        let bridge = BrowserBridge::new();
+        assert!(!bridge.has_capability("navigate").await);
+
+        bridge.attach_transport(MockTransport::new()).await;
+        bridge.set_capabilities(["navigate".to_string()]).await;
+        assert!(bridge.has_capability("navigate").await);
+        assert!(!bridge.has_capability("teleport").await);
+
+        // A reconnect (possibly an older extension) must not inherit the
+        // previous session's capabilities.
+        bridge.attach_transport(MockTransport::new()).await;
+        assert!(!bridge.has_capability("navigate").await);
     }
 
     #[tokio::test]

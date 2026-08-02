@@ -76,6 +76,19 @@ struct WsEvalResponse {
     error: Option<String>,
 }
 
+/// The extension's hello frame — sent once per connection right after the
+/// socket opens. `capabilities` gates newer server→extension actions (e.g.
+/// `navigate`); extensions that predate the field parse as an empty set.
+#[derive(Debug, Deserialize)]
+struct WsHelloFrame {
+    #[serde(rename = "type")]
+    kind: String,
+    browser: Option<String>,
+    version: Option<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct EvalResponseBody {
     pub success: bool,
@@ -318,8 +331,18 @@ async fn handle_extension_socket(socket: WebSocket, bridge: Arc<InnerBridge>) {
                     )
                     .await;
             }
-            // Other messages (hello, pong) — log and continue
+            // Other messages (hello, pong) — record capabilities, log, continue
             _ => {
+                if let Ok(hello) = serde_json::from_str::<WsHelloFrame>(&text) {
+                    if hello.kind == "hello" {
+                        info!(
+                            "browser extension hello: browser={:?} version={:?} capabilities={:?}",
+                            hello.browser, hello.version, hello.capabilities
+                        );
+                        bridge.set_capabilities(hello.capabilities).await;
+                        continue;
+                    }
+                }
                 let preview: String = text.chars().take(200).collect();
                 debug!("browser extension msg: {preview}");
             }

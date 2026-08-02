@@ -43,6 +43,7 @@ var lastAlertAt = 0;
 var openedThisAttempt = false;
 var lastFrameAt = 0;
 var heartbeatTimer = null;
+var CAPABILITIES = ["navigate"];
 async function getConfig() {
   const s = await chrome.storage.local.get([STORAGE_KEY_TOKEN, STORAGE_KEY_BASE_URL]);
   const token = s[STORAGE_KEY_TOKEN]?.trim() || null;
@@ -100,7 +101,8 @@ async function connect() {
       type: "hello",
       from: "extension",
       browser: detectBrowser(),
-      version: chrome.runtime.getManifest().version
+      version: chrome.runtime.getManifest().version,
+      capabilities: CAPABILITIES
     };
     send(hello);
   };
@@ -138,6 +140,16 @@ async function connect() {
         const tabId = await findTab(url2);
         const result = await evalInTab(tabId, code);
         send({ id, ok: true, result });
+      } catch (err) {
+        send({ id, ok: false, error: err?.message ?? String(err) });
+      }
+      return;
+    }
+    if (msg.action === "navigate") {
+      const { id, url: url2 } = msg;
+      try {
+        const tab = await openInWorkTab(url2);
+        send({ id, ok: true, result: { tabId: tab.id ?? null, url: url2 } });
       } catch (err) {
         send({ id, ok: false, error: err?.message ?? String(err) });
       }
@@ -213,12 +225,66 @@ function isRestrictedUrl(url) {
     return true;
   return url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url.startsWith("edge://") || url.startsWith("about:") || url.includes("chromewebstore.google.com");
 }
+var SESSION_KEY_WORK_TAB = "screenpipe_work_tab_id";
+var workTabId = null;
+async function getWorkTabId() {
+  if (workTabId != null)
+    return workTabId;
+  try {
+    const s = await chrome.storage.session.get(SESSION_KEY_WORK_TAB);
+    const id = s[SESSION_KEY_WORK_TAB];
+    if (typeof id === "number")
+      workTabId = id;
+  } catch {}
+  return workTabId;
+}
+async function setWorkTabId(id) {
+  workTabId = id;
+  try {
+    if (id == null) {
+      await chrome.storage.session.remove(SESSION_KEY_WORK_TAB);
+    } else {
+      await chrome.storage.session.set({ [SESSION_KEY_WORK_TAB]: id });
+    }
+  } catch {}
+}
+async function getLiveWorkTab() {
+  const id = await getWorkTabId();
+  if (id == null)
+    return null;
+  try {
+    return await chrome.tabs.get(id);
+  } catch {
+    await setWorkTabId(null);
+    return null;
+  }
+}
+async function openInWorkTab(url) {
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("navigate only accepts http(s) urls");
+  }
+  const existing = await getLiveWorkTab();
+  if (existing?.id != null) {
+    return await chrome.tabs.update(existing.id, { url, active: false });
+  }
+  const tab = await chrome.tabs.create({ url, active: false });
+  if (tab.id != null)
+    await setWorkTabId(tab.id);
+  return tab;
+}
 async function findTab(urlPattern) {
+  const work = await getLiveWorkTab();
   if (urlPattern) {
+    if (work?.id != null && work.url?.includes(urlPattern) && !isRestrictedUrl(work.url)) {
+      return work.id;
+    }
     const tabs = await chrome.tabs.query({});
     const match = tabs.find((t) => t.url?.includes(urlPattern) && !isRestrictedUrl(t.url));
     if (match?.id != null)
       return match.id;
+  }
+  if (work?.id != null && !isRestrictedUrl(work.url)) {
+    return work.id;
   }
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (active?.id != null && !isRestrictedUrl(active.url)) {
@@ -361,5 +427,11 @@ chrome.tabs.onActivated.addListener(() => void connect());
 chrome.tabs.onUpdated.addListener((_tabId, info) => {
   if (info.status === "complete")
     connect();
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void (async () => {
+    if (tabId === await getWorkTabId())
+      await setWorkTabId(null);
+  })();
 });
 connect();
