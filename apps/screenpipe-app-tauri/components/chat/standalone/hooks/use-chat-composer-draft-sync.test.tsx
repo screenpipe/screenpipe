@@ -25,6 +25,7 @@ function seedSession(id: string) {
 
 describe("useChatComposerDraftSync", () => {
   afterEach(() => {
+    vi.useRealTimers();
     useChatStore.setState({
       sessions: {},
       currentId: null,
@@ -71,7 +72,14 @@ describe("useChatComposerDraftSync", () => {
     await waitFor(() => expect(setPrefillContext).toHaveBeenCalledWith(null));
     expect(setPrefillFrameId).toHaveBeenCalledWith(null);
     expect(setPrefillSource).toHaveBeenCalledWith("search");
-    expect(useChatStore.getState().sessions["old-chat"].composerDraft).toBeUndefined();
+    expect(
+      useChatStore.getState().sessions["old-chat"].composerDraft,
+    ).toBeUndefined();
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(
+      useChatStore.getState().sessions["new-chat"].composerDraft,
+    ).toBeUndefined();
   });
 
   it("keeps regular chat prefills scoped to the existing draft behavior", async () => {
