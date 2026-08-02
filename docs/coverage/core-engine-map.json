@@ -411,6 +411,7 @@
         "tests/close_severs_connections_test.rs",
         "tests/memory_pressure_test.rs",
         "tests/multi_pool_wal_parity_test.rs",
+        "tests/secret_store_pool_writability_test.rs",
         "tests/sqlite_runtime_version.rs",
         "tests/wal_chaos_e2e_test.rs"
       ],
@@ -420,7 +421,7 @@
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
-      "notes": "SQLite hard-fault classification, failpoint VFS injection, query cancellation surviving dropped futures, close-severs-connections wedge regression, multi-pool WAL parity/corruption coverage, runtime version pinning, and manual WAL chaos plus memory-pressure probes (several ignored by default)."
+      "notes": "SQLite hard-fault classification, failpoint VFS injection, query cancellation surviving dropped futures, close-severs-connections wedge regression, multi-pool WAL parity/corruption coverage, read-pool/write-pool split writability on file-backed databases, runtime version pinning, and manual WAL chaos plus memory-pressure probes (several ignored by default)."
     },
     {
       "id": "db-audio-meetings-speakers",
