@@ -101,6 +101,13 @@ function responseError(body: unknown, fallback: string): string {
   return fallback;
 }
 
+function slackChannelErrorMessage(error: string): string {
+  if (error.toLowerCase().includes("missing_scope")) {
+    return 'Channels need Slack "Send + read" permission. You can still send to your own Slack messages.';
+  }
+  return `${error} You can still send to your own Slack messages.`;
+}
+
 function SlackMark() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
@@ -589,7 +596,7 @@ export function ConnectedShareDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[calc(100vh-2rem)] max-w-2xl gap-5 overflow-y-auto rounded-none"
+        className="max-h-[calc(100vh-2rem)] max-w-2xl gap-5 overflow-y-auto rounded-none [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/40 hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/60"
         data-testid="connected-share-dialog"
       >
         <DialogHeader>
@@ -895,23 +902,20 @@ export function ConnectedShareDialog({
                 </p>
               )}
               {slackChannelsError && (
-                <div
-                  className="flex items-start justify-between gap-2 text-[10px] text-muted-foreground"
+                <p
+                  className="text-[10px] text-muted-foreground"
                   role="status"
                   data-testid="connected-share-slack-channels-error"
                 >
-                  <span>
-                    {slackChannelsError} You can still send to your own Slack
-                    messages.
-                  </span>
+                  {slackChannelErrorMessage(slackChannelsError)}{" "}
                   <button
                     type="button"
-                    className="shrink-0 underline"
+                    className="underline underline-offset-2"
                     onClick={() => setSlackRefresh((value) => value + 1)}
                   >
                     retry
                   </button>
-                </div>
+                </p>
               )}
             </div>
           </div>
@@ -1040,7 +1044,7 @@ export function ConnectedShareDialog({
               setReceipt(null);
               setActionError(null);
             }}
-            className="min-h-56 rounded-none font-mono text-xs"
+            className="min-h-56 rounded-none border-border font-mono text-xs focus-visible:border-foreground focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/40 hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/60"
           />
           {destination === "slack" && (
             <p className="text-[11px] text-muted-foreground">
