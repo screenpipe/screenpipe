@@ -33,12 +33,18 @@ describe("pipeConnectionLookupKey", () => {
 });
 
 describe("mcpOauthRedirectUri", () => {
-  it("builds the HTTPS relay callback with an encoded server id", () => {
-    expect(mcpOauthRedirectUri("196e4fda44e233d0")).toBe(
-      "https://screenpi.pe/api/oauth/mcp/196e4fda44e233d0/callback",
+  it("builds the HTTPS relay callback with an encoded server id and app scheme", () => {
+    expect(mcpOauthRedirectUri("196e4fda44e233d0", "screenpipe")).toBe(
+      "https://screenpi.pe/api/oauth/mcp/196e4fda44e233d0/callback?app_scheme=screenpipe",
     );
-    expect(mcpOauthRedirectUri("a/b c")).toBe(
-      "https://screenpi.pe/api/oauth/mcp/a%2Fb%20c/callback",
+    expect(mcpOauthRedirectUri("a/b c", "screenpipe")).toBe(
+      "https://screenpi.pe/api/oauth/mcp/a%2Fb%20c/callback?app_scheme=screenpipe",
+    );
+  });
+
+  it("carries the enterprise scheme so enterprise builds get the hand-off", () => {
+    expect(mcpOauthRedirectUri("linear", "screenpipe-enterprise")).toBe(
+      "https://screenpi.pe/api/oauth/mcp/linear/callback?app_scheme=screenpipe-enterprise",
     );
   });
 });

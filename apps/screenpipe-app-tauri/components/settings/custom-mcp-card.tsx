@@ -30,7 +30,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
-import { mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
+import { appDeepLinkScheme, mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
 import { RegistryBrowser } from "./registry-browser";
 import type { McpHeader, McpServer, McpServerDraft } from "@/lib/mcp-registry";
 
@@ -727,7 +727,7 @@ function ServerEditor({
       const manualClientId = Boolean(initial.oauth?.client_id?.trim());
       const redirectUri = manualClientId
         ? undefined
-        : mcpOauthRedirectUri(targetId);
+        : mcpOauthRedirectUri(targetId, await appDeepLinkScheme());
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
         {

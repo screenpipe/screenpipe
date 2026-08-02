@@ -20,7 +20,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
-import { mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
+import { appDeepLinkScheme, mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import {
   CONNECTION_CATEGORY_BY_ID,
@@ -3310,6 +3310,7 @@ function OAuthMcpPanel({
       // (the server is persisted only when OAuth succeeds).
       const targetId = serverId ?? mcpRandomId();
       const isNew = !serverId;
+      const redirectUri = mcpOauthRedirectUri(targetId, await appDeepLinkScheme());
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
         {
@@ -3322,9 +3323,9 @@ function OAuthMcpPanel({
                   url: mcpUrl,
                   headers: [],
                   enabled: true,
-                  redirect_uri: mcpOauthRedirectUri(targetId),
+                  redirect_uri: redirectUri,
                 }
-              : { redirect_uri: mcpOauthRedirectUri(targetId) }
+              : { redirect_uri: redirectUri }
           ),
         }
       );
