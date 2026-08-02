@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 89
-- Declared test blocks: 250
-- Weighted coverage points: 192.7
+- Mapped specs: 90
+- Declared test blocks: 251
+- Weighted coverage points: 193.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 72 | 223 | 180.2 | 15 | 77 | 91% |
-| macos | 85 | 213 | 163.5 | 17 | 79 | 89% |
-| linux | 62 | 183 | 150.0 | 14 | 72 | 88% |
+| windows | 73 | 224 | 181.2 | 15 | 78 | 91% |
+| macos | 86 | 214 | 164.5 | 17 | 80 | 89% |
+| linux | 63 | 184 | 151.0 | 14 | 73 | 88% |
 
 ## Runtime Results
 
@@ -39,13 +39,13 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 23 specs / 37 tests / 28.1 pts | 30 specs / 50 tests / 33.7 pts | 22 specs / 36 tests / 27.6 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 18 specs / 100 tests / 82.8 pts | 19 specs / 75 tests / 63.8 pts | 14 specs / 71 tests / 62.2 pts |
+| local-api | 19 specs / 101 tests / 83.8 pts | 20 specs / 76 tests / 64.8 pts | 15 specs / 72 tests / 63.2 pts |
 | notifications | 3 specs / 24 tests / 15.3 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts |
 | os-integration | 6 specs / 18 tests / 17.1 pts | 8 specs / 8 tests / 4.7 pts | 1 specs / 1 tests / 1.0 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts |
-| real-ui-e2e | 49 specs / 140 tests / 113.0 pts | 53 specs / 128 tests / 104.1 pts | 45 specs / 118 tests / 99.4 pts |
+| real-ui-e2e | 50 specs / 141 tests / 114.0 pts | 54 specs / 129 tests / 105.1 pts | 46 specs / 119 tests / 100.4 pts |
 | settings | 14 specs / 37 tests / 34.0 pts | 16 specs / 32 tests / 27.7 pts | 13 specs / 29 tests / 26.0 pts |
 | storage-privacy | 8 specs / 37 tests / 28.3 pts | 7 specs / 18 tests / 17.1 pts | 5 specs / 16 tests / 15.1 pts |
 | tauri-command | 13 specs / 22 tests / 15.3 pts | 15 specs / 25 tests / 16.8 pts | 12 specs / 21 tests / 14.3 pts |
@@ -70,7 +70,7 @@ pass/fail/skip counts.
 | Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; meetings-only-audio-lifecycle, audio-fallback) | gap |
 | Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
-| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click) |
+| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, connected-share) | covered (strong; meeting-note-bottom-click, connected-share) |
 | Pipes discover, install, and play | pipes | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) | covered (strong; pipes, pipes-mcp-connections) |
 | Chat window, composer, and streaming state | chat-ai | covered (strong; chat-sidebar-groups, chat-tool-activity) | covered (strong; chat-sidebar-groups, chat-tool-activity) | covered (strong; chat-sidebar-groups, chat-tool-activity) |
 | Tray/search window behavior | window-lifecycle | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) | covered (strong; window-lifecycle, tray-search) |
@@ -137,6 +137,7 @@ pass/fail/skip counts.
 | chat-tool-activity.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-tool-activity, progressive-disclosure | high | strong | mixed | 4 | Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, keep completed tools active while the shared Pi turn is still streaming, and capture screenshots. |
 | chat-window.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, window-lifecycle | high | strong | real-user-flow | 1 | Opens Chat and focuses the composer for typing. |
 | chat-within-session-context-loss.spec.ts | macos | chat-ai | chat, chat-context | medium | conditional | synthetic | 5 | macOS-only within-chat context retention regression. |
+| connected-share.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes, brain-overview, live-views, connections | high | strong | real-user-flow | 1 | Exercises the Send snapshot dialog from meeting notes and Live Views across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage. |
 | db-hard-fault-fail-closed.spec.ts | windows, macos, linux | local-api, tauri-command, real-ui-e2e | database-hard-fault-containment, app-launch | high | strong | mixed | 1 | Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window. |
 | first-run-guide.spec.ts | windows, macos, linux | onboarding, chat-ai, real-ui-e2e | onboarding, chat, first-run-guide | high | strong | real-user-flow | 3 | Replayed first-run guide verifies the composer remains focused and clickable above its scrim, fails open when stacking defeats the lift, and remembers decline across reloads. |
 | focus-server.spec.ts | windows, macos, linux | local-api, window-lifecycle, tauri-command | window-lifecycle, focus-server, deeplink | medium | partial | api | 2 | Focus server opens windows and forwards deeplink args. |

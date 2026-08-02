@@ -955,6 +955,16 @@
       "notes": "Creates the first-open starter dashboard, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
     },
     {
+      "spec": "connected-share.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api"],
+      "features": ["meeting-notes", "brain-overview", "live-views", "connections"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Exercises the Send snapshot dialog from meeting notes and Live Views across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage."
+    },
+    {
       "spec": "live-view-item-actions.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "local-api", "pipes"],
