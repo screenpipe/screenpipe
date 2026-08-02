@@ -20,6 +20,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import {
   CONNECTION_CATEGORY_BY_ID,
@@ -3316,8 +3317,14 @@ function OAuthMcpPanel({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             isNew
-              ? { name, url: mcpUrl, headers: [], enabled: true }
-              : {}
+              ? {
+                  name,
+                  url: mcpUrl,
+                  headers: [],
+                  enabled: true,
+                  redirect_uri: mcpOauthRedirectUri(targetId),
+                }
+              : { redirect_uri: mcpOauthRedirectUri(targetId) }
           ),
         }
       );
@@ -3355,7 +3362,9 @@ function OAuthMcpPanel({
           timerRef.current = setTimeout(poll, 2000);
         } else {
           setWaiting(false);
-          setStatusMsg("Sign-in was not completed");
+          setStatusMsg(
+            "Sign-in was not completed — if your browser blocks http://localhost (e.g. Safari HTTPS-Only mode), click \"Open screenpipe\" on the confirmation page"
+          );
         }
       };
       timerRef.current = setTimeout(poll, 2000);

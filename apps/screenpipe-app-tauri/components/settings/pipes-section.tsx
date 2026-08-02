@@ -45,6 +45,7 @@ import {
   type AvailableConnection,
   fetchAvailablePipeConnections,
   isMcpConnectionKey,
+  pipeConnectionDisplayLabel,
   pipeConnectionInstanceName,
   pipeConnectionLookupKey,
 } from "@/lib/pipe-connections";
@@ -394,7 +395,7 @@ function pipeConnectionDisplayName(
   instanceName: string | null
 ): string {
   if (instanceName) return `${connection?.name || pipeConnectionLookupKey(connectionId)} (${instanceName})`;
-  if (connection) return connection.name;
+  if (connection) return pipeConnectionDisplayLabel(connection);
   if (isMcpConnectionKey(connectionId)) return "deleted MCP server";
   return connectionId;
 }
@@ -434,7 +435,7 @@ function buildPipeConnectionOptions(
 
       return [{
         key: connection.id,
-        label: connection.name,
+        label: pipeConnectionDisplayLabel(connection),
         connectionName: connection.name,
         instanceName: null,
         connected: connection.connected,
@@ -2943,7 +2944,7 @@ export function PipesSection() {
                                   title={isMcpConnectionKey(connId) && !conn ? connId : undefined}
                                   className={cn(
                                     "flex items-center gap-2 border px-3 py-1.5 text-xs font-mono transition-colors duration-150",
-                                    isConnected ? "border-foreground/20" : "border-destructive/50"
+                                    isConnected ? "border-foreground/20" : "border-destructive/50 bg-destructive/10"
                                   )}
                                 >
                                   <span className={cn("w-1.5 h-1.5", isConnected ? "bg-foreground" : "bg-destructive")} />

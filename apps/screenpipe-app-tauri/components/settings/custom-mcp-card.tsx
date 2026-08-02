@@ -30,6 +30,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
 import { RegistryBrowser } from "./registry-browser";
 import type { McpHeader, McpServer, McpServerDraft } from "@/lib/mcp-registry";
 
@@ -721,6 +722,12 @@ function ServerEditor({
       if (!effectiveName || !url.trim()) return;
       const targetId = duplicateServer?.id ?? initial.id;
       if (mode === "edit" && !(await saveConfig())) return;
+      // A manual (non-DCR) client_id is registered against the engine's
+      // localhost callback, so only DCR flows go through the HTTPS relay.
+      const manualClientId = Boolean(initial.oauth?.client_id?.trim());
+      const redirectUri = manualClientId
+        ? undefined
+        : mcpOauthRedirectUri(targetId);
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
         {
@@ -733,8 +740,9 @@ function ServerEditor({
                   url: url.trim(),
                   headers: headersForRequest(),
                   enabled,
+                  redirect_uri: redirectUri,
                 }
-              : {}
+              : { redirect_uri: redirectUri }
           ),
         }
       );
@@ -775,7 +783,9 @@ function ServerEditor({
           oauthTimerRef.current = setTimeout(poll, 2000);
         } else {
           setOauthWaiting(false);
-          setOauthMessage("Sign-in was not completed");
+          setOauthMessage(
+            "Sign-in was not completed — if your browser blocks http://localhost (e.g. Safari HTTPS-Only mode), click \"Open screenpipe\" on the confirmation page"
+          );
         }
       };
       oauthTimerRef.current = setTimeout(poll, 2000);

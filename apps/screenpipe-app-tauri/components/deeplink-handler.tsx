@@ -21,6 +21,8 @@ import { timelineTimestampFromDeepLink } from "@/lib/timeline-deeplink";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
 import { rememberSelectedLiveViewDashboard } from "@/lib/live-views/onboarding-activation";
 import { isBusinessSubscriptionPurchaseDeepLink } from "@/lib/utils/purchase-deep-link";
+import { localFetch } from "@/lib/api";
+import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import posthog from "posthog-js";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
@@ -196,6 +198,40 @@ export function DeeplinkHandler() {
             : error || "something went wrong",
           variant: success ? undefined : "destructive",
         });
+      }
+
+      // Handle OAuth callbacks relayed from the HTTPS page on screenpi.pe.
+      // Safari's HTTPS-Only mode blocks plain-http localhost navigations, so
+      // the relay finishes on https and hands the provider params back here:
+      //   screenpipe://oauth/connections/callback?code=...&state=...
+      //   screenpipe://oauth/mcp/<serverId>/callback?code=...&state=...
+      // We forward them to the same engine endpoints the browser would have
+      // hit. A second delivery (relay fetch + deep link) is a harmless no-op
+      // because the pending state is consumed on first use.
+      if (parsedUrl.host === "oauth") {
+        const oauthPath = parsedUrl.pathname?.replace(/^\/+/, "") ?? "";
+        const search = parsedUrl.searchParams.toString();
+        const query = search ? `?${search}` : "";
+        try {
+          if (oauthPath === "connections/callback") {
+            await localFetch(`/connections/oauth/callback${query}`);
+            await foregroundAfterOAuth();
+          } else {
+            const mcpMatch = oauthPath.match(/^mcp\/([^/]+)\/callback$/);
+            if (mcpMatch) {
+              // mcpMatch[1] is already a percent-encoded path segment.
+              await localFetch(`/mcp-servers/${mcpMatch[1]}/oauth/callback${query}`);
+              await foregroundAfterOAuth();
+            }
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          toast({
+            title: "sign-in hand-off failed",
+            description: msg || "couldn't reach the local screenpipe engine",
+            variant: "destructive",
+          });
+        }
       }
 
       if (url.includes("settings") || url.includes("home")) {

@@ -27,6 +27,13 @@ export interface McpServer {
   command?: string;
   args?: string[];
   header_names: string[];
+  /** Public OAuth config; a non-empty client_id means a manual (non-DCR) client. */
+  oauth?: {
+    auth_url?: string;
+    token_url?: string;
+    client_id?: string;
+    scopes?: string[];
+  };
   enabled: boolean;
   created_at: number;
 }

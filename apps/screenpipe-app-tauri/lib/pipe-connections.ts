@@ -41,6 +41,16 @@ export function pipeConnectionLookupKey(connectionId: string): string {
   return connectionId.includes(":") ? connectionId.split(":")[0] : connectionId;
 }
 
+// Built-in connections and MCP servers can share a display name (e.g. the
+// Notion integration and the Notion MCP server) but live in disjoint
+// namespaces — an MCP server never satisfies a pipe's `notion` requirement.
+// Suffix MCP entries so the two are distinguishable in pickers and chips.
+export function pipeConnectionDisplayLabel(
+  connection: Pick<AvailableConnection, "name" | "kind">
+): string {
+  return connection.kind === "mcp" ? `${connection.name} (MCP)` : connection.name;
+}
+
 export function pipeConnectionInstanceName(connectionId: string): string | null {
   if (isMcpConnectionKey(connectionId)) return null;
   return connectionId.includes(":")
