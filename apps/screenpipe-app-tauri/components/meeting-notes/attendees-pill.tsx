@@ -218,7 +218,6 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
             spellCheck={false}
             data-1p-ignore
             data-lpignore
-            // eslint-disable-next-line jsx-a11y/no-autofocus
             autoFocus
             onChange={(e) => {
               const v = e.target.value;

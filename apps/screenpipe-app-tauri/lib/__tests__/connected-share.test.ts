@@ -109,7 +109,10 @@ describe("connected share artifacts", () => {
     const prompt = buildConnectedShareChatPrompt("notion");
 
     expect(prompt).toContain("Do not create or send anything yet");
-    expect(prompt).toContain("ask me to confirm the parent page or database");
+    expect(prompt).toContain(
+      "If the parent page or database is missing, ask for it first",
+    );
+    expect(prompt).toContain("ask for approval exactly once");
     expect(prompt).toContain("snapshot attached as context");
   });
 });

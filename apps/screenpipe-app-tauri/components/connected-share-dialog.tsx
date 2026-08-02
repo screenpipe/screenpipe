@@ -221,14 +221,16 @@ export function ConnectedShareDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    let didTimeout = false;
     const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, 5000);
     setConnectionsLoading(true);
     setConnectionsError(null);
     void localFetch("/connections", {
-      signal: AbortSignal.any([
-        controller.signal,
-        AbortSignal.timeout(5000),
-      ]),
+      signal: controller.signal,
     })
       .then(async (response) => {
         const body = await response.json();
@@ -249,7 +251,7 @@ export function ConnectedShareDialog({
         setAvailability(EMPTY_AVAILABILITY);
         setDestination("copy");
         setConnectionsError(
-          error instanceof Error && error.name === "TimeoutError"
+          didTimeout
             ? "Connection check timed out."
             : error instanceof Error
               ? error.message
@@ -261,6 +263,7 @@ export function ConnectedShareDialog({
       });
     return () => {
       cancelled = true;
+      clearTimeout(timeoutId);
       controller.abort();
     };
   }, [connectionsRefresh, open]);
@@ -985,7 +988,12 @@ export function ConnectedShareDialog({
 
         {artifact.sections.length > 1 && (
           <div className="space-y-2">
-            <p className="text-xs font-medium">include blocks</p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium">include blocks</p>
+              <span className="text-[10px] tabular-nums text-muted-foreground">
+                {selectedSectionIds.length} / {artifact.sections.length}
+              </span>
+            </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {artifact.sections.map((section) => (
                 <label

@@ -82,6 +82,9 @@ describe("ConnectedShareDialog", () => {
       <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
     );
 
+    fireEvent.click(
+      await screen.findByTestId("connected-share-destination-slack"),
+    );
     const send = await screen.findByRole("button", {
       name: "send to my Slack messages",
     });
@@ -154,6 +157,9 @@ describe("ConnectedShareDialog", () => {
       <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
     );
 
+    fireEvent.click(
+      await screen.findByTestId("connected-share-destination-linear"),
+    );
     const create = await screen.findByRole("button", {
       name: "create issue in ENG",
     });
@@ -326,6 +332,9 @@ describe("ConnectedShareDialog", () => {
       <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
     );
 
+    fireEvent.click(
+      await screen.findByTestId("connected-share-destination-slack"),
+    );
     expect(
       await screen.findByTestId("connected-share-slack-channels-error"),
     ).toHaveTextContent("You can still send to your own Slack messages");
@@ -356,6 +365,9 @@ describe("ConnectedShareDialog", () => {
       <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
     );
 
+    fireEvent.click(
+      await screen.findByTestId("connected-share-destination-slack"),
+    );
     fireEvent.click(
       await screen.findByRole("button", {
         name: "send to my Slack messages",
