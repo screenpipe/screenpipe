@@ -153,21 +153,36 @@ const MAX_RATE_LIMIT_RETRIES: usize = 3;
 const RATE_LIMIT_DEFAULT_WAIT_SECS: u64 = 10;
 /// Cap so an oversized `reset_in` can't stall a pipe run indefinitely.
 const RATE_LIMIT_MAX_WAIT_SECS: u64 = 60;
+/// Total time budget for retrying `hosted_ai_capacity_reserved` contention,
+/// matching the gateway's reservation TTL. Unlike a provider rate limit this
+/// error means a sibling chat/pipe is briefly holding the shared hosted-AI
+/// slot, not that anything is wrong, so it gets a time budget instead of
+/// `MAX_RATE_LIMIT_RETRIES`.
+const CAPACITY_RESERVED_MAX_WAIT_SECS: u64 = 600;
+
+/// Parse a `"field": <digits>` JSON number out of a pi error payload.
+fn parse_json_number_field(text: &str, field: &str) -> Option<u64> {
+    let needle = format!("\"{field}\"");
+    let idx = text.find(&needle)?;
+    let rest = &text[idx + needle.len()..];
+    let rest = rest.trim_start_matches(|c: char| c == ':' || c.is_whitespace());
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse::<u64>().ok()
+}
 
 /// Parse the rate-limit retry hint (in seconds) from a pi error payload.
 ///
-/// The cloud gateway returns a 429 body containing `"reset_in":<secs>` plus a
-/// human-readable "Please wait N seconds". We prefer the structured `reset_in`
-/// field and fall back to the prose. Returns `None` when no hint is present.
+/// The cloud gateway returns a 429 body containing `"reset_in":<secs>` for
+/// provider rate limits, or `"retry_after_seconds":<secs>` for
+/// `hosted_ai_capacity_reserved` contention, plus a human-readable "Please
+/// wait N seconds". We prefer the structured fields and fall back to the
+/// prose. Returns `None` when no hint is present.
 fn parse_rate_limit_reset_secs(text: &str) -> Option<u64> {
-    // Prefer the structured "reset_in" field.
-    if let Some(idx) = text.find("\"reset_in\"") {
-        let rest = &text[idx + "\"reset_in\"".len()..];
-        let rest = rest.trim_start_matches(|c: char| c == ':' || c.is_whitespace());
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(secs) = digits.parse::<u64>() {
-            return Some(secs);
-        }
+    if let Some(secs) = parse_json_number_field(text, "reset_in") {
+        return Some(secs);
+    }
+    if let Some(secs) = parse_json_number_field(text, "retry_after_seconds") {
+        return Some(secs);
     }
     // Fall back to the human-readable "wait N seconds".
     let lower = text.to_lowercase();
@@ -198,6 +213,129 @@ fn is_rate_limit_error(text: &str) -> bool {
         || lower.contains("requests per minute")
         || lower.contains("too many requests")
         || lower.contains("\"reset_in\"")
+        || lower.contains("hosted_ai_capacity_reserved")
+}
+
+/// Whether a pi failure is hosted-AI capacity contention
+/// (`hosted_ai_capacity_reserved`) rather than a real provider rate limit.
+///
+/// The shared hosted-AI slot is briefly held by a sibling chat or pipe; the
+/// gateway's `retry_after_seconds` hint is honored until it clears or the
+/// reservation TTL (`CAPACITY_RESERVED_MAX_WAIT_SECS`) expires, instead of
+/// the fixed `MAX_RATE_LIMIT_RETRIES` used for other rate limits.
+fn is_capacity_reserved_error(text: &str) -> bool {
+    text.to_lowercase().contains("hosted_ai_capacity_reserved")
+}
+
+/// Outcome of [`next_rate_limit_retry`]: retry after `wait_secs`, tagged with
+/// whether this was hosted-AI capacity contention (for logging/telemetry).
+struct RateLimitRetryDecision {
+    wait_secs: u64,
+    capacity_reserved: bool,
+}
+
+/// Decide whether a failed pi run should be retried, and for how long to wait.
+///
+/// Pure retry policy, isolated from the I/O loop in `run_streaming` so it can
+/// be exercised without spawning a real pi subprocess. `plain_rate_limit_retries`
+/// and `capacity_reserved_waited_secs` are independent budget counters
+/// accumulated *before* this attempt — kept separate so a run that alternates
+/// between the two error classes doesn't let one exhaust the other's budget.
+/// Returns `None` once the applicable budget is exhausted:
+/// `MAX_RATE_LIMIT_RETRIES` attempts for a generic rate limit, or
+/// `CAPACITY_RESERVED_MAX_WAIT_SECS` of total wait for
+/// `hosted_ai_capacity_reserved` contention.
+fn next_rate_limit_retry(
+    stderr: &str,
+    plain_rate_limit_retries: usize,
+    capacity_reserved_waited_secs: u64,
+) -> Option<RateLimitRetryDecision> {
+    if !is_rate_limit_error(stderr) {
+        return None;
+    }
+    let capacity_reserved = is_capacity_reserved_error(stderr);
+    if capacity_reserved {
+        if capacity_reserved_waited_secs >= CAPACITY_RESERVED_MAX_WAIT_SECS {
+            return None;
+        }
+    } else if plain_rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+        return None;
+    }
+    let wait_secs = parse_rate_limit_reset_secs(stderr)
+        .unwrap_or(RATE_LIMIT_DEFAULT_WAIT_SECS)
+        .clamp(1, RATE_LIMIT_MAX_WAIT_SECS);
+    Some(RateLimitRetryDecision {
+        wait_secs,
+        capacity_reserved,
+    })
+}
+
+/// Drive a failed pi run through rate-limit / capacity-contention retries
+/// until it succeeds or `next_rate_limit_retry` exhausts the applicable
+/// budget.
+///
+/// Extracted out of `run_streaming` so the retry *loop* — not just the pure
+/// `next_rate_limit_retry` policy — can be driven directly in tests via a
+/// fake `respawn`, under tokio's virtual clock, instead of only exercising
+/// the policy function in isolation.
+async fn retry_rate_limited_output<F, Fut>(
+    mut output: AgentOutput,
+    line_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    mut respawn: F,
+) -> Result<AgentOutput>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<AgentOutput>>,
+{
+    // `attempt` is a monotonic counter for logging only. The two retry
+    // budgets below stay independent so a run that alternates between plain
+    // rate limits and capacity contention can't have one exhaust the other's
+    // allowance.
+    let mut attempt = 0usize;
+    let mut plain_rate_limit_retries = 0usize;
+    let mut capacity_reserved_waited_secs = 0u64;
+    loop {
+        if output.success {
+            break;
+        }
+        let Some(decision) = next_rate_limit_retry(
+            &output.stderr,
+            plain_rate_limit_retries,
+            capacity_reserved_waited_secs,
+        ) else {
+            break;
+        };
+        attempt += 1;
+        let wait_secs = decision.wait_secs;
+        if decision.capacity_reserved {
+            capacity_reserved_waited_secs += wait_secs;
+            warn!(
+                "pi hit hosted AI capacity contention (attempt {}, {}/{}s waited), waiting {}s before retry (stderr: {})",
+                attempt,
+                capacity_reserved_waited_secs,
+                CAPACITY_RESERVED_MAX_WAIT_SECS,
+                wait_secs,
+                output.stderr.trim()
+            );
+        } else {
+            plain_rate_limit_retries += 1;
+            warn!(
+                "pi rate limited (attempt {}/{}), waiting {}s before retry (stderr: {})",
+                plain_rate_limit_retries,
+                MAX_RATE_LIMIT_RETRIES,
+                wait_secs,
+                output.stderr.trim()
+            );
+        }
+        // Surface the wait to any UI/log consumer draining line_tx.
+        let _ = line_tx.send(format!(
+            r#"{{"type":"status","kind":"rate_limit_retry","wait_secs":{},"attempt":{},"max_attempts":{},"capacity_reserved":{}}}"#,
+            wait_secs, attempt, MAX_RATE_LIMIT_RETRIES, decision.capacity_reserved
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+        output = respawn().await?;
+    }
+    Ok(output)
 }
 
 /// Fetch the model catalog from the Cloudflare Worker gateway and convert
@@ -1952,54 +2090,39 @@ impl AgentExecutor for PiExecutor {
                 .await?;
         }
 
-        // Retry on provider rate limiting (HTTP 429). The cloud gateway caps
+        // Retry on provider rate limiting (HTTP 429) and on hosted-AI capacity
+        // contention (`hosted_ai_capacity_reserved`). The cloud gateway caps
         // requests per minute; concurrent scheduler pressure or a single busy
-        // run can trip it. pi exits 0 but surfaces the 429 as an assistant
-        // error, so `output.success` is false with the payload (including
-        // "reset_in") in stderr. Honor that hint, wait, and re-run instead of
-        // failing the whole pipe — which previously left automations silently
-        // doing nothing. (Runs that legitimately exceed the per-minute budget
-        // also need scheduler pacing, but a wait-and-retry still beats a hard
-        // stop.)
-        let mut rate_limit_retries = 0usize;
-        while !output.success
-            && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
-            && is_rate_limit_error(&output.stderr)
-        {
-            rate_limit_retries += 1;
-            let wait_secs = parse_rate_limit_reset_secs(&output.stderr)
-                .unwrap_or(RATE_LIMIT_DEFAULT_WAIT_SECS)
-                .clamp(1, RATE_LIMIT_MAX_WAIT_SECS);
-            warn!(
-                "pi rate limited (attempt {}/{}), waiting {}s before retry (stderr: {})",
-                rate_limit_retries,
-                MAX_RATE_LIMIT_RETRIES,
-                wait_secs,
-                output.stderr.trim()
-            );
-            // Surface the wait to any UI/log consumer draining line_tx.
-            let _ = line_tx.send(format!(
-                r#"{{"type":"status","kind":"rate_limit_retry","wait_secs":{},"attempt":{},"max_attempts":{}}}"#,
-                wait_secs, rate_limit_retries, MAX_RATE_LIMIT_RETRIES
-            ));
-            tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-            output = self
-                .spawn_pi_streaming(
-                    &pi_path,
-                    prompt,
-                    &resolved_model,
-                    working_dir,
-                    &resolved_provider,
-                    provider_api_key,
-                    None,
-                    line_tx.clone(),
-                    continue_session,
-                    pipe_system_prompt,
-                    mcp_server_allowlist,
-                    session_owner,
-                )
-                .await?;
-        }
+        // run can trip it, and the shared hosted-AI slot can briefly be held
+        // by a sibling chat or pipe. pi exits 0 but surfaces the 429 as an
+        // assistant error, so `output.success` is false with the payload
+        // (including "reset_in" or "retry_after_seconds") in stderr. Honor
+        // that hint, wait, and re-run instead of failing the whole run —
+        // which previously left automations silently doing nothing.
+        //
+        // Capacity contention isn't a real error — someone else is just using
+        // the shared slot — so it gets a time budget
+        // (`CAPACITY_RESERVED_MAX_WAIT_SECS`, matching the gateway's
+        // reservation TTL) instead of `MAX_RATE_LIMIT_RETRIES`: contention
+        // outlasting three short waits would otherwise kill the run even
+        // though the slot frees up shortly after. See `retry_rate_limited_output`.
+        output = retry_rate_limited_output(output, &line_tx, || {
+            self.spawn_pi_streaming(
+                &pi_path,
+                prompt,
+                &resolved_model,
+                working_dir,
+                &resolved_provider,
+                provider_api_key,
+                None,
+                line_tx.clone(),
+                continue_session,
+                pipe_system_prompt,
+                mcp_server_allowlist,
+                session_owner,
+            )
+        })
+        .await?;
 
         Ok(output)
     }
@@ -4279,6 +4402,10 @@ mod tests {
 
         // Unrelated error carries no hint.
         assert_eq!(parse_rate_limit_reset_secs("model not found"), None);
+
+        // hosted_ai_capacity_reserved uses "retry_after_seconds", not "reset_in".
+        let capacity_reserved = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        assert_eq!(parse_rate_limit_reset_secs(capacity_reserved), Some(5));
     }
 
     #[test]
@@ -4424,6 +4551,9 @@ mod tests {
             "You've exceeded 25 requests per minute"
         ));
         assert!(is_rate_limit_error(r#"{"reset_in":12}"#));
+        assert!(is_rate_limit_error(
+            r#"429 {"error":"hosted_ai_capacity_reserved","retry_after_seconds":5}"#
+        ));
         assert!(!is_rate_limit_error("model not found"));
         assert!(!is_rate_limit_error("credits_exhausted"));
         assert!(!is_rate_limit_error(r#"429 "daily_cost_limit_exceeded""#));
@@ -4431,6 +4561,227 @@ mod tests {
         assert!(!is_rate_limit_error(
             r#"429 {"error":{"type":"insufficient_quota"}}"#
         ));
+    }
+
+    #[test]
+    fn test_is_capacity_reserved_error() {
+        assert!(is_capacity_reserved_error(
+            r#"429 {"error":"hosted_ai_capacity_reserved","retry_after_seconds":5}"#
+        ));
+        assert!(!is_capacity_reserved_error("HTTP 429 Too Many Requests"));
+        assert!(!is_capacity_reserved_error(
+            r#"429 "daily_cost_limit_exceeded""#
+        ));
+    }
+
+    // These exercise `next_rate_limit_retry`, the pure decision function
+    // shared by both `run_streaming` call sites (interactive chat and
+    // scheduled pipes both execute through it — see the caller in
+    // `PiExecutor::run_streaming`) — so one set of cases here covers the
+    // "chat" and "pipe executor" scenarios from #5673 without duplicating
+    // the same assertions against two entry points.
+
+    #[test]
+    fn test_next_rate_limit_retry_capacity_reserved_outlasts_fixed_retry_cap() {
+        // Real gateway payload for contention on the shared hosted-AI slot.
+        let stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+
+        // Simulate holding capacity for 35s (7 retries at 5s each) — longer
+        // than the fixed MAX_RATE_LIMIT_RETRIES=3 a generic rate limit gets.
+        let mut retries = 0usize;
+        let mut waited = 0u64;
+        for _ in 0..7 {
+            let decision = next_rate_limit_retry(stderr, retries, waited)
+                .expect("capacity contention must keep retrying past the fixed attempt cap");
+            assert!(decision.capacity_reserved);
+            assert_eq!(decision.wait_secs, 5);
+            retries += 1;
+            waited += decision.wait_secs;
+        }
+        assert!(retries > MAX_RATE_LIMIT_RETRIES);
+        assert_eq!(waited, 35);
+    }
+
+    #[test]
+    fn test_next_rate_limit_retry_capacity_reserved_stops_at_reservation_ttl() {
+        let stderr = r#"429 {"error":"hosted_ai_capacity_reserved","retry_after_seconds":5}"#;
+        assert!(next_rate_limit_retry(stderr, 100, CAPACITY_RESERVED_MAX_WAIT_SECS).is_none());
+        assert!(next_rate_limit_retry(stderr, 100, CAPACITY_RESERVED_MAX_WAIT_SECS - 1).is_some());
+    }
+
+    #[test]
+    fn test_next_rate_limit_retry_generic_rate_limit_still_capped_at_three() {
+        let stderr = "HTTP 429 Too Many Requests";
+        for retries in 0..MAX_RATE_LIMIT_RETRIES {
+            let decision = next_rate_limit_retry(stderr, retries, 0)
+                .expect("generic rate limit should retry up to MAX_RATE_LIMIT_RETRIES");
+            assert!(!decision.capacity_reserved);
+        }
+        assert!(next_rate_limit_retry(stderr, MAX_RATE_LIMIT_RETRIES, 0).is_none());
+    }
+
+    #[test]
+    fn test_next_rate_limit_retry_budgets_are_independent_across_error_classes() {
+        // A run that alternates between capacity contention and a plain rate
+        // limit must not let one error class's retries consume the other's
+        // budget.
+        let capacity_stderr =
+            r#"429 {"error":"hosted_ai_capacity_reserved","retry_after_seconds":5}"#;
+        let plain_stderr = "HTTP 429 Too Many Requests";
+
+        let mut plain_retries = 0usize;
+        let mut capacity_waited = 0u64;
+
+        // Three capacity-reserved retries must not touch the plain budget.
+        for _ in 0..3 {
+            let decision = next_rate_limit_retry(capacity_stderr, plain_retries, capacity_waited)
+                .expect("capacity contention should retry");
+            assert!(decision.capacity_reserved);
+            capacity_waited += decision.wait_secs;
+        }
+        assert_eq!(plain_retries, 0);
+
+        // The plain rate-limit budget is still fully available afterwards.
+        for _ in 0..MAX_RATE_LIMIT_RETRIES {
+            let decision = next_rate_limit_retry(plain_stderr, plain_retries, capacity_waited)
+                .expect("plain rate limit budget must be untouched by capacity retries");
+            assert!(!decision.capacity_reserved);
+            plain_retries += 1;
+        }
+        assert!(next_rate_limit_retry(plain_stderr, plain_retries, capacity_waited).is_none());
+    }
+
+    #[test]
+    fn test_next_rate_limit_retry_daily_cap_is_terminal() {
+        // daily_cost_limit_exceeded must never retry, regardless of counters.
+        let stderr = r#"429 "daily_cost_limit_exceeded""#;
+        assert!(next_rate_limit_retry(stderr, 0, 0).is_none());
+    }
+
+    // The tests below drive `retry_rate_limited_output` itself — the actual
+    // loop `run_streaming` calls in production (both interactive chat and
+    // scheduled pipes go through it) — rather than only the extracted
+    // `next_rate_limit_retry` policy function above. `start_paused` runs
+    // tokio's virtual clock, so every real `tokio::time::sleep` the loop
+    // performs (including a full simulated 600s reservation TTL) resolves
+    // instantly instead of blocking the test for real wall-clock time.
+
+    fn fake_agent_output(stderr: &str, success: bool) -> AgentOutput {
+        AgentOutput {
+            stdout: String::new(),
+            stderr: stderr.to_string(),
+            success,
+            pid: None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_retry_rate_limited_output_capacity_reserved_succeeds_after_more_than_three_retries(
+    ) {
+        // Simulate the shared hosted-AI slot staying busy for 4 attempts —
+        // one more than MAX_RATE_LIMIT_RETRIES=3 — before it frees up.
+        let capacity_stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        let calls = std::cell::RefCell::new(0u32);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result =
+            retry_rate_limited_output(fake_agent_output(capacity_stderr, false), &tx, || {
+                *calls.borrow_mut() += 1;
+                let attempt = *calls.borrow();
+                async move {
+                    Ok(if attempt <= 4 {
+                        fake_agent_output(capacity_stderr, false)
+                    } else {
+                        fake_agent_output("", true)
+                    })
+                }
+            })
+            .await
+            .expect("retry loop must not error");
+
+        assert!(result.success);
+        assert_eq!(*calls.borrow(), 5);
+        assert!(*calls.borrow() as usize > MAX_RATE_LIMIT_RETRIES);
+
+        // The status channel actually received one event per retry — proves
+        // the line_tx wiring executed, not just the retry decision.
+        drop(tx);
+        let mut status_events = 0;
+        while let Some(msg) = rx.recv().await {
+            assert!(msg.contains("rate_limit_retry"));
+            assert!(msg.contains("\"capacity_reserved\":true"));
+            status_events += 1;
+        }
+        assert_eq!(status_events, 5);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_retry_rate_limited_output_generic_rate_limit_gives_up_after_max_retries() {
+        let plain_stderr = "HTTP 429 Too Many Requests";
+        let calls = std::cell::RefCell::new(0u32);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = retry_rate_limited_output(fake_agent_output(plain_stderr, false), &tx, || {
+            *calls.borrow_mut() += 1;
+            async move { Ok(fake_agent_output(plain_stderr, false)) }
+        })
+        .await
+        .expect("retry loop must not error even when it gives up");
+
+        assert!(!result.success);
+        assert_eq!(*calls.borrow() as usize, MAX_RATE_LIMIT_RETRIES);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_retry_rate_limited_output_daily_cap_never_retries() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let calls = std::cell::RefCell::new(0u32);
+
+        let result = retry_rate_limited_output(
+            fake_agent_output(r#"429 "daily_cost_limit_exceeded""#, false),
+            &tx,
+            || {
+                *calls.borrow_mut() += 1;
+                async move { Ok(fake_agent_output("", true)) }
+            },
+        )
+        .await
+        .expect("retry loop must not error");
+
+        assert!(!result.success);
+        assert_eq!(
+            *calls.borrow(),
+            0,
+            "must not retry a terminal daily-cap error"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_retry_rate_limited_output_capacity_reserved_stops_at_reservation_ttl_live() {
+        // The gateway's hint (100s here) is clamped to RATE_LIMIT_MAX_WAIT_SECS
+        // (60s) — same safety clamp a generic rate limit gets, so an oversized
+        // hint can't stall a run — leaving 60s waits: a 600s budget allows
+        // exactly 10 retries before the 11th is refused. This is exactly the
+        // kind of interaction between two independently-reasonable pieces of
+        // logic that only a live run of the loop (not the isolated policy
+        // function) catches: this assertion's first draft assumed 100s waits
+        // and 6 retries, and the live test caught the clamp.
+        let capacity_stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"still busy","retry_after_seconds":100}"#;
+        let calls = std::cell::RefCell::new(0u32);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let start = tokio::time::Instant::now();
+        let result =
+            retry_rate_limited_output(fake_agent_output(capacity_stderr, false), &tx, || {
+                *calls.borrow_mut() += 1;
+                async move { Ok(fake_agent_output(capacity_stderr, false)) }
+            })
+            .await
+            .expect("retry loop must not error");
+
+        assert!(!result.success);
+        assert_eq!(*calls.borrow(), 10);
+        assert_eq!(start.elapsed(), std::time::Duration::from_secs(600));
     }
 
     #[test]
