@@ -63,6 +63,12 @@
       "layers": ["settings"]
     },
     {
+      "id": "settings-permissions",
+      "label": "Permissions settings recovery UX",
+      "platforms": ["macos"],
+      "layers": ["settings"]
+    },
+    {
       "id": "notifications",
       "label": "Notification history and viewer paths",
       "platforms": ["windows", "macos", "linux"],
@@ -142,6 +148,16 @@
     }
   ],
   "specs": [
+    {
+      "spec": "acp-text-streaming.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "tauri-command"],
+      "features": ["chat", "acp-runtime", "acp-text-streaming"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "A deterministic ACP adapter runs through the packaged Rust desktop runtime and proves ordered assistant text streaming from pi_start through agent_end."
+    },
     {
       "spec": "api.spec.ts",
       "platforms": ["windows", "macos", "linux"],
@@ -250,7 +266,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
-      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, and capture screenshots."
+      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, keep completed tools active while the shared Pi turn is still streaming, and capture screenshots."
     },
     {
       "spec": "chat-automation-card-duplicate.spec.ts",
@@ -736,11 +752,11 @@
       "spec": "settings-sections.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "real-ui-e2e", "storage-privacy"],
-      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
+      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "settings-permissions", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard."
+      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
     },
     {
       "spec": "spotlight-exclusion.spec.ts",

@@ -2131,13 +2131,41 @@ pub async fn show_window_activated(
     show_window(app_handle, window).await
 }
 
-/// Programmatically adjust a window's always-on-top level after creation.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct TemporaryWindowLevelState {
+    original_levels: std::collections::HashMap<String, i64>,
+}
+
+#[cfg(target_os = "macos")]
+impl TemporaryWindowLevelState {
+    fn transition(&mut self, label: &str, current_level: i64, restore: bool) -> i64 {
+        if restore {
+            self.original_levels.remove(label).unwrap_or(current_level)
+        } else {
+            // Repeated lowering must not overwrite the real origin with level 0.
+            self.original_levels
+                .entry(label.to_string())
+                .or_insert(current_level);
+            0
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+static TEMPORARY_WINDOW_LEVELS: once_cell::sync::Lazy<std::sync::Mutex<TemporaryWindowLevelState>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(TemporaryWindowLevelState::default()));
+
+/// Temporarily lower a window for a permission flow, then restore its native
+/// level. The command name and boolean are retained for binding compatibility:
+/// `false` begins the temporary lowering and `true` restores the captured
+/// level.
 ///
 /// Tauri's JS `setAlwaysOnTop` can be unreliable for macOS panel-style
-/// windows. For permission flows we need Screenpipe to stay normally
-/// always-on-top, but temporarily drop below System Settings while the user is
-/// granting permissions. On macOS this directly sets the underlying NSWindow
-/// level: floating when enabled, normal when disabled.
+/// windows. The old implementation restored every window to a hardcoded
+/// floating level, which permanently elevated the normal Home/Settings window
+/// after it regained focus. Capture-once/restore-exactly mirrors the native
+/// focus-session lifecycle used to preserve external-app focus.
 #[tauri::command]
 #[specta::specta]
 pub async fn set_window_always_on_top_native(
@@ -2151,36 +2179,105 @@ pub async fn set_window_always_on_top_native(
         .get_webview_window(&label)
         .ok_or_else(|| format!("window not found: {}", label))?;
 
-    window
-        .set_always_on_top(always_on_top)
-        .map_err(|e| format!("failed to set always-on-top: {}", e))?;
-
     #[cfg(target_os = "macos")]
     {
-        use crate::window::run_on_main_thread_safe;
         use raw_window_handle::HasWindowHandle;
 
         let window_clone = window.clone();
-        run_on_main_thread_safe(&app_handle, move || {
-            if let Ok(handle) = window_clone.window_handle() {
-                if let raw_window_handle::RawWindowHandle::AppKit(appkit_handle) = handle.as_raw() {
+        let label_for_main_thread = label.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        app_handle
+            .run_on_main_thread(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let handle = window_clone
+                        .window_handle()
+                        .map_err(|e| format!("failed to get native window handle: {e}"))?;
+                    let raw_window_handle::RawWindowHandle::AppKit(appkit_handle) = handle.as_raw()
+                    else {
+                        return Err("window is not backed by AppKit".to_string());
+                    };
+
                     use objc::{msg_send, sel, sel_impl};
                     let ns_view = appkit_handle.ns_view.as_ptr() as *mut objc::runtime::Object;
                     let ns_window: *mut objc::runtime::Object =
                         unsafe { msg_send![ns_view, window] };
-                    if !ns_window.is_null() {
-                        // NSNormalWindowLevel = 0. NSFloatingWindowLevel = 3.
-                        // Floating keeps recovery/onboarding above normal app
-                        // windows; normal lets System Settings sit above it.
-                        let level: i64 = if always_on_top { 3 } else { 0 };
-                        let _: () = unsafe { msg_send![ns_window, setLevel: level] };
+                    if ns_window.is_null() {
+                        return Err("native NSWindow is unavailable".to_string());
                     }
-                }
-            }
-        });
+
+                    let current_level: i64 = unsafe { msg_send![ns_window, level] };
+                    let target_level = TEMPORARY_WINDOW_LEVELS
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .transition(&label_for_main_thread, current_level, always_on_top);
+                    let _: () = unsafe { msg_send![ns_window, setLevel: target_level] };
+                    info!(
+                        window_label = %label_for_main_thread,
+                        current_level,
+                        target_level,
+                        restore = always_on_top,
+                        "permission window-level transition"
+                    );
+                    Ok(())
+                }))
+                .unwrap_or_else(|panic| {
+                    Err(format!(
+                        "panic while changing native window level: {panic:?}"
+                    ))
+                });
+                let _ = sender.send(result);
+            })
+            .map_err(|e| format!("failed to schedule native window-level change: {e}"))?;
+
+        receiver
+            .await
+            .map_err(|_| "native window-level change was cancelled".to_string())??;
     }
 
+    #[cfg(not(target_os = "macos"))]
+    window
+        .set_always_on_top(always_on_top)
+        .map_err(|e| format!("failed to set always-on-top: {}", e))?;
+
     Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod temporary_window_level_tests {
+    use super::TemporaryWindowLevelState;
+
+    #[test]
+    fn normal_window_returns_to_normal_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("home", 0, false), 0);
+        assert_eq!(state.transition("home", 0, true), 0);
+    }
+
+    #[test]
+    fn floating_window_returns_to_its_original_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("permission-recovery", 3, false), 0);
+        assert_eq!(state.transition("permission-recovery", 0, true), 3);
+    }
+
+    #[test]
+    fn repeated_lowering_preserves_the_first_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("home", 3, false), 0);
+        assert_eq!(state.transition("home", 0, false), 0);
+        assert_eq!(state.transition("home", 0, true), 3);
+    }
+
+    #[test]
+    fn unmatched_restore_keeps_the_current_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("home", 0, true), 0);
+        assert_eq!(state.transition("chat", 1001, true), 1001);
+    }
 }
 
 /// Apply the "Chat Always on Top" setting to the already-open chat window.

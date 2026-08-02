@@ -43,11 +43,29 @@ async fn run_wal_restart_checkpoint(
 }
 
 impl DatabaseManager {
-    pub async fn execute_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
-        // This API intentionally executes caller-supplied maintenance SQL.
-        // Keep that trust boundary explicit for SQLx 0.9's dynamic-SQL audit.
+    /// Execute trusted, row-returning dynamic SQL on the query pool.
+    pub async fn query_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
+        Self::raw_sql_on_pool(&self.pool, query).await
+    }
+
+    /// Execute trusted dynamic SQL that may mutate the database through the
+    /// dedicated, process-coordinated writer lane.
+    pub async fn execute_raw_sql_write(
+        &self,
+        query: &str,
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        let writer = self.coordinated_writer().lock().await?;
+        Self::raw_sql_on_pool(writer.pool(), query).await
+    }
+
+    async fn raw_sql_on_pool(
+        pool: &SqlitePool,
+        query: &str,
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        // These APIs intentionally execute caller-supplied trusted SQL. Keep
+        // that trust boundary explicit for SQLx 0.9's dynamic-SQL audit.
         let rows = sqlx::query(sqlx::AssertSqlSafe(query))
-            .fetch_all(&self.pool)
+            .fetch_all(pool)
             .await?;
 
         let result: Vec<serde_json::Map<String, serde_json::Value>> = rows
@@ -1292,11 +1310,13 @@ impl DatabaseManager {
         chunk_id: i64,
         blob_id: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE video_chunks SET cloud_blob_id = ?1 WHERE id = ?2")
             .bind(blob_id)
             .bind(chunk_id)
-            .execute(&self.pool)
+            .execute(&mut **tx.conn())
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1306,11 +1326,13 @@ impl DatabaseManager {
         frame_id: i64,
         blob_id: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE frames SET cloud_blob_id = ?1 WHERE id = ?2")
             .bind(blob_id)
             .bind(frame_id)
-            .execute(&self.pool)
+            .execute(&mut **tx.conn())
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1319,6 +1341,7 @@ impl DatabaseManager {
             .acquire_owned()
             .await
             .map_err(|_| anyhow::anyhow!("SQLite write coordinator closed"))?;
+        let mut conn = self.write_pool.acquire().await?;
         debug!("starting aggressive database repair process");
 
         // Force close any pending transactions
@@ -1329,7 +1352,7 @@ impl DatabaseManager {
         ];
 
         for step in emergency_steps {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
+            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
                 warn!("emergency step failed (continuing anyway): {}", e);
             }
         }
@@ -1342,7 +1365,7 @@ impl DatabaseManager {
         ];
 
         for step in wal_cleanup {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
+            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
                 warn!("wal cleanup failed (continuing anyway): {}", e);
             }
         }
@@ -1361,7 +1384,7 @@ impl DatabaseManager {
 
         for (query, step) in recovery_steps {
             debug!("running aggressive recovery step: {}", step);
-            match sqlx::query(query).execute(&self.pool).await {
+            match sqlx::query(query).execute(&mut *conn).await {
                 Ok(_) => debug!("recovery step '{}' succeeded", step),
                 Err(e) => warn!("recovery step '{}' failed: {}", step, e),
             }
@@ -1381,14 +1404,14 @@ impl DatabaseManager {
         ];
 
         for step in restore_steps {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
+            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
                 warn!("restore step failed: {}", e);
             }
         }
 
         // Final verification
         match sqlx::query_scalar::<_, String>("PRAGMA quick_check;")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *conn)
             .await
         {
             Ok(result) if result == "ok" => {
@@ -1418,7 +1441,7 @@ impl DatabaseManager {
     /// paths still use serialized `TRUNCATE` checkpoints when a physical reset
     /// is required.
     pub fn start_wal_maintenance(&self) {
-        let pool = self.pool.clone();
+        let pool = self.write_pool.clone();
         let shutdown = self.close_token.clone();
         let write_queue_health = self.write_queue_health.clone();
         let write_semaphore = std::sync::Arc::clone(&self.write_semaphore);
@@ -1629,8 +1652,9 @@ impl DatabaseManager {
         if self.write_queue_health.is_hard_faulted() {
             return Err(SqlxError::PoolClosed);
         }
+        let mut conn = self.write_pool.acquire().await?;
         let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *conn)
             .await?;
         Ok((row.get(0), row.get(1), row.get(2)))
     }
@@ -1638,9 +1662,14 @@ impl DatabaseManager {
     /// Create an atomic backup of the database using `VACUUM INTO`.
     /// The destination path must not already exist.
     pub async fn backup_to(&self, dest: &str) -> Result<(), sqlx::Error> {
+        let _write_guard = Arc::clone(&self.write_semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| SqlxError::PoolClosed)?;
+        let mut conn = self.write_pool.acquire().await?;
         sqlx::query("VACUUM INTO ?1")
             .bind(dest)
-            .execute(&self.pool)
+            .execute(&mut *conn)
             .await?;
         Ok(())
     }
@@ -1664,9 +1693,12 @@ impl DatabaseManager {
     /// insufficient disk VACUUM errors (surfaced as 500) without corrupting
     /// anything.
     pub async fn compact(&self) -> Result<(), sqlx::Error> {
-        let _write_guard = self.write_semaphore.acquire().await.ok();
+        let _write_guard = Arc::clone(&self.write_semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| SqlxError::PoolClosed)?;
 
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.write_pool.acquire().await?;
         let _ = sqlx::query("PRAGMA busy_timeout = 60000")
             .execute(&mut *conn)
             .await;
@@ -1692,6 +1724,47 @@ mod wal_maintenance_tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::Row;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn raw_sql_writes_wait_for_coordinator_and_reads_return_rows() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("db.sqlite");
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let db = DatabaseManager::new(&db_path_string, DbConfig::for_tier(DeviceTier::Low))
+            .await
+            .expect("database manager");
+
+        db.execute_raw_sql_write("CREATE TABLE raw_boundary (value INTEGER NOT NULL)")
+            .await
+            .expect("create through writer API");
+
+        let held_writer = db
+            .coordinated_writer()
+            .lock()
+            .await
+            .expect("hold writer lane");
+        let mut queued_write =
+            Box::pin(db.execute_raw_sql_write("INSERT INTO raw_boundary (value) VALUES (42)"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut queued_write)
+                .await
+                .is_err(),
+            "raw write bypassed the coordinator"
+        );
+        drop(held_writer);
+        tokio::time::timeout(Duration::from_secs(1), queued_write)
+            .await
+            .expect("queued write timed out")
+            .expect("queued write failed");
+
+        let rows = db
+            .query_raw_sql("SELECT value FROM raw_boundary LIMIT 1")
+            .await
+            .expect("query through reader API");
+        assert_eq!(rows, serde_json::json!([{ "value": 42 }]));
+
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn routine_checkpoint_never_truncates_the_live_wal() {

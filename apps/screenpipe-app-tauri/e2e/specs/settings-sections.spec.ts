@@ -61,6 +61,7 @@ const SETTINGS_SECTIONS = [
   { id: 'notifications', keywords: ['notification', 'toast', 'sound'] },
   { id: 'usage', keywords: ['usage', 'activity', 'analytics'] },
   { id: 'privacy', keywords: ['privacy', 'api', 'encryption', 'keychain'] },
+  { id: 'permissions', keywords: ['permission', 'screen recording', 'microphone', 'accessibility', 'macos'] },
   { id: 'storage', keywords: ['storage', 'disk', 'retention', 'cache'] },
   { id: 'speakers', keywords: ['speaker', 'voice'] },
   { id: 'team', keywords: ['team', 'share', 'member', 'invite'] },
@@ -385,12 +386,48 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  it('Permissions is macOS-only: absent from nav elsewhere, recovery content on macOS', async function () {
+    const navPermissions = await $('[data-testid="settings-nav-permissions"]');
+
+    if (process.platform !== 'darwin') {
+      expect(await navPermissions.isExisting()).toBe(false);
+      return;
+    }
+
+    await navPermissions.waitForExist({ timeout: 8_000 });
+    await navPermissions.click();
+
+    const section = await $('[data-testid="section-settings-permissions"]');
+    await section.waitForExist({ timeout: 6_000 });
+    await browser.pause(800);
+
+    const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
+    expect(body).not.toContain('unhandled runtime error');
+    expect(body).not.toContain('application error');
+    expect(body).not.toContain('not applicable');
+
+    const hasPermissionsContent =
+      body.includes('permission') ||
+      body.includes('screen recording') ||
+      body.includes('microphone') ||
+      body.includes('accessibility');
+    expect(hasPermissionsContent).toBe(true);
+
+    const required = await $('[data-testid="permissions-required"]');
+    await required.waitForExist({ timeout: 5_000 });
+    const accessibilityRow = await $('[data-testid="permission-row-accessibility"]');
+    await accessibilityRow.waitForExist({ timeout: 5_000 });
+
+    const filepath = await saveScreenshot('settings-permissions');
+    expect(existsSync(filepath)).toBe(true);
+  });
+
   // ─── Negative: rapid navigation must not crash ────────────────────────────
 
   it('survives rapid section switching without a blank crash (Windows COM/DPI regression)', async () => {
     // Click through every section quickly — this has historically caused a white
     // blank render on Windows due to COM apartment threading issues (TESTING.md §14).
-    const sectionIds = ['general', 'recording', 'ai', 'ai-settings', 'display', 'shortcuts', 'speakers', 'privacy', 'storage'];
+    const sectionIds = ['general', 'recording', 'ai', 'ai-settings', 'display', 'shortcuts', 'speakers', 'privacy', 'permissions', 'storage'];
     for (const id of sectionIds) {
       const btn = await $(`[data-testid="settings-nav-${id}"]`);
       if (await btn.isExisting()) {

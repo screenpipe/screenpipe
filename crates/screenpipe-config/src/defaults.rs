@@ -10,6 +10,8 @@ use sysinfo::{System, SystemExt};
 /// Minimum macOS major version required for parakeet-mlx (Metal GPU).
 /// macOS 26 (Tahoe) is required for the MLX framework APIs used by parakeet.
 /// On older macOS versions, the model loading segfaults during Metal buffer allocation.
+/// (cfg-gated: since the AVX2-aware refactor its only uses live in macOS-only blocks.)
+#[cfg(target_os = "macos")]
 const PARAKEET_MIN_MACOS_MAJOR: u32 = 26;
 
 /// Device performance tier, determined by hardware detection.
@@ -273,14 +275,49 @@ pub fn macos_major_version() -> Option<u32> {
 
 /// Pick the best audio transcription engine for the current platform.
 ///
-/// Decision matrix:
+/// Decision matrix (CPU with AVX2 — i.e. every x86-64 since Haswell/2013):
 ///
 /// | Tier | macOS ≥ 26         | macOS < 26         | Windows/Linux |
 /// |------|--------------------|--------------------|---------------|
 /// | High | parakeet (MLX GPU) | whisper-turbo-q    | parakeet      |
 /// | Mid  | whisper-tiny       | whisper-tiny       | whisper-tiny  |
 /// | Low  | whisper-tiny       | whisper-tiny       | whisper-tiny  |
+///
+/// On x86-64 CPUs WITHOUT AVX2 (pre-Haswell, Atom-line Celeron/Pentium),
+/// whisper/qwen3 cannot run (their kernels are AVX2-compiled — see
+/// `screenpipe_core::cpu_features`), so Windows/Linux fall back to
+/// parakeet (ONNX Runtime, runtime CPU dispatch) on High/Mid and
+/// "disabled" on Low (parakeet's ~2GB doesn't fit Low-tier RAM).
 pub fn best_engine_for_platform(tier: DeviceTier) -> &'static str {
+    best_engine_for_platform_for_cpu(tier, screenpipe_cpu_features::has_avx2())
+}
+
+/// CPU-explicit core of [`best_engine_for_platform`], testable without the
+/// host CPU's actual feature set.
+pub fn best_engine_for_platform_for_cpu(tier: DeviceTier, has_avx2: bool) -> &'static str {
+    // ggml/whisper is compiled with AVX2 on x86-64 release builds; on CPUs
+    // without AVX2 (pre-2013 Intel, Atom-line Celeron/Pentium) whisper would
+    // die with an illegal instruction, and the runtime gate in
+    // screenpipe-audio disables it on EVERY x86-64 target — this picker must
+    // stay consistent with that gate or settings show an engine that
+    // silently never runs.
+    if cfg!(target_arch = "x86_64") && !has_avx2 {
+        // macOS: the only local alternative is parakeet, which auto-upgrades
+        // to MLX and needs macOS 26 — a non-AVX2 Intel Mac (Mac Pro 2013 is
+        // the only such supported model) can't run it either. Disable local
+        // STT outright; cloud engines remain selectable.
+        if cfg!(target_os = "macos") {
+            return "disabled";
+        }
+        // Windows/Linux: parakeet runs on ONNX Runtime, which does runtime
+        // CPU dispatch — safe everywhere, but too heavy for Low tier.
+        return if tier == DeviceTier::Low {
+            "disabled"
+        } else {
+            "parakeet"
+        };
+    }
+
     if tier == DeviceTier::Low || tier == DeviceTier::Mid {
         return "whisper-tiny";
     }
@@ -307,24 +344,64 @@ pub fn best_engine_for_platform(tier: DeviceTier) -> &'static str {
 /// Returns true if the given engine string is unsafe for the current platform.
 ///
 /// An engine is unsafe if:
+/// - It's whisper*/qwen3* on an x86-64 CPU without AVX2 (their native kernels
+///   are AVX2-compiled — STATUS_ILLEGAL_INSTRUCTION at first use)
 /// - It's parakeet/parakeet-mlx on a Low-tier device (OOM crash)
+/// - It's parakeet/parakeet-mlx on a Mid-tier device (too heavy), EXCEPT
+///   plain parakeet on a non-AVX2 x86-64 CPU where it's the only local
+///   engine that can run at all (and what the default picker chooses)
 /// - It's parakeet/parakeet-mlx on macOS < 26 (segfault during Metal init)
-/// - It's parakeet/parakeet-mlx on a non-macOS platform (no MLX support)
+/// - It's parakeet-mlx on a non-macOS platform (no MLX support; plain
+///   parakeet is ONNX CPU and fine on High tier)
 pub fn is_engine_unsafe(engine: &str, tier: DeviceTier) -> bool {
+    is_engine_unsafe_for_cpu(engine, tier, screenpipe_cpu_features::has_avx2())
+}
+
+/// CPU-explicit core of [`is_engine_unsafe`], testable without the host
+/// CPU's actual feature set.
+pub fn is_engine_unsafe_for_cpu(engine: &str, tier: DeviceTier, has_avx2: bool) -> bool {
+    // AVX2-compiled static kernels: whisper* (ggml) and qwen3* (antirez C).
+    // Applies on every x86-64 target (macOS included) — mirrors the runtime
+    // gate in screenpipe-audio's TranscriptionEngine::new exactly, so the
+    // store migration moves users off an engine that could never load.
+    let non_avx2_x86 = cfg!(target_arch = "x86_64") && !has_avx2;
+    if non_avx2_x86 && (engine.starts_with("whisper") || engine.starts_with("qwen3")) {
+        return true;
+    }
+
     let is_parakeet = engine == "parakeet" || engine == "parakeet-mlx";
     if !is_parakeet {
         return false;
     }
 
-    if tier == DeviceTier::Low || tier == DeviceTier::Mid {
+    if tier == DeviceTier::Low {
         return true;
     }
+    if tier == DeviceTier::Mid {
+        // Parakeet (~2GB) is normally too heavy for Mid, but on a non-AVX2
+        // x86-64 CPU (off-macOS: on macOS parakeet needs MLX/macOS 26
+        // regardless) plain parakeet is the only local engine that can run
+        // (whisper/qwen3 are AVX2-compiled) and Mid (≥12GB) holds it — it is
+        // also exactly what best_engine_for_platform_for_cpu picks there.
+        return !(non_avx2_x86 && cfg!(not(target_os = "macos")) && engine == "parakeet");
+    }
 
-    let macos_ok = macos_major_version()
-        .map(|v| v >= PARAKEET_MIN_MACOS_MAJOR)
-        .unwrap_or(false);
-
-    !macos_ok
+    // High tier from here.
+    #[cfg(target_os = "macos")]
+    {
+        // parakeet auto-upgrades to MLX on macOS, so both variants need
+        // macOS ≥ 26 (Metal buffer allocation segfaults on older versions).
+        let macos_ok = macos_major_version()
+            .map(|v| v >= PARAKEET_MIN_MACOS_MAJOR)
+            .unwrap_or(false);
+        !macos_ok
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Off-macOS, plain parakeet is ONNX CPU — safe on High tier. Only the
+        // explicit MLX variant is impossible here (no MLX support).
+        engine == "parakeet-mlx"
+    }
 }
 
 /// Apply platform-specific defaults to a `RecordingSettings`.
@@ -436,6 +513,72 @@ mod tests {
             "whisper-large-v3-turbo-quantized",
             DeviceTier::High
         ));
+    }
+
+    // The AVX2 rules only apply on x86-64 off-macOS (the arch/OS the fix
+    // targets); on aarch64 or macOS the `has_avx2` parameter is ignored,
+    // so these assertions would be vacuously wrong there.
+    #[cfg(all(target_arch = "x86_64", not(target_os = "macos")))]
+    #[test]
+    fn whisper_and_qwen3_unsafe_without_avx2_on_x86() {
+        assert!(is_engine_unsafe_for_cpu(
+            "whisper-tiny",
+            DeviceTier::High,
+            false
+        ));
+        assert!(is_engine_unsafe_for_cpu(
+            "whisper-large-v3-turbo-quantized",
+            DeviceTier::High,
+            false
+        ));
+        assert!(is_engine_unsafe_for_cpu(
+            "qwen3-asr",
+            DeviceTier::High,
+            false
+        ));
+        // parakeet is ONNX (runtime-dispatched MS DLL) — safe without AVX2 off-macOS
+        assert!(!is_engine_unsafe_for_cpu(
+            "parakeet",
+            DeviceTier::High,
+            false
+        ));
+        // with AVX2 everything keeps its existing verdicts
+        assert!(!is_engine_unsafe_for_cpu(
+            "whisper-tiny",
+            DeviceTier::High,
+            true
+        ));
+    }
+
+    #[cfg(all(target_arch = "x86_64", not(target_os = "macos")))]
+    #[test]
+    fn non_avx2_default_prefers_parakeet_when_ram_allows() {
+        assert_eq!(
+            best_engine_for_platform_for_cpu(DeviceTier::High, false),
+            "parakeet"
+        );
+        assert_eq!(
+            best_engine_for_platform_for_cpu(DeviceTier::Mid, false),
+            "parakeet"
+        );
+        // Low tier can't hold parakeet (OOM) and can't run whisper (no AVX2):
+        assert_eq!(
+            best_engine_for_platform_for_cpu(DeviceTier::Low, false),
+            "disabled"
+        );
+    }
+
+    #[test]
+    fn default_engine_is_never_unsafe_for_same_cpu() {
+        for tier in [DeviceTier::High, DeviceTier::Mid, DeviceTier::Low] {
+            for has_avx2 in [true, false] {
+                let engine = best_engine_for_platform_for_cpu(tier, has_avx2);
+                assert!(
+                    !is_engine_unsafe_for_cpu(engine, tier, has_avx2),
+                    "default engine {engine} flagged unsafe (tier={tier:?}, avx2={has_avx2})"
+                );
+            }
+        }
     }
 
     #[test]

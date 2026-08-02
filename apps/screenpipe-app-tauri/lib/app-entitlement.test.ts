@@ -285,6 +285,32 @@ describe("app entitlement", () => {
     ).toBe(false);
   });
 
+  it.each(["pro_max", "pro_ultra"] as const)(
+    "recognizes %s as a consumer plan when the user also belongs to an enterprise workspace",
+    (plan) => {
+      const capacityUser = user({
+        cloud_subscribed: true,
+        app_entitled: true,
+        subscription_plan: plan,
+        entitlement: {
+          active: true,
+          plan,
+          checked_at: "2026-06-05T11:00:00.000Z",
+          source: "manual",
+          features: { app: true, cloud: true, enterprise: false },
+        },
+        enterprise_account: {
+          org_name: "Screenpipe",
+          role: "admin",
+          requires_enterprise_app: true,
+        },
+      });
+
+      expect(getLocalPlanPolicy(capacityUser)).toBe("verified-paid");
+      expect(hasConsumerAppSubscription(capacityUser)).toBe(true);
+    },
+  );
+
   it("does not unlock new cloud features from stale entitlement data", () => {
     expect(
       hasCloudEntitlement(user({ cloud_subscribed: true, entitlement: null })),

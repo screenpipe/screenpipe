@@ -164,6 +164,33 @@ describe("parseAnnouncement", () => {
     expect(parseAnnouncement({ ...VALID, title: "x".repeat(121) })).toBeNull();
     expect(parseAnnouncement({ ...VALID, body: "x".repeat(4001) })).toBeNull();
   });
+
+  it("requires a bounded, code-approved anchor for bubble surfaces", () => {
+    expect(
+      parseAnnouncement({ ...VALID, surface: "bubble", anchor: "sidebar-pipes" }),
+    ).toMatchObject({
+      surface: "bubble",
+      anchor: "sidebar-pipes",
+      position: "bottom",
+      dismissible: true,
+    });
+    expect(
+      parseAnnouncement({
+        ...VALID,
+        surface: "bubble",
+        anchor: "sidebar-pipes",
+        dismissible: false,
+      })!.dismissible,
+    ).toBe(true);
+    expect(parseAnnouncement({ ...VALID, surface: "bubble" })).toBeNull();
+    expect(
+      parseAnnouncement({
+        ...VALID,
+        surface: "bubble",
+        anchor: '[data-secret="anything"]',
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("survey payloads", () => {
@@ -246,6 +273,22 @@ describe("position normalization", () => {
     const announcement = parseAnnouncement({ id: "x", title: "t", body: "b", surface: "sidebar" })!;
     expect(announcement.surface).toBe("sidebar");
     expect(announcement.position).toBeUndefined();
+  });
+  it("bubble defaults below its anchor and accepts each target side", () => {
+    const base = {
+      id: "x",
+      title: "t",
+      body: "b",
+      surface: "bubble",
+      anchor: "sidebar-pipes",
+    };
+    expect(parseAnnouncement(base)!.position).toBe("bottom");
+    for (const position of ["top", "right", "bottom", "left"]) {
+      expect(parseAnnouncement({ ...base, position })!.position).toBe(position);
+    }
+    expect(parseAnnouncement({ ...base, position: "top-right" })!.position).toBe(
+      "bottom",
+    );
   });
 });
 

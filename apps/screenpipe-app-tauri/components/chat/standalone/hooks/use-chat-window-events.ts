@@ -425,6 +425,7 @@ export function useChatE2EGlobals({
           content?: string;
           contentBlocks?: Message["contentBlocks"];
           sourceCitations?: unknown[];
+          storeOnlyActive?: boolean;
         },
       ) => void;
     }).__e2eSeedAssistantMessage = (
@@ -433,6 +434,7 @@ export function useChatE2EGlobals({
         content?: string;
         contentBlocks?: Message["contentBlocks"];
         sourceCitations?: unknown[];
+        storeOnlyActive?: boolean;
       },
     ) => {
       const id = `e2e-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -451,15 +453,23 @@ export function useChatE2EGlobals({
       const store = useChatStore.getState();
       store.actions.setStreaming(sid, {
         streamingText: "",
-        streamingMessageId: null,
-        contentBlocks: [],
-        isLoading: false,
-        isStreaming: false,
+        streamingMessageId: payload.storeOnlyActive ? id : null,
+        contentBlocks: payload.storeOnlyActive
+          ? (payload.contentBlocks ?? [])
+          : [],
+        isLoading: payload.storeOnlyActive === true,
+        isStreaming: payload.storeOnlyActive === true,
       });
-      store.actions.patch(sid, { status: "idle", lastError: undefined });
+      store.actions.patch(sid, {
+        status: payload.storeOnlyActive ? "streaming" : "idle",
+        lastError: undefined,
+      });
       piStreamingTextRef.current = "";
       piMessageIdRef.current = null;
       piContentBlocksRef.current = [];
+      // `storeOnlyActive` reproduces a real cross-WebView handoff: the
+      // background router owns liveness, while this panel has not observed a
+      // foreground event yet. The runtime store bridge must activate it.
       setIsLoading(false);
       setIsStreaming(false);
     };

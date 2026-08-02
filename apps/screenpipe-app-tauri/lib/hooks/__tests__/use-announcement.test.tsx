@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   eventHandlers,
   captureMock,
+  reloadFlagsMock,
   pushMock,
   openMock,
   flagPayload,
@@ -18,6 +19,7 @@ const {
 } = vi.hoisted(() => ({
   eventHandlers: new Map<string, Set<(e: { payload: unknown }) => void>>(),
   captureMock: vi.fn(),
+  reloadFlagsMock: vi.fn(),
   pushMock: vi.fn(),
   openMock: vi.fn(() => Promise.resolve()),
   // mutable holder so each test can set the active flag payload
@@ -31,6 +33,7 @@ vi.mock("posthog-js", () => ({
   default: {
     getFeatureFlagPayload: vi.fn(() => flagPayload.current),
     onFeatureFlags: vi.fn(() => () => {}),
+    reloadFeatureFlags: reloadFlagsMock,
     capture: captureMock,
     has_opted_out_capturing: vi.fn(() => optedOut.current),
   },
@@ -84,6 +87,7 @@ describe("useAnnouncement", () => {
   beforeEach(() => {
     eventHandlers.clear();
     captureMock.mockClear();
+    reloadFlagsMock.mockClear();
     pushMock.mockClear();
     openMock.mockClear();
     flagPayload.current = null;
@@ -122,6 +126,18 @@ describe("useAnnouncement", () => {
       announcement_id: "flag-1",
       surface: "modal",
     });
+  });
+
+  it("refreshes flags on mount and when an already-open app regains focus", async () => {
+    const { unmount } = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+
+    expect(reloadFlagsMock).toHaveBeenCalledTimes(1);
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(reloadFlagsMock).toHaveBeenCalledTimes(2);
+    unmount();
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(reloadFlagsMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not load remote prompts after analytics opt-out", async () => {

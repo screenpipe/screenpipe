@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
 
-use tokio::sync::Semaphore;
+use sqlx::SqlitePool;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub const FIRST_WAL_RESET_SAFE_SQLITE: i32 = 3_051_003;
 
@@ -17,6 +19,59 @@ static SQLITE_WRITE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Semaphore>>>> = 
 /// after SQLite reported IOERR, CORRUPT, FULL, or NOTADB.
 static SQLITE_HARD_FAULTS: OnceLock<Mutex<HashMap<PathBuf, i32>>> = OnceLock::new();
 static SQLITE_RUNTIME_CHECK: OnceLock<Result<SqliteRuntimeIdentity, String>> = OnceLock::new();
+
+/// A cloneable capability for a SQLite pool whose callers must participate in
+/// the process-wide single-writer protocol.
+///
+/// The underlying pool is available only through [`SqliteWritePermit`], so a
+/// downstream worker must first join the same coordinator used by
+/// DatabaseManager, checkpoints, and SecretStore.
+#[derive(Clone)]
+pub struct SqliteWritePool {
+    pool: SqlitePool,
+    coordinator: Arc<Semaphore>,
+}
+
+impl SqliteWritePool {
+    pub fn new(pool: SqlitePool, coordinator: Arc<Semaphore>) -> Self {
+        Self { pool, coordinator }
+    }
+
+    /// Build a standalone capability for tests or independently owned
+    /// databases that do not share a DatabaseManager coordinator.
+    pub fn standalone(pool: SqlitePool) -> Self {
+        Self::new(pool, Arc::new(Semaphore::new(1)))
+    }
+
+    pub async fn lock(&self) -> Result<SqliteWritePermit, sqlx::Error> {
+        let permit = match tokio::time::timeout(
+            Duration::from_secs(10),
+            Arc::clone(&self.coordinator).acquire_owned(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => return Err(sqlx::Error::PoolClosed),
+            Err(_) => return Err(sqlx::Error::PoolTimedOut),
+        };
+        Ok(SqliteWritePermit {
+            pool: self.pool.clone(),
+            _permit: permit,
+        })
+    }
+}
+
+/// Proof that a caller currently owns the coordinated writer lane.
+pub struct SqliteWritePermit {
+    pool: SqlitePool,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl SqliteWritePermit {
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+}
 
 #[derive(Debug)]
 pub struct SqliteRuntimeIdentity {
@@ -180,6 +235,25 @@ pub fn sqlite_write_lock(db_path: impl AsRef<Path>) -> Arc<Semaphore> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn write_capability_holds_coordinator_until_permit_drops() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("open sqlite");
+        let coordinator = Arc::new(Semaphore::new(1));
+        let writer = SqliteWritePool::new(pool, Arc::clone(&coordinator));
+
+        let permit = writer.lock().await.expect("acquire writer");
+        assert_eq!(coordinator.available_permits(), 0);
+        sqlx::query("CREATE TABLE capability_test (id INTEGER PRIMARY KEY)")
+            .execute(permit.pool())
+            .await
+            .expect("write through capability");
+
+        drop(permit);
+        assert_eq!(coordinator.available_permits(), 1);
+    }
 
     #[test]
     fn canonical_and_relative_paths_share_one_lock() {

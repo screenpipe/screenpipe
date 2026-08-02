@@ -82,6 +82,15 @@ fn preflight_existing_database_header(path: &Path) -> Result<(), SqlxError> {
 }
 
 impl DatabaseManager {
+    /// Give an independently owned worker access to the dedicated write pool
+    /// only while it participates in this database's single-writer protocol.
+    pub fn coordinated_writer(&self) -> screenpipe_sqlite_coordinator::SqliteWritePool {
+        screenpipe_sqlite_coordinator::SqliteWritePool::new(
+            self.write_pool.clone(),
+            Arc::clone(&self.write_semaphore),
+        )
+    }
+
     pub async fn new(database_path: &str, config: DbConfig) -> Result<Self, sqlx::Error> {
         screenpipe_sqlite_coordinator::verify_sqlite_runtime().map_err(SqlxError::Protocol)?;
         debug!(
@@ -203,12 +212,28 @@ impl DatabaseManager {
                 .map_err(|error| quarantine_startup_error(database_file, error))?;
         }
 
+        // File-backed query connections have two independent write barriers:
+        // SQLite opens the file with mode=ro, and query_only rejects mutations
+        // at the connection level. In-memory databases cannot use mode=ro and
+        // remain writable for the many isolated test fixtures that seed them
+        // directly; production databases are always file-backed.
+        let is_in_memory =
+            database_path.contains(":memory:") || database_path.contains("mode=memory");
+        let read_connect_options = if is_in_memory {
+            connect_options.clone()
+        } else {
+            connect_options
+                .clone()
+                .read_only(true)
+                .pragma("query_only", "ON")
+        };
+
         // Read pool: handles all SELECT queries (search, timeline, API, pipes).
         let read_pool = SqlitePoolOptions::new()
             .max_connections(config.read_pool_max)
             .min_connections(config.read_pool_min)
             .acquire_timeout(Duration::from_secs(5))
-            .connect_with(connect_options.clone())
+            .connect_with(read_connect_options)
             .await
             .map_err(|error| quarantine_startup_error(database_file, error))?;
 
@@ -268,7 +293,7 @@ impl DatabaseManager {
             .await
             .map_err(|_| SqlxError::PoolClosed)?;
         match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .fetch_one(&db_manager.pool)
+            .fetch_one(&db_manager.write_pool)
             .await
         {
             Ok(row) => {
@@ -292,16 +317,17 @@ impl DatabaseManager {
                 warn!("startup wal checkpoint failed (continuing): {}", e);
             }
         }
-        drop(_checkpoint_guard);
-
-        // Run migrations after establishing the connection
-        if let Err(error) = Self::run_migrations(&db_manager.pool).await {
+        // Migrations mutate schema and migration bookkeeping, so keep them on
+        // the same serialized writer boundary as application writes.
+        if let Err(error) = Self::run_migrations(&db_manager.write_pool).await {
             if crate::sqlite_error::is_sqlite_hard_fault(&error) {
                 db_manager.write_queue_health.latch_hard_fault(&error);
             }
+            drop(_checkpoint_guard);
             db_manager.close().await;
             return Err(error);
         }
+        drop(_checkpoint_guard);
 
         // Surface persistent-file corruption proactively at boot with a recovery
         // hint, instead of only discovering it later via worker query errors.
@@ -757,6 +783,63 @@ impl DatabaseManager {
 mod shutdown_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn file_query_pool_remains_read_only_when_query_only_is_disabled() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("read-only-query-pool.sqlite");
+        let database = DatabaseManager::new(
+            db_path.to_str().expect("utf-8 temp path"),
+            DbConfig::for_tier(screenpipe_config::DeviceTier::Low),
+        )
+        .await
+        .expect("database init");
+
+        database
+            .execute_raw_sql_write("CREATE TABLE query_pool_probe (value INTEGER NOT NULL)")
+            .await
+            .expect("create probe through writer");
+
+        let mut reader = database.pool.acquire().await.expect("query connection");
+        let query_only: i64 = sqlx::query_scalar("PRAGMA query_only")
+            .fetch_one(&mut *reader)
+            .await
+            .expect("read query_only");
+        assert_eq!(query_only, 1, "query connections must enable query_only");
+
+        sqlx::query("PRAGMA query_only = OFF")
+            .execute(&mut *reader)
+            .await
+            .expect("disable connection-level guard for physical-mode test");
+        let write_error = sqlx::query("INSERT INTO query_pool_probe (value) VALUES (1)")
+            .execute(&mut *reader)
+            .await
+            .expect_err("mode=ro query connection unexpectedly accepted a write");
+        assert!(
+            write_error
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("readonly"),
+            "unexpected query-pool write error: {write_error}"
+        );
+        sqlx::query("PRAGMA query_only = ON")
+            .execute(&mut *reader)
+            .await
+            .expect("restore connection-level guard");
+        drop(reader);
+
+        database
+            .execute_raw_sql_write("INSERT INTO query_pool_probe (value) VALUES (2)")
+            .await
+            .expect("dedicated writer remains writable");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM query_pool_probe")
+            .fetch_one(&database.pool)
+            .await
+            .expect("query pool remains readable");
+        assert_eq!(count, 1);
+
+        database.close().await;
+    }
 
     #[test]
     fn early_startup_hard_fault_closes_the_process_writer_gate() {

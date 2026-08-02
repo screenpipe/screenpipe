@@ -1347,15 +1347,15 @@ pub trait PipeStore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Resolved model + provider from an AI preset.
-struct ResolvedPreset {
-    model: String,
-    provider: Option<String>,
+pub struct ResolvedPreset {
+    pub model: String,
+    pub provider: Option<String>,
     /// Provider base URL (e.g. `http://localhost:11434/v1` for Ollama).
-    url: Option<String>,
+    pub url: Option<String>,
     /// API key for the provider (custom / openai BYOK).
-    api_key: Option<String>,
+    pub api_key: Option<String>,
     /// System prompt from the preset (injected before the pipe body).
-    prompt: Option<String>,
+    pub prompt: Option<String>,
 }
 
 /// Read the ChatGPT OAuth access token, with auto-refresh if expired.
@@ -2408,6 +2408,14 @@ impl PipeManager {
     }
 
     /// Set a callback to be invoked for each stdout line from a running pipe.
+    /// Resolves a named AI preset (provider, model, base url, key) from the
+    /// user's own store. Exposed so the local HTTP surface can serve plain chat
+    /// with the same credentials the desktop app uses, without going through a
+    /// pipe or the hosted gateway.
+    pub fn resolve_ai_preset(&self, preset_id: &str) -> Option<ResolvedPreset> {
+        resolve_preset(&self.pipes_dir, preset_id)
+    }
+
     pub fn set_on_output_line(&mut self, cb: OnPipeOutputLine) {
         self.on_output_line = Some(cb);
     }

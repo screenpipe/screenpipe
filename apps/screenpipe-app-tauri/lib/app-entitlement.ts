@@ -9,6 +9,8 @@ export type AppEntitlementPlan =
   | "none"
   | "standard"
   | "pro"
+  | "pro_max"
+  | "pro_ultra"
   | "team"
   | "enterprise"
   | "lifetime";
@@ -72,6 +74,8 @@ export const ENTERPRISE_DOWNLOAD_URL = screenpipeWebUrl("/api/download", "https:
 const VERIFIED_PAID_PLAN_IDS = new Set([
   "standard",
   "pro",
+  "pro_max",
+  "pro_ultra",
   "team",
   "enterprise",
   "lifetime",

@@ -1070,7 +1070,12 @@ impl ServerCore {
                     poll_interval: std::time::Duration::from_secs(5 * 60),
                     ..Default::default()
                 };
-                let _ = Worker::new(db.pool.clone(), placeholder, cfg)
+                let _ = Worker::new_with_writer(
+                    db.pool.clone(),
+                    db.coordinated_writer(),
+                    placeholder,
+                    cfg,
+                )
                     .spawn_with_shutdown(redact_shutdown.clone());
             }
         }
@@ -1146,7 +1151,12 @@ impl ServerCore {
                     tables: ALL_TARGET_TABLES.to_vec(),
                     ..Default::default()
                 };
-                let _ = Worker::new(db.pool.clone(), pipeline_arc, cfg)
+                let _ = Worker::new_with_writer(
+                    db.pool.clone(),
+                    db.coordinated_writer(),
+                    pipeline_arc,
+                    cfg,
+                )
                     .with_database_error_hook(redact_database_error_hook.clone())
                     .spawn_with_shutdown(redact_shutdown.clone());
             } else {
@@ -1155,6 +1165,7 @@ impl ServerCore {
                 // launch. The worker is created inside the spawned
                 // task once the model is ready.
                 let pool = db.pool.clone();
+                let writer = db.coordinated_writer();
                 let shutdown = redact_shutdown.clone();
                 let labels = pii_labels.clone();
                 let pseudonymizer = pseudonymizer.clone();
@@ -1236,7 +1247,7 @@ impl ServerCore {
                         tables: ALL_TARGET_TABLES.to_vec(),
                         ..Default::default()
                     };
-                    let _ = Worker::new(pool, pipeline_arc, cfg)
+                    let _ = Worker::new_with_writer(pool, writer, pipeline_arc, cfg)
                         .with_database_error_hook(database_error_hook)
                         .spawn_with_shutdown(shutdown);
                 });
@@ -1253,6 +1264,7 @@ impl ServerCore {
             use screenpipe_redact::ImageRedactor;
 
             let pool = db.pool.clone();
+            let writer = db.coordinated_writer();
             if use_tinfoil {
                 let detector = Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
                     api_key: tinfoil_api_key.clone(),
@@ -1265,8 +1277,9 @@ impl ServerCore {
                     has_api_key = tinfoil_api_key.is_some(),
                     "starting async image-PII worker (backend=tinfoil)"
                 );
-                let _ = ImageWorker::new(
+                let _ = ImageWorker::new_with_writer(
                     pool,
+                    writer,
                     detector,
                     ImageWorkerConfig {
                         policy: ImageRedactionPolicy::from_labels(&pii_labels),
@@ -1293,8 +1306,9 @@ impl ServerCore {
                                 "starting async image-PII worker (backend=local)"
                             );
                             let detector_arc = Arc::new(detector) as Arc<dyn ImageRedactor>;
-                            let _ = ImageWorker::new(
+                            let _ = ImageWorker::new_with_writer(
                                 pool,
+                                writer,
                                 detector_arc,
                                 ImageWorkerConfig {
                                     policy: ImageRedactionPolicy::from_labels(&labels),

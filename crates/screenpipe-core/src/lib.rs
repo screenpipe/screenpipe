@@ -4,6 +4,10 @@
 pub mod agents;
 pub mod connections;
 pub mod display_topology;
+// Runtime CPU-feature detection lives in its own leaf crate so that
+// screenpipe-config can use it too (config can't depend on core — package
+// cycle via screenpipe-secrets). Re-exported here as the canonical path.
+pub use screenpipe_cpu_features as cpu_features;
 pub mod ffmpeg;
 pub mod memories;
 pub mod paths;

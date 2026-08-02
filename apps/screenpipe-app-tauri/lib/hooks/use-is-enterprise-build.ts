@@ -99,6 +99,24 @@ export type EnterpriseBuildStatus = {
 };
 
 /**
+ * Non-hook check for "this is definitely a consumer build", for persistence
+ * code that runs outside React (see `use-settings`).
+ *
+ * Deliberately asymmetric, for the same reason as the module doc above: only an
+ * authoritative `false` from Rust counts. An unresolved or failed check reports
+ * `false` here, so callers keep enforcing enterprise policy rather than letting
+ * a managed device escape it by racing the IPC.
+ */
+export async function isResolvedConsumerBuild(): Promise<boolean> {
+  if (cachedResult !== null) return cachedResult === false;
+  try {
+    return (await resolveEnterpriseBuild()) === false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Tri-state build policy for privacy-sensitive controls.
  *
  * IPC failure must never be cached as "consumer": doing so can make a managed

@@ -17,7 +17,13 @@ import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
+import { useFeatureFlagEnabled } from "posthog-js/react";
 import { commands } from "@/lib/utils/tauri";
+import {
+  ACP_AGENTS_FLAG,
+  filterAcpPresets,
+  isAcpRolloutEnabled,
+} from "@/lib/acp-rollout";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
@@ -124,6 +130,16 @@ export function StandaloneChat({
   sidebarCollapsed?: boolean;
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
+  const acpFlag = useFeatureFlagEnabled(ACP_AGENTS_FLAG);
+  const acpEnabled = isAcpRolloutEnabled(acpFlag);
+  const availableAiPresets = React.useMemo(
+    () => filterAcpPresets(settings.aiPresets, acpEnabled),
+    [settings.aiPresets, acpEnabled],
+  );
+  const rolloutSettings = React.useMemo(
+    () => ({ ...settings, aiPresets: availableAiPresets }) as typeof settings,
+    [settings, availableAiPresets],
+  );
   const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
   const hardcodedConnectionTiles = useHardcodedTiles();
   // Drop the macOS traffic-light reservation when the window is fullscreen
@@ -753,7 +769,7 @@ export function StandaloneChat({
     pastedImagesRef,
     attachedDocsRef,
     pendingDocsRef,
-    settings,
+    settings: rolloutSettings,
     selectedPreset: activePreset ?? null,
     selectedPresetRef: activePresetRef,
     inlineHistoryEnabled: !hideInlineHistory,
@@ -806,7 +822,7 @@ export function StandaloneChat({
     setIsStreaming,
   });
   useChatWindowSyncEvents({
-    aiPresets: settings?.aiPresets,
+    aiPresets: availableAiPresets,
     setActivePreset: handleSetActivePreset,
   });
 
@@ -849,7 +865,7 @@ export function StandaloneChat({
   } = usePiSessionLifecycle({
     activePreset,
     setActivePreset: handleSetActivePreset,
-    aiPresets: settings.aiPresets,
+    aiPresets: availableAiPresets,
     isSettingsLoaded,
     shouldFreezePresetSelection: Boolean(activePipeExecution),
     userToken: settings.user?.token,
@@ -888,7 +904,7 @@ export function StandaloneChat({
   });
 
   usePipeWatchSession({
-    aiPresets: settings.aiPresets,
+    aiPresets: availableAiPresets,
     setActivePreset: handleSetActivePreset,
     startPipeExecution,
     clearPipeExecution,
@@ -969,7 +985,7 @@ export function StandaloneChat({
     setPrefillContext,
     setPrefillFrameId,
     setRunningConfigFromProviderConfig,
-    settings,
+    settings: rolloutSettings,
     stagePendingAttachments,
     syncThinkingLevelAfterStart,
     takeQueuedDisplayById,
@@ -1179,7 +1195,7 @@ export function StandaloneChat({
     setIsStreaming,
     setMessages,
     setPiInfo,
-    settings,
+    settings: rolloutSettings,
     syncThinkingLevelAfterStart,
     turnIntentTextValuesMatch,
   });
@@ -1523,7 +1539,7 @@ export function StandaloneChat({
           onPickFiles: handleFilePicker,
         }}
         modelControls={{
-          settings,
+          settings: rolloutSettings,
           activePreset,
           activePipeExecution,
           currentQueueSessionId,

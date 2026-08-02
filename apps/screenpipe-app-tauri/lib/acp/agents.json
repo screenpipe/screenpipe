@@ -1,0 +1,10 @@
+[
+  {
+    "id": "claude-acp",
+    "name": "Claude Code",
+    "imageSrc": "/images/claude-ai.svg",
+    "presetName": "claude code",
+    "description": "Local coding agent with workspace file and terminal access. Uses an Anthropic API key; Claude subscription sign-in is disabled.",
+    "launch": { "kind": "npx", "package": "@agentclientprotocol/claude-agent-acp@0.61.0", "args": ["--hide-claude-auth"] }
+  }
+]

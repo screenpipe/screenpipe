@@ -20,8 +20,15 @@ export type AnnouncementKind = "news" | "tip" | "reminder";
  *  - `banner` — full-width strip that does not block interaction. placed at the
  *               top or bottom (see `position`).
  *  - `card`   — compact floating card docked in a corner (see `position`).
+ *  - `bubble` — compact callout attached to a code-approved UI anchor. the
+ *               preferred side is selected with `position`.
  *  - `sidebar`— quiet opt-in row; opens a modal only after the user clicks. */
-export type AnnouncementSurface = "modal" | "banner" | "card" | "sidebar";
+export type AnnouncementSurface =
+  | "modal"
+  | "banner"
+  | "card"
+  | "bubble"
+  | "sidebar";
 
 export type SurveyQuestionType = "single-choice" | "multiple-choice";
 
@@ -51,9 +58,15 @@ export type BannerPosition = "top" | "bottom";
 /** Which corner a `card` docks in. */
 export type CardPosition =
   "top-left" | "top-right" | "bottom-left" | "bottom-right";
-/** Placement hint. Meaningful for `banner` (top/bottom) and `card` (corners);
- *  ignored for `modal`, which is always centered. */
-export type AnnouncementPosition = BannerPosition | CardPosition;
+/** Preferred side of the target for a `bubble`. The renderer flips and clamps
+ *  it when the requested side would leave the viewport. */
+export type BubblePosition = "top" | "right" | "bottom" | "left";
+/** Placement hint. Meaningful for `banner` (top/bottom), `card` (corners), and
+ *  `bubble` (target side); ignored for `modal` and `sidebar`. */
+export type AnnouncementPosition =
+  | BannerPosition
+  | CardPosition
+  | BubblePosition;
 
 export interface AnnouncementCta {
   /** button label. shown UPPERCASE by the host per brand. */
@@ -73,21 +86,27 @@ export interface Announcement {
   kind: AnnouncementKind;
   /** default "modal". */
   surface: AnnouncementSurface;
-  /** placement for banner/card. defaulted by surface ("top" for banner,
-   *  "bottom-right" for card). undefined for modal/sidebar. */
+  /** placement for banner/card/bubble. defaulted by surface ("top" for banner,
+   *  "bottom-right" for card, "bottom" for bubble). undefined for
+   *  modal/sidebar. */
   position?: AnnouncementPosition;
+  /** Stable value of a `data-announcement-anchor` attribute in the app. This
+   *  is required for `bubble` and ignored for every other surface. Remote
+   *  payloads cannot supply arbitrary CSS selectors. */
+  anchor?: string;
   title: string;
-  /** markdown. rendered with the same sanitizing transform as notifications. */
+  /** Markdown. HTML and embedded media are disabled; links use the same
+   *  first-party HTTPS allowlist as CTA destinations. */
   body: string;
   cta?: AnnouncementCta;
   survey?: AnnouncementSurvey;
-  /** auto-close after this many ms. honored only for `banner`/`card` (modals
-   *  are meant to be acknowledged). omitted = stays until dismissed. */
+  /** auto-close after this many ms. honored only for `banner`/`card`/`bubble`
+   *  (modals are meant to be acknowledged). omitted = stays until dismissed. */
   autoDismissMs?: number;
   /** ISO-8601 instant. once passed, the announcement is never shown again. */
   expiresAt?: string;
   /** when false the user must act on the cta — no X / overlay-close.
-   *  default true. */
+   *  default true. Bubbles and surveys always normalize this to true. */
   dismissible: boolean;
 }
 
@@ -96,6 +115,7 @@ const SURFACES: readonly AnnouncementSurface[] = [
   "modal",
   "banner",
   "card",
+  "bubble",
   "sidebar",
 ];
 const QUESTION_TYPES: readonly SurveyQuestionType[] = [
@@ -109,6 +129,12 @@ const CARD_POSITIONS: readonly CardPosition[] = [
   "top-right",
   "bottom-left",
   "bottom-right",
+];
+const BUBBLE_POSITIONS: readonly BubblePosition[] = [
+  "top",
+  "right",
+  "bottom",
+  "left",
 ];
 
 /** Resolve a placement valid for the surface, falling back to that surface's
@@ -126,6 +152,11 @@ function normalizePosition(
     return CARD_POSITIONS.includes(raw as CardPosition)
       ? (raw as CardPosition)
       : "bottom-right";
+  }
+  if (surface === "bubble") {
+    return BUBBLE_POSITIONS.includes(raw as BubblePosition)
+      ? (raw as BubblePosition)
+      : "bottom";
   }
   return undefined;
 }
@@ -197,7 +228,7 @@ function safeInternalRoute(raw: unknown): string | null {
   return route;
 }
 
-function safeExternalUrl(raw: unknown): string | null {
+export function safeAnnouncementExternalUrl(raw: unknown): string | null {
   const value = boundedString(raw, 2048);
   if (!value) return null;
   try {
@@ -225,7 +256,7 @@ function normalizeCta(raw: unknown): AnnouncementCta | undefined {
   const label = boundedString(r.label, 40);
   if (!label) return undefined;
   const cta: AnnouncementCta = { label };
-  const url = safeExternalUrl(r.url);
+  const url = safeAnnouncementExternalUrl(r.url);
   const route = safeInternalRoute(r.route);
   if (url) cta.url = url;
   if (route) cta.route = route;
@@ -344,6 +375,15 @@ export function parseAnnouncement(raw: unknown): Announcement | null {
     dismissible: r.dismissible === false ? false : true,
   };
   if (position) announcement.position = position;
+  if (surface === "bubble") {
+    const anchor = boundedIdentifier(r.anchor, 80);
+    if (!anchor) return null;
+    announcement.anchor = anchor;
+    // Anchored callouts must never trap the user next to an app control. Unlike
+    // a modal, a bubble is contextual and can contain enough copy to scroll, so
+    // remote configuration cannot remove its close affordance.
+    announcement.dismissible = true;
+  }
 
   const cta = normalizeCta(r.cta);
   if (cta) announcement.cta = cta;

@@ -70,6 +70,11 @@ pub struct BootPhaseSnapshot {
     /// Unix epoch seconds when the current phase was entered. Lets the UI
     /// show "X minutes" on slow migrations.
     pub since_epoch_secs: u64,
+    /// True when this CPU lacks AVX2 (pre-2013 x86-64 / Atom-line): local
+    /// whisper/qwen3 STT is disabled at runtime (their kernels are
+    /// AVX2-compiled); parakeet + cloud engines still work. Drives the
+    /// "compatibility mode" notice in onboarding/settings.
+    pub cpu_compat_mode: bool,
 }
 
 impl BootPhaseSnapshot {
@@ -79,12 +84,22 @@ impl BootPhaseSnapshot {
             message: None,
             error: None,
             since_epoch_secs: 0,
+            cpu_compat_mode: false,
         }
     }
 }
 
 static BOOT_PHASE: Lazy<RwLock<BootPhaseSnapshot>> =
     Lazy::new(|| RwLock::new(BootPhaseSnapshot::idle()));
+
+/// Set once at startup (main.rs) when the CPU lacks AVX2; folded into every
+/// boot-phase snapshot so the frontend's existing getBootPhase polling
+/// carries the flag without a new command.
+static CPU_COMPAT_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_cpu_compat_mode(on: bool) {
+    CPU_COMPAT_MODE.store(on, Ordering::SeqCst);
+}
 
 fn now_epoch() -> u64 {
     std::time::SystemTime::now()
@@ -118,7 +133,9 @@ pub fn set_boot_error(err: &str) {
 }
 
 pub fn get_boot_phase_snapshot() -> BootPhaseSnapshot {
-    BOOT_PHASE.read().unwrap_or_else(|e| e.into_inner()).clone()
+    let mut snap = BOOT_PHASE.read().unwrap_or_else(|e| e.into_inner()).clone();
+    snap.cpu_compat_mode = CPU_COMPAT_MODE.load(Ordering::SeqCst);
+    snap
 }
 
 /// Snapshot of where the boot lifecycle currently is.
@@ -1888,6 +1905,28 @@ async fn check_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_compat_mode_round_trips_through_snapshot() {
+        // Serialize with every other test that mutates the process-wide
+        // BOOT_PHASE singleton (see the boot-readiness section for the
+        // convention) — an unguarded set_boot_phase here would race the
+        // wait_for_boot_ready tests and flap them.
+        let _guard = BOOT_PHASE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Default off.
+        assert!(!get_boot_phase_snapshot().cpu_compat_mode);
+        set_cpu_compat_mode(true);
+        assert!(get_boot_phase_snapshot().cpu_compat_mode);
+        // Setting a boot phase must not clear the flag (separate storage).
+        set_boot_phase("building_audio", None);
+        assert!(get_boot_phase_snapshot().cpu_compat_mode);
+        set_cpu_compat_mode(false);
+        assert!(!get_boot_phase_snapshot().cpu_compat_mode);
+        // Reset so other tests see a known-pending baseline.
+        set_boot_phase("idle", None);
+    }
 
     fn make_healthy_response() -> Result<HealthCheckResponse> {
         Ok(HealthCheckResponse {
