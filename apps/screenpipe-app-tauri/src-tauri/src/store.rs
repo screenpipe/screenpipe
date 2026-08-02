@@ -962,7 +962,10 @@ pub struct SettingsStore {
     #[serde(rename = "autoUpdatePipes", default = "default_true")]
     pub auto_update_pipes: bool,
     /// Use screenpipe cloud for AI-powered features like suggestions.
-    /// Better quality but sends activity context to the cloud (zero data retention).
+    /// Better quality, but sends activity context to a model at request time.
+    /// Request-time processing only: this flag never uploads history for
+    /// storage and is unrelated to cloud archive (`cloud_archive`) and sync
+    /// (`cloud_sync`). Keep user-facing copy consistent with that boundary.
     #[serde(rename = "enhancedAI", default)]
     pub enhanced_ai: bool,
     /// Explicit consumer opt-in for on-demand remote diagnostic log requests.

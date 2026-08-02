@@ -3732,7 +3732,10 @@ autoUpdate?: boolean;
 autoUpdatePipes?: boolean;
 /**
  * Use screenpipe cloud for AI-powered features like suggestions.
- * Better quality but sends activity context to the cloud (zero data retention).
+ * Better quality, but sends activity context to a model at request time.
+ * Request-time processing only: this flag never uploads history for
+ * storage and is unrelated to cloud archive (`cloud_archive`) and sync
+ * (`cloud_sync`). Keep user-facing copy consistent with that boundary.
  */
 enhancedAI?: boolean;
 /**

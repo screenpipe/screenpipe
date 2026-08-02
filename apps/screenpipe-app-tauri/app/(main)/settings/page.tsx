@@ -27,6 +27,8 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { useQueryState } from "nuqs";
 import { useRouter, useSearchParams } from "next/navigation";
+import { SETTINGS_SECTIONS, type SettingsSection } from "@/components/settings/sections";
+import { SettingsNavProvider, type GoToSection } from "@/components/settings/settings-nav";
 import { AccountSection, searchIndex as accountSearchIndex } from "@/components/settings/account-section";
 import ShortcutSection, { searchIndex as shortcutsSearchIndex } from "@/components/settings/shortcut-section";
 import { AIPresets, searchIndex as aiSearchIndex } from "@/components/settings/ai-presets";
@@ -86,29 +88,6 @@ import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 
-type SettingsSection =
-  | "account"
-  | "recording"
-  | "ai"
-  | "ai-settings"
-  | "general"
-  | "display"
-  | "shortcuts"
-  | "privacy"
-  | "permissions"
-  | "storage"
-  | "team"
-  | "notifications"
-  | "referral"
-  | "usage"
-  | "speakers";
-
-const ALL_SETTINGS_SECTIONS: SettingsSection[] = [
-  "display", "general", "ai", "ai-settings", "recording", "shortcuts", "notifications",
-  "usage", "privacy", "permissions", "storage", "speakers",
-  "team", "account", "referral",
-];
-
 function ReferralSection() {
   return <ReferralCard />;
 }
@@ -136,7 +115,7 @@ function SettingsContent() {
 
   const [section, setSection] = useQueryState<SettingsSection>("section", {
     defaultValue: "display",
-    parse: (v) => (ALL_SETTINGS_SECTIONS.includes(v as SettingsSection) ? (v as SettingsSection) : "display"),
+    parse: (v) => (SETTINGS_SECTIONS.includes(v as SettingsSection) ? (v as SettingsSection) : "display"),
     serialize: (v) => v,
   });
 
@@ -151,7 +130,7 @@ function SettingsContent() {
   useEffect(() => {
     if (isPlatformLoading) return;
     if (!isSettingsSectionHidden(section)) return;
-    const fallback = ALL_SETTINGS_SECTIONS.find((s) => !isSettingsSectionHidden(s)) ?? "display";
+    const fallback = SETTINGS_SECTIONS.find((s) => !isSettingsSectionHidden(s)) ?? "display";
     setSection(fallback as SettingsSection);
   }, [section, isSettingsSectionHidden, isPlatformLoading, setSection]);
 
@@ -250,18 +229,28 @@ function SettingsContent() {
   // Reset highlight to top whenever the query changes.
   useEffect(() => { setActiveIndex(0); }, [searchQuery]);
 
+  // Switch sections and (optionally) land on a specific field. Shared by the
+  // search popover and by in-copy cross-references (SettingsSectionLink), so
+  // both routes behave identically: same state, same scroll-and-flash.
+  //
+  // scrollToSettingsField defers via rAF and retries a few frames in case the
+  // destination section mounts asynchronously.
+  const goToSection = useCallback<GoToSection>(
+    (target, field) => {
+      setSection(target);
+      if (field) scrollToSettingsField(field);
+    },
+    [setSection],
+  );
+
   const pickResult = (result: { item: { id: string }; matchedFieldLabel?: string }) => {
     posthog.capture("settings_search_result_selected", {
       section: result.item.id,
       matched_field: Boolean(result.matchedFieldLabel),
     });
-    setSection(result.item.id as SettingsSection);
     setSearchQuery("");
     searchInputRef.current?.blur();
-    // If a specific field matched (not just the section name), scroll to it once
-    // the target section has mounted. scrollToSettingsField defers via rAF and
-    // retries a few frames in case the section mounts asynchronously.
-    if (result.matchedFieldLabel) scrollToSettingsField(result.matchedFieldLabel);
+    goToSection(result.item.id as SettingsSection, result.matchedFieldLabel);
   };
 
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -460,9 +449,12 @@ function SettingsContent() {
           <h2 className="text-sm font-medium text-foreground">{currentLabel}</h2>
         </div>
 
-        {/* Scrollable content */}
+        {/* Scrollable content. The nav provider lets a section's copy link to a
+            control that lives in another section (e.g. Enhanced AI -> Storage). */}
         <div className="flex-1 overflow-y-auto p-6">
-          {renderSection()}
+          <SettingsNavProvider value={goToSection}>
+            {renderSection()}
+          </SettingsNavProvider>
         </div>
       </div>
     </>

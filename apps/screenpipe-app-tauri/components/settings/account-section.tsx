@@ -36,6 +36,7 @@ import {
   type AppUser,
 } from "@/lib/app-entitlement";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { SettingsSectionLink } from "./settings-nav";
 import { Card } from "../ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -558,8 +559,19 @@ export function AccountSection() {
             </div>
           )}
 
+          {/* Sync toggles below copy data to your account; Enhanced AI (AI
+              Settings) does not. Users conflate the two, so state the boundary
+              from this side too (screenpipe/screenpipe#5623). */}
           {/* Pipe sync */}
           <div className="mt-4 pt-4 border-t border-border/50">
+            <p className="text-[10px] text-muted-foreground/60 mb-3">
+              sync copies data to your account so other devices can read it.
+              enhanced AI in{" "}
+              <SettingsSectionLink section="ai-settings" field="Enhanced AI">
+                AI settings
+              </SettingsSectionLink>{" "}
+              doesn&apos;t — it only sends context to a model when you ask.
+            </p>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">pipe sync across devices</p>

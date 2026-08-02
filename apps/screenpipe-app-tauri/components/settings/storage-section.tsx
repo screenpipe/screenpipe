@@ -118,7 +118,9 @@ export function StorageSection() {
   }, [toast]);
 
   return (
-    <div className="space-y-5">
+    // Matches the `section-settings-{id}` hook every other section exposes, so
+    // e2e can assert a jump landed here without depending on copy.
+    <div className="space-y-5" data-testid="section-settings-storage">
       <p className="text-muted-foreground text-sm mb-4">
         Local disk usage and storage controls
       </p>

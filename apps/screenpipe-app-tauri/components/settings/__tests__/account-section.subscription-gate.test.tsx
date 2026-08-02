@@ -113,6 +113,7 @@ vi.mock("../business-upgrade-card", () => ({
   ),
 }));
 
+import { SettingsNavProvider } from "../settings-nav";
 import { AccountSection } from "../account-section";
 
 const ACTIVE_CARD = "account-cloud-active-card";
@@ -458,5 +459,49 @@ describe("AccountSection subscription/login gating", () => {
     expect(loginStatus()).toContain("not logged in");
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
     expect(screen.getByText(/sign in to screenpipe/i)).toBeInTheDocument();
+  });
+});
+
+// Sync copies data to the account; Enhanced AI only sends context to a model on
+// request. Users conflate the two (screenpipe/screenpipe#5623), so the sync
+// controls carry the boundary in copy and a way to reach the other setting.
+describe("AccountSection sync vs Enhanced AI", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    mocks.state.user = null;
+  });
+
+  function renderSignedIn(goToSection = vi.fn()) {
+    mocks.state.user = {
+      id: "u1",
+      email: "pro@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: true,
+      subscription_plan: "pro",
+    };
+    render(
+      <SettingsNavProvider value={goToSection}>
+        <AccountSection />
+      </SettingsNavProvider>,
+    );
+    return goToSection;
+  }
+
+  it("says sync copies data while Enhanced AI does not", () => {
+    renderSignedIn();
+
+    const note = screen.getByText(/sync copies data to your account/i);
+    expect(note.textContent?.replace(/\s+/g, " ")).toContain(
+      "only sends context to a model when you ask",
+    );
+  });
+
+  it("links to the Enhanced AI toggle rather than just naming it", () => {
+    const goToSection = renderSignedIn();
+
+    fireEvent.click(screen.getByTestId("settings-section-link-ai-settings"));
+
+    expect(goToSection).toHaveBeenCalledWith("ai-settings", "Enhanced AI");
   });
 });

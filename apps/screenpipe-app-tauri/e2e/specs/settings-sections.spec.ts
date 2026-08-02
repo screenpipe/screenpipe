@@ -177,6 +177,44 @@ describe('Settings sections', () => {
     expect(generalBody).not.toContain('auto-generate chat titles');
   });
 
+  // Enhanced AI has been read as a cloud-storage switch (screenpipe/screenpipe#5623).
+  // The copy now draws the processing/storage boundary and links to the controls
+  // that really do move data; this covers the wiring end to end, which the unit
+  // test (which stubs the nav provider) can't reach.
+  it('separates Enhanced AI from cloud storage and sync, and links to both', async () => {
+    const navAiSettings = await $('[data-testid="settings-nav-ai-settings"]');
+    await navAiSettings.waitForExist({ timeout: 8_000 });
+    await navAiSettings.click();
+
+    const section = await $('[data-testid="section-settings-ai-settings"]');
+    await section.waitForExist({ timeout: 8_000 });
+
+    const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
+    expect(body).toContain('processing only');
+    expect(body).toContain("doesn't store your history in the cloud");
+    // A retention promise we don't control shouldn't reappear in this row.
+    expect(body).not.toContain('zero data retention');
+
+    await section.moveTo();
+    const filepath = await saveScreenshot('settings-enhanced-ai-storage-distinction');
+    expect(existsSync(filepath)).toBe(true);
+
+    const storageLink = await $('[data-testid="settings-section-link-storage"]');
+    await storageLink.waitForExist({ timeout: 5_000 });
+    await storageLink.click();
+    const storageSection = await $('[data-testid="section-settings-storage"]');
+    await storageSection.waitForExist({ timeout: 8_000 });
+
+    // Back to AI Settings, then follow the sync pointer.
+    await navAiSettings.click();
+    await section.waitForExist({ timeout: 8_000 });
+    const accountLink = await $('[data-testid="settings-section-link-account"]');
+    await accountLink.waitForExist({ timeout: 5_000 });
+    await accountLink.click();
+    const accountStatus = await $('[data-testid="account-login-status"]');
+    await accountStatus.waitForExist({ timeout: 8_000 });
+  });
+
   it('navigates to Speakers settings and mounts section container', async () => {
     const navSpeakers = await $('[data-testid="settings-nav-speakers"]');
     await navSpeakers.waitForExist({ timeout: 8_000 });

@@ -11,11 +11,28 @@ import { useSettings, type Settings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { Lock, MessageSquare, Sparkles } from "lucide-react";
 import { CloudMediaAnalysisPreview } from "./setting-previews";
+import { SettingsSectionLink } from "./settings-nav";
 import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Enhanced AI", keywords: ["cloud", "suggestions", "daily summary", "timeline"] },
+  {
+    label: "Enhanced AI",
+    keywords: [
+      "cloud",
+      "suggestions",
+      "daily summary",
+      "timeline",
+      // Users looking for "cloud storage"/"sync" land here first and misread
+      // this toggle as one — index those terms so the card that corrects the
+      // misreading is reachable from them. The real storage and sync controls
+      // still outrank it: they match on label, this only matches on keyword.
+      "cloud storage",
+      "sync",
+      "upload",
+      "privacy",
+    ],
+  },
   {
     label: "AI audio & video analysis",
     keywords: [
@@ -105,6 +122,26 @@ export function AISettings() {
                   daily summaries use your configured AI model; suggestions may
                   use screenpipe cloud. relevant activity is processed only when
                   needed.
+                </p>
+                {/* The distinction this setting is most often misread on: users
+                    have taken "screenpipe cloud" here to mean their history is
+                    being uploaded and kept. It isn't — this toggle only decides
+                    whether a model gets asked, so name the boundary and point at
+                    the controls that DO move data (screenpipe/screenpipe#5623). */}
+                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                  processing only — this doesn&apos;t store your history in the
+                  cloud or sync it across devices.{" "}
+                  <SettingsSectionLink section="storage" field="storage policy">
+                    storage
+                  </SettingsSectionLink>{" "}
+                  and{" "}
+                  <SettingsSectionLink
+                    section="account"
+                    field="pipe sync across devices"
+                  >
+                    sync
+                  </SettingsSectionLink>{" "}
+                  are separate settings.
                 </p>
               </div>
             </div>
