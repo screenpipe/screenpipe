@@ -1039,6 +1039,79 @@ describe('usage reservations against workerd D1', () => {
 		}
 	});
 
+	it('allows an explicit one-time trial incident reset while preserving its bounded cap', async () => {
+		const deviceId = 'user-d1-trial-incident-epoch';
+		const now = new Date();
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const trialCap = holdUsd * 4;
+		const incidentSpend = 0.9;
+		env.PRIVATE_TRIAL_COST_CAP_EPOCH = 'trial-incident-v1';
+		setTrialTextWindows(env, {
+			request: holdUsd,
+			daily: holdUsd * 4,
+			total: trialCap,
+		});
+		await env.DB.prepare(`
+			INSERT INTO usage (device_id, user_id, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, ?, 'trial', 'trial_cost_v1', 'trial', ?)
+		`).bind(trialCostKey(deviceId), deviceId, incidentSpend).run();
+
+		const first = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+			'interactive',
+			{},
+			'business',
+			true,
+		);
+		expect(first.allowed).toBe(true);
+		if (!first.allowed || !first.reservation) throw new Error('expected fresh trial epoch reservation');
+		await releaseDailyCostReservation(env, first.reservation);
+
+		const preserved = await env.DB.prepare(
+			'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(trialCostKey(deviceId)).first<{ daily_cost_usd: number }>();
+		expect(preserved?.daily_cost_usd).toBe(incidentSpend);
+
+		await env.DB.prepare('UPDATE usage SET daily_cost_usd = ? WHERE device_id = ?')
+			.bind(incidentSpend + trialCap, trialCostKey(deviceId)).run();
+		const atCap = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+			'interactive',
+			{},
+			'business',
+			true,
+		);
+		expect(atCap.allowed).toBe(false);
+		if (!atCap.allowed) {
+			expect(await atCap.response.text()).toContain('trial_cost_limit_exceeded');
+		}
+
+		env.PRIVATE_TRIAL_COST_CAP_EPOCH = 'trial-incident-v2';
+		const secondEpoch = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			'claude-sonnet-5',
+			now,
+			'interactive',
+			{},
+			'business',
+			true,
+		);
+		expect(secondEpoch.allowed).toBe(true);
+		if (secondEpoch.allowed && secondEpoch.reservation) {
+			await releaseDailyCostReservation(env, secondEpoch.reservation);
+		}
+	});
+
 	it('preserves incident spend while enforcing a fresh post-epoch cash budget', async () => {
 		const deviceId = 'user-d1-cost-epoch';
 		const day = new Date().toISOString().slice(0, 10);

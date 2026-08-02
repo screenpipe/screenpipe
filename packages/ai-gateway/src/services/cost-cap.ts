@@ -29,6 +29,7 @@ import { loadHostedAiReservationControls } from './hosted-ai-reservation-control
 
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
 const MONTHLY_COST_BASELINE_TIER = 'monthly_cost_baseline_v1';
+const TRIAL_COST_BASELINE_TIER = 'trial_cost_baseline_v1';
 const COST_RESERVATION_TIER_PREFIX = 'daily_cost_reservation_v3';
 
 export type DailyCostHold = {
@@ -63,6 +64,11 @@ function utcDay(now: Date = new Date()): string {
 
 function configuredCostCapEpoch(env: Env): string | null {
 	const epoch = env.PRIVATE_COST_CAP_EPOCH?.trim();
+	return epoch && epoch.length <= 128 ? epoch : null;
+}
+
+function configuredTrialCostCapEpoch(env: Env): string | null {
+	const epoch = env.PRIVATE_TRIAL_COST_CAP_EPOCH?.trim();
 	return epoch && epoch.length <= 128 ? epoch : null;
 }
 
@@ -161,6 +167,39 @@ async function getMonthlyUserCostForCapOrThrow(
 		currentCost,
 	).first<{ baseline: number }>();
 	if (!baselineRow) throw new Error('monthly cost baseline unavailable');
+
+	return Math.max(0, currentCost - Number(baselineRow.baseline || 0));
+}
+
+/** Return trial spend incurred after an explicit one-time incident reset. */
+async function getTrialUserCostForCapOrThrow(
+	env: Env,
+	deviceId: string,
+): Promise<number> {
+	const currentCost = await getCostAccumulatorOrThrow(env, trialCostKey(deviceId), 'trial');
+	const epoch = configuredTrialCostCapEpoch(env);
+	if (!epoch) return currentCost;
+
+	const baselineKey = `trial-cost:baseline:v1:${await sha256Hex(`${epoch}:${deviceId}`)}`;
+	const baselineRow = await env.DB.prepare(`
+		INSERT INTO usage
+			(device_id, user_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+		VALUES (?, ?, 0, 'trial', ?, 'trial', ?)
+		ON CONFLICT(device_id) DO UPDATE SET
+			user_id = excluded.user_id,
+			daily_count = 0,
+			last_reset = excluded.last_reset,
+			tier = excluded.tier,
+			daily_cost_usd = usage.daily_cost_usd,
+			cost_day = 'trial'
+		RETURNING daily_cost_usd AS baseline
+	`).bind(
+		baselineKey,
+		deviceId,
+		TRIAL_COST_BASELINE_TIER,
+		currentCost,
+	).first<{ baseline: number }>();
+	if (!baselineRow) throw new Error('trial cost baseline unavailable');
 
 	return Math.max(0, currentCost - Number(baselineRow.baseline || 0));
 }
@@ -320,9 +359,8 @@ export async function reserveDailyCostCap(
 		const reservationControls = loadHostedAiReservationControls(env);
 		// Establish immutable incident-epoch baselines before admission.
 		await getDailyUserCostForCapOrThrow(env, deviceId, now);
-		if (!hostedAiTrial) {
-			await getMonthlyUserCostForCapOrThrow(env, deviceId, now);
-		}
+		if (hostedAiTrial) await getTrialUserCostForCapOrThrow(env, deviceId);
+		else await getMonthlyUserCostForCapOrThrow(env, deviceId, now);
 
 		const day = utcDay(now);
 		const month = utcMonth(now);
@@ -339,9 +377,14 @@ export async function reserveDailyCostCap(
 		const baselineKey = baselineEpoch
 			? `daily-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
 			: '__no_daily_cost_baseline__';
-		const monthlyBaselineKey = baselineEpoch && !hostedAiTrial
-			? `monthly-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
-			: '__no_monthly_cost_baseline__';
+		const trialBaselineEpoch = configuredTrialCostCapEpoch(env);
+		const monthlyBaselineKey = hostedAiTrial
+			? trialBaselineEpoch
+				? `trial-cost:baseline:v1:${await sha256Hex(`${trialBaselineEpoch}:${deviceId}`)}`
+				: '__no_trial_cost_baseline__'
+			: baselineEpoch
+				? `monthly-cost:baseline:v1:${await sha256Hex(`${baselineEpoch}:${deviceId}`)}`
+				: '__no_monthly_cost_baseline__';
 		// Non-Business Auto is constrained to the efficient waterfall. Reserving it
 		// against Sol would reject legitimate requests before the provider runs.
 		const reservationModel = model === 'auto' && getHostedAiPlan(accountPlan) !== 'business'
@@ -524,7 +567,7 @@ export async function reserveDailyCostCap(
 		const [dailyCost, monthlyCost, globalDailyCost, globalHourlyCost, accountHolds, globalHolds] = await Promise.all([
 			getDailyUserCostForCapOrThrow(env, deviceId, now),
 			hostedAiTrial
-				? getCostAccumulatorOrThrow(env, monthKey, monthPeriod)
+				? getTrialUserCostForCapOrThrow(env, deviceId)
 				: getMonthlyUserCostForCapOrThrow(env, deviceId, now),
 			getCostAccumulatorOrThrow(env, GLOBAL_DAILY_COST_KEY, day),
 			getCostAccumulatorOrThrow(env, GLOBAL_HOURLY_COST_KEY, hour),
