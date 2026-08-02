@@ -45,7 +45,9 @@ snapshot impossible.
    checkpointing the quarantined generation. Compare file identity, length, and
    nanosecond modification time before/after the copy and again before swap; if
    anything changed, refuse recovery because the source was not truly offline.
-3. Run SQLite `.recover` against only that working copy, producing a new file.
+3. Run SQLite's official page-level Recovery API, compiled into Screenpipe,
+   against only that working copy. Recovery never depends on a host `sqlite3`
+   executable or package-manager installation.
 4. Require the candidate's physical identity to differ from every quarantined
    identity.
 5. Run `quick_check`, full `integrity_check`, and `foreign_key_check`.

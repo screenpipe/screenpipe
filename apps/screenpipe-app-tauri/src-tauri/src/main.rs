@@ -2096,6 +2096,12 @@ async fn main() {
                     )
                     .await;
                 });
+                if !app_ui_hidden && !headless_startup {
+                    crate::db_recovery_notifications::prompt_for_quarantined_database(
+                        app_handle.clone(),
+                        data_dir.clone(),
+                    );
+                }
             }
             crate::disk_pressure_notifications::start(app_handle.clone());
 

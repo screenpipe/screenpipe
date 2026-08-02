@@ -3,7 +3,7 @@ members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.164"
+version = "2.5.165"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""

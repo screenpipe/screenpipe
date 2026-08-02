@@ -103,7 +103,7 @@ export function createCanvasDocument(
     schema: "live-view-canvas.v1",
     viewId: view.id,
     revision: 0,
-    mode: "dashboard",
+    mode: "canvas",
     viewport: { ...DEFAULT_CANVAS_VIEWPORT },
     blocks: createCanvasBlockLayout(view.slots),
     notes: [],
@@ -138,13 +138,14 @@ export function reconcileCanvasDocument(
       validNodes.has(arrow.toId),
   );
   if (
+    document.mode === "canvas" &&
     blocks.length === document.blocks.length &&
     blocks.every((block, index) => block === document.blocks[index]) &&
     arrows.length === document.arrows.length
   ) {
     return document;
   }
-  return { ...document, blocks, arrows };
+  return { ...document, mode: "canvas", blocks, arrows };
 }
 
 export function toSaveCanvasRequest(

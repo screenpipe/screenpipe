@@ -31,16 +31,17 @@
 //!
 //! ## Recovery pre-flight
 //!
-//!  * sqlite3 cli present and ≥ 3.38 (when `.recover` shipped)
+//!  * SQLite's official recovery extension is compiled into Screenpipe
 //!  * free disk ≥ 2× the DB/WAL/SHM generation size
 //!  * never open or checkpoint the quarantined generation; copy the exact
-//!    triplet and run `.recover` only against the working copy
+//!    triplet and run page-level recovery only against the working copy
 //!  * require a new physical file identity, quick/full integrity, zero foreign
 //!    key violations, and a durable write/close/reopen/read canary
 //!  * preserve the exact original DB/WAL/SHM in a recovery directory and clear
 //!    durable quarantine only after the installed file passes verification
 
 use anyhow::{bail, Context, Result};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -49,6 +50,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use sysinfo::{DiskExt, System, SystemExt};
 
 use super::DbCommand;
 
@@ -349,24 +351,6 @@ fn ensure_app_quit(force: bool) -> Result<()> {
     Ok(())
 }
 
-fn ensure_sqlite_recover_capable() -> Result<()> {
-    let out = Command::new("sqlite3")
-        .arg("--version")
-        .output()
-        .context("`sqlite3` cli not found in PATH. macOS ships it; on Linux: `apt install sqlite3` or `brew install sqlite3`.")?;
-    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let version = line.split_whitespace().next().unwrap_or("").to_string();
-    let mut parts = version.split('.');
-    let major: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-    let minor: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-    if (major, minor) < (3, 38) {
-        bail!(
-            "sqlite3 cli is too old ({version}). `.recover` requires 3.38+. install a newer sqlite (e.g. `brew install sqlite3`)."
-        );
-    }
-    Ok(())
-}
-
 fn ensure_disk_space(data_dir: &Path, source_size: u64) -> Result<()> {
     // Need ≥ 2× source: the .recovered sidecar plus the snapshot copy.
     let needed = source_size.saturating_mul(2);
@@ -384,17 +368,16 @@ fn ensure_disk_space(data_dir: &Path, source_size: u64) -> Result<()> {
 }
 
 fn available_disk_bytes(path: &Path) -> Option<u64> {
-    // Best-effort via `df -k`. If parsing fails we just skip the check rather
-    // than blocking the user.
-    let out = Command::new("df").arg("-k").arg(path).output().ok()?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let line = stdout.lines().nth(1)?;
-    let mut cols = line.split_whitespace();
-    let _fs = cols.next()?;
-    let _size = cols.next()?;
-    let _used = cols.next()?;
-    let avail_kb: u64 = cols.next()?.parse().ok()?;
-    Some(avail_kb * 1024)
+    let path = fs::canonicalize(path).ok()?;
+    let mut system = System::new();
+    system.refresh_disks_list();
+    system.refresh_disks();
+    system
+        .disks()
+        .iter()
+        .filter(|disk| path.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().components().count())
+        .map(|disk| disk.available_space())
 }
 
 // ── command entry ──────────────────────────────────────────────────────
@@ -421,20 +404,20 @@ fn integrity_check(db_path: &Path) -> Result<()> {
         );
     }
     println!("running PRAGMA quick_check on {} …", db_path.display());
-    let out = Command::new("sqlite3")
-        .arg(db_path)
-        .arg("PRAGMA quick_check;")
-        .output()
-        .context("failed to invoke sqlite3 (is the cli installed?)")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let result = stdout.trim();
-    if result == "ok" {
+    let connection = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("opening {} read-only", db_path.display()))?;
+    let mut statement = connection.prepare("PRAGMA quick_check")?;
+    let results = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if results.as_slice() == ["ok"] {
         println!("  ✓ database is healthy");
         Ok(())
     } else {
-        eprintln!("  ✗ corruption detected:\n{result}");
-        eprintln!("\n  next step: quit the screenpipe app, then run `screenpipe db recover`");
-        std::process::exit(1)
+        bail!(
+            "corruption detected:\n{}\n\nnext step: quit the screenpipe app, then run `screenpipe db recover`",
+            results.join("\n")
+        )
     }
 }
 
@@ -770,8 +753,24 @@ async fn recover(data_dir: &Path, _force: bool) -> Result<()> {
     // exact source generation. `--force` is retained for CLI compatibility but
     // deliberately cannot override this architectural boundary.
     ensure_app_quit(false)?;
-    ensure_sqlite_recover_capable()?;
 
+    recover_offline(data_dir).await
+}
+
+/// Recover a database that was durably quarantined by the running app.
+///
+/// The desktop app calls this only on a fail-closed launch, before it starts
+/// the server or capture. Requiring the durable marker keeps an accidental UI
+/// invocation from turning an ordinary healthy database into a recovery job.
+pub async fn recover_quarantined_database(data_dir: &Path) -> Result<()> {
+    let live = data_dir.join("db.sqlite");
+    if !screenpipe_db::sqlite_quarantine_exists(&live) {
+        bail!(
+            "database recovery is not required: no durable quarantine marker exists for {}",
+            live.display()
+        );
+    }
+    ensure_app_quit(false)?;
     recover_offline(data_dir).await
 }
 
@@ -844,8 +843,8 @@ async fn recover_offline(data_dir: &Path) -> Result<()> {
     );
 
     println!("running SQLite page-level recovery against the working copy");
-    sqlite_pipe_recover(&work, &candidate)
-        .context("`.recover` pipeline failed; quarantined DB/WAL/SHM remain untouched")?;
+    screenpipe_sqlite_recovery::recover_database(&work, &candidate)
+        .context("embedded page-level recovery failed; quarantined DB/WAL/SHM remain untouched")?;
 
     let mut forbidden_identities = vec![original_identity.clone()];
     if let Some(marker_identity) = marker.and_then(|marker| marker.file_identity) {
@@ -993,48 +992,22 @@ async fn recover_offline(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sqlite_pipe_recover(source: &Path, dest: &Path) -> Result<()> {
-    let mut dump = Command::new("sqlite3")
-        .arg(source)
-        .arg(".recover")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .context("failed to spawn `sqlite3 .recover`")?;
-    let dump_stdout = dump.stdout.take().expect("piped stdout");
-    let mut apply = Command::new("sqlite3")
-        .arg(dest)
-        .stdin(Stdio::from(dump_stdout))
-        .stderr(Stdio::inherit())
-        .spawn()
-        .context("failed to spawn second sqlite3 to apply recover dump")?;
-    let dump_status = dump.wait().context("waiting on `sqlite3 .recover`")?;
-    let apply_status = apply.wait().context("waiting on apply sqlite3")?;
-    if !dump_status.success() || !apply_status.success() {
-        bail!(
-            "sqlite3 returned non-zero (dump={}, apply={})",
-            dump_status,
-            apply_status
-        );
-    }
-    Ok(())
-}
-
 fn best_effort_counts(db_path: &Path) -> Vec<(&'static str, u64)> {
     let tables = ["frames", "audio_transcriptions", "ui_events"];
+    let connection = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
     let mut out = Vec::new();
     for t in tables {
-        let result = Command::new("sqlite3")
-            .arg(db_path)
-            .arg(format!("SELECT COUNT(*) FROM {t};"))
-            .output();
-        let n = match result {
-            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse()
-                .unwrap_or(0),
-            _ => 0,
-        };
+        let n = connection
+            .as_ref()
+            .and_then(|connection| {
+                connection
+                    .query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .ok()
+            })
+            .and_then(|count| u64::try_from(count).ok())
+            .unwrap_or(0);
         out.push((t, n));
     }
     out
@@ -1049,15 +1022,15 @@ fn format_counts(counts: &[(&'static str, u64)]) -> String {
 }
 
 fn table_count(db_path: &Path) -> Option<u64> {
-    let out = Command::new("sqlite3")
-        .arg(db_path)
-        .arg("SELECT COUNT(*) FROM sqlite_master WHERE type='table';")
-        .output()
+    let connection = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let count = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
         .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    u64::try_from(count).ok()
 }
 
 // ── cleanup ────────────────────────────────────────────────────────────
@@ -1231,6 +1204,7 @@ fn unlock(data_dir: &Path, force: bool) -> Result<()> {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    use std::io::{Seek, SeekFrom};
 
     fn write_generation(live: &Path) {
         fs::write(live, b"database-bytes").expect("write db");
@@ -1348,31 +1322,52 @@ mod recovery_tests {
     }
 
     #[tokio::test]
-    async fn end_to_end_recovery_installs_fresh_inode_and_archives_original() {
-        if let Err(error) = ensure_sqlite_recover_capable() {
-            eprintln!("skipping end-to-end recovery test without sqlite3 .recover: {error}");
-            return;
-        }
-
+    async fn end_to_end_recovery_salvages_corruption_installs_fresh_inode_and_archives_original() {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path();
         let live = data_dir.join("db.sqlite");
-        let create = Command::new("sqlite3")
-            .arg(&live)
-            .arg(
-                "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL); \
-                 INSERT INTO records (value) VALUES ('recover-me');",
+        let create = Connection::open(&live).expect("create source database");
+        create
+            .execute_batch(
+                "PRAGMA page_size = 4096; \
+                 CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL); \
+                 WITH RECURSIVE n(value) AS ( \
+                   SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 200 \
+                 ) \
+                 INSERT INTO records(value) SELECT printf('row-%04d', value) FROM n; \
+                 CREATE INDEX records_value_idx ON records(value);",
             )
-            .output()
-            .expect("create source database");
-        assert!(create.status.success());
+            .expect("seed source database");
+        let index_root: i64 = create
+            .query_row(
+                "SELECT rootpage FROM sqlite_schema WHERE name = 'records_value_idx'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("index root page");
+        drop(create);
+
+        let mut source_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&live)
+            .expect("open source database bytes");
+        source_file
+            .seek(SeekFrom::Start(((index_root - 1) * 4096 + 100) as u64))
+            .expect("seek index page");
+        source_file
+            .write_all(&[0xff; 512])
+            .expect("corrupt index page");
+        source_file.sync_all().expect("sync source corruption");
+        drop(source_file);
+
         let original_bytes = fs::read(&live).expect("read original bytes");
         let original_identity = screenpipe_db::sqlite_file_identity(&live).expect("old identity");
         screenpipe_db::prepare_sqlite_quarantine_reserve(&live).expect("prepare marker reserve");
         screenpipe_db::persist_sqlite_quarantine(&live, Some(11), "test corruption")
             .expect("persist quarantine");
 
-        recover_offline(data_dir)
+        recover_quarantined_database(data_dir)
             .await
             .expect("end-to-end offline recovery");
 
@@ -1380,13 +1375,18 @@ mod recovery_tests {
             screenpipe_db::sqlite_file_identity(&live).expect("replacement identity");
         assert_ne!(replacement_identity, original_identity);
         assert!(!screenpipe_db::sqlite_quarantine_exists(&live));
-        let value = Command::new("sqlite3")
-            .arg(&live)
-            .arg("SELECT value FROM records WHERE id = 1;")
-            .output()
-            .expect("query recovered row");
-        assert!(value.status.success());
-        assert_eq!(String::from_utf8_lossy(&value.stdout).trim(), "recover-me");
+        let recovered = Connection::open_with_flags(&live, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("open recovered database");
+        let recovered_count: i64 = recovered
+            .query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
+            .expect("count recovered rows");
+        assert_eq!(recovered_count, 200);
+        assert_eq!(
+            recovered
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .expect("verify recovered integrity"),
+            "ok"
+        );
 
         let recovery_dir = newest_recovery_directories(data_dir)
             .expect("recovery dirs")
@@ -1405,6 +1405,23 @@ mod recovery_tests {
         assert!(recovery_dir
             .join("recovery-manifest-complete.json")
             .exists());
+    }
+
+    #[tokio::test]
+    async fn app_recovery_refuses_a_database_without_a_quarantine_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let live = dir.path().join("db.sqlite");
+        Connection::open(&live).expect("create healthy database");
+
+        let error = recover_quarantined_database(dir.path())
+            .await
+            .expect_err("healthy unmarked database must not enter app recovery");
+
+        assert!(error.to_string().contains("no durable quarantine marker"));
+        assert!(live.exists());
+        assert!(newest_recovery_directories(dir.path())
+            .expect("list recovery directories")
+            .is_empty());
     }
 
     #[tokio::test]

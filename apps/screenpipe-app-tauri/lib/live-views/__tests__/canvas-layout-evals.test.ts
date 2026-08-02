@@ -208,8 +208,22 @@ describe("Live View Canvas layout evals", () => {
 
     const reconciled = reconcileCanvasDocument(target, foreign);
     expect(reconciled.viewId).toBe(target.id);
-    expect(reconciled.mode).toBe("dashboard");
+    expect(reconciled.mode).toBe("canvas");
     expect(reconciled.revision).toBe(0);
+  });
+
+  it("migrates the removed dashboard mode to Canvas", () => {
+    const target = view([slot(0)]);
+    const dashboardDocument: BrainViewCanvasDocument = {
+      ...createCanvasDocument(target),
+      revision: 4,
+      mode: "dashboard",
+    };
+
+    const reconciled = reconcileCanvasDocument(target, dashboardDocument);
+
+    expect(reconciled.mode).toBe("canvas");
+    expect(reconciled.revision).toBe(4);
   });
 
   it("anchors a horizontal arrow to the facing edges of its nodes", () => {

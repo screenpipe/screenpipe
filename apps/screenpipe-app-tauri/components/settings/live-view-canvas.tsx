@@ -32,6 +32,7 @@ import {
 import {
   ArrowRight,
   Hand,
+  LayoutGrid,
   Maximize2,
   MousePointer2,
   Move,
@@ -1094,7 +1095,7 @@ export function LiveViewCanvas({
   return (
     <section
       data-testid="live-view-canvas"
-      className="relative h-[min(70vh,720px)] min-h-[480px] w-full overflow-hidden border border-border bg-background"
+      className="relative min-h-0 w-full flex-1 overflow-hidden border border-border bg-background"
       aria-label="Live View process canvas"
     >
       <div
@@ -1204,7 +1205,7 @@ export function LiveViewCanvas({
 
       <div
         data-canvas-toolbar
-        className="absolute left-3 top-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center border border-foreground bg-background shadow-lg shadow-black/5"
+        className="absolute left-3 top-1/2 z-30 flex -translate-y-1/2 flex-col items-center border border-foreground bg-background shadow-lg shadow-black/5"
       >
         {TOOL_OPTIONS.map((option) => {
           const Icon = option.icon;
@@ -1214,10 +1215,11 @@ export function LiveViewCanvas({
               type="button"
               data-testid={`canvas-tool-${option.value}`}
               variant="ghost"
-              size="sm"
+              size="icon"
               aria-label={option.label}
               aria-pressed={tool === option.value}
-              className={`h-8 rounded-none border-r border-border px-2 text-[10px] ${
+              title={option.label}
+              className={`h-9 w-9 rounded-none border-b border-border ${
                 tool === option.value ? "bg-foreground text-background" : ""
               }`}
               onClick={() => {
@@ -1225,17 +1227,49 @@ export function LiveViewCanvas({
                 setArrowSource(null);
               }}
             >
-              <Icon className="mr-1 h-3 w-3" />
-              <span className="hidden sm:inline">{option.label}</span>
+              <Icon className="h-3.5 w-3.5" />
+              <span className="sr-only">{option.label}</span>
             </Button>
           );
         })}
         <Button
           type="button"
+          data-testid="canvas-arrange"
+          variant="ghost"
+          size="icon"
+          aria-label="arrange canvas"
+          title="arrange canvas"
+          className="h-9 w-9 rounded-none border-b border-border"
+          onClick={arrangeCanvas}
+        >
+          <LayoutGrid className="h-3.5 w-3.5" />
+          <span className="sr-only">arrange canvas</span>
+        </Button>
+        <Button
+          type="button"
+          data-testid="canvas-delete-selection"
+          variant="ghost"
+          size="icon"
+          aria-label="delete selected canvas item"
+          title="delete selected canvas item"
+          className="h-9 w-9 rounded-none"
+          disabled={!selectedCanDelete}
+          onClick={removeSelection}
+        >
+          <Trash2 className="h-3 w-3" />
+        </Button>
+      </div>
+
+      <div
+        data-canvas-toolbar
+        className="absolute bottom-3 left-3 z-30 flex items-center border border-foreground bg-background shadow-lg shadow-black/5"
+      >
+        <Button
+          type="button"
           variant="ghost"
           size="icon"
           aria-label="zoom out"
-          className="h-8 w-8 rounded-none"
+          className="h-8 w-8 rounded-none border-r border-border"
           onClick={() => zoomCanvas(1 / 1.2)}
         >
           <ZoomOut className="h-3 w-3" />
@@ -1248,7 +1282,7 @@ export function LiveViewCanvas({
           variant="ghost"
           size="icon"
           aria-label="zoom in"
-          className="h-8 w-8 rounded-none"
+          className="h-8 w-8 rounded-none border-l border-border"
           onClick={() => zoomCanvas(1.2)}
         >
           <ZoomIn className="h-3 w-3" />
@@ -1264,32 +1298,10 @@ export function LiveViewCanvas({
         >
           <Maximize2 className="h-3 w-3" />
         </Button>
-        <Button
-          type="button"
-          data-testid="canvas-arrange"
-          variant="ghost"
-          size="sm"
-          className="h-8 rounded-none border-l border-border px-2 text-[10px]"
-          onClick={arrangeCanvas}
-        >
-          arrange
-        </Button>
-        <Button
-          type="button"
-          data-testid="canvas-delete-selection"
-          variant="ghost"
-          size="icon"
-          aria-label="delete selected canvas item"
-          className="h-8 w-8 rounded-none border-l border-border"
-          disabled={!selectedCanDelete}
-          onClick={removeSelection}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
       </div>
 
       {tool === "arrow" && arrowSource && (
-        <div className="absolute bottom-3 left-3 z-30 border border-foreground bg-background px-3 py-2 text-xs">
+        <div className="absolute bottom-14 left-3 z-30 border border-foreground bg-background px-3 py-2 text-xs">
           choose another Block or note to connect
         </div>
       )}
