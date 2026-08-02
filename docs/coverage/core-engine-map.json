@@ -15,6 +15,11 @@
       "sourceRoots": ["src"]
     },
     {
+      "crate": "screenpipe-sqlite-coordinator",
+      "testRoots": ["tests"],
+      "sourceRoots": ["src"]
+    },
+    {
       "crate": "screenpipe-audio",
       "testRoots": ["tests"],
       "sourceRoots": ["src"]
@@ -219,6 +224,21 @@
       "notes": "Active /search route test builds an audio-disabled router, seeds captured-screen-shaped OCR data into an in-memory DB, and asserts the HTTP response and pagination."
     },
     {
+      "id": "engine-db-recovery-cli",
+      "label": "Engine offline database recovery lifecycle",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/cli/db.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "engine-lifecycle"],
+      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Exact DB/WAL/SHM working-copy preservation, rollback on archive failure, and restart repair for crashes during the multi-file generation swap."
+    },
+    {
       "id": "engine-focus-os",
       "label": "Engine focus and OS integration helpers",
       "crate": "screenpipe-engine",
@@ -341,6 +361,22 @@
       "notes": "PostHog capture gating, telemetry context shaping, piggyback telemetry forwarding, crash-log helpers, resource monitoring, and the recording-coverage reliability metric."
     },
     {
+      "id": "sqlite-coordinator-durable-quarantine",
+      "label": "SQLite coordination and durable quarantine",
+      "crate": "screenpipe-sqlite-coordinator",
+      "files": [
+        "src/lib.rs",
+        "src/quarantine.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "engine-lifecycle"],
+      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Process-wide single-writer gates, SQLite runtime pinning, atomic hard-fault markers, OS file identity, fail-closed malformed metadata, fresh-identity resolution, and a real cross-process restart test."
+    },
+    {
       "id": "db-search-indexing",
       "label": "Database OCR/accessibility search indexing",
       "crate": "screenpipe-db",
@@ -405,6 +441,7 @@
       "files": [
         "src/cancellable_query.rs",
         "src/failpoint_vfs.rs",
+        "src/recovery.rs",
         "src/sqlite_error.rs",
         "tests/cancellable_query_test.rs",
         "tests/cancellation_performance_bench.rs",
@@ -421,7 +458,7 @@
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
-      "notes": "SQLite hard-fault classification, failpoint VFS injection, query cancellation surviving dropped futures, close-severs-connections wedge regression, multi-pool WAL parity/corruption coverage, read-pool/write-pool split writability on file-backed databases, runtime version pinning, and manual WAL chaos plus memory-pressure probes (several ignored by default)."
+      "notes": "SQLite hard-fault classification, failpoint VFS injection, fresh-identity recovery verification with integrity/FK/write canaries, query cancellation, close-severs-connections regressions, multi-pool WAL parity, read-pool/write-pool split writability on file-backed databases, runtime version pinning, and WAL chaos plus memory-pressure probes."
     },
     {
       "id": "db-audio-meetings-speakers",

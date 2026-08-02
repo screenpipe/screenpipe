@@ -248,7 +248,8 @@ impl WriteQueueHealth {
         self.inner.degraded.load(Ordering::SeqCst)
     }
     /// True once SQLite reports an unrecoverable hard fault for this manager.
-    /// The latch never clears; recovery requires a new `DatabaseManager`.
+    /// The latch never clears; recovery requires an offline, verified fresh
+    /// physical database generation, not merely a new `DatabaseManager`.
     pub fn is_hard_faulted(&self) -> bool {
         self.inner.hard_faulted.load(Ordering::SeqCst)
             || self.inner.hard_fault_path.as_ref().is_some_and(|path| {

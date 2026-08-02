@@ -1681,10 +1681,28 @@ async fn main() {
             //     let _ = app_handle.emit("vault-locked-on-startup", ());
             // }
 
+            let launch_db_path = data_dir.join("db.sqlite");
+            let launch_db_quarantined = screenpipe_db::sqlite_quarantine_exists(&launch_db_path);
+            if launch_db_quarantined {
+                // Preserve the cross-launch fail-closed boundary before any
+                // server, SQLite pool, watchdog, or capture thread is started.
+                crate::health::set_boot_error(
+                    "database remains quarantined after a SQLite hard fault; run `screenpipe db recover` while screenpipe is closed",
+                );
+                crate::health::set_recording_status(crate::health::RecordingStatus::Error);
+            }
+
             // Start server core + capture on a dedicated thread with its own tokio runtime
             // to avoid competing with Tauri's UI runtime.
             // Two-phase startup: ServerCore (DB + HTTP + pipes) then CaptureSession (vision + audio).
             'start_server: {
+                if launch_db_quarantined {
+                    info!(
+                        database = %launch_db_path.display(),
+                        "Skipping server and capture startup: durable SQLite quarantine is active"
+                    );
+                    break 'start_server;
+                }
                 let store_clone = store.clone();
                 let data_dir_clone = data_dir.clone();
                 if !crate::recording::recording_access_allowed(&store_clone) {
@@ -2068,6 +2086,17 @@ async fn main() {
             crate::meeting_live_notes::start(app_handle.clone());
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
+            if launch_db_quarantined {
+                // A new process must preserve the same fail-closed state as the
+                // process that observed the hard fault. Start the notification
+                // subscriber first, then publish recovery-required immediately.
+                tauri::async_runtime::spawn(async {
+                    crate::db_relaunch::surface_manual_recovery(
+                        "durable SQLite quarantine was present at app launch",
+                    )
+                    .await;
+                });
+            }
             crate::disk_pressure_notifications::start(app_handle.clone());
 
             // Background ChatGPT OAuth token refresh — keeps access tokens
