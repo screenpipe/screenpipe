@@ -603,8 +603,13 @@ impl ServerCore {
                     db.report_sqlite_error(error);
                 })
             };
+            // Must be the WRITE pool: the secret store issues INSERTs (OAuth
+            // pending state, cloud tokens), and `db.pool` is opened read-only
+            // for file-backed databases. It acquires the same process-wide
+            // write lock as the engine, so writing through this pool directly
+            // still serializes correctly.
             match screenpipe_secrets::SecretStore::new_with_database_error_hook(
-                db.pool.clone(),
+                db.write_pool(),
                 secret_key,
                 Some(database_error_hook),
             )

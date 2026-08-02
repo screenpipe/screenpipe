@@ -598,7 +598,13 @@ impl McpServerStore {
             create_config: create_on_complete.then_some(cfg),
             create_headers: headers,
         };
-        ss.set_json(&oauth_pending_key(&state), &pending).await?;
+        // Name the step and keep the full source chain (`:#`). A bare "failed to
+        // set secret" here reads as a keychain or crypto problem and hides the
+        // underlying SQLx error, which is what made a read-only-pool regression
+        // take so long to localize.
+        ss.set_json(&oauth_pending_key(&state), &pending)
+            .await
+            .map_err(|error| anyhow!("failed to save MCP OAuth sign-in state: {error:#}"))?;
         Ok(McpOAuthStart {
             auth_url: auth_url.to_string(),
             state,

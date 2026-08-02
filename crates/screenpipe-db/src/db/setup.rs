@@ -91,6 +91,25 @@ impl DatabaseManager {
         )
     }
 
+    /// Raw write pool, for the narrow case of a component that owns its own
+    /// write serialization over this same database file.
+    ///
+    /// Prefer [`Self::coordinated_writer`] — it hands out the write pool
+    /// already bound to this database's single-writer semaphore. This accessor
+    /// exists for callers that cannot consume a `SqliteWritePool` because they
+    /// take a bare `SqlitePool`, and that independently acquire
+    /// [`screenpipe_sqlite_coordinator::sqlite_write_lock`] for the same path.
+    /// Since that lock is process-wide and keyed by database file, such a
+    /// caller serializes against every other writer here despite holding the
+    /// pool directly — `screenpipe_secrets::SecretStore` is the one example.
+    ///
+    /// Never hand `pool` (the read pool) to a writer: it is opened `mode=ro`
+    /// with `query_only=ON` for file-backed databases, so writes fail at
+    /// runtime while every `:memory:` test keeps passing.
+    pub fn write_pool(&self) -> SqlitePool {
+        self.write_pool.clone()
+    }
+
     pub async fn new(database_path: &str, config: DbConfig) -> Result<Self, sqlx::Error> {
         screenpipe_sqlite_coordinator::verify_sqlite_runtime().map_err(SqlxError::Protocol)?;
         debug!(

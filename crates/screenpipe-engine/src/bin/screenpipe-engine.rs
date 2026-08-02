@@ -1374,8 +1374,11 @@ async fn main() -> anyhow::Result<()> {
                 db.report_sqlite_error(error);
             })
         };
+        // Must be the WRITE pool — see the matching note in the Tauri app's
+        // server_core.rs. `db.pool` is read-only for file-backed databases, so
+        // every secret write (OAuth pending state, tokens) would fail at runtime.
         let secret_store_result = screenpipe_secrets::SecretStore::new_with_database_error_hook(
-            db.pool.clone(),
+            db.write_pool(),
             secret_key,
             Some(database_error_hook),
         )
