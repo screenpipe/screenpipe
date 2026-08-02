@@ -102,9 +102,7 @@ pub async fn transcribe_with_openai_compatible(
             form = form.text("prompt", prompt.clone()).text("context", prompt);
         }
 
-        let mut request = client
-            .post(format!("{}/v1/audio/transcriptions", endpoint))
-            .multipart(form);
+        let mut request = client.post(transcription_url(endpoint)).multipart(form);
 
         if let Some(key) = api_key {
             if !key.is_empty() {
@@ -145,6 +143,16 @@ pub async fn transcribe_with_openai_compatible(
     Err(last_err
         .expect("retry loop ran with at least one attempt")
         .into())
+}
+
+/// Build the OpenAI-compatible transcription URL from a user-provided base
+/// endpoint. Keeping this in the shared request path means the settings
+/// verification request and production transcription use the exact same URL.
+fn transcription_url(endpoint: &str) -> String {
+    format!(
+        "{}/v1/audio/transcriptions",
+        endpoint.trim().trim_end_matches('/')
+    )
 }
 
 /// Whether a transport-level error is transient (worth retrying) rather than
@@ -343,6 +351,22 @@ mod tests {
         assert!(transient_error_text("Connection refused (os error 61)"));
         assert!(!transient_error_text("invalid api key"));
         assert!(!transient_error_text("404 not found"));
+    }
+
+    #[test]
+    fn transcription_url_accepts_endpoints_with_or_without_a_trailing_slash() {
+        assert_eq!(
+            transcription_url("http://127.0.0.1:8080"),
+            "http://127.0.0.1:8080/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            transcription_url("http://127.0.0.1:8080/"),
+            "http://127.0.0.1:8080/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            transcription_url("  http://127.0.0.1:8080/  "),
+            "http://127.0.0.1:8080/v1/audio/transcriptions"
+        );
     }
 
     #[test]

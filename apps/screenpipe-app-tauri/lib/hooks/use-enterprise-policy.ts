@@ -424,6 +424,10 @@ async function sendHeartbeat(
       settings.enterpriseAppUpdatePolicy
     );
     const installMetadata = await getEnterpriseInstallMetadata();
+    const hostIdentity = await commands.getEnterpriseHostIdentity().catch(() => ({
+      machine_id_hash: null,
+      os_user_id_hash: null,
+    }));
 
     let frameStatus = "unknown";
     let audioStatus = "unknown";
@@ -459,6 +463,8 @@ async function sendHeartbeat(
         },
         body: JSON.stringify({
           device_id: deviceId,
+          machine_id_hash: hostIdentity.machine_id_hash,
+          os_user_id_hash: hostIdentity.os_user_id_hash,
           hostname,
           platform: devicePlatform,
           app_version: appVersion,
@@ -834,6 +840,11 @@ export function useEnterprisePolicyRuntime() {
             : rawMode === true
             ? "cited"
             : "off";
+        const rawFeedback = streams.feedback;
+        const feedback =
+          rawFeedback === "ratings" || rawFeedback === "full"
+            ? rawFeedback
+            : "off";
         await withTimeout(
           "enterprise setSyncStreams",
           commands.setSyncStreams(
@@ -842,6 +853,7 @@ export function useEnterprisePolicyRuntime() {
             pickBool("ui_events"),
             pickBool("memories"),
             pickBool("snapshots"),
+            feedback,
             frameImages,
           ),
           LOCAL_POLICY_COMMAND_TIMEOUT_MS

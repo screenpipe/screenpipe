@@ -583,13 +583,13 @@ async fn collect_summary_core(
         edited_files_result,
         active_ts_result,
     ) = tokio::join!(
-        db.execute_raw_sql(&apps_query),
-        db.execute_raw_sql(&windows_query),
-        db.execute_raw_sql(&texts_query),
-        db.execute_raw_sql(&audio_speakers_query),
-        db.execute_raw_sql(&audio_transcripts_query),
-        db.execute_raw_sql(&edited_files_query),
-        db.execute_raw_sql(&active_ts_query),
+        db.query_raw_sql(&apps_query),
+        db.query_raw_sql(&windows_query),
+        db.query_raw_sql(&texts_query),
+        db.query_raw_sql(&audio_speakers_query),
+        db.query_raw_sql(&audio_transcripts_query),
+        db.query_raw_sql(&edited_files_query),
+        db.query_raw_sql(&active_ts_query),
     );
 
     let mut apps = Vec::new();
@@ -762,10 +762,7 @@ async fn load_recording_status(
          (SELECT ROUND((JULIANDAY('{now}') - JULIANDAY(MAX(timestamp))) * 86400) FROM audio_transcriptions) AS seconds_since_last_audio"
     );
 
-    let rows = db
-        .execute_raw_sql(&query)
-        .await
-        .map_err(|e| e.to_string())?;
+    let rows = db.query_raw_sql(&query).await.map_err(|e| e.to_string())?;
     let row = rows
         .as_array()
         .and_then(|a| a.first())
@@ -891,7 +888,7 @@ async fn load_snippets(
     }
 
     let audio_rows = db
-        .execute_raw_sql(&audio_query)
+        .query_raw_sql(&audio_query)
         .await
         .map_err(|e| e.to_string())?;
     if let Some(rows) = audio_rows.as_array() {
@@ -1604,12 +1601,12 @@ mod db_tests {
             sql_val(window),
             if focused { 1 } else { 0 }
         );
-        db.execute_raw_sql(&q).await.expect("insert frame");
+        db.execute_raw_sql_write(&q).await.expect("insert frame");
     }
 
     async fn last_frame_id(db: &DatabaseManager) -> i64 {
         let rows = db
-            .execute_raw_sql("SELECT MAX(id) AS id FROM frames")
+            .query_raw_sql("SELECT MAX(id) AS id FROM frames")
             .await
             .expect("select latest frame id");
         rows.as_array()
@@ -1871,7 +1868,7 @@ mod db_tests {
         let (db, _d) = fresh_db().await;
         let p = "/Users/me/proj/main.rs";
         for ts in ["10:00:00", "10:00:20"] {
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO frames (timestamp, app_name, window_name, document_path) \
                  VALUES ('{DAY} {ts}', 'Code', 'main.rs', '{p}')"
             ))
@@ -1893,17 +1890,17 @@ mod db_tests {
         let (db, _d) = fresh_db().await;
         // audio_transcriptions.audio_chunk_id is a NOT NULL FK (sqlx enables
         // foreign_keys), so the parent chunk must exist first.
-        db.execute_raw_sql("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
+        db.execute_raw_sql_write("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
             .await
             .unwrap();
-        db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
+        db.execute_raw_sql_write("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
             .await
             .unwrap();
         for (m, text) in [
             (0, "hello team this is the weekly sync"),
             (1, "lets review the roadmap now"),
         ] {
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO audio_transcriptions \
                  (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
                  VALUES (1, {m}, '{DAY} 10:0{m}:00', '{text}', 'mic', 1)"
@@ -1925,10 +1922,10 @@ mod db_tests {
     #[tokio::test]
     async fn weekly_audio_context_is_not_consumed_by_the_last_few_minutes() {
         let (db, _d) = fresh_db().await;
-        db.execute_raw_sql("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
+        db.execute_raw_sql_write("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
             .await
             .unwrap();
-        db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
+        db.execute_raw_sql_write("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
             .await
             .unwrap();
 
@@ -1936,7 +1933,7 @@ mod db_tests {
         // the final minutes to crowd every older row out of the old global
         // length sort and newest-first snippet query.
         for day in 1..=7 {
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO audio_transcriptions \
                  (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
                  VALUES (1, {day}, '2026-06-0{day} 10:00:00', \
@@ -1946,7 +1943,7 @@ mod db_tests {
             .unwrap();
         }
         for second in 0..24 {
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO audio_transcriptions \
                  (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
                  VALUES (1, {}, '2026-06-07 23:59:{second:02}', \
@@ -2022,15 +2019,15 @@ mod db_tests {
     #[tokio::test]
     async fn audio_context_backfills_capacity_from_one_dense_period() {
         let (db, _d) = fresh_db().await;
-        db.execute_raw_sql("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
+        db.execute_raw_sql_write("INSERT INTO audio_chunks (id, file_path) VALUES (1, 'test.wav')")
             .await
             .unwrap();
-        db.execute_raw_sql("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
+        db.execute_raw_sql_write("INSERT INTO speakers (id, name) VALUES (1, 'Alice')")
             .await
             .unwrap();
 
         for second in 0..24 {
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO audio_transcriptions \
                  (audio_chunk_id, offset_index, timestamp, transcription, device, speaker_id) \
                  VALUES (1, {second}, '2026-06-07 23:59:{second:02}', \
@@ -2073,7 +2070,7 @@ mod db_tests {
         .await;
         // The frame just inserted is the only row, so its id is 1.
         let txt = "Quarterly planning notes for the leadership offsite";
-        db.execute_raw_sql(&format!(
+        db.execute_raw_sql_write(&format!(
             "INSERT INTO elements (frame_id, source, role, text, depth, sort_order) \
              VALUES (1, 'accessibility', 'AXTextField', '{txt}', 0, 0)"
         ))
@@ -2100,7 +2097,7 @@ mod db_tests {
             let txt = format!(
                 "weekly day {day} planning notes with enough detail for summary regression"
             );
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO elements (frame_id, source, role, text, depth, sort_order) \
                  VALUES ({frame_id}, 'accessibility', 'AXTextField', '{}', 0, 0)",
                 txt.replace('\'', "''")
@@ -2189,7 +2186,7 @@ mod db_tests {
                 "2026-06-03T10:00:00Z",
             ),
         ] {
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO memories (content, source, tags, importance, created_at, updated_at) \
                  VALUES ('{}', 'test', '[]', 0.9, '{created_at}', '{created_at}')",
                 content.replace('\'', "''")
@@ -2250,7 +2247,7 @@ mod db_tests {
                 ));
                 i += 1;
             }
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO frames (timestamp, app_name, window_name) VALUES {}",
                 vals.join(",")
             ))
@@ -2349,7 +2346,7 @@ mod db_tests {
                 ));
                 i += 1;
             }
-            db.execute_raw_sql(&format!(
+            db.execute_raw_sql_write(&format!(
                 "INSERT INTO frames (timestamp, app_name, window_name) VALUES {}",
                 vals.join(",")
             ))
@@ -2389,7 +2386,7 @@ mod db_tests {
         let (db, _d) = fresh_db().await;
         // Mirrors the WHERE clause shared by the apps / windows / active-ts queries.
         let plan = db
-            .execute_raw_sql(
+            .query_raw_sql(
                 "EXPLAIN QUERY PLAN SELECT timestamp FROM frames \
                  WHERE timestamp BETWEEN '2026-05-15T00:00:00Z' AND '2026-05-15T01:00:00Z' \
                  AND app_name IS NOT NULL AND app_name != ''",

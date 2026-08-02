@@ -33,6 +33,10 @@ const mocks = vi.hoisted(() => {
         managed: false,
         detected_by: [],
       })),
+      getEnterpriseHostIdentity: vi.fn(async () => ({
+        machine_id_hash: "sp_machine_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        os_user_id_hash: "sp_os_user_v1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      })),
       getCloudToken: vi.fn(async () => null as string | null),
       stopScreenpipe: vi.fn(async () => undefined),
       spawnScreenpipe: vi.fn(async () => undefined),
@@ -384,6 +388,11 @@ describe("enterprise policy runtime manual activation", () => {
     );
     expect(keyHeartbeatCall?.[1]?.headers["X-License-Key"]).toBe(KEY);
     expect(keyHeartbeatCall?.[1]?.headers.Authorization).toBeUndefined();
+    const heartbeatBody = JSON.parse(String(keyHeartbeatCall?.[1]?.body));
+    expect(heartbeatBody).toMatchObject({
+      machine_id_hash: "sp_machine_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      os_user_id_hash: "sp_os_user_v1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    });
   });
 
   it("accepts a successful account-authenticated policy response", async () => {

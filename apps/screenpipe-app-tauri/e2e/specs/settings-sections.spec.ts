@@ -5,6 +5,26 @@
 import { existsSync } from 'node:fs';
 import { waitForAppReady, openHomeWindow, t } from '../helpers/test-utils.js';
 import { saveScreenshot } from '../helpers/screenshot-utils.js';
+import { invokeOrThrow } from '../helpers/tauri.js';
+
+const FOCUS_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? '11436');
+const NOTIFICATIONS_URL = `http://127.0.0.1:${FOCUS_PORT}/notifications`;
+
+interface NotificationHistoryEntry {
+  title?: string;
+  body?: string;
+}
+
+async function readNotifications(): Promise<NotificationHistoryEntry[]> {
+  return (await browser.executeAsync(
+    (url: string, done: (entries: NotificationHistoryEntry[]) => void) => {
+      void fetch(url)
+        .then(async (response) => done((await response.json()) as NotificationHistoryEntry[]))
+        .catch(() => done([]));
+    },
+    NOTIFICATIONS_URL,
+  )) as NotificationHistoryEntry[];
+}
 
 /**
  * Settings Sections E2E
@@ -41,6 +61,7 @@ const SETTINGS_SECTIONS = [
   { id: 'notifications', keywords: ['notification', 'toast', 'sound'] },
   { id: 'usage', keywords: ['usage', 'activity', 'analytics'] },
   { id: 'privacy', keywords: ['privacy', 'api', 'encryption', 'keychain'] },
+  { id: 'permissions', keywords: ['permission', 'screen recording', 'microphone', 'accessibility', 'macos'] },
   { id: 'storage', keywords: ['storage', 'disk', 'retention', 'cache'] },
   { id: 'speakers', keywords: ['speaker', 'voice'] },
   { id: 'team', keywords: ['team', 'share', 'member', 'invite'] },
@@ -234,6 +255,114 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  it('keeps the low-disk guard off by default, then stops capture and persists a notification when enabled', async () => {
+    const navStorage = await $('[data-testid="settings-nav-storage"]');
+    await navStorage.click();
+
+    const toggle = await $('[data-testid="low-disk-recording-guard-toggle"]');
+    await toggle.waitForExist({ timeout: t(8_000) });
+    expect(await toggle.getAttribute('data-state')).toBe('unchecked');
+    expect(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')).toBe(false);
+    const config = await invokeOrThrow<{
+      thresholdBytes: number;
+      checkIntervalSeconds: number;
+    }>('get_low_disk_guard_config');
+    expect(config.thresholdBytes).toBeGreaterThan(0);
+    expect(config.checkIntervalSeconds).toBeGreaterThan(0);
+    const thresholdCopy = await $(
+      '[data-testid="low-disk-recording-guard-copy"]',
+    );
+    await browser.waitUntil(
+      async () =>
+        (await thresholdCopy.getText()).includes(
+          `${(config.thresholdBytes / (1024 ** 3)).toFixed(2)} GB`,
+        ),
+      {
+        timeout: t(8_000),
+        interval: 100,
+        timeoutMsg: 'low-disk UI copy did not use the engine threshold',
+      },
+    );
+    const initialLowDiskNotifications = (await readNotifications()).filter(
+      (entry) => entry.title === 'recording stopped — disk almost full',
+    ).length;
+
+    try {
+      // Model active capture without depending on a physical CI display or
+      // audio device. The Windows recording lane separately proves a real
+      // CaptureSession is torn down.
+      await invokeOrThrow('e2e_mark_capture_intended');
+      expect(await invokeOrThrow<boolean>('is_capture_paused')).toBe(false);
+      expect(
+        await invokeOrThrow<string>('e2e_handle_disk_space_low', {
+          availableBytes: 1024 * 1024 * 1024,
+        }),
+      ).toBe('guard_disabled');
+      expect(await invokeOrThrow<boolean>('is_capture_paused')).toBe(false);
+      expect(
+        (await readNotifications()).filter(
+          (entry) => entry.title === 'recording stopped — disk almost full',
+        ),
+      ).toHaveLength(initialLowDiskNotifications);
+
+      await toggle.click();
+      await browser.waitUntil(
+        async () => await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled'),
+        {
+          timeout: t(8_000),
+          interval: 200,
+          timeoutMsg: 'low-disk guard setting was not persisted',
+        },
+      );
+
+      // Critical recording-stopped alerts must remain visible even if the
+      // ordinary notification master switch is off.
+      await invokeOrThrow('e2e_set_notification_master_enabled', {
+        enabled: false,
+      });
+      await invokeOrThrow('e2e_emit_disk_space_low', {
+        availableBytes: 1024 * 1024 * 1024,
+      });
+      await browser.waitUntil(
+        async () => await invokeOrThrow<boolean>('is_capture_paused'),
+        {
+          timeout: t(20_000),
+          interval: 100,
+          timeoutMsg: 'typed low-disk event did not stop capture intent',
+        },
+      );
+      await browser.waitUntil(
+        async () =>
+          (await readNotifications()).filter(
+            (entry) => entry.title === 'recording stopped — disk almost full',
+          ).length > initialLowDiskNotifications,
+        {
+          timeout: t(10_000),
+          interval: 250,
+          timeoutMsg: 'critical low-disk notification was not persisted',
+        },
+      );
+
+      const notification = (await readNotifications()).filter(
+        (entry) => entry.title === 'recording stopped — disk almost full',
+      ).at(-1);
+      expect(notification?.body).toContain('only 1.0 GB is free');
+      expect(notification?.body).toContain(
+        'search and existing data remain available',
+      );
+
+      const filepath = await saveScreenshot('settings-low-disk-recording-guard');
+      expect(existsSync(filepath)).toBe(true);
+    } finally {
+      // Leave the isolated E2E store at production defaults for later specs,
+      // including when an assertion above fails.
+      await invokeOrThrow('e2e_set_low_disk_guard_enabled', { enabled: false });
+      await invokeOrThrow('e2e_set_notification_master_enabled', {
+        enabled: true,
+      });
+    }
+  });
+
   it('Privacy section renders api auth + keychain controls (covers 729247599, 4253ed2bd, recent encryption-toggle UX)', async () => {
     const navPrivacy = await $('[data-testid="settings-nav-privacy"]');
     await navPrivacy.waitForExist({ timeout: 8_000 });
@@ -257,12 +386,48 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  it('Permissions is macOS-only: absent from nav elsewhere, recovery content on macOS', async function () {
+    const navPermissions = await $('[data-testid="settings-nav-permissions"]');
+
+    if (process.platform !== 'darwin') {
+      expect(await navPermissions.isExisting()).toBe(false);
+      return;
+    }
+
+    await navPermissions.waitForExist({ timeout: 8_000 });
+    await navPermissions.click();
+
+    const section = await $('[data-testid="section-settings-permissions"]');
+    await section.waitForExist({ timeout: 6_000 });
+    await browser.pause(800);
+
+    const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
+    expect(body).not.toContain('unhandled runtime error');
+    expect(body).not.toContain('application error');
+    expect(body).not.toContain('not applicable');
+
+    const hasPermissionsContent =
+      body.includes('permission') ||
+      body.includes('screen recording') ||
+      body.includes('microphone') ||
+      body.includes('accessibility');
+    expect(hasPermissionsContent).toBe(true);
+
+    const required = await $('[data-testid="permissions-required"]');
+    await required.waitForExist({ timeout: 5_000 });
+    const accessibilityRow = await $('[data-testid="permission-row-accessibility"]');
+    await accessibilityRow.waitForExist({ timeout: 5_000 });
+
+    const filepath = await saveScreenshot('settings-permissions');
+    expect(existsSync(filepath)).toBe(true);
+  });
+
   // ─── Negative: rapid navigation must not crash ────────────────────────────
 
   it('survives rapid section switching without a blank crash (Windows COM/DPI regression)', async () => {
     // Click through every section quickly — this has historically caused a white
     // blank render on Windows due to COM apartment threading issues (TESTING.md §14).
-    const sectionIds = ['general', 'recording', 'ai', 'ai-settings', 'display', 'shortcuts', 'speakers', 'privacy', 'storage'];
+    const sectionIds = ['general', 'recording', 'ai', 'ai-settings', 'display', 'shortcuts', 'speakers', 'privacy', 'permissions', 'storage'];
     for (const id of sectionIds) {
       const btn = await $(`[data-testid="settings-nav-${id}"]`);
       if (await btn.isExisting()) {

@@ -315,28 +315,30 @@ async fn compact_returns_free_pages_to_the_os_after_deletion() {
 
     // Grow the file with sizable rows, then checkpoint into the main file.
     let ts = (Utc::now() - Duration::days(30)).to_rfc3339();
+    let writer = db.coordinated_writer().lock().await.unwrap();
     for _ in 0..500 {
         sqlx::query("INSERT INTO frames (timestamp, full_text) VALUES (?1, ?2)")
             .bind(&ts)
             .bind("x".repeat(2000))
-            .execute(&db.pool)
+            .execute(writer.pool())
             .await
             .unwrap();
     }
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&db.pool)
+        .execute(writer.pool())
         .await
         .unwrap();
 
     // Delete everything → pages go on the free list (auto_vacuum=NONE).
     sqlx::query("DELETE FROM frames")
-        .execute(&db.pool)
+        .execute(writer.pool())
         .await
         .unwrap();
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&db.pool)
+        .execute(writer.pool())
         .await
         .unwrap();
+    drop(writer);
 
     let freelist_before = count(&db, "PRAGMA freelist_count").await;
     assert!(

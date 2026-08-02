@@ -19,6 +19,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useToast } from "@/components/ui/use-toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import {
   CONNECTION_CATEGORY_BY_ID,
@@ -3344,6 +3345,7 @@ function OAuthMcpPanel({
               setConnected(true);
               setServerId(targetId);
               setStatusMsg(null);
+              await foregroundAfterOAuth();
               notifyConnectionsUpdated();
               onConnected?.();
               return;

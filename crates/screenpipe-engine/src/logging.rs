@@ -448,7 +448,10 @@ mod tests {
                     .map(|ext| ext == "log")
                     .unwrap_or(false)
             })
-            .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+            // Read the bytes instead of trusting directory metadata: NTFS
+            // updates enumerated sizes lazily while the writer still holds the
+            // file open, so metadata len reads 0 on Windows.
+            .map(|e| fs::read(e.path()).map(|b| b.len() as u64).unwrap_or(0))
             .sum()
     }
 

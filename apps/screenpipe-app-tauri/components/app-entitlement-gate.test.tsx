@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   loadUser: vi.fn().mockResolvedValue(undefined),
   updateSettings: vi.fn().mockResolvedValue(undefined),
   state: { isSettingsLoaded: true, user: null as any },
+  enterpriseResolutionError: false,
   enterprise: {
     isManagedDeployment: false,
     isManagedDeploymentResolved: true,
@@ -65,6 +66,7 @@ vi.mock("@/lib/hooks/use-managed-policy", () => ({
   useManagedPolicy: () => ({
     isManagedDeployment: mocks.enterprise.isManagedDeployment,
     isManagedDeploymentResolved: mocks.enterprise.isManagedDeploymentResolved,
+    managedDeploymentResolutionError: mocks.enterpriseResolutionError,
     authenticationState: mocks.enterprise.authenticationState,
     authenticationError: mocks.enterprise.authenticationError,
     isManagedAuthenticated: mocks.enterprise.isManagedAuthenticated,
@@ -126,6 +128,7 @@ describe("AppEntitlementGate", () => {
     vi.stubEnv("TAURI_ENV_DEBUG", "false");
     vi.stubEnv("NEXT_PUBLIC_SCREENPIPE_DEV_BILLING_BYPASS", "false");
     mocks.state = { isSettingsLoaded: true, user: null };
+    mocks.enterpriseResolutionError = false;
     mocks.windowLabel = "home";
     mocks.enterprise = {
       isManagedDeployment: false,
@@ -174,6 +177,19 @@ describe("AppEntitlementGate", () => {
     mocks.enterprise.isManagedDeploymentResolved = true;
     rerender(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
     await waitFor(() => expect(mocks.stopScreenpipe).toHaveBeenCalled());
+  });
+
+  it("surfaces a recoverable error when build detection cannot finish", () => {
+    mocks.enterprise.isManagedDeploymentResolved = false;
+    mocks.enterpriseResolutionError = true;
+
+    render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+    expect(screen.getByText(/couldn't check access/i)).toBeInTheDocument();
+    expect(screen.getByText(/retry automatically/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /reload and retry/i }),
+    ).toBeInTheDocument();
   });
 
   it("keeps recording while enterprise authentication is still checking", async () => {
@@ -816,6 +832,37 @@ describe("AppEntitlementGate", () => {
     expect(screen.getByTestId("protected-app")).toBeInTheDocument();
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
   });
+
+  it.each(["pro_max", "pro_ultra"] as const)(
+    "does not route an enterprise workspace admin with a %s consumer plan away",
+    (plan) => {
+      mocks.state.user = baseUser({
+        app_entitled: true,
+        cloud_subscribed: true,
+        subscription_plan: plan,
+        enterprise_account: {
+          org_name: "Screenpipe",
+          role: "admin",
+          requires_enterprise_app: true,
+        },
+        entitlement: {
+          active: true,
+          plan,
+          source: "manual",
+          checked_at: minsAgo(1),
+          features: { app: true, cloud: true, enterprise: false },
+        },
+      });
+
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+      expect(
+        screen.queryByText(/enterprise app required/i),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+      expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not show the consumer-app warning inside the enterprise build", () => {
     mocks.enterprise.isManagedDeployment = true;

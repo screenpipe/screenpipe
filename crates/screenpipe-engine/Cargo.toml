@@ -72,6 +72,7 @@ colored = "2.0"
 
 # Plugins
 futures = { workspace = true, features = ["std"] }
+tokio-stream = { workspace = true, features = ["sync"] }
 
 # Directory management
 dirs = { workspace = true }

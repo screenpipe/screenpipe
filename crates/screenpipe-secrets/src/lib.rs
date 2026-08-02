@@ -18,4 +18,4 @@ mod telemetry;
 pub use migration::{fix_secret_file_permissions, migrate_legacy_secrets, MigrationReport};
 pub use screenpipe_sqlite_coordinator::sqlite_write_lock;
 pub use state::{is_encryption_requested, mark_encryption_disabled, mark_encryption_enabled};
-pub use store::{close_all_secret_pools, shared_secret_pool, SecretStore};
+pub use store::{close_all_secret_pools, shared_secret_pool, DatabaseErrorHook, SecretStore};

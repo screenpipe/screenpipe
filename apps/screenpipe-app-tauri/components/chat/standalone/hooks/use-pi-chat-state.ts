@@ -14,6 +14,7 @@ type PiRunningConfig = {
   url: string;
   apiKey: string | null;
   maxTokens: number;
+  maxContextChars: number | null;
   systemPrompt: string | null;
   token: string | null;
 };

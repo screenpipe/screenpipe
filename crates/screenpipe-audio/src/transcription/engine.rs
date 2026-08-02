@@ -165,6 +165,32 @@ impl TranscriptionEngine {
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
     ) -> Result<Self> {
+        // Whisper (ggml) and Qwen3 (antirez kernels) are statically compiled
+        // with AVX2 on Windows/Linux x64 release builds — initializing them on
+        // a CPU without AVX2 raises STATUS_ILLEGAL_INSTRUCTION (kills the
+        // process; no panic hook can catch it). Degrade to Disabled like the
+        // model-not-downloaded path; the onboarding compat notice and the
+        // engine-safety check in screenpipe-config explain the limitation.
+        if !screenpipe_core::cpu_features::has_avx2() && config.requires_avx2() {
+            // Warn once per process: the audio manager re-runs engine
+            // creation on every device/model refresh tick, and repeating the
+            // same warning forever buries real errors in the logs.
+            static AVX2_GATE_WARNED: std::sync::Once = std::sync::Once::new();
+            let mut first_time = false;
+            AVX2_GATE_WARNED.call_once(|| first_time = true);
+            let msg = format!(
+                "transcription engine {:?} requires AVX2 but this CPU has none ({}); disabling local STT — parakeet/cloud engines remain available",
+                *config,
+                screenpipe_core::cpu_features::snapshot().as_log_string()
+            );
+            if first_time {
+                warn!("{msg}");
+            } else {
+                tracing::debug!("{msg}");
+            }
+            return Ok(Self::Disabled);
+        }
+
         match *config {
             AudioTranscriptionEngine::Disabled => {
                 info!("transcription engine runtime: Disabled (no background STT)");
@@ -754,12 +780,12 @@ impl TranscriptionSession {
                 // as of audiopipe#14 (shallow fusion, same as the ONNX path).
                 let keyterms = parakeet_keyterms(vocabulary);
 
-                // Chunk to 30s like the CPU Parakeet path above. The Metal backend
-                // panics with command-buffer / GPU-memory-pressure errors on long
-                // variable-length tensors — historically the top transcription crash
-                // in the field (~61 hits/2wk, "mlx transcription panic"). Bounding
-                // each transcribe to a fixed 30s tensor removes that pressure, and
-                // isolating the panic guard *per chunk* means a single bad chunk drops
+                // Chunk to 30s like the CPU Parakeet path above, and zero-pad the
+                // final chunk to that exact shape. Real meeting chunks have subtly
+                // different AAC durations; passing each length through MLX causes
+                // shape-specific CPU allocations to accumulate even after its GPU
+                // cache is cleared. A stable input shape keeps that memory bounded.
+                // Isolating the panic guard *per chunk* means a single bad chunk drops
                 // only its own ~30s instead of the entire batch's transcript.
                 let chunk_samples = (sample_rate as usize) * 30;
                 let chunks: Vec<&[f32]> = if audio.len() <= chunk_samples {
@@ -771,7 +797,16 @@ impl TranscriptionSession {
                 let mut texts = Vec::new();
                 let mut had_success = false;
                 let mut last_err: Option<anyhow::Error> = None;
+                let mut padded_chunk = Vec::with_capacity(chunk_samples);
                 for chunk in chunks {
+                    let inference_chunk = if chunk.len() == chunk_samples {
+                        chunk
+                    } else {
+                        padded_chunk.clear();
+                        padded_chunk.extend_from_slice(chunk);
+                        padded_chunk.resize(chunk_samples, 0.0);
+                        padded_chunk.as_slice()
+                    };
                     // Clear GPU cache before/after each chunk to reduce Metal command
                     // buffer errors from memory pressure (prevents abort in the MLX
                     // completion handler) and to release resources held by a panic.
@@ -781,7 +816,7 @@ impl TranscriptionSession {
                         ..Default::default()
                     };
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        engine.transcribe_with_sample_rate(chunk, sample_rate, opts)
+                        engine.transcribe_with_sample_rate(inference_chunk, sample_rate, opts)
                     }));
                     mlx_memory::clear_cache();
                     match outcome {

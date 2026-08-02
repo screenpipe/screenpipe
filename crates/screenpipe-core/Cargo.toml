@@ -8,6 +8,7 @@ license-file = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+screenpipe-cpu-features = { path = "../screenpipe-cpu-features" }
 screenpipe-events = { path = "../screenpipe-events" }
 futures = { workspace = true }
 serde = { workspace = true }
@@ -100,6 +101,11 @@ core-graphics = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 uiautomation = { workspace = true }
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_System_JobObjects", "Win32_Foundation", "Win32_Security"] }
+# Mandatory in-process SHA-256 for runtime binary downloads (PortableGit,
+# baseline bun) in agents/pi.rs — certutil parsing was fail-open and locale-
+# dependent. Unconditional here (not the optional cloud-sync sha2): verifying
+# executables we download and run must not depend on a feature flag.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Used by sync::client wire-compat test (asserts the PUT request shape

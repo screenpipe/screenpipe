@@ -1283,6 +1283,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cidre"
+version = "0.16.1"
+source = "git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30#9c20f5ee5abaad4598843a33e13d6e48822d1f30"
+dependencies = [
+ "cc",
+ "cidre-macros 0.6.0",
+ "half",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
 name = "cidre-macros"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6808,9 +6820,9 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
+source = "git+https://github.com/screenpipe/sck-rs?rev=6deefba79619c2763f24cfbaaf4e08fa7e8302e0#6deefba79619c2763f24cfbaaf4e08fa7e8302e0"
 dependencies = [
- "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=9c20f5ee5abaad4598843a33e13d6e48822d1f30)",
  "image",
  "once_cell",
  "thiserror 1.0.69",
@@ -6838,7 +6850,7 @@ dependencies = [
  "arboard",
  "arc-swap",
  "chrono",
- "cidre 0.16.1",
+ "cidre 0.16.1 (git+https://github.com/yury/cidre.git?rev=8d0f7307d201d75328ed82ea0d4ca7bb0a649716)",
  "core-foundation",
  "core-graphics",
  "crossbeam-channel",
@@ -6882,9 +6894,10 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "dirs 6.0.0",
+ "screenpipe-cpu-features",
  "serde",
  "serde_json",
  "sysinfo",
@@ -6893,7 +6906,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -6938,7 +6951,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6963,10 +6976,12 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "reqwest",
+ "screenpipe-cpu-features",
  "screenpipe-events",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tracing",
@@ -6977,8 +6992,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-cpu-features"
+version = "0.4.35"
+
+[[package]]
 name = "screenpipe-db"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7006,7 +7025,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7044,7 +7063,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7123,9 +7142,10 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "libsqlite3-sys",
+ "sqlx",
  "tokio",
  "tracing",
 ]
@@ -7148,7 +7168,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.32"
+version = "0.4.35"
 dependencies = [
  "argon2",
  "chacha20poly1305",

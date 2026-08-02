@@ -90,7 +90,10 @@ jobs:
             ~/.cargo/git/db/
             target/x86_64-pc-windows-msvc
             apps/screenpipe-app-tauri/src-tauri/target
-          shared-key: "rust-cache-x86_64-pc-windows-msvc"
+          # v2 epoch, shared with release-app.yml's Windows x64 job: flushes
+          # objects compiled under LTCG / the old global /arch:AVX2 flags
+          # (cc/cmake outputs aren't keyed on those env vars).
+          shared-key: "rust-cache-v2-x86_64-pc-windows-msvc"
           save-if: true
 
       - name: Cache Pre Build
@@ -146,16 +149,26 @@ jobs:
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
 
-      - name: Download ONNX Runtime (CPU) for Windows
+      - name: Download ONNX Runtime
         shell: pwsh
         run: |
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-1.24.2.zip"
-          $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2"
-          $ortDir = "ort-system-lib"
-          # retry: the GitHub release CDN intermittently returns 504, which would otherwise fail the whole job
+          # DirectML flavor of the OFFICIAL MS build: baseline SSE2 + MLAS
+          # runtime CPUID dispatch, DML EP for parakeet/PII. pyke's
+          # download-binaries static libs are compiled /arch:AVX2 since Oct
+          # 2025 and die with 0xc000001d AT LAUNCH on pre-Haswell CPUs — old
+          # Xeons/thin clients are MORE likely on enterprise fleets. Staged as
+          # a controlled lib/ so the tauri glob (onnxruntime*\lib\*.dll)
+          # bundles exactly onnxruntime.dll + DirectML.dll. Keep in sync with
+          # release-app.yml's x64 branch.
+          $version = '1.24.2'
+          $dmlVersion = '1.15.4'
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-$version"
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          # retry: nuget/CDN can intermittently fail, which would otherwise kill the job
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
-              Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.24.2.zip"
+              Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/$version" -OutFile ort-dml.zip
+              Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/$dmlVersion" -OutFile directml.zip
               break
             } catch {
               if ($attempt -eq 5) { throw }
@@ -163,21 +176,28 @@ jobs:
               Start-Sleep -Seconds (10 * $attempt)
             }
           }
-          if (Test-Path $tauriDir) { Remove-Item $tauriDir -Recurse -Force }
-          7z x onnxruntime-win-x64-1.24.2.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
-          if (Test-Path $ortDir) { Remove-Item $ortDir -Recurse -Force }
-          Copy-Item -Path $tauriDir -Destination $ortDir -Recurse -Force
+          7z x ort-dml.zip -oort-dml -y
+          7z x directml.zip -odirectml -y
+          New-Item -ItemType Directory -Force -Path "$extractDir/lib" | Out-Null
+          Copy-Item "ort-dml/runtimes/win-x64/native/onnxruntime.dll" "$extractDir/lib/"
+          Copy-Item "ort-dml/runtimes/win-x64/native/onnxruntime.lib" "$extractDir/lib/"
+          Copy-Item "directml/bin/x64-win/DirectML.dll" "$extractDir/lib/"
+          # Import-table (load-time) link against the MS DLL — same mechanism
+          # as release-app.yml. NOT ort's `load-dynamic` feature (deadlocks
+          # with rc.12, #4171/#4173). ORT_PREFER_DYNAMIC_LINK=1 makes ort-sys
+          # emit a dynamic import instead of attempting a static link (which
+          # needs the static _deps tree the MS prebuilt doesn't ship).
+          $libDir = (Resolve-Path "$extractDir/lib").Path
+          "ORT_STRATEGY=system"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ORT_LIB_LOCATION=$libDir"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ORT_PREFER_DYNAMIC_LINK=1"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$libDir"                    | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "x64: ORT_LIB_LOCATION=$libDir (dynamic import link)"
+          Get-ChildItem "$extractDir/lib"
 
-      - name: Set ORT env vars
+      - name: Set OpenBLAS env vars
         shell: bash
         run: |
-          # Windows x64 must link ONNX Runtime via ort's download-binaries (its
-          # default) — NOT system linking. ort-sys rc.12's system path needs
-          # static libs the Microsoft dynamic zip doesn't ship, so setting
-          # ORT_STRATEGY=system + ORT_LIB_LOCATION makes the build fail with
-          # "ort-sys could not link to the ONNX Runtime build in .../ort-system-lib".
-          # The runtime onnxruntime.dll is still bundled via the download step
-          # above. Mirrors the consumer release-app.yml x64 fix (11566613b).
           echo "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" >> $GITHUB_ENV
 
       - name: Use enterprise config
@@ -212,8 +232,21 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: "-C link-arg=/LTCG"
+          # LTCG removed (was the last workflow still shipping it): MSVC has
+          # known bugs where LTCG ignores /arch flags and emits AVX-512 on
+          # Xeon CI runners, causing STATUS_ILLEGAL_INSTRUCTION (0xc000001d)
+          # on CPUs without AVX-512. Consumer builds dropped it long ago.
+          # See: https://developercommunity.visualstudio.com/content/problem/848627
+          RUSTFLAGS: ""
+          # No CFLAGS/CXXFLAGS on purpose: MSVC's x64 default is baseline SSE2.
+          # AVX2 is opted into only inside ggml (whisper), which is gated on
+          # is_x86_feature_detected in screenpipe-audio. Aligned with
+          # release-app.yml's Windows x64 env.
           GGML_NATIVE: "OFF"
+          GGML_SSE42: "ON"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
+          GGML_BMI2: "ON"
           GGML_AVX512: "OFF"
           GGML_AVX512_VBMI: "OFF"
           GGML_AVX512_VNNI: "OFF"

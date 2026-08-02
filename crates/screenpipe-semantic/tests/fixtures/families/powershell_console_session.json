@@ -1,0 +1,23 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "powershell.exe",
+    "display_name": "powershell.exe",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Text",
+      "classes": ["WindowsForms10.STATIC.app.0.85071e_r8_ad1"],
+      "identifier": "2100460",
+      "text": "PS C:\\repo> cargo test\nrunning 4 tests\ntest result: ok. 4 passed"
+    },
+    { "parent": null, "role": "MenuItem", "text": "System" },
+    { "parent": null, "role": "Button", "text": "Minimize" },
+    { "parent": null, "role": "Button", "text": "Maximize" },
+    { "parent": null, "role": "Button", "text": "Close" }
+  ]
+}

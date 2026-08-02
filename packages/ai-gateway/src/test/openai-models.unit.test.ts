@@ -50,9 +50,13 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).toContain('gpt-5.5-pro');
 		expect(ids).toContain('gpt-5.4');
 		expect(ids).toContain('gpt-5.4-pro');
-		expect(ids).toContain('gpt-5.3-codex');
 		expect(ids).toContain('gpt-5.4-mini');
 		expect(ids).toContain('gpt-5.4-nano');
+	});
+
+	it('never advertises Responses-API-only codex models (chat-completions 404s them)', async () => {
+		const ids = await listedModelIds();
+		expect(ids).not.toContain('gpt-5.3-codex');
 	});
 
 	it('hides OpenAI models until OPENAI_API_KEY is configured', async () => {
@@ -75,12 +79,13 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).not.toContain('gpt-5.4-mini');
 	});
 
-	it('keeps premium OpenAI models gated while Luna remains an included fallback', () => {
+	it('keeps frontier OpenAI models gated while Basic gets efficient models', () => {
 		expect(isModelAllowed('gpt-5.4-mini', 'anonymous')).toBe(false);
-		expect(isModelAllowed('gpt-5.4-mini', 'logged_in')).toBe(false);
+		expect(isModelAllowed('gpt-5.4-mini', 'logged_in')).toBe(true);
 		expect(isModelAllowed('gpt-5.4-mini', 'subscribed')).toBe(true);
-		expect(isModelAllowed('gpt-5.6-luna', 'anonymous')).toBe(true);
+		expect(isModelAllowed('gpt-5.6-luna', 'anonymous')).toBe(false);
 		expect(isModelAllowed('gpt-5.6-luna', 'logged_in')).toBe(true);
+		expect(isModelAllowed('gpt-5.6-sol', 'logged_in')).toBe(false);
 	});
 
 	it('does not advertise removed hosted model families', async () => {
@@ -94,8 +99,9 @@ describe('OpenAI API model catalog', () => {
 		for (const id of ids) {
 			expect(id).not.toMatch(/gemini|gemma|gpt-oss|glm-|kimi-|qwen|llama-4|haiku|sonnet-4/i);
 		}
-		expect(ids).toContain('claude-opus-5');
 		expect(ids).toContain('claude-sonnet-5');
+		expect(ids).toContain('claude-opus-5');
+		expect(ids).toContain('claude-fable-5');
 	});
 
 	it('does not expose provider-secret gates in /v1/models responses', async () => {
@@ -118,7 +124,7 @@ describe('tier locking in /v1/models', () => {
 		const models = await listedFor('logged_in');
 		const sonnet = models.find(m => m.id === 'claude-sonnet-5');
 		const opus = models.find(m => m.id === 'claude-opus-5');
-		// present (not hidden) and flagged so the app can grey + upsell
+		// Frontier models remain visible with an explicit Business lock.
 		expect(sonnet?.locked).toBe(true);
 		expect(opus?.locked).toBe(true);
 	});
@@ -139,6 +145,12 @@ describe('tier locking in /v1/models', () => {
 		const body = await response.json() as { data: Array<{ locked?: boolean }> };
 		expect(body.data.length).toBeGreaterThan(0);
 		expect(body.data.every(m => !m.locked)).toBe(true);
+	});
+
+	it('returns the server-backed upgrade decision beside the model catalog', async () => {
+		const response = await handleModelListing(env(), 'logged_in', true);
+		const body = await response.json() as { upgrade_eligible?: boolean };
+		expect(body.upgrade_eligible).toBe(true);
 	});
 });
 

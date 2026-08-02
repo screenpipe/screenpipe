@@ -244,6 +244,37 @@ fn friendly_login_error(raw: &str, host: &str) -> anyhow::Error {
     anyhow!("IMAP login failed: {}", raw)
 }
 
+/// Render a caller-supplied phrase as an RFC 3501 quoted string (§4.3).
+///
+/// `EXAMINE` and `LIST` run their arguments through async-imap's own
+/// validator, but search keys are interpolated into the command line
+/// verbatim, so this is the only thing between the phrase and the protocol.
+/// A bare CR or LF ends the line, and everything after it is read as the next
+/// command — which is enough to turn a read-only search into `STORE` or
+/// `EXPUNGE` against the real mailbox, since `EXAMINE` only constrains the
+/// mailbox that is currently selected.
+///
+/// Control characters have no quoted-string representation at all, so they
+/// are dropped; the two characters that are representable are escaped rather
+/// than deleted, so phrases containing a quote or a backslash now search for
+/// what the user actually typed.
+fn quoted_search_phrase(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() + 2);
+    out.push('"');
+    for ch in query.chars() {
+        match ch {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// List recent messages, newest first. `query` (optional) runs an IMAP
 /// `TEXT` search; otherwise the last `limit` messages by sequence.
 pub async fn list_messages(
@@ -271,10 +302,9 @@ where
 
     let set = match query {
         Some(q) if !q.trim().is_empty() => {
-            let escaped = q.replace('\\', "").replace('"', "");
             let uids = bounded("search", OP_TIMEOUT, async {
                 session
-                    .uid_search(format!("TEXT \"{}\"", escaped))
+                    .uid_search(format!("TEXT {}", quoted_search_phrase(q)))
                     .await
                     .context("IMAP search failed")
             })
@@ -471,6 +501,63 @@ mod tests {
     }
 
     #[test]
+    fn search_phrase_escapes_quotes_and_backslashes() {
+        // Escaped, not deleted: the user searched for these characters.
+        assert_eq!(quoted_search_phrase(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(quoted_search_phrase(r"c:\reports"), r#""c:\\reports""#);
+    }
+
+    #[test]
+    fn search_phrase_drops_line_terminators() {
+        // CR/LF are what end an IMAP command line; NUL is equally illegal.
+        let out = quoted_search_phrase("invoice\r\nx9 EXPUNGE");
+        assert_eq!(out, r#""invoicex9 EXPUNGE""#);
+        assert!(!out.contains('\r') && !out.contains('\n'));
+        assert!(!quoted_search_phrase("a\0b").contains('\0'));
+    }
+
+    #[test]
+    fn search_phrase_is_always_one_balanced_quoted_string() {
+        // Whatever goes in, exactly one quoted string comes out: the opening
+        // and closing quotes are the only unescaped ones.
+        for phrase in [
+            r#""" OR FROM "x"#,
+            r#"\"#,
+            r#"\\""#,
+            "plain words",
+            "trailing backslash\\",
+            "\r\n\r\n",
+            "héllo ünïcode",
+        ] {
+            let out = quoted_search_phrase(phrase);
+            assert!(out.starts_with('"') && out.ends_with('"'), "{out:?}");
+            let inner = &out[1..out.len() - 1];
+            let mut chars = inner.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    assert!(
+                        matches!(chars.peek(), Some('"') | Some('\\')),
+                        "dangling escape in {out:?}"
+                    );
+                    chars.next();
+                } else {
+                    assert_ne!(c, '"', "unescaped quote closes the string early: {out:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn search_phrase_preserves_ordinary_text() {
+        // No behaviour change for the phrases users actually type.
+        assert_eq!(
+            quoted_search_phrase("quarterly invoice from ansh"),
+            r#""quarterly invoice from ansh""#
+        );
+        assert_eq!(quoted_search_phrase("héllo"), r#""héllo""#);
+    }
+
+    #[test]
     fn parses_rfc2047_headers() {
         let raw = b"From: =?utf-8?q?Ansh_Grover?= <ansh@screenpi.pe>\r\nTo: you@gmail.com\r\nSubject: =?utf-8?q?hello_world?=\r\nDate: Fri, 17 Jul 2026 10:00:00 +0530\r\n\r\n";
         let v = headers_to_json(raw);
@@ -609,6 +696,71 @@ mod net_tests {
             "expected a deadline error, got: {err}"
         );
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// The search phrase is the only caller-controlled value that reaches the
+    /// wire, and `uid_search` interpolates it verbatim. A bare CRLF would end
+    /// the line and run the remainder as its own command against the user's
+    /// real mailbox — read-only EXAMINE does not protect against that.
+    #[tokio::test]
+    async fn search_query_cannot_inject_imap_commands() {
+        let (port, log) = spawn_fake_server(None).await;
+        let mut session = fake_session(port).await;
+
+        // Exactly what an agent could be talked into passing through
+        // GET /connections/imap/messages?query=...
+        let hostile = "invoice\r\nx9 STORE 1:* +FLAGS (\\Deleted)\r\nx8 EXPUNGE";
+        let _ = list_messages_in(&mut session, "INBOX", 5, Some(hostile)).await;
+
+        let lines = log.lock().unwrap().clone();
+        // The phrase may appear inside the quoted string — searching for the
+        // word "EXPUNGE" is legitimate. What must never happen is the phrase
+        // producing a *line* of its own, so assert on line structure: LOGIN,
+        // EXAMINE, UID SEARCH, and nothing else.
+        assert_eq!(
+            lines.len(),
+            3,
+            "hostile phrase added command lines: {lines:#?}"
+        );
+        assert!(
+            lines[2].to_uppercase().starts_with("A0003 UID SEARCH"),
+            "expected one UID SEARCH line; saw: {lines:#?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("x9") || l.starts_with("x8")),
+            "an injected tag reached the server as a command: {lines:#?}"
+        );
+        // ...and the phrase is still actually searched for.
+        assert!(lines[2].contains("invoice"), "phrase lost: {lines:#?}");
+    }
+
+    /// `?mailbox=` is the other caller-controlled value on the same routes.
+    /// It is safe for a different reason — async-imap validates EXAMINE
+    /// arguments itself — so pin that, both to document why only the search
+    /// phrase needed fixing and to catch a future switch to an API that does
+    /// not validate.
+    #[tokio::test]
+    async fn mailbox_name_cannot_inject_imap_commands() {
+        let (port, log) = spawn_fake_server(None).await;
+        let mut session = fake_session(port).await;
+
+        let err = list_messages_in(&mut session, "INBOX\r\nx9 EXPUNGE", 5, None)
+            .await
+            .expect_err("a mailbox name with CRLF must be rejected, not sent");
+        assert!(
+            err.to_string().contains("not found"),
+            "expected the mailbox error, got: {err}"
+        );
+
+        let lines = log.lock().unwrap().clone();
+        assert_eq!(
+            lines.len(),
+            1,
+            "only LOGIN should have been sent: {lines:#?}"
+        );
+        assert!(lines[0].to_uppercase().contains("LOGIN"), "{lines:#?}");
     }
 
     #[tokio::test]

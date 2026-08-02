@@ -27,6 +27,7 @@ import { format, isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import { runSearchResultNavigation } from "@/lib/search-result-navigation";
 import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
 import { getFrameThumbnailSources } from "@/lib/frame-thumbnails";
 import { NearViewport } from "./near-viewport";
@@ -62,7 +63,7 @@ interface TaggedFrame {
 interface SearchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onNavigateToTimestamp: (timestamp: string, frameId?: number, searchTerms?: string[], searchResultsJson?: string, searchQuery?: string) => void;
+  onNavigateToTimestamp: (timestamp: string, frameId?: number, searchTerms?: string[], searchResultsJson?: string, searchQuery?: string) => void | Promise<void>;
   embedded?: boolean;
   /** When true, this is rendered in its own Tauri window (no backdrop, always open) */
   standalone?: boolean;
@@ -657,6 +658,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [chatsPassPending, setChatsPassPending] = useState(false);
   const chatSearchRequestRef = useRef(0);
   const recentChatRequestRef = useRef(0);
+  const resultNavigationInFlightRef = useRef(false);
   // The query a chat load has already been dispatched for. Guards against
   // refetching the same query when only the scope changed. Seeded from the
   // prewarm cache, which holds the no-query list the Chats scope would ask for.
@@ -1496,10 +1498,35 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   );
 
   const handleOpenChatResult = useCallback(
-    (conversationId: string, selectionMethod: SearchSelectionMethod) => {
-      trackSearchResultSelected("chat", selectionMethod, "chat");
-      void emit("chat-load-conversation", { conversationId });
-      onClose();
+    async (conversationId: string, selectionMethod: SearchSelectionMethod) => {
+      let homeShown = false;
+      await runSearchResultNavigation({
+        inFlightRef: resultNavigationInFlightRef,
+        navigate: async () => {
+          trackSearchResultSelected("chat", selectionMethod, "chat");
+          localStorage.setItem("pending-chat-conversation", conversationId);
+          try {
+            await commands.showWindowActivated({ Home: { page: "home" } });
+            homeShown = true;
+            await emit("chat-load-conversation", {
+              conversationId,
+              targetWindow: "home",
+            });
+          } catch (error) {
+            if (
+              !homeShown &&
+              localStorage.getItem("pending-chat-conversation") === conversationId
+            ) {
+              localStorage.removeItem("pending-chat-conversation");
+            }
+            throw error;
+          }
+        },
+        close: onClose,
+        onError: (phase, error) => {
+          console.error(`failed to ${phase} search chat result`, error);
+        },
+      });
     },
     [onClose, trackSearchResultSelected],
   );
@@ -1692,7 +1719,31 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     }
   }, [selectedSpeaker, loadMoreOcr, loadMoreTranscriptions]);
 
-  const handleSelectResult = useCallback((
+  const navigateToResult = useCallback(async (
+    timestamp: string,
+    frameId?: number,
+    searchTerms?: string[],
+    searchResultsJson?: string,
+    searchQuery?: string,
+    closeAfterNavigation = true,
+  ) => {
+    await runSearchResultNavigation({
+      inFlightRef: resultNavigationInFlightRef,
+      navigate: () => onNavigateToTimestamp(
+        timestamp,
+        frameId,
+        searchTerms,
+        searchResultsJson,
+        searchQuery,
+      ),
+      close: closeAfterNavigation ? onClose : undefined,
+      onError: (phase, error) => {
+        console.error(`failed to ${phase} search timeline result`, error);
+      },
+    });
+  }, [onClose, onNavigateToTimestamp]);
+
+  const handleSelectResult = useCallback(async (
     result: SearchMatch,
     selectionMethod: SearchSelectionMethod = "click",
   ) => {
@@ -1704,9 +1755,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     const idx = searchResults.findIndex((r) => r.frame_id === result.frame_id);
     if (idx >= 0) setCurrentResultIndex(idx);
     const resultsJson = JSON.stringify(searchResults);
-    onNavigateToTimestamp(result.timestamp, result.frame_id, queryTokens, resultsJson, query);
-    onClose();
-  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex, trackSearchResultSelected]);
+    await navigateToResult(
+      result.timestamp,
+      result.frame_id,
+      queryTokens,
+      resultsJson,
+      query,
+    );
+  }, [navigateToResult, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex, trackSearchResultSelected]);
 
   // Keyboard navigation — uses refs for data arrays to avoid re-mounting when results change
   useEffect(() => {
@@ -1740,8 +1796,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   "keyboard",
                   "timeline",
                 );
-                onNavigateToTimestamp(transcriptions[i].timestamp);
-                onClose();
+                void navigateToResult(transcriptions[i].timestamp);
               }
               return i;
             });
@@ -1826,8 +1881,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             const evt = uiEventResultsRef.current.find((u) => String(u.id) === item.id);
             if (evt) {
               trackSearchResultSelected("input", "keyboard", "timeline");
-              onNavigateToTimestamp(evt.timestamp);
-              if (!embedded) onClose();
+              void navigateToResult(
+                evt.timestamp,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                !embedded,
+              );
             }
           } else {
             const r = filteredResultsRef.current[item.index];
@@ -1847,7 +1908,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected, embedded, frameColumns]);
+  }, [isOpen, selectedSpeaker, onClose, navigateToResult, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected, embedded, frameColumns]);
 
   // Scroll selected row into view (only on arrow-key navigation, not on new page load)
   const prevNavIndex = useRef(navIndex);
@@ -2268,8 +2329,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                           "click",
                           "timeline",
                         );
-                        onNavigateToTimestamp(t.timestamp);
-                        if (!embedded) onClose();
+                        void navigateToResult(
+                          t.timestamp,
+                          undefined,
+                          undefined,
+                          undefined,
+                          undefined,
+                          !embedded,
+                        );
                       }
                     }}
                     className={cn(
@@ -2438,8 +2505,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       "timeline",
                     );
                     const resultsJson = JSON.stringify(searchResults);
-                    onNavigateToTimestamp(frame.timestamp, frame.frame_id, queryTokens, resultsJson, query);
-                    if (!embedded) onClose();
+                    void navigateToResult(
+                      frame.timestamp,
+                      frame.frame_id,
+                      queryTokens,
+                      resultsJson,
+                      query,
+                      !embedded,
+                    );
                   }}
                   className="cursor-pointer rounded-[6px] overflow-hidden border border-border hover:border-foreground/50 transition-colors"
                 >
@@ -2708,8 +2781,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       onHover={() => pos !== undefined && setNavIndex(pos)}
                       onNavigate={() => {
                         trackSearchResultSelected("input", "click", "timeline");
-                        onNavigateToTimestamp(evt.timestamp);
-                        if (!embedded) onClose();
+                        void navigateToResult(
+                          evt.timestamp,
+                          undefined,
+                          undefined,
+                          undefined,
+                          undefined,
+                          !embedded,
+                        );
                       }}
                     />
                   );

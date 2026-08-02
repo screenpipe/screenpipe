@@ -323,18 +323,17 @@ mod tests {
 
     /// End-to-end proof of the fail-closed boundary. The real VFS injects
     /// SQLITE_IOERR_SHORT_READ (522) into a live write queue. The first error
-    /// must quarantine that queue generation, reject later writes without a
-    /// retry/tail flush, and request recovery exactly once. Only a newly opened
-    /// queue generation may write after the underlying fault clears.
+    /// must quarantine the physical database path, reject later writes without
+    /// a retry/tail flush, and request recovery exactly once. A new manager in
+    /// the same process must remain quarantined after the injected fault clears.
     #[tokio::test]
-    async fn write_queue_quarantines_on_first_ioerr_and_requires_new_generation() {
+    async fn write_queue_quarantines_ioerr_across_manager_generations() {
         use crate::write_queue::{
             spawn_write_drain_with, WriteDrainOpts, WriteOp, WriteQueueHealth,
         };
         use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
         use std::sync::Arc;
         use std::time::Duration;
-        use tokio::sync::Semaphore;
 
         let _guard = failpoint_test_lock().lock().await;
 
@@ -389,8 +388,8 @@ mod tests {
             .connect_with(opts.clone())
             .await
             .unwrap();
-        let sem = Arc::new(Semaphore::new(1));
-        let health = WriteQueueHealth::default();
+        let sem = screenpipe_sqlite_coordinator::sqlite_write_lock(&db);
+        let health = WriteQueueHealth::for_database_path(db.to_string_lossy().into_owned());
         let fired = Arc::new(AtomicBool::new(false));
         let fired_hook = fired.clone();
         let queue = spawn_write_drain_with(
@@ -501,40 +500,38 @@ mod tests {
         drop(queue);
         write_pool.close().await;
 
-        // Model the app's existing recovery hook: a new manager generation gets
-        // fresh pools and may write after the storage fault is gone.
-        let replacement_pool = SqlitePoolOptions::new()
-            .max_connections(2)
-            .min_connections(1)
-            .acquire_timeout(Duration::from_secs(2))
-            .connect_with(opts.clone())
-            .await
-            .unwrap();
-        let replacement_health = WriteQueueHealth::default();
-        let replacement = spawn_write_drain_with(
-            replacement_pool.clone(),
-            Arc::new(Semaphore::new(1)),
-            Arc::from(format!("{}", db.display()).as_str()),
-            WriteDrainOpts {
-                health: replacement_health.clone(),
-                ..Default::default()
-            },
-        );
-        replacement
-            .submit(WriteOp::InsertAudioChunk {
-                file_path: "/post/ok".into(),
-                timestamp: None,
-            })
-            .await
-            .expect("new queue generation must recover after fault clearance");
+        // Reproduce the unsafe desktop behavior from the July 31 incident: the
+        // engine teardown completes, then tries to construct a fresh manager
+        // over the same path. Clearing the VFS fault is not operator recovery;
+        // this process must remain ineligible to reopen the database.
+        let replacement_health =
+            WriteQueueHealth::for_database_path(db.to_string_lossy().into_owned());
         assert!(
-            !replacement_health.is_hard_faulted(),
-            "quarantine must not leak into a new manager generation"
+            replacement_health.is_hard_faulted(),
+            "replacement health must inherit the path quarantine"
         );
-        drop(replacement);
-        replacement_pool.close().await;
+        assert!(
+            screenpipe_sqlite_coordinator::sqlite_write_lock(&db).is_closed(),
+            "replacement writer admission must stay closed"
+        );
+        let replacement_error = match crate::DatabaseManager::new(
+            db.to_str().expect("utf-8 temp path"),
+            screenpipe_config::DbConfig::for_tier(screenpipe_config::DeviceTier::Low),
+        )
+        .await
+        {
+            Ok(database) => {
+                database.close().await;
+                panic!("same-process manager replacement must fail closed");
+            }
+            Err(error) => error,
+        };
+        assert!(replacement_error
+            .to_string()
+            .contains("remains quarantined"));
 
-        // Fresh-connection readback proves only the replacement write committed.
+        // A forensic read-only connection proves no pre- or post-fault write
+        // crossed the quarantine boundary.
         let verify = SqlitePoolOptions::new()
             .min_connections(1)
             .connect_with(opts.clone())
@@ -550,11 +547,98 @@ mod tests {
                 .fetch_one(&verify)
                 .await
                 .unwrap();
-        assert_eq!(post.0, 1, "replacement write must be durable");
+        assert_eq!(post.0, 0, "replacement write must never be attempted");
         assert_eq!(
             quarantined.0, 0,
             "hard-fault and post-fault writes must never commit"
         );
         verify.close().await;
+    }
+
+    /// Direct transaction callers execute statements through `tx.conn()`, so
+    /// the statement error is not routed through DatabaseManager. Prove that
+    /// dropping that failed transaction reads SQLite's extended result before
+    /// rollback, quarantines the path, and fires recovery exactly once.
+    #[tokio::test]
+    async fn direct_transaction_statement_ioerr_quarantines_before_rollback() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let _guard = failpoint_test_lock().lock().await;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = dir.path().join("direct-tx.sqlite");
+        let vfs = register();
+        disarm();
+        set_auto_heal(false);
+
+        let opts = tiny_cache_opts(&db, vfs);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .min_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("open failpoint pool");
+        seed_multipage(&pool).await;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&pool)
+            .await
+            .expect("checkpoint seed");
+
+        let writer_gate = screenpipe_sqlite_coordinator::sqlite_write_lock(&db);
+        let permit = Arc::clone(&writer_gate)
+            .acquire_owned()
+            .await
+            .expect("open writer gate");
+        let mut conn = pool.acquire().await.expect("write connection");
+        sqlx::query("PRAGMA shrink_memory")
+            .execute(&mut *conn)
+            .await
+            .expect("clear page cache");
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .expect("begin before fault");
+
+        let health = crate::write_queue::WriteQueueHealth::for_database_path(
+            db.to_string_lossy().into_owned(),
+        );
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let hook_counter = Arc::clone(&hook_calls);
+        let hook = crate::write_queue::persistent_failure_slot(Some(Arc::new(move || {
+            hook_counter.fetch_add(1, AtomicOrdering::SeqCst);
+        })));
+        let mut tx = crate::ImmediateTx::for_test(conn, permit, health.clone(), hook);
+
+        arm();
+        let error = sqlx::query("INSERT INTO t VALUES (?, ?)")
+            .bind(99_999)
+            .bind("fault".repeat(40))
+            .execute(&mut **tx.conn())
+            .await
+            .expect_err("uncached statement must observe the injected IOERR");
+        assert!(
+            crate::sqlite_error::is_sqlite_hard_fault(&error),
+            "injected error must be a hard SQLite fault: {error}"
+        );
+        drop(tx);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !health.is_hard_faulted() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("transaction drop must quarantine promptly");
+        assert!(writer_gate.is_closed(), "writer admission must close");
+        assert_eq!(hook_calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(matches!(
+            screenpipe_sqlite_coordinator::registered_sqlite_hard_fault(&db),
+            Some(10 | 522)
+        ));
+
+        disarm();
+        set_auto_heal(true);
+        pool.close().await;
     }
 }

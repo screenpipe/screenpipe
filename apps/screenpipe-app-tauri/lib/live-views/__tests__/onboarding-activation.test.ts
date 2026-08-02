@@ -13,6 +13,7 @@ import {
   markOnboardingLiveViewSetupReady,
   removeOnboardingLiveViewActivation,
   readLegacyUserGoalCategory,
+  selectExistingLiveViewForOnboarding,
   selectedLiveViewDashboardId,
   setOnboardingLiveViewGuideStep,
   startOnboardingLiveViewActivation,
@@ -61,6 +62,26 @@ describe("onboarding Live View activation", () => {
         completedAt: null,
       }),
     );
+  });
+
+  it("schedules only the explicitly selected existing view", () => {
+    selectExistingLiveViewForOnboarding("weekly-review");
+
+    expect(selectedLiveViewDashboardId()).toBe("weekly-review");
+    expect(consumeOnboardingBrainHandoff()).toBe("weekly-review");
+    expect(getOnboardingLiveViewActivation("weekly-review")).toEqual(
+      expect.objectContaining({
+        viewId: "weekly-review",
+        goalCategory: "custom",
+        setupStatus: "ready",
+        guideStep: "done",
+        followUp: expect.objectContaining({
+          status: "scheduled",
+          dueAt: expect.any(String),
+        }),
+      }),
+    );
+    expect(getOnboardingLiveViewActivation("unselected-view")).toBeNull();
   });
 
   it("prefers the explicit legacy user goal during settings migration", () => {

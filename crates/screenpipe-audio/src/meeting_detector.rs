@@ -84,6 +84,10 @@ pub struct MeetingDetector {
     /// detection loop can wake immediately and scan instead of waiting out a
     /// slow idle interval.
     audio_onset: Notify,
+    /// Fired whenever the meeting flag changes so capture ownership can react
+    /// immediately instead of waiting for the device monitor's fallback poll.
+    /// `notify_one` preserves a permit when the monitor is between passes.
+    meeting_state_changed: Notify,
     /// Identity of the currently-detected meeting process, published by the
     /// v2 watcher alongside `v2_override`. See [`ActiveMeeting`].
     active_meeting: std::sync::Mutex<Option<ActiveMeeting>>,
@@ -103,13 +107,23 @@ impl MeetingDetector {
             last_output_chunk_ms: AtomicU64::new(0),
             last_input_chunk_ms: AtomicU64::new(0),
             audio_onset: Notify::new(),
+            meeting_state_changed: Notify::new(),
             active_meeting: std::sync::Mutex::new(None),
         }
     }
 
     /// Set the v2 override flag. Called by the v2 meeting detection loop.
     pub fn set_v2_in_meeting(&self, in_meeting: bool) {
-        self.v2_override.store(in_meeting, Ordering::Relaxed);
+        let previous = self.v2_override.swap(in_meeting, Ordering::Relaxed);
+        if previous != in_meeting {
+            self.meeting_state_changed.notify_one();
+        }
+    }
+
+    /// Wait until the meeting flag changes. The stored Notify permit makes
+    /// this safe when an edge lands just before the caller starts waiting.
+    pub async fn meeting_state_changed(&self) {
+        self.meeting_state_changed.notified().await;
     }
 
     /// Publish which meeting is active (pid/bundle when the sensor knows it).
@@ -237,6 +251,39 @@ mod tests {
         detector.set_v2_in_meeting(false);
         assert!(!detector.is_in_meeting());
         assert!(!detector.is_in_audio_session());
+    }
+
+    #[tokio::test]
+    async fn meeting_state_notifies_once_per_real_edge() {
+        let detector = MeetingDetector::new();
+
+        // Setting the existing value is not an edge and must not spin the
+        // device monitor.
+        detector.set_v2_in_meeting(false);
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            detector.meeting_state_changed()
+        )
+        .await
+        .is_err());
+
+        // Notify stores a permit when no waiter exists, closing the race where
+        // an edge lands between monitor passes.
+        detector.set_v2_in_meeting(true);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            detector.meeting_state_changed(),
+        )
+        .await
+        .expect("rising edge should wake a later waiter");
+
+        detector.set_v2_in_meeting(false);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            detector.meeting_state_changed(),
+        )
+        .await
+        .expect("falling edge should wake a later waiter");
     }
 
     #[test]

@@ -971,6 +971,20 @@ impl SCServer {
                     crate::routes::structured_outputs::set_structured_output_feedback_handler,
                 ),
             )
+            .route(
+                "/outputs/targets/:target_id/items/:item_id/actions",
+                axum::routing::post(
+                    crate::routes::structured_outputs::set_structured_output_item_action_handler,
+                ),
+            )
+            // One local read contract for user feedback across AI surfaces.
+            // Writes retain their surface-specific conflict checks; the
+            // notification panel posts new feedback through this route.
+            .route(
+                "/feedback",
+                get(crate::routes::ai_feedback::list_ai_feedback_handler)
+                    .post(crate::routes::ai_feedback::set_ai_feedback_handler),
+            )
             // Live View Templates are a versioned cross-surface protocol.
             // Local app/API clients can edit them; pipe tokens can only fill
             // their assigned structured output targets above.
@@ -1060,6 +1074,15 @@ impl SCServer {
 
         // Pipe API routes (if pipe manager is available)
         let router = if let Some(ref pm) = self.pipe_manager {
+            let pipe_stream_hub = Arc::new(crate::pipe_stream::PipeStreamHub::new());
+            {
+                let hub = pipe_stream_hub.clone();
+                pm.lock()
+                    .await
+                    .set_on_output_line(Arc::new(move |pipe, exec_id, line| {
+                        hub.publish(pipe, exec_id, line)
+                    }));
+            }
             let pipe_routes = Router::new()
                 .route("/", axum::routing::get(crate::pipes_api::list_pipes))
                 .route(
@@ -1161,7 +1184,28 @@ impl SCServer {
             } else {
                 pipe_routes
             };
-            router.nest("/pipes", pipe_routes)
+            let router = router.nest("/pipes", pipe_routes).merge(
+                Router::new()
+                    .route(
+                        "/pipes/:id/stream",
+                        axum::routing::get(crate::pipe_stream::stream_pipe),
+                    )
+                    .with_state(pipe_stream_hub),
+            );
+
+            // Plain chat, no pipe: served locally using the user's own AI preset
+            // so clients can stream without going through the hosted gateway.
+            router.merge(
+                Router::new()
+                    .route(
+                        // /v1/chat/completions is already taken by the cloud proxy.
+                        // Mounted under /v1/local so an OpenAI SDK reaches it by
+                        // setting base_url to http://<host>:3030/v1/local.
+                        "/v1/local/chat/completions",
+                        axum::routing::post(crate::local_chat::local_chat_completions),
+                    )
+                    .with_state(pm.clone()),
+            )
         } else {
             router
         };
@@ -1540,6 +1584,11 @@ mod tests {
         ] {
             assert!(!is_api_auth_exempt_path(path));
         }
+    }
+
+    #[test]
+    fn pipe_stream_is_not_api_auth_exempt() {
+        assert!(!is_api_auth_exempt_path("/pipes/daily-summary/stream"));
     }
 
     #[test]

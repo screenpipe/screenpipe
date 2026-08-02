@@ -336,6 +336,7 @@ pub fn direct_upload_cursors(cursor: &Cursor) -> DirectUploadCursors {
         last_audio_ts: cursor.last_audio_ts.clone(),
         last_ui_ts: cursor.last_ui_ts.clone(),
         last_memory_ts: cursor.last_memory_ts.clone(),
+        last_feedback_ts: cursor.last_feedback_ts.clone(),
     }
 }
 
@@ -605,12 +606,14 @@ mod tests {
                 ui: 0,
                 snapshots: 0,
                 memories: 0,
+                feedback: 0,
             },
             DirectUploadCursors {
                 last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
                 last_audio_ts: None,
                 last_ui_ts: None,
                 last_memory_ts: None,
+                last_feedback_ts: None,
             },
         )
     }

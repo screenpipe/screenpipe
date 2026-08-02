@@ -5,6 +5,9 @@ compatibility_date = "2024-10-11"
 workers_dev = true
 compatibility_flags = ["nodejs_compat"]
 upload_source_maps = true
+# Production-only policy bindings are managed outside this repository. Preserve
+# them when Wrangler deploys the public configuration below.
+keep_vars = true
 
 # Custom domain
 routes = [
@@ -19,6 +22,10 @@ routes = [
 # Configuration: https://developers.cloudflare.com/workers/observability/logs/workers-logs/#enable-workers-logs
 [observability]
 enabled = true
+
+# Hourly bounded-state cleanup. The minute offset avoids top-of-hour load.
+[triggers]
+crons = ["17 * * * *"]
 
 # Automatically place your workloads in an optimal location to minimize latency.
 # If you are running back-end logic in a Worker, running it closer to your back-end infrastructure
@@ -54,14 +61,17 @@ SELF_HOSTED_TRANSCRIPTION_URL = "https://audio.screenpi.pe"
 # deliberate default across redeploys; FLEX_TIER_ENABLED remains the master switch.
 GEMINI_FLEX_INTERACTIVE = "false"
 
+# Hosted AI model policy is public. Operational spend-control values are private
+# production bindings and must never be committed to this file.
+MODEL_GATING_ENABLED = "true"
+PIPE_FRONTIER_POLICY = "reject"
+
 # Cost / flex tuning knobs — read with a code default, so they live in the CF
 # dashboard (Settings → Variables), not here, and take effect with no redeploy:
 # - FLEX_TIER_ENABLED ("true"): master kill switch for the Vertex Gemini flex tier.
 # - GEMINI_FLEX_INTERACTIVE ("true"): also flex interactive Gemini, not just
 #   background. Set "false" to revert to background-only flex if best-effort
 #   latency hurts user-facing chat.
-# - MAX_DAILY_COST_PER_USER ("5"): base per-user daily $ cap; ×7 subscribed,
-#   ×0.64 logged_in, ×0.32 anonymous (getTierDailyCostCap). Credits extend 1:1.
 # - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = GPT-5.6 Luna
 #   (today's behavior). "heuristic" = regex tiering (0 latency). "embedding" =
 #   bge centroid via Workers AI (best accuracy, +1 embed call). See difficulty-router.ts.
@@ -97,8 +107,8 @@ binding = "AI"
 # Then update the database_id below with the returned ID
 [[d1_databases]]
 binding = "DB"
-database_name = "screenpipe-usage"
-database_id = "5496f4b2-03c9-496f-b8ca-675961c0622a"
+database_name = "screenpipe-usage-v2"
+database_id = "f410ff74-4c3f-4786-a1ca-c8365f6c0ddf"
 
 # Bind a dispatch namespace. Use Workers for Platforms to deploy serverless functions programmatically on behalf of your customers.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#dispatch-namespace-bindings-workers-for-platforms

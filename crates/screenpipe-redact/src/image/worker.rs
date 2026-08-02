@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use screenpipe_resource::ResourceGovernor;
+use screenpipe_sqlite_coordinator::SqliteWritePool;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
@@ -33,6 +34,7 @@ use tracing::{debug, info, warn};
 
 use super::frame_redactor::{redact_frame, FrameRedactionOutcome};
 use super::{ImageRedactionPolicy, ImageRedactor};
+use crate::DatabaseErrorHook;
 
 /// Knobs for the image reconciliation worker.
 ///
@@ -92,21 +94,42 @@ pub struct ImageWorkerStatus {
 #[derive(Clone)]
 pub struct ImageWorker {
     pool: SqlitePool,
+    writer: SqliteWritePool,
     redactor: Arc<dyn ImageRedactor>,
     cfg: ImageWorkerConfig,
     status: Arc<Mutex<ImageWorkerStatus>>,
     paused: Arc<AtomicBool>,
+    database_error_hook: Option<DatabaseErrorHook>,
 }
 
 impl ImageWorker {
     pub fn new(pool: SqlitePool, redactor: Arc<dyn ImageRedactor>, cfg: ImageWorkerConfig) -> Self {
+        let writer = SqliteWritePool::standalone(pool.clone());
+        Self::new_with_writer(pool, writer, redactor, cfg)
+    }
+
+    pub fn new_with_writer(
+        pool: SqlitePool,
+        writer: SqliteWritePool,
+        redactor: Arc<dyn ImageRedactor>,
+        cfg: ImageWorkerConfig,
+    ) -> Self {
         Self {
             pool,
+            writer,
             redactor,
             cfg,
             status: Arc::new(Mutex::new(ImageWorkerStatus::default())),
             paused: Arc::new(AtomicBool::new(false)),
+            database_error_hook: None,
         }
+    }
+
+    /// Route typed SQLx failures to the database owner. Image/model errors do
+    /// not invoke this hook even when their text happens to mention I/O.
+    pub fn with_database_error_hook(mut self, hook: DatabaseErrorHook) -> Self {
+        self.database_error_hook = Some(hook);
+        self
     }
 
     pub fn pause(&self) {
@@ -232,6 +255,7 @@ impl ImageWorker {
                 }
                 Some(Err(e)) => {
                     drop(cpu_permit);
+                    crate::notify_database_error(self.database_error_hook.as_ref(), &e);
                     warn!(error = %e, "image reconciliation error; backing off");
                     let mut s = self.status.lock().await;
                     s.last_error = Some(e.to_string());
@@ -354,6 +378,7 @@ impl ImageWorker {
     }
 
     async fn mark_redacted(&self, frame_id: i64) -> Result<(), sqlx::Error> {
+        let writer = self.writer.lock().await?;
         sqlx::query(
             r#"
             UPDATE frames
@@ -362,7 +387,7 @@ impl ImageWorker {
             "#,
         )
         .bind(frame_id)
-        .execute(&self.pool)
+        .execute(writer.pool())
         .await
         .map(|_| ())
     }

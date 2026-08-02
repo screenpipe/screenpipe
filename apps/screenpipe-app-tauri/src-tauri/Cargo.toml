@@ -1,8 +1,9 @@
 [workspace]
+members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.149"
+version = "2.5.164"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -55,6 +56,7 @@ tauri-plugin-permission-flow = { git = "https://github.com/EzraEllette/permissio
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"
+bytes = "1"
 plist = "1"
 arc-swap = "1"
 
@@ -89,6 +91,7 @@ tracing-appender = "0.2.3"
 
 
 sha2 = "0.10"
+libc = "0.2"
 anyhow = "1.0.71"
 arboard = "3.4"
 
@@ -114,6 +117,7 @@ raw-window-handle = "0.6"
 
 notify = "8.0.0"
 futures = "0.3.30"
+agent-client-protocol = "=1.2.0"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
@@ -140,6 +144,7 @@ screenpipe-vault = { path = "../../../crates/screenpipe-vault" }
 screenpipe-connect = { path = "../../../crates/screenpipe-connect", features = ["specta"] }
 screenpipe-secrets = { path = "../../../crates/screenpipe-secrets" }
 screenpipe-events = { path = "../../../crates/screenpipe-events" }
+sqlx = { version = "=0.9.0", default-features = false, features = ["sqlite", "runtime-tokio"], optional = true }
 eventkit-rs = { git = "https://github.com/divanshu-go/eventkit-rs", rev = "9dd52787c8435d734ed443e2d5641f45b0177cae", default-features = false, features = ["events"] }
 # Async PII reconciliation (issue #3185 / PR #3188). `onnx-coreml` is
 # the right execution-provider for Apple Silicon (image PII via
@@ -237,8 +242,13 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
     "Win32_System_Com",
+    "Win32_System_ErrorReporting",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_Security_Cryptography",
+    # GetLastInputInfo/GetTickCount for the recording-health user-presence tier
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -260,7 +270,7 @@ pulseaudio = ["screenpipe-audio/pulseaudio"]
 directml = ["screenpipe-engine/directml"]
 vulkan = ["screenpipe-audio/vulkan"]
 cargo-clippy = []
-e2e = ["tauri-plugin-webdriver"]
+e2e = ["tauri-plugin-webdriver", "dep:sqlx"]
 
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
@@ -353,10 +363,12 @@ incremental = true
 opt-level = 1
 debug = false
 
-# Faster dev builds
+# Default non-release builds retain complete Screenpipe symbols while omitting
+# debuginfo from third-party crates.
 [profile.dev]
 opt-level = 0
-debug = false
+debug = true
+split-debuginfo = "packed"
 # Per-worktree incremental state cannot help a cold target and prevents the
 # shared compiler cache from reusing screenpipe's path crates across worktrees.
 incremental = false
@@ -369,5 +381,58 @@ debug = false
 # with the dependency-wide opt-level=2 only slows the build and cannot improve
 # app runtime performance.
 [profile.dev.build-override]
+opt-level = 0
+debug = false
+
+# Kept for explicit invocations; default non-release builds use these settings
+# through the `dev` profile above.
+[profile.dev-debug]
+inherits = "dev"
+debug = true
+split-debuginfo = "packed"
+incremental = false
+
+[profile.dev-debug.package."*"]
+opt-level = 2
+debug = false
+
+# Preserve complete debugging across the first-party runtime
+# stack without paying for third-party dependency symbols.
+[profile.dev-debug.package.screenpipe-a11y]
+debug = true
+[profile.dev-debug.package.screenpipe-audio]
+debug = true
+[profile.dev-debug.package.screenpipe-capture]
+debug = true
+[profile.dev-debug.package.screenpipe-config]
+debug = true
+[profile.dev-debug.package.screenpipe-connect]
+debug = true
+[profile.dev-debug.package.screenpipe-core]
+debug = true
+[profile.dev-debug.package.screenpipe-db]
+debug = true
+[profile.dev-debug.package.screenpipe-engine]
+debug = true
+[profile.dev-debug.package.screenpipe-events]
+debug = true
+[profile.dev-debug.package.screenpipe-redact]
+debug = true
+[profile.dev-debug.package.screenpipe-resource]
+debug = true
+[profile.dev-debug.package.screenpipe-screen]
+debug = true
+[profile.dev-debug.package.screenpipe-secrets]
+debug = true
+[profile.dev-debug.package.screenpipe-sqlite-coordinator]
+debug = true
+[profile.dev-debug.package.screenpipe-sync]
+debug = true
+[profile.dev-debug.package.screenpipe-vault]
+debug = true
+
+# Build scripts/proc macros are not part of the shipped app, so do not retain
+# their debuginfo either.
+[profile.dev-debug.build-override]
 opt-level = 0
 debug = false

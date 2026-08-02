@@ -451,7 +451,8 @@ pub async fn paired_capture(
             Some(r) => Arc::new(ctx.image.crop_imm(r.x, r.y, r.width, r.height)),
             None => ctx.image.clone(),
         };
-        // Windows native OCR is async, so call it directly (not inside spawn_blocking)
+        // The Windows wrapper serializes native OCR and runs its blocking
+        // WinRT waits on Tokio's blocking pool.
         #[cfg(target_os = "windows")]
         let raw = {
             match screenpipe_screen::perform_ocr_windows(&ocr_input, &ctx.languages).await {

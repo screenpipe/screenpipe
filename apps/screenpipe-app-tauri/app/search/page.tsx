@@ -62,7 +62,7 @@ export default function SearchPage() {
 	}, []);
 	const handleNavigate = useCallback(async (timestamp: string, frameId?: number, searchTerms?: string[], searchResultsJson?: string, searchQuery?: string) => {
 		// Rust command: shows Main, emits navigation event from app handle, closes Search
-		commands.searchNavigateToTimeline(timestamp, frameId ?? null, searchTerms ?? null, searchResultsJson ?? null, searchQuery ?? null).catch(console.error);
+		await commands.searchNavigateToTimeline(timestamp, frameId ?? null, searchTerms ?? null, searchResultsJson ?? null, searchQuery ?? null);
 	}, []);
 
 	const handleClose = useCallback(async () => {

@@ -41,7 +41,7 @@ export const userSchema = z.object({
   entitlement: z.any().nullable().optional(),
 });
 
-export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "screenpipe-cloud", "pi", "anthropic"]);
+export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "screenpipe-cloud", "pi", "anthropic", "acp"]);
 
 export const aiPresetSchema = z.object({
   id: z.string().min(1, "Preset name is required").regex(/^[a-zA-Z0-9\s\-_]+$/, "Only letters, numbers, spaces, hyphens, and underscores allowed").refine(
@@ -301,6 +301,7 @@ export const validateApiKey = (apiKey: string, provider: AIProviderType): FieldV
       }
       break;
     case "anthropic":
+    case "acp":
       if (!apiKey.startsWith("sk-ant-")) {
         return { isValid: false, error: "Anthropic API keys should start with 'sk-ant-'" };
       }

@@ -1,0 +1,20 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "chrome.exe",
+    "display_name": "Google Chrome",
+    "version": null,
+    "browser_url": "https://chatgpt.com/"
+  },
+  "nodes": [
+    { "parent": null, "role": "Button", "text": "Minimize", "identifier": "view_1", "classes": ["WindowsCaptionButton"], "description": "button" },
+    { "parent": null, "role": "Button", "text": "Close", "identifier": "view_4", "classes": ["WindowsCaptionButton"], "description": "button" },
+    { "parent": 1, "role": "Edit", "text": "chatgpt.com", "value": "chatgpt.com", "identifier": "view_1012", "classes": ["OmniboxViewViews"], "description": "Ask Google or type a URL" },
+    { "parent": 1, "role": "Button", "text": "New Chrome available", "identifier": "view_1007", "classes": ["BrowserAppMenuButton"], "description": "button" },
+    { "parent": 3, "role": "Text", "text": "Where should we begin?", "classes": ["wm-app-landingHeading"], "description": "heading" },
+    { "parent": 3, "role": "Text", "text": "Get responses tailored to you", "identifier": "sidebar-login-title", "classes": ["wm-sidebar-loginTitle"], "description": "heading" },
+    { "parent": 3, "role": "Hyperlink", "text": "Help center", "value": "https://help.example.com/", "classes": ["wm-sidebar-navigationLink"], "description": "link" },
+    { "parent": 3, "role": "Edit", "text": "Ask anything", "identifier": "mobile-composer-prompt", "classes": ["wm-composer-textarea"], "description": "Ask anything" }
+  ]
+}

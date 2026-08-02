@@ -772,6 +772,112 @@ async fn query_memories(
         .collect())
 }
 
+async fn query_feedback(
+    db: &DatabaseManager,
+    kq: &KindQuery<'_>,
+) -> Result<Vec<Value>, sqlx::Error> {
+    let order = if kq.newest_first { "DESC" } else { "ASC" };
+    let sql = format!(
+        r#"SELECT f.id, f.device_id, gd.device_label, f.updated_at,
+                  f.target_kind, f.target_id, NULLIF(f.target_version, ''),
+                  f.producer_ref, f.actor_id, f.rating, f.comment, f.snapshot,
+                  f.context, f.created_at
+           FROM feedback f
+           LEFT JOIN gateway_devices gd ON gd.device_id = f.device_id
+           WHERE f.device_id != ''
+             AND datetime(f.updated_at) >= datetime(?1) AND datetime(f.updated_at) <= datetime(?2)
+             AND (?3 IS NULL OR f.device_id = ?3)
+             AND (?4 IS NULL OR lower(f.target_id) LIKE '%' || lower(?4) || '%'
+                 OR lower(COALESCE(f.producer_ref, '')) LIKE '%' || lower(?4) || '%'
+                 OR lower(COALESCE(f.comment, '')) LIKE '%' || lower(?4) || '%'
+                 OR lower(COALESCE(f.snapshot, '')) LIKE '%' || lower(?4) || '%'
+                 OR lower(f.context) LIKE '%' || lower(?4) || '%')
+           ORDER BY datetime(f.updated_at) {order}
+           LIMIT ?5"#,
+    );
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        ),
+    >(sqlx::AssertSqlSafe(sql))
+    .bind(&kq.since)
+    .bind(&kq.until)
+    .bind(kq.device_id)
+    .bind(kq.q)
+    .bind(kq.limit)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                device_id,
+                device,
+                updated_at,
+                target_kind,
+                target_id,
+                target_version,
+                producer_ref,
+                actor_id,
+                rating,
+                comment,
+                snapshot,
+                context,
+                created_at,
+            )| {
+                json!({
+                    "kind": "feedback",
+                    "t": updated_at,
+                    "device": device,
+                    "device_id": device_id,
+                    "app": null,
+                    "window": null,
+                    "url": null,
+                    "text": comment,
+                    "transcription": null,
+                    "speaker": null,
+                    "content": comment,
+                    "importance": null,
+                    "tags": null,
+                    "source": producer_ref,
+                    "frame_id": null,
+                    "memory_id": null,
+                    "feedback_id": id
+                        .split_once(":feedback:")
+                        .map(|(_, source_id)| source_id)
+                        .unwrap_or(&id),
+                    "target_kind": target_kind,
+                    "target_id": target_id,
+                    "target_version": target_version,
+                    "producer_ref": producer_ref,
+                    "actor_id": actor_id,
+                    "rating": rating,
+                    "comment": comment,
+                    "snapshot": snapshot.and_then(|value| serde_json::from_str::<Value>(&value).ok()),
+                    "context": serde_json::from_str::<Value>(&context).unwrap_or_else(|_| json!({})),
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                })
+            },
+        )
+        .collect())
+}
+
 async fn query_kinds(
     db: &DatabaseManager,
     kinds: &[&str],
@@ -784,6 +890,7 @@ async fn query_kinds(
             "audio" => query_audio(db, kq).await?,
             "ui" => query_ui(db, kq).await?,
             "memory" => query_memories(db, kq).await?,
+            "feedback" => query_feedback(db, kq).await?,
             // Snapshots are files + frames.snapshot_path, not records.
             _ => Vec::new(),
         };
@@ -852,7 +959,13 @@ async fn search(
         limit,
         newest_first: true,
     };
-    let mut results = match query_kinds(&state.db, &["frame", "audio", "ui", "memory"], &kq).await {
+    let mut results = match query_kinds(
+        &state.db,
+        &["frame", "audio", "ui", "memory", "feedback"],
+        &kq,
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("search: {e}")),
     };
@@ -895,7 +1008,7 @@ async fn records(
     };
 
     let kinds: Vec<&str> = match kind_filter.as_str() {
-        "all" => vec!["frame", "audio", "ui", "memory"],
+        "all" => vec!["frame", "audio", "ui", "memory", "feedback"],
         k => vec![k],
     };
     let kq = KindQuery {

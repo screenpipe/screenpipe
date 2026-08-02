@@ -85,6 +85,14 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "meeting-summary",
         include_str!("../../assets/pipes/meeting-summary/pipe.md"),
     ),
+    (
+        "commitments",
+        include_str!("../../assets/pipes/commitments/pipe.md"),
+    ),
+    (
+        "accounting-follow-through",
+        include_str!("../../assets/pipes/accounting-follow-through/pipe.md"),
+    ),
 ];
 
 /// Explicitly install one trusted Pipe bundled with the app.
@@ -1339,15 +1347,15 @@ pub trait PipeStore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Resolved model + provider from an AI preset.
-struct ResolvedPreset {
-    model: String,
-    provider: Option<String>,
+pub struct ResolvedPreset {
+    pub model: String,
+    pub provider: Option<String>,
     /// Provider base URL (e.g. `http://localhost:11434/v1` for Ollama).
-    url: Option<String>,
+    pub url: Option<String>,
     /// API key for the provider (custom / openai BYOK).
-    api_key: Option<String>,
+    pub api_key: Option<String>,
     /// System prompt from the preset (injected before the pipe body).
-    prompt: Option<String>,
+    pub prompt: Option<String>,
 }
 
 /// Read the ChatGPT OAuth access token, with auto-refresh if expired.
@@ -2400,6 +2408,14 @@ impl PipeManager {
     }
 
     /// Set a callback to be invoked for each stdout line from a running pipe.
+    /// Resolves a named AI preset (provider, model, base url, key) from the
+    /// user's own store. Exposed so the local HTTP surface can serve plain chat
+    /// with the same credentials the desktop app uses, without going through a
+    /// pipe or the hosted gateway.
+    pub fn resolve_ai_preset(&self, preset_id: &str) -> Option<ResolvedPreset> {
+        resolve_preset(&self.pipes_dir, preset_id)
+    }
+
     pub fn set_on_output_line(&mut self, cb: OnPipeOutputLine) {
         self.on_output_line = Some(cb);
     }
@@ -6252,6 +6268,22 @@ fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
                 "the most recent row is the one that just ended. capture its",
                 "either way, capture the meeting's",
             ),
+            // A maintainer-only synchronization note was accidentally shipped
+            // inside the runtime prompt. Agents interpreted it as work to do
+            // and recursively searched the user's home or ~/.screenpipe for
+            // app source, pegging a CPU core after meetings. Replace it in
+            // already-installed copies with an explicit bounded-work rule.
+            (
+                "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in `apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app \"summarize with AI\" button) — the two surfaces should produce the same behavior.",
+                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
+            ),
+            // Clarify the first bounded-work migration: the pipe must search
+            // Screenpipe through the meeting-scoped API. Only recursive
+            // filesystem/source discovery is prohibited.
+            (
+                "the instructions below are complete. do not inspect app source or search outside this pipe folder. never run recursive `find` or `grep` over the user's home or `~/.screenpipe`; use only the named local files and bounded HTTP endpoints below.",
+                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
+            ),
         ],
         _ => return None,
     };
@@ -6382,7 +6414,7 @@ fn render_pipe_system_prompt(
     };
 
     sys.push_str(&format!(
-        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}{api_auth_note}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\nNotifications support action buttons (`\"actions\": [...]`) so you can ASK the user instead of sending a passive FYI — when a human decision or follow-up would help (send/share/draft/fix/dig deeper), attach actions rather than doing nothing or acting unilaterally. Schema + examples: screenpipe-api skill, Notifications section.\n\n"
+        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}{api_auth_note}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nUser ratings and written corrections for this Pipe are available from authenticated GET http://localhost:{api_port}/feedback. Check them before regenerating recurring output: preserve what earned up ratings and correct what earned down ratings.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\nNotifications support action buttons (`\"actions\": [...]`) so you can ASK the user instead of sending a passive FYI — when a human decision or follow-up would help (send/share/draft/fix/dig deeper), attach actions rather than doing nothing or acting unilaterally. Schema + examples: screenpipe-api skill, Notifications section.\n\n"
     ));
     if subagents_available {
         sys.push_str("Subagents: the `subagent` tool is enabled. Use it when this task has at least two independent research, review, or implementation workstreams that can run in parallel, then synthesize the child results. Keep simple or sequential work in this agent. For read-only child tasks, pass `acceptance.level: \"none\"` so a successful child is not rejected for making no edits.\n\n");
@@ -6394,6 +6426,8 @@ fn render_pipe_system_prompt(
         sys.push_str(ctx);
         sys.push_str("\n\nConnection write policy: never POST, PUT, or PATCH to a connection proxy unless the pipe body or user explicitly asks you to create, write, or modify something in that service. Read first, write only when clearly instructed.");
     }
+
+    sys.push_str("\n\nProfile memory: when the user shares something durable about themselves or their preferences, keep a compact running user profile and update it quietly when useful. Save only stable, reusable facts that would help on future turns — preferred name, writing style, timezone/location if relevant, recurring workflow preferences, long-lived goals, tool conventions, or standing constraints. Do not save temporary task details, one-off requests, secrets, raw transcripts, or anything likely to go stale soon. Merge with what you already know, avoid duplicates, and when uncertain, skip saving rather than guessing. Treat the profile as a short factual reference, not a diary or scratchpad.");
 
     sys
 }
@@ -7944,6 +7978,25 @@ mod tests {
         assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
     }
 
+    #[test]
+    fn migrate_builtin_pipe_removes_source_search_instruction() {
+        let stale = concat!(
+            "a meeting just ended.\n\n",
+            "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in ",
+            "`apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app ",
+            "\"summarize with AI\" button) — the two surfaces should produce the same behavior.\n\n",
+            "read the screenpipe skill first.\n",
+        );
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
+            .expect("source-search instruction should migrate");
+        assert!(!fixed.contains("buildMeetingSummarizeInstructions"));
+        assert!(fixed.contains("screenpipe API search is required"));
+        assert!(fixed.contains("never run recursive `find` or `grep`"));
+        assert!(fixed.ends_with("read the screenpipe skill first.\n"));
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
     /// The shipped prompt must already be in its migrated form, or every fresh
     /// install would be rewritten on the next startup.
     #[test]
@@ -7953,6 +8006,11 @@ mod tests {
             .find_map(|(name, content)| (*name == "meeting-summary").then_some(*content))
             .expect("meeting-summary is bundled");
         assert!(migrate_builtin_pipe_text("meeting-summary", bundled).is_none());
+        let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
+        assert_eq!(config.timeout, Some(300));
+        assert!(!body.contains("buildMeetingSummarizeInstructions"));
+        assert!(body.contains("screenpipe API search is required"));
+        assert!(body.contains("never run recursive `find` or `grep`"));
     }
 
     #[test]

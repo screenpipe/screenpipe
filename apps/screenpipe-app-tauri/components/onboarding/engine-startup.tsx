@@ -24,6 +24,7 @@ import {
 } from "@tauri-apps/plugin-os";
 import { ParticleStream, ProgressSteps } from "./particle-stream";
 import { screenpipeWebBase } from "@/lib/web-url";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
 interface EngineStartupProps {
   handleNextSlide: () => void;
@@ -50,6 +51,9 @@ type BootPhaseSnapshot = {
   message: string | null;
   error: string | null;
   sinceEpochSecs: number;
+  // True when the CPU lacks AVX2 (compatibility mode): local whisper/qwen3
+  // STT is disabled at runtime; parakeet + cloud engines still work.
+  cpuCompatMode: boolean;
 };
 
 const BOOT_PHASE_POLL_MS = 500;
@@ -287,6 +291,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
       posthog.capture("onboarding_engine_started", {
         time_spent_ms: Date.now() - mountTimeRef.current,
       });
+      onboardingFunnel.engineReady();
     }
 
     // Keep the completed progress visible briefly before advancing.
@@ -558,6 +563,16 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
             </motion.p>
           )}
         </AnimatePresence>
+
+        {/* CPU compatibility mode — pre-AVX2 CPUs can't run the local
+            whisper/qwen3 kernels; the backend disables them at runtime and
+            reports it via the boot-phase snapshot. */}
+        {bootPhase?.cpuCompatMode && (
+          <p className="font-mono text-[10px] text-muted-foreground/60 mt-2 max-w-[360px] text-center">
+            compatibility mode: this CPU lacks AVX2 — local whisper
+            transcription is unavailable (cloud + parakeet engines still work)
+          </p>
+        )}
 
         {/* Stuck UI */}
         <AnimatePresence>

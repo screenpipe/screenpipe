@@ -313,6 +313,30 @@ pub struct MemoryRecord {
     pub updated_at: String,
 }
 
+/// Human feedback attached to any AI-produced or user-visible object.
+///
+/// `target_kind` is intentionally open (notification, chat, memory, block,
+/// artifact, structured_output, ...). This keeps one searchable contract as
+/// new product surfaces are added instead of creating one table per surface.
+#[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone, PartialEq)]
+pub struct FeedbackRecord {
+    pub id: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub target_version: Option<String>,
+    pub producer_ref: Option<String>,
+    pub actor_id: String,
+    pub rating: String,
+    pub comment: Option<String>,
+    /// Size-bounded JSON snapshot of what the user rated.
+    pub snapshot: Option<String>,
+    /// Size-bounded JSON metadata such as session/message identifiers.
+    pub context: String,
+    pub device_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// A registered output file: produced by a pipe, chat, or agent.
 #[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct OutputRecord {

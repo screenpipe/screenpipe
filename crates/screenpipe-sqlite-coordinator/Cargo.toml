@@ -9,6 +9,7 @@ edition.workspace = true
 
 [dependencies]
 libsqlite3-sys = { workspace = true }
+sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 

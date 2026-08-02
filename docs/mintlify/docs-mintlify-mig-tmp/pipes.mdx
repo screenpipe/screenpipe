@@ -19,7 +19,7 @@ to find and install pipes others have made:
 2. click the **Discover** tab at the top
 3. browse featured and community pipes, or search for a specific one
 4. click **GET** to install any pipe
-5. go to **Settings → Pipes** to enable it and configure the schedule
+5. open **My Pipes** to run it, enable it, and configure the schedule
 
 you can also browse all available pipes online at [screenpi.pe/pipes](https://screenpi.pe/pipes) before installing.
 
@@ -70,7 +70,8 @@ the AI agent uses this context to query the right time range. no template variab
 
 the agent queries screen data via the local REST API:
 
-curl "http://localhost:3030/search?limit=20&content_type=all&start_time=<ISO8601>&end_time=<ISO8601>"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  "http://localhost:3030/search?limit=20&content_type=all&start_time=<ISO8601>&end_time=<ISO8601>"
 
 ### query parameters
 - q: text search query (optional)
@@ -110,24 +111,26 @@ each result contains:
 - timestamp: when it was captured
 
 ### input results (user actions)
-query via: curl "http://localhost:3030/search?content_type=input&app_name=Slack&limit=50&start_time=<ISO8601>&end_time=<ISO8601>"
+query via: curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/search?content_type=input&app_name=Slack&limit=50&start_time=<ISO8601>&end_time=<ISO8601>"
 event types: text (keyboard input), click, app_switch, window_focus, clipboard, scroll
 
-## secrets
+## local API authentication and secrets
 
-store API keys in a .env file next to pipe.md (never in the prompt itself):
+screenpipe injects `SCREENPIPE_LOCAL_API_KEY` into pipe runs. add `-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"` to every protected local API request.
+
+store keys for external services in a .env file next to pipe.md (never in the prompt itself):
 echo "API_KEY=your_key" > ~/.screenpipe/pipes/my-pipe/.env
 reference in prompt: source .env && curl -H "Authorization: Bearer $API_KEY" ...
 
 ## after creating the file
 
-use the desktop app: go to **settings → pipes** to enable, run, and view logs. browse and install pipes from the **Pipes** section in the sidebar.
+use the desktop app: go to **Pipes → My Pipes** to enable, run, and view logs. browse and install pipes from the **Discover** tab.
 
 or use the REST API:
-install: curl -X POST http://localhost:3030/pipes/install -H "Content-Type: application/json" -d '{"source": "~/.screenpipe/pipes/my-pipe"}'
-enable:  curl -X POST http://localhost:3030/pipes/my-pipe/enable -H "Content-Type: application/json" -d '{"enabled": true}'
-test:    curl -X POST http://localhost:3030/pipes/my-pipe/run
-logs:    curl http://localhost:3030/pipes/my-pipe/logs
+install: curl -X POST http://localhost:3030/pipes/install -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" -H "Content-Type: application/json" -d '{"source": "~/.screenpipe/pipes/my-pipe"}'
+enable:  curl -X POST http://localhost:3030/pipes/my-pipe/enable -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" -H "Content-Type: application/json" -d '{"enabled": true}'
+test:    curl -X POST http://localhost:3030/pipes/my-pipe/run -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"
+logs:    curl http://localhost:3030/pipes/my-pipe/logs -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"
 ```
 </CodeGroup>
 
@@ -187,6 +190,7 @@ enabled: true
 
 Summarize my screen activity for the last 30 minutes.
 Query screenpipe at http://localhost:3030/search using the time range from the context header.
+Authenticate with the SCREENPIPE_LOCAL_API_KEY environment variable.
 Write the summary to ./output/<date>.md
 EOF
 
@@ -195,7 +199,7 @@ npx -y screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
 npx -y screenpipe@latest pipe enable my-pipe
 npx -y screenpipe@latest pipe run my-pipe        # run once now to test
 #
-# (or use the desktop app: settings → pipes — or the REST API: POST /pipes/install, /pipes/my-pipe/run)
+# (or use the desktop app: Pipes → My Pipes — or the authenticated REST API)
 ```
 
 ## manage pipes from the CLI
@@ -282,65 +286,71 @@ in this example, the pipe will run daily and has up to 40 minutes to complete. w
 
 ## manage pipes
 
-use the desktop app (**settings → pipes**) or the REST API:
+use the desktop app (**Pipes → My Pipes**) or the REST API:
 
 ## http api
 
 when screenpipe is running, pipes are also manageable via the local API:
 
 ```bash
+export SCREENPIPE_LOCAL_API_KEY="$(npx -y screenpipe@latest auth token)"
+
 # list all pipes
-curl http://localhost:3030/pipes
+curl http://localhost:3030/pipes \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"
 
 # run a pipe
-curl -X POST http://localhost:3030/pipes/my-pipe/run
+curl -X POST http://localhost:3030/pipes/my-pipe/run \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"
 
 # enable/disable
 curl -X POST http://localhost:3030/pipes/my-pipe/enable \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"enabled": true}'
 
 # update pipe content
 curl -X POST http://localhost:3030/pipes/my-pipe/config \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"raw_content": "---\nschedule: every 1h\nenabled: true\n---\n\nYour prompt here..."}'
 
 # view logs
-curl http://localhost:3030/pipes/my-pipe/logs
+curl http://localhost:3030/pipes/my-pipe/logs \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"
 
 # install from URL
 curl -X POST http://localhost:3030/pipes/install \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"source": "https://example.com/pipe.md"}'
 ```
 
 ## app ui
 
-go to **settings → pipes** to see all installed pipes, toggle them on/off, run them manually, edit the pipe.md directly, select an AI preset, and view logs.
+go to **Pipes → My Pipes** to see installed pipes, toggle schedules, run them manually, select an AI preset, and view logs.
 
 ## examples
 
-### time tracking (toggl)
+### reviewed project time report
 
 ```markdown
 ---
-schedule: every 1m
-enabled: true
+schedule: manual
+enabled: false
 ---
 
-Automatically update my Toggl time tracking based on screen activity.
+Create a draft project time report for the time range in the context header.
 
-1. Query screenpipe search API for the time range in the context header
-2. Read API key: source .env
-3. Check current Toggl timer
-4. If activity changed, stop old timer and start new one
-
-Activity rules:
-- VSCode/Cursor/Terminal → "coding"
-- Chrome with GitHub → "code review"
-- Slack/Discord → "communication"
-- Zoom/Meet → "meeting"
+1. Authenticate local API requests with SCREENPIPE_LOCAL_API_KEY
+2. Use /activity-summary for numeric active-time totals
+3. Use bounded /search results to suggest project labels and describe work
+4. Put ambiguous blocks in a needs-review section
+5. Write the draft to ./output/project-time-report.md
+6. Do not send it, create an invoice, or update an external time tracker
 ```
+
+see [consultant time tracking](/consultant-time-tracking) for the full workflow.
 
 ### daily journal (obsidian)
 
@@ -372,7 +382,7 @@ Write to ./output/<date>.md
 
 ## AI presets
 
-in the screenpipe app, go to **settings → AI settings** to configure presets (model + provider combinations). in **settings → pipes**, you can assign a preset to each pipe — this overrides the model/provider in the frontmatter.
+in the screenpipe app, go to **Settings → AI settings** to configure presets (model + provider combinations). in **Pipes → My Pipes**, you can assign a preset to each pipe — this overrides the model/provider in the frontmatter.
 
 screenpipe auto-creates a default preset using screenpipe cloud.
 
@@ -467,7 +477,7 @@ for a production-style debugging flow, including logs, stuck runs, provider auth
 **problem**: pipe executes successfully but generates no files or notifications.
 
 **solution**: ensure your pipe prompt includes concrete instructions to:
-- query screenpipe API (e.g., `curl http://localhost:3030/search?...`)
+- query screenpipe API with the injected local token and a bounded start time
 - write output files (e.g., to `./output/<date>.md`)
 - or send notifications (e.g., `POST http://localhost:11435/notify`)
 
@@ -544,19 +554,16 @@ to further restrict what an agent can do, use `permissions: reader` — pipes wi
 
 see the full reference: [pipe permissions →](/pipe-permissions)
 
-## built-in pipes
+## built-in Home shortcuts
 
-screenpipe ships with 7 template pipes. browse them in the app under **pipes**, or see the full catalog: [pipe store →](/pipe-store)
+screenpipe currently ships four Home shortcuts. these are available without a Store install; community and integration pipes remain under **Pipes → Discover**.
 
 | pipe | what it does | schedule |
 |------|-------------|----------|
-| **Day Recap** | summarize accomplishments, key moments, unfinished work | on-demand |
-| **Standup Update** | generate a copy-paste standup report | on-demand / daily |
-| **Time Breakdown** | where your time went by app, project, category | on-demand |
-| **AI Habits** | how you use AI tools — patterns and insights | on-demand |
-| **AI Prompt Journal** | capture every prompt you send to AI tools | every hour |
-| **Meeting Summary** | summarize meeting transcripts with action items | on-demand |
-| **Video Export** | create a video clip from your screen recordings | on-demand |
+| **Automate My Work** | find a repeated workflow and propose a testable automation | on-demand |
+| **Day Recap** | summarize accomplishments, key moments, and unfinished work | on-demand |
+| **Time Breakdown** | review app, project, and category activity | on-demand |
+| **Missed To-Dos** | find likely unresolved commitments from recent work | on-demand |
 
 need help building pipes? [join our discord](https://discord.gg/screenpipe) — share your pipes, get feedback, and see what others are building.
 

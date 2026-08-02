@@ -216,6 +216,41 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
         return;
     }
 
+    // Human rating of the exact notification output. Persist through the
+    // engine's local feedback ledger so the native Swift panel and webview
+    // panel share one contract, and so this works even when no React listener
+    // is mounted. The rating, correction, and rated output stay local.
+    if action_type == Some("feedback") {
+        let Some(payload) = parsed.clone() else {
+            warn!("invalid native notification feedback payload: {}", json);
+            return;
+        };
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            use crate::recording::local_api_context_from_app;
+            let api = local_api_context_from_app(&app_clone);
+            let client = reqwest::blocking::Client::new();
+            let request = api.apply_auth_blocking(
+                client
+                    .post(api.url("/feedback"))
+                    .header("Content-Type", "application/json")
+                    .body(payload.to_string()),
+            );
+            match request.send() {
+                Ok(response) if response.status().is_success() => {}
+                Ok(response) => error!(
+                    status = %response.status(),
+                    "failed to persist native notification feedback"
+                ),
+                Err(error) => error!(
+                    "failed to reach local feedback API from native notification: {}",
+                    error
+                ),
+            }
+        });
+        return;
+    }
+
     // Source actions open the originating surface. Accept several field names
     // because producers have used both URL-shaped and source-shaped payloads.
     if action_type == Some("source") {

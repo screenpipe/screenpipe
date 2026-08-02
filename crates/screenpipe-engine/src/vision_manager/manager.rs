@@ -174,7 +174,13 @@ impl VisionManager {
 
         let semantic_tx = (config.enable_semantic_context
             && config.semantic_context_mode.includes_memory())
-        .then(|| spawn_semantic_projection_worker(db.clone(), &vision_handle));
+        .then(|| {
+            spawn_semantic_projection_worker(
+                db.clone(),
+                &vision_handle,
+                config.semantic_context_mode,
+            )
+        });
 
         Self {
             config,

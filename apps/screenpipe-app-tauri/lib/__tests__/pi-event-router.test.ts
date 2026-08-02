@@ -112,11 +112,33 @@ describe("pi-event-router: status mirroring for backgrounded sessions", () => {
     expect(useChatStore.getState().sessions.A.status).toBe("streaming");
   });
 
-  it("flips status to idle on agent_end", async () => {
+  it("flips status to idle on terminal agent_end", async () => {
     seed("A", { status: "streaming" });
     useChatStore.setState({ currentId: "B" });
     await handlePiEvent(piEvt("A", { type: "agent_end" }));
     expect(useChatStore.getState().sessions.A.status).toBe("idle");
+  });
+
+  it("stays streaming while agent_end is followed by an automatic retry", async () => {
+    seed("A", { status: "streaming" });
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(piEvt("A", { type: "agent_end", willRetry: true }));
+    expect(useChatStore.getState().sessions.A.status).toBe("streaming");
+
+    await handlePiEvent(piEvt("A", {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+    }));
+    expect(useChatStore.getState().sessions.A.status).toBe("streaming");
+  });
+
+  it("marks an exhausted automatic retry as an error", async () => {
+    seed("A", { status: "streaming" });
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(piEvt("A", { type: "auto_retry_end", success: false }));
+    expect(useChatStore.getState().sessions.A.status).toBe("error");
   });
 
   it("lazy-creates a row for an unknown session id", async () => {

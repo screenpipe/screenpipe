@@ -29,6 +29,11 @@ const RECOVERED_HOLD: Duration = Duration::from_secs(3);
 const FIXING_TIMEOUT: Duration = Duration::from_secs(120);
 /// Healthy ticks required while fixing before we call the recovery confirmed.
 const FIXING_CONFIRM_TICKS: u32 = 2;
+/// Healthy 1Hz checks required before a passive recovery can turn the pill
+/// green. A single captured frame keeps `frame_status == "ok"` for 60 seconds,
+/// so this must exceed that freshness window; otherwise one transient frame
+/// can falsely announce "recording again" while capture is still wedged.
+const PASSIVE_RECOVERY_CONFIRM_TICKS: u32 = 90;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OverlayHealthState {
@@ -107,6 +112,7 @@ fn begin_fixing(inner: &mut Inner, now: Instant) -> bool {
 fn fixing_failed(inner: &mut Inner) {
     inner.state = OverlayHealthState::Failure;
     inner.fixing_since = None;
+    inner.healthy_ticks = 0;
     inner.last_detail.clear();
 }
 
@@ -115,6 +121,7 @@ fn dismiss_state(inner: &mut Inner) -> bool {
     inner.state = OverlayHealthState::Normal;
     inner.fixing_since = None;
     inner.recovered_at = None;
+    inner.healthy_ticks = 0;
     inner.not_broken_ticks = 0;
     inner.last_detail.clear();
     let was_auto_revealed = inner.auto_revealed;
@@ -151,10 +158,11 @@ fn disable_alert_state(inner: &mut Inner) -> TickEffect {
 /// Pure overlay state transition. All Tauri/Swift side effects stay in
 /// `on_tick`; keeping the reducer independent lets tests drive long temporal
 /// sequences with an injected clock and boot phase.
-fn transition_tick(
+fn transition_tick_with_stand_down(
     inner: &mut Inner,
     broken: bool,
     healthy: bool,
+    stand_down: bool,
     now: Instant,
     boot_detail: &str,
 ) -> TickEffect {
@@ -162,6 +170,7 @@ fn transition_tick(
         OverlayHealthState::Normal => {
             if broken && !inner.dismissed {
                 inner.state = OverlayHealthState::Failure;
+                inner.healthy_ticks = 0;
                 inner.not_broken_ticks = 0;
                 info!("overlay health: recording incident confirmed — showing failure state");
                 TickEffect::PushAndReveal(OverlayHealthState::Failure)
@@ -175,19 +184,29 @@ fn transition_tick(
         }
         OverlayHealthState::Failure => {
             if healthy {
-                // Recovered without our restart (auto-respawn watchdog, user
-                // fixed it elsewhere) — confirm and collapse.
-                inner.state = OverlayHealthState::Recovered;
-                inner.recovered_at = Some(now);
+                // Passive recovery must outlive the 60s freshness window of a
+                // single frame. Today's incident produced a brief frame burst,
+                // looked healthy, then wedged again; one tick is not proof.
+                inner.healthy_ticks = inner.healthy_ticks.saturating_add(1);
                 inner.not_broken_ticks = 0;
-                info!("overlay health: recording recovered");
-                TickEffect::Push(OverlayHealthState::Recovered, None)
-            } else if !broken {
+                if inner.healthy_ticks >= PASSIVE_RECOVERY_CONFIRM_TICKS {
+                    inner.state = OverlayHealthState::Recovered;
+                    inner.recovered_at = Some(now);
+                    info!(
+                        "overlay health: recording recovery remained healthy for {} checks",
+                        PASSIVE_RECOVERY_CONFIRM_TICKS
+                    );
+                    TickEffect::Push(OverlayHealthState::Recovered, None)
+                } else {
+                    TickEffect::None
+                }
+            } else if stand_down {
                 // The incident evaporated without a healthy engine — the
                 // user deliberately stopped recording, a scheduled/DRM
                 // pause took over, etc. Nothing recovered, so no green
                 // confirmation: stand down quietly (debounced so a flap
                 // between broken-reasons doesn't flicker the pill).
+                inner.healthy_ticks = 0;
                 inner.not_broken_ticks += 1;
                 if inner.not_broken_ticks >= 3 {
                     inner.state = OverlayHealthState::Normal;
@@ -204,6 +223,7 @@ fn transition_tick(
                     TickEffect::None
                 }
             } else {
+                inner.healthy_ticks = 0;
                 inner.not_broken_ticks = 0;
                 TickEffect::None
             }
@@ -267,6 +287,7 @@ fn transition_tick(
             if broken {
                 // Relapse inside the confirmation window.
                 inner.state = OverlayHealthState::Failure;
+                inner.healthy_ticks = 0;
                 inner.not_broken_ticks = 0;
                 TickEffect::Push(OverlayHealthState::Failure, None)
             } else if inner
@@ -288,6 +309,28 @@ fn transition_tick(
             }
         }
     }
+}
+
+/// Test-friendly reducer preserving the historical neutral-tick meaning.
+/// Production passes the explicit intentional-pause signal through
+/// [`transition_tick_with_stand_down`] so an unconfirmed recovery cannot make
+/// the failure pill disappear merely because `broken` is being re-debounced.
+#[cfg(test)]
+fn transition_tick(
+    inner: &mut Inner,
+    broken: bool,
+    healthy: bool,
+    now: Instant,
+    boot_detail: &str,
+) -> TickEffect {
+    transition_tick_with_stand_down(
+        inner,
+        broken,
+        healthy,
+        !broken && !healthy,
+        now,
+        boot_detail,
+    )
 }
 
 /// Current state as the wire payload: "state" or "state|detail" (detail is
@@ -352,8 +395,14 @@ fn track(app: &tauri::AppHandle, event: &'static str) {
 ///             debounced capture stall, or the debug-only simulated break).
 /// `healthy` — engine responding and recording with no active stall; the only
 ///             signal that confirms a recovery.
-/// The two are not complements: during a restart both are false.
-pub async fn on_tick(app: &tauri::AppHandle, broken: bool, healthy: bool) {
+/// `stand_down` — recording was deliberately stopped or intentionally paused.
+/// These signals are not complements: during a restart all three are false.
+pub async fn on_tick(
+    app: &tauri::AppHandle,
+    broken: bool,
+    healthy: bool,
+    stand_down: bool,
+) {
     // This detector still produces false positives, so all visible effects are
     // opt-in through Settings > Notifications > Recording health alerts.
     // Read the persisted flag each tick so toggling it off clears an active
@@ -378,7 +427,14 @@ pub async fn on_tick(app: &tauri::AppHandle, broken: bool, healthy: bool) {
             } else {
                 ""
             };
-            transition_tick(&mut inner, broken, healthy, Instant::now(), boot_detail)
+            transition_tick_with_stand_down(
+                &mut inner,
+                broken,
+                healthy,
+                stand_down,
+                Instant::now(),
+                boot_detail,
+            )
         }
     };
 
@@ -536,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_recovers_then_collapses_only_after_hold_boundary() {
+    fn passive_recovery_requires_ninety_healthy_ticks_then_holds_before_collapsing() {
         let start = Instant::now();
         let mut inner = test_inner(OverlayHealthState::Normal);
 
@@ -545,14 +601,25 @@ mod tests {
             TickEffect::PushAndReveal(OverlayHealthState::Failure)
         );
         inner.auto_revealed = true;
+
+        for tick in 1..PASSIVE_RECOVERY_CONFIRM_TICKS {
+            assert_eq!(
+                transition_tick(
+                    &mut inner,
+                    false,
+                    true,
+                    start + Duration::from_secs(tick.into()),
+                    "",
+                ),
+                TickEffect::None,
+                "passive recovery must remain unconfirmed at healthy tick {tick}"
+            );
+            assert_eq!(inner.state, OverlayHealthState::Failure);
+        }
+
+        let recovered_at = start + Duration::from_secs(PASSIVE_RECOVERY_CONFIRM_TICKS.into());
         assert_eq!(
-            transition_tick(
-                &mut inner,
-                false,
-                true,
-                start + Duration::from_secs(1),
-                "",
-            ),
+            transition_tick(&mut inner, false, true, recovered_at, ""),
             TickEffect::Push(OverlayHealthState::Recovered, None)
         );
 
@@ -561,7 +628,7 @@ mod tests {
                 &mut inner,
                 false,
                 true,
-                start + Duration::from_secs(1) + RECOVERED_HOLD,
+                recovered_at + RECOVERED_HOLD,
                 "",
             ),
             TickEffect::None,
@@ -572,7 +639,7 @@ mod tests {
                 &mut inner,
                 false,
                 true,
-                start + Duration::from_secs(1) + RECOVERED_HOLD + Duration::from_millis(1),
+                recovered_at + RECOVERED_HOLD + Duration::from_millis(1),
                 "",
             ),
             TickEffect::PushAndUnreveal(OverlayHealthState::Normal)
@@ -850,6 +917,7 @@ mod tests {
     fn recovered_relapse_returns_to_failure_without_a_second_reveal() {
         let start = Instant::now();
         let mut inner = test_inner(OverlayHealthState::Failure);
+        inner.healthy_ticks = PASSIVE_RECOVERY_CONFIRM_TICKS - 1;
         transition_tick(&mut inner, false, true, start, "");
         assert_eq!(inner.state, OverlayHealthState::Recovered);
         assert_eq!(
@@ -862,6 +930,64 @@ mod tests {
             ),
             TickEffect::Push(OverlayHealthState::Failure, None)
         );
+    }
+
+    #[test]
+    fn transient_passive_recovery_resets_without_false_green_or_silent_stand_down() {
+        let start = Instant::now();
+        let mut inner = test_inner(OverlayHealthState::Failure);
+
+        for tick in 1..=60 {
+            assert_eq!(
+                transition_tick_with_stand_down(
+                    &mut inner,
+                    false,
+                    true,
+                    false,
+                    start + Duration::from_secs(tick),
+                    "",
+                ),
+                TickEffect::None
+            );
+        }
+        assert_eq!(inner.healthy_ticks, 60);
+
+        for tick in 61..=95 {
+            assert_eq!(
+                transition_tick_with_stand_down(
+                    &mut inner,
+                    false,
+                    false,
+                    false,
+                    start + Duration::from_secs(tick),
+                    "",
+                ),
+                TickEffect::None,
+                "an unconfirmed recovery must stay visible while failure is re-debounced"
+            );
+            assert_eq!(inner.state, OverlayHealthState::Failure);
+        }
+        assert_eq!(inner.healthy_ticks, 0);
+
+        for tick in 96..=98 {
+            let effect = transition_tick_with_stand_down(
+                &mut inner,
+                false,
+                false,
+                true,
+                start + Duration::from_secs(tick),
+                "",
+            );
+            if tick < 98 {
+                assert_eq!(effect, TickEffect::None);
+            } else {
+                assert_eq!(
+                    effect,
+                    TickEffect::Push(OverlayHealthState::Normal, None),
+                    "an intentional stop still clears the incident quietly"
+                );
+            }
+        }
     }
 
     #[test]
@@ -944,7 +1070,6 @@ mod tests {
             (1, 0),
             (1, 1),
             (1, 2),
-            (1, 3),
             (2, 2),
             (2, 3),
             (3, 0),

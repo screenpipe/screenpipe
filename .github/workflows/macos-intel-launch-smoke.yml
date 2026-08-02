@@ -59,7 +59,12 @@ on:
       - "crates/screenpipe-engine/src/event_driven_capture.rs"
       - "crates/screenpipe-engine/src/hd_recorder.rs"
       - "crates/screenpipe-engine/src/vision_manager/**"
+      - "crates/screenpipe-core/src/paths.rs"
+      - "apps/screenpipe-app-tauri/e2e/helpers/spotlight.ts"
+      - "apps/screenpipe-app-tauri/e2e/scripts/verify-spotlight-exclusion.ts"
+      - "apps/screenpipe-app-tauri/e2e/specs/spotlight-exclusion.spec.ts"
       - "apps/screenpipe-app-tauri/src-tauri/src/capture_session.rs"
+      - "apps/screenpipe-app-tauri/src-tauri/src/config.rs"
       - "apps/screenpipe-app-tauri/src-tauri/src/main.rs"
       - "apps/screenpipe-app-tauri/src-tauri/Cargo.toml"
       - "scripts/tcc-grant/**"
@@ -355,6 +360,11 @@ jobs:
           fi
 
           echo "RESULT: screenpipe-app launched, captured with Screen Recording permission granted, and stayed up for the full watch window."
+
+      - name: Verify Spotlight exclusion on Intel
+        shell: bash
+        working-directory: apps/screenpipe-app-tauri
+        run: bun e2e/scripts/verify-spotlight-exclusion.ts "$RUNNER_TEMP/screenpipe-intel-smoke-data"
 
       - name: Upload artifacts
         if: always()

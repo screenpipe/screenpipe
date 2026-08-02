@@ -45,7 +45,7 @@ import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import { cn } from "@/lib/utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 
-const SUMMARY_CACHE_PREFIX = "screenpipe:timeline-daily-summary:pi-v1:";
+const SUMMARY_CACHE_PREFIX = "screenpipe:timeline-daily-summary:pi-v2:";
 
 type SummaryStatus = "idle" | "gathering" | "complete" | "error";
 

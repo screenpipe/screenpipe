@@ -8,6 +8,11 @@ import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import { emit, listen } from "@tauri-apps/api/event";
+import {
+	createSettingsWriteQueue,
+	enqueueSettingsWrite,
+	flushSettingsWrites,
+} from "@/components/settings/settings-write-queue";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
@@ -34,6 +39,7 @@ import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
 } from "./managed-settings";
+import { isResolvedConsumerBuild } from "./use-is-enterprise-build";
 import {
 	clearLegacyUserGoalCategory,
 	DEFAULT_USER_GOAL_CATEGORY,
@@ -794,8 +800,66 @@ export function createDefaultSettingsObject(): Settings {
 	}
 }
 
+export function normalizeSettingsArrays(settings: Settings): boolean {
+	const defaults = {
+		...createDefaultSettingsObject(),
+		aiPresets: makeDefaultPresets(settings.user?.cloud_subscribed === true),
+	};
+	let changed = false;
+
+	for (const [key, fallback] of Object.entries(defaults)) {
+		if (!Array.isArray(fallback) || Array.isArray(settings[key])) continue;
+		settings[key] = [...fallback];
+		changed = true;
+	}
+
+	return changed;
+}
+
 // Store singleton
 let _store: Promise<Store> | undefined;
+
+// Settings writes are whole-object read/merge/save operations. Keep them in one
+// FIFO so two controls cannot both read the same snapshot and let the slower
+// save erase the faster one. The updater also drains this queue before a
+// banner-triggered relaunch, which closes the "toggle Auto-update, then click
+// Restart to update" race where process exit could beat the preference save.
+const settingsWriteQueue = createSettingsWriteQueue();
+
+async function waitForE2eSettingsWriteDelay(): Promise<void> {
+	if (
+		process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true" ||
+		typeof document === "undefined"
+	) {
+		return;
+	}
+	const delayMs = Number(
+		document.documentElement.dataset.e2eSettingsWriteDelayMs ?? 0,
+	);
+	if (Number.isFinite(delayMs) && delayMs > 0) {
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+	}
+}
+
+function enqueueSettingsStoreWrite(write: () => Promise<void>): Promise<void> {
+	const queuedWrite = async () => {
+		await waitForE2eSettingsWriteDelay();
+		await write();
+		if (
+			process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+			typeof document !== "undefined"
+		) {
+			document.documentElement.dataset.e2eSettingsWriteFinishedAt = String(
+				performance.now(),
+			);
+		}
+	};
+	return enqueueSettingsWrite(settingsWriteQueue, queuedWrite);
+}
+
+export async function flushPendingSettingsWrites(): Promise<void> {
+	await flushSettingsWrites(settingsWriteQueue);
+}
 
 export const getStore = async () => {
 	if (!_store) {
@@ -844,6 +908,8 @@ export const saveAndEncrypt = async (store: Store) => {
  * pre-hydration state can't sign the user out.
  */
 async function setSettingsStripped(store: Store, settings: Settings) {
+	normalizeSettingsArrays(settings);
+
 	const token = settings?.user?.token;
 	// Default to "safe to write as-is" when there's no token to protect.
 	let persisted = !token;
@@ -892,6 +958,30 @@ async function hydrateCloudToken(settings: Settings): Promise<Settings> {
 	return settings;
 }
 
+/**
+ * The managed values that should actually be enforced right now, or `undefined`
+ * on a confirmed consumer build.
+ *
+ * Enterprise and consumer installs share `~/.screenpipe`, so a machine that ran
+ * the enterprise binary once keeps its `enterpriseManagedSettings` blob. The UI
+ * layer gates on `isEnterprise` (`use-enterprise-policy`), but this persistence
+ * layer did not — so on a consumer build the switch rendered as a normal,
+ * interactive control while every write was clamped straight back on both write
+ * and read, with no lock shown and no way to clear the blob. Toggling
+ * "screenshot images" off simply did nothing, forever.
+ *
+ * Fails closed: `isResolvedConsumerBuild` only reports true on an authoritative
+ * `false` from Rust, so an unresolved or failed check keeps enforcing policy and
+ * a managed device cannot escape it by racing the IPC.
+ */
+async function activeManagedValues(
+	settings: Partial<Settings>
+): Promise<Record<string, ManagedSettingValue> | undefined> {
+	const managed = settings.enterpriseManagedSettings;
+	if (!managed) return undefined;
+	return (await isResolvedConsumerBuild()) ? undefined : managed;
+}
+
 // Store utilities similar to Cap's implementation
 function createSettingsStore() {
 	const get = async (): Promise<Settings> => {
@@ -904,8 +994,9 @@ function createSettingsStore() {
 		// #3943: re-hydrate the cloud token that no longer persists in store.bin.
 		await hydrateCloudToken(settings);
 
+		let needsUpdate = normalizeSettingsArrays(settings);
+
 		// Migration: Ensure existing users have deviceId for free tier tracking
-		let needsUpdate = false;
 		const existingUserGoal = normalizeUserGoalCategory(
 			settings.userGoalCategory,
 		);
@@ -967,7 +1058,7 @@ function createSettingsStore() {
 		// get() returns directly when there are no stored settings).
 
 		// Migration: Add default presets if user has none
-		if (!settings.aiPresets || settings.aiPresets.length === 0) {
+		if (!Array.isArray(settings.aiPresets) || settings.aiPresets.length === 0) {
 			const isPro = settings.user?.cloud_subscribed === true;
 			settings.aiPresets = makeDefaultPresets(isPro) as any;
 			needsUpdate = true;
@@ -1159,7 +1250,7 @@ function createSettingsStore() {
 
 			// Migrations may touch recording defaults. Enterprise values are the
 			// final authority and must survive reads as well as explicit writes.
-			const managedValues = settings.enterpriseManagedSettings;
+			const managedValues = await activeManagedValues(settings);
 			if (managedValues) {
 				const managedChanged = Object.entries(managedValues).some(
 					([key, value]) => JSON.stringify(settings[key]) !== JSON.stringify(value)
@@ -1168,6 +1259,11 @@ function createSettingsStore() {
 					Object.assign(settings, applyManagedOverrides(settings, managedValues));
 					needsUpdate = true;
 				}
+			} else if (settings.enterpriseManagedSettings) {
+				// Confirmed consumer build carrying a stale policy blob: drop it so
+				// the machine stops re-clamping on every read.
+				delete settings.enterpriseManagedSettings;
+				needsUpdate = true;
 			}
 
 		// Save migrations if needed
@@ -1184,40 +1280,43 @@ function createSettingsStore() {
 		return settings;
 	};
 
-	const set = async (value: Partial<Settings>) => {
-		const store = await getStore();
-		const current = await get();
-		const managedValues = current.enterpriseManagedSettings;
-		let newSettings = { ...current, ...value } as Settings;
-		if ("user" in value) {
-			// On logout / Pro→non-Pro transition, clear the V2 marker so a future
-			// Pro login re-evaluates cloud defaults (handles account switching).
-			if (!isLoggedInProUser(newSettings.user)) {
-				delete (newSettings as any)._proCloudAudioDefaultsAppliedV2;
+	const set = (value: Partial<Settings>) =>
+		enqueueSettingsStoreWrite(async () => {
+			const store = await getStore();
+			const current = await get();
+			const managedValues = await activeManagedValues(current);
+			let newSettings = { ...current, ...value } as Settings;
+			if ("user" in value) {
+				// On logout / Pro→non-Pro transition, clear the V2 marker so a future
+				// Pro login re-evaluates cloud defaults (handles account switching).
+				if (!isLoggedInProUser(newSettings.user)) {
+					delete (newSettings as any)._proCloudAudioDefaultsAppliedV2;
+				}
+				newSettings = applyProCloudAudioDefaults(newSettings);
 			}
-			newSettings = applyProCloudAudioDefaults(newSettings);
-		}
-		newSettings = applyManagedOverrides(
-			newSettings as Record<string, unknown>,
-			managedValues
-		) as Settings;
-		if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
-		await setSettingsStripped(store, newSettings);
-		await saveAndEncrypt(store);
-	};
+			newSettings = applyManagedOverrides(
+				newSettings as Record<string, unknown>,
+				managedValues
+			) as Settings;
+			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
+			else delete newSettings.enterpriseManagedSettings;
+			await setSettingsStripped(store, newSettings);
+			await saveAndEncrypt(store);
+		});
 
-	const reset = async () => {
-		const store = await getStore();
-		const current = await get();
-		const managedValues = current.enterpriseManagedSettings;
-		const defaults = applyManagedOverrides(
-			createDefaultSettingsObject() as Record<string, unknown>,
-			managedValues
-		) as Settings;
-		if (managedValues) defaults.enterpriseManagedSettings = managedValues;
-		await store.set("settings", defaults);
-		await saveAndEncrypt(store);
-	};
+	const reset = () =>
+		enqueueSettingsStoreWrite(async () => {
+			const store = await getStore();
+			const current = await get();
+			const managedValues = await activeManagedValues(current);
+			const defaults = applyManagedOverrides(
+				createDefaultSettingsObject() as Record<string, unknown>,
+				managedValues
+			) as Settings;
+			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
+			await store.set("settings", defaults);
+			await saveAndEncrypt(store);
+		});
 
 	const resetSetting = async <K extends keyof Settings>(key: K) => {
 		const current = await get();
@@ -1235,6 +1334,7 @@ function createSettingsStore() {
 			return store.onKeyChange("settings", async (newValue: Settings | null | undefined) => {
 				const mySeq = ++seq;
 				const next = await hydrateCloudToken(newValue || createDefaultSettingsObject());
+				normalizeSettingsArrays(next);
 				if (mySeq === seq) callback(next);
 			});
 		});

@@ -5,7 +5,7 @@
 //! JSONL record schema for enterprise telemetry batches.
 //!
 //! One record per line, tagged by `kind` so mixed streams stay trivially
-//! parseable: `kind: "frame" | "audio" | "ui" | "snapshot" | "memory"`.
+//! parseable: `kind: "frame" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
 //! Every record carries the originating `device_id` + `device_label` at the
 //! top level (flattened next to the kind-specific row fields).
 //!
@@ -14,6 +14,7 @@
 //! unparseable lines and count them.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -102,8 +103,31 @@ pub struct MemoryRow {
     pub frame_id: Option<i64>,
 }
 
+/// Human feedback for any target produced on the device. The same shape is
+/// used by the local API, hosted archive, and customer gateway.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FeedbackRow {
+    pub feedback_id: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub target_version: Option<String>,
+    pub producer_ref: Option<String>,
+    pub actor_id: String,
+    /// "up" or "down". Kept as a string so a future neutral/multi-axis
+    /// rating can be introduced without changing the outer wire enum.
+    pub rating: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<Value>,
+    #[serde(default)]
+    pub context: Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// One JSONL line. Tagged enum keeps mixed streams trivially parseable —
-/// `kind: "frame" | "audio" | "ui" | "snapshot" | "memory"`.
+/// `kind: "frame" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TelemetryRecord {
@@ -137,6 +161,12 @@ pub enum TelemetryRecord {
         #[serde(flatten)]
         memory: MemoryRow,
     },
+    Feedback {
+        device_id: String,
+        device_label: String,
+        #[serde(flatten)]
+        feedback: FeedbackRow,
+    },
 }
 
 impl TelemetryRecord {
@@ -146,7 +176,8 @@ impl TelemetryRecord {
             | Self::Audio { device_id, .. }
             | Self::Ui { device_id, .. }
             | Self::Snapshot { device_id, .. }
-            | Self::Memory { device_id, .. } => device_id,
+            | Self::Memory { device_id, .. }
+            | Self::Feedback { device_id, .. } => device_id,
         }
     }
 
@@ -156,7 +187,8 @@ impl TelemetryRecord {
             | Self::Audio { device_label, .. }
             | Self::Ui { device_label, .. }
             | Self::Snapshot { device_label, .. }
-            | Self::Memory { device_label, .. } => device_label,
+            | Self::Memory { device_label, .. }
+            | Self::Feedback { device_label, .. } => device_label,
         }
     }
 
@@ -169,6 +201,7 @@ impl TelemetryRecord {
             Self::Ui { ui, .. } => &ui.timestamp,
             Self::Snapshot { snapshot, .. } => &snapshot.timestamp,
             Self::Memory { memory, .. } => &memory.created_at,
+            Self::Feedback { feedback, .. } => &feedback.created_at,
         }
     }
 
@@ -180,8 +213,37 @@ impl TelemetryRecord {
             Self::Ui { .. } => "ui",
             Self::Snapshot { .. } => "snapshot",
             Self::Memory { .. } => "memory",
+            Self::Feedback { .. } => "feedback",
         }
     }
+}
+
+/// Serialize feedback rows separately so adding the new stream does not
+/// change the established `build_jsonl` call signature for older producers.
+pub fn build_feedback_jsonl(
+    device_id: &str,
+    device_label: &str,
+    feedback: &[FeedbackRow],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(feedback.len() * 512);
+    for row in feedback {
+        let record = TelemetryRecord::Feedback {
+            device_id: device_id.to_string(),
+            device_label: device_label.to_string(),
+            feedback: row.clone(),
+        };
+        match serde_json::to_vec(&record) {
+            Ok(line) => {
+                out.extend_from_slice(&line);
+                out.push(b'\n');
+            }
+            Err(error) => warn!(
+                "telemetry-wire: failed to serialize feedback {}: {}",
+                row.feedback_id, error
+            ),
+        }
+    }
+    out
 }
 
 /// Serialize a batch of rows into JSONL bytes, tagged with the device's
@@ -381,5 +443,37 @@ mod tests {
         let parsed = parse_jsonl(&body);
         assert_eq!(parsed.records.len(), 1);
         assert_eq!(parsed.skipped_lines, 2);
+    }
+
+    #[test]
+    fn feedback_uses_the_same_flat_wire_contract() {
+        let body = build_feedback_jsonl(
+            "dev-a",
+            "alice-mbp",
+            &[FeedbackRow {
+                feedback_id: "feedback-1".to_string(),
+                target_kind: "notification".to_string(),
+                target_id: "daily-recap".to_string(),
+                target_version: None,
+                producer_ref: Some("pipe:daily-recap".to_string()),
+                actor_id: "local-user".to_string(),
+                rating: "down".to_string(),
+                comment: Some("include project names".to_string()),
+                snapshot: Some(serde_json::json!({"title": "today"})),
+                context: serde_json::json!({"session_id": "s-1"}),
+                created_at: "2026-07-30T10:00:00Z".to_string(),
+                updated_at: "2026-07-30T10:00:00Z".to_string(),
+            }],
+        );
+        let parsed = parse_jsonl(&body);
+        assert_eq!(parsed.records.len(), 1);
+        match &parsed.records[0] {
+            TelemetryRecord::Feedback { feedback, .. } => {
+                assert_eq!(feedback.target_kind, "notification");
+                assert_eq!(feedback.rating, "down");
+                assert_eq!(feedback.comment.as_deref(), Some("include project names"));
+            }
+            other => panic!("expected feedback record, got {}", other.kind()),
+        }
     }
 }

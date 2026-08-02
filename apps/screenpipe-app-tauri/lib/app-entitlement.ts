@@ -9,6 +9,8 @@ export type AppEntitlementPlan =
   | "none"
   | "standard"
   | "pro"
+  | "pro_max"
+  | "pro_ultra"
   | "team"
   | "enterprise"
   | "lifetime";
@@ -72,6 +74,8 @@ export const ENTERPRISE_DOWNLOAD_URL = screenpipeWebUrl("/api/download", "https:
 const VERIFIED_PAID_PLAN_IDS = new Set([
   "standard",
   "pro",
+  "pro_max",
+  "pro_ultra",
   "team",
   "enterprise",
   "lifetime",
@@ -499,6 +503,12 @@ export function planDisplayName(
       return "Basic";
     case "pro":
       return "Business";
+    case "pro_max":
+    case "business_max":
+      return "Business Max";
+    case "pro_ultra":
+    case "business_ultra":
+      return "Business Ultra";
     case "team":
       return isEnterpriseBuild ? "Team" : "Business";
     case "enterprise":
@@ -507,6 +517,34 @@ export function planDisplayName(
       return "Lifetime";
     default:
       return "Free";
+  }
+}
+
+export type BusinessCapacityUpgrade = {
+  targetPlan: "pro_max" | "pro_ultra";
+  name: "Business Max" | "Business Ultra";
+  monthlyPrice: 100 | 200;
+};
+
+/** Return the next self-serve capacity tier without upselling org plans. */
+export function getBusinessCapacityUpgrade(
+  plan: string | null | undefined,
+): BusinessCapacityUpgrade | null {
+  switch ((plan || "").trim().toLowerCase()) {
+    case "pro":
+    case "business":
+    case "monthly":
+    case "annual":
+      return { targetPlan: "pro_max", name: "Business Max", monthlyPrice: 100 };
+    case "pro_max":
+    case "business_max":
+      return {
+        targetPlan: "pro_ultra",
+        name: "Business Ultra",
+        monthlyPrice: 200,
+      };
+    default:
+      return null;
   }
 }
 

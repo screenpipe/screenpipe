@@ -10,8 +10,9 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use screenpipe_audio::core::device::resolve_audio_devices_for_capture;
@@ -84,6 +85,73 @@ pub struct ServerCore {
 const BIND_RETRY_ATTEMPTS: u32 = 20;
 const BIND_RETRY_DELAY: Duration = Duration::from_millis(500);
 const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+const OPENAI_COMPATIBLE_FAILURE_POLL_INTERVAL: Duration = Duration::from_secs(15);
+const OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+fn should_notify_openai_compatible_failure(
+    previous_error_count: u64,
+    current_error_count: u64,
+    previous_empty_count: u64,
+    current_empty_count: u64,
+    previous_completed_count: u64,
+    current_completed_count: u64,
+    last_notification: Option<Instant>,
+    now: Instant,
+) -> bool {
+    let failed_request = current_error_count > previous_error_count;
+    // VAD already filters for speech before this stage. A run of empty
+    // responses with no successful transcript is therefore a strong signal
+    // that the endpoint accepted the request but is not producing indexable
+    // data, rather than normal silence.
+    let repeated_empty_responses = current_empty_count.saturating_sub(previous_empty_count) >= 3
+        && current_completed_count == previous_completed_count;
+
+    (failed_request || repeated_empty_responses)
+        && last_notification.is_none_or(|last| now.duration_since(last) >= OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN)
+}
+
+fn monitor_openai_compatible_transcription_failures(
+    metrics: Arc<screenpipe_audio::metrics::AudioPipelineMetrics>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut previous_error_count = metrics.transcription_errors.load(Ordering::Relaxed);
+        let mut previous_empty_count = metrics.transcriptions_empty.load(Ordering::Relaxed);
+        let mut previous_completed_count = metrics.transcriptions_completed.load(Ordering::Relaxed);
+        let mut last_notification = None;
+
+        loop {
+            tokio::time::sleep(OPENAI_COMPATIBLE_FAILURE_POLL_INTERVAL).await;
+            let current_error_count = metrics.transcription_errors.load(Ordering::Relaxed);
+            let current_empty_count = metrics.transcriptions_empty.load(Ordering::Relaxed);
+            let current_completed_count = metrics.transcriptions_completed.load(Ordering::Relaxed);
+            let now = Instant::now();
+
+            if should_notify_openai_compatible_failure(
+                previous_error_count,
+                current_error_count,
+                previous_empty_count,
+                current_empty_count,
+                previous_completed_count,
+                current_completed_count,
+                last_notification,
+                now,
+            ) {
+                crate::notifications::client::send_typed_with_priority(
+                    "OpenAI Compatible transcription is failing",
+                    "Screenpipe is still recording audio, but the endpoint is failing or returning empty transcripts, so new audio may not be searchable. Check Settings and run Test and enable again.",
+                    "system",
+                    Some(20_000),
+                    crate::notifications::store::NotificationPriority::High,
+                );
+                last_notification = Some(now);
+            }
+
+            previous_error_count = current_error_count;
+            previous_empty_count = current_empty_count;
+            previous_completed_count = current_completed_count;
+        }
+    })
+}
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn parse_lsof_port_holder(stdout: &str) -> Option<String> {
@@ -512,6 +580,12 @@ impl ServerCore {
         let mut external_memory_sync_handle = None;
         let mut owned_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
+        if config.audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible {
+            owned_tasks.push(monitor_openai_compatible_transcription_failures(
+                audio_manager.metrics.clone(),
+            ));
+        }
+
         // Secret store — read-only keychain access on startup.
         // Never create a key automatically (that triggers a macOS modal).
         // Users opt in via onboarding or Settings > Privacy.
@@ -523,7 +597,19 @@ impl ServerCore {
                     None
                 }
             };
-            match screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await {
+            let database_error_hook: screenpipe_secrets::DatabaseErrorHook = {
+                let db = Arc::clone(&db);
+                Arc::new(move |error| {
+                    db.report_sqlite_error(error);
+                })
+            };
+            match screenpipe_secrets::SecretStore::new_with_database_error_hook(
+                db.pool.clone(),
+                secret_key,
+                Some(database_error_hook),
+            )
+            .await
+            {
                 Ok(store) => {
                     let fixed = screenpipe_secrets::fix_secret_file_permissions(&config.data_dir);
                     if fixed > 0 {
@@ -955,6 +1041,12 @@ impl ServerCore {
         // One shutdown signal, shared across both worker spawn paths and
         // stored on Self for `shutdown()` to fire on app quit.
         let redact_shutdown = Arc::new(Notify::new());
+        let redact_database_error_hook: screenpipe_redact::DatabaseErrorHook = {
+            let db = Arc::clone(&db);
+            Arc::new(move |error| {
+                db.report_sqlite_error(error);
+            })
+        };
 
         // Opt-in (Settings → Privacy → "redact secrets in agent logs", default
         // off): strip secrets the pi agent persists into its session logs (bash
@@ -978,7 +1070,12 @@ impl ServerCore {
                     poll_interval: std::time::Duration::from_secs(5 * 60),
                     ..Default::default()
                 };
-                let _ = Worker::new(db.pool.clone(), placeholder, cfg)
+                let _ = Worker::new_with_writer(
+                    db.pool.clone(),
+                    db.coordinated_writer(),
+                    placeholder,
+                    cfg,
+                )
                     .spawn_with_shutdown(redact_shutdown.clone());
             }
         }
@@ -1054,7 +1151,13 @@ impl ServerCore {
                     tables: ALL_TARGET_TABLES.to_vec(),
                     ..Default::default()
                 };
-                let _ = Worker::new(db.pool.clone(), pipeline_arc, cfg)
+                let _ = Worker::new_with_writer(
+                    db.pool.clone(),
+                    db.coordinated_writer(),
+                    pipeline_arc,
+                    cfg,
+                )
+                    .with_database_error_hook(redact_database_error_hook.clone())
                     .spawn_with_shutdown(redact_shutdown.clone());
             } else {
                 // Local mode: spawn the download+load off the boot path
@@ -1062,9 +1165,11 @@ impl ServerCore {
                 // launch. The worker is created inside the spawned
                 // task once the model is ready.
                 let pool = db.pool.clone();
+                let writer = db.coordinated_writer();
                 let shutdown = redact_shutdown.clone();
                 let labels = pii_labels.clone();
                 let pseudonymizer = pseudonymizer.clone();
+                let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
                     let policy = TextRedactionPolicy::from_labels(&labels);
                     // Prefer the local ONNX text redactor (~278 MB INT8,
@@ -1142,7 +1247,9 @@ impl ServerCore {
                         tables: ALL_TARGET_TABLES.to_vec(),
                         ..Default::default()
                     };
-                    let _ = Worker::new(pool, pipeline_arc, cfg).spawn_with_shutdown(shutdown);
+                    let _ = Worker::new_with_writer(pool, writer, pipeline_arc, cfg)
+                        .with_database_error_hook(database_error_hook)
+                        .spawn_with_shutdown(shutdown);
                 });
             }
         }
@@ -1157,6 +1264,7 @@ impl ServerCore {
             use screenpipe_redact::ImageRedactor;
 
             let pool = db.pool.clone();
+            let writer = db.coordinated_writer();
             if use_tinfoil {
                 let detector = Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
                     api_key: tinfoil_api_key.clone(),
@@ -1169,14 +1277,16 @@ impl ServerCore {
                     has_api_key = tinfoil_api_key.is_some(),
                     "starting async image-PII worker (backend=tinfoil)"
                 );
-                let _ = ImageWorker::new(
+                let _ = ImageWorker::new_with_writer(
                     pool,
+                    writer,
                     detector,
                     ImageWorkerConfig {
                         policy: ImageRedactionPolicy::from_labels(&pii_labels),
                         ..Default::default()
                     },
                 )
+                .with_database_error_hook(redact_database_error_hook.clone())
                 .spawn_with_shutdown(redact_shutdown.clone());
             } else {
                 // Local mode: rfdetr ONNX. First-run downloads ~108 MB
@@ -1186,6 +1296,7 @@ impl ServerCore {
                 // loads, so they never drift on a model bump.
                 let shutdown = redact_shutdown.clone();
                 let labels = pii_labels.clone();
+                let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
                     match RfdetrRedactor::load_or_download(RfdetrConfig::default()).await {
                         Ok(detector) => {
@@ -1195,14 +1306,16 @@ impl ServerCore {
                                 "starting async image-PII worker (backend=local)"
                             );
                             let detector_arc = Arc::new(detector) as Arc<dyn ImageRedactor>;
-                            let _ = ImageWorker::new(
+                            let _ = ImageWorker::new_with_writer(
                                 pool,
+                                writer,
                                 detector_arc,
                                 ImageWorkerConfig {
                                     policy: ImageRedactionPolicy::from_labels(&labels),
                                     ..Default::default()
                                 },
                             )
+                            .with_database_error_hook(database_error_hook)
                             .spawn_with_shutdown(shutdown);
                         }
                         Err(e) => {
@@ -1370,5 +1483,34 @@ mod tests {
             Some("screenpipe.exe")
         );
         assert_eq!(parse_tasklist_process_name(""), None);
+    }
+
+    #[test]
+    fn openai_compatible_failure_notifications_are_rate_limited() {
+        let now = Instant::now();
+        assert!(should_notify_openai_compatible_failure(2, 3, 0, 0, 0, 0, None, now));
+        assert!(!should_notify_openai_compatible_failure(3, 3, 0, 0, 0, 0, None, now));
+        assert!(should_notify_openai_compatible_failure(3, 3, 1, 4, 10, 10, None, now));
+        assert!(!should_notify_openai_compatible_failure(3, 3, 1, 4, 10, 11, None, now));
+        assert!(!should_notify_openai_compatible_failure(
+            3,
+            4,
+            0,
+            0,
+            0,
+            0,
+            Some(now),
+            now + Duration::from_secs(1),
+        ));
+        assert!(should_notify_openai_compatible_failure(
+            3,
+            4,
+            0,
+            0,
+            0,
+            0,
+            Some(now),
+            now + OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN,
+        ));
     }
 }

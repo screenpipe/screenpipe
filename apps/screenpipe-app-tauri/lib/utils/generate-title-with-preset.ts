@@ -86,6 +86,7 @@ function buildTitleProviderConfig(preset: AIPreset): PiProviderConfig {
     url: preset.url || "",
     model: preset.model || "",
     apiKey: ("apiKey" in preset ? (preset.apiKey as string) : null) || null,
+    maxContextChars: preset.maxContextChars,
     systemPrompt: null,
   };
 }

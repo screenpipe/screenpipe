@@ -120,6 +120,8 @@ describe("useOnboarding measurement", () => {
       pipeCount: 2,
       dashboardBlockCount: 5,
       goalCategory: "work_memory",
+      live_view_flow_variant: "existing_live_views",
+      existing_live_view_count_bucket: "multiple",
     });
 
     expect(
@@ -136,6 +138,8 @@ describe("useOnboarding measurement", () => {
       customized: undefined,
       dashboard_block_count: 5,
       goal_category: "work_memory",
+      live_view_flow_variant: "existing_live_views",
+      existing_live_view_count_bucket: "multiple",
     });
   });
 

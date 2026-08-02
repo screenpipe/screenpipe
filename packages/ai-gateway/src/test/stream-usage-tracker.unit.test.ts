@@ -66,6 +66,8 @@ describe('trackStreamUsage — anthropic format', () => {
 		expect(u.cache_read_input_tokens).toBe(50_000);
 		expect(u.cache_creation_input_tokens).toBe(2_000);
 		expect(u.output_tokens).toBe(42);
+		expect(u.usage_complete).toBe(true);
+		expect(u.termination).toBe('complete');
 	});
 
 	it('passes bytes through unchanged', async () => {
@@ -140,5 +142,69 @@ describe('trackStreamUsage — openai format', () => {
 		const u = await usage;
 		expect(u.input_tokens).toBe(1234);
 		expect(u.cache_read_input_tokens).toBe(1000);
+	});
+
+	it('captures a terminal usage event without a trailing newline', async () => {
+		const finalEvent = `data: ${JSON.stringify({
+			choices: [],
+			usage: { prompt_tokens: 44, completion_tokens: 7 },
+		})}`;
+		const { response, usage } = trackResponseUsage(sseResponse([finalEvent]), 'openai');
+		expect(await drain(response.body!)).toBe(finalEvent);
+		expect(await usage).toMatchObject({
+			input_tokens: 44,
+			output_tokens: 7,
+			usage_complete: true,
+			termination: 'complete',
+		});
+	});
+
+	it('resolves observed usage when the client cancels before stream completion', async () => {
+		const event = `data: ${JSON.stringify({
+			choices: [],
+			usage: { prompt_tokens: 321, completion_tokens: 12 },
+		})}\n\n`;
+		const source = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(event));
+			},
+		});
+		const { response, usage } = trackResponseUsage(new Response(source), 'openai');
+		const reader = response.body!.getReader();
+		await reader.read();
+		await reader.cancel('client disconnected');
+
+		expect(await usage).toMatchObject({
+			input_tokens: 321,
+			output_tokens: 12,
+			usage_complete: true,
+			termination: 'cancelled',
+		});
+	});
+
+	it('marks cancellation before terminal usage as incomplete', async () => {
+		let upstreamCancelled = false;
+		const source = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(
+					`data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`,
+				));
+			},
+			cancel() {
+				upstreamCancelled = true;
+			},
+		});
+		const { response, usage } = trackResponseUsage(new Response(source), 'openai');
+		const reader = response.body!.getReader();
+		await reader.read();
+		await reader.cancel('client disconnected');
+
+		expect(upstreamCancelled).toBe(true);
+		expect(await usage).toMatchObject({
+			input_tokens: 0,
+			output_tokens: 0,
+			usage_complete: false,
+			termination: 'cancelled',
+		});
 	});
 });

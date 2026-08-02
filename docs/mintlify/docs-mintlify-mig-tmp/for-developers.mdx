@@ -59,7 +59,7 @@ screenpipe works with any AI tool that supports MCP or HTTP APIs:
 ```bash
 curl http://localhost:3030/health
 curl "http://localhost:3030/search?q=error&content_type=all&limit=10"
-curl "http://localhost:3030/activity-summary?start_time=2026-05-14T16:00:00Z&end_time=2026-05-14T18:00:00Z"
+curl "http://localhost:3030/activity-summary?start_time=2h+ago&end_time=now"
 ```
 
 if API auth is enabled, add `-H "Authorization: Bearer $SCREENPIPE_API_KEY"`. see [API recipes](/api-recipes) for meetings, speakers, frames, memories, retention, archive, and delete-range examples.

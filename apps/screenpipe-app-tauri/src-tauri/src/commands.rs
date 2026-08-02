@@ -225,6 +225,27 @@ pub fn get_app_identifier(app_handle: tauri::AppHandle) -> String {
     app_handle.config().identifier.clone()
 }
 
+/// Stable low-disk safety values shared with the settings UI.
+///
+/// Keeping the threshold and monitor cadence in Rust prevents user-facing copy
+/// from drifting away from the values enforced by the capture engine.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LowDiskGuardConfig {
+    pub threshold_bytes: u64,
+    pub check_interval_seconds: u64,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_low_disk_guard_config() -> LowDiskGuardConfig {
+    LowDiskGuardConfig {
+        threshold_bytes: screenpipe_events::LOW_DISK_THRESHOLD_BYTES,
+        check_interval_seconds:
+            screenpipe_engine::disk_pressure::LOW_DISK_CHECK_INTERVAL_SECS,
+    }
+}
+
 /// Get the local API auth key and port for the frontend to use.
 /// Returns the local API config (key, port, auth flag).
 ///
@@ -1159,6 +1180,118 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+/// E2E helper: model an active capture intent without requiring physical
+/// screen/audio devices on the CI runner.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_mark_capture_intended(
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    state.set_capture_intent(true);
+    Ok(())
+}
+
+/// E2E helper: publish the same typed core event as the real disk probe.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_emit_disk_space_low(available_bytes: u64) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let event = screenpipe_events::DiskSpaceLowEvent::new(
+        available_bytes,
+        ".e2e".to_string(),
+    );
+    screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
+}
+
+/// E2E helper: execute the production policy handler directly and return its
+/// explicit outcome. This avoids sleep-based assertions; the settings E2E also
+/// publishes through the typed event bus to cover the production subscription.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_handle_disk_space_low(
+    app_handle: tauri::AppHandle,
+    available_bytes: u64,
+) -> Result<crate::disk_pressure_notifications::DiskPressureOutcome, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let event = screenpipe_events::DiskSpaceLowEvent::new(
+        available_bytes,
+        ".e2e".to_string(),
+    );
+    Ok(crate::disk_pressure_notifications::handle(&app_handle, event).await)
+}
+
+/// E2E helper: distinguish a real CaptureSession from capture intent alone.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_capture_session_running(
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    Ok(state.capture.lock().await.is_some())
+}
+
+/// E2E helper: update the native store without depending on a mounted settings
+/// webview. Used by the recording-enabled Windows lane.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_set_low_disk_guard_enabled(
+    app_handle: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    settings.stop_recording_on_low_disk = enabled;
+    settings.save(&app_handle)
+}
+
+/// E2E helper: prove critical recording-stopped alerts bypass the user's
+/// ordinary notification master switch.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_set_notification_master_enabled(
+    app_handle: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    let mut settings = SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let prefs = settings
+        .extra
+        .entry("notificationPrefs".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !prefs.is_object() {
+        *prefs = serde_json::json!({});
+    }
+    prefs["notificationsEnabled"] = serde_json::Value::Bool(enabled);
+    settings.save(&app_handle)
+}
+
+/// E2E helper: read back the persisted guard value before publishing an event.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_low_disk_guard_enabled(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    Ok(SettingsStore::get(&app_handle)?
+        .unwrap_or_default()
+        .stop_recording_on_low_disk)
+}
+
 /// E2E helper: drive the health-to-native-tray status transition.
 #[tauri::command]
 #[specta::specta]
@@ -1720,6 +1853,22 @@ fn is_login_callback_scheme(scheme: &str) -> bool {
     scheme == deep_link_scheme() || scheme == "screenpipe"
 }
 
+#[cfg(not(target_os = "macos"))]
+fn reset_existing_login_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    login_url: tauri::Url,
+) -> Result<(), String> {
+    // A provider flow can leave this reusable webview on GitHub, Google, or
+    // even a failed/blank document. A later login click means "start over",
+    // so never surface whatever navigation state the previous attempt left.
+    window
+        .navigate(login_url)
+        .map_err(|e| format!("failed to reset login window: {e}"))?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// Open the screenpipe.com login page.
 /// macOS: ASWebAuthenticationSession (system-managed sheet, forwards callback).
 /// Windows/Linux: in-app WebView that intercepts the screenpipe:// redirect.
@@ -1777,24 +1926,28 @@ pub async fn open_login_window(
             "login-browser".to_string()
         };
 
+        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
+        let parsed_login_url = login_url
+            .parse()
+            .map_err(|e| format!("invalid login URL: {e}"))?;
+
         if fresh_session {
             if let Some(w) = app_handle.get_webview_window("login-browser") {
                 let _ = w.close();
             }
         } else if let Some(w) = app_handle.get_webview_window(&label) {
-            let _ = w.show();
-            let _ = w.set_focus();
+            info!("resetting existing login window");
+            reset_existing_login_window(&w, parsed_login_url)?;
             return Ok(());
         }
 
         let app_for_nav = app_handle.clone();
         let label_for_nav = label.clone();
 
-        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label.clone(),
-            WebviewUrl::External(login_url.parse().unwrap()),
+            WebviewUrl::External(parsed_login_url),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
@@ -1826,6 +1979,31 @@ pub async fn open_login_window(
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod login_window_tests {
+    use super::reset_existing_login_window;
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    #[test]
+    fn reused_login_window_returns_to_login_page() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let stale_url: tauri::Url = "https://github.com/settings/profile".parse().unwrap();
+        let login_url: tauri::Url = "https://screenpipe.com/login?return_scheme=screenpipe"
+            .parse()
+            .unwrap();
+        let window =
+            WebviewWindowBuilder::new(&app, "login-browser", WebviewUrl::External(stale_url))
+                .build()
+                .expect("login webview");
+
+        reset_existing_login_window(&window, login_url.clone()).unwrap();
+
+        assert_eq!(window.url().unwrap(), login_url);
     }
 }
 
@@ -1953,13 +2131,41 @@ pub async fn show_window_activated(
     show_window(app_handle, window).await
 }
 
-/// Programmatically adjust a window's always-on-top level after creation.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct TemporaryWindowLevelState {
+    original_levels: std::collections::HashMap<String, i64>,
+}
+
+#[cfg(target_os = "macos")]
+impl TemporaryWindowLevelState {
+    fn transition(&mut self, label: &str, current_level: i64, restore: bool) -> i64 {
+        if restore {
+            self.original_levels.remove(label).unwrap_or(current_level)
+        } else {
+            // Repeated lowering must not overwrite the real origin with level 0.
+            self.original_levels
+                .entry(label.to_string())
+                .or_insert(current_level);
+            0
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+static TEMPORARY_WINDOW_LEVELS: once_cell::sync::Lazy<std::sync::Mutex<TemporaryWindowLevelState>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(TemporaryWindowLevelState::default()));
+
+/// Temporarily lower a window for a permission flow, then restore its native
+/// level. The command name and boolean are retained for binding compatibility:
+/// `false` begins the temporary lowering and `true` restores the captured
+/// level.
 ///
 /// Tauri's JS `setAlwaysOnTop` can be unreliable for macOS panel-style
-/// windows. For permission flows we need Screenpipe to stay normally
-/// always-on-top, but temporarily drop below System Settings while the user is
-/// granting permissions. On macOS this directly sets the underlying NSWindow
-/// level: floating when enabled, normal when disabled.
+/// windows. The old implementation restored every window to a hardcoded
+/// floating level, which permanently elevated the normal Home/Settings window
+/// after it regained focus. Capture-once/restore-exactly mirrors the native
+/// focus-session lifecycle used to preserve external-app focus.
 #[tauri::command]
 #[specta::specta]
 pub async fn set_window_always_on_top_native(
@@ -1973,36 +2179,105 @@ pub async fn set_window_always_on_top_native(
         .get_webview_window(&label)
         .ok_or_else(|| format!("window not found: {}", label))?;
 
-    window
-        .set_always_on_top(always_on_top)
-        .map_err(|e| format!("failed to set always-on-top: {}", e))?;
-
     #[cfg(target_os = "macos")]
     {
-        use crate::window::run_on_main_thread_safe;
         use raw_window_handle::HasWindowHandle;
 
         let window_clone = window.clone();
-        run_on_main_thread_safe(&app_handle, move || {
-            if let Ok(handle) = window_clone.window_handle() {
-                if let raw_window_handle::RawWindowHandle::AppKit(appkit_handle) = handle.as_raw() {
+        let label_for_main_thread = label.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        app_handle
+            .run_on_main_thread(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let handle = window_clone
+                        .window_handle()
+                        .map_err(|e| format!("failed to get native window handle: {e}"))?;
+                    let raw_window_handle::RawWindowHandle::AppKit(appkit_handle) = handle.as_raw()
+                    else {
+                        return Err("window is not backed by AppKit".to_string());
+                    };
+
                     use objc::{msg_send, sel, sel_impl};
                     let ns_view = appkit_handle.ns_view.as_ptr() as *mut objc::runtime::Object;
                     let ns_window: *mut objc::runtime::Object =
                         unsafe { msg_send![ns_view, window] };
-                    if !ns_window.is_null() {
-                        // NSNormalWindowLevel = 0. NSFloatingWindowLevel = 3.
-                        // Floating keeps recovery/onboarding above normal app
-                        // windows; normal lets System Settings sit above it.
-                        let level: i64 = if always_on_top { 3 } else { 0 };
-                        let _: () = unsafe { msg_send![ns_window, setLevel: level] };
+                    if ns_window.is_null() {
+                        return Err("native NSWindow is unavailable".to_string());
                     }
-                }
-            }
-        });
+
+                    let current_level: i64 = unsafe { msg_send![ns_window, level] };
+                    let target_level = TEMPORARY_WINDOW_LEVELS
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .transition(&label_for_main_thread, current_level, always_on_top);
+                    let _: () = unsafe { msg_send![ns_window, setLevel: target_level] };
+                    info!(
+                        window_label = %label_for_main_thread,
+                        current_level,
+                        target_level,
+                        restore = always_on_top,
+                        "permission window-level transition"
+                    );
+                    Ok(())
+                }))
+                .unwrap_or_else(|panic| {
+                    Err(format!(
+                        "panic while changing native window level: {panic:?}"
+                    ))
+                });
+                let _ = sender.send(result);
+            })
+            .map_err(|e| format!("failed to schedule native window-level change: {e}"))?;
+
+        receiver
+            .await
+            .map_err(|_| "native window-level change was cancelled".to_string())??;
     }
 
+    #[cfg(not(target_os = "macos"))]
+    window
+        .set_always_on_top(always_on_top)
+        .map_err(|e| format!("failed to set always-on-top: {}", e))?;
+
     Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod temporary_window_level_tests {
+    use super::TemporaryWindowLevelState;
+
+    #[test]
+    fn normal_window_returns_to_normal_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("home", 0, false), 0);
+        assert_eq!(state.transition("home", 0, true), 0);
+    }
+
+    #[test]
+    fn floating_window_returns_to_its_original_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("permission-recovery", 3, false), 0);
+        assert_eq!(state.transition("permission-recovery", 0, true), 3);
+    }
+
+    #[test]
+    fn repeated_lowering_preserves_the_first_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("home", 3, false), 0);
+        assert_eq!(state.transition("home", 0, false), 0);
+        assert_eq!(state.transition("home", 0, true), 3);
+    }
+
+    #[test]
+    fn unmatched_restore_keeps_the_current_level() {
+        let mut state = TemporaryWindowLevelState::default();
+
+        assert_eq!(state.transition("home", 0, true), 0);
+        assert_eq!(state.transition("chat", 1001, true), 1001);
+    }
 }
 
 /// Apply the "Chat Always on Top" setting to the already-open chat window.
@@ -3018,6 +3293,55 @@ pub async fn get_recording_health_state() -> String {
     crate::overlay_health::current_state_payload()
 }
 
+/// E2E-only accelerated reproduction of an idle capture heartbeat pause that
+/// recovers as the user returns. The real incident accumulated 114 idle stale
+/// checks, then the first input both woke capture and crossed the attended
+/// alert threshold before the next healthy check arrived.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_recording_health_return_race(
+    app_handle: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let seed_enabled = std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .map(|flags| {
+            flags
+                .split(',')
+                .any(|flag| flag.trim() == "recording-health-return-race")
+        })
+        .unwrap_or(false);
+    if !cfg!(feature = "e2e") || !seed_enabled {
+        return Err("recording-health return-race probe requires the e2e feature and seed".into());
+    }
+
+    let mut tier = crate::stale_tier::StaleTier::default();
+    for _ in 0..114 {
+        tier.observe(true, false);
+    }
+    let idle_confirmed = tier.confirmed();
+
+    tier.observe(true, true);
+    let return_confirmed = tier.confirmed();
+    let alerts_enabled = crate::store::SettingsStore::get(&app_handle)
+        .ok()
+        .flatten()
+        .map(|settings| settings.show_restart_notifications)
+        .unwrap_or(false);
+    crate::overlay_health::on_tick(&app_handle, return_confirmed, false, false).await;
+    let overlay_state = crate::overlay_health::current_state_payload();
+
+    let recovered_after = tier.observe(false, true);
+    crate::overlay_health::dismiss_incident(app_handle).await;
+
+    Ok(serde_json::json!({
+        "idleConfirmed": idle_confirmed,
+        "returnConfirmed": return_confirmed,
+        "alertsEnabled": alerts_enabled,
+        "overlayState": overlay_state,
+        "recoveredAfter": recovered_after,
+    }))
+}
+
 /// Restart the recording engine from the overlay's failure state. Runs the
 /// same stop → settle → spawn sequence as the native panel's restart action;
 /// the health loop confirms recovery and pushes "recovered" to the overlay.
@@ -3064,14 +3388,17 @@ pub async fn show_notification_inbox(app_handle: tauri::AppHandle) -> Result<(),
                     app_handle.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
                 {
                     let analytics = std::sync::Arc::clone(&analytics);
-                    let unread = entries.iter().filter(|e| !e.read).count();
+                    let unread = entries
+                        .iter()
+                        .filter(|entry| !entry.read && entry.is_high_priority())
+                        .count();
                     let total = entries.len();
                     tauri::async_runtime::spawn(async move {
                         let _ = analytics
                             .send_event(
                                 "notification_bell_opened",
                                 Some(serde_json::json!({
-                                    "unread_count": unread,
+                                    "high_priority_unread_count": unread,
                                     "total_count": total,
                                     "surface": "native_overlay",
                                 })),

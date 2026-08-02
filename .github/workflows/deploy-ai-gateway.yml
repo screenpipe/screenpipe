@@ -60,6 +60,12 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
+      # The worker auto-deploys to prod on merge; never ship a build whose
+      # own test suite (cost caps, rate limiting, auth, provider fallback)
+      # is red.
+      - name: Run tests
+        run: bun run test
+
       - name: Deploy worker (build + Sentry source maps + wrangler deploy)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

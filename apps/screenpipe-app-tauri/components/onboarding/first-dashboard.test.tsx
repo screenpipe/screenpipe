@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => ({
   createOnboardingLiveView: vi.fn(),
   completeOnboarding: vi.fn(),
   updateSettings: vi.fn(),
+  listBrainViews: vi.fn(),
   markSetupNeedsRetry: vi.fn(),
+  selectExistingLiveView: vi.fn(),
   capture: vi.fn(),
 }));
 
@@ -47,6 +49,12 @@ vi.mock("@/lib/hooks/use-settings", () => ({
   }),
 }));
 
+vi.mock("@/lib/utils/tauri", () => ({
+  commands: {
+    listBrainViews: mocks.listBrainViews,
+  },
+}));
+
 vi.mock("@/lib/live-views/onboarding-live-view", async (importOriginal) => {
   const original =
     await importOriginal<
@@ -61,6 +69,7 @@ vi.mock("@/lib/live-views/onboarding-live-view", async (importOriginal) => {
 
 vi.mock("@/lib/live-views/onboarding-activation", () => ({
   markOnboardingLiveViewSetupNeedsRetry: mocks.markSetupNeedsRetry,
+  selectExistingLiveViewForOnboarding: mocks.selectExistingLiveView,
 }));
 
 vi.mock("posthog-js", () => ({
@@ -100,6 +109,7 @@ describe("FirstDashboard", () => {
     vi.clearAllMocks();
     mocks.completeOnboarding.mockResolvedValue(undefined);
     mocks.updateSettings.mockResolvedValue(undefined);
+    mocks.listBrainViews.mockResolvedValue({ status: "ok", data: [] });
     mocks.prepareOnboardingLiveViewShell.mockResolvedValue({
       id: "first-dashboard",
       title: "Meeting follow-through",
@@ -124,7 +134,9 @@ describe("FirstDashboard", () => {
     render(<FirstDashboard />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: /follow through after meetings/i }),
+      await screen.findByRole("button", {
+        name: /follow through after meetings/i,
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: /build my first Live View/i }),
@@ -149,6 +161,8 @@ describe("FirstDashboard", () => {
         pipeCount: 1,
         dashboardBlockCount: 5,
         goalCategory: "meeting_follow_through",
+        live_view_flow_variant: "first_live_view",
+        existing_live_view_count_bucket: "none",
       }),
     );
 
@@ -159,6 +173,8 @@ describe("FirstDashboard", () => {
       expect.objectContaining({
         goal_category: "meeting_follow_through",
         custom_goal: false,
+        live_view_flow_variant: "first_live_view",
+        existing_live_view_count_bucket: "none",
       }),
     );
     expect(submitted?.[1]).not.toHaveProperty("goal");
@@ -175,7 +191,9 @@ describe("FirstDashboard", () => {
     const { container } = render(<FirstDashboard />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: /follow through after meetings/i }),
+      await screen.findByRole("button", {
+        name: /follow through after meetings/i,
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: /build my first Live View/i }),
@@ -211,8 +229,14 @@ describe("FirstDashboard", () => {
     );
     render(<FirstDashboard />);
 
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     fireEvent.click(
-      screen.getByRole("button", { name: /follow through after meetings/i }),
+      screen.getByRole("button", {
+        name: /follow through after meetings/i,
+      }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: /build my first Live View/i }),
@@ -234,6 +258,8 @@ describe("FirstDashboard", () => {
     expect(mocks.completeOnboarding).toHaveBeenCalledWith({
       method: "live_view_deferred",
       goalCategory: "meeting_follow_through",
+      live_view_flow_variant: "first_live_view",
+      existing_live_view_count_bucket: "none",
     });
     expect(mocks.markSetupNeedsRetry).toHaveBeenCalledWith(
       expect.stringMatching(/^first-dashboard-/),
@@ -252,7 +278,9 @@ describe("FirstDashboard", () => {
     render(<FirstDashboard />);
 
     fireEvent.change(
-      screen.getByPlaceholderText(/show how I spend time across projects/i),
+      await screen.findByPlaceholderText(
+        /show how I spend time across projects/i,
+      ),
       { target: { value: "show my private project work" } },
     );
     fireEvent.click(
@@ -283,7 +311,9 @@ describe("FirstDashboard", () => {
     render(<FirstDashboard />);
 
     expect(
-      screen.getByRole("button", { name: /remember and resume my work/i }),
+      await screen.findByRole("button", {
+        name: /remember and resume my work/i,
+      }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /follow through after meetings/i }),
@@ -321,17 +351,143 @@ describe("FirstDashboard", () => {
   it("skips without generating, installing, or saving anything", async () => {
     render(<FirstDashboard />);
 
-    fireEvent.click(screen.getByRole("button", { name: /skip for now/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /skip for now/i }),
+    );
 
     await waitFor(() =>
       expect(mocks.completeOnboarding).toHaveBeenCalledWith({
         method: "pipe_step_skipped",
+        live_view_flow_variant: "first_live_view",
+        existing_live_view_count_bucket: "none",
       }),
     );
     expect(mocks.createOnboardingLiveView).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_first_dashboard_skipped",
-      expect.objectContaining({ goal_category: "none" }),
+      expect.objectContaining({
+        goal_category: "none",
+        live_view_flow_variant: "first_live_view",
+        existing_live_view_count_bucket: "none",
+      }),
+    );
+  });
+
+  it("requires an explicit existing-view selection before opening it", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          id: "weekly-review",
+          title: "Weekly review",
+          revision: 3,
+          timeRange: "7d",
+          periodPolicy: {
+            type: "selectable.v1",
+            values: ["today", "24h", "7d", "30d"],
+          },
+          slots: [{ id: "decisions" }, { id: "actions" }],
+          createdAt: "2026-07-20T00:00:00Z",
+          updatedAt: "2026-07-30T00:00:00Z",
+        },
+        {
+          id: "project-pulse",
+          title: "Project pulse",
+          revision: 1,
+          timeRange: "today",
+          periodPolicy: {
+            type: "selectable.v1",
+            values: ["today", "24h", "7d", "30d"],
+          },
+          slots: [{ id: "activity" }],
+          createdAt: "2026-07-25T00:00:00Z",
+          updatedAt: "2026-07-31T00:00:00Z",
+        },
+      ],
+    });
+
+    render(<FirstDashboard />);
+
+    expect(
+      await screen.findByRole("heading", { name: /we found 2 Live Views/i }),
+    ).toBeInTheDocument();
+    const openButton = screen.getByRole("button", {
+      name: /open selected Live View/i,
+    });
+    expect(openButton).toBeDisabled();
+    expect(mocks.selectExistingLiveView).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Project pulse 1 section/i }),
+    );
+    fireEvent.click(openButton);
+
+    expect(mocks.selectExistingLiveView).toHaveBeenCalledWith("project-pulse");
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "existing_live_view_selected",
+        dashboardBlockCount: 1,
+        live_view_flow_variant: "existing_live_views",
+        existing_live_view_count_bucket: "multiple",
+      }),
+    );
+    expect(mocks.createOnboardingLiveView).not.toHaveBeenCalled();
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_existing_live_view_selected",
+      expect.objectContaining({
+        live_view_flow_variant: "existing_live_views",
+        existing_live_view_count_bucket: "multiple",
+      }),
+    );
+  });
+
+  it("creates an additional view only after that choice", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          id: "weekly-review",
+          title: "Weekly review",
+          revision: 3,
+          timeRange: "7d",
+          periodPolicy: {
+            type: "selectable.v1",
+            values: ["today", "24h", "7d", "30d"],
+          },
+          slots: [],
+          createdAt: "2026-07-20T00:00:00Z",
+          updatedAt: "2026-07-30T00:00:00Z",
+        },
+      ],
+    });
+
+    render(<FirstDashboard />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /create another Live View/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /follow through after meetings/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /build another Live View/i }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dashboardId: expect.stringMatching(/^first-dashboard-/),
+          goalCategory: "meeting_follow_through",
+        }),
+      ),
+    );
+    expect(mocks.selectExistingLiveView).not.toHaveBeenCalled();
+    expect(mocks.completeOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "live_view_created",
+        live_view_flow_variant: "existing_live_views",
+        existing_live_view_count_bucket: "one",
+      }),
     );
   });
 });
