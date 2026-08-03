@@ -8,11 +8,11 @@ confidence, and criticality.
 - Manifest: `docs/coverage/core-engine-map.json`
 - Tracked crates: screenpipe-engine, screenpipe-db, screenpipe-sqlite-coordinator, screenpipe-audio, screenpipe-screen, screenpipe-a11y
 - Mapped suites: 32
-- Mapped Rust files: 307
-- Active test blocks: 2854
+- Mapped Rust files: 308
+- Active test blocks: 2857
 - Ignored/manual test blocks: 133
-- Declared test blocks: 2987
-- Weighted coverage points: 2352.1
+- Declared test blocks: 2990
+- Weighted coverage points: 2354.2
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,15 +23,15 @@ are explicitly enabled in a runtime lane.
 
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| windows | 29 | 2726 | 128 | 2293.4 | 21 | 11 | 100% |
-| macos | 29 | 2777 | 108 | 2303.3 | 22 | 11 | 100% |
-| linux | 25 | 2420 | 102 | 2015.7 | 20 | 11 | 100% |
+| windows | 29 | 2729 | 128 | 2295.5 | 21 | 11 | 100% |
+| macos | 29 | 2780 | 108 | 2305.4 | 22 | 11 | 100% |
+| linux | 25 | 2423 | 102 | 2017.9 | 20 | 11 | 100% |
 
 ## Crate Summary
 
 | Crate | Suites | Integration files | Source unit files | Active tests | Ignored tests | Weighted points | Flows |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| screenpipe-engine | 10 | 18 | 98 | 1355 | 42 | 1043.5 | 10 |
+| screenpipe-engine | 10 | 18 | 99 | 1358 | 42 | 1045.6 | 10 |
 | screenpipe-db | 5 | 48 | 14 | 406 | 16 | 387.2 | 9 |
 | screenpipe-sqlite-coordinator | 1 | 0 | 2 | 10 | 0 | 10.0 | 2 |
 | screenpipe-audio | 6 | 23 | 47 | 524 | 39 | 454.6 | 5 |
@@ -68,20 +68,20 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | database | 6 suites / 322 active / 12 ignored / 303.2 pts | 6 suites / 322 active / 12 ignored / 303.2 pts | 6 suites / 322 active / 12 ignored / 303.2 pts |
 | db-search | 2 suites / 105 active / 9 ignored / 105.0 pts | 2 suites / 105 active / 9 ignored / 105.0 pts | 2 suites / 105 active / 9 ignored / 105.0 pts |
 | engine-lifecycle | 6 suites / 201 active / 1 ignored / 176.6 pts | 6 suites / 201 active / 1 ignored / 176.6 pts | 5 suites / 195 active / 1 ignored / 174.9 pts |
-| local-api | 2 suites / 294 active / 9 ignored / 207.0 pts | 2 suites / 294 active / 9 ignored / 207.0 pts | 2 suites / 294 active / 9 ignored / 207.0 pts |
-| meeting | 6 suites / 1286 active / 15 ignored / 1048.7 pts | 6 suites / 1286 active / 15 ignored / 1048.7 pts | 4 suites / 1015 active / 12 ignored / 798.1 pts |
+| local-api | 2 suites / 295 active / 9 ignored / 207.7 pts | 2 suites / 295 active / 9 ignored / 207.7 pts | 2 suites / 295 active / 9 ignored / 207.7 pts |
+| meeting | 6 suites / 1289 active / 15 ignored / 1050.8 pts | 6 suites / 1289 active / 15 ignored / 1050.8 pts | 4 suites / 1018 active / 12 ignored / 800.2 pts |
 | ocr | 4 suites / 120 active / 7 ignored / 114.3 pts | 4 suites / 124 active / 7 ignored / 119.8 pts | 3 suites / 115 active / 6 ignored / 110.8 pts |
 | os-integration | 1 suites / 6 active / 0 ignored / 1.7 pts | 1 suites / 6 active / 0 ignored / 1.7 pts | - |
 | performance | 13 suites / 1301 active / 67 ignored / 1153.0 pts | 14 suites / 1396 active / 70 ignored / 1191.0 pts | 13 suites / 1301 active / 67 ignored / 1153.0 pts |
-| pipes | 1 suites / 433 active / 3 ignored / 303.1 pts | 1 suites / 433 active / 3 ignored / 303.1 pts | 1 suites / 433 active / 3 ignored / 303.1 pts |
-| privacy | 5 suites / 840 active / 36 ignored / 685.5 pts | 5 suites / 887 active / 16 ignored / 689.9 pts | 5 suites / 816 active / 14 ignored / 663.7 pts |
+| pipes | 1 suites / 435 active / 3 ignored / 304.5 pts | 1 suites / 435 active / 3 ignored / 304.5 pts | 1 suites / 435 active / 3 ignored / 304.5 pts |
+| privacy | 5 suites / 842 active / 36 ignored / 686.9 pts | 5 suites / 889 active / 16 ignored / 691.3 pts | 5 suites / 818 active / 14 ignored / 665.1 pts |
 | real-app | - | 1 suites / 95 active / 3 ignored / 38.0 pts | - |
 | speaker | 2 suites / 292 active / 5 ignored / 292.0 pts | 2 suites / 292 active / 5 ignored / 292.0 pts | 2 suites / 292 active / 5 ignored / 292.0 pts |
 | storage | 3 suites / 436 active / 29 ignored / 354.4 pts | 3 suites / 436 active / 29 ignored / 354.4 pts | 3 suites / 436 active / 29 ignored / 354.4 pts |
-| sync | 1 suites / 433 active / 3 ignored / 303.1 pts | 1 suites / 433 active / 3 ignored / 303.1 pts | 1 suites / 433 active / 3 ignored / 303.1 pts |
-| timeline | 4 suites / 864 active / 33 ignored / 706.8 pts | 4 suites / 864 active / 33 ignored / 706.8 pts | 4 suites / 864 active / 33 ignored / 706.8 pts |
-| transcription | 5 suites / 621 active / 37 ignored / 485.0 pts | 5 suites / 621 active / 37 ignored / 485.0 pts | 5 suites / 621 active / 37 ignored / 485.0 pts |
-| ui-events | 4 suites / 668 active / 28 ignored / 511.5 pts | 3 suites / 620 active / 5 ignored / 477.9 pts | 3 suites / 620 active / 5 ignored / 477.9 pts |
+| sync | 1 suites / 435 active / 3 ignored / 304.5 pts | 1 suites / 435 active / 3 ignored / 304.5 pts | 1 suites / 435 active / 3 ignored / 304.5 pts |
+| timeline | 4 suites / 865 active / 33 ignored / 707.5 pts | 4 suites / 865 active / 33 ignored / 707.5 pts | 4 suites / 865 active / 33 ignored / 707.5 pts |
+| transcription | 5 suites / 622 active / 37 ignored / 485.7 pts | 5 suites / 622 active / 37 ignored / 485.7 pts | 5 suites / 622 active / 37 ignored / 485.7 pts |
+| ui-events | 4 suites / 670 active / 28 ignored / 512.9 pts | 3 suites / 622 active / 5 ignored / 479.3 pts | 3 suites / 622 active / 5 ignored / 479.3 pts |
 | vision-capture | 5 suites / 454 active / 32 ignored / 365.3 pts | 5 suites / 458 active / 32 ignored / 370.8 pts | 4 suites / 449 active / 31 ignored / 361.8 pts |
 
 ## Critical Flow Matrix
@@ -133,13 +133,13 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | db-runtime-reliability | screenpipe-db | windows, macos, linux | database, performance | performance-liveness | high | partial | mixed | 11 | 22 | 6 | SQLite hard-fault classification, failpoint VFS injection, fresh-identity recovery verification with integrity/FK/write canaries, query cancellation, close-severs-connections regressions, multi-pool WAL parity, runtime version pinning, and WAL chaos plus memory-pressure probes. |
 | db-search-indexing | screenpipe-db | windows, macos, linux | db-search, ocr, accessibility, performance | local-api-search, capture-ocr-pipeline, accessibility-ui-events, performance-liveness | high | strong | mixed | 13 | 101 | 4 | FTS, tokenizer, OCR snapshot search, query planning, ordering, accessibility search, and contention coverage. |
 | db-timeline-frames | screenpipe-db | windows, macos, linux | database, timeline, storage, performance | timeline-streaming, performance-liveness | high | strong | mixed | 17 | 164 | 3 | Frame/audio joins, timeline query shape, suggestions frames, write queue, DB primitives (src/db.rs split into src/db/ modules), feedback record upserts, media eviction anti-join regressions, SAF output registry, semantic storage, and timeline performance. |
-| engine-api-routes | screenpipe-engine | windows, macos, linux | local-api, timeline, meeting, transcription | local-api-search, timeline-streaming, meeting-live-notes, audio-record-transcribe | high | partial | mixed | 28 | 290 | 4 | Route/unit coverage for search, health, streaming, meetings, time/timezone, and transcription. Legacy endpoint/websocket tests require local data and remain ignored. |
+| engine-api-routes | screenpipe-engine | windows, macos, linux | local-api, timeline, meeting, transcription | local-api-search, timeline-streaming, meeting-live-notes, audio-record-transcribe | high | partial | mixed | 29 | 291 | 4 | Route/unit coverage for search, health, streaming, meetings, time/timezone, and transcription. Legacy endpoint/websocket tests require local data and remain ignored. |
 | engine-capture-timeline | screenpipe-engine | windows, macos, linux | vision-capture, timeline, storage, performance | capture-ocr-pipeline, timeline-streaming, performance-liveness | high | partial | mixed | 23 | 234 | 26 | Covers capture trigger logic, frame/audio linking, hot cache, timeline refresh regressions, fragmented MP4 extraction, and HD-mode control. Several real-data tests are intentionally ignored by default. |
 | engine-config-lifecycle | screenpipe-engine | windows, macos, linux | configuration, engine-lifecycle, performance | settings-to-engine-config, engine-health-lifecycle, performance-liveness | high | strong | mixed | 11 | 111 | 1 | Fast logic coverage for the config bridge, tray health debounce, sleep/power policies, and queue backpressure. |
 | engine-db-recovery-cli | screenpipe-engine | windows, macos, linux | database, engine-lifecycle | engine-health-lifecycle, performance-liveness | high | strong | unit | 1 | 7 | 0 | Exact DB/WAL/SHM working-copy preservation, rollback on archive failure, and restart repair for crashes during the multi-file generation swap. |
 | engine-focus-os | screenpipe-engine | windows, macos | engine-lifecycle, os-integration | engine-health-lifecycle, performance-liveness | medium | conditional | unit | 3 | 6 | 0 | Platform focus-tracker parsing/helpers. These files are cfg-gated and only execute on their target OS. |
 | engine-local-api-search-integration | screenpipe-engine | windows, macos, linux | local-api, db-search | local-api-search | high | strong | integration | 1 | 4 | 5 | Active /search route test builds an audio-disabled router, seeds captured-screen-shaped OCR data into an in-memory DB, and asserts the HTTP response and pagination. |
-| engine-meeting-privacy-sync | screenpipe-engine | windows, macos, linux | meeting, privacy, ui-events, pipes, sync | meeting-live-notes, privacy-and-redaction, accessibility-ui-events, performance-liveness | medium | strong | unit | 29 | 433 | 3 | Unit-heavy coverage for privacy filter policy, capture exclusions, UI recorder safety, pipes/live-view/structured-output helpers, sync helpers, and CLI parsing. Meeting detection moved to the engine-meeting-watcher suite. |
+| engine-meeting-privacy-sync | screenpipe-engine | windows, macos, linux | meeting, privacy, ui-events, pipes, sync | meeting-live-notes, privacy-and-redaction, accessibility-ui-events, performance-liveness | medium | strong | unit | 29 | 435 | 3 | Unit-heavy coverage for privacy filter policy, capture exclusions, UI recorder safety, pipes/live-view/structured-output helpers, sync helpers, and CLI parsing. Meeting detection moved to the engine-meeting-watcher suite. |
 | engine-meeting-watcher | screenpipe-engine | windows, macos | meeting | meeting-live-notes | high | strong | mixed | 9 | 203 | 3 | Successor of src/meeting_detector.rs and src/meeting_telemetry.rs. Audio-process and UI-scan backend state machines, candidate resolution, shared telemetry, and a scored trajectory eval. ui_scan/macos.rs and ui_scan/windows.rs are cfg-gated and only execute on their target OS; both backends are null on Linux. |
 | engine-retention-storage | screenpipe-engine | windows, macos, linux | storage, engine-lifecycle, performance | engine-health-lifecycle, performance-liveness | medium | strong | mixed | 5 | 38 | 0 | Local retention deletion (including lean-mode heavy-text stripping), cloud archive watermarking, atomic state-file replacement, and the low-disk capture monitor. |
 | engine-telemetry-observability | screenpipe-engine | windows, macos, linux | engine-lifecycle, performance | engine-health-lifecycle, performance-liveness | medium | strong | unit | 6 | 29 | 0 | PostHog capture gating, telemetry context shaping, piggyback telemetry forwarding, crash-log helpers, resource monitoring, and the recording-coverage reliability metric. |
@@ -375,7 +375,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | engine-config-lifecycle | screenpipe-engine | src/power/profile.rs | source | 24 | 0 | 24 |
 | engine-meeting-privacy-sync | screenpipe-engine | src/privacy_filter.rs | source | 3 | 0 | 3 |
 | engine-focus-os | screenpipe-engine | src/process_priority.rs | source | 2 | 0 | 2 |
-| engine-meeting-privacy-sync | screenpipe-engine | src/qualified_value.rs | source | 2 | 0 | 2 |
+| engine-meeting-privacy-sync | screenpipe-engine | src/qualified_value.rs | source | 4 | 0 | 4 |
 | engine-config-lifecycle | screenpipe-engine | src/recording_config.rs | source | 15 | 0 | 15 |
 | engine-telemetry-observability | screenpipe-engine | src/recording_coverage.rs | source | 5 | 0 | 5 |
 | engine-telemetry-observability | screenpipe-engine | src/resource_monitor.rs | source | 6 | 0 | 6 |
@@ -390,6 +390,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | engine-api-routes | screenpipe-engine | src/routes/live_views.rs | source | 1 | 0 | 1 |
 | engine-api-routes | screenpipe-engine | src/routes/meetings.rs | source | 4 | 0 | 4 |
 | engine-api-routes | screenpipe-engine | src/routes/memories.rs | source | 5 | 0 | 5 |
+| engine-api-routes | screenpipe-engine | src/routes/request_origin.rs | source | 1 | 0 | 1 |
 | engine-api-routes | screenpipe-engine | src/routes/response_format.rs | source | 6 | 0 | 6 |
 | engine-api-routes | screenpipe-engine | src/routes/retranscribe.rs | source | 3 | 0 | 3 |
 | engine-api-routes | screenpipe-engine | src/routes/search.rs | source | 22 | 0 | 22 |
