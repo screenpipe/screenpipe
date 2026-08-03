@@ -205,22 +205,25 @@ export function DeeplinkHandler() {
       // the relay finishes on https and hands the provider params back here:
       //   screenpipe[-enterprise]://oauth/connections/callback?code=...&state=...
       //   screenpipe[-enterprise]://oauth/mcp/<serverId>/callback?code=...&state=...
-      // We forward them to the same engine endpoints the browser would have
-      // hit. A second delivery (relay fetch + deep link) is a harmless no-op
-      // because the pending state is consumed on first use.
+      // This deep link is the relay's only delivery path. Forward it to the
+      // same engine endpoint the browser would have reached on localhost.
       if (parsedUrl.host === "oauth") {
         const oauthPath = parsedUrl.pathname?.replace(/^\/+/, "") ?? "";
         const search = parsedUrl.searchParams.toString();
         const query = search ? `?${search}` : "";
         try {
           if (oauthPath === "connections/callback") {
-            await localFetch(`/connections/oauth/callback${query}`);
+            const response = await localFetch(`/connections/oauth/callback${query}`);
+            if (!response.ok) throw new Error(`callback failed (HTTP ${response.status})`);
             await foregroundAfterOAuth();
           } else {
             const mcpMatch = oauthPath.match(/^mcp\/([^/]+)\/callback$/);
             if (mcpMatch) {
               // mcpMatch[1] is already a percent-encoded path segment.
-              await localFetch(`/mcp-servers/${mcpMatch[1]}/oauth/callback${query}`);
+              const response = await localFetch(
+                `/mcp-servers/${mcpMatch[1]}/oauth/callback${query}`,
+              );
+              if (!response.ok) throw new Error(`callback failed (HTTP ${response.status})`);
               await foregroundAfterOAuth();
             }
           }

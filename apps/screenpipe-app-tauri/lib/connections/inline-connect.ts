@@ -9,7 +9,7 @@ import { commands } from "@/lib/utils/tauri";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import { MCP_OAUTH_PROVIDERS } from "@/components/settings/connections-section";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
-import { appDeepLinkScheme, mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
+import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
 
 const DEFAULT_OAUTH_VARIANTS: Record<string, string | null> = {
   slack: "send",
@@ -82,19 +82,19 @@ async function connectMcpProvider(connectionId: string, signal?: AbortSignal): P
 
   const existingId = await findMcpServerIdByUrl(provider.url);
   const targetId = existingId ?? mcpRandomId();
-  const redirectUri = mcpOauthRedirectUri(targetId, await appDeepLinkScheme());
+  const appScheme = await appDeepLinkScheme();
   const res = await localFetch(`/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(
       existingId
-        ? { redirect_uri: redirectUri }
+        ? { app_scheme: appScheme }
         : {
             name: provider.name,
             url: provider.url,
             headers: [],
             enabled: true,
-            redirect_uri: redirectUri,
+            app_scheme: appScheme,
           },
     ),
   });

@@ -30,7 +30,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
-import { appDeepLinkScheme, mcpOauthRedirectUri } from "@/lib/connections/mcp-oauth";
+import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
 import { RegistryBrowser } from "./registry-browser";
 import type { McpHeader, McpServer, McpServerDraft } from "@/lib/mcp-registry";
 
@@ -725,9 +725,7 @@ function ServerEditor({
       // A manual (non-DCR) client_id is registered against the engine's
       // localhost callback, so only DCR flows go through the HTTPS relay.
       const manualClientId = Boolean(initial.oauth?.client_id?.trim());
-      const redirectUri = manualClientId
-        ? undefined
-        : mcpOauthRedirectUri(targetId, await appDeepLinkScheme());
+      const appScheme = manualClientId ? undefined : await appDeepLinkScheme();
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
         {
@@ -740,9 +738,9 @@ function ServerEditor({
                   url: url.trim(),
                   headers: headersForRequest(),
                   enabled,
-                  redirect_uri: redirectUri,
+                  app_scheme: appScheme,
                 }
-              : { redirect_uri: redirectUri }
+              : { app_scheme: appScheme }
           ),
         }
       );

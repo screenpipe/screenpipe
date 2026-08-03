@@ -261,7 +261,7 @@ pub async fn oauth_connect(
             // "took too long" page instead of "session expired". The entry is
             // swept on the next oauth_connect.
             format!(
-                "{} sign-in expired before the browser steps finished — click connect to try again. If your browser blocks http://localhost (e.g. Safari with HTTPS-Only mode), allow it for localhost or use a different default browser",
+                "{} sign-in expired before the browser steps finished — click connect to try again",
                 integration_id
             )
         })?
