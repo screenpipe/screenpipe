@@ -1940,13 +1940,14 @@ pub enum VaultCommand {
 pub enum DbCommand {
     /// Run PRAGMA quick_check on the live db.sqlite
     Check,
-    /// Recover a corrupt db.sqlite via SQLite's `.recover` page-level scan.
-    /// Snapshots the corrupt file aside, repairs into a sidecar, integrity-checks,
-    /// and atomically swaps in the recovered db. Refuses to run while screenpipe
-    /// is open (the desktop app would race the swap).
+    /// Recover a quarantined db.sqlite onto a verified fresh physical file.
+    /// Preserves the exact DB/WAL/SHM generation, repairs only a working copy,
+    /// verifies integrity, foreign keys, and a durable write canary, then swaps.
+    /// Refuses to run while screenpipe is open.
     Recover {
-        /// Run even if the screenpipe HTTP server is reachable. Dangerous —
-        /// quitting the app cleanly is preferred.
+        /// Deprecated compatibility flag. Recovery still refuses to race a
+        /// reachable screenpipe server because that cannot preserve one exact
+        /// DB/WAL/SHM generation.
         #[arg(long)]
         force: bool,
     },

@@ -29,6 +29,7 @@ screenpipe-connect = { path = "../screenpipe-connect" }
 screenpipe-vault = { path = "../screenpipe-vault" }
 screenpipe-secrets = { path = "../screenpipe-secrets" }
 screenpipe-semantic = { path = "../screenpipe-semantic" }
+screenpipe-sqlite-recovery = { path = "../screenpipe-sqlite-recovery" }
 
 
 # Image processing
@@ -42,6 +43,7 @@ sqlx = { workspace = true, features = [
     "chrono",
     "migrate",
 ] }
+rusqlite = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

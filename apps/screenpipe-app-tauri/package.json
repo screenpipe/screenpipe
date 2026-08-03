@@ -3,6 +3,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 1420",
+    "dev:web": "bun scripts/dev-web.ts mock",
+    "dev:web:live": "bun scripts/dev-web.ts live",
+    "dev:tauri": "tauri dev",
     "test": "bun run test:vitest && bun run test:bun",
     "test:vitest": "bunx vitest run --config vitest.config.ts",
     "test:automation-pipe-evals": "bunx vitest run lib/automation-pipe-evals.test.ts components/chat/summary-cards.test.tsx",

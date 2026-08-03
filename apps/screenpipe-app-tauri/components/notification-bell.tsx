@@ -26,7 +26,10 @@ import { useRouter } from "next/navigation";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
+import {
+  notificationActionAnalyticsProperties,
+  notificationAnalyticsProperties,
+} from "@/lib/notification-analytics";
 import { NotificationFeedback } from "@/components/notification-feedback";
 import {
   isHighPriorityNotification,
@@ -247,8 +250,7 @@ export function NotificationInboxPanel({
 
   const runAction = async (entry: NotificationEntry, action: NotificationAction) => {
     posthog.capture("notification_bell_action", {
-      action: action.action,
-      action_type: action.type,
+      ...notificationActionAnalyticsProperties(action.type),
       ...notificationAnalyticsProperties(entry, "bell"),
       surface,
     });
@@ -275,10 +277,8 @@ export function NotificationInboxPanel({
       // user it worked when the pipe never ran. Surface it instead.
       console.error("notification action failed", { action: action.action, type: action.type }, err);
       posthog.capture("notification_bell_action_error", {
-        action: action.action,
-        action_type: action.type,
+        ...notificationActionAnalyticsProperties(action.type),
         ...notificationAnalyticsProperties(entry, "bell"),
-        error: String(err),
         surface,
       });
       return;

@@ -20,6 +20,7 @@ pub mod meetings;
 pub mod memories;
 pub mod pipe_store;
 pub mod power;
+pub mod request_origin;
 pub mod response_format;
 pub mod retranscribe;
 pub mod search;

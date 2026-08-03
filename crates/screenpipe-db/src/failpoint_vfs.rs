@@ -528,7 +528,7 @@ mod tests {
         };
         assert!(replacement_error
             .to_string()
-            .contains("remains quarantined"));
+            .contains("remains durably quarantined"));
 
         // A forensic read-only connection proves no pre- or post-fault write
         // crossed the quarantine boundary.
