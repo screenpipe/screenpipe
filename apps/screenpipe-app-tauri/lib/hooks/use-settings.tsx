@@ -1728,9 +1728,11 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				if (response.status === 401 || response.status === 403) {
 					await clearRejectedSession();
 				}
-				throw new Error(
+				const verifyError = new Error(
 					`failed to verify token: ${response.status} ${response.statusText} - ${body}`,
-				);
+				) as Error & { status?: number };
+				verifyError.status = response.status;
+				throw verifyError;
 			}
 
 			const data = await response.json();

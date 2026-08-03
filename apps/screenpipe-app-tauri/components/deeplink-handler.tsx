@@ -73,6 +73,31 @@ export function DeeplinkHandler() {
       }
     };
 
+    // A brand-new account may not exist server-side yet when the deep link
+    // arrives (the user row is provisioned asynchronously after the token is
+    // minted), so 404/5xx on first sign-in mean "not ready", not "rejected".
+    // Retry briefly before failing; 401/403 stay definitive and are rethrown.
+    const loadUserWithProvisioningRetry = async (apiKey: string) => {
+      const retryDelaysMs = [0, 2000, 5000, 10000];
+      for (let i = 0; i < retryDelaysMs.length; i++) {
+        if (retryDelaysMs[i] > 0) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[i]));
+        }
+        try {
+          await loadUser(apiKey);
+          return;
+        } catch (error) {
+          const status = (error as { status?: number }).status;
+          const retryable =
+            status === 404 || (typeof status === "number" && status >= 500);
+          if (!retryable || i === retryDelaysMs.length - 1) throw error;
+          console.warn(
+            `[deeplink] sign-in verify not ready (status ${status}), retrying...`,
+          );
+        }
+      }
+    };
+
     // Shared deep-link URL processor used by both the native plugin callback
     // and the custom Tauri event from single-instance handoff.
     const processDeepLinkUrl = async (url: string) => {
@@ -83,7 +108,7 @@ export function DeeplinkHandler() {
         const apiKey = parsedUrl.searchParams.get("api_key");
         if (apiKey) {
           try {
-            await loadUser(apiKey);
+            await loadUserWithProvisioningRetry(apiKey);
             toast({
               title: "logged in!",
               description: "you have been logged in",
