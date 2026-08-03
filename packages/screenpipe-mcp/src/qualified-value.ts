@@ -8,14 +8,41 @@ type Payload = {
     | "meeting_result"
     | "artifact_result"
     | "artifact_created";
+  client:
+    | "claude"
+    | "codex"
+    | "cursor"
+    | "openclaw"
+    | "hermes"
+    | "windsurf"
+    | "grok"
+    | "unknown";
 };
+
+const SAFE_CLIENTS = new Set<Payload["client"]>([
+  "claude",
+  "codex",
+  "cursor",
+  "openclaw",
+  "hermes",
+  "windsurf",
+  "grok",
+]);
+
+export function safeMcpClient(value: unknown): Payload["client"] {
+  return typeof value === "string" &&
+    SAFE_CLIENTS.has(value as Payload["client"])
+    ? (value as Payload["client"])
+    : "unknown";
+}
 
 export function createMcpQualifiedValueReporter(
   send: (payload: Payload) => Promise<unknown>,
+  client = safeMcpClient(process.env.SCREENPIPE_MCP_CLIENT),
 ) {
   const report = (outcome: Payload["outcome"]): void => {
     // Telemetry must never affect the MCP tool result.
-    void send({ outcome }).catch(() => {});
+    void send({ outcome, client }).catch(() => {});
   };
 
   return {

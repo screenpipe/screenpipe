@@ -128,14 +128,29 @@ impl DatabaseManager {
         // write_queue's runtime recovery (see ensure_db_parent_dir).
         crate::write_queue::ensure_db_parent_dir(database_path, true);
 
-        // A hard fault is process-lifetime for a physical path. Rebuilding a
-        // DatabaseManager in-process must not reopen the same potentially
-        // damaged DB/WAL/SHM generation.
+        // Arm a preallocated fail-closed marker before SQLite touches the
+        // database. If the filesystem later reports SQLITE_FULL, the hard-fault
+        // path can durably quarantine this generation with a metadata-only
+        // rename even when allocating a new marker would fail.
+        let database_file = Path::new(database_path);
+        screenpipe_sqlite_coordinator::prepare_sqlite_quarantine_reserve(database_file).map_err(
+            |error| {
+                SqlxError::Protocol(format!(
+                    "failed to arm durable SQLite quarantine for {}: {error}",
+                    database_file.display()
+                ))
+            },
+        )?;
+
+        // A hard fault is durable for a physical path. Rebuilding a manager or
+        // relaunching the app must not reopen the same potentially damaged
+        // DB/WAL/SHM generation. A malformed marker also maps to the fail-closed
+        // IOERR class in the coordinator.
         if let Some(code) =
             screenpipe_sqlite_coordinator::registered_sqlite_hard_fault(database_path)
         {
             return Err(SqlxError::Protocol(format!(
-                "SQLite database remains quarantined for this process after hard fault (code: {code})"
+                "SQLite database remains durably quarantined after a hard fault (code: {code}); run `screenpipe db recover` while the app is closed"
             )));
         }
 
@@ -143,7 +158,6 @@ impl DatabaseManager {
         // checkpointing, migrations, or capture can mutate an existing file.
         // This catches the observed wrong-page/code-26 failure in 100 bytes;
         // it never scans a multi-gigabyte recording database at startup.
-        let database_file = Path::new(database_path);
         if database_file.is_file() {
             if let Err(error) = preflight_existing_database_header(database_file) {
                 if let Some(code) = crate::sqlite_error::sqlite_hard_fault_code(&error) {
@@ -161,6 +175,14 @@ impl DatabaseManager {
             sqlx::Sqlite::create_database(&connection_string)
                 .await
                 .map_err(|error| quarantine_startup_error(database_file, error))?;
+            // The pre-open reserve had no file identity because this was a new
+            // path. Refresh it now that SQLite created the physical generation.
+            screenpipe_sqlite_coordinator::prepare_sqlite_quarantine_reserve(database_file)
+                .map_err(|error| {
+                    SqlxError::Protocol(format!(
+                        "failed to identify fresh SQLite generation for durable quarantine: {error}"
+                    ))
+                })?;
         }
 
         // This process-wide coordinator is also used by the standalone
@@ -908,9 +930,12 @@ mod shutdown_tests {
             }
             Err(error) => error,
         };
-        assert!(replacement_error
-            .to_string()
-            .contains("remains quarantined"));
+        assert!(
+            replacement_error
+                .to_string()
+                .contains("remains durably quarantined"),
+            "unexpected replacement error: {replacement_error}"
+        );
     }
 
     #[tokio::test]
@@ -957,9 +982,12 @@ mod shutdown_tests {
             }
             Err(error) => error,
         };
-        assert!(replacement_error
-            .to_string()
-            .contains("remains quarantined"));
+        assert!(
+            replacement_error
+                .to_string()
+                .contains("remains durably quarantined"),
+            "unexpected replacement error: {replacement_error}"
+        );
     }
 
     #[tokio::test]

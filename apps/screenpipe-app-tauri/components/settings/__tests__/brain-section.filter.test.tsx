@@ -133,6 +133,10 @@ vi.mock("@/components/settings/compact-markdown", () => ({
   ),
 }));
 
+vi.mock("@/components/settings/brain-overview", () => ({
+  BrainOverview: () => <div data-testid="brain-overview-stub" />,
+}));
+
 vi.mock("@/components/ui/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
@@ -200,24 +204,58 @@ const openDetailMenu = () =>
     pointerType: "mouse",
   });
 
+const openBrainViewMenu = () =>
+  fireEvent.pointerDown(screen.getByTestId("brain-view-switcher"), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
+
+const selectBrainView = (view: "overview" | "memories" | "artifacts") => {
+  openBrainViewMenu();
+  fireEvent.click(screen.getByTestId(`brain-filter-${view}`));
+};
+
 describe("BrainSection type filter", () => {
   it("loads all tab totals before the user opens each tab", async () => {
     render(<BrainSection />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("brain-filter-overview")).toHaveTextContent("Live Views3");
-      expect(screen.getByTestId("brain-filter-memories")).toHaveTextContent("Memories8");
-      expect(screen.getByTestId("brain-filter-artifacts")).toHaveTextContent("Artifacts5");
+      expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Memories8");
     });
+
+    openBrainViewMenu();
+    expect(screen.getByTestId("brain-filter-overview")).toHaveTextContent("Live Views3");
+    expect(screen.getByTestId("brain-filter-memories")).toHaveTextContent("Memories8");
+    expect(screen.getByTestId("brain-filter-artifacts")).toHaveTextContent("Artifacts5");
   });
 
   it("shows memories by default", async () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
     expect(artifactRows().length).toBe(0);
+    expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Memories8");
     expect(analyticsMocks.capture).toHaveBeenCalledWith("brain_viewed", {
       tab: "memories",
     });
+  });
+
+  it("keeps the same dropdown switcher in every Brain view", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    selectBrainView("artifacts");
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+    expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Artifacts5");
+
+    selectBrainView("overview");
+    await waitFor(() =>
+      expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Live Views3"),
+    );
+
+    selectBrainView("memories");
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+    expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Memories8");
   });
 
   it("keeps the stale warning specific to memories", async () => {
@@ -246,7 +284,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBeGreaterThan(0));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
 
     await waitFor(() => expect(artifactRows().length).toBe(5));
     expect(memoryRows().length).toBe(0);
@@ -258,10 +296,10 @@ describe("BrainSection type filter", () => {
 
   it("memories tab switches back from artifacts", async () => {
     render(<BrainSection />);
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-memories")[0]);
+    selectBrainView("memories");
 
     await waitFor(() => expect(memoryRows().length).toBe(8));
     expect(artifactRows().length).toBe(0);
@@ -312,7 +350,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     fireEvent.change(screen.getByTestId("brain-search-input"), {
       target: { value: "source:glob-pipe content:artifact" },
     });
@@ -328,7 +366,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     fireEvent.change(screen.getByTestId("brain-search-input"), {
       target: { value: "yoo" },
     });
@@ -346,7 +384,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
 
     await waitFor(() => {
       expect(screen.getByTestId("brain-artifacts-error")).toBeTruthy();
@@ -395,7 +433,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
@@ -422,7 +460,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
@@ -450,7 +488,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
@@ -467,7 +505,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
     const variants = () => artifactRows().map((row) => row.dataset.variant);
@@ -491,7 +529,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
@@ -517,7 +555,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
     const first = artifactTitleAt(0);
@@ -555,7 +593,7 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
 
     const first = artifactTitleAt(0);
@@ -573,7 +611,7 @@ describe("BrainSection type filter", () => {
     const firstRender = render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
 
-    fireEvent.click(screen.getAllByTestId("brain-filter-artifacts")[0]);
+    selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
     expect(memoryRows().length).toBe(0);
 

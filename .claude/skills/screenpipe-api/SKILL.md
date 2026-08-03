@@ -12,8 +12,14 @@ Local REST API at `http://localhost:3030`. Full reference (60+ endpoints): https
 **ALL requests require authentication.** Add the auth header to every curl call:
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/..."
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/..."
 ```
+
+The fixed `X-Screenpipe-Client: api` value attributes a successful, nonempty
+external retrieval to the API surface. Never put an agent name, customer name,
+project, prompt, or other dynamic value in this header.
 
 The `$SCREENPIPE_LOCAL_API_KEY` env var is already set in your environment. Without it you get 403. The only exception is `/health` (no auth needed).
 
@@ -28,7 +34,9 @@ For the list endpoints (`/search`, `/elements`, `/frames/{id}/elements`) you can
 ## 1. Search — `GET /search`
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
 ```
 
 ### Parameters
@@ -121,7 +129,9 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
 ## 2. Activity Summary — `GET /activity-summary`
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/activity-summary?start_time=1h%20ago&end_time=now"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/activity-summary?start_time=1h%20ago&end_time=now"
 ```
 
 Returns a rich overview with:

@@ -219,6 +219,8 @@ export interface Env {
 	 * the new cap only on spend incurred after that snapshot.
 	 */
 	PRIVATE_COST_CAP_EPOCH?: string;
+	/** One-time incident reset for the otherwise lifetime/non-resetting trial allowance. */
+	PRIVATE_TRIAL_COST_CAP_EPOCH?: string;
 	PRIVATE_COST_RESERVATION_TTL_SECONDS?: string;
 	PRIVATE_CAPACITY_ACTIVITY_SECONDS?: string;
 	PRIVATE_MAX_ACTIVE_INTERACTIVE_RESERVATIONS?: string;

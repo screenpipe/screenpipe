@@ -5,7 +5,7 @@
 //! JSONL record schema for enterprise telemetry batches.
 //!
 //! One record per line, tagged by `kind` so mixed streams stay trivially
-//! parseable: `kind: "frame" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
+//! parseable: `kind: "frame" | "parsed" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
 //! Every record carries the originating `device_id` + `device_label` at the
 //! top level (flattened next to the kind-specific row fields).
 //!
@@ -30,6 +30,33 @@ pub struct FrameRow {
     /// Merged accessibility + OCR text (from `frames.full_text`). Already
     /// PII-sanitized on the device if PII removal is enabled.
     pub text: Option<String>,
+}
+
+/// One app-specific semantic projection produced from a captured frame.
+/// This remains a distinct, admin-gated stream: enabling screen text does
+/// not implicitly upload structured messages, documents, tasks, or actors.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ParsedRow {
+    pub frame_id: i64,
+    pub timestamp: String,
+    pub app_name: String,
+    pub window_name: String,
+    pub browser_url: Option<String>,
+    pub text: String,
+    pub run_id: i64,
+    pub parser_id: String,
+    pub parser_version: String,
+    pub schema_version: u16,
+    pub app_platform: String,
+    pub app_id: Option<String>,
+    pub app_executable: Option<String>,
+    pub app_version: Option<String>,
+    pub parse_duration_us: u64,
+    pub text_bytes: usize,
+    /// Kept as JSON values so the telemetry wire does not couple every
+    /// enterprise client to the parser crate's internal Rust types.
+    pub items: Vec<serde_json::Value>,
+    pub actors: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -127,7 +154,7 @@ pub struct FeedbackRow {
 }
 
 /// One JSONL line. Tagged enum keeps mixed streams trivially parseable —
-/// `kind: "frame" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
+/// `kind: "frame" | "parsed" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TelemetryRecord {
@@ -136,6 +163,12 @@ pub enum TelemetryRecord {
         device_label: String,
         #[serde(flatten)]
         frame: FrameRow,
+    },
+    Parsed {
+        device_id: String,
+        device_label: String,
+        #[serde(flatten)]
+        parsed: ParsedRow,
     },
     Audio {
         device_id: String,
@@ -173,6 +206,7 @@ impl TelemetryRecord {
     pub fn device_id(&self) -> &str {
         match self {
             Self::Frame { device_id, .. }
+            | Self::Parsed { device_id, .. }
             | Self::Audio { device_id, .. }
             | Self::Ui { device_id, .. }
             | Self::Snapshot { device_id, .. }
@@ -184,6 +218,7 @@ impl TelemetryRecord {
     pub fn device_label(&self) -> &str {
         match self {
             Self::Frame { device_label, .. }
+            | Self::Parsed { device_label, .. }
             | Self::Audio { device_label, .. }
             | Self::Ui { device_label, .. }
             | Self::Snapshot { device_label, .. }
@@ -197,6 +232,7 @@ impl TelemetryRecord {
     pub fn timestamp(&self) -> &str {
         match self {
             Self::Frame { frame, .. } => &frame.timestamp,
+            Self::Parsed { parsed, .. } => &parsed.timestamp,
             Self::Audio { audio, .. } => &audio.timestamp,
             Self::Ui { ui, .. } => &ui.timestamp,
             Self::Snapshot { snapshot, .. } => &snapshot.timestamp,
@@ -209,6 +245,7 @@ impl TelemetryRecord {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Frame { .. } => "frame",
+            Self::Parsed { .. } => "parsed",
             Self::Audio { .. } => "audio",
             Self::Ui { .. } => "ui",
             Self::Snapshot { .. } => "snapshot",
@@ -257,8 +294,33 @@ pub fn build_jsonl(
     snapshots: &[SnapshotRow],
     memories: &[MemoryRow],
 ) -> Vec<u8> {
+    build_jsonl_with_parsed(
+        device_id,
+        device_label,
+        frames,
+        &[],
+        audio,
+        ui,
+        snapshots,
+        memories,
+    )
+}
+
+/// Serialize a batch including the separately gated parsed-app stream.
+/// The original [`build_jsonl`] stays source-compatible for older callers.
+pub fn build_jsonl_with_parsed(
+    device_id: &str,
+    device_label: &str,
+    frames: &[FrameRow],
+    parsed: &[ParsedRow],
+    audio: &[AudioRow],
+    ui: &[UiEventRow],
+    snapshots: &[SnapshotRow],
+    memories: &[MemoryRow],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(
-        (frames.len() + audio.len() + ui.len() + memories.len()) * 256 + snapshots.len() * 50_000,
+        (frames.len() + parsed.len() + audio.len() + ui.len() + memories.len()) * 256
+            + snapshots.len() * 50_000,
     );
     let mut push = |record: &TelemetryRecord, id: i64| match serde_json::to_vec(record) {
         Ok(line) => {
@@ -282,6 +344,16 @@ pub fn build_jsonl(
                 frame: f.clone(),
             },
             f.frame_id,
+        );
+    }
+    for p in parsed {
+        push(
+            &TelemetryRecord::Parsed {
+                device_id: device_id.to_string(),
+                device_label: device_label.to_string(),
+                parsed: p.clone(),
+            },
+            p.frame_id,
         );
     }
     for a in audio {
@@ -432,6 +504,53 @@ mod tests {
             line.get("frame").is_none(),
             "row must be flattened, not nested"
         );
+    }
+
+    #[test]
+    fn parsed_stream_round_trips_without_becoming_frame_text() {
+        let parsed = ParsedRow {
+            frame_id: 42,
+            timestamp: "2026-07-29T10:00:00Z".to_string(),
+            app_name: "Slack".to_string(),
+            window_name: "Acme".to_string(),
+            browser_url: None,
+            text: "Ada Lovelace: ship Acme".to_string(),
+            run_id: 9,
+            parser_id: "slack.messages".to_string(),
+            parser_version: "1.0.0".to_string(),
+            schema_version: 1,
+            app_platform: "macos".to_string(),
+            app_id: Some("com.tinyspeck.slackmacgap".to_string()),
+            app_executable: None,
+            app_version: None,
+            parse_duration_us: 400,
+            text_bytes: 24,
+            items: vec![serde_json::json!({"kind": "message", "body": "ship Acme"})],
+            actors: vec![serde_json::json!({"name": "Ada Lovelace"})],
+        };
+        let body = build_jsonl_with_parsed(
+            "dev-a",
+            "alice-mbp",
+            &[],
+            &[parsed.clone()],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        let batch = parse_jsonl(&body);
+        assert_eq!(batch.skipped_lines, 0);
+        match &batch.records[0] {
+            TelemetryRecord::Parsed {
+                device_id,
+                parsed: decoded,
+                ..
+            } => {
+                assert_eq!(device_id, "dev-a");
+                assert_eq!(decoded, &parsed);
+            }
+            other => panic!("expected parsed record, got {}", other.kind()),
+        }
     }
 
     #[test]

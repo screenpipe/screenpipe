@@ -6,6 +6,12 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { NotificationFeedback } from "./notification-feedback";
 
+const capture = vi.hoisted(() => vi.fn());
+
+vi.mock("posthog-js", () => ({
+  default: { capture },
+}));
+
 const notification = {
   id: "notification-1",
   type: "pipe",
@@ -18,6 +24,7 @@ const notification = {
 
 describe("NotificationFeedback", () => {
   it("expands a small correction input and saves down feedback on send", async () => {
+    capture.mockClear();
     const submitFeedback = vi.fn().mockResolvedValue(undefined);
     render(
       <NotificationFeedback
@@ -39,9 +46,21 @@ describe("NotificationFeedback", () => {
       );
     });
     expect(await screen.findByText("saved for the next run")).toBeInTheDocument();
+    expect(capture).toHaveBeenCalledWith(
+      "notification_feedback_submitted",
+      expect.objectContaining({
+        feedback_rating: "down",
+        notification_category: "pipe",
+      }),
+    );
+    const analyticsPayload = capture.mock.calls[0][1];
+    expect(analyticsPayload).not.toHaveProperty("notification_id");
+    expect(analyticsPayload).not.toHaveProperty("pipe_name");
+    expect(analyticsPayload).not.toHaveProperty("comment");
   });
 
   it("saves up feedback immediately without asking for text", async () => {
+    capture.mockClear();
     const submitFeedback = vi.fn().mockResolvedValue(undefined);
     render(
       <NotificationFeedback
@@ -56,6 +75,18 @@ describe("NotificationFeedback", () => {
       expect(submitFeedback).toHaveBeenCalledWith(notification, "up", undefined);
     });
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(capture).toHaveBeenCalledWith(
+      "notification_feedback_submitted",
+      expect.objectContaining({ feedback_rating: "up" }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      "qualified_value_event",
+      expect.objectContaining({
+        action: "artifact",
+        surface: "pipe",
+        value_strength: "accepted",
+      }),
+    );
   });
 
   it("does not rate non-AI system notifications", () => {

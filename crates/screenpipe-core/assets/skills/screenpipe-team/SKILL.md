@@ -1,6 +1,6 @@
 ---
 name: screenpipe-team
-description: Query the org's screenpipe telemetry as an enterprise admin — devices, members, recent activity, and substring search across the team's screen recordings and audio transcripts. Use when the user asks about their team, a teammate's activity, what their organization worked on, app usage across the org, or anything that requires seeing data beyond the user's own machine. The skill is only installed for enterprise admins; ordinary users won't see it.
+description: Query the org's screenpipe telemetry as an enterprise admin — devices, members, recent activity, and substring search across the team's screen recordings, structured app data, and audio transcripts. Use when the user asks about their team, a teammate's activity, what their organization worked on, app usage across the org, or anything that requires seeing data beyond the user's own machine. The skill is only installed for enterprise admins; ordinary users won't see it.
 ---
 
 # Screenpipe Team
@@ -104,7 +104,7 @@ jq '.records[] | {t, app, window, text: (.text // "")[0:120]}' /tmp/sp_team_reco
 | Name | Description |
 |------|-------------|
 | `device_id` | Required-ish. Without it you get the whole org — usually noisy. |
-| `kind` | `frame` (screen) / `audio` / `all`. Default `all`. |
+| `kind` | `frame` (screen) / `parsed` (structured app data) / `audio` / `all`. Default `all`. |
 | `since_hours_ago` / `since` / `until` | Time window. |
 | `limit` | Default 50, max 200. |
 
