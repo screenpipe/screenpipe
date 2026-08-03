@@ -49,27 +49,79 @@ fn run_chat_show_on_main_thread<F: FnOnce() + Send + 'static>(
     })
 }
 
+/// NSNonactivatingPanelMask. Set, the panel floats and clicking it never
+/// activates the application; cleared, it behaves like an ordinary window.
+#[cfg(target_os = "macos")]
+const NON_ACTIVATING_PANEL_MASK: i32 = 128;
+
+/// Window level for the chat panel: 1001 floats above other applications, 0 is
+/// an ordinary window anything can cover.
+#[cfg(target_os = "macos")]
+fn chat_panel_level(on_top: bool) -> i32 {
+    if on_top {
+        1001
+    } else {
+        0
+    }
+}
+
+/// Style mask for the chat panel, preserving every bit except the
+/// non-activating one.
+///
+/// That bit must be *cleared* when the setting is off. Left set, the panel keeps
+/// floating whatever level it is given — the setting becomes a no-op and an open
+/// chat window can never be un-pinned.
+#[cfg(target_os = "macos")]
+fn chat_panel_style_mask(current: i32, on_top: bool) -> i32 {
+    if on_top {
+        current | NON_ACTIVATING_PANEL_MASK
+    } else {
+        current & !NON_ACTIVATING_PANEL_MASK
+    }
+}
+
+/// How long to leave `MoveToActiveSpace` in place before pinning the chat panel
+/// to the Space it landed on. Matches the main-overlay blur debounce.
+#[cfg(target_os = "macos")]
+const CHAT_SPACE_MOVE_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Bumped on every chat show. A deferred Space pin captures the value first and
+/// bails when it no longer matches, so a show that happens while the timer
+/// sleeps is not undone by the previous show's timer firing late.
+#[cfg(target_os = "macos")]
+static CHAT_SHOW_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(target_os = "macos")]
+fn next_chat_show_generation() -> u64 {
+    CHAT_SHOW_GENERATION
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        .saturating_add(1)
+}
+
+#[cfg(target_os = "macos")]
+fn current_chat_show_generation() -> u64 {
+    CHAT_SHOW_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Apply the chat window's always-on-top panel behaviour. Single source of
 /// truth shared by the show path and the live settings toggle
-/// (`commands::set_chat_always_on_top`). The panel remains non-activating in
-/// both modes; the setting only controls whether it sits above other apps.
+/// (`commands::set_chat_always_on_top`). When on-top, the panel sits at level
+/// 1001 with the NonActivatingPanel style bit (128) so clicking it doesn't
+/// steal focus from the frontmost app; when off, it drops to normal window
+/// level and the bit is cleared so other windows can cover it.
 ///
 /// Must run on the main thread (wrap callers in `run_on_main_thread_safe`).
 #[cfg(target_os = "macos")]
 pub fn apply_chat_panel_on_top(panel: &tauri_nspanel::raw_nspanel::RawNSPanel, on_top: bool) {
     use objc::{msg_send, sel, sel_impl};
-    if on_top {
-        panel.set_level(1001);
-    } else {
-        // Normal window level — allow it to go behind other windows
-        panel.set_level(0);
-    }
-    // Chat is always an overlay: it may become key for typing without making
-    // the entire screenpipe app active or switching Spaces.
     unsafe {
         let current: i32 = msg_send![panel, styleMask];
-        panel.set_style_mask(current | 128);
-        let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: true];
+        panel.set_level(chat_panel_level(on_top));
+        panel.set_style_mask(chat_panel_style_mask(current, on_top));
+        // Only a floating panel takes key without activating the app. An
+        // ordinary window must reset this, or an on→off toggle leaves it stuck.
+        let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: on_top];
     }
 }
 
@@ -739,17 +791,58 @@ impl ShowRewindWindow {
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                             );
-                            use tauri_nspanel::cocoa::base::nil;
-                            let _: () = unsafe { msg_send![&*panel, orderFront: nil] };
+                            // orderFrontRegardless, not orderFront: — the latter only
+                            // raises the panel within screenpipe's own window layer.
+                            // With chat_always_on_top off the panel sits at level 0,
+                            // so on a normal Space it lands behind whichever app is
+                            // active and never becomes visible. (A fullscreen Space
+                            // hides the bug: FullScreenAuxiliary puts the panel above
+                            // the fullscreen content whatever its level.) Ordering
+                            // front regardless does not activate the application.
+                            panel.order_front_regardless();
                             panel.make_key_window();
                             // Set WKWebView as first responder AFTER make_key_window
                             unsafe {
                                 make_webview_first_responder(&panel);
                             }
-                            // Remove MoveToActiveSpace now that the panel is shown.
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-                            );
+                            // Pin the panel to this Space — but only once the
+                            // move has actually landed.
+                            //
+                            // The migration AppKit starts on orderFront is
+                            // asynchronous. Clearing MoveToActiveSpace in the
+                            // same run-loop turn cancels it, so the panel stays
+                            // on whichever Space it was last shown on — chat only
+                            // ever opening on the first Space, whichever Space the
+                            // shortcut was pressed from. Defer the reset so the
+                            // move completes first, then pin.
+                            //
+                            // Carry a generation token, as the shortcut-sync
+                            // register/unregister pair does: a show that happens
+                            // while this timer sleeps starts its own move, and an
+                            // older timer firing late would clear MoveToActiveSpace
+                            // out from under it and strand the panel again.
+                            let generation = next_chat_show_generation();
+                            let pin_app = app_clone.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(CHAT_SPACE_MOVE_SETTLE);
+                                if current_chat_show_generation() != generation {
+                                    return;
+                                }
+                                let pin_app_main = pin_app.clone();
+                                let _ = pin_app.run_on_main_thread(move || {
+                                    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                                    if current_chat_show_generation() != generation {
+                                        return;
+                                    }
+                                    if let Ok(panel) = pin_app_main
+                                        .get_webview_panel(RewindWindowId::Chat.label())
+                                    {
+                                        panel.set_collection_behaviour(
+                                            NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                                        );
+                                    }
+                                });
+                            });
                         } else {
                             finish_chat_focus_session(false);
                             error!("Chat panel disappeared before it could be shown");
@@ -2106,5 +2199,73 @@ mod tests {
         ));
         assert!(!allowed_while_hidden_ui(&RewindWindowId::Home, false));
         assert!(!allowed_while_hidden_ui(&RewindWindowId::Main, false));
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod chat_panel_tests {
+    use super::{chat_panel_level, chat_panel_style_mask, NON_ACTIVATING_PANEL_MASK};
+
+    /// Titled | Closable | Miniaturizable | Resizable | NonActivatingPanel |
+    /// FullSizeContentView — what the live chat panel actually reports.
+    const ON_TOP_MASK: i32 = 1 | 2 | 4 | 8 | 128 | 32768;
+    const NORMAL_MASK: i32 = ON_TOP_MASK & !128;
+
+    #[test]
+    fn on_top_floats_above_other_applications() {
+        assert_eq!(chat_panel_level(true), 1001);
+    }
+
+    #[test]
+    fn off_drops_to_ordinary_window_level() {
+        assert_eq!(chat_panel_level(false), 0);
+    }
+
+    #[test]
+    fn off_clears_the_non_activating_bit_so_other_windows_can_cover_chat() {
+        // The regression guard: leaving this bit set keeps the panel floating
+        // whatever its level, which silently turns the setting into a no-op.
+        let mask = chat_panel_style_mask(ON_TOP_MASK, false);
+        assert_eq!(mask & NON_ACTIVATING_PANEL_MASK, 0);
+        assert_eq!(mask, NORMAL_MASK);
+    }
+
+    #[test]
+    fn on_top_sets_the_non_activating_bit() {
+        let mask = chat_panel_style_mask(NORMAL_MASK, true);
+        assert_eq!(mask & NON_ACTIVATING_PANEL_MASK, NON_ACTIVATING_PANEL_MASK);
+        assert_eq!(mask, ON_TOP_MASK);
+    }
+
+    #[test]
+    fn every_other_style_bit_survives_a_toggle_in_both_directions() {
+        let others = ON_TOP_MASK & !NON_ACTIVATING_PANEL_MASK;
+        assert_eq!(chat_panel_style_mask(ON_TOP_MASK, false) & others, others);
+        assert_eq!(chat_panel_style_mask(NORMAL_MASK, true) & others, others);
+    }
+
+    #[test]
+    fn a_later_show_supersedes_an_older_deferred_pin() {
+        use super::{current_chat_show_generation, next_chat_show_generation};
+
+        // A show captures its token, then a second show happens while the first
+        // timer is still sleeping. The first must recognise it is stale — pinning
+        // anyway would clear MoveToActiveSpace out from under the second move.
+        let first = next_chat_show_generation();
+        let second = next_chat_show_generation();
+
+        assert_ne!(first, second);
+        assert_ne!(current_chat_show_generation(), first);
+        assert_eq!(current_chat_show_generation(), second);
+    }
+
+    #[test]
+    fn applying_the_same_setting_twice_is_idempotent() {
+        // The live toggle re-applies on every flip; a second call must not drift.
+        let once = chat_panel_style_mask(ON_TOP_MASK, false);
+        assert_eq!(chat_panel_style_mask(once, false), once);
+
+        let once = chat_panel_style_mask(NORMAL_MASK, true);
+        assert_eq!(chat_panel_style_mask(once, true), once);
     }
 }
