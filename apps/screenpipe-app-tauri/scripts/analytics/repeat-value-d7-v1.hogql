@@ -1,0 +1,103 @@
+-- screenpipe Repeat Value by D7 v1
+-- Canonical forward-only query. Do not replace the event with a changing
+-- allowlist. The 180-day first-observed lookback is part of this contract.
+
+WITH contract AS (
+  SELECT
+    addDays(
+      toStartOfWeek(toDate(toTimeZone(min(timestamp), 'America/Los_Angeles')), 1),
+      7
+    ) AS first_full_week,
+    count() AS contract_events
+  FROM events
+  WHERE event = 'qualified_value_event'
+    AND toString(properties.metric_version) = 'repeat_value_d7_v1'
+),
+first_starts AS (
+  SELECT person_id, min(timestamp) AS started_at
+  FROM events
+  WHERE event = 'app_started'
+    AND timestamp >= addDays(now(), -180)
+    AND person.properties.email IS NOT NULL
+    AND person.properties.email != ''
+    AND person.properties.email NOT LIKE '%@screenpipe.test'
+    AND person.properties.email NOT LIKE '%@screenpipe.com'
+    AND person.properties.email NOT LIKE '%@screenpi.pe'
+  GROUP BY person_id
+),
+eligible_cohorts AS (
+  SELECT
+    person_id,
+    started_at,
+    toStartOfWeek(
+      toDate(toTimeZone(started_at, 'America/Los_Angeles')),
+      1
+    ) AS cohort_week
+  FROM first_starts
+  CROSS JOIN contract
+  WHERE contract.contract_events > 0
+    AND toStartOfWeek(
+      toDate(toTimeZone(started_at, 'America/Los_Angeles')),
+      1
+    ) >= contract.first_full_week
+    AND toStartOfWeek(
+      toDate(toTimeZone(started_at, 'America/Los_Angeles')),
+      1
+    ) < addDays(
+      toStartOfWeek(toDate(toTimeZone(now(), 'America/Los_Angeles')), 1),
+      -7
+    )
+),
+latest_weeks AS (
+  SELECT cohort_week
+  FROM eligible_cohorts
+  GROUP BY cohort_week
+  ORDER BY cohort_week DESC
+  LIMIT 2
+),
+cohorts AS (
+  SELECT *
+  FROM eligible_cohorts
+  WHERE cohort_week IN (SELECT cohort_week FROM latest_weeks)
+),
+value_buckets AS (
+  SELECT
+    e.person_id AS person_id,
+    c.cohort_week AS cohort_week,
+    intDiv(dateDiff('second', c.started_at, e.timestamp), 86400) AS value_period
+  FROM (
+    SELECT person_id, timestamp
+    FROM events
+    WHERE event = 'qualified_value_event'
+      AND toString(properties.metric_version) = 'repeat_value_d7_v1'
+      AND JSONExtractBool(properties, 'user_initiated') = true
+      AND JSONExtractBool(properties, 'success') = true
+      AND JSONExtractBool(properties, 'result_non_empty') = true
+      AND toString(properties.value_strength) IN (
+        'retrieved', 'consumed', 'accepted', 'completed'
+      )
+  ) e
+  INNER JOIN cohorts c ON e.person_id = c.person_id
+  WHERE e.timestamp >= c.started_at
+    AND e.timestamp < addDays(c.started_at, 7)
+  GROUP BY e.person_id, c.cohort_week, value_period
+),
+value_counts AS (
+  SELECT person_id, cohort_week, uniqExact(value_period) AS value_periods
+  FROM value_buckets
+  GROUP BY person_id, cohort_week
+)
+SELECT
+  c.cohort_week,
+  uniqExact(c.person_id) AS eligible_users,
+  uniqExactIf(c.person_id, coalesce(v.value_periods, 0) >= 1) AS first_value_users,
+  round(100.0 * first_value_users / nullIf(eligible_users, 0), 1)
+    AS first_value_d7_pct,
+  uniqExactIf(c.person_id, coalesce(v.value_periods, 0) >= 2) AS repeat_value_users,
+  round(100.0 * repeat_value_users / nullIf(eligible_users, 0), 1)
+    AS repeat_value_d7_pct
+FROM cohorts c
+LEFT JOIN value_counts v
+  ON c.person_id = v.person_id AND c.cohort_week = v.cohort_week
+GROUP BY c.cohort_week
+ORDER BY c.cohort_week

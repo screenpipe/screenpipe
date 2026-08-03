@@ -21,7 +21,10 @@ import {
   executeNotificationAction,
   type NotificationAction,
 } from "@/lib/notifications/actions";
-import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
+import {
+  notificationActionAnalyticsProperties,
+  notificationAnalyticsProperties,
+} from "@/lib/notification-analytics";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { NotificationActionButton } from "@/components/notification-action-button";
 import { NotificationFeedback } from "@/components/notification-feedback";
@@ -107,8 +110,6 @@ export default function NotificationPanelPage() {
         intervalRef.current = null;
       }
       posthog.capture("notification_dismissed", {
-        type: payload?.type,
-        id: payload?.id,
         auto: reason === "auto",
         dismiss_reason: reason,
         ...notificationAnalyticsProperties(payload, "toast"),
@@ -132,11 +133,9 @@ export default function NotificationPanelPage() {
       const actionObj = typeof actionOrObj === "object" ? actionOrObj : null;
 
       posthog.capture("notification_action", {
-        type: payload?.type,
-        id: payload?.id,
-        action: actionStr,
-        actionType: actionObj?.type,
-        action_type: actionObj?.type,
+        ...notificationActionAnalyticsProperties(
+          actionObj?.type ?? actionStr,
+        ),
         ...notificationAnalyticsProperties(payload, "toast"),
       });
 
@@ -155,8 +154,6 @@ export default function NotificationPanelPage() {
               setCopied(true);
               copyResetRef.current = setTimeout(() => setCopied(false), 1400);
               posthog.capture("notification_copied", {
-                type: payload?.type,
-                id: payload?.id,
                 source: "action",
                 ...notificationAnalyticsProperties(payload, "toast"),
               });
@@ -248,13 +245,10 @@ export default function NotificationPanelPage() {
           e,
         );
         posthog.capture("notification_action_error", {
-          type: payload?.type,
-          id: payload?.id,
-          action: actionStr,
-          actionType: actionObj?.type,
-          action_type: actionObj?.type,
+          ...notificationActionAnalyticsProperties(
+            actionObj?.type ?? actionStr,
+          ),
           ...notificationAnalyticsProperties(payload, "toast"),
-          error: String(e),
         });
       }
 
@@ -300,8 +294,6 @@ export default function NotificationPanelPage() {
       setCopied(true);
       copyResetRef.current = setTimeout(() => setCopied(false), 1400);
       posthog.capture("notification_copied", {
-        type: payload.type,
-        id: payload.id,
         ...notificationAnalyticsProperties(payload, "toast"),
       });
       if (payload.pipe_name) {
@@ -331,8 +323,6 @@ export default function NotificationPanelPage() {
         setRestartError(null);
 
         posthog.capture("notification_shown", {
-          type: data.type,
-          id: data.id,
           ...notificationAnalyticsProperties(data, "toast"),
         });
 
