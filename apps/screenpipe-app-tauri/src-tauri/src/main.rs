@@ -512,9 +512,9 @@ async fn main() {
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
     let store_json = std::fs::read(&store_path).ok().and_then(|data| {
         if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
-            // Encrypted store — try to decrypt with keychain key
-            // Only attempt if encryption is enabled (file being encrypted is the signal)
-            let key = match secrets::get_key_if_encryption_enabled() {
+            // The encrypted file is authoritative: every reader asks the OS
+            // vault for its existing key instead of relying on a separate flag.
+            let key = match secrets::get_key() {
                 secrets::KeyResult::Found(k) => k,
                 _ => return None,
             };
@@ -1298,8 +1298,8 @@ async fn main() {
             // hit a split: the engine (server_core) reads its SecretStore from
             // `config.data_dir` (the custom path) while OAuth token writes
             // (`open_secret_store`, chatgpt_oauth, …) went to the default
-            // `~/.screenpipe`. Tokens landed in one db.sqlite and were read from
-            // another → "no credentials found … cannot authenticate" 401s on
+            // `~/.screenpipe`. Tokens landed in one data directory and were read
+            // from another → "no credentials found … cannot authenticate" 401s on
             // every Microsoft 365 / Google / ChatGPT call, reconnecting forever
             // never helping. Setting the env var here (before any OAuth callback
             // can fire) makes `default_screenpipe_data_dir()` self-consistent and
@@ -1523,6 +1523,20 @@ async fn main() {
 
             let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
             let from_autostart = launched_from_autostart();
+
+            // The old connection slide blocked onboarding on work that can be
+            // done safely and idempotently by Rust. During first-run setup,
+            // wire detected local AI tools in the background; after onboarding
+            // completes this no longer runs, so an explicit Settings removal
+            // remains removed on future launches.
+            if !onboarding_store.is_completed && !app_ui_hidden {
+                let local_api = recording::local_api_context_from_app(&app.handle());
+                skills::connect_detected_ai_tools_in_background(
+                    store.recording.api_auth,
+                    local_api.port,
+                );
+            }
+
             // Enterprise hidden-UI deployments always run headless with the
             // recorder only, regardless of user settings or onboarding state.
             let headless_startup = app_ui_hidden
@@ -1681,10 +1695,28 @@ async fn main() {
             //     let _ = app_handle.emit("vault-locked-on-startup", ());
             // }
 
+            let launch_db_path = data_dir.join("db.sqlite");
+            let launch_db_quarantined = screenpipe_db::sqlite_quarantine_exists(&launch_db_path);
+            if launch_db_quarantined {
+                // Preserve the cross-launch fail-closed boundary before any
+                // server, SQLite pool, watchdog, or capture thread is started.
+                crate::health::set_boot_error(
+                    "database remains quarantined after a SQLite hard fault; run `screenpipe db recover` while screenpipe is closed",
+                );
+                crate::health::set_recording_status(crate::health::RecordingStatus::Error);
+            }
+
             // Start server core + capture on a dedicated thread with its own tokio runtime
             // to avoid competing with Tauri's UI runtime.
             // Two-phase startup: ServerCore (DB + HTTP + pipes) then CaptureSession (vision + audio).
             'start_server: {
+                if launch_db_quarantined {
+                    info!(
+                        database = %launch_db_path.display(),
+                        "Skipping server and capture startup: durable SQLite quarantine is active"
+                    );
+                    break 'start_server;
+                }
                 let store_clone = store.clone();
                 let data_dir_clone = data_dir.clone();
                 if !crate::recording::recording_access_allowed(&store_clone) {
@@ -2068,6 +2100,22 @@ async fn main() {
             crate::meeting_live_notes::start(app_handle.clone());
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
+            if launch_db_quarantined {
+                // A new process must preserve the same fail-closed state as the
+                // process that observed the hard fault. Start the notification
+                // subscriber first, then publish recovery-required immediately.
+                tauri::async_runtime::spawn(async {
+                    crate::db_relaunch::surface_manual_recovery(
+                        "durable SQLite quarantine was present at app launch",
+                    )
+                    .await;
+                });
+                if !app_ui_hidden && !headless_startup {
+                    crate::db_recovery_notifications::notify_quarantined_database(
+                        data_dir.clone(),
+                    );
+                }
+            }
             crate::disk_pressure_notifications::start(app_handle.clone());
 
             // Background ChatGPT OAuth token refresh — keeps access tokens

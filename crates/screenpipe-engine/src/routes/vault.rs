@@ -43,19 +43,15 @@ pub struct LockRequest {
 /// POST /vault/lock
 #[oasgen]
 pub async fn vault_lock(
-    State(state): State<Arc<AppState>>,
-    JsonResponse(body): JsonResponse<LockRequest>,
+    State(_state): State<Arc<AppState>>,
+    JsonResponse(_body): JsonResponse<LockRequest>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
-    match state.vault.lock(&body.password).await {
-        Ok(_progress_rx) => Ok(JsonResponse(json!({ "success": true }))),
-        Err(e) => {
-            let status = match &e {
-                screenpipe_vault::VaultError::WrongPassword => StatusCode::FORBIDDEN,
-                _ => StatusCode::BAD_REQUEST,
-            };
-            Err((status, JsonResponse(json!({ "error": e.to_string() }))))
-        }
-    }
+    Err((
+        StatusCode::CONFLICT,
+        JsonResponse(json!({
+            "error": "online vault locking is disabled because the running server owns live SQLite connections; stop screenpipe and run `screenpipe vault lock`"
+        })),
+    ))
 }
 
 /// POST /vault/unlock

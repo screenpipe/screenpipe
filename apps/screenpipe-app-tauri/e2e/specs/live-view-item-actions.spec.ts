@@ -236,7 +236,7 @@ async function selectDashboard(viewId: string) {
       })) as string) === viewId,
     { timeout: t(10_000) },
   );
-  await waitForTestId("brain-overview-grid", 10_000);
+  await waitForTestId("live-view-canvas", 10_000);
 }
 
 async function waitForItemState(itemId: string, expected: string) {

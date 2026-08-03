@@ -410,6 +410,12 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
         return;
     }
 
+    if crate::db_recovery_notifications::recovery_active() {
+        info!("Quit ignored while protected database recovery is active");
+        crate::db_recovery_notifications::notify_recovery_quit_blocked();
+        return;
+    }
+
     let recording_active = app
         .try_state::<RecordingState>()
         .map(|state| state.capture_intended())
@@ -549,6 +555,12 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
 
 /// Shared quit entry point for tray menu, app menu (Cmd+Q), etc.
 pub fn request_app_quit(app: AppHandle) {
+    if crate::db_recovery_notifications::recovery_active() {
+        info!("Quit ignored while protected database recovery is active");
+        crate::db_recovery_notifications::notify_recovery_quit_blocked();
+        return;
+    }
+
     QUIT_REQUESTED.store(true, Ordering::SeqCst);
 
     if QUIT_TEARDOWN_STARTED.swap(true, Ordering::SeqCst) {

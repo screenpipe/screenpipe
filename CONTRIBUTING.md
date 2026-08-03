@@ -286,6 +286,21 @@ cargo test
 
 ## other hacks
 
+### fast desktop UI loop without rebuilding rust
+
+for React/layout work, run the desktop frontend directly in a browser:
+
+```bash
+cd apps/screenpipe-app-tauri
+bun run dev:web
+```
+
+open <http://127.0.0.1:1420/home>. this uses in-memory Tauri and local-engine
+mocks. use `bun run dev:web:live` to keep the mocked Tauri shell but talk to an
+already-running local engine, or `bun run dev:tauri` for the full native app.
+the supported fixtures, API-key setup, and native-validation boundary are in
+[`apps/screenpipe-app-tauri/README.md`](apps/screenpipe-app-tauri/README.md#fast-browser-ui-development).
+
 ### running dev + prod in the same time
 
 one command i keep using to avoid having to kill my main "production" process is:

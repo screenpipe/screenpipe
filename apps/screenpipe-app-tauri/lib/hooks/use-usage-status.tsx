@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { fetchAiGateway } from "@/lib/ai-gateway-url";
 
 /**
  * Daily quota snapshot from the ai-proxy worker's /v1/usage endpoint.
@@ -37,7 +38,6 @@ export interface UsageStatus {
   upgrade_eligible?: boolean;
 }
 
-const USAGE_URL = "https://api.screenpipe.com/v1/usage";
 /** Poll interval — 30s is frequent enough that a user who sends a burst
  *  sees the chip appear promptly, rare enough not to hammer the worker. */
 const POLL_INTERVAL_MS = 30_000;
@@ -58,7 +58,7 @@ export function useUsageStatus(): UsageStatus | null {
 
     const fetchOnce = async () => {
       try {
-        const res = await fetch(USAGE_URL, {
+        const res = await fetchAiGateway("/usage", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) return;

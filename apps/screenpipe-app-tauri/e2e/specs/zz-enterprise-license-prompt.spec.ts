@@ -58,6 +58,7 @@ const ACTIVATION_POLICY_MOCK = JSON.stringify({
     orgName: 'Bungalow',
     syncStreams: {
       frames: true,
+      parsed: false,
       audio: true,
       ui_events: true,
       memories: true,
@@ -106,6 +107,7 @@ const MANAGED_POLICY_MOCK = JSON.stringify({
     orgName: 'Bungalow',
     syncStreams: {
       frames: true,
+      parsed: false,
       audio: true,
       ui_events: true,
       memories: true,

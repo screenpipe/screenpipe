@@ -4,8 +4,13 @@
   "private": true,
   "scripts": {
     "test": "bun test --timeout=10000",
+    "bindings:required": "bunx wrangler secret list | bun scripts/required-bindings.ts",
+    "db:migrate:required": "bash scripts/apply-required-migrations.sh --remote",
+    "db:migrate:required:local": "bash scripts/apply-required-migrations.sh --local",
+    "test:local-gateway": "bun test src/test/local-gateway-harness.integration.test.ts --timeout=30000",
     "deploy": "bash scripts/deploy.sh",
-    "deploy:no-sourcemaps": "wrangler deploy",
+    "deploy:upload": "SCREENPIPE_AI_GATEWAY_DEPLOY_MODE=upload bash scripts/deploy.sh",
+    "deploy:no-sourcemaps": "bun run bindings:required && bun run db:migrate:required && wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "cf-typegen": "wrangler types"

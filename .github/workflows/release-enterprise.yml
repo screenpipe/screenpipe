@@ -589,9 +589,22 @@ jobs:
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
 
-  # ─── macOS Apple Silicon ──────────────────────────────────────────────────
+  # ─── macOS (Apple Silicon + Intel) ────────────────────────────────────────
   release-enterprise-macos:
-    runs-on: macos-latest
+    name: release-enterprise-macos (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            features: metal,parakeet-mlx,enterprise-build
+            package_arch: arm64
+          - platform: macos-26
+            target: x86_64-apple-darwin
+            features: metal,redact-onnx-coreml,enterprise-build
+            package_arch: x64
+    runs-on: ${{ matrix.platform }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -606,16 +619,22 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: macos-enterprise-rust-aarch64-apple-darwin-${{ hashFiles('**/Cargo.lock') }}
+          key: macos-enterprise-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           cache-directories: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             apps/screenpipe-app-tauri/src-tauri/target
-          shared-key: "rust-cache-aarch64-apple-darwin-enterprise"
+          shared-key: "rust-cache-${{ matrix.target }}-enterprise"
           save-if: true
 
       - name: Cache Pre Build
@@ -625,9 +644,9 @@ jobs:
             apps/screenpipe-app-tauri/node_modules
             apps/screenpipe-app-tauri/src-tauri/target
             apps/screenpipe-app-tauri/.tauri
-          key: macos-enterprise-aarch64-pre-build-${{ hashFiles('**/Cargo.lock', '**/bun.lockb') }}
+          key: macos-enterprise-${{ matrix.target }}-pre-build-${{ hashFiles('**/Cargo.lock', '**/bun.lockb') }}
           restore-keys: |
-            macos-enterprise-aarch64-pre-build-
+            macos-enterprise-${{ matrix.target }}-pre-build-
 
       - name: Install frontend dependencies
         working-directory: apps/screenpipe-app-tauri
@@ -644,7 +663,7 @@ jobs:
       - name: Run pre_build.js
         env:
           SKIP_SCREENPIPE_SETUP: true
-          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
+          SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
 
@@ -654,7 +673,7 @@ jobs:
       - name: Configure macOS sidecar bundle entries
         shell: bash
         env:
-          TARGET: aarch64-apple-darwin
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -737,7 +756,7 @@ jobs:
           echo "Build keychain ready"
           security find-identity -v -p codesigning "$BUILD_KC" 2>&1 | tail -3
 
-      - name: Build (enterprise, macOS ARM64)
+      - name: Build (enterprise, macOS ${{ matrix.target }})
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -751,13 +770,13 @@ jobs:
           # background image and icon layout.
           # See: https://github.com/tauri-apps/tauri-action/issues/740
           TAURI_BUNDLER_DMG_IGNORE_CI: true
-          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
-          MACOSX_DEPLOYMENT_TARGET: "14.0"
-          CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
-          CFLAGS: "-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
-          CXXFLAGS: "-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
-          CMAKE_C_FLAGS: "-mmacosx-version-min=14.0"
-          CMAKE_CXX_FLAGS: "-mmacosx-version-min=14.0"
+          SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
+          CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CMAKE_C_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0' || '-mmacosx-version-min=10.15' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0' || '-mmacosx-version-min=10.15' }}
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "3"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
@@ -766,18 +785,20 @@ jobs:
           CARGO_PROFILE_RELEASE_PANIC: unwind
           CARGO_PROFILE_RELEASE_INCREMENTAL: "true"
         run: |
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
 
-          # Compiler wrapper to force macOS 14.0 for MLX Metal kernels
-          WRAPPER_DIR="$(pwd)/.compiler-wrapper"
-          mkdir -p "$WRAPPER_DIR"
-          for tool in cc c++ xcrun; do
-            REAL_PATH=$(which $tool)
-            printf '#!/bin/bash\nnew=(); for x in "$@"; do [[ "$x" == -mmacosx-version-min=* ]] && x="-mmacosx-version-min=14.0"; new+=("$x"); done; exec '"$REAL_PATH"' "${new[@]}"\n' > "$WRAPPER_DIR/$tool"
-            chmod +x "$WRAPPER_DIR/$tool"
-          done
-          export PATH="$WRAPPER_DIR:$PATH"
+          # Compiler wrapper is only needed for ARM64 MLX Metal kernels.
+          if [[ "$TARGET" == "aarch64-apple-darwin" ]]; then
+            WRAPPER_DIR="$(pwd)/.compiler-wrapper"
+            mkdir -p "$WRAPPER_DIR"
+            for tool in cc c++ xcrun; do
+              REAL_PATH=$(which $tool)
+              printf '#!/bin/bash\nnew=(); for x in "$@"; do [[ "$x" == -mmacosx-version-min=* ]] && x="-mmacosx-version-min=14.0"; new+=("$x"); done; exec '"$REAL_PATH"' "${new[@]}"\n' > "$WRAPPER_DIR/$tool"
+              chmod +x "$WRAPPER_DIR/$tool"
+            done
+            export PATH="$WRAPPER_DIR:$PATH"
+          fi
 
           # Clean stale bundle artifacts
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
@@ -800,7 +821,7 @@ jobs:
             fi
 
             cd apps/screenpipe-app-tauri
-            if bunx tauri build -v --target aarch64-apple-darwin --features metal,parakeet-mlx,enterprise-build 2>&1 | tee /tmp/tauri-build-$attempt.log; then
+            if bunx tauri build -v --target "$TARGET" --features "${{ matrix.features }}" 2>&1 | tee /tmp/tauri-build-$attempt.log; then
               echo "Build succeeded on attempt $attempt"
               cd ../..
               break
@@ -828,7 +849,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           APP_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle/macos"
           shopt -s nullglob
           apps=( "${APP_DIR}"/*.app )
@@ -848,7 +869,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
 
           for dmg in "${BUNDLE_DIR}"/dmg/*.dmg; do
@@ -889,7 +910,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           MACOS_DIR="${BUNDLE_DIR}/macos"
           notary_auth=(
@@ -1015,9 +1036,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          PACKAGE_ARCH="${{ matrix.package_arch }}"
 
           APP_PATH="${BUNDLE_DIR}/macos/screenpipe.app"
           if [ ! -d "$APP_PATH" ]; then
@@ -1048,8 +1070,8 @@ jobs:
           # Create an unsigned component package first so the package receipt
           # keeps a stable identifier, then sign the final product archive with
           # Developer ID Installer.
-          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
-          COMPONENT_PKG="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64-component.pkg"
+          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-${PACKAGE_ARCH}.pkg"
+          COMPONENT_PKG="${PKG_DIR}/screenpipe-enterprise-${VERSION}-${PACKAGE_ARCH}-component.pkg"
 
           echo "Building component .pkg..."
           pkgbuild \
@@ -1120,7 +1142,7 @@ jobs:
           AWS_DEFAULT_REGION: auto
           R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           R2_PREFIX="s3://screenpipe-releases/enterprise/releases/${VERSION}/${TARGET}"
@@ -1140,12 +1162,12 @@ jobs:
       - name: Upload enterprise macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: enterprise-macos-arm64
+          name: enterprise-macos-${{ matrix.package_arch }}
           path: |
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/pkg/*.pkg
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/pkg/*.pkg
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
 
       - name: Clean up build keychain
         if: always()

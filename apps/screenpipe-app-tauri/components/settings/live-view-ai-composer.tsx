@@ -9,6 +9,8 @@ import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useUsageStatus } from "@/lib/hooks/use-usage-status";
+import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import type { AIPreset } from "@/lib/utils/tauri";
 import type { LiveViewGenerationScope } from "@/lib/live-views/generate-live-view-with-pi";
 
@@ -69,6 +71,7 @@ export function LiveViewAiComposer({
   onGenerate,
 }: LiveViewAiComposerProps) {
   const { settings } = useSettings();
+  const usage = useUsageStatus();
   const presets = useMemo(
     () => (settings.aiPresets ?? []) as AIPreset[],
     [settings.aiPresets],
@@ -90,9 +93,24 @@ export function LiveViewAiComposer({
   const selectedPreset = presets.find(
     (preset) => preset.id === selectedPresetId,
   );
-  const canSubmit = Boolean(prompt.trim() && selectedPreset && !busy);
+  const hostedUsageExhausted = Boolean(
+    selectedPreset?.provider === "screenpipe-cloud" &&
+    usage &&
+    usage.remaining <= 0,
+  );
+  const canUpgrade = Boolean(
+    hostedUsageExhausted &&
+    usage?.upgrade_eligible === true &&
+    usage.upsell_banner !== false &&
+    usage.tier !== "subscribed" &&
+    usage.tier !== "business_max" &&
+    usage.tier !== "business_ultra",
+  );
+  const canSubmit = Boolean(
+    prompt.trim() && selectedPreset && !busy && !hostedUsageExhausted,
+  );
   const compactExpanded =
-    compact && (compactFocused || Boolean(prompt.trim()) || busy);
+    compact && !hostedUsageExhausted && (compactFocused || busy);
   const intent = inferLiveViewGenerationIntent(
     prompt,
     Boolean(currentViewTitle),
@@ -122,7 +140,15 @@ export function LiveViewAiComposer({
     <div
       data-testid="live-view-ai-composer"
       onFocusCapture={() => {
-        if (compact) setCompactFocused(true);
+        if (compact && !hostedUsageExhausted) setCompactFocused(true);
+      }}
+      onBlurCapture={(event) => {
+        if (
+          compact &&
+          !event.currentTarget.contains(event.relatedTarget as Node | null)
+        ) {
+          setCompactFocused(false);
+        }
       }}
       className={
         compact
@@ -143,7 +169,7 @@ export function LiveViewAiComposer({
           data-testid="live-view-ai-prompt"
           autoFocus={autoFocus}
           value={prompt}
-          disabled={busy}
+          disabled={busy || hostedUsageExhausted}
           rows={compactExpanded ? 2 : compact ? 1 : 3}
           maxLength={1_500}
           className={
@@ -154,11 +180,16 @@ export function LiveViewAiComposer({
               : "min-h-16 resize-none rounded-none border-0 px-4 py-3 text-sm shadow-none focus-visible:ring-0"
           }
           placeholder={
-            compact
-              ? "Ask AI to change this Live View..."
-              : "For example: show how I spend my time and what changed this week"
+            hostedUsageExhausted
+              ? "Hosted AI limit reached"
+              : compact
+                ? "Ask AI to change this Live View..."
+                : "For example: show how I spend my time and what changed this week"
           }
-          onChange={(event) => setPrompt(event.target.value)}
+          onChange={(event) => {
+            setPrompt(event.target.value);
+            if (compact) setCompactFocused(true);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -166,25 +197,38 @@ export function LiveViewAiComposer({
             }
           }}
         />
-        {compact && (
-          <Button
-            data-testid="live-view-ai-generate"
-            type="button"
-            size="icon"
-            className="h-10 w-10 shrink-0 rounded-none"
-            aria-label={actionLabel}
-            title={actionLabel}
-            disabled={!canSubmit}
-            onClick={submit}
-          >
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <ArrowUp className="h-3.5 w-3.5" />
-            )}
-            <span className="sr-only">{actionLabel}</span>
-          </Button>
-        )}
+        {compact &&
+          (canUpgrade ? (
+            <Button
+              data-testid="live-view-ai-upgrade"
+              type="button"
+              size="sm"
+              className="h-10 shrink-0 rounded-none px-3 text-xs"
+              onClick={() =>
+                void openBusinessUpgradeSurface("live-view-ai-composer")
+              }
+            >
+              upgrade
+            </Button>
+          ) : (
+            <Button
+              data-testid="live-view-ai-generate"
+              type="button"
+              size="icon"
+              className="h-10 w-10 shrink-0 rounded-none"
+              aria-label={actionLabel}
+              title={actionLabel}
+              disabled={!canSubmit}
+              onClick={submit}
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ArrowUp className="h-3.5 w-3.5" />
+              )}
+              <span className="sr-only">{actionLabel}</span>
+            </Button>
+          ))}
       </div>
       {compact ? (
         compactExpanded && (
@@ -232,28 +276,42 @@ export function LiveViewAiComposer({
               </span>
             )}
           </div>
-          <Button
-            data-testid="live-view-ai-generate"
-            type="button"
-            size="sm"
-            className="h-8 rounded-none"
-            disabled={!canSubmit}
-            onClick={submit}
-          >
-            {busy ? (
-              <>
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                <span>creating</span>
-              </>
-            ) : (
-              <>
-                <span className="mr-1.5">
-                  {intent === "pipe-agent" ? "open agent" : "generate"}
-                </span>
-                <ArrowUp className="h-3.5 w-3.5" />
-              </>
-            )}
-          </Button>
+          {canUpgrade ? (
+            <Button
+              data-testid="live-view-ai-upgrade"
+              type="button"
+              size="sm"
+              className="h-8 rounded-none"
+              onClick={() =>
+                void openBusinessUpgradeSurface("live-view-ai-composer")
+              }
+            >
+              upgrade
+            </Button>
+          ) : (
+            <Button
+              data-testid="live-view-ai-generate"
+              type="button"
+              size="sm"
+              className="h-8 rounded-none"
+              disabled={!canSubmit}
+              onClick={submit}
+            >
+              {busy ? (
+                <>
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  <span>creating</span>
+                </>
+              ) : (
+                <>
+                  <span className="mr-1.5">
+                    {intent === "pipe-agent" ? "open agent" : "generate"}
+                  </span>
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </>
+              )}
+            </Button>
+          )}
         </div>
       )}
       {busy && (
@@ -296,7 +354,7 @@ export function LiveViewAiComposer({
             <button
               key={suggestion}
               type="button"
-              disabled={busy}
+              disabled={busy || hostedUsageExhausted}
               className="border border-border px-2 py-1 text-[11px] text-muted-foreground hover:border-foreground hover:text-foreground disabled:opacity-50"
               onClick={() => setPrompt(suggestion)}
             >

@@ -310,6 +310,14 @@ jobs:
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-engine --test router_contract_test --profile release-dev --target x86_64-pc-windows-msvc
 
+      # Recovery must be part of the shipped binary on Windows; never fall
+      # back to a host-installed sqlite3 executable.
+      - name: Verify embedded SQLite recovery on Windows
+        env:
+          RUSTFLAGS: ""
+          AWS_LC_SYS_PREBUILT_NASM: "1"
+        run: cargo test -p screenpipe-sqlite-recovery --profile release-dev --target x86_64-pc-windows-msvc
+
       - name: Run specific Windows OCR cargo test
         env:
           RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
@@ -442,6 +450,11 @@ jobs:
         run: |
           mkdir -p target/debug/deps || true
           cp crates/screenpipe-screen/tests/testing_OCR.png target/debug/deps/
+
+      # Recovery must be linked into the app and salvage a damaged database
+      # without relying on Homebrew or a host sqlite3 executable.
+      - name: Verify embedded SQLite recovery on macOS
+        run: cargo test -p screenpipe-sqlite-recovery
 
       - name: Run specific Apple OCR cargo test
         shell: bash

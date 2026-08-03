@@ -218,4 +218,10 @@ pub trait AgentExecutor: Send + Sync {
     fn user_token(&self) -> Option<String> {
         None
     }
+
+    /// Hosted-AI base URL used when pre-configuring an agent provider.
+    /// Non-cloud executors keep the production default and ignore it.
+    fn screenpipe_api_url(&self) -> &str {
+        pi::SCREENPIPE_API_URL
+    }
 }

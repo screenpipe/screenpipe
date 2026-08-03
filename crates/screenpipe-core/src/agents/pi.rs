@@ -375,6 +375,13 @@ impl PiExecutor {
         self
     }
 
+    /// Override the hosted-AI base URL supplied by the app. Production callers
+    /// use the default; the desktop app exposes a loopback-only E2E resolver.
+    pub fn with_api_url(mut self, api_url: String) -> Self {
+        self.api_url = api_url;
+        self
+    }
+
     /// User policy: when the marker file
     /// `~/.screenpipe/cloud_media_analysis.disabled` exists, the
     /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
@@ -896,6 +903,14 @@ impl PiExecutor {
     /// for screenpipe-cloud to avoid sending data to our backend when the
     /// user chose a local/custom provider.
     pub fn ensure_web_search_extension(project_dir: &Path, provider: Option<&str>) -> Result<()> {
+        Self::ensure_web_search_extension_with_api_url(project_dir, provider, SCREENPIPE_API_URL)
+    }
+
+    fn ensure_web_search_extension_with_api_url(
+        project_dir: &Path,
+        provider: Option<&str>,
+        api_url: &str,
+    ) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         let ext_path = ext_dir.join("web-search.ts");
 
@@ -906,7 +921,8 @@ impl PiExecutor {
 
         if is_screenpipe_cloud {
             std::fs::create_dir_all(&ext_dir)?;
-            let ext_content = include_str!("../../assets/extensions/web-search.ts");
+            let ext_content = include_str!("../../assets/extensions/web-search.ts")
+                .replace(SCREENPIPE_API_URL, api_url);
             std::fs::write(&ext_path, ext_content)?;
             debug!("web-search extension installed at {:?}", ext_path);
         } else if ext_path.exists() {
@@ -1767,7 +1783,11 @@ impl AgentExecutor for PiExecutor {
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
 
-        Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
+        Self::ensure_web_search_extension_with_api_url(
+            working_dir,
+            Some(&resolved_provider),
+            &self.api_url,
+        )?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -1882,7 +1902,11 @@ impl AgentExecutor for PiExecutor {
         .await?;
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
-        Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
+        Self::ensure_web_search_extension_with_api_url(
+            working_dir,
+            Some(&resolved_provider),
+            &self.api_url,
+        )?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -2101,6 +2125,10 @@ impl AgentExecutor for PiExecutor {
 
     fn user_token(&self) -> Option<String> {
         self.current_user_token()
+    }
+
+    fn screenpipe_api_url(&self) -> &str {
+        &self.api_url
     }
 }
 
@@ -3689,6 +3717,29 @@ mod tests {
     fn describe_exit_status_code_plain_codes_unchanged() {
         assert_eq!(describe_exit_status_code(0), "exit code 0");
         assert_eq!(describe_exit_status_code(1), "exit code 1");
+    }
+
+    #[test]
+    fn web_search_extension_uses_executor_gateway_url() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let api_url = "http://127.0.0.1:8787/v1";
+
+        PiExecutor::ensure_web_search_extension_with_api_url(
+            dir.path(),
+            Some("screenpipe"),
+            api_url,
+        )
+        .expect("install web-search extension");
+
+        let content = std::fs::read_to_string(
+            dir.path()
+                .join(".pi")
+                .join("extensions")
+                .join("web-search.ts"),
+        )
+        .expect("read web-search extension");
+        assert!(content.contains("http://127.0.0.1:8787/v1/web-search"));
+        assert!(!content.contains(SCREENPIPE_API_URL));
     }
 
     #[test]

@@ -443,7 +443,7 @@ async function installGrokMcp(): Promise<void> {
   const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : {}) as Record<string, unknown>;
   const servers = (Array.isArray(mcp.servers) ? mcp.servers : []) as Record<string, unknown>[];
   const next = servers.filter((s) => s?.id !== "screenpipe");
-  next.push(buildGrokMcpServer(await buildMcpConfig()));
+  next.push(buildGrokMcpServer(await buildMcpConfig({ client: "grok" })));
   mcp.servers = next;
   config.mcp = mcp;
   await mkdir(await dirname(configPath), { recursive: true });
@@ -1075,13 +1075,12 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
       if (!(await areExternalAgentSkillsInstalled("claude"))) return;
       setState("connected");
       onConnected?.();
-      // Auto-repair legacy/keyless configs (older builds, hand-authored npx
-      // snippets) so they hit the MCP's fast env-key path instead of the slow
-      // discovery ladder that can stall Claude Desktop's attach. Idempotent:
-      // a config that already carries the key is left untouched.
+      // Auto-repair legacy managed configs so they use the fast env-key path
+      // and carry the fixed Claude category used by privacy-safe value metrics.
+      // Hand-customized configs are always left untouched.
       if (isStaleClaudeScreenpipeEntry(entry)) {
         try {
-          const next = await buildMcpConfig();
+          const next = await buildMcpConfig({ client: "claude" });
           if (next.env?.SCREENPIPE_LOCAL_API_KEY) {
             await installClaudeMcp();
           }

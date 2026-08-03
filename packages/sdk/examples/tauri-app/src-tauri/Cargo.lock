@@ -7027,7 +7027,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "dirs 6.0.0",
  "screenpipe-cpu-features",
@@ -7039,7 +7039,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -7084,7 +7084,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -7126,11 +7126,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-cpu-features"
-version = "0.4.35"
+version = "0.4.36"
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7158,7 +7158,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7194,7 +7194,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7240,7 +7240,6 @@ dependencies = [
  "chrono",
  "keyring",
  "rand 0.9.4",
- "screenpipe-config",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -7262,12 +7261,15 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "libsqlite3-sys",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tracing",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -7296,7 +7298,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "argon2",
  "chacha20poly1305",

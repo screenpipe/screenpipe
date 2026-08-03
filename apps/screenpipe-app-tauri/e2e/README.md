@@ -35,6 +35,19 @@ to keep vision capture off while leaving the audio settings visible with
 Screenpipe Cloud saved and no logged-in user. It asserts the Recording fallback
 alert and the persisted `/notifications` entry.
 
+**Run the local hosted-AI gateway spec**
+
+```bash
+bun run test:e2e:local-ai-gateway:macos
+```
+
+This opt-in lane bundles the production AI Worker under Miniflare, applies all
+checked-in migrations to an isolated in-memory D1 database, and launches the
+real E2E app with its hosted-AI URL pinned to that loopback Worker. OpenAI is a
+network-closed fake: the harness intercepts the exact chat endpoint and fails
+the run if the Worker attempts any other outbound request. No production
+gateway, customer data, provider credential, or paid model is used.
+
 **Run the macOS HD recording pipeline spec**
 
 ```bash

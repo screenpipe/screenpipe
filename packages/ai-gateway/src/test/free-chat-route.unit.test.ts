@@ -40,12 +40,24 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		DB: {
 			prepare: (sql: string) => ({
 				bind: (...values: unknown[]) => ({
+					sql,
+					values,
 					first: async () => sql.includes('INSERT OR IGNORE INTO usage')
 						? { reservation_key: values[0] }
 						: null,
 					run: async () => ({ success: true, meta: { changes: 1 } }),
 				}),
 			}),
+			batch: async (statements: Array<{ sql: string; values: unknown[] }>) => {
+				const last = statements.at(-1);
+				return statements.map((_, index) => ({
+					success: true,
+					meta: { changes: 1 },
+					results: index === statements.length - 1 && last?.sql.includes('hosted_ai_settlements')
+						? [{ settlement_id: last.values[0], applied_at: new Date().toISOString() }]
+						: [],
+				}));
+			},
 		},
 	} as unknown as Env;
 	const ctx = {
@@ -444,33 +456,40 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(await errorCode(response)).toBe('cost_control_unavailable');
 	});
 
-	it('returns the Max capacity tier from the authenticated usage route', async () => {
-		verifyTokenMock.mockImplementation(async () => ({ sub: 'user_pro_max' }) as any);
-		globalThis.fetch = mock(async () => new Response(JSON.stringify({
-			success: true,
-			user: {
-				clerk_id: 'user_pro_max',
-				cloud_subscribed: true,
-				app_entitled: true,
-				subscription_plan: 'pro_max',
-				entitlement: { active: true, plan: 'pro_max', features: { app: true } },
-			},
-		}), { status: 200 })) as typeof fetch;
+	it('returns canonical Max and Ultra capacity from desktop-compatible user responses', async () => {
+		for (const [billingPlan, usageTier, dailyLimit] of [
+			['pro_max', 'business_max', 120],
+			['pro_ultra', 'business_ultra', 240],
+		] as const) {
+			const clerkId = `user_${billingPlan}`;
+			verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
+			globalThis.fetch = mock(async () => new Response(JSON.stringify({
+				success: true,
+				user: {
+					clerk_id: clerkId,
+					cloud_subscribed: true,
+					app_entitled: true,
+					subscription_plan: 'pro',
+					billing_plan: billingPlan,
+					entitlement: { active: true, plan: 'pro', features: { app: true } },
+				},
+			}), { status: 200 })) as typeof fetch;
 
-		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
-			headers: { Authorization: 'Bearer eyJ.pro-max.paid' },
-		}), env, ctx);
-		const body = await response.json() as Record<string, unknown>;
+			const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+				headers: { Authorization: `Bearer eyJ.${billingPlan}.paid` },
+			}), env, ctx);
+			const body = await response.json() as Record<string, unknown>;
 
-		expect(response.status).toBe(200);
-		expect(body).toMatchObject({
-			tier: 'business_max',
-			limit_today: 120,
-			remaining: 120,
-			upsell_banner: false,
-			upgrade_eligible: false,
-			cost_limit_reached: false,
-		});
+			expect(response.status).toBe(200);
+			expect(body).toMatchObject({
+				tier: usageTier,
+				limit_today: dailyLimit,
+				remaining: dailyLimit,
+				upsell_banner: false,
+				upgrade_eligible: false,
+				cost_limit_reached: false,
+			});
+		}
 	});
 
 	it('normalizes a removed model before gating and reaches the fallback provider', async () => {

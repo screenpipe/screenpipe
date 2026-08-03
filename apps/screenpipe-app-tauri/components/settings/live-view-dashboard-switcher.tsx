@@ -84,16 +84,12 @@ export function LiveViewDashboardSwitcher({
 
   return (
     <>
-      <div data-testid="live-view-dashboard-switcher" className="min-w-0">
-        <div className="mb-1 flex items-center gap-2">
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-            Dashboards
-          </p>
-          <span className="text-[10px] tabular-nums text-muted-foreground">
-            {views.length}/{MAX_DASHBOARDS}
-          </span>
-        </div>
-        <div className="flex min-w-0 items-center gap-2">
+      <div
+        data-testid="live-view-dashboard-switcher"
+        className="flex min-w-0 flex-1 items-center"
+      >
+        <p className="sr-only">Dashboards</p>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <select
             data-testid="overview-dashboard-selector"
             aria-label="Dashboard"
@@ -164,6 +160,9 @@ export function LiveViewDashboardSwitcher({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <span className="hidden shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground 2xl:inline">
+            {views.length}/{MAX_DASHBOARDS}
+          </span>
         </div>
       </div>
 

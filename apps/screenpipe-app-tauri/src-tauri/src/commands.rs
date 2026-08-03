@@ -292,6 +292,15 @@ pub fn get_app_server_config() -> serde_json::Value {
     serde_json::json!({ "port": port })
 }
 
+/// Start the protected database repair selected from the persistent `/notify`
+/// recovery card. The command returns immediately while recovery continues in
+/// the background and reports progress back through `/notify`.
+#[tauri::command]
+#[specta::specta]
+pub fn start_database_recovery(app_handle: tauri::AppHandle) -> Result<(), String> {
+    crate::db_recovery_notifications::start_quarantined_database_recovery(app_handle)
+}
+
 /// Pure JSON shape used by the cold-spawn fallback. Extracted so the contract
 /// is covered by a unit test without needing a tauri::AppHandle. Port is the
 /// same effective port that the server config will use, including settings and
@@ -2736,12 +2745,8 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
         tracing::warn!("failed to write .encrypt-store flag: {}", e);
     }
 
-    let db_path = data_dir.join("db.sqlite");
-
-    // Shared, engine-matched pool (never an ad-hoc per-call connection — that
-    // churn corrupts db.sqlite, #4263).
     if let Ok(store) =
-        screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key)).await
+        screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, Some(key)).await
     {
         match store.reencrypt_unencrypted_secrets(&key).await {
             Ok(count) if count > 0 => {
@@ -2763,13 +2768,10 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
 #[specta::specta]
 pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let db_path = data_dir.join("db.sqlite");
+    let secrets_path = screenpipe_secrets::secrets_database_path(&data_dir);
 
-    if db_path.exists() {
-        // Shared, engine-matched pool (never an ad-hoc per-call connection —
-        // that churn corrupts db.sqlite, #4263). The later encrypted-store open
-        // reuses this same cached pool.
-        let plain_store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), None)
+    if secrets_path.exists() || data_dir.join("db.sqlite").exists() {
+        let plain_store = screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, None)
             .await
             .map_err(|e| format!("failed to open secret store: {e}"))?;
         let encrypted_count = plain_store
@@ -2798,7 +2800,7 @@ pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
             };
 
             let encrypted_store =
-                screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key))
+                screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, Some(key))
                     .await
                     .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
             match encrypted_store.decrypt_encrypted_secrets().await {
@@ -3284,9 +3286,9 @@ pub async fn hide_shortcut_reminder(app_handle: tauri::AppHandle) -> Result<(), 
 }
 
 /// Current recording-health overlay state: "normal" | "failure" | "fixing" |
-/// "recovered", optionally suffixed "|<detail>" (boot-phase label while
-/// fixing). The shortcut-reminder webview pulls this on mount, then stays
-/// current via the "recording-health-state" event.
+/// "recovered", optionally suffixed "|<detail>" (a concise failure reason or
+/// boot-phase label while fixing). The shortcut-reminder webview pulls this on
+/// mount, then stays current via the "recording-health-state" event.
 #[tauri::command]
 #[specta::specta]
 pub async fn get_recording_health_state() -> String {
@@ -3327,7 +3329,14 @@ pub async fn e2e_recording_health_return_race(
         .flatten()
         .map(|settings| settings.show_restart_notifications)
         .unwrap_or(false);
-    crate::overlay_health::on_tick(&app_handle, return_confirmed, false, false).await;
+    crate::overlay_health::on_tick(
+        &app_handle,
+        return_confirmed,
+        false,
+        false,
+        "screen capture is not updating",
+    )
+    .await;
     let overlay_state = crate::overlay_health::current_state_payload();
 
     let recovered_after = tier.observe(false, true);

@@ -43,6 +43,7 @@ import {
   AlertCircle,
   FolderOpen,
   Eye,
+  LayoutDashboard,
   MessageSquare,
   MoreVertical,
 } from "lucide-react";
@@ -1403,16 +1404,85 @@ export function BrainSection() {
       ? Math.floor((Date.now() - new Date(newestCreatedAt).getTime()) / 86400000)
       : 0;
   const isStale = staleDays >= 1;
+  const brainViewOptions = [
+    {
+      value: "overview" as const,
+      label: "Live Views",
+      count: liveViewsTabCount,
+      Icon: LayoutDashboard,
+    },
+    {
+      value: "memories" as const,
+      label: "Memories",
+      count: memoriesTabCount,
+      Icon: Eye,
+    },
+    {
+      value: "artifacts" as const,
+      label: "Artifacts",
+      count: artifactsTabCount,
+      Icon: FolderOpen,
+    },
+  ];
+  const activeBrainView =
+    brainViewOptions.find(({ value }) => value === typeFilter) ??
+    brainViewOptions[0];
+  const ActiveBrainViewIcon = activeBrainView.Icon;
+  const brainViewSwitcher = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-testid="brain-view-switcher"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-background transition-colors hover:bg-foreground hover:text-background"
+          aria-label={`switch Brain view, current: ${activeBrainView.label}`}
+          title={`switch Brain view, current: ${activeBrainView.label}`}
+        >
+          <ActiveBrainViewIcon className="h-3.5 w-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="w-56 rounded-none"
+        data-testid="brain-view-menu"
+      >
+        {brainViewOptions.map(({ value, label, count, Icon }) => (
+          <DropdownMenuItem
+            key={value}
+            data-testid={`brain-filter-${value}`}
+            className={typeFilter === value ? "bg-muted/50" : undefined}
+            aria-current={typeFilter === value ? "page" : undefined}
+            onSelect={() => switchTypeFilter(value)}
+          >
+            <Icon className="mr-2 h-3.5 w-3.5" />
+            <span className="flex-1">{label}</span>
+            {count !== null && (
+              <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                {count.toLocaleString()}
+              </span>
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <div data-testid="section-brain" className="h-full overflow-hidden">
     <div
       data-testid="brain-content"
-      className="max-w-6xl mx-auto px-3 pb-6 pt-10 sm:px-6 space-y-4 h-full flex flex-col"
+      className={`mx-auto flex h-full flex-col px-3 pb-6 sm:px-6 ${
+        typeFilter === "overview"
+          ? "max-w-none space-y-2 pt-8"
+          : "max-w-6xl space-y-4 pt-10"
+      }`}
     >
-      <p className="text-muted-foreground text-sm mb-4">
-        what the AI has learned from your activity and what it has generated for you
-      </p>
+      {typeFilter !== "overview" && (
+        <p className="mb-4 text-sm text-muted-foreground">
+          what the AI has learned from your activity and what it has generated
+          for you
+        </p>
+      )}
 
       {/* stale memories warning */}
       {typeFilter === "memories" && isStale && (
@@ -1433,34 +1503,14 @@ export function BrainSection() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3">
-        <div className="inline-flex items-center gap-1 border-b border-border">
-          {(
-            [
-              { value: "overview", label: "Live Views", count: liveViewsTabCount ?? undefined },
-              { value: "memories", label: "Memories", count: memoriesTabCount ?? undefined },
-              { value: "artifacts", label: "Artifacts", count: artifactsTabCount ?? undefined },
-            ] as { value: TypeFilter; label: string; count?: number }[]
-          ).map(({ value, label, count }) => (
-            <button
-              key={value}
-              data-testid={`brain-filter-${value}`}
-              onClick={() => switchTypeFilter(value)}
-              className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                typeFilter === value
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {label}
-              {count !== undefined && (
-                <span className="ml-2 text-xs text-muted-foreground">
-                  {count.toLocaleString()}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+      <div
+        className={
+          typeFilter === "overview"
+            ? "hidden"
+            : "flex items-center justify-between gap-3"
+        }
+      >
+        {typeFilter !== "overview" && brainViewSwitcher}
         {showFilterButton && (
           <Popover
             open={filterOpen}
@@ -1557,7 +1607,10 @@ export function BrainSection() {
       </div>
 
       {typeFilter === "overview" ? (
-        <BrainOverview onViewCountChange={setLiveViewsTabCount} />
+        <BrainOverview
+          navigation={brainViewSwitcher}
+          onViewCountChange={setLiveViewsTabCount}
+        />
       ) : (
         <>
 

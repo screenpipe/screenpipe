@@ -12,6 +12,11 @@ vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => settingsState,
 }));
 
+vi.mock("@/lib/ai-gateway-url", () => ({
+  fetchAiGateway: async (path: string, init?: RequestInit) =>
+    fetch(`https://api.screenpipe.com/v1${path}`, init),
+}));
+
 function usageResponse(upgradeEligible: boolean): Promise<Response> {
   return Promise.resolve({
     ok: true,
