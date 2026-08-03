@@ -78,6 +78,17 @@ export function DeeplinkHandler() {
     const processDeepLinkUrl = async (url: string) => {
       const parsedUrl = new URL(url);
 
+      if (
+        parsedUrl.host === "database-recovery" ||
+        parsedUrl.pathname === "database-recovery"
+      ) {
+        const result = await commands.startDatabaseRecovery();
+        if (result.status === "error") {
+          throw new Error(result.error);
+        }
+        return;
+      }
+
       // Handle API key auth
       if (url.includes("api_key=")) {
         const apiKey = parsedUrl.searchParams.get("api_key");

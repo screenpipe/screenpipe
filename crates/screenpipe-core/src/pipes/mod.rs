@@ -20,7 +20,7 @@ pub mod sync;
 pub(crate) mod trajectory;
 
 use crate::agents::{
-    pi::{pi_package_enabled, PiExecutor, SCREENPIPE_API_URL},
+    pi::{pi_package_enabled, PiExecutor},
     AgentExecutor, ExecutionHandle, SharedPid, STOP_REQUESTED_PID,
 };
 use crate::pipes::connections::parse_mcp_connection_id;
@@ -1406,30 +1406,20 @@ fn read_chatgpt_token_from_legacy_file() -> Option<String> {
 /// Read and refresh ChatGPT token from the encrypted secrets store.
 #[cfg(feature = "secrets")]
 fn read_chatgpt_token_from_secrets() -> Option<String> {
-    use screenpipe_secrets::keychain::{get_key, KeyResult};
-
     let data_dir = crate::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    if !db_path.exists() {
+    if !db_path.exists() && !screenpipe_secrets::secrets_database_path(&data_dir).exists() {
         return None;
     }
-
-    let secret_key = match get_key() {
-        KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-
-    let db_path_str = db_path.to_string_lossy().into_owned();
 
     // We're in a sync context but need async for sqlx. Use block_in_place
     // since the caller is always on a tokio runtime.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            // Shared, engine-matched pool — not an ad-hoc per-call connection,
-            // which churns the WAL-index and corrupts db.sqlite (#4263).
-            let store = screenpipe_secrets::SecretStore::open(&db_path_str, secret_key)
-                .await
-                .ok()?;
+            let store =
+                screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
+                    .await
+                    .ok()?;
             let bytes = store.get("oauth:chatgpt").await.ok()??;
             let mut token_data: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
 
@@ -3303,7 +3293,7 @@ impl PipeManager {
             let cloud_token = executor.user_token();
             if let Err(e) = PiExecutor::ensure_pi_config(
                 cloud_token.as_deref(),
-                SCREENPIPE_API_URL,
+                executor.screenpipe_api_url(),
                 run_provider.as_deref(),
                 Some(&run_model),
                 run_provider_url.as_deref(),
@@ -3852,7 +3842,7 @@ impl PipeManager {
             if config.agent == "pi" {
                 if let Err(e) = PiExecutor::ensure_pi_config(
                     None,
-                    SCREENPIPE_API_URL,
+                    executor.screenpipe_api_url(),
                     run_provider.as_deref(),
                     Some(&run_model),
                     run_provider_url.as_deref(),
@@ -5405,7 +5395,7 @@ impl PipeManager {
                         let cloud_token = executor.user_token();
                         if let Err(e) = PiExecutor::ensure_pi_config(
                             cloud_token.as_deref(),
-                            SCREENPIPE_API_URL,
+                            executor.screenpipe_api_url(),
                             provider.as_deref(),
                             Some(&model),
                             provider_url.as_deref(),

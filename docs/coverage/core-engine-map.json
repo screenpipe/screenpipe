@@ -449,6 +449,7 @@
         "tests/close_severs_connections_test.rs",
         "tests/memory_pressure_test.rs",
         "tests/multi_pool_wal_parity_test.rs",
+        "tests/sqlite_architecture_invariants_test.rs",
         "tests/sqlite_runtime_version.rs",
         "tests/wal_chaos_e2e_test.rs"
       ],

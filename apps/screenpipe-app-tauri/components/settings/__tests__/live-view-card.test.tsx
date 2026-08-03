@@ -178,3 +178,20 @@ describe("LiveViewCard line chart", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("3.25");
   });
 });
+
+describe("LiveViewCard range and freshness", () => {
+  it("labels the selected period as requested and keeps block freshness visible with actions", () => {
+    render(
+      <LiveViewCard
+        slot={listSlot}
+        timeRange="7d"
+        onRegenerate={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("List · requested: Last 7 days")).toBeTruthy();
+    expect(
+      screen.getByTestId("overview-card-updated-process-steps"),
+    ).toHaveTextContent(/^updated .* · artifact #42 · v1$/);
+  });
+});

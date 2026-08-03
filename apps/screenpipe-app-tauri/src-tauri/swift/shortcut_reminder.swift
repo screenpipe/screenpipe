@@ -33,8 +33,8 @@ public func shortcutSetInboxUnread(_ count: Int32) {
 
 /// Recording-health state pushed from the Rust health loop (issue #5127):
 /// "normal" | "failure" | "fixing" | "recovered", optionally "state|detail"
-/// where detail is a boot-phase label shown while fixing. Swift only renders
-/// it — all detection/debounce/recovery logic lives in Rust.
+/// where detail is a concise failure reason or a boot-phase label while fixing.
+/// Swift only renders it — all detection/debounce/recovery logic lives in Rust.
 @_cdecl("shortcut_set_health_state")
 public func shortcutSetHealthState(_ statePtr: UnsafePointer<CChar>?) -> Int32 {
     guard let statePtr = statePtr else { return -1 }
@@ -62,7 +62,7 @@ final class OverlayMetrics: ObservableObject {
     /// "normal" | "failure" | "fixing" | "recovered" — set only via
     /// ShortcutReminderController.setHealthState (pushed from Rust).
     @Published var healthState: String = "normal"
-    /// Boot-phase label shown while fixing ("updating database", ...).
+    /// Concise failure reason, or boot-phase label while fixing.
     @Published var healthDetail: String = ""
     /// True when the cursor is inside the panel area — drives expand/collapse
     /// since SwiftUI's .onHover tracking areas use .activeInActiveApp which
@@ -681,6 +681,19 @@ class ShortcutReminderController: NSObject {
     private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-status"
     private var isVisible = false
 
+    private var healthToolTip: String? {
+        guard metrics.healthState == "failure" else { return nil }
+        return metrics.healthDetail.isEmpty
+            ? "recording stopped unexpectedly"
+            : metrics.healthDetail
+    }
+
+    private func updateHealthToolTip() {
+        let toolTip = healthToolTip
+        trackingView?.toolTip = toolTip
+        hostingView?.toolTip = toolTip
+    }
+
     func show(shortcuts: String?) {
         DispatchQueue.main.async { [self] in
             isVisible = true
@@ -877,11 +890,13 @@ class ShortcutReminderController: NSObject {
             if self.metrics.healthDetail != detail {
                 self.metrics.healthDetail = detail
             }
-            guard self.metrics.healthState != state else { return }
-            self.metrics.healthState = state
-            // Health states replace the hover-expand UI; reset the
-            // click-to-expand flag so it doesn't stay stuck expanded.
-            self.metrics.forceExpanded = false
+            if self.metrics.healthState != state {
+                self.metrics.healthState = state
+                // Health states replace the hover-expand UI; reset the
+                // click-to-expand flag so it doesn't stay stuck expanded.
+                self.metrics.forceExpanded = false
+            }
+            self.updateHealthToolTip()
         }
     }
 
@@ -952,6 +967,7 @@ class ShortcutReminderController: NSObject {
         self.trackingView = tracking
 
         self.panel = p
+        updateHealthToolTip()
     }
 
     private func positionPanel() {
@@ -996,6 +1012,7 @@ class ShortcutReminderController: NSObject {
             contentView.addSubview(hosting)
             self.hostingView = hosting
         }
+        updateHealthToolTip()
     }
 
     private func sendAction(_ action: String) {

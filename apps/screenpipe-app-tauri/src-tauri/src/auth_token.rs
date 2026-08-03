@@ -12,7 +12,7 @@
 //! skipped). A ~10-year-lifetime credential sat readable by any local process,
 //! backup, or cloud-sync folder.
 //!
-//! This module makes the encrypted [`SecretStore`] (db.sqlite, keychain-backed
+//! This module makes the encrypted [`SecretStore`] (`secrets.sqlite`, keychain-backed
 //! when encryption is enabled) the **authoritative** home for the token. The
 //! runtime in-memory shape (`settings.user.token`, the `cloud_token` ArcSwap)
 //! is preserved by hydrating from here, so cloud-auth readers are unchanged —
@@ -25,8 +25,7 @@
 //!
 //! ## Cross-platform
 //! Paths come from `default_screenpipe_data_dir()` and the SecretStore is
-//! opened with the same `sqlite:{path}?mode=rwc` form the rest of the app uses
-//! on macOS and Windows. The `0o600` hardening on the scrubbed file is
+//! opened from that directory on macOS and Windows. The `0o600` hardening on the scrubbed file is
 //! `#[cfg(unix)]` (a no-op on Windows, which relies on ACLs).
 
 use std::path::Path;
@@ -76,16 +75,13 @@ fn write_encryption_key() -> anyhow::Result<Option<[u8; 32]>> {
     }
 }
 
-/// Open a [`SecretStore`] over `<data_dir>/db.sqlite`. `key` controls
+/// Open a [`SecretStore`] over `<data_dir>/secrets.sqlite`. `key` controls
 /// encryption (matches the `enable_keychain_encryption` open pattern). Returns
 /// `None` if the DB can't be opened (missing parent dir, locked, etc.).
 ///
-/// Uses [`SecretStore::open`] so every secret access in the process shares ONE
-/// long-lived, engine-matched pool instead of opening (and dropping) its own —
-/// the ad-hoc-pool churn that corrupts `db.sqlite` (#4263).
+/// The dedicated single-connection store never participates in capture WAL.
 async fn secret_store_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<SecretStore> {
-    let db_path = data_dir.join("db.sqlite");
-    SecretStore::open(&db_path.to_string_lossy(), key)
+    SecretStore::open_for_data_dir(data_dir, key)
         .await
         .ok()
 }
@@ -146,8 +142,9 @@ pub async fn store_cloud_token(token: Option<&str>) -> anyhow::Result<()> {
 /// into the SecretStore, seed the cache, then scrub the plaintext copies.
 /// Idempotent and best-effort — safe to call on every startup.
 pub async fn migrate_plaintext_token(data_dir: &Path) -> Option<String> {
+    let read_key = screenpipe_secrets::keychain::get_key_for_read();
     match write_encryption_key() {
-        Ok(key) => migrate_at(data_dir, key).await,
+        Ok(write_key) => migrate_at(data_dir, read_key, write_key).await,
         Err(e) => {
             // Encryption is on but the keychain is denying access right now.
             // Don't write secrets at a lower protection level and don't touch
@@ -161,16 +158,21 @@ pub async fn migrate_plaintext_token(data_dir: &Path) -> Option<String> {
     }
 }
 
-async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
+async fn migrate_at(
+    data_dir: &Path,
+    read_key: Option<[u8; 32]>,
+    write_key: Option<[u8; 32]>,
+) -> Option<String> {
     let store_path = data_dir.join("store.bin");
 
     // Resolve the token, in priority order: SecretStore (already migrated) →
-    // store.bin → auth.json. Only read the SecretStore if db.sqlite already
-    // exists — never create it here just to check (on a fresh install there's
-    // nothing to migrate, and the engine should own db.sqlite's creation). The
-    // persist path below still creates it when there's actually a token to move.
-    let from_secret = if data_dir.join("db.sqlite").exists() {
-        load_session_token_at(data_dir, key).await
+    // store.bin → auth.json. Only open SQLite when a legacy capture database or
+    // the dedicated credential database exists. The persist path below creates
+    // `secrets.sqlite` when there is actually a token to move.
+    let from_secret = if data_dir.join("db.sqlite").exists()
+        || screenpipe_secrets::secrets_database_path(data_dir).exists()
+    {
+        load_session_token_at(data_dir, read_key).await
     } else {
         None
     };
@@ -180,7 +182,7 @@ async fn migrate_at(data_dir: &Path, key: Option<[u8; 32]>) -> Option<String> {
     // is GATED on this succeeding — never drop the last plaintext copy.
     if from_secret.is_none() {
         if let Some(ref t) = token {
-            if let Err(e) = store_token_at(data_dir, key, Some(t)).await {
+            if let Err(e) = store_token_at(data_dir, write_key, Some(t)).await {
                 tracing::warn!(
                     "auth-token migration: failed to persist to secret store, \
                      leaving plaintext in place (#3943): {}",
@@ -536,7 +538,7 @@ mod tests {
         )
         .unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         assert_eq!(got, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
         let after = std::fs::read(dir.join("store.bin")).unwrap();
@@ -695,7 +697,7 @@ mod tests {
             Some("jwt-enc".to_string())
         );
         // Raw db bytes must not contain the plaintext token.
-        let raw = std::fs::read(dir.join("db.sqlite")).unwrap();
+        let raw = std::fs::read(screenpipe_secrets::secrets_database_path(&dir)).unwrap();
         assert!(
             !raw.windows(7).any(|w| w == b"jwt-enc"),
             "token must not appear in plaintext in the encrypted db"
@@ -719,7 +721,7 @@ mod tests {
         )
         .unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         assert_eq!(got, Some(JWT.to_string()));
         // Now in the SecretStore...
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
@@ -734,7 +736,7 @@ mod tests {
     async fn migrate_from_auth_json_moves_token() {
         let dir = unique_dir("mig_auth");
         std::fs::write(dir.join("auth.json"), format!(r#"{{"token":"{JWT}"}}"#)).unwrap();
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         assert_eq!(got, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
     }
@@ -748,7 +750,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join("auth.json"), format!(r#"{{"token":"{JWT_ALT}"}}"#)).unwrap();
-        assert_eq!(migrate_at(&dir, None).await, Some(JWT.to_string()));
+        assert_eq!(migrate_at(&dir, None, None).await, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
     }
 
@@ -764,7 +766,7 @@ mod tests {
         )
         .unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         // SecretStore wins — the stale plaintext does NOT overwrite it.
         assert_eq!(got, Some(JWT.to_string()));
         assert_eq!(read_back(&dir, None).await, Some(JWT.to_string()));
@@ -779,7 +781,7 @@ mod tests {
     async fn migrate_no_token_anywhere_is_noop() {
         let dir = unique_dir("mig_empty");
         // No store.bin, no auth.json, empty db → resolves to nothing, no panic.
-        assert_eq!(migrate_at(&dir, None).await, None);
+        assert_eq!(migrate_at(&dir, None, None).await, None);
         assert!(!dir.join("store.bin.scrub.tmp").exists());
     }
 
@@ -789,7 +791,7 @@ mod tests {
         // not create db.sqlite (the engine owns that), avoiding a bare-connection
         // db ahead of the engine's setup.
         let dir = unique_dir("mig_fresh");
-        assert_eq!(migrate_at(&dir, None).await, None);
+        assert_eq!(migrate_at(&dir, None, None).await, None);
         assert!(
             !dir.join("db.sqlite").exists(),
             "migration must not create db.sqlite when there's nothing to migrate"
@@ -809,7 +811,7 @@ mod tests {
             br#"{"settings":{"user":{"token":"jwt"},"aiPresets":[{"id":"x"}]}}"#,
         )
         .unwrap();
-        migrate_at(&dir, None).await;
+        migrate_at(&dir, None, None).await;
         assert_eq!(
             token_from_store_bytes(&std::fs::read(dir.join("store.bin.last-good")).unwrap()),
             None,
@@ -828,7 +830,7 @@ mod tests {
         let store_json = format!(r#"{{"settings":{{"user":{{"token":"{JWT}"}}}}}}"#);
         std::fs::write(dir.join("store.bin"), store_json.as_bytes()).unwrap();
 
-        let got = migrate_at(&dir, None).await;
+        let got = migrate_at(&dir, None, None).await;
         // Token is still resolved (from store.bin) and cached for the session...
         assert_eq!(got, Some(JWT.to_string()));
         // ...but the plaintext copy is preserved because persistence failed.

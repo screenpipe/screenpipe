@@ -174,6 +174,33 @@ type PreviewDestination = "new" | "replace";
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
+const LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS = 60_000;
+
+const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+function liveViewDataStatus(slots: BrainViewSlot[]): string {
+  const timestamps = slots.flatMap((slot) => {
+    const timestamp = slot.value?.updatedAt
+      ? Date.parse(slot.value.updatedAt)
+      : Number.NaN;
+    return Number.isFinite(timestamp) ? [timestamp] : [];
+  });
+  if (timestamps.length === 0) return "No data yet";
+
+  const blockLabel = slots.length === 1 ? "block" : "blocks";
+  const readiness = `${timestamps.length} of ${slots.length} ${blockLabel} ready`;
+  const oldest = Math.min(...timestamps);
+  const latest = Math.max(...timestamps);
+  if (latest - oldest <= LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS) {
+    return `${readiness} · updated ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
+  }
+  return `${readiness} · oldest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(oldest)} · latest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
+}
 
 function analyticsErrorType(error: unknown): string {
   return error instanceof Error ? error.name : "unknown";
@@ -402,8 +429,10 @@ function uniqueDashboardTitle(title: string, views: ViewDefinition[]): string {
 }
 
 export function BrainOverview({
+  navigation,
   onViewCountChange,
 }: {
+  navigation?: React.ReactNode;
   onViewCountChange?: (count: number) => void;
 } = {}) {
   const { toast } = useToast();
@@ -2585,13 +2614,7 @@ export function BrainOverview({
   const slots = normalizedSlots(view.slots);
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
-  const latestDataTimestamp = slots.reduce<number | null>((latest, slot) => {
-    const timestamp = slot.value?.updatedAt
-      ? Date.parse(slot.value.updatedAt)
-      : Number.NaN;
-    if (!Number.isFinite(timestamp)) return latest;
-    return latest === null ? timestamp : Math.max(latest, timestamp);
-  }, null);
+  const dataStatus = liveViewDataStatus(slots);
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
@@ -2621,7 +2644,11 @@ export function BrainOverview({
           data-onboarding-guide-target="dashboard"
           className="mb-3 flex shrink-0 flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
         >
-          <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+          <div
+            data-testid="overview-dashboard-row"
+            className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1"
+          >
+          {navigation}
           <LiveViewDashboardSwitcher
             views={views}
             current={view}
@@ -2652,13 +2679,11 @@ export function BrainOverview({
           />
           <p
             data-testid="overview-data-status"
-            className="shrink-0 font-mono text-[9px] text-muted-foreground"
+            className="basis-full pl-12 font-mono text-[9px] text-muted-foreground sm:basis-auto sm:pl-0"
           >
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : latestDataTimestamp !== null
-                ? `Updated ${new Date(latestDataTimestamp).toLocaleString()}`
-                : "No data yet"}
+              : dataStatus}
           </p>
           </div>
           <div

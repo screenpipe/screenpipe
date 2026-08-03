@@ -24,7 +24,7 @@ async function invokePi<T>(
     (
       command: string,
       invokeArgs: Record<string, unknown>,
-      done: (result: InvokeResult<unknown>) => void,
+      done: (result?: InvokeResult<unknown>) => void,
     ) => {
       const global = globalThis as any;
       const invoke =
@@ -39,9 +39,11 @@ async function invokePi<T>(
     },
     command,
     args,
-  )) as InvokeResult<T>;
+  )) as InvokeResult<T> | undefined;
 
-  if (!result.ok) throw new Error(result.error || `${command} failed`);
+  if (!result || !result.ok) {
+    throw new Error(result?.error || `${command} failed`);
+  }
   return result.value;
 }
 
@@ -62,6 +64,11 @@ export class PiConversationHarness {
 
   async initialize(): Promise<void> {
     await this.startMockModel();
+    await this.installWireRecorder();
+  }
+
+  /** Install only the Pi event recorder when the real local Worker owns egress. */
+  async initializeHostedGateway(): Promise<void> {
     await this.installWireRecorder();
   }
 
@@ -141,6 +148,63 @@ export class PiConversationHarness {
     await this.clearCaptures();
   }
 
+  /**
+   * Start Pi with the Screenpipe provider. The E2E app build resolves the
+   * provider base URL through Rust, so this exercises the real loopback-only
+   * gateway seam instead of supplying a custom-provider URL here.
+   */
+  async restartHostedGateway(userToken: string): Promise<void> {
+    if (!userToken) throw new Error("local hosted-AI gateway token is required");
+    await invokePi("pi_stop", { sessionId: this.sessionId }).catch(() => {});
+    const started = await invokePi<{ running: boolean; pid: number | null }>(
+      "pi_start",
+      {
+        sessionId: this.sessionId,
+        projectDir: join(E2E_DATA_DIR, "pi-history-hosted-gateway"),
+        userToken,
+        providerConfig: {
+          provider: "screenpipe-cloud",
+          url: "",
+          model: "gpt-5.4-mini",
+          apiKey: null,
+          maxTokens: 64,
+          systemPrompt: "Reply briefly for the local hosted-AI gateway E2E test.",
+        },
+      },
+    );
+    if (!started.running || typeof started.pid !== "number") {
+      throw new Error("hosted-gateway Pi process did not start");
+    }
+
+    // The chat's Pi status is refreshed on a three-second product interval.
+    // Let that real synchronization boundary observe this exact PID before the
+    // composer submits; otherwise the UI correctly assumes Pi is stopped and
+    // auto-starts the user's default preset over the test-owned process.
+    await browser.waitUntil(
+      async () => {
+        const info = await invokePi<{ running: boolean; pid: number | null }>(
+          "pi_info",
+          { sessionId: this.sessionId },
+        );
+        return info.running && info.pid === started.pid;
+      },
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "hosted-gateway Pi process did not remain ready",
+      },
+    );
+    await browser.pause(t(3_250));
+    const synchronized = await invokePi<{ running: boolean; pid: number | null }>(
+      "pi_info",
+      { sessionId: this.sessionId },
+    );
+    if (!synchronized.running || synchronized.pid !== started.pid) {
+      throw new Error("hosted-gateway Pi process changed before UI synchronization");
+    }
+    await this.clearCaptures();
+  }
+
   async clearCaptures(): Promise<void> {
     this.requests.length = 0;
     await browser.execute(() => {
@@ -204,7 +268,7 @@ export class PiConversationHarness {
         sessionId: string,
         first: string,
         second: string,
-        done: (result: InvokeResult<unknown>) => void,
+        done: (result?: InvokeResult<unknown>) => void,
       ) => {
         const global = globalThis as any;
         const invoke =
@@ -233,10 +297,10 @@ export class PiConversationHarness {
       this.sessionId,
       coldMessage,
       followUpMessage,
-    )) as InvokeResult<unknown>;
+    )) as InvokeResult<unknown> | undefined;
 
-    if (!result.ok)
-      throw new Error(result.error || "concurrent Pi prompts failed");
+    if (!result || !result.ok)
+      throw new Error(result?.error || "concurrent Pi prompts failed");
   }
 
   async waitForExchange(expectedCount: number, label: string): Promise<void> {

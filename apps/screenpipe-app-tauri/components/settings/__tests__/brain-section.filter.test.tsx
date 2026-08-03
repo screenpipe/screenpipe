@@ -134,7 +134,14 @@ vi.mock("@/components/settings/compact-markdown", () => ({
 }));
 
 vi.mock("@/components/settings/brain-overview", () => ({
-  BrainOverview: () => <div data-testid="brain-overview-stub" />,
+  BrainOverview: ({ navigation }: { navigation?: React.ReactNode }) => (
+    <div data-testid="brain-overview-stub">
+      <div data-testid="overview-dashboard-row">
+        {navigation}
+        <span>Time &amp; focus</span>
+      </div>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/ui/use-toast", () => ({
@@ -221,7 +228,10 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Memories8");
+      expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
+        "aria-label",
+        "switch Brain view, current: Memories",
+      );
     });
 
     openBrainViewMenu();
@@ -234,7 +244,10 @@ describe("BrainSection type filter", () => {
     render(<BrainSection />);
     await waitFor(() => expect(memoryRows().length).toBe(8));
     expect(artifactRows().length).toBe(0);
-    expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Memories8");
+    expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
+      "aria-label",
+      "switch Brain view, current: Memories",
+    );
     expect(analyticsMocks.capture).toHaveBeenCalledWith("brain_viewed", {
       tab: "memories",
     });
@@ -246,16 +259,31 @@ describe("BrainSection type filter", () => {
 
     selectBrainView("artifacts");
     await waitFor(() => expect(artifactRows().length).toBe(5));
-    expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Artifacts5");
+    expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
+      "aria-label",
+      "switch Brain view, current: Artifacts",
+    );
 
     selectBrainView("overview");
     await waitFor(() =>
-      expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Live Views3"),
+      expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
+        "aria-label",
+        "switch Brain view, current: Live Views",
+      ),
     );
+    const dashboardRow = screen.getByTestId("overview-dashboard-row");
+    const overviewSwitcher = within(dashboardRow).getByTestId(
+      "brain-view-switcher",
+    );
+    expect(overviewSwitcher).not.toHaveTextContent("Live Views");
+    expect(overviewSwitcher.querySelector("svg")).not.toBeNull();
 
     selectBrainView("memories");
     await waitFor(() => expect(memoryRows().length).toBe(8));
-    expect(screen.getByTestId("brain-view-switcher")).toHaveTextContent("Memories8");
+    expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
+      "aria-label",
+      "switch Brain view, current: Memories",
+    );
   });
 
   it("keeps the stale warning specific to memories", async () => {

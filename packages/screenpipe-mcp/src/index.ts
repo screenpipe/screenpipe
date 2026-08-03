@@ -26,7 +26,10 @@ import {
   flushMcpTelemetry,
   initMcpTelemetry,
 } from "./telemetry";
-import { createMcpQualifiedValueReporter } from "./qualified-value";
+import {
+  createMcpQualifiedValueReporter,
+  resolveMcpClient,
+} from "./qualified-value";
 import { discoverTeamApiBase, discoverTeamToken } from "./team-config";
 import { PKG_VERSION } from "./version";
 import { formatForElementPurpose } from "./element-format";
@@ -1308,6 +1311,11 @@ const qualifiedValue = createMcpQualifiedValueReporter((payload) =>
     method: "POST",
     body: JSON.stringify(payload),
   }),
+  () =>
+    resolveMcpClient(
+      process.env.SCREENPIPE_MCP_CLIENT,
+      server.getClientVersion()?.name,
+    ),
 );
 
 // Server's deserialize_flexible_datetime accepts ISO 8601 + "Nh ago" / "Nd ago"

@@ -330,9 +330,9 @@ fn decrypt_store_file(path: &Path) -> DecryptOutcome {
     if !is_encrypted_bytes(&data) {
         return DecryptOutcome::PlainOrMissing; // already plain JSON (or empty)
     }
-    // File is encrypted, so user must have encryption enabled
-    // Use get_key_if_encryption_enabled to prevent prompts if encryption is somehow disabled
-    let mut key_result = secrets::get_key_if_encryption_enabled();
+    // The encrypted file is authoritative: always ask the OS vault for its
+    // existing key instead of relying on a separate opt-in flag.
+    let mut key_result = secrets::get_key();
     // Transient credential-store hiccups right after boot/update are a known
     // wipe trigger (Windows Credential Manager especially). Retry briefly
     // before declaring the file locked. AccessDenied is a deliberate user
@@ -341,7 +341,7 @@ fn decrypt_store_file(path: &Path) -> DecryptOutcome {
         match key_result {
             secrets::KeyResult::NotFound | secrets::KeyResult::Unavailable => {
                 std::thread::sleep(std::time::Duration::from_millis(250 * attempt as u64));
-                key_result = secrets::get_key_if_encryption_enabled();
+                key_result = secrets::get_key();
             }
             _ => break,
         }

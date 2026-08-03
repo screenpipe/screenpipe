@@ -29,29 +29,8 @@ describe("onboardingFunnel", () => {
     );
     for (const [event, properties] of capture.mock.calls) {
       expect(event).toBe("onboarding_funnel_step");
-      expect(properties.funnel_version).toBe("onboarding_ui_v1");
+      expect(properties.funnel_version).toBe("onboarding_ui_v2");
     }
-  });
-
-  it("reduces connection state to privacy-safe buckets", () => {
-    onboardingFunnel.connectionsScreenCompleted(0);
-    onboardingFunnel.connectionsScreenCompleted(1);
-    onboardingFunnel.connectionsScreenCompleted(9);
-
-    expect(capture.mock.calls.map(([, properties]) => properties)).toEqual([
-      expect.objectContaining({
-        has_connection: false,
-        connection_count_bucket: "none",
-      }),
-      expect.objectContaining({
-        has_connection: true,
-        connection_count_bucket: "one",
-      }),
-      expect.objectContaining({
-        has_connection: true,
-        connection_count_bucket: "two_plus",
-      }),
-    ]);
   });
 
   it("does not allow arbitrary goal text into the event", () => {
@@ -61,7 +40,7 @@ describe("onboardingFunnel", () => {
     );
 
     expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
-      funnel_version: "onboarding_ui_v1",
+      funnel_version: "onboarding_ui_v2",
       step: "goal_submitted",
       goal_category: "unknown",
       live_view_flow_variant: "first_live_view",
@@ -76,7 +55,7 @@ describe("onboardingFunnel", () => {
     );
 
     expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
-      funnel_version: "onboarding_ui_v1",
+      funnel_version: "onboarding_ui_v2",
       step: "live_view_created",
       goal_category: "work_memory",
       live_view_flow_variant: "existing_live_views",
@@ -88,7 +67,7 @@ describe("onboardingFunnel", () => {
     onboardingFunnel.firstResultAccepted("work_memory", "positive_feedback");
 
     expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
-      funnel_version: "onboarding_ui_v1",
+      funnel_version: "onboarding_ui_v2",
       step: "first_result_accepted",
       goal_category: "work_memory",
       acceptance_action: "positive_feedback",

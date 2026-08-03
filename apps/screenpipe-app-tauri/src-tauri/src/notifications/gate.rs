@@ -12,7 +12,8 @@
 //!   3. quiet hours  — a recurring daily window (`quietHours`, local wall-clock)
 //!
 //! Two things punch through a *temporary* pause (snooze / quiet hours):
-//!   - `capture_stall` / `disk_pressure` — critical recording-stopped alerts.
+//!   - `capture_stall` / `disk_pressure` / `db_recovery` — critical
+//!     recording-stopped alerts.
 //!     screenpipe's whole job is to keep recording, so no reduced state hides
 //!     it (not even master-off).
 //!   - VIP pipes — pipes the user marked "always notify" (`allowDuringPause`).
@@ -30,9 +31,11 @@ use tauri::AppHandle;
 /// Keep this list tiny — it exists to prevent silent recording failure.
 pub const CAPTURE_STALL_NOTIFICATION_TYPE: &str = "capture_stall";
 pub const DISK_PRESSURE_NOTIFICATION_TYPE: &str = "disk_pressure";
+pub const DB_RECOVERY_NOTIFICATION_TYPE: &str = "db_recovery";
 pub const CRITICAL_TYPES: &[&str] = &[
     CAPTURE_STALL_NOTIFICATION_TYPE,
     DISK_PRESSURE_NOTIFICATION_TYPE,
+    DB_RECOVERY_NOTIFICATION_TYPE,
 ];
 
 pub fn is_critical_type(notification_type: &str) -> bool {

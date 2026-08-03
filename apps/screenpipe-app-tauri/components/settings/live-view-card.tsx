@@ -441,15 +441,10 @@ export function LiveViewCard({
         <div className={`min-w-0 ${hasActions ? "pr-32" : ""}`}>
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
           <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-            {COMPONENT_LABELS[slot.component]} ·{" "}
+            {COMPONENT_LABELS[slot.component]} · requested:{" "}
             {getLiveViewTimeRangeOption(timeRange).label}
           </p>
         </div>
-        {slot.value && !hasActions && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">
-            {timeAgo(slot.value.updatedAt)}
-          </span>
-        )}
       </div>
       {hasActions && (
         <div
@@ -642,15 +637,19 @@ export function LiveViewCard({
           onItemHandoff={onItemHandoff}
         />
       </div>
-      <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-2 text-[10px] text-muted-foreground">
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
           {slot.binding
             ? `Pipe: ${slot.binding.pipeName}`
             : "No Pipe connected"}
         </span>
         {slot.value && (
-          <span className="shrink-0">
-            artifact #{slot.value.artifactOutputId} · v
+          <span
+            data-testid={`overview-card-updated-${slot.id}`}
+            className="ml-auto shrink-0"
+          >
+            updated {timeAgo(slot.value.updatedAt)} · artifact #
+            {slot.value.artifactOutputId} · v
             {slot.value.artifactVersion}
           </span>
         )}
