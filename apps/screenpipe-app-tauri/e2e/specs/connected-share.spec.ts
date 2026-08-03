@@ -387,12 +387,36 @@ describe("connected snapshot sharing", function () {
   });
 
   it("reviews disconnected, direct-send, receipt, Live View, and Chat-draft states", async () => {
-    const meetingsNav = await waitForTestId("nav-meetings", 25_000);
-    await meetingsNav.click();
+    // Load the meetings section by URL instead of clicking the nav item.
+    // `section` is a query param (useQueryState), so when a previous spec left
+    // Home on ?section=meetings the click is a no-op: MeetingNotesSection stays
+    // mounted with the list it fetched before this spec seeded its meeting, and
+    // it only refetches on mount, on search, or on visibilitychange. A full
+    // load guarantees a fresh fetch that includes the seeded meeting.
+    await browser.execute(() => {
+      window.location.href = "/home?section=meetings";
+    });
+    await waitForTestId("home-page", 25_000);
     const meetingRow = await $(
       `//*[@role="button"][.//*[contains(text(), "${MEETING_TITLE}")]]`,
     );
-    await meetingRow.waitForExist({ timeout: t(25_000) });
+    await meetingRow.waitForExist({ timeout: t(25_000) }).catch(async (error) => {
+      const listText = (await browser
+        .execute(() => document.body?.innerText.slice(0, 2_000) ?? "")
+        .catch(() => "")) as string;
+      const seeded = await fetch(`${apiBase}/meetings?limit=5`, {
+        headers: apiHeaders,
+      })
+        .then((res) => res.text())
+        .then((body) => body.slice(0, 800))
+        .catch((fetchError) => String(fetchError));
+      console.error("Connected share meeting row diagnostic", {
+        listText,
+        seeded,
+      });
+      await saveScreenshot("connected-share-meeting-row-missing").catch(() => "");
+      throw error;
+    });
     await meetingRow.click();
     await waitForTestId("note-editor", 20_000);
     const sendMeeting = await $(`[title="send meeting notes"]`);
@@ -442,7 +466,21 @@ describe("connected snapshot sharing", function () {
       existsSync(await saveScreenshot("connected-share-meeting-connected")),
     ).toBe(true);
 
+    // The dialog always opens on "copy" — no destination is preselected, so
+    // opening the review can never send anything. Pick Slack explicitly.
+    const slackDestination = await waitForTestId(
+      "connected-share-destination-slack",
+      10_000,
+    );
+    await slackDestination.click();
     const confirmSlack = await waitForTestId("connected-share-confirm", 10_000);
+    await browser.waitUntil(
+      async () => (await confirmSlack.getText()).includes("Slack"),
+      {
+        timeout: t(10_000),
+        timeoutMsg: "Slack destination did not become the confirm action",
+      },
+    );
     expect(await confirmSlack.getText()).toContain("send to my Slack messages");
     await confirmSlack.click();
     await waitForTestId("connected-share-receipt", 10_000);
@@ -559,8 +597,13 @@ describe("connected snapshot sharing", function () {
         ),
       { timeout: t(20_000), timeoutMsg: "Chat draft was not prefilled" },
     );
+    // Wording per buildConnectedShareChatPrompt: Chat asks for the missing
+    // destination first, then takes a single approval before it creates.
     expect(String(await chatInput.getValue())).toContain(
-      "ask me to confirm the parent page or database",
+      "If the parent page or database is missing, ask for it first",
+    );
+    expect(String(await chatInput.getValue())).toContain(
+      "ask for approval exactly once",
     );
     expect(String(await chatInput.getValue())).not.toContain(
       "Released the new meeting flow",
