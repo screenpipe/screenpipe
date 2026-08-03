@@ -5,6 +5,7 @@ mod cancellable_query;
 mod db;
 #[cfg(test)]
 mod failpoint_vfs;
+mod recovery;
 mod sqlite_error;
 pub mod text_normalizer;
 pub mod text_similarity;
@@ -22,6 +23,13 @@ pub use db::{
     SemanticActorReference, SemanticCleanupResult, SemanticContextQuery, SemanticFrameContext,
     SemanticProjectionWriteResult, MEETING_END_REASON_AUTO_END, MEETING_END_REASON_EXPLICIT_STOP,
     MEETING_END_REASON_SHUTDOWN,
+};
+pub use recovery::{verify_fresh_sqlite_recovery_candidate, RecoveryVerification};
+pub use screenpipe_sqlite_coordinator::{
+    archive_resolved_sqlite_quarantine, persist_sqlite_quarantine,
+    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine, sqlite_file_identity,
+    sqlite_quarantine_exists, sqlite_quarantine_marker_path, SqliteFileIdentity,
+    SqliteQuarantineMarker,
 };
 pub use text_normalizer::{expand_search_query, sanitize_fts5_query};
 pub use types::*;

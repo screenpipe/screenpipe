@@ -47,5 +47,7 @@ export const qualifiedValue = {
     capture("app", "artifact", "accepted");
     return true;
   },
+  notificationFeedbackAccepted: (generatedByPipe: boolean) =>
+    capture(generatedByPipe ? "pipe" : "app", "artifact", "accepted"),
   pipeOutputCopied: () => capture("pipe", "artifact", "accepted"),
 } as const;

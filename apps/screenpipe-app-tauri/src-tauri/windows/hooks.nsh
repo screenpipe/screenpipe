@@ -207,6 +207,8 @@
 !macro NSIS_HOOK_POSTUNINSTALL
   ; Clean up runtime-downloaded PortableGit (bash for AI chat)
   RMDir /r "$LOCALAPPDATA\screenpipe\git-portable"
+  ; Clean up runtime-downloaded baseline bun (non-AVX2 CPU fallback)
+  RMDir /r "$LOCALAPPDATA\screenpipe\bun-baseline"
   ; Remove parent dir only if empty (preserves other screenpipe data)
   RMDir "$LOCALAPPDATA\screenpipe"
 !macroend

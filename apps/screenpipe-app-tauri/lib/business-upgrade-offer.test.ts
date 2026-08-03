@@ -20,7 +20,7 @@ describe("business upgrade offer", () => {
       ...BUSINESS_PLAN_FEATURES,
     ]);
     expect(DEFAULT_BUSINESS_UPGRADE_OFFER.copy.features.join(" ")).not.toMatch(
-      /cloud transcription|100x more AI queries/i,
+      /cloud transcription|100x more AI queries|hosted/i,
     );
   });
 

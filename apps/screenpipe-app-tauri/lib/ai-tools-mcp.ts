@@ -124,12 +124,16 @@ async function resolveLocalApiKeyForMcp(): Promise<string | undefined> {
  * desktop app over `npx`: no Node dependency, ~3× faster cold start, absolute
  * path. `forceNpx` is for copy-paste configs aimed at users without the app.
  */
-export async function buildMcpConfig(opts?: { forceNpx?: boolean }): Promise<McpCommand> {
+export async function buildMcpConfig(opts?: {
+  forceNpx?: boolean;
+  client?: ConnectAllToolId | "grok";
+}): Promise<McpCommand> {
   const apiKey = await resolveLocalApiKeyForMcp();
 
-  const env: Record<string, string> | undefined = apiKey
-    ? { SCREENPIPE_LOCAL_API_KEY: apiKey }
-    : undefined;
+  const env: Record<string, string> = {
+    SCREENPIPE_MCP_CLIENT: opts?.client ?? "unknown",
+    ...(apiKey ? { SCREENPIPE_LOCAL_API_KEY: apiKey } : {}),
+  };
 
   if (opts?.forceNpx) return { command: "npx", args: ["-y", "screenpipe-mcp@latest"], env };
   try {
@@ -262,7 +266,7 @@ export async function installClaudeMcp(): Promise<McpCommand> {
   const configPath = await getClaudeConfigPath();
   if (!configPath) throw new Error("unsupported platform");
   const config = await readJsonConfigStrict(configPath);
-  const mcp = await buildMcpConfig();
+  const mcp = await buildMcpConfig({ client: "claude" });
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
   (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
   await writeJsonConfig(configPath, config);
@@ -272,7 +276,7 @@ export async function installClaudeMcp(): Promise<McpCommand> {
 export async function installCursorMcp(): Promise<McpCommand> {
   const configPath = await getCursorMcpConfigPath();
   const config = await readJsonConfigStrict(configPath);
-  const mcp = await buildMcpConfig();
+  const mcp = await buildMcpConfig({ client: "cursor" });
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
   (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
   await writeJsonConfig(configPath, config);
@@ -310,7 +314,7 @@ export async function installCodexMcp(): Promise<McpCommand> {
   const configPath = await getCodexConfigPath();
   const existing = (await readConfigText(configPath)) ?? "";
 
-  const config = await buildMcpConfig();
+  const config = await buildMcpConfig({ client: "codex" });
   const withoutScreenpipe = removeCodexMcpConfig(existing);
   const next = `${withoutScreenpipe}${withoutScreenpipe ? "\n\n" : ""}${buildCodexMcpToml(config)}\n`;
 
@@ -367,7 +371,7 @@ export async function installOpenclawMcp(): Promise<McpCommand> {
   // openclaw.json holds the whole gateway/agent config — preserve everything
   // and only set mcpServers.screenpipe.
   const config = await readJsonConfigStrict(configPath);
-  const mcp = await buildMcpConfig();
+  const mcp = await buildMcpConfig({ client: "openclaw" });
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
   (config.mcpServers as Record<string, unknown>).screenpipe = { ...mcp, transport: "stdio" };
   await writeJsonConfig(configPath, config);
@@ -409,7 +413,7 @@ export async function isHermesMcpInstalled(): Promise<boolean> {
 
 export async function installHermesMcp(): Promise<McpCommand> {
   const configPath = await getHermesConfigPath();
-  const mcp = await buildMcpConfig();
+  const mcp = await buildMcpConfig({ client: "hermes" });
   const { command, args, env } = mcp;
   const existing = (await readConfigText(configPath)) ?? "";
 
@@ -495,7 +499,7 @@ export async function isWindsurfMcpInstalled(): Promise<boolean> {
 export async function installWindsurfMcp(): Promise<McpCommand> {
   const configPath = await getWindsurfMcpConfigPath();
   const config = await readJsonConfigStrict(configPath);
-  const mcp = await buildMcpConfig();
+  const mcp = await buildMcpConfig({ client: "windsurf" });
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
   (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
   await writeJsonConfig(configPath, config);

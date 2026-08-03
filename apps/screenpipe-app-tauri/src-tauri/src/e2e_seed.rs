@@ -221,15 +221,17 @@ async fn e2e_inject_db_hard_fault_impl(
     };
 
     database
-        .execute_raw_sql("DROP TABLE IF EXISTS e2e_hard_fault_probe")
+        .execute_raw_sql_write("DROP TABLE IF EXISTS e2e_hard_fault_probe")
         .await
         .map_err(|error| format!("failed to reset corruption fixture: {error}"))?;
     database
-        .execute_raw_sql("CREATE TABLE e2e_hard_fault_probe(id INTEGER PRIMARY KEY, payload BLOB)")
+        .execute_raw_sql_write(
+            "CREATE TABLE e2e_hard_fault_probe(id INTEGER PRIMARY KEY, payload BLOB)",
+        )
         .await
         .map_err(|error| format!("failed to create corruption fixture: {error}"))?;
     database
-        .execute_raw_sql(
+        .execute_raw_sql_write(
             "WITH RECURSIVE rows(id) AS (SELECT 1 UNION ALL SELECT id + 1 FROM rows WHERE id < 200) \
              INSERT INTO e2e_hard_fault_probe(id, payload) SELECT id, randomblob(3000) FROM rows",
         )
@@ -238,7 +240,7 @@ async fn e2e_inject_db_hard_fault_impl(
     checkpoint_hard_fault_fixture(&database).await?;
 
     let page_size = database
-        .execute_raw_sql("PRAGMA page_size")
+        .query_raw_sql("PRAGMA page_size")
         .await
         .map_err(|error| format!("failed to read page size: {error}"))?
         .as_array()
@@ -247,7 +249,7 @@ async fn e2e_inject_db_hard_fault_impl(
         .and_then(|value| value.as_u64())
         .ok_or_else(|| "SQLite returned no page size".to_string())?;
     let leaf_page = database
-        .execute_raw_sql(
+        .query_raw_sql(
             "SELECT pageno FROM dbstat WHERE name = 'e2e_hard_fault_probe' \
              AND pagetype = 'leaf' ORDER BY pageno DESC LIMIT 1",
         )

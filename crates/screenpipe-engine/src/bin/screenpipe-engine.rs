@@ -1942,7 +1942,9 @@ async fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
             info!("starting pi session secret-scrub worker (--redact-agent-session-secrets)");
-            let _ = Worker::new(db.pool.clone(), placeholder, cfg).spawn();
+            let _ =
+                Worker::new_with_writer(db.pool.clone(), db.coordinated_writer(), placeholder, cfg)
+                    .spawn();
         }
     }
 
@@ -1989,6 +1991,7 @@ async fn main() -> anyhow::Result<()> {
         //   4. Regex-only otherwise (still destructive — overwrites
         //      regex-redacted text into the source columns).
         let pool = db.pool.clone();
+        let writer = db.coordinated_writer();
         let labels = config.pii_redaction_labels.clone();
         let database_error_hook = redact_database_error_hook.clone();
         // Consistent-pseudonym tokens (issue #4206), opt-in. Loads (or
@@ -2112,7 +2115,7 @@ async fn main() -> anyhow::Result<()> {
                 columns,
                 ..Default::default()
             };
-            let _worker_handle = Worker::new(pool, pipeline_arc, worker_cfg)
+            let _worker_handle = Worker::new_with_writer(pool, writer, pipeline_arc, worker_cfg)
                 .with_database_error_hook(database_error_hook)
                 .spawn();
             // The worker runs for the lifetime of the engine. We don't
@@ -2211,9 +2214,14 @@ async fn main() -> anyhow::Result<()> {
                 policy: ImageRedactionPolicy::from_labels(&config.pii_redaction_labels),
                 ..Default::default()
             };
-            let _img_handle = ImageWorker::new(db.pool.clone(), detector, cfg)
-                .with_database_error_hook(redact_database_error_hook.clone())
-                .spawn();
+            let _img_handle = ImageWorker::new_with_writer(
+                db.pool.clone(),
+                db.coordinated_writer(),
+                detector,
+                cfg,
+            )
+            .with_database_error_hook(redact_database_error_hook.clone())
+            .spawn();
         }
     }
 

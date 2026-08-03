@@ -12,6 +12,7 @@ import {
   clampCanvasZoom,
   createCanvasBlockLayout,
   createCanvasDocument,
+  createTemplateCanvasDocument,
   reconcileCanvasDocument,
   snapCanvasValue,
   toSaveCanvasRequest,
@@ -73,6 +74,42 @@ function overlap(
 }
 
 describe("Live View Canvas layout evals", () => {
+  it("seeds the process-map template as a connected editable Canvas", () => {
+    const ids = [
+      "trigger-and-outcome",
+      "observed-steps",
+      "handoffs",
+      "bottlenecks",
+      "controls-and-exceptions",
+      "improvement-path",
+    ];
+    const processView = view(
+      ids.map((id, index) => ({
+        ...slot(index),
+        id,
+        title: id,
+      })),
+    );
+
+    const document = createTemplateCanvasDocument("process-map", processView);
+
+    expect(document?.mode).toBe("canvas");
+    expect(document?.blocks.map((block) => block.slotId)).toEqual(ids);
+    expect(document?.arrows.map((arrow) => arrow.label)).toEqual([
+      "starts",
+      "moves through",
+      "reveals",
+      "must preserve",
+      "enables",
+    ]);
+    expect(document?.notes[0].text).toContain(
+      "Observed workflow → handoffs → friction → controls → improvement",
+    );
+    expect(
+      createTemplateCanvasDocument("daily-memory", processView),
+    ).toBeNull();
+  });
+
   for (const count of [1, 2, 5, 12, 24]) {
     it(`lays out ${count} mixed-width source Blocks deterministically without overlap`, () => {
       const slots = Array.from({ length: count }, (_, index) =>
@@ -208,8 +245,22 @@ describe("Live View Canvas layout evals", () => {
 
     const reconciled = reconcileCanvasDocument(target, foreign);
     expect(reconciled.viewId).toBe(target.id);
-    expect(reconciled.mode).toBe("dashboard");
+    expect(reconciled.mode).toBe("canvas");
     expect(reconciled.revision).toBe(0);
+  });
+
+  it("migrates the removed dashboard mode to Canvas", () => {
+    const target = view([slot(0)]);
+    const dashboardDocument: BrainViewCanvasDocument = {
+      ...createCanvasDocument(target),
+      revision: 4,
+      mode: "dashboard",
+    };
+
+    const reconciled = reconcileCanvasDocument(target, dashboardDocument);
+
+    expect(reconciled.mode).toBe("canvas");
+    expect(reconciled.revision).toBe(4);
   });
 
   it("anchors a horizontal arrow to the facing edges of its nodes", () => {

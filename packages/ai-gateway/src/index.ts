@@ -567,8 +567,24 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) {
+				let rejectionReason: string | undefined;
+				try {
+					const payload = await costReservation.response.clone().json() as { error?: unknown };
+					if (typeof payload.error === 'string') {
+						rejectionReason = payload.error;
+						try {
+							const nested = JSON.parse(payload.error) as { error?: unknown };
+							if (typeof nested.error === 'string') rejectionReason = nested.error;
+						} catch {
+							// The error was already a plain code.
+						}
+					}
+				} catch {
+					// Preserve the original response even if diagnostic decoding fails.
+				}
 				console.warn('hosted AI admission rejected', {
 					gate: 'cost_reservation',
+					reason: rejectionReason,
 					tier: authResult.tier,
 					accountPlan: authResult.accountPlan,
 					hostedAiTrial: authResult.hostedAiTrial === true,

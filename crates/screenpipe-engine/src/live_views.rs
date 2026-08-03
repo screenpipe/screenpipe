@@ -687,6 +687,7 @@ pub fn list_bundled_live_view_kits() -> Result<Vec<LiveViewKit>, LiveViewError> 
         include_str!("../schemas/kits/standup-ready.live-view-kit.v1.json"),
         include_str!("../schemas/kits/commitments.live-view-kit.v1.json"),
         include_str!("../schemas/kits/accounting-follow-through.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/process-map.live-view-kit.v1.json"),
     ];
 
     BUNDLED_KITS
@@ -1388,7 +1389,7 @@ mod tests {
     #[test]
     fn bundled_kits_declare_every_pipe_used_by_their_templates() {
         let kits = list_bundled_live_view_kits().unwrap();
-        assert_eq!(kits.len(), 8);
+        assert_eq!(kits.len(), 9);
         assert_eq!(live_view_kit_json_schema()["$id"], LIVE_VIEW_KIT_SCHEMA);
         for kit in kits {
             validate_live_view_kit(&kit).unwrap();
@@ -1411,6 +1412,37 @@ mod tests {
             .blocks
             .iter()
             .any(|block| block.id == "resume-here"));
+    }
+
+    #[test]
+    fn process_map_has_source_backed_stages_for_a_connected_canvas() {
+        let kits = list_bundled_live_view_kits().unwrap();
+        let process_map = kits.iter().find(|kit| kit.id == "process-map").unwrap();
+
+        assert_eq!(
+            process_map.template.time_range,
+            LiveViewTimeRange::Last7Days
+        );
+        assert_eq!(
+            process_map
+                .template
+                .blocks
+                .iter()
+                .map(|block| block.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "trigger-and-outcome",
+                "observed-steps",
+                "handoffs",
+                "bottlenecks",
+                "controls-and-exceptions",
+                "improvement-path",
+            ]
+        );
+        assert!(process_map.template.blocks.iter().all(|block| block
+            .source
+            .as_ref()
+            .is_some_and(|source| source.pipe_name() == "automate-my-work")));
     }
 
     #[test]

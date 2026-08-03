@@ -12,7 +12,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.34"
+version = "0.4.36"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"
@@ -144,6 +144,7 @@ moka = { version = "0.12", features = ["future"] }
 # SQLite bundled C lib (pinned so SQLx and rusqlite link the same copy).
 # libsqlite3-sys 0.37 bundles SQLite 3.51.3, including the WAL-reset fix.
 libsqlite3-sys = { version = "=0.37.0", features = ["bundled"] }
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
 
 # String similarity
 strsim = "0.10"

@@ -3,7 +3,7 @@ members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.161"
+version = "2.5.167"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -117,6 +117,7 @@ raw-window-handle = "0.6"
 
 notify = "8.0.0"
 futures = "0.3.30"
+agent-client-protocol = "=1.2.0"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"

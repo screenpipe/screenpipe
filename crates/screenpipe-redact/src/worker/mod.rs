@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use screenpipe_resource::ResourceGovernor;
+use screenpipe_sqlite_coordinator::SqliteWritePool;
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
@@ -117,6 +118,7 @@ pub struct WorkerStatus {
 #[derive(Clone)]
 pub struct Worker {
     pool: SqlitePool,
+    writer: SqliteWritePool,
     redactor: Arc<dyn Redactor>,
     cfg: WorkerConfig,
     status: Arc<Mutex<WorkerStatus>>,
@@ -126,8 +128,19 @@ pub struct Worker {
 
 impl Worker {
     pub fn new(pool: SqlitePool, redactor: Arc<dyn Redactor>, cfg: WorkerConfig) -> Self {
+        let writer = SqliteWritePool::standalone(pool.clone());
+        Self::new_with_writer(pool, writer, redactor, cfg)
+    }
+
+    pub fn new_with_writer(
+        pool: SqlitePool,
+        writer: SqliteWritePool,
+        redactor: Arc<dyn Redactor>,
+        cfg: WorkerConfig,
+    ) -> Self {
         Self {
             pool,
+            writer,
             redactor,
             cfg,
             status: Arc::new(Mutex::new(WorkerStatus::default())),
@@ -593,8 +606,9 @@ impl Worker {
                 None
             };
 
+            let writer = self.writer.lock().await?;
             tables::write_redacted_element(
-                &self.pool,
+                writer.pool(),
                 row.id,
                 text_out.as_deref(),
                 props_out.as_deref(),
@@ -709,7 +723,8 @@ impl Worker {
         }
 
         for (row, redacted) in rows.iter().zip(outputs_by_row.iter()) {
-            tables::write_redacted_ui_events(&self.pool, &active, row.id, redacted).await?;
+            let writer = self.writer.lock().await?;
+            tables::write_redacted_ui_events(writer.pool(), &active, row.id, redacted).await?;
         }
 
         let n = rows.len() as u32;
@@ -776,8 +791,9 @@ impl Worker {
                     // they're warned + skipped inside the helper, unfixable by
                     // retry, so they must not wedge full_text).
                     writes += self.propagate_frame_derived(row, &map).await?;
+                    let writer = self.writer.lock().await?;
                     tables::write_redacted(
-                        &self.pool,
+                        writer.pool(),
                         TargetTable::FullText,
                         row.id,
                         &map.apply(&row.full_text),
@@ -802,8 +818,9 @@ impl Worker {
                     // accessibility_text is left to the Accessibility pass
                     // (it has its own model-pass fallback target).
                     let out = self.redactor.redact(&row.full_text).await?;
+                    let writer = self.writer.lock().await?;
                     tables::write_redacted(
-                        &self.pool,
+                        writer.pool(),
                         TargetTable::FullText,
                         row.id,
                         &out.redacted,
@@ -842,8 +859,9 @@ impl Worker {
         if cols.accessibility_text {
             if let Some(acc) = row.accessibility_text.as_deref() {
                 if !acc.is_empty() && row.accessibility_redacted_at.is_none() {
+                    let writer = self.writer.lock().await?;
                     tables::write_redacted(
-                        &self.pool,
+                        writer.pool(),
                         TargetTable::Accessibility,
                         row.id,
                         &map.apply(acc),
@@ -864,7 +882,8 @@ impl Worker {
                         &cols.a11y_json_fields(),
                     ) {
                         Ok(Some(json)) => {
-                            tables::write_redacted_tree(&self.pool, row.id, &json).await?;
+                            let writer = self.writer.lock().await?;
+                            tables::write_redacted_tree(writer.pool(), row.id, &json).await?;
                             writes += 1;
                         }
                         // Ok(None) means the map was empty — impossible here
@@ -884,7 +903,9 @@ impl Worker {
         if cols.window_name {
             if let Some(wn) = row.window_name.as_deref() {
                 if !wn.is_empty() && row.window_name_redacted_at.is_none() {
-                    tables::write_redacted_window_name(&self.pool, row.id, &map.apply(wn)).await?;
+                    let writer = self.writer.lock().await?;
+                    tables::write_redacted_window_name(writer.pool(), row.id, &map.apply(wn))
+                        .await?;
                     writes += 1;
                 }
             }
@@ -896,7 +917,9 @@ impl Worker {
         if cols.browser_url {
             if let Some(url) = row.browser_url.as_deref() {
                 if !url.is_empty() && row.browser_url_redacted_at.is_none() {
-                    tables::write_redacted_browser_url(&self.pool, row.id, &map.apply(url)).await?;
+                    let writer = self.writer.lock().await?;
+                    tables::write_redacted_browser_url(writer.pool(), row.id, &map.apply(url))
+                        .await?;
                     writes += 1;
                 }
             }
@@ -916,7 +939,8 @@ impl Worker {
             if !tj.is_empty() && row.text_json_redacted_at.is_none() {
                 match crate::ocr_json::redact_ocr_text_json(tj, map) {
                     Ok(Some(json)) => {
-                        tables::write_redacted_text_json(&self.pool, row.id, &json).await?;
+                        let writer = self.writer.lock().await?;
+                        tables::write_redacted_text_json(writer.pool(), row.id, &json).await?;
                         writes += 1;
                     }
                     // Ok(None) means the map was empty — impossible here
@@ -964,13 +988,15 @@ impl Worker {
                     .await
                     {
                         Ok(Some(json)) => {
-                            tables::write_redacted_tree(&self.pool, row.id, &json).await?;
+                            let writer = self.writer.lock().await?;
+                            tables::write_redacted_tree(writer.pool(), row.id, &json).await?;
                             writes += 1;
                         }
                         // No redactable text → stamp the verbatim blob so the
                         // row isn't re-scanned for the tree forever.
                         Ok(None) => {
-                            tables::write_redacted_tree(&self.pool, row.id, tree).await?;
+                            let writer = self.writer.lock().await?;
+                            tables::write_redacted_tree(writer.pool(), row.id, tree).await?;
                             writes += 1;
                         }
                         Err(crate::tree_json::TreeRedactError::Json(e)) => warn!(
@@ -991,7 +1017,9 @@ impl Worker {
             if let Some(wn) = row.window_name.as_deref() {
                 if !wn.is_empty() && row.window_name_redacted_at.is_none() {
                     let out = self.redactor.redact(wn).await?;
-                    tables::write_redacted_window_name(&self.pool, row.id, &out.redacted).await?;
+                    let writer = self.writer.lock().await?;
+                    tables::write_redacted_window_name(writer.pool(), row.id, &out.redacted)
+                        .await?;
                     writes += 1;
                 }
             }
@@ -1001,7 +1029,9 @@ impl Worker {
             if let Some(url) = row.browser_url.as_deref() {
                 if !url.is_empty() && row.browser_url_redacted_at.is_none() {
                     let out = self.redactor.redact(url).await?;
-                    tables::write_redacted_browser_url(&self.pool, row.id, &out.redacted).await?;
+                    let writer = self.writer.lock().await?;
+                    tables::write_redacted_browser_url(writer.pool(), row.id, &out.redacted)
+                        .await?;
                     writes += 1;
                 }
             }
@@ -1024,13 +1054,15 @@ impl Worker {
                 .await
                 {
                     Ok(Some(json)) => {
-                        tables::write_redacted_text_json(&self.pool, row.id, &json).await?;
+                        let writer = self.writer.lock().await?;
+                        tables::write_redacted_text_json(writer.pool(), row.id, &json).await?;
                         writes += 1;
                     }
                     // No redactable text → stamp the verbatim blob so the
                     // row isn't re-scanned for text_json forever.
                     Ok(None) => {
-                        tables::write_redacted_text_json(&self.pool, row.id, tj).await?;
+                        let writer = self.writer.lock().await?;
+                        tables::write_redacted_text_json(writer.pool(), row.id, tj).await?;
                         writes += 1;
                     }
                     Err(crate::tree_json::TreeRedactError::Json(e)) => warn!(
@@ -1069,7 +1101,8 @@ impl Worker {
         }
 
         for (row, out) in rows.iter().zip(outputs.iter()) {
-            tables::write_redacted(&self.pool, table, row.id, &out.redacted).await?;
+            let writer = self.writer.lock().await?;
+            tables::write_redacted(writer.pool(), table, row.id, &out.redacted).await?;
         }
 
         let n = rows.len() as u32;
