@@ -31,6 +31,8 @@ pub const DIRECT_UPLOAD_READABLE_MODE: &str = "direct_upload_readable";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DirectUploadRecordCounts {
     pub frames: usize,
+    #[serde(default)]
+    pub parsed: usize,
     pub audio: usize,
     pub ui: usize,
     pub snapshots: usize,
@@ -43,6 +45,8 @@ pub struct DirectUploadRecordCounts {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DirectUploadCursors {
     pub last_frame_ts: Option<String>,
+    #[serde(default)]
+    pub last_parsed_ts: Option<String>,
     pub last_audio_ts: Option<String>,
     pub last_ui_ts: Option<String>,
     #[serde(default)]
@@ -106,6 +110,7 @@ mod tests {
         (
             DirectUploadRecordCounts {
                 frames: 1,
+                parsed: 0,
                 audio: 0,
                 ui: 0,
                 snapshots: 0,
@@ -114,6 +119,7 @@ mod tests {
             },
             DirectUploadCursors {
                 last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
+                last_parsed_ts: None,
                 last_audio_ts: None,
                 last_ui_ts: None,
                 last_memory_ts: None,
@@ -159,5 +165,26 @@ mod tests {
         // And it round-trips.
         let back: DirectUploadManifest = serde_json::from_value(wire).unwrap();
         assert_eq!(back, manifest);
+    }
+
+    #[test]
+    fn older_manifests_default_new_parsed_fields_to_empty() {
+        let counts: DirectUploadRecordCounts = serde_json::from_value(serde_json::json!({
+            "frames": 1,
+            "audio": 0,
+            "ui": 0,
+            "snapshots": 0
+        }))
+        .unwrap();
+        let cursors: DirectUploadCursors = serde_json::from_value(serde_json::json!({
+            "last_frame_ts": "2026-05-13T18:00:00Z",
+            "last_audio_ts": null,
+            "last_ui_ts": null
+        }))
+        .unwrap();
+        assert_eq!(counts.parsed, 0);
+        assert_eq!(counts.memories, 0);
+        assert_eq!(cursors.last_parsed_ts, None);
+        assert_eq!(cursors.last_memory_ts, None);
     }
 }

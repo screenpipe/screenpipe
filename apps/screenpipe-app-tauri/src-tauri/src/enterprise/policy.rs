@@ -95,6 +95,7 @@ impl FeedbackSyncMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncStreams {
     pub frames: bool,
+    pub parsed: bool,
     pub audio: bool,
     pub ui_events: bool,
     pub memories: bool,
@@ -107,6 +108,7 @@ impl Default for SyncStreams {
     fn default() -> Self {
         Self {
             frames: true,
+            parsed: false,
             audio: true,
             ui_events: true,
             memories: true,
@@ -256,12 +258,13 @@ pub fn set_enterprise_policy(hidden_sections: Vec<String>) {
 /// Called by the frontend after fetching the `syncStreams` block from
 /// `/api/enterprise/policy`. Flat params rather than a struct so the
 /// specta-generated TS binding stays trivial. `frame_images` is the mode
-/// string ("off" | "cited" | "all"; legacy "true" accepted) — parsed
-/// fail-closed by FrameImagesMode::parse.
+/// string ("off" | "cited" | "all"; legacy "true" accepted) and invalid
+/// values fail closed in FrameImagesMode::parse.
 #[tauri::command]
 #[specta::specta]
 pub fn set_sync_streams(
     frames: bool,
+    parsed: bool,
     audio: bool,
     ui_events: bool,
     memories: bool,
@@ -273,6 +276,7 @@ pub fn set_sync_streams(
     let frame_images = FrameImagesMode::parse(&frame_images);
     let next = SyncStreams {
         frames,
+        parsed,
         audio,
         ui_events,
         memories,
@@ -283,8 +287,9 @@ pub fn set_sync_streams(
     if let Ok(mut guard) = SYNC_STREAMS.write() {
         if *guard != next {
             tracing::info!(
-                "enterprise: sync streams updated frames={} audio={} ui={} memories={} snapshots={} feedback={} frame_images={}",
+                "enterprise: sync streams updated frames={} parsed={} audio={} ui={} memories={} snapshots={} feedback={} frame_images={}",
                 frames,
+                parsed,
                 audio,
                 ui_events,
                 memories,
@@ -385,12 +390,12 @@ mod tests {
     }
 
     #[test]
-    fn sync_streams_default_is_all_true() {
-        // Brand-new process should see all streams enabled — preserves the
-        // behavior of every existing enterprise deployment before this
-        // feature ships.
+    fn sync_streams_default_keeps_parsed_data_off() {
+        // Existing streams preserve deployed behavior; the new structured
+        // data class requires an explicit admin choice.
         let s = SyncStreams::default();
         assert!(s.frames);
+        assert!(!s.parsed);
         assert!(s.audio);
         assert!(s.ui_events);
         assert!(s.memories);
@@ -406,6 +411,7 @@ mod tests {
         set_sync_streams(
             false,
             true,
+            true,
             false,
             true,
             false,
@@ -414,6 +420,7 @@ mod tests {
         );
         let s = current_sync_streams();
         assert!(!s.frames);
+        assert!(s.parsed);
         assert!(s.audio);
         assert!(!s.ui_events);
         assert!(s.memories);
@@ -421,6 +428,7 @@ mod tests {
         assert_eq!(s.feedback, FeedbackSyncMode::Ratings);
         set_sync_streams(
             true,
+            false,
             true,
             true,
             true,

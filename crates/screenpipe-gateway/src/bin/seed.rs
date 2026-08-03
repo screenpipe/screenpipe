@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use screenpipe_gateway::{GatewayConfig, S3BlobSource};
 use screenpipe_telemetry_wire::{
-    build_jsonl, compute_batch_id, direct_batch_key, AudioRow, DirectUploadCursors,
-    DirectUploadRecordCounts, FrameRow, MemoryRow, UiEventRow,
+    build_jsonl_with_parsed, compute_batch_id, direct_batch_key, AudioRow, DirectUploadCursors,
+    DirectUploadRecordCounts, FrameRow, MemoryRow, ParsedRow, UiEventRow,
 };
 
 struct Device {
@@ -46,7 +46,8 @@ const DEVICES: &[Device] = &[
 
 fn batch_for(device: &Device) -> Vec<u8> {
     let ts = |m: u32| format!("2026-07-22T{:02}:{:02}:00Z", device.hour, m);
-    build_jsonl(
+    let parsed_text = format!("Ada: quarterly roadmap {} structured update", device.marker);
+    build_jsonl_with_parsed(
         device.id,
         device.label,
         &[
@@ -73,6 +74,30 @@ fn batch_for(device: &Device) -> Vec<u8> {
                 )),
             },
         ],
+        &[ParsedRow {
+            frame_id: 2,
+            timestamp: ts(6),
+            app_name: "Slack".to_string(),
+            window_name: "#eng".to_string(),
+            browser_url: None,
+            text: parsed_text.clone(),
+            run_id: 1,
+            parser_id: "family.conversation".to_string(),
+            parser_version: "2".to_string(),
+            schema_version: 1,
+            app_platform: "macos".to_string(),
+            app_id: Some("com.tinyspeck.slackmacgap".to_string()),
+            app_executable: Some("Slack".to_string()),
+            app_version: None,
+            parse_duration_us: 1_000,
+            text_bytes: parsed_text.len(),
+            items: vec![serde_json::json!({
+                "kind": "message",
+                "body": format!("quarterly roadmap {} structured update", device.marker),
+                "actor": "Ada",
+            })],
+            actors: vec![serde_json::json!({"name": "Ada"})],
+        }],
         &[AudioRow {
             transcription_id: 1,
             timestamp: ts(2),
@@ -121,7 +146,7 @@ fn rollup_body() -> Vec<u8> {
     // fixture, and the fixture-parity test compares bytes.
     // br##..##: the body contains `"#` (the "#eng" window name), which would
     // close a single-hash raw string.
-    br##"{"day":"2026-07-22","records":10,"devices":["dev-alice","dev-bob"],"apps":{"Arc":6,"Slack":2},"top_windows":["quarterly planning","#eng"],"speakers":["presenter"],"active_hours":[9,10]}"##
+    br##"{"day":"2026-07-22","records":12,"devices":["dev-alice","dev-bob"],"apps":{"Arc":6,"Slack":4},"top_windows":["quarterly planning","#eng"],"speakers":["presenter"],"active_hours":[9,10]}"##
         .to_vec()
 }
 
@@ -135,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let body = batch_for(device);
         let counts = DirectUploadRecordCounts {
             frames: 2,
+            parsed: 1,
             audio: 1,
             ui: 1,
             snapshots: 0,
@@ -143,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let cursors = DirectUploadCursors {
             last_frame_ts: Some(format!("2026-07-22T{:02}:05:00Z", device.hour)),
+            last_parsed_ts: Some(format!("2026-07-22T{:02}:06:00Z", device.hour)),
             last_audio_ts: Some(format!("2026-07-22T{:02}:02:00Z", device.hour)),
             last_ui_ts: Some(format!("2026-07-22T{:02}:03:00Z", device.hour)),
             last_memory_ts: Some(format!("2026-07-22T{:02}:08:00Z", device.hour)),
