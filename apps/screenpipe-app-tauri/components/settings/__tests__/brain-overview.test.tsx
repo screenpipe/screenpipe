@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   refetchPipes: vi.fn(),
   capture: vi.fn(),
+  usageState: null as any,
+  openBusinessUpgradeSurface: vi.fn(),
 }));
 
 const localStorageMock = (() => {
@@ -116,6 +118,12 @@ vi.mock("@/lib/hooks/use-settings", () => ({
       ],
     },
   }),
+}));
+vi.mock("@/lib/hooks/use-usage-status", () => ({
+  useUsageStatus: () => mocks.usageState,
+}));
+vi.mock("@/lib/upgrade-flow", () => ({
+  openBusinessUpgradeSurface: mocks.openBusinessUpgradeSurface,
 }));
 vi.mock("@/lib/hooks/use-health-check", () => ({
   useHealthCheck: () => ({
@@ -304,8 +312,39 @@ const dailyMemoryTemplate = {
   ],
 };
 
+const processMapTemplate = {
+  id: "process-map",
+  title: "Process map",
+  description: "Map one repeated workflow from trigger to improvement.",
+  version: 1,
+  timeRange: "7d" as const,
+  periodPolicy: {
+    type: "selectable.v1" as const,
+    values: ["7d" as const, "30d" as const],
+  },
+  pipes: [{ name: "automate-my-work", distribution: "bundled" }],
+  slots: [
+    "trigger-and-outcome",
+    "observed-steps",
+    "handoffs",
+    "bottlenecks",
+    "controls-and-exceptions",
+    "improvement-path",
+  ].map((id, order) => ({
+    id,
+    title: id,
+    component: "markdown.v1" as const,
+    width: 6,
+    order,
+    intent: `Build ${id}`,
+    binding: { pipeName: "automate-my-work" },
+  })),
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.usageState = null;
+  mocks.openBusinessUpgradeSurface.mockResolvedValue(undefined);
   Object.defineProperty(window, "localStorage", {
     configurable: true,
     value: localStorageMock,
@@ -889,11 +928,47 @@ describe("BrainOverview", () => {
     expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
     fireEvent.focus(prompt);
     expect(screen.getByTestId("live-view-ai-options")).toBeTruthy();
+    fireEvent.change(prompt, { target: { value: "keep this draft" } });
+    fireEvent.blur(prompt, { relatedTarget: null });
+    expect(prompt.rows).toBe(1);
+    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
 
     await openDashboardMenu();
     expect(await screen.findByTestId("overview-new-dashboard")).toBeTruthy();
     expect(screen.getByTestId("overview-edit").textContent).toContain(
       "customize",
+    );
+  });
+
+  it("disables exhausted hosted AI and opens the native upgrade surface", async () => {
+    mocks.usageState = {
+      tier: "logged_in",
+      used_today: 30,
+      limit_today: 30,
+      remaining: 0,
+      resets_at: "2026-08-03T00:00:00.000Z",
+      upsell_banner: true,
+      upgrade_eligible: true,
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const prompt = (await screen.findByTestId(
+      "live-view-ai-prompt",
+    )) as HTMLTextAreaElement;
+    expect(prompt).toBeDisabled();
+    expect(prompt.placeholder).toBe("Hosted AI limit reached");
+    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
+    expect(screen.queryByTestId("live-view-ai-generate")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("live-view-ai-upgrade"));
+    await waitFor(() =>
+      expect(mocks.openBusinessUpgradeSurface).toHaveBeenCalledWith(
+        "live-view-ai-composer",
+      ),
     );
   });
 
@@ -1410,6 +1485,64 @@ describe("BrainOverview", () => {
         expectedRevision: 4,
         slots: [expect.objectContaining({ id: "focus-time" })],
       }),
+    );
+  });
+
+  it("installs the process map template with its connected Canvas seed", async () => {
+    const installedTemplateView: ViewDefinition = {
+      ...populatedView,
+      id: "process-map",
+      title: processMapTemplate.title,
+      revision: 1,
+      timeRange: processMapTemplate.timeRange,
+      periodPolicy: processMapTemplate.periodPolicy,
+      slots: processMapTemplate.slots.map((slot) => ({
+        ...slot,
+        value: null,
+        feedback: { upCount: 0, downCount: 0, current: null },
+        itemActions: { items: [] },
+      })),
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.listBrainViewTemplateKits.mockResolvedValue({
+      status: "ok",
+      data: [processMapTemplate],
+    });
+    mocks.installBrainViewTemplateKit.mockResolvedValue({
+      status: "ok",
+      data: installedTemplateView,
+    });
+    render(<BrainOverview />);
+
+    await openDashboardMenu();
+    fireEvent.click(await screen.findByTestId("overview-templates"));
+    fireEvent.click(
+      await screen.findByTestId("preview-live-view-template-process-map"),
+    );
+    fireEvent.click(await screen.findByTestId("overview-apply-template"));
+
+    await waitFor(() =>
+      expect(mocks.saveBrainViewCanvas).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewId: "process-map",
+          expectedRevision: null,
+          mode: "canvas",
+          arrows: [
+            expect.objectContaining({ label: "starts" }),
+            expect.objectContaining({ label: "moves through" }),
+            expect.objectContaining({ label: "reveals" }),
+            expect.objectContaining({ label: "must preserve" }),
+            expect.objectContaining({ label: "enables" }),
+          ],
+        }),
+      ),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/automate-my-work/enable",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 

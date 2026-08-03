@@ -6,12 +6,15 @@
 
 import { FormEvent, useState } from "react";
 import { Send, ThumbsDown, ThumbsUp } from "lucide-react";
+import posthog from "posthog-js";
 import {
   isNotificationFeedbackEligible,
   submitNotificationFeedback,
   type AiFeedbackRating,
   type FeedbackableNotification,
 } from "@/lib/ai-feedback";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
+import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
 
 interface NotificationFeedbackProps {
   notification: FeedbackableNotification;
@@ -36,6 +39,18 @@ export function NotificationFeedback({
     setSaveState("saving");
     try {
       await submitFeedback(notification, nextRating, detail);
+      posthog.capture("notification_feedback_submitted", {
+        feedback_rating: nextRating,
+        ...notificationAnalyticsProperties(
+          notification,
+          variant === "inbox" ? "bell" : "toast",
+        ),
+      });
+      if (nextRating === "up") {
+        qualifiedValue.notificationFeedbackAccepted(
+          Boolean(notification.pipe_name),
+        );
+      }
       setRating(nextRating);
       setSaveState("saved");
     } catch (error) {

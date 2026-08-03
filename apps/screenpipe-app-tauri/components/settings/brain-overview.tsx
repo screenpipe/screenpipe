@@ -75,6 +75,7 @@ import {
 } from "@/lib/active-ai-preset";
 import { Input } from "@/components/ui/input";
 import {
+  createTemplateCanvasDocument,
   reconcileCanvasDocument,
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
@@ -1832,6 +1833,7 @@ export function BrainOverview({
           `You can keep up to ${MAX_DASHBOARDS} dashboards. Delete one before creating another.`,
         );
       }
+      await pumpCanvasSaves();
       const requestedTitle = creatingNew
         ? uniqueDashboardTitle(draft?.title.trim() || kit.title, views)
         : draft?.title.trim() || kit.title;
@@ -1857,6 +1859,30 @@ export function BrainOverview({
         if (renameResult.status === "error")
           throw new Error(renameResult.error);
         installedView = renameResult.data;
+      }
+      let canvasSeedFailure: string | null = null;
+      const canvasSeed = createTemplateCanvasDocument(kit.id, installedView);
+      if (canvasSeed) {
+        const expectedCanvasRevision = creatingNew
+          ? null
+          : (canvasServerRevisionsRef.current.get(installedView.id) ?? null);
+        const canvasResult = await commands.saveBrainViewCanvas({
+          ...toSaveCanvasRequest({
+            ...canvasSeed,
+            revision: expectedCanvasRevision ?? 0,
+          }),
+          expectedRevision: expectedCanvasRevision,
+        });
+        if (canvasResult.status === "error") {
+          canvasSeedFailure = canvasResult.error;
+        } else {
+          canvasServerRevisionsRef.current.set(
+            installedView.id,
+            canvasResult.data.revision,
+          );
+          canvasLatestRef.current = canvasResult.data;
+          setCanvasDocument(canvasResult.data);
+        }
       }
       const pipeEnableFailures: string[] = [];
       await Promise.all(
@@ -1898,7 +1924,9 @@ export function BrainOverview({
         description:
           pipeEnableFailures.length > 0
             ? `Open Pipes to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
-            : undefined,
+            : canvasSeedFailure
+              ? `The source-backed Blocks were installed, but the process Canvas could not be arranged: ${canvasSeedFailure}`
+              : undefined,
       });
       posthog.capture("live_view_dashboard_saved", {
         ...liveViewAnalyticsProperties(

@@ -16,6 +16,7 @@ import { showChatWithPrefill } from "@/lib/chat-utils";
 import { localFetch, isLocalApiUrl } from "@/lib/api";
 import { routeNotificationDeeplink } from "@/lib/notifications/actions";
 import {
+  notificationActionAnalyticsProperties,
   notificationAnalyticsProperties,
   type NotificationAnalyticsContext,
 } from "@/lib/notification-analytics";
@@ -97,8 +98,6 @@ const NotificationHandler: React.FC = () => {
         // PostHog analytics (same as webview panel)
         const posthog = (await import("posthog-js")).default;
         posthog.capture("notification_shown", {
-          type: data.type,
-          id: data.id,
           ...notificationAnalyticsProperties(data, "toast"),
         });
 
@@ -130,7 +129,6 @@ const NotificationHandler: React.FC = () => {
   useEffect(() => {
     const unlisten = listen<string>("native-notification-action", async (event) => {
       let actionType: string | null = null;
-      let actionName: string | null = null;
       let analytics = notificationAnalyticsProperties(
         nativeNotificationRef.current,
         "toast",
@@ -138,7 +136,6 @@ const NotificationHandler: React.FC = () => {
       try {
         const action = JSON.parse(event.payload);
         actionType = action.type ?? null;
-        actionName = action.action ?? null;
         console.log("native notification action:", action);
         const notification = nativeNotificationRef.current;
         analytics = notificationAnalyticsProperties(
@@ -159,9 +156,7 @@ const NotificationHandler: React.FC = () => {
           return;
         }
         posthog.capture("notification_action", {
-          action: action.action,
-          actionType: action.type,
-          action_type: action.type,
+          ...notificationActionAnalyticsProperties(action.type),
           ...analytics,
         });
         // Copy keeps the native panel open, so retain its source context for a
@@ -338,11 +333,8 @@ const NotificationHandler: React.FC = () => {
         try {
           const posthog = (await import("posthog-js")).default;
           posthog.capture("notification_action_error", {
-            action: actionName,
-            actionType,
-            action_type: actionType,
+            ...notificationActionAnalyticsProperties(actionType),
             ...analytics,
-            error: String(e),
           });
         } catch {
           // Analytics must never hide the original action failure.

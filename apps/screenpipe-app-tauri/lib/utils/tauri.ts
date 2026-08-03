@@ -2387,11 +2387,11 @@ async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
  * Called by the frontend after fetching the `syncStreams` block from
  * `/api/enterprise/policy`. Flat params rather than a struct so the
  * specta-generated TS binding stays trivial. `frame_images` is the mode
- * string ("off" | "cited" | "all"; legacy "true" accepted) — parsed
- * fail-closed by FrameImagesMode::parse.
+ * string ("off" | "cited" | "all"; legacy "true" accepted) and invalid
+ * values fail closed in FrameImagesMode::parse.
  */
-async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, feedback: string, frameImages: string) : Promise<void> {
-    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots, feedback, frameImages });
+async setSyncStreams(frames: boolean, parsed: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, feedback: string, frameImages: string) : Promise<void> {
+    await TAURI_INVOKE("set_sync_streams", { frames, parsed, audio, uiEvents, memories, snapshots, feedback, frameImages });
 },
 async setTrayHealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_health_icon");

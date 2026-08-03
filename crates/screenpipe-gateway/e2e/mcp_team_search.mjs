@@ -86,6 +86,7 @@ notify("notifications/initialized");
 const tools = await request(2, "tools/list", {});
 const names = tools.result.tools.map((t) => t.name);
 assert(names.includes("team-search"), `team-search not registered (got ${names.join(",")})`);
+assert(names.includes("team-records"), `team-records not registered (got ${names.join(",")})`);
 
 const search = await request(3, "tools/call", {
   name: "team-search",
@@ -104,8 +105,22 @@ const devicesResp = await request(4, "tools/call", { name: "team-devices", argum
 const deviceBody = JSON.parse(devicesResp.result.content[0].text);
 assert(deviceBody.count === 2, `expected 2 devices, got ${deviceBody.count}`);
 
+const parsedRecords = await request(5, "tools/call", {
+  name: "team-records",
+  arguments: { kind: "parsed", since: "2026-07-22T00:00:00Z", limit: 50 },
+});
+assert(
+  !parsedRecords.result.isError,
+  `team-records parsed errored: ${JSON.stringify(parsedRecords.result)}`
+);
+const parsedBody = JSON.parse(parsedRecords.result.content[0].text);
+assert(
+  parsedBody.record_count === 2 && parsedBody.records.every((r) => r.kind === "parsed"),
+  `expected two parsed records, got ${JSON.stringify(parsedBody)}`
+);
+
 console.log(
-  `MCP team-search via gateway: ${body.result_count} results across ` +
+  `MCP team-search + parsed team-records via gateway: ${body.result_count} results across ` +
     `${[...devices].sort().join(", ")} — PASS`
 );
 child.kill();

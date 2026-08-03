@@ -1,7 +1,7 @@
 repo:   screenpipe/website (PRIVATE)
-branch: ezra/archive-admin-local-setup-25f21c   (PR #579)
-commit: a144d3c38bdd7b7a0cf1cf673a447057208c8859
-date:   2026-07-24T21:32:03-07:00
+branch: enterprise-gateway-fargate-token-flow
+commit: 1dd050439a9f33f0c8b2ff593ff7ea22d7883309
+date:   2026-07-29T22:18:33Z
 files:  openapi/enterprise-v1.yaml       -> enterprise-v1.yaml
         conformance/spec.ts              -> spec.ts
         conformance/cases.ts             -> cases.ts

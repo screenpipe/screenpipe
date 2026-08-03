@@ -1404,6 +1404,30 @@ export function BrainSection() {
       ? Math.floor((Date.now() - new Date(newestCreatedAt).getTime()) / 86400000)
       : 0;
   const isStale = staleDays >= 1;
+  const brainViewOptions = [
+    {
+      value: "overview" as const,
+      label: "Live Views",
+      count: liveViewsTabCount,
+      Icon: LayoutDashboard,
+    },
+    {
+      value: "memories" as const,
+      label: "Memories",
+      count: memoriesTabCount,
+      Icon: Eye,
+    },
+    {
+      value: "artifacts" as const,
+      label: "Artifacts",
+      count: artifactsTabCount,
+      Icon: FolderOpen,
+    },
+  ];
+  const activeBrainView =
+    brainViewOptions.find(({ value }) => value === typeFilter) ??
+    brainViewOptions[0];
+  const ActiveBrainViewIcon = activeBrainView.Icon;
 
   return (
     <div data-testid="section-brain" className="h-full overflow-hidden">
@@ -1442,93 +1466,48 @@ export function BrainSection() {
       )}
 
       <div className="flex items-center justify-between gap-3">
-        {typeFilter === "overview" ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                data-testid="brain-filter-overview"
-                className="inline-flex h-8 items-center gap-2 border border-border bg-background px-2.5 text-xs font-medium transition-colors hover:bg-foreground hover:text-background"
-                aria-label="switch Brain view"
-              >
-                <LayoutDashboard className="h-3.5 w-3.5" />
-                <span>Live Views</span>
-                {liveViewsTabCount !== null && (
-                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                    {liveViewsTabCount.toLocaleString()}
-                  </span>
-                )}
-                <ChevronDown className="h-3 w-3" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 rounded-none">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-testid="brain-view-switcher"
+              className="inline-flex h-8 items-center gap-2 border border-border bg-background px-2.5 text-xs font-medium transition-colors hover:bg-foreground hover:text-background"
+              aria-label={`switch Brain view, current: ${activeBrainView.label}`}
+            >
+              <ActiveBrainViewIcon className="h-3.5 w-3.5" />
+              <span>{activeBrainView.label}</span>
+              {activeBrainView.count !== null && (
+                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                  {activeBrainView.count.toLocaleString()}
+                </span>
+              )}
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="w-56 rounded-none"
+            data-testid="brain-view-menu"
+          >
+            {brainViewOptions.map(({ value, label, count, Icon }) => (
               <DropdownMenuItem
-                className="bg-muted/50"
-                onSelect={() => switchTypeFilter("overview")}
-              >
-                <LayoutDashboard className="mr-2 h-3.5 w-3.5" />
-                <span className="flex-1">Live Views</span>
-                {liveViewsTabCount !== null && (
-                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                    {liveViewsTabCount.toLocaleString()}
-                  </span>
-                )}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                data-testid="brain-filter-memories"
-                onSelect={() => switchTypeFilter("memories")}
-              >
-                <Eye className="mr-2 h-3.5 w-3.5" />
-                <span className="flex-1">Memories</span>
-                {memoriesTabCount !== null && (
-                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                    {memoriesTabCount.toLocaleString()}
-                  </span>
-                )}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                data-testid="brain-filter-artifacts"
-                onSelect={() => switchTypeFilter("artifacts")}
-              >
-                <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                <span className="flex-1">Artifacts</span>
-                {artifactsTabCount !== null && (
-                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                    {artifactsTabCount.toLocaleString()}
-                  </span>
-                )}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : (
-          <div className="inline-flex items-center gap-1 border-b border-border">
-            {(
-              [
-                { value: "overview", label: "Live Views", count: liveViewsTabCount ?? undefined },
-                { value: "memories", label: "Memories", count: memoriesTabCount ?? undefined },
-                { value: "artifacts", label: "Artifacts", count: artifactsTabCount ?? undefined },
-              ] as { value: TypeFilter; label: string; count?: number }[]
-            ).map(({ value, label, count }) => (
-              <button
                 key={value}
                 data-testid={`brain-filter-${value}`}
-                onClick={() => switchTypeFilter(value)}
-                className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                  typeFilter === value
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
+                className={typeFilter === value ? "bg-muted/50" : undefined}
+                aria-current={typeFilter === value ? "page" : undefined}
+                onSelect={() => switchTypeFilter(value)}
               >
-                {label}
-                {count !== undefined && (
-                  <span className="ml-2 text-xs text-muted-foreground">
+                <Icon className="mr-2 h-3.5 w-3.5" />
+                <span className="flex-1">{label}</span>
+                {count !== null && (
+                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
                     {count.toLocaleString()}
                   </span>
                 )}
-              </button>
+              </DropdownMenuItem>
             ))}
-          </div>
-        )}
+          </DropdownMenuContent>
+        </DropdownMenu>
         {showFilterButton && (
           <Popover
             open={filterOpen}

@@ -2155,7 +2155,8 @@ pub struct TeamRecordsArgs {
     #[arg(long)]
     pub device_id: String,
 
-    /// Record kind: `frame` (screen) / `audio` / `all`. Default `all`.
+    /// Record kind: `frame` (screen) / `parsed` (structured app data) /
+    /// `audio` / `all`. Default `all`.
     #[arg(long, default_value = "all")]
     pub kind: String,
 

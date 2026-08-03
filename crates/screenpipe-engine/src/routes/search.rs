@@ -11,6 +11,7 @@ use axum::{
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::pipes::permissions::PipePermissions;
 
+use super::request_origin::ExplicitApiClient;
 use super::response_format::{
     is_passthrough, parse_fields, parse_format, render_list, rows_from, OutputFormat,
 };
@@ -403,6 +404,7 @@ fn group_related_tags(rows: Vec<(String, i64)>) -> std::collections::HashMap<Str
 
 pub struct SearchCacheEntry {
     json_body: Bytes,
+    result_count: usize,
 }
 
 const SEARCH_CACHE_MAX_ITEMS: usize = 200;
@@ -427,7 +429,19 @@ fn build_search_cache_entry(response: &SearchResponse) -> Option<SearchCacheEntr
     }
     Some(SearchCacheEntry {
         json_body: Bytes::from(json_body),
+        result_count: response.data.len(),
     })
+}
+
+fn capture_direct_api_search_value(client: &ExplicitApiClient, result_count: usize) {
+    if client.is_direct_api() && result_count > 0 {
+        analytics::capture_event_nonblocking(
+            "qualified_value_event",
+            crate::qualified_value::api_outcome_properties(
+                crate::qualified_value::ApiOutcomeKind::SearchResult,
+            ),
+        );
+    }
 }
 
 /// Middle-truncate a string to at most `max_chars` characters.
@@ -824,6 +838,7 @@ pub(crate) async fn search(
     Query(mut query): Query<SearchQuery>,
     State(state): State<Arc<AppState>>,
     OptionalPipePerms(pipe_perms): OptionalPipePerms,
+    api_client: ExplicitApiClient,
 ) -> Result<Response<Body>, (StatusCode, JsonResponse<serde_json::Value>)> {
     // Presentation-only: parsed up front so a bad `format` 400s before any
     // DB work. Only the default JSON representation is cached; alternate
@@ -866,6 +881,7 @@ pub(crate) async fn search(
     if !query.include_frames && cacheable_render {
         if let Some(cached) = state.search_cache.get(&cache_key).await {
             debug!("search cache hit for key {}", cache_key);
+            capture_direct_api_search_value(&api_client, cached.result_count);
             return Ok(render_cached_search(&cached));
         }
     }
@@ -1261,6 +1277,8 @@ pub(crate) async fn search(
         cloud,
         related,
     };
+
+    capture_direct_api_search_value(&api_client, response.data.len());
 
     // Cache the result (only for queries without frame extraction). Cache hits
     // serve the pre-serialized JSON bytes directly for the common response

@@ -26,7 +26,7 @@ mod imp {
     use base64::Engine;
     use ee_sync::{
         AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FeedbackRow, FrameRow, LocalApiClient,
-        MemoryRow, SnapshotRow, UiEventRow,
+        MemoryRow, ParsedRow, SnapshotRow, UiEventRow,
     };
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
@@ -101,6 +101,7 @@ mod imp {
     #[serde(tag = "type", content = "content")]
     enum LocalSearchItem {
         OCR(LocalOcr),
+        Parsed(ParsedRow),
         Audio(LocalAudio),
         Input(LocalInput),
         // Memory/UI variants ignored — only the ones we sync are listed.
@@ -284,6 +285,46 @@ mod imp {
                     });
                 }
             }
+            out.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+            Ok(out)
+        }
+
+        async fn fetch_parsed_since(
+            &self,
+            since_ts: Option<&str>,
+            limit: u32,
+        ) -> Result<Vec<ParsedRow>, EnterpriseSyncError> {
+            let mut url = format!(
+                "{}/search?content_type=parsed&limit={}&order=ascending",
+                self.api_url_base, limit
+            );
+            if let Some(ts) = since_ts {
+                url.push_str(&format!("&start_time={}", urlencoding::encode(ts)));
+            }
+            let resp = self
+                .auth(self.http.get(&url))
+                .send()
+                .await
+                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+            if !resp.status().is_success() {
+                return Err(EnterpriseSyncError::LocalApi(format!(
+                    "GET {} -> {}",
+                    url,
+                    resp.status()
+                )));
+            }
+            let body: LocalSearchResponse = resp
+                .json()
+                .await
+                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+            let mut out = body
+                .data
+                .into_iter()
+                .filter_map(|item| match item {
+                    LocalSearchItem::Parsed(parsed) => Some(parsed),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             out.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
             Ok(out)
         }

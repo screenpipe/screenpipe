@@ -39,7 +39,12 @@ interface CanvasDocument {
     height: number;
   }>;
   notes: Array<{ id: string; text: string }>;
-  arrows: Array<{ id: string; fromId: string; toId: string }>;
+  arrows: Array<{
+    id: string;
+    fromId: string;
+    toId: string;
+    label: string | null;
+  }>;
   strokes: Array<{ id: string }>;
 }
 
@@ -369,6 +374,68 @@ describe("Brain Live Views", function () {
     if (starterViews.some((candidate) => candidate.id === "my-dashboard")) {
       await invokeOrThrow("delete_brain_view", { id: "my-dashboard" });
     }
+  });
+
+  it("installs the process map template as a connected Canvas", async () => {
+    await waitForAppReady();
+    await openHomeWithDiagnostics();
+    const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
+    if (existingViews.some((view) => view.id === "process-map")) {
+      await invokeOrThrow("delete_brain_view", { id: "process-map" });
+    }
+
+    const brainNav = await waitForTestId("nav-brain", 10_000);
+    await brainNav.click();
+    await waitForTestId("section-brain", 15_000);
+    await openDashboardMenu();
+    await waitForTestId("overview-templates", 10_000).then((element) =>
+      element.click(),
+    );
+    await waitForTestId("preview-live-view-template-process-map", 10_000).then(
+      (element) => element.click(),
+    );
+    await waitForTestId("overview-apply-template", 10_000).then((element) =>
+      element.click(),
+    );
+
+    const selector = await waitForTestId("overview-dashboard-selector", 20_000);
+    await browser.waitUntil(
+      async () => (await selector.getText()).includes("Process map"),
+      {
+        timeout: t(20_000),
+        timeoutMsg: "Process map dashboard was not selected after install",
+      },
+    );
+    await waitForTestId("live-view-canvas", 15_000);
+    expect(await $("textarea[aria-label='Canvas note']").getValue()).toContain(
+      "Observed workflow → handoffs → friction → controls → improvement",
+    );
+    expect(await $$(`[data-testid^='canvas-arrow-']`)).toHaveLength(5);
+    const canvasText = (await browser.execute(
+      () => document.body?.innerText || "",
+    )) as string;
+    expect(canvasText).toContain("moves through");
+    expect(canvasText).toContain("must preserve");
+    await waitForTestId("canvas-fit", 10_000).then((element) =>
+      element.click(),
+    );
+    await browser.pause(300);
+    const screenshot = await saveScreenshot("brain-process-map-template");
+    expect(existsSync(screenshot)).toBe(true);
+
+    const saved = await invokeOrThrow<CanvasDocument | null>(
+      "load_brain_view_canvas",
+      { viewId: "process-map" },
+    );
+    expect(saved?.mode).toBe("canvas");
+    expect(saved?.arrows.map((arrow) => arrow.label)).toEqual([
+      "starts",
+      "moves through",
+      "reveals",
+      "must preserve",
+      "enables",
+    ]);
+    await invokeOrThrow("delete_brain_view", { id: "process-map" });
   });
 
   it("renders a Pipe-filled Live View template", async () => {

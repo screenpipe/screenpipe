@@ -304,7 +304,7 @@ List available monitors/screens for capture.
 Manage pipes — scheduled AI automations that run a markdown prompt on a schedule (e.g. "every day at 9am"). `list-pipes` shows enabled state + schedule; `create-pipe` creates one; `run-pipe` triggers a one-off test run; `pipe-logs` fetches recent execution output.
 
 ### team-search / team-devices / team-records
-Team-tier tools, registered only when an enterprise admin token is configured. `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), and `team-records` dumps chronological org data for a time window. Orgs running their own query gateway must also set `SCREENPIPE_TEAM_API_URL` — see [Enterprise team tools](#enterprise-team-tools-team-) for the full precedence order.
+Team-tier tools, registered only when an enterprise admin token is configured. `team-search` runs substring search across the entire org's telemetry, `team-devices` lists enrolled devices (hostname, OS), and `team-records` dumps chronological frame, parsed-app, or audio data for a time window. Orgs running their own query gateway must also set `SCREENPIPE_TEAM_API_URL` — see [Enterprise team tools](#enterprise-team-tools-team-) for the full precedence order.
 
 ## Example Queries in Claude
 

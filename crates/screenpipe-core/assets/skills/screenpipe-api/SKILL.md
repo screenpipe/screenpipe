@@ -20,8 +20,14 @@ Local REST API at `http://localhost:3030`.
 3. curl fails instantly (`Failed to connect ... after 0 ms`) even though screenpipe is running → your shell is network-sandboxed; stop retrying curl and use the MCP tools.
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/..."
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/..."
 ```
+
+The fixed `X-Screenpipe-Client: api` value attributes a successful, nonempty
+external retrieval to the API surface. Never put an agent name, customer name,
+project, prompt, or other dynamic value in this header.
 
 No-auth endpoints: `/health`, `/ws/health`, `/audio/device/status`, `/connections/oauth/callback`, `/frames/*`, `/notify`, `/pipes/store/*`.
 
@@ -38,7 +44,9 @@ Cut tokens at the source on list endpoints (`/search`, `/elements`): add `&forma
 Default broad-context call. Bundles apps, windows, key_texts, audio, edited_files, recording health, top memories, deduped screen+audio snippets, and a `data_status`/`query_status`/`guidance` triple.
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/activity-summary?start_time=30m%20ago&end_time=now"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/activity-summary?start_time=30m%20ago&end_time=now"
 ```
 
 Required: `start_time`, `end_time`. Optional: `app_name`, `q` (filters memories+snippets, drives `query_status`); `include_recording|memories|snippets|guidance=false` to slim (each defaults true); `max_snippets`, `max_snippet_chars`, `max_memories`. For a lean time-tracking sweep also set `include_key_texts=false` (biggest win), `include_apps=false`, `include_windows=false` — `total_active_minutes` + per-app/window `minutes` + the status triple still return.
@@ -54,7 +62,9 @@ Required: `start_time`, `end_time`. Optional: `app_name`, `q` (filters memories+
 Use when `/activity-summary` says `ok` but you need verbatim quotes, media paths, frame IDs, or a specific match.
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
 ```
 
 | Parameter | Required | Description |

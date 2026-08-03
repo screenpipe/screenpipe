@@ -561,9 +561,23 @@ export function normalizeAppUser(rawUser: any, token: string): AppUser {
   // Explicit server denial is stronger than a stale users.plan label left by a
   // canceled or refunded account.
   const explicitlyFree = rawUser?.app_entitled === false && !cloudSubscribed;
+  // The server computes `subscription_plan` per request and can omit it while
+  // still returning a full entitlement. The cloud_subscribed/app_entitled
+  // fallbacks below invent a *label* ("pro"/"standard"), and the entitlement is
+  // passed through verbatim — so inventing one when the entitlement already
+  // names a plan guarantees the two disagree. hasVerifiedPaidPlanAt requires
+  // them to be exactly equal, so that mismatch collapses the account to
+  // "unknown" policy, which in turn clears hasConsumerAppSubscription and trips
+  // the enterprise-app gate for a fully paid consumer account. Prefer the
+  // entitlement's own plan so the two sides cannot diverge.
+  const rawEntitlementPlan =
+    typeof rawEntitlement?.plan === "string" && rawEntitlement.plan.trim()
+      ? rawEntitlement.plan
+      : null;
   const subscriptionPlan = explicitlyFree
     ? "none"
     : (rawUser?.subscription_plan ??
+      rawEntitlementPlan ??
       (cloudSubscribed ? "pro" : appEntitled ? "standard" : null));
   const entitlement = explicitlyFree
     ? {
