@@ -482,7 +482,7 @@ describe("connected snapshot sharing", function () {
     const brainNav = await waitForTestId("nav-brain", 10_000);
     await brainNav.click();
     await waitForTestId("section-brain", 25_000);
-    await waitForTestId("brain-overview-grid", 25_000);
+    await waitForTestId("brain-overview-scroll", 25_000);
     await selectDashboard(VIEW_ID);
     await waitForTestId("overview-send", 15_000);
     await installShareFixture("connected", false);
