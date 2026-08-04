@@ -1636,6 +1636,59 @@ mod ocr_tests {
         assert_eq!(text_source.as_deref(), Some("accessibility"));
         assert_eq!(searchable, 1);
     }
+
+    /// Counterpart to the read-only test above. Without it, a regression that
+    /// turned `persist_on_demand_ocr` into a no-op would leave that test green
+    /// while proving nothing: it would pass because nothing writes, not because
+    /// `persist=false` suppressed a write that would otherwise happen.
+    #[tokio::test]
+    async fn persisting_ocr_writes_when_the_caller_opts_in() {
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let canonical_text = "canonicalaccessibilitytoken from the accessibility tree";
+        let frame_id = db
+            .insert_snapshot_frame(
+                "persisting-ocr-device",
+                Utc::now(),
+                "unused-persisting-ocr-snapshot.jpg",
+                Some("Safari"),
+                Some("Accessibility-only frame"),
+                None,
+                true,
+                Some("test"),
+                Some(canonical_text),
+                Some("accessibility"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let generated_ocr = "different visible screenshot text";
+        let generated_json = serde_json::to_string(&vec![OcrTextBlock {
+            conf: "0.99".to_string(),
+            left: "0.1".to_string(),
+            top: "0.2".to_string(),
+            width: "0.3".to_string(),
+            height: "0.04".to_string(),
+            text: generated_ocr.to_string(),
+            ..Default::default()
+        }])
+        .unwrap();
+
+        persist_on_demand_ocr(&db, frame_id, generated_ocr, &generated_json, true).await;
+
+        let (full_text, text_json): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT full_text, text_json FROM frames WHERE id = ?1")
+                .bind(frame_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+
+        assert_eq!(full_text.as_deref(), Some(generated_ocr));
+        assert!(text_json.is_some());
+    }
 }
 
 #[cfg(test)]

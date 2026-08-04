@@ -1315,10 +1315,13 @@ mod tests {
             .unwrap();
 
         // No stored OCR text, so the handler cannot short-circuit and must take
-        // the real extraction + OCR path the permit guards.
+        // the real extraction + OCR path the permit guards. The frame carries
+        // accessibility text as its canonical `full_text`, mirroring the search
+        // candidates this route actually verifies.
         db.insert_video_chunk("permit-placeholder.mp4", "permit-device")
             .await
             .unwrap();
+        let canonical_text = "permitcanonicaltoken from the accessibility tree";
         let frame_id = db
             .insert_frame(
                 "permit-device",
@@ -1331,12 +1334,16 @@ mod tests {
             )
             .await
             .unwrap();
-        sqlx::query("UPDATE frames SET snapshot_path = ?1 WHERE id = ?2")
-            .bind(snapshot_path.to_string_lossy().to_string())
-            .bind(frame_id)
-            .execute(&db.pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE frames SET snapshot_path = ?1, full_text = ?2, text_source = 'accessibility' \
+             WHERE id = ?3",
+        )
+        .bind(snapshot_path.to_string_lossy().to_string())
+        .bind(canonical_text)
+        .bind(frame_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
         let permit = screenpipe_capture::ocr_semaphore().acquire().await.unwrap();
 
@@ -1367,5 +1374,26 @@ mod tests {
             .expect("request should complete once the permit is released")
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        // `persist=false` must leave the row alone. Search runs this route over
+        // accessibility-only candidates, so a write here would replace the very
+        // text that made the frame findable.
+        //
+        // The fixture is a flat image, so OCR legitimately returns nothing on
+        // every platform and `persist_on_demand_ocr` also short-circuits on
+        // empty text — the sharper proof that the flag itself gates the write is
+        // the `ocr_tests` pair in `routes/frames.rs`. This assertion guards the
+        // wiring end to end.
+        let (full_text, text_json): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT full_text, text_json FROM frames WHERE id = ?1")
+                .bind(frame_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(full_text.as_deref(), Some(canonical_text));
+        assert!(
+            text_json.is_none(),
+            "read-only verification must not store OCR boxes"
+        );
     }
 }

@@ -567,6 +567,15 @@ jobs:
         export RECORD_VIDEO=1
 
         bun run test:e2e:onboarding-background-ai-tools
+
+        # The seeded Search suite self-skips without SCREENPIPE_E2E_SEED=
+        # search-fixture, so the plain `test:e2e` run below never exercises it.
+        # Run it explicitly here, where the step is a hard gate, so visible-match
+        # verification and on-demand OCR are actually covered. Ordered before
+        # `test:e2e` so the main suite's results are the ones left in
+        # ./e2e/results for the coverage report.
+        rm -rf ./e2e/results
+        bun run test:e2e:search-bugs
         rm -rf ./e2e/results
         bun run test:e2e
 
@@ -860,6 +869,11 @@ jobs:
       env:
         RECORD_VIDEO: "true"
       run: |
+        # Seeded Search suite — self-skips without its fixture flag. Advisory
+        # here like the rest of this step; Linux is the gate. Ordered before
+        # `test:e2e` so the main suite's results feed the coverage report.
+        rm -rf ./e2e/results
+        bun run test:e2e:search-bugs
         rm -rf ./e2e/results
         bun run test:e2e
 
