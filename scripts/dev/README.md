@@ -95,12 +95,12 @@ coexist on a single box.
 
 ## Producing PR evidence
 
-Every PR gets asked for before/after evidence (the `potential-ai-slop` bot, and
-[`CONTRIBUTING.md`](../../CONTRIBUTING.md#pull-requests)). For app/UX changes you
-film the window. For backend / CLI / DB / log changes there's no window — so show
-the old behavior then the fixed behavior **in a terminal**. `pr-evidence` records
-both in one session and renders a single GIF (headless, no browser — an agent can
-run it end to end):
+Every PR must provide the evidence appropriate to its change, as described in
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md#ai-assisted-contributions). App/UX
+changes need a before/after recording. Backend / CLI / DB / log changes normally
+need regression tests and relevant logs or results; when the behavior is easiest
+to demonstrate in a terminal, `pr-evidence` can record the old behavior and the
+fix in one session and render a single GIF (headless, no browser):
 
 ```bash
 brew install asciinema agg

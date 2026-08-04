@@ -16,6 +16,7 @@ export interface HostedChatGatewayContext {
 	plan: HostedChatPlan;
 	lane: HostedChatLane;
 	workload: HostedChatWorkload;
+	trial: boolean;
 }
 
 export interface HostedChatGatewayConnection {
@@ -28,7 +29,7 @@ export interface HostedChatGatewayConnection {
 export interface HostedChatAllowance {
 	lane: HostedChatLane;
 	plan: HostedChatPlan;
-	window: '30d';
+	managed_by: 'cloudflare';
 }
 
 export class HostedChatAllowanceExceededError extends Error {
@@ -43,7 +44,7 @@ export class HostedChatAllowanceExceededError extends Error {
 		this.allowance = {
 			lane: context.lane,
 			plan: context.plan,
-			window: '30d',
+			managed_by: 'cloudflare',
 		};
 	}
 }
@@ -86,7 +87,7 @@ async function sha256Hex(value: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** Build the only four metadata fields Cloudflare receives. No prompt data is included. */
+/** Build the five reviewed metadata fields Cloudflare receives. No prompt data is included. */
 export async function buildHostedChatGatewayContext(
 	auth: AuthResult,
 	model: string,
@@ -105,6 +106,7 @@ export async function buildHostedChatGatewayContext(
 		plan: collapsePlan(auth),
 		lane: model.toLowerCase() === 'auto' ? 'auto' : 'explicit',
 		workload,
+		trial: auth.hostedAiTrial === true,
 	};
 }
 

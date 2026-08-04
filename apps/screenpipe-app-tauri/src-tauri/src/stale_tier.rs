@@ -34,6 +34,31 @@ pub(crate) const IDLE_STALE_STALL_THRESHOLD: u32 = 900;
 /// short reading pauses without letting a long-idle machine count as attended.
 pub(crate) const USER_ACTIVITY_FRESH_WINDOW: Duration = Duration::from_secs(120);
 
+/// Shared app-side flag for the full-stack gone-silent E2E profile. Release
+/// builds can never accelerate user-visible incident thresholds.
+pub(crate) fn capture_loop_silent_e2e_enabled() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        return std::env::var("SCREENPIPE_E2E_SEED")
+            .ok()
+            .is_some_and(|seeds| {
+                seeds
+                    .split(',')
+                    .any(|seed| seed.trim() == "capture-loop-silent-once")
+            });
+    }
+    #[cfg(not(debug_assertions))]
+    false
+}
+
+/// The seed opts the binary into the probe, but short user-visible thresholds
+/// are safe only after the E2E client explicitly arms the fault. Debug startup
+/// can legitimately take longer than the accelerated freshness window.
+pub(crate) fn capture_loop_silent_e2e_armed() -> bool {
+    capture_loop_silent_e2e_enabled()
+        && screenpipe_engine::event_driven_capture::e2e_capture_loop_silent_fault_armed()
+}
+
 /// Seconds since the last OS-level user input (keyboard/mouse/scroll), where
 /// the platform can answer cheaply. `None` on platforms without a source or
 /// on FFI failure — callers treat unknown as idle, the conservative direction
@@ -132,6 +157,9 @@ pub(crate) fn user_present_for_stale_tier(last_ui_timestamp: Option<&str>) -> bo
 ///   the engine's own gone-silent watchdog restarts the VisionManager at
 ///   ~240s. Only alert if staleness survives all of that (15 min).
 pub(crate) fn stale_stall_threshold(user_active: bool) -> u32 {
+    if capture_loop_silent_e2e_armed() {
+        return 2;
+    }
     if user_active {
         CAPTURE_STALL_THRESHOLD
     } else {

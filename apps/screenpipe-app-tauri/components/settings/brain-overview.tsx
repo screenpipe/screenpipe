@@ -2332,230 +2332,230 @@ export function BrainOverview({
       >
         <div
           data-onboarding-guide-target="dashboard"
-          className="mb-3 flex shrink-0 flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
+          className="mb-3 grid shrink-0 grid-cols-1 gap-2 border-b border-border pb-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center"
         >
           <div
             data-testid="overview-dashboard-row"
-            className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1"
+            className="flex min-w-0 items-center gap-x-3"
           >
-          {navigation}
-          <LiveViewDashboardSwitcher
-            views={views}
-            current={view}
-            busy={dashboardBusy}
-            selectionDisabled={dashboardSelectionDisabled}
-            onSelect={selectDashboard}
-            onCreate={beginCreate}
-            onCustomize={onboardingColdStart ? undefined : beginEdit}
-            onOpenTemplates={
-              !onboardingColdStart && templateKits.length > 0
-                ? () => setTemplateGalleryOpen(true)
-                : undefined
-            }
-            onRename={renameDashboard}
-            onDuplicate={duplicateDashboard}
-            onDelete={deleteDashboard}
-          />
-          <LiveViewCreateDashboardDialog
-            open={createDashboardOpen}
-            busy={false}
-            selectedPresetId={selectedAiPreset?.id ?? null}
-            onOpenChange={setCreateDashboardOpen}
-            onSelectedPresetIdChange={selectAiPreset}
-            onGenerate={(prompt, preset) =>
-              generateFromComposer(
-                prompt,
-                "dashboard",
-                preset,
-                "new-dashboard",
-              )
-            }
-            onCreateBlank={beginManualCreate}
-          />
-          <p
-            data-testid="overview-data-status"
-            className="basis-full pl-12 font-mono text-[9px] text-muted-foreground sm:basis-auto sm:pl-0"
-          >
-            {onboardingColdStart
-              ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : dataStatus}
-          </p>
+            {navigation}
+            <LiveViewDashboardSwitcher
+              views={views}
+              current={view}
+              busy={dashboardBusy}
+              selectionDisabled={dashboardSelectionDisabled}
+              onSelect={selectDashboard}
+              onCreate={beginCreate}
+              onCustomize={onboardingColdStart ? undefined : beginEdit}
+              onOpenTemplates={
+                !onboardingColdStart && templateKits.length > 0
+                  ? () => setTemplateGalleryOpen(true)
+                  : undefined
+              }
+              onRename={renameDashboard}
+              onDuplicate={duplicateDashboard}
+              onDelete={deleteDashboard}
+            />
+            <LiveViewCreateDashboardDialog
+              open={createDashboardOpen}
+              busy={false}
+              selectedPresetId={selectedAiPreset?.id ?? null}
+              onOpenChange={setCreateDashboardOpen}
+              onSelectedPresetIdChange={selectAiPreset}
+              onGenerate={(prompt, preset) =>
+                generateFromComposer(
+                  prompt,
+                  "dashboard",
+                  preset,
+                  "new-dashboard",
+                )
+              }
+              onCreateBlank={beginManualCreate}
+            />
           </div>
           <div
             data-testid="overview-header-controls"
             className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end"
           >
-          {view.periodPolicy.type !== "fixed.v1" && (
-            <Select
-              value={view.timeRange}
-              disabled={dashboardBusy}
-              onValueChange={(value) =>
-                void changeTimeRange(value as BrainViewTimeRange)
-              }
-            >
-              <SelectTrigger
-                data-testid="overview-time-range"
-                aria-label="Live View time range"
-                className="h-9 min-w-36 w-auto flex-1 text-xs sm:flex-none"
+            {view.periodPolicy.type !== "fixed.v1" && (
+              <Select
+                value={view.timeRange}
+                disabled={dashboardBusy}
+                onValueChange={(value) =>
+                  void changeTimeRange(value as BrainViewTimeRange)
+                }
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {periodRanges.map((range) => (
-                  <SelectItem key={range.value} value={range.value}>
-                    {range.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {boundSlotCount > 0 && !onboardingColdStart && (
-            <Button
-              data-testid="overview-refresh-data"
-              variant="outline"
-              size="icon"
-              className="h-9 w-9 shrink-0 rounded-none"
-              aria-label={refreshIsActive ? "loading data" : "refresh data"}
-              title={refreshIsActive ? "loading data" : "refresh data"}
-              disabled={dashboardBusy}
-              onClick={() => void refreshConnectedPipes(view)}
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${
-                  refreshIsActive ? "animate-spin" : ""
-                }`}
-              />
-            </Button>
-          )}
+                <SelectTrigger
+                  data-testid="overview-time-range"
+                  aria-label="Live View time range"
+                  className="h-9 min-w-36 w-auto flex-1 text-xs sm:flex-none"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {periodRanges.map((range) => (
+                    <SelectItem key={range.value} value={range.value}>
+                      {range.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {boundSlotCount > 0 && !onboardingColdStart && (
+              <Button
+                data-testid="overview-refresh-data"
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 shrink-0 rounded-none"
+                aria-label={refreshIsActive ? "loading data" : "refresh data"}
+                title={refreshIsActive ? "loading data" : "refresh data"}
+                disabled={dashboardBusy}
+                onClick={() => void refreshConnectedPipes(view)}
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${
+                    refreshIsActive ? "animate-spin" : ""
+                  }`}
+                />
+              </Button>
+            )}
           </div>
-        </div>
-      {canvasError && (
-        <div
-          data-testid="live-view-canvas-error"
-          className="mb-4 flex items-center gap-2 border border-border px-3 py-2 text-xs"
-        >
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          <span>
-            Canvas could not be loaded. Reopen Live Views to try again.
-          </span>
-        </div>
-      )}
-      {canvasSaving && (
-        <p className="sr-only" role="status">
-          saving canvas
-        </p>
-      )}
-      {templateGalleryOpen && !onboardingColdStart && (
-        <div className="relative mb-5 max-h-[min(50vh,32rem)] shrink-0 overflow-y-auto border border-border p-4 pr-12">
-          <Button
-            aria-label="close templates"
-            variant="ghost"
-            size="icon"
-            className="absolute right-2 top-2 h-8 w-8 rounded-none"
-            onClick={() => setTemplateGalleryOpen(false)}
+          <p
+            data-testid="overview-data-status"
+            className="min-w-0 truncate pl-12 font-mono text-[9px] text-muted-foreground lg:col-span-2"
           >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-          <LiveViewTemplateGallery
-            kits={templateKits}
-            installedPipeNames={installedPipeNames}
-            onPreview={previewTemplate}
+            {onboardingColdStart
+              ? "This view will appear when Screenpipe has enough real activity for your outcome."
+              : dataStatus}
+          </p>
+        </div>
+        {canvasError && (
+          <div
+            data-testid="live-view-canvas-error"
+            className="mb-4 flex items-center gap-2 border border-border px-3 py-2 text-xs"
+          >
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Canvas could not be loaded. Reopen Live Views to try again.
+            </span>
+          </div>
+        )}
+        {canvasSaving && (
+          <p className="sr-only" role="status">
+            saving canvas
+          </p>
+        )}
+        {templateGalleryOpen && !onboardingColdStart && (
+          <div className="relative mb-5 max-h-[min(50vh,32rem)] shrink-0 overflow-y-auto border border-border p-4 pr-12">
+            <Button
+              aria-label="close templates"
+              variant="ghost"
+              size="icon"
+              className="absolute right-2 top-2 h-8 w-8 rounded-none"
+              onClick={() => setTemplateGalleryOpen(false)}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+            <LiveViewTemplateGallery
+              kits={templateKits}
+              installedPipeNames={installedPipeNames}
+              onPreview={previewTemplate}
+            />
+          </div>
+        )}
+        {undoView && (
+          <div
+            data-testid="overview-undo-banner"
+            className="mb-4 flex items-center gap-3 border border-border bg-muted/30 px-3 py-2 text-xs"
+          >
+            <Undo2 className="h-3.5 w-3.5 shrink-0" />
+            <span>Your previous dashboard layout is available.</span>
+            <Button
+              data-testid="overview-undo"
+              variant="ghost"
+              size="sm"
+              className="ml-auto h-7 rounded-none px-2"
+              disabled={saving}
+              onClick={() => void restorePreviousView()}
+            >
+              undo
+            </Button>
+          </div>
+        )}
+        {dataRefresh?.viewId === view.id && (
+          <DataRefreshBanner state={dataRefresh} />
+        )}
+        {showOnboardingActivation && onboardingActivation && (
+          <LiveViewOnboardingActivation
+            goalCategory={onboardingActivation.goalCategory}
+            captureReadiness={captureReadiness}
+            pipesReady={onboardingPipesReady}
+            setupStatus={onboardingActivation.setupStatus}
+            setupError={onboardingActivation.setupError}
+            hasResult={onboardingHasResult}
+            refreshing={refreshIsActive}
+            retrying={onboardingRetrying}
+            onRetry={() => void retryOnboardingSetup()}
+            onFixCapture={() =>
+              window.dispatchEvent(
+                new CustomEvent("open-settings", {
+                  detail: { section: "recording" },
+                }),
+              )
+            }
+            onRefresh={() => {
+              posthog.capture("onboarding_live_view_refresh_requested", {
+                goal_category: onboardingActivation.goalCategory,
+                pipe_count: onboardingPipeNames.length,
+              });
+              void refreshConnectedPipes(view, undefined, "onboarding");
+            }}
+            onComplete={() => finishOnboardingActivation("confirmed")}
           />
-        </div>
-      )}
-      {undoView && (
-        <div
-          data-testid="overview-undo-banner"
-          className="mb-4 flex items-center gap-3 border border-border bg-muted/30 px-3 py-2 text-xs"
-        >
-          <Undo2 className="h-3.5 w-3.5 shrink-0" />
-          <span>Your previous dashboard layout is available.</span>
-          <Button
-            data-testid="overview-undo"
-            variant="ghost"
-            size="sm"
-            className="ml-auto h-7 rounded-none px-2"
-            disabled={saving}
-            onClick={() => void restorePreviousView()}
+        )}
+        {showOnboardingActivation && onboardingActivation && (
+          <LiveViewOnboardingGuide
+            activation={onboardingActivation}
+            hasResult={onboardingHasResult}
+            retrying={onboardingRetrying}
+            onRetry={() => void retryOnboardingSetup()}
+            onComplete={() => finishOnboardingActivation("confirmed")}
+            onActivationChange={refreshOnboardingActivation}
+          />
+        )}
+        {showOnboardingActivation &&
+        !onboardingHasResult ? null : slots.length === 0 ? (
+          <button
+            type="button"
+            className="flex min-h-0 w-full flex-1 items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
+            onClick={beginEdit}
           >
-            undo
-          </Button>
-        </div>
-      )}
-      {dataRefresh?.viewId === view.id && (
-        <DataRefreshBanner state={dataRefresh} />
-      )}
-      {showOnboardingActivation && onboardingActivation && (
-        <LiveViewOnboardingActivation
-          goalCategory={onboardingActivation.goalCategory}
-          captureReadiness={captureReadiness}
-          pipesReady={onboardingPipesReady}
-          setupStatus={onboardingActivation.setupStatus}
-          setupError={onboardingActivation.setupError}
-          hasResult={onboardingHasResult}
-          refreshing={refreshIsActive}
-          retrying={onboardingRetrying}
-          onRetry={() => void retryOnboardingSetup()}
-          onFixCapture={() =>
-            window.dispatchEvent(
-              new CustomEvent("open-settings", {
-                detail: { section: "recording" },
-              }),
-            )
-          }
-          onRefresh={() => {
-            posthog.capture("onboarding_live_view_refresh_requested", {
-              goal_category: onboardingActivation.goalCategory,
-              pipe_count: onboardingPipeNames.length,
-            });
-            void refreshConnectedPipes(view, undefined, "onboarding");
-          }}
-          onComplete={() => finishOnboardingActivation("confirmed")}
-        />
-      )}
-      {showOnboardingActivation && onboardingActivation && (
-        <LiveViewOnboardingGuide
-          activation={onboardingActivation}
-          hasResult={onboardingHasResult}
-          retrying={onboardingRetrying}
-          onRetry={() => void retryOnboardingSetup()}
-          onComplete={() => finishOnboardingActivation("confirmed")}
-          onActivationChange={refreshOnboardingActivation}
-        />
-      )}
-      {showOnboardingActivation &&
-      !onboardingHasResult ? null : slots.length === 0 ? (
-        <button
-          type="button"
-          className="flex min-h-0 w-full flex-1 items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
-          onClick={beginEdit}
-        >
-          add your first Block
-        </button>
-      ) : canvasReady && canvasDocument ? (
-        <LiveViewCanvas
-          document={canvasDocument}
-          slots={slots}
-          timeRange={view.timeRange}
-          refreshingSlotIds={refreshingSlotIds}
-          aiEditingSlotId={aiEditingSlotId}
-          onChange={changeCanvasDocument}
-          onFeedback={recordCardFeedback}
-          onRegenerate={(slot) =>
-            void refreshConnectedPipes(view, [slot], "card_regenerated")
-          }
-          onAiEdit={editSlotWithAi}
-          onItemAction={recordItemAction}
-          onItemHandoff={handoffItem}
-        />
-      ) : canvasLoading ? (
-        <div
-          data-testid="live-view-canvas-loading"
-          className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
-        >
-          loading process map
-        </div>
-      ) : null}
+            add your first Block
+          </button>
+        ) : canvasReady && canvasDocument ? (
+          <LiveViewCanvas
+            document={canvasDocument}
+            slots={slots}
+            timeRange={view.timeRange}
+            refreshingSlotIds={refreshingSlotIds}
+            aiEditingSlotId={aiEditingSlotId}
+            onChange={changeCanvasDocument}
+            onFeedback={recordCardFeedback}
+            onRegenerate={(slot) =>
+              void refreshConnectedPipes(view, [slot], "card_regenerated")
+            }
+            onAiEdit={editSlotWithAi}
+            onItemAction={recordItemAction}
+            onItemHandoff={handoffItem}
+          />
+        ) : canvasLoading ? (
+          <div
+            data-testid="live-view-canvas-loading"
+            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+          >
+            loading process map
+          </div>
+        ) : null}
       </div>
       {!onboardingColdStart && (
         <div

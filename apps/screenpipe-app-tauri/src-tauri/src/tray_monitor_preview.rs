@@ -66,6 +66,10 @@ pub fn clear_registrations() {
 
 /// Read the latest latched SCK frame before building the tray menu (main thread safe).
 pub fn sync_refresh_monitors(monitor_ids: &[u32]) {
+    if !preview_capture_expected() {
+        clear_cached_previews();
+        return;
+    }
     for &monitor_id in monitor_ids {
         let update = refresh_monitor_from_sck(monitor_id);
         if update != PreviewUpdate::NoFrame {
@@ -73,6 +77,28 @@ pub fn sync_refresh_monitors(monitor_ids: &[u32]) {
         }
         queue_sck_bootstrap(monitor_id);
     }
+}
+
+fn preview_capture_expected() -> bool {
+    preview_capture_expected_from(
+        screenpipe_engine::sleep_monitor::screen_is_locked(),
+        screenpipe_engine::sleep_monitor::recently_woke_from_sleep(),
+        screenpipe_engine::drm_detector::drm_content_paused(),
+        screenpipe_engine::schedule_monitor::schedule_paused(),
+    )
+}
+
+fn preview_capture_expected_from(
+    locked: bool,
+    recently_woke: bool,
+    drm_paused: bool,
+    schedule_paused: bool,
+) -> bool {
+    !locked && !recently_woke && !drm_paused && !schedule_paused
+}
+
+fn clear_cached_previews() {
+    CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 pub fn register_monitor_submenu(monitor_id: u32, checked: bool) {
@@ -138,6 +164,10 @@ async fn drain_bootstrap_requests(rx: &mpsc::Receiver<u32>, app: &AppHandle) {
             Err(TryRecvError::Disconnected) => break,
         }
     }
+    if !preview_capture_expected() {
+        clear_cached_previews();
+        return;
+    }
     for monitor_id in pending {
         bootstrap_sck_stream(monitor_id).await;
         if should_refresh_menu(refresh_monitor_from_sck(monitor_id)) {
@@ -147,6 +177,10 @@ async fn drain_bootstrap_requests(rx: &mpsc::Receiver<u32>, app: &AppHandle) {
 }
 
 async fn poll_sck_frames(app: &AppHandle) {
+    if !preview_capture_expected() {
+        clear_cached_previews();
+        return;
+    }
     for monitor_id in active_monitor_ids() {
         // The native menu only receives a new image when it is rebuilt. Updating
         // CACHE for every 2fps SCK frame while the menu is closed therefore did
@@ -194,6 +228,9 @@ fn queue_sck_bootstrap(monitor_id: u32) {
 }
 
 async fn bootstrap_sck_stream(monitor_id: u32) {
+    if !preview_capture_expected() {
+        return;
+    }
     if screenpipe_screen::stream_invalidation::peek_monitor_frame(monitor_id).is_some() {
         return;
     }
@@ -294,6 +331,15 @@ mod tests {
         assert!(should_refresh_menu(PreviewUpdate::FirstFrame));
         assert!(!should_refresh_menu(PreviewUpdate::Updated));
         assert!(!should_refresh_menu(PreviewUpdate::Unchanged));
+    }
+
+    #[test]
+    fn preview_never_bootstraps_capture_during_intentional_pause_states() {
+        assert!(preview_capture_expected_from(false, false, false, false));
+        assert!(!preview_capture_expected_from(true, false, false, false));
+        assert!(!preview_capture_expected_from(false, true, false, false));
+        assert!(!preview_capture_expected_from(false, false, true, false));
+        assert!(!preview_capture_expected_from(false, false, false, true));
     }
 
     #[test]

@@ -1218,16 +1218,25 @@ async fn main() {
                 store.recording.disable_audio = true;
                 info!("E2E seed: audio disabled");
             }
+            if e2e_flags.iter().any(|f| f == "sck-capture-hang-once") {
+                // The CoreGraphics recovery path cannot enforce SCK window-id
+                // exclusions. This isolated lane deliberately removes filters
+                // so it can prove the availability fallback without weakening
+                // the production fail-closed privacy rule.
+                store.recording.ignored_windows.clear();
+                store.recording.included_windows.clear();
+                info!("E2E seed: window filters cleared for unfiltered CoreGraphics recovery probe");
+            }
             if e2e_flags
                 .iter()
-                .any(|f| f == "recording-health-return-race")
+                .any(|f| f == "recording-health-return-race" || f == "capture-loop-silent-once")
             {
                 store.show_restart_notifications = true;
                 store.extra.insert(
                     "restartNotificationsDefaultedOff".to_string(),
                     serde_json::Value::Bool(true),
                 );
-                info!("E2E seed: recording health alerts enabled for return-race regression");
+                info!("E2E seed: recording health alerts enabled for liveness regression");
             }
             if e2e_flags.iter().any(|f| f == "event-trigger-capture") {
                 store.recording.capture_on_keystroke = Some(true);
@@ -2104,11 +2113,9 @@ async fn main() {
                 // A new process must preserve the same fail-closed state as the
                 // process that observed the hard fault. Start the notification
                 // subscriber first, then publish recovery-required immediately.
-                tauri::async_runtime::spawn(async {
-                    crate::db_relaunch::surface_manual_recovery(
-                        "durable SQLite quarantine was present at app launch",
-                    )
-                    .await;
+                tauri::async_runtime::spawn(async move {
+                    crate::db_relaunch::surface_quarantined_recovery_at_launch(&launch_db_path)
+                        .await;
                 });
                 if !app_ui_hidden && !headless_startup {
                     crate::db_recovery_notifications::notify_quarantined_database(

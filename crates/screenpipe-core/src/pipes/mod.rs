@@ -20,7 +20,7 @@ pub mod sync;
 pub(crate) mod trajectory;
 
 use crate::agents::{
-    pi::{pi_package_enabled, PiExecutor},
+    pi::{pi_event_protocol_error, pi_package_enabled, PiExecutor},
     AgentExecutor, ExecutionHandle, SharedPid, STOP_REQUESTED_PID,
 };
 use crate::pipes::connections::parse_mcp_connection_id;
@@ -1744,6 +1744,21 @@ fn classify_pipe_process_result(
         };
     }
 
+    if let Some(protocol_error) = pipe_stdout_protocol_error(filtered_stdout) {
+        let classified_stderr = if stderr.trim().is_empty() {
+            protocol_error.to_string()
+        } else {
+            format!("{}\n{}", stderr.trim_end(), protocol_error)
+        };
+        return ClassifiedPipeProcessResult {
+            status: "failed",
+            success: false,
+            stderr: classified_stderr,
+            error_type: Some("provider_protocol".to_string()),
+            error_message: Some("provider returned an unusable tool-call response".to_string()),
+        };
+    }
+
     if process_success {
         return ClassifiedPipeProcessResult {
             status: "completed",
@@ -1772,6 +1787,13 @@ fn classify_pipe_process_result(
         error_type,
         error_message,
     }
+}
+
+fn pipe_stdout_protocol_error(stdout: &str) -> Option<&'static str> {
+    stdout.lines().find_map(|line| {
+        let event = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+        pi_event_protocol_error(&event)
+    })
 }
 
 fn is_post_completion_continue_error(stderr: &str, stdout: &str) -> bool {
@@ -1881,6 +1903,12 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     let lower = stderr.to_lowercase();
     if let Some(parsed) = parse_structured_llm_error(stderr) {
         return parsed;
+    }
+    if lower.contains("provider_protocol_error") {
+        return (
+            Some("provider_protocol".to_string()),
+            Some("provider returned an unusable tool-call response".to_string()),
+        );
     }
     if lower.contains("daily_cost_limit_exceeded") || lower.contains("daily_limit_exceeded") {
         return (
@@ -8519,6 +8547,29 @@ mod tests {
         let (etype, msg) = parse_error_type("completed successfully, output saved");
         assert_eq!(etype, None);
         assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn test_parse_error_type_provider_protocol_failure() {
+        let (error_type, message) = parse_error_type(
+            "provider_protocol_error: assistant ended with toolUse but emitted no executable tool call",
+        );
+        assert_eq!(error_type.as_deref(), Some("provider_protocol"));
+        assert_eq!(
+            message.as_deref(),
+            Some("provider returned an unusable tool-call response")
+        );
+    }
+
+    #[test]
+    fn malformed_tool_use_cannot_be_classified_as_completed() {
+        let stdout = r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"toolUse"}}"#;
+        let classified = classify_pipe_process_result(true, false, "", stdout);
+
+        assert_eq!(classified.status, "failed");
+        assert!(!classified.success);
+        assert_eq!(classified.error_type.as_deref(), Some("provider_protocol"));
+        assert!(classified.stderr.contains("provider_protocol_error"));
     }
 
     fn successful_agent_then_compaction_retry_stdout() -> String {

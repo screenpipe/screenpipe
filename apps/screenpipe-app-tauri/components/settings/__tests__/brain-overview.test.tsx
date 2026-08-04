@@ -121,6 +121,7 @@ vi.mock("@/lib/hooks/use-settings", () => ({
 }));
 vi.mock("@/lib/hooks/use-usage-status", () => ({
   useUsageStatus: () => mocks.usageState,
+  hostedAiAllowanceForModel: () => null,
 }));
 vi.mock("@/lib/upgrade-flow", () => ({
   openBusinessUpgradeSurface: mocks.openBusinessUpgradeSurface,
@@ -891,7 +892,14 @@ describe("BrainOverview", () => {
 
     const controls = await screen.findByTestId("overview-header-controls");
     expect(controls.className).toContain("flex-wrap");
-    expect(controls.parentElement?.className).toContain("lg:flex-row");
+    const header = controls.parentElement;
+    expect(header?.className).toContain("grid");
+    expect(header?.className).toContain("lg:grid-cols-[minmax(0,1fr)_auto]");
+    const freshness = screen.getByTestId("overview-data-status");
+    expect(freshness.parentElement).toBe(header);
+    expect(freshness.className).toContain("lg:col-span-2");
+    expect(freshness.className).toContain("truncate");
+    expect(header?.lastElementChild).toBe(freshness);
     expect(screen.getByTestId("overview-time-range").className).toContain(
       "h-9",
     );

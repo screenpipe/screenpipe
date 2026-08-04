@@ -9,7 +9,10 @@ import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { useUsageStatus } from "@/lib/hooks/use-usage-status";
+import {
+  hostedAiAllowanceForModel,
+  useUsageStatus,
+} from "@/lib/hooks/use-usage-status";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import type { AIPreset } from "@/lib/utils/tauri";
 import type { LiveViewGenerationScope } from "@/lib/live-views/generate-live-view-with-pi";
@@ -69,6 +72,7 @@ export function LiveViewAiComposer({
   const [prompt, setPrompt] = useState("");
   const [generationStep, setGenerationStep] = useState(0);
   const [compactFocused, setCompactFocused] = useState(false);
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
 
   useEffect(() => {
     if (!busy) return;
@@ -83,10 +87,16 @@ export function LiveViewAiComposer({
   const selectedPreset = presets.find(
     (preset) => preset.id === selectedPresetId,
   );
+  const cloudflareAllowance = hostedAiAllowanceForModel(
+    usage,
+    selectedPreset?.model,
+  );
   const hostedUsageExhausted = Boolean(
     selectedPreset?.provider === "screenpipe-cloud" &&
       usage &&
-      usage.remaining <= 0,
+      (usage.hosted_ai?.allowance_managed_by === "cloudflare"
+        ? cloudflareAllowance?.remaining_percent === 0
+        : usage.remaining <= 0),
   );
   const canUpgrade = Boolean(
     hostedUsageExhausted &&
@@ -100,7 +110,9 @@ export function LiveViewAiComposer({
     prompt.trim() && selectedPreset && !busy && !hostedUsageExhausted,
   );
   const compactExpanded =
-    compact && !hostedUsageExhausted && (compactFocused || busy);
+    compact &&
+    !hostedUsageExhausted &&
+    (compactFocused || modelSelectorOpen || busy);
   const intent = inferLiveViewGenerationIntent(
     prompt,
     Boolean(currentViewTitle),
@@ -226,6 +238,7 @@ export function LiveViewAiComposer({
               showLoginCta
               containerClassName="w-auto min-w-36"
               triggerClassName="h-8 rounded-none"
+              onOpenChange={setModelSelectorOpen}
             />
             {prompt.trim() && (
               <span

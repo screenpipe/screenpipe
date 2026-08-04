@@ -10,6 +10,7 @@ import {
   type OnboardingLiveViewActivation,
 } from "@/lib/live-views/onboarding-activation";
 import { buildLiveViewTimeContext } from "@/lib/live-views/time-range";
+import { appServerFetch } from "@/lib/notifications/app-server";
 import { commands, type BrainViewDefinition } from "@/lib/utils/tauri";
 
 const FOLLOW_UP_RETRY_DELAY_MS = 5 * 60 * 1_000;
@@ -17,7 +18,8 @@ const FOLLOW_UP_RETRY_DELAY_MS = 5 * 60 * 1_000;
 type FollowUpDependencies = {
   now?: () => Date;
   listViews?: () => Promise<BrainViewDefinition[]>;
-  fetch?: typeof localFetch;
+  engineFetch?: typeof localFetch;
+  notificationFetch?: typeof appServerFetch;
 };
 
 export type OnboardingLiveViewFollowUpResult =
@@ -117,6 +119,7 @@ function followUpNotification(
   return {
     id: `onboarding-live-view-follow-up:${view.id}`,
     type: "system",
+    priority: "high",
     title: `${viewTitle} has new context`,
     body: goal
       ? `For “${goal}”: open this Live View to see the latest activity and choose your next step.`
@@ -195,7 +198,9 @@ export async function runDueOnboardingLiveViewFollowUp(
     activation.goalCategory,
   );
 
-  const fetch = dependencies.fetch ?? localFetch;
+  const engineFetch = dependencies.engineFetch ?? localFetch;
+  const notificationFetch =
+    dependencies.notificationFetch ?? appServerFetch;
   try {
     const listViews =
       dependencies.listViews ??
@@ -217,7 +222,7 @@ export async function runDueOnboardingLiveViewFollowUp(
       return { status: "view_missing", viewId: activation.viewId };
     }
 
-    const pipeCount = await startDashboardPipes(view, fetch);
+    const pipeCount = await startDashboardPipes(view, engineFetch);
     if (pipeCount === 0) {
       scheduleRetry(activation.viewId, now);
       captureOnboardingH1FollowUp(
@@ -228,7 +233,7 @@ export async function runDueOnboardingLiveViewFollowUp(
       return { status: "retry_scheduled", viewId: activation.viewId };
     }
 
-    const notification = await fetch("/notify", {
+    const notification = await notificationFetch("/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(followUpNotification(view, activation)),

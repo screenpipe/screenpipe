@@ -8,13 +8,31 @@ use super::{
 use anyhow::Result;
 use image::DynamicImage;
 use once_cell::sync::Lazy;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// macOS display capture is mediated by WindowServer/replayd. Serializing these
-/// calls avoids concurrent multi-monitor spikes while preserving capture order.
-static MACOS_CAPTURE_SEMAPHORE: Lazy<tokio::sync::Semaphore> =
-    Lazy::new(|| tokio::sync::Semaphore::new(1));
+/// Healthy macOS captures stay single-file, but a timed-out `spawn_blocking`
+/// task cannot be cancelled while Apple owns the callback. Keep the serializer
+/// separate from the worker budget: after a timeout the serializer is released
+/// for one fresh attempt, while the abandoned task retains one of two permits
+/// until it truly returns. This bounds the worker leak without making the first
+/// wedged callback permanently block recovery.
+static MACOS_CAPTURE_SERIALIZER: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
+static MACOS_CAPTURE_WORKERS: Lazy<Arc<tokio::sync::Semaphore>> =
+    Lazy::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
+static MACOS_CG_FALLBACK_SERIALIZER: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
+static MACOS_CG_FALLBACK_WORKERS: Lazy<Arc<tokio::sync::Semaphore>> =
+    Lazy::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
+
+// The macOS engine's complete capture/OCR/DB operation is bounded at 20s. Leave
+// enough of that budget for the independent fallback to return and latch the
+// per-monitor backend preference; otherwise the outer timeout would cancel us
+// at the same instant as SCK and the fallback could never run.
+const MACOS_CAPTURE_TIMEOUT: Duration = Duration::from_secs(12);
+const MACOS_CG_FALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// ScreenCaptureKit can stop delivering the `SCShareableContent` completion
 /// callback after a capture teardown or update. Serialize healthy calls, but
@@ -23,11 +41,28 @@ static SCK_MONITOR_ENUMERATION_SERIALIZER: Lazy<tokio::sync::Mutex<()>> =
     Lazy::new(|| tokio::sync::Mutex::new(()));
 static SCK_MONITOR_ENUMERATION_WORKERS: Lazy<Arc<tokio::sync::Semaphore>> =
     Lazy::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
+static XCAP_MONITOR_ENUMERATION_SERIALIZER: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
+static XCAP_MONITOR_ENUMERATION_WORKERS: Lazy<Arc<tokio::sync::Semaphore>> =
+    Lazy::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
 
 const MONITOR_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const XCAP_MONITOR_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(debug_assertions)]
 static SCK_E2E_HANG_INJECTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(debug_assertions)]
+static SCK_E2E_LOOKUP_HANG_INJECTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(debug_assertions)]
+static SCK_E2E_LOOKUP_HANG_ARMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(debug_assertions)]
+static SCK_E2E_CAPTURE_HANG_INJECTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Optional cap on captured width for the macOS SCK stream. The GPU
@@ -108,6 +143,106 @@ pub mod macos_version {
 
 use macos_version::use_sck_rs;
 
+fn seed_list_has_exact_token(seeds: &str, token: &str) -> bool {
+    seeds.split(',').any(|seed| seed.trim() == token)
+}
+
+fn seed_has_exact_token(token: &str) -> bool {
+    std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|seeds| seed_list_has_exact_token(&seeds, token))
+}
+
+#[cfg(debug_assertions)]
+fn e2e_sck_capture_hang_enabled() -> bool {
+    seed_has_exact_token("sck-capture-hang-once")
+}
+
+#[cfg(not(debug_assertions))]
+fn e2e_sck_capture_hang_enabled() -> bool {
+    false
+}
+
+fn macos_capture_timeout() -> Duration {
+    if e2e_sck_capture_hang_enabled() {
+        Duration::from_secs(2)
+    } else {
+        MACOS_CAPTURE_TIMEOUT
+    }
+}
+
+#[cfg(debug_assertions)]
+fn inject_e2e_sck_capture_hang_once() {
+    if e2e_sck_capture_hang_enabled() && !SCK_E2E_CAPTURE_HANG_INJECTED.swap(true, Ordering::SeqCst)
+    {
+        tracing::warn!("e2e: injecting one blocked ScreenCaptureKit frame callback");
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-sck-capture-hang-fired"),
+                b"1",
+            );
+        }
+        loop {
+            std::thread::park();
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn inject_e2e_sck_capture_hang_once() {}
+
+async fn run_bounded_macos_capture<T, F>(
+    name: &'static str,
+    serializer: &tokio::sync::Mutex<()>,
+    workers: Arc<tokio::sync::Semaphore>,
+    timeout: Duration,
+    capture: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let _serial_guard = serializer.lock().await;
+    let permit = workers.try_acquire_owned().map_err(|e| match e {
+        tokio::sync::TryAcquireError::NoPermits => anyhow::anyhow!(
+            "{name}: capture retry budget exhausted; Apple callbacks remain blocked"
+        ),
+        tokio::sync::TryAcquireError::Closed => {
+            anyhow::anyhow!("{name}: capture worker pool closed")
+        }
+    })?;
+
+    let task = tokio::task::spawn_blocking(move || {
+        // A timeout drops only the JoinHandle. Retaining the permit inside the
+        // closure makes the uncancellable OS call continue to count against
+        // the strict worker cap until it actually returns.
+        let _permit = permit;
+        capture()
+    });
+
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => Err(anyhow::anyhow!("{name}: capture task failed: {e}")),
+        Err(_) => Err(anyhow::anyhow!(
+            "{name}: capture timed out after {}s; Apple capture callback did not reply",
+            timeout.as_secs()
+        )),
+    }
+}
+
+fn xcap_monitor_by_id(monitor_id: u32) -> Option<XcapMonitor> {
+    XcapMonitor::all()
+        .ok()?
+        .into_iter()
+        .find(|monitor| monitor.id().unwrap_or(0) == monitor_id)
+}
+
+fn core_graphics_fallback_allowed(excluded_window_ids: &[u32]) -> bool {
+    // xcap's macOS monitor fallback uses CGWindowListCreateImage. It cannot
+    // enforce SCK window-id exclusions, so privacy must win over availability.
+    excluded_window_ids.is_empty()
+}
+
 impl SafeMonitor {
     // macOS: Create from sck-rs monitor
     pub fn from_sck(monitor: SckMonitor) -> Self {
@@ -126,7 +261,12 @@ impl SafeMonitor {
             monitor_data,
             use_sck: true,
             cached_sck: Some(monitor),
+            // Do not nest a synchronous CoreGraphics enumeration inside the
+            // bounded SCK worker. If fallback is needed, capture_xcap_bounded
+            // resolves the matching display under its own timeout/admission
+            // budget instead of letting a wedged CG call consume SCK capacity.
             cached_xcap: None,
+            prefer_xcap_fallback: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -148,104 +288,121 @@ impl SafeMonitor {
             use_sck: false,
             cached_sck: None,
             cached_xcap: Some(monitor),
+            prefer_xcap_fallback: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
-    /// Capture a screenshot using the cached monitor handle.
-    ///
-    /// Uses `tokio::task::spawn_blocking` instead of `std::thread::spawn` to reuse
-    /// the tokio blocking thread pool (bounded concurrency, no thread creation overhead).
-    ///
-    /// Uses the cached native monitor handle directly — no `Monitor::all()` re-enumeration.
-    /// If the cache is empty (shouldn't happen in normal flow), falls back to enumeration.
-    pub async fn capture_image(&self) -> Result<DynamicImage> {
-        let _permit = MACOS_CAPTURE_SEMAPHORE
-            .acquire()
-            .await
-            .map_err(|e| anyhow::anyhow!("macOS capture semaphore closed: {}", e))?;
+    async fn capture_sck_bounded(&self, excluded_window_ids: Vec<u32>) -> Result<DynamicImage> {
         let monitor_id = self.monitor_id;
-        let use_sck = self.use_sck;
         let cached_sck = self.cached_sck.clone();
-        let cached_xcap = self.cached_xcap.clone();
-
-        let image = tokio::task::spawn_blocking(move || -> Result<DynamicImage> {
-            // Wrap in autorelease pool — sck-rs and xcap call CoreGraphics/
-            // ScreenCaptureKit which create autoreleased ObjC objects. Without
-            // this, those objects accumulate on the tokio blocking thread
-            // (which is reused) until the thread exits, causing a memory leak
-            // proportional to capture rate.
-            // Note: ar_pool requires R: Clone, so we return Result<_, String>
-            // and convert back to anyhow::Error.
-            cidre::objc::ar_pool(|| -> Result<DynamicImage, String> {
-                if use_sck {
-                    let monitor = match cached_sck {
-                        Some(m) => m,
-                        None => {
-                            tracing::debug!(
-                                "sck-rs cache miss for monitor {}, re-enumerating",
-                                monitor_id
-                            );
-                            SckMonitor::all()
-                                .map_err(|e| format!("{}", e))?
-                                .into_iter()
-                                .find(|m| m.id() == monitor_id)
-                                .ok_or_else(|| "Monitor not found".to_string())?
-                        }
-                    };
-
+        run_bounded_macos_capture(
+            "ScreenCaptureKit",
+            &MACOS_CAPTURE_SERIALIZER,
+            MACOS_CAPTURE_WORKERS.clone(),
+            macos_capture_timeout(),
+            move || {
+                inject_e2e_sck_capture_hang_once();
+                // Per-call autorelease pool is load-bearing on reused Tokio
+                // blocking threads; SCK creates ObjC objects on every frame.
+                cidre::objc::ar_pool(|| -> Result<DynamicImage, String> {
+                    let monitor = cached_sck.ok_or_else(|| {
+                        format!(
+                            "cached SCK monitor {} unavailable; bounded refresh required",
+                            monitor_id
+                        )
+                    })?;
                     if monitor.width().unwrap_or(0) == 0 || monitor.height().unwrap_or(0) == 0 {
-                        return Err("Invalid monitor dimensions".to_string());
+                        return Err("invalid monitor dimensions".to_string());
                     }
 
-                    // Honor the user's video_quality cap at the SCK layer so
-                    // WindowServer composites + replayd delivers a framebuffer
-                    // at the same resolution the snapshot writer would write
-                    // to disk anyway. `0` = no cap (capture native).
                     let cap = sck_capture_max_width();
-                    let result = if cap == 0 {
-                        monitor.capture_image()
-                    } else {
-                        monitor.capture_image_scaled(cap)
+                    let result = match (cap, excluded_window_ids.is_empty()) {
+                        (0, true) => monitor.capture_image(),
+                        (_, true) => monitor.capture_image_scaled(cap),
+                        (0, false) => monitor.capture_image_excluding(&excluded_window_ids),
+                        (_, false) => {
+                            monitor.capture_image_scaled_excluding(cap, &excluded_window_ids)
+                        }
                     };
                     result
-                        .map_err(|e| format!("{}", e))
                         .map(DynamicImage::ImageRgba8)
-                } else {
-                    let monitor = match cached_xcap {
-                        Some(m) => m,
-                        None => {
-                            tracing::debug!(
-                                "xcap cache miss for monitor {}, re-enumerating",
-                                monitor_id
-                            );
-                            XcapMonitor::all()
-                                .map_err(|e| format!("{}", e))?
-                                .into_iter()
-                                .find(|m| m.id().unwrap_or(0) == monitor_id)
-                                .ok_or_else(|| "Monitor not found".to_string())?
-                        }
-                    };
+                        .map_err(|e| e.to_string())
+                })
+                .map_err(anyhow::Error::msg)
+            },
+        )
+        .await
+    }
 
+    async fn capture_xcap_bounded(&self) -> Result<DynamicImage> {
+        let monitor_id = self.monitor_id;
+        let cached_xcap = self.cached_xcap.clone();
+        run_bounded_macos_capture(
+            "CoreGraphics fallback",
+            &MACOS_CG_FALLBACK_SERIALIZER,
+            MACOS_CG_FALLBACK_WORKERS.clone(),
+            MACOS_CG_FALLBACK_TIMEOUT,
+            move || {
+                cidre::objc::ar_pool(|| -> Result<DynamicImage, String> {
+                    let monitor = cached_xcap
+                        .or_else(|| xcap_monitor_by_id(monitor_id))
+                        .ok_or_else(|| format!("CoreGraphics monitor {monitor_id} not found"))?;
                     if monitor.width().unwrap_or(0) == 0 || monitor.height().unwrap_or(0) == 0 {
-                        return Err("Invalid monitor dimensions".to_string());
+                        return Err("invalid monitor dimensions".to_string());
                     }
-
                     monitor
                         .capture_image()
-                        .map_err(|e| format!("{}", e))
                         .map(DynamicImage::ImageRgba8)
-                }
-            })
-            .map_err(|s| anyhow::anyhow!(s))
-        })
+                        .map_err(|e| e.to_string())
+                })
+                .map_err(anyhow::Error::msg)
+            },
+        )
         .await
-        .map_err(|e| anyhow::anyhow!("capture task panicked: {}", e))??;
+    }
 
-        Ok(image)
+    /// Capture a screenshot using SCK normally, with a privacy-safe
+    /// CoreGraphics escape hatch when the OS callback wedges. CoreGraphics is
+    /// used only for an unfiltered frame because it cannot enforce SCK window
+    /// exclusions.
+    pub async fn capture_image(&self) -> Result<DynamicImage> {
+        if !self.use_sck || self.prefer_xcap_fallback.load(Ordering::Acquire) {
+            match self.capture_xcap_bounded().await {
+                Ok(image) => return Ok(image),
+                Err(e) if !self.use_sck => return Err(e),
+                Err(e) => {
+                    tracing::warn!(
+                        "CoreGraphics capture fallback failed for monitor {}: {}; retrying SCK",
+                        self.monitor_id,
+                        e
+                    );
+                    self.prefer_xcap_fallback.store(false, Ordering::Release);
+                }
+            }
+        }
+
+        match self.capture_sck_bounded(Vec::new()).await {
+            Ok(image) => Ok(image),
+            Err(sck_error) => {
+                self.release_capture_stream();
+                let image = self.capture_xcap_bounded().await.map_err(|cg_error| {
+                    anyhow::anyhow!(
+                        "SCK capture failed ({sck_error}); CoreGraphics fallback failed ({cg_error})"
+                    )
+                })?;
+                self.prefer_xcap_fallback.store(true, Ordering::Release);
+                tracing::warn!(
+                    "SCK capture failed for monitor {}: {}; switched this monitor generation to CoreGraphics fallback (no window exclusions requested)",
+                    self.monitor_id,
+                    sck_error
+                );
+                Ok(image)
+            }
+        }
     }
 
     /// Capture an image excluding the given SCK window IDs (macOS only).
-    /// The OS won't render excluded windows into the capture buffer.
+    /// This intentionally fails closed: CoreGraphics cannot enforce the list.
     pub async fn capture_image_excluding(
         &self,
         excluded_window_ids: &[u32],
@@ -253,48 +410,12 @@ impl SafeMonitor {
         if excluded_window_ids.is_empty() {
             return self.capture_image().await;
         }
-
-        let monitor_id = self.monitor_id;
-        let use_sck = self.use_sck;
-        let cached_sck = self.cached_sck.clone();
-        let ids = excluded_window_ids.to_vec();
-
-        let image = tokio::task::spawn_blocking(move || -> Result<DynamicImage> {
-            cidre::objc::ar_pool(|| -> Result<DynamicImage, String> {
-                if use_sck {
-                    let monitor = match cached_sck {
-                        Some(m) => m,
-                        None => SckMonitor::all()
-                            .map_err(|e| format!("{}", e))?
-                            .into_iter()
-                            .find(|m| m.id() == monitor_id)
-                            .ok_or_else(|| "Monitor not found".to_string())?,
-                    };
-
-                    if monitor.width().unwrap_or(0) == 0 || monitor.height().unwrap_or(0) == 0 {
-                        return Err("Invalid monitor dimensions".to_string());
-                    }
-
-                    let cap = sck_capture_max_width();
-                    let result = if cap == 0 {
-                        monitor.capture_image_excluding(&ids)
-                    } else {
-                        monitor.capture_image_scaled_excluding(cap, &ids)
-                    };
-                    result
-                        .map_err(|e| format!("{}", e))
-                        .map(DynamicImage::ImageRgba8)
-                } else {
-                    // xcap fallback doesn't support exclusion — capture normally
-                    Err("capture_image_excluding not supported on xcap path".to_string())
-                }
-            })
-            .map_err(|s| anyhow::anyhow!(s))
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("capture task panicked: {}", e))??;
-
-        Ok(image)
+        debug_assert!(!core_graphics_fallback_allowed(excluded_window_ids));
+        let result = self.capture_sck_bounded(excluded_window_ids.to_vec()).await;
+        if result.is_err() {
+            self.release_capture_stream();
+        }
+        result
     }
 
     /// Refresh the cached monitor handle by re-enumerating all monitors.
@@ -302,58 +423,10 @@ impl SafeMonitor {
     /// with different properties (resolution change, etc.).
     pub async fn refresh(&mut self) -> Result<()> {
         let monitor_id = self.monitor_id;
-        let use_sck = self.use_sck;
-
-        let refreshed = tokio::task::spawn_blocking(
-            move || -> Result<(Option<SckMonitor>, Option<XcapMonitor>, MonitorData)> {
-                cidre::objc::ar_pool(|| -> Result<_, String> {
-                    if use_sck {
-                        let monitor = SckMonitor::all()
-                            .map_err(|e| format!("{}", e))?
-                            .into_iter()
-                            .find(|m| m.id() == monitor_id)
-                            .ok_or_else(|| {
-                                format!("Monitor {} not found during refresh", monitor_id)
-                            })?;
-
-                        let data = MonitorData {
-                            width: monitor.width().unwrap_or(0),
-                            height: monitor.height().unwrap_or(0),
-                            x: monitor.x(),
-                            y: monitor.y(),
-                            name: monitor.name().to_string(),
-                            is_primary: monitor.is_primary(),
-                        };
-                        Ok((Some(monitor), None, data))
-                    } else {
-                        let monitor = XcapMonitor::all()
-                            .map_err(|e| format!("{}", e))?
-                            .into_iter()
-                            .find(|m| m.id().unwrap_or(0) == monitor_id)
-                            .ok_or_else(|| {
-                                format!("Monitor {} not found during refresh", monitor_id)
-                            })?;
-
-                        let data = MonitorData {
-                            width: monitor.width().unwrap_or(0),
-                            height: monitor.height().unwrap_or(0),
-                            x: monitor.x().unwrap_or(0),
-                            y: monitor.y().unwrap_or(0),
-                            name: monitor.name().unwrap_or_default().to_string(),
-                            is_primary: monitor.is_primary().unwrap_or(false),
-                        };
-                        Ok((None, Some(monitor), data))
-                    }
-                })
-                .map_err(|s| anyhow::anyhow!(s))
-            },
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("refresh task panicked: {}", e))??;
-
-        self.cached_sck = refreshed.0;
-        self.cached_xcap = refreshed.1;
-        self.monitor_data = Arc::new(refreshed.2);
+        let refreshed = get_monitor_by_id(monitor_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Monitor {} not found during refresh", monitor_id))?;
+        *self = refreshed;
         tracing::debug!("Refreshed monitor {} cache", self.monitor_id);
         Ok(())
     }
@@ -472,8 +545,74 @@ fn enumerate_sck_monitors() -> std::result::Result<Vec<SafeMonitor>, MonitorList
     }
 }
 
+#[cfg(debug_assertions)]
+fn e2e_lookup_hang_enabled() -> bool {
+    std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|seeds| {
+            seeds
+                .split(',')
+                .any(|seed| seed.trim() == "sck-lookup-hang-once")
+        })
+}
+
+/// Arm the one-shot lookup wedge only after the E2E client has observed a
+/// healthy app. This keeps unrelated startup requests from consuming the
+/// deterministic fault before the assertion begins.
+#[cfg(debug_assertions)]
+pub fn e2e_arm_sck_lookup_hang_fault() -> bool {
+    e2e_lookup_hang_enabled()
+        && !SCK_E2E_LOOKUP_HANG_INJECTED.load(std::sync::atomic::Ordering::SeqCst)
+        && SCK_E2E_LOOKUP_HANG_ARMED
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+}
+
+#[cfg(not(debug_assertions))]
+pub fn e2e_arm_sck_lookup_hang_fault() -> bool {
+    false
+}
+
+#[cfg(debug_assertions)]
+fn enumerate_sck_monitors_for_lookup() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
+    if e2e_lookup_hang_enabled()
+        && SCK_E2E_LOOKUP_HANG_ARMED.load(std::sync::atomic::Ordering::SeqCst)
+        && !SCK_E2E_LOOKUP_HANG_INJECTED.swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        tracing::warn!("e2e: injecting one blocked ScreenCaptureKit monitor lookup callback");
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-sck-lookup-hang-fired"),
+                b"1",
+            );
+        }
+        loop {
+            std::thread::park();
+        }
+    }
+    enumerate_sck_monitors()
+}
+
+#[cfg(not(debug_assertions))]
+fn enumerate_sck_monitors_for_lookup() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
+    enumerate_sck_monitors()
+}
+
+fn monitor_lookup_timeout() -> Duration {
+    #[cfg(debug_assertions)]
+    if e2e_lookup_hang_enabled() {
+        return Duration::from_secs(2);
+    }
+    MONITOR_ENUMERATION_TIMEOUT
+}
+
 fn enumerate_xcap_monitors() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
-    tracing::info!("Using xcap fallback for screen capture (macOS < 12.3)");
+    tracing::info!("Using CoreGraphics/xcap monitor fallback");
     match XcapMonitor::all() {
         Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
         Ok(monitors) => Ok(monitors
@@ -492,29 +631,84 @@ fn enumerate_xcap_monitors() -> std::result::Result<Vec<SafeMonitor>, MonitorLis
     }
 }
 
+async fn enumerate_xcap_monitors_bounded() -> std::result::Result<Vec<SafeMonitor>, MonitorListError>
+{
+    let _serial_guard = XCAP_MONITOR_ENUMERATION_SERIALIZER.lock().await;
+    let permit = XCAP_MONITOR_ENUMERATION_WORKERS
+        .clone()
+        .try_acquire_owned()
+        .map_err(|e| match e {
+            tokio::sync::TryAcquireError::NoPermits => MonitorListError::Other(
+                "CoreGraphics monitor enumeration worker remains blocked".to_string(),
+            ),
+            tokio::sync::TryAcquireError::Closed => {
+                MonitorListError::Other("CoreGraphics monitor worker pool closed".to_string())
+            }
+        })?;
+    let task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        cidre::objc::ar_pool(enumerate_xcap_monitors)
+    });
+    match tokio::time::timeout(XCAP_MONITOR_ENUMERATION_TIMEOUT, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => Err(MonitorListError::Other(format!(
+            "CoreGraphics monitor enumeration task failed: {e}"
+        ))),
+        Err(_) => Err(MonitorListError::Other(format!(
+            "CoreGraphics monitor enumeration timed out after {}s",
+            XCAP_MONITOR_ENUMERATION_TIMEOUT.as_secs()
+        ))),
+    }
+}
+
+async fn fallback_after_sck_monitor_error(
+    sck_error: MonitorListError,
+) -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
+    if !sck_monitor_error_allows_fallback(&sck_error) {
+        return Err(sck_error);
+    }
+    tracing::warn!(
+        "ScreenCaptureKit monitor enumeration failed ({}); trying bounded CoreGraphics fallback",
+        sck_error
+    );
+    enumerate_xcap_monitors_bounded().await.map_err(|cg_error| {
+        MonitorListError::Other(format!(
+            "ScreenCaptureKit enumeration failed ({sck_error}); CoreGraphics fallback failed ({cg_error})"
+        ))
+    })
+}
+
+fn sck_monitor_error_allows_fallback(error: &MonitorListError) -> bool {
+    // CoreGraphics display enumeration does not prove Screen Recording
+    // permission. In addition to explicit PermissionDenied, SCK can return an
+    // empty list after a grant lapses; the monitor watcher deliberately uses
+    // NoMonitorsFound + awake CG topology as that signal. Preserve both
+    // verdicts and fall back only for an operational SCK failure (timeout,
+    // callback error, exhausted worker budget).
+    matches!(error, MonitorListError::Other(_))
+}
+
 /// List monitors with detailed error information (permission denied vs no monitors)
 pub async fn list_monitors_detailed() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
     // Wrap the ObjC call paths in an autorelease pool. Tokio blocking workers
     // are long-lived; without a per-call drain these objects accumulate.
     // See monitor::tests::repro_list_monitors_autorelease_leak.
     let result: std::result::Result<Vec<SafeMonitor>, MonitorListError> = if use_sck_rs() {
-        run_bounded_sck_enumeration(
+        let sck_result = run_bounded_sck_enumeration(
             &SCK_MONITOR_ENUMERATION_SERIALIZER,
             SCK_MONITOR_ENUMERATION_WORKERS.clone(),
             MONITOR_ENUMERATION_TIMEOUT,
             || cidre::objc::ar_pool(enumerate_sck_monitors),
         )
-        .await
+        .await;
+        match sck_result {
+            Ok(monitors) => Ok(monitors),
+            Err(error) => fallback_after_sck_monitor_error(error).await,
+        }
     } else {
         // macOS < 12.3 never enters ScreenCaptureKit. Preserve the legacy xcap
         // behavior exactly instead of applying an unneeded SCK timeout policy.
-        tokio::task::spawn_blocking(|| cidre::objc::ar_pool(enumerate_xcap_monitors))
-            .await
-            .unwrap_or_else(|e| {
-                Err(MonitorListError::Other(format!(
-                    "legacy macOS monitor enumeration task failed: {e}"
-                )))
-            })
+        enumerate_xcap_monitors_bounded().await
     };
 
     if let Ok(monitors) = &result {
@@ -529,79 +723,58 @@ pub async fn list_monitors() -> Vec<SafeMonitor> {
 }
 
 pub async fn get_default_monitor() -> Option<SafeMonitor> {
-    tokio::task::spawn_blocking(|| {
-        if use_sck_rs() {
-            SckMonitor::all()
+    if use_sck_rs() {
+        let sck_result = run_bounded_sck_enumeration(
+            &SCK_MONITOR_ENUMERATION_SERIALIZER,
+            SCK_MONITOR_ENUMERATION_WORKERS.clone(),
+            monitor_lookup_timeout(),
+            || cidre::objc::ar_pool(enumerate_sck_monitors_for_lookup),
+        )
+        .await;
+        match sck_result {
+            Ok(monitors) => monitors.into_iter().next(),
+            Err(error) => fallback_after_sck_monitor_error(error)
+                .await
                 .ok()?
                 .into_iter()
-                .next()
-                .map(SafeMonitor::from_sck)
-        } else {
-            XcapMonitor::all()
-                .ok()?
-                .into_iter()
-                .next()
-                .map(SafeMonitor::from_xcap)
+                .next(),
         }
-    })
-    .await
-    .ok()?
+    } else {
+        enumerate_xcap_monitors_bounded()
+            .await
+            .ok()?
+            .into_iter()
+            .next()
+    }
 }
 
 pub async fn get_monitor_by_id(id: u32) -> Option<SafeMonitor> {
-    tokio::task::spawn_blocking(move || {
-        if use_sck_rs() {
-            match SckMonitor::all() {
-                Ok(monitors) => {
-                    let monitor_count = monitors.len();
-                    let monitor_ids: Vec<u32> = monitors.iter().map(|m| m.id()).collect();
-
-                    tracing::debug!(
-                        "Found {} monitors with IDs: {:?} (using sck-rs)",
-                        monitor_count,
-                        monitor_ids
-                    );
-
-                    monitors
-                        .into_iter()
-                        .find(|m| m.id() == id)
-                        .map(SafeMonitor::from_sck)
-                }
-                Err(e) => {
-                    tracing::error!("Failed to list monitors with sck-rs: {}", e);
-                    None
-                }
-            }
-        } else {
-            match XcapMonitor::all() {
-                Ok(monitors) => {
-                    let monitor_count = monitors.len();
-                    let monitor_ids: Vec<u32> =
-                        monitors.iter().filter_map(|m| m.id().ok()).collect();
-
-                    tracing::debug!(
-                        "Found {} monitors with IDs: {:?} (using xcap fallback)",
-                        monitor_count,
-                        monitor_ids
-                    );
-
-                    monitors
-                        .into_iter()
-                        .find(|m| m.id().unwrap_or(0) == id)
-                        .map(SafeMonitor::from_xcap)
-                }
-                Err(e) => {
-                    tracing::error!("Failed to list monitors with xcap: {}", e);
-                    None
-                }
+    if use_sck_rs() {
+        match run_bounded_sck_enumeration(
+            &SCK_MONITOR_ENUMERATION_SERIALIZER,
+            SCK_MONITOR_ENUMERATION_WORKERS.clone(),
+            monitor_lookup_timeout(),
+            || cidre::objc::ar_pool(enumerate_sck_monitors_for_lookup),
+        )
+        .await
+        {
+            Ok(monitors) => monitors.into_iter().find(|monitor| monitor.id() == id),
+            Err(e) => {
+                tracing::warn!("bounded SCK lookup for monitor {} failed: {}", id, e);
+                fallback_after_sck_monitor_error(e)
+                    .await
+                    .ok()?
+                    .into_iter()
+                    .find(|monitor| monitor.id() == id)
             }
         }
-    })
-    .await
-    .unwrap_or_else(|e| {
-        tracing::error!("Task to get monitor by ID {} panicked: {}", id, e);
-        None
-    })
+    } else {
+        enumerate_xcap_monitors_bounded()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|monitor| monitor.id() == id)
+    }
 }
 
 /// Check if the current system supports screen capture
@@ -813,6 +986,103 @@ mod tests {
             run_bounded_sck_enumeration(&serializer, workers, Duration::from_secs(1), || Ok(4u8))
                 .await;
         assert!(matches!(recovered, Ok(4)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn capture_timeout_keeps_permit_and_caps_abandoned_workers() {
+        let serializer = tokio::sync::Mutex::new(());
+        let workers = Arc::new(tokio::sync::Semaphore::new(2));
+        let (release_first_tx, release_first_rx) = std::sync::mpsc::channel();
+        let (release_second_tx, release_second_rx) = std::sync::mpsc::channel();
+
+        for release_rx in [release_first_rx, release_second_rx] {
+            let result = run_bounded_macos_capture(
+                "test SCK",
+                &serializer,
+                workers.clone(),
+                Duration::from_millis(25),
+                move || {
+                    release_rx.recv().expect("release blocked capture");
+                    Ok(1u8)
+                },
+            )
+            .await;
+            assert!(result
+                .expect_err("blocked capture must time out")
+                .to_string()
+                .contains("did not reply"));
+        }
+
+        let third_ran = Arc::new(AtomicBool::new(false));
+        let third_ran_in_task = third_ran.clone();
+        let third = run_bounded_macos_capture(
+            "test SCK",
+            &serializer,
+            workers.clone(),
+            Duration::from_secs(1),
+            move || {
+                third_ran_in_task.store(true, Ordering::SeqCst);
+                Ok(3u8)
+            },
+        )
+        .await;
+        assert!(third
+            .expect_err("third abandoned worker must be rejected")
+            .to_string()
+            .contains("retry budget exhausted"));
+        assert!(!third_ran.load(Ordering::SeqCst));
+
+        release_first_tx.send(()).expect("release first worker");
+        release_second_tx.send(()).expect("release second worker");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while workers.available_permits() < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("capture permits should return when late workers exit");
+
+        let recovered = run_bounded_macos_capture(
+            "test SCK",
+            &serializer,
+            workers,
+            Duration::from_secs(1),
+            || Ok(4u8),
+        )
+        .await;
+        assert_eq!(recovered.expect("fresh capture should recover"), 4);
+    }
+
+    #[test]
+    fn core_graphics_fallback_is_fail_closed_for_window_exclusions() {
+        assert!(core_graphics_fallback_allowed(&[]));
+        assert!(!core_graphics_fallback_allowed(&[42]));
+        assert!(!core_graphics_fallback_allowed(&[1, 2, 3]));
+    }
+
+    #[test]
+    fn core_graphics_monitor_fallback_preserves_permission_signals() {
+        assert!(!sck_monitor_error_allows_fallback(
+            &MonitorListError::PermissionDenied
+        ));
+        assert!(!sck_monitor_error_allows_fallback(
+            &MonitorListError::NoMonitorsFound
+        ));
+        assert!(sck_monitor_error_allows_fallback(&MonitorListError::Other(
+            "callback timed out".to_string()
+        )));
+    }
+
+    #[test]
+    fn sck_capture_fault_seed_requires_an_exact_token() {
+        assert!(seed_list_has_exact_token(
+            "onboarding, sck-capture-hang-once ,no-audio",
+            "sck-capture-hang-once"
+        ));
+        assert!(!seed_list_has_exact_token(
+            "sck-capture-hang-once-ish",
+            "sck-capture-hang-once"
+        ));
     }
 
     /// Reproduction for the macOS memory leak reported 2026-04-22

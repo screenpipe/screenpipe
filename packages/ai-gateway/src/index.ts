@@ -68,6 +68,7 @@ import {
 } from './services/free-chat-limit';
 import {
 	getHostedAiAllowedModels,
+	getHostedAiCapacityUpgrade,
 	getHostedAiIncludedCredits,
 	getHostedAiPlan,
 	hasPaidHostedAiPlan,
@@ -85,10 +86,11 @@ import { resolveModelAlias } from './providers';
 import {
 	buildHostedChatGatewayContext,
 	isHostedChatGatewayEnabled,
+	type HostedChatGatewayContext,
 } from './services/cloudflare-ai-gateway';
+import { getCloudflareHostedChatUsage } from './services/cloudflare-ai-gateway-usage';
 import {
-	ARGUS_BACKGROUND_FALLBACK_MODEL,
-	shouldUseArgusBackgroundFallback,
+	resolveArgusBackgroundFallbackBody,
 } from './services/background-limit-fallback';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
@@ -346,27 +348,47 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				usageAccountPlan,
 			);
 			if (cloudflareManaged) {
+				let cloudflareContext: HostedChatGatewayContext | null = null;
+				let cloudflareUsage: Awaited<ReturnType<typeof getCloudflareHostedChatUsage>> = null;
+				try {
+					cloudflareContext = await buildHostedChatGatewayContext(
+						authResult,
+						'auto',
+						'interactive',
+					);
+					cloudflareUsage = await getCloudflareHostedChatUsage(env, cloudflareContext);
+				} catch (error) {
+					// Hosted inference remains available when the read-only analytics
+					// token or Cloudflare analytics is temporarily unavailable. Never
+					// replace missing provider data with a fabricated zero balance.
+					console.error('Cloudflare hosted AI usage unavailable', error);
+				}
+				const allowanceExhausted = cloudflareUsage?.allowances
+					.some((allowance) => allowance.remaining_percent <= 0) ?? null;
+				const capacityUpgrade = getHostedAiCapacityUpgrade(usageAccountPlan);
+				const upgradeEligible = capacityUpgrade !== null;
 				const enriched = {
 					...status,
-					// Cloudflare owns the 30-day spend allowance in this mode. The
+					// Cloudflare owns the spend allowance in this mode. The
 					// legacy query counters remain in the compatibility envelope, but
 					// cannot be presented as a live provider-cost meter.
-					upsell_banner: false,
-					cost_limit_reached: null,
-					upgrade_eligible: isHostedAiUpgradeEligible(authResult),
+					upsell_banner: allowanceExhausted === true && upgradeEligible,
+					cost_limit_reached: allowanceExhausted,
+					upgrade_eligible: upgradeEligible,
 					hosted_ai: {
-						plan: authResult.service === true
-							? 'internal'
-							: getHostedAiPlan(usageAccountPlan) ?? 'unknown',
+						// Use the exact plan sent to Cloudflare. Max and Ultra have
+						// distinct allowance rules even though they share model access.
+						plan: cloudflareContext?.plan ?? 'unknown',
 						trial: authResult.hostedAiTrial === true,
 						allowance_managed_by: 'cloudflare',
 						included_credits: null,
 						used_credits: null,
 						remaining_credits: null,
+						usage_as_of: cloudflareUsage?.usage_as_of ?? null,
+						allowances: cloudflareUsage?.allowances ?? null,
 						model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
-						upgrade_url: isHostedAiUpgradeEligible(authResult)
-							? 'https://screenpi.pe/account/billing'
-							: null,
+						required_plan: capacityUpgrade?.requiredPlan ?? null,
+						upgrade_url: capacityUpgrade?.upgradeUrl ?? null,
 						can_buy_credits: false,
 						byok_supported: true,
 					},
@@ -410,9 +432,12 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 			const includedCredits = getHostedAiIncludedCredits(usageAccountPlan);
 			const usedCredits = monthlyCost === null ? null : Math.ceil(monthlyCost * 100);
+			const capacityUpgrade = getHostedAiCapacityUpgrade(usageAccountPlan);
 			const enriched = {
 				...status,
 				cost_limit_reached: dailyCost >= maxCost || (monthlyCost !== null && monthlyCost >= monthlyCap),
+				// This field controls proactive prompts. Capacity recovery is the
+				// separate required_plan + upgrade_url contract below.
 				upgrade_eligible: isHostedAiUpgradeEligible(authResult),
 				upsell_banner: status.upsell_banner === true && isHostedAiUpgradeEligible(authResult),
 				hosted_ai: {
@@ -424,9 +449,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						? null
 						: Math.max(0, includedCredits - usedCredits),
 					model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
-					upgrade_url: isHostedAiUpgradeEligible(authResult)
-						? 'https://screenpi.pe/account/billing'
-						: null,
+					required_plan: capacityUpgrade?.requiredPlan ?? null,
+					upgrade_url: capacityUpgrade?.upgradeUrl ?? null,
 					// Legacy query credits do not raise the provider-cost ceiling yet.
 					can_buy_credits: false,
 					byok_supported: true,
@@ -592,14 +616,15 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					status: 429,
 					code: creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded',
 				};
-				if (shouldUseArgusBackgroundFallback({
+				const argusFallbackBody = resolveArgusBackgroundFallbackBody({
 					enabled: isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult),
 					error: allowanceError,
 					body,
 					env,
-				})) {
+				});
+				if (argusFallbackBody) {
 					legacyArgusFallback = true;
-					body = { ...body, model: ARGUS_BACKGROUND_FALLBACK_MODEL };
+					body = argusFallbackBody;
 				} else return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					...buildDailyUsageLimitError(
 						usage,
@@ -679,14 +704,15 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						status: costReservation.response.status,
 					});
 					const allowanceError = { status: costReservation.response.status, code: rejectionReason };
-					if (shouldUseArgusBackgroundFallback({
+					const argusFallbackBody = resolveArgusBackgroundFallbackBody({
 						enabled: isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult),
 						error: allowanceError,
 						body,
 						env,
-					})) {
+					});
+					if (argusFallbackBody) {
 						legacyArgusFallback = true;
-						body = { ...body, model: ARGUS_BACKGROUND_FALLBACK_MODEL };
+						body = argusFallbackBody;
 					} else {
 						if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
 						return costReservation.response;

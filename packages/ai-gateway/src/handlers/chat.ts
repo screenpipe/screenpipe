@@ -20,10 +20,10 @@ import {
 } from '../services/cloudflare-ai-gateway';
 import {
   ARGUS_BACKGROUND_FALLBACK_MODEL,
-  prepareArgusBackgroundFallbackBody,
   isProviderQuotaOrBillingLimitError,
-  shouldUseArgusBackgroundFallback,
+  resolveArgusBackgroundFallbackBody,
 } from '../services/background-limit-fallback';
+import { getHostedAiCapacityUpgrade } from '../services/hosted-ai-policy';
 
 // Auto model waterfall (INTERACTIVE) — use only current OpenAI/Anthropic models.
 // Keep a cross-provider option second so an OpenAI outage does not break chat.
@@ -437,9 +437,9 @@ export async function tryArgusBackgroundFallback(
   error: unknown,
   attemptModel: typeof tryModel = tryModel,
 ): Promise<Response | null> {
-  if (!shouldUseArgusBackgroundFallback({ enabled, error, body, env })) return null;
+  const fallbackBody = resolveArgusBackgroundFallbackBody({ enabled, error, body, env });
+  if (!fallbackBody) return null;
   try {
-    const fallbackBody = prepareArgusBackgroundFallbackBody(body);
     const response = await attemptModel(
       ARGUS_BACKGROUND_FALLBACK_MODEL,
       fallbackBody,
@@ -543,16 +543,19 @@ function errorResponse(body: RequestBody, status: number, message: string): Resp
 
 function allowanceMessage(allowance: HostedChatAllowanceExceededError['allowance']): string {
   if (allowance.lane === 'explicit') {
-    return 'Your 30-day hosted AI allowance for explicit models is used up. Switch to Auto, or use a local model or your own provider key.';
+    return 'Your current hosted AI allowance for explicit models is used up. Switch to Auto, or use a local model or your own provider key.';
   }
   if (allowance.plan === 'free') {
-    return 'Your 30-day hosted AI allowance for Auto is used up. Upgrade, or use a local model or your own provider key.';
+    return 'Your current hosted AI allowance for Auto is used up. Upgrade, or use a local model or your own provider key.';
   }
-  return 'Your 30-day hosted AI allowance for Auto is used up. Choose an explicit hosted model, or use a local model or your own provider key.';
+  return 'Your current hosted AI allowance for Auto is used up. Choose an explicit hosted model, or use a local model or your own provider key.';
 }
 
 /** Render the stable terminal contract Pi uses to avoid generic 429 retries. */
 export function allowanceErrorResponse(body: RequestBody, error: HostedChatAllowanceExceededError): Response {
+  const upgrade = error.allowance.plan === 'internal'
+    ? null
+    : getHostedAiCapacityUpgrade(error.allowance.plan);
   const payload = {
     error: {
       message: allowanceMessage(error.allowance),
@@ -560,6 +563,8 @@ export function allowanceErrorResponse(body: RequestBody, error: HostedChatAllow
       code: 'hosted_ai_allowance_exceeded',
     },
     allowance: error.allowance,
+    required_plan: upgrade?.requiredPlan ?? null,
+    upgrade_url: upgrade?.upgradeUrl ?? null,
   };
   if (body.stream) {
     return addCorsHeaders(new Response(

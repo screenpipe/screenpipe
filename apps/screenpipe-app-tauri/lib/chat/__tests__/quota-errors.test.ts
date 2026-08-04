@@ -16,13 +16,14 @@ import {
   parseRateLimitWaitSeconds,
   parseQuotaUpgradeAction,
   PI_MAX_RATE_LIMIT_RETRIES,
+  validateQuotaUpgradeAction,
 } from "../quota-errors";
 
 describe("classifyQuotaError", () => {
   it("classifies daily-limit signals as 'daily'", () => {
     expect(
       classifyQuotaError(
-        'HTTP 429: {"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"auto","plan":"basic","window":"30d"}}',
+        'HTTP 429: {"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"auto","plan":"basic","managed_by":"cloudflare"}}',
       ),
     ).toBe("daily");
     expect(classifyQuotaError("free_chat_limit_exceeded")).toBe("daily");
@@ -90,16 +91,16 @@ describe("hosted busy messages", () => {
 describe("buildDailyLimitMessage", () => {
   it("suggests the independent explicit lane when Auto is exhausted", () => {
     const message = buildDailyLimitMessage(
-      '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"auto","plan":"basic","window":"30d"}}',
+      '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"auto","plan":"basic","managed_by":"cloudflare"}}',
     );
-    expect(message).toContain("30-day hosted AI allowance for Auto");
+    expect(message).toContain("current hosted AI allowance for Auto");
     expect(message).toContain("explicit hosted model");
     expect(message).not.toMatch(/\$\d/);
   });
 
   it("suggests Auto when the explicit lane is exhausted", () => {
     const message = buildDailyLimitMessage(
-      '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"explicit","plan":"business","window":"30d"}}',
+      '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"explicit","plan":"business","managed_by":"cloudflare"}}',
     );
     expect(message).toContain("explicit models");
     expect(message).toContain("Switch to Auto");
@@ -107,7 +108,7 @@ describe("buildDailyLimitMessage", () => {
 
   it("does not suggest an unavailable explicit hosted lane to Free users", () => {
     const message = buildDailyLimitMessage(
-      '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"auto","plan":"free","window":"30d"}}',
+      '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"auto","plan":"free","managed_by":"cloudflare"}}',
     );
     expect(message).toContain("Upgrade");
     expect(message).not.toContain("explicit hosted model");
@@ -207,6 +208,39 @@ describe("buildDailyLimitMessage", () => {
         resetsAt: null,
       });
     }
+  });
+
+  it("validates the same plan action contract for polled usage state", () => {
+    const upgradeUrl =
+      "https://screenpipe.com/account/billing?target_plan=pro_max&interval=month";
+    expect(
+      validateQuotaUpgradeAction({
+        requiredPlan: "business_max",
+        upgradeUrl,
+      }),
+    ).toEqual({
+      requiredPlan: "business_max",
+      upgradeUrl,
+      resetsAt: null,
+    });
+    expect(
+      validateQuotaUpgradeAction({
+        requiredPlan: "business_ultra",
+        upgradeUrl: "https://example.com/account/billing",
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts the immediate Cloudflare allowance action contract", () => {
+    const error = JSON.stringify({
+      error: { code: "hosted_ai_allowance_exceeded" },
+      allowance: { lane: "auto", plan: "business", managed_by: "cloudflare" },
+      required_plan: "business_max",
+      upgrade_url:
+        "https://screenpipe.com/account/billing?target_plan=pro_max&interval=month",
+    });
+    expect(parseQuotaUpgradeAction(error)?.requiredPlan).toBe("business_max");
+    expect(buildDailyLimitMessage(error)).toContain("explicit hosted model");
   });
 
   it("recognizes monthly and trial cost limits through the same upgrade contract", () => {

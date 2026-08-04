@@ -31,6 +31,8 @@ import {
 } from "@xyflow/react";
 import {
   ArrowRight,
+  ChevronLeft,
+  ChevronRight,
   Hand,
   LayoutGrid,
   Maximize2,
@@ -375,6 +377,7 @@ export function LiveViewCanvas({
   onItemHandoff: (slot: BrainViewSlot, item: LiveViewListItem) => void;
 }) {
   const [tool, setTool] = useState<CanvasTool>("select");
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
   const [arrowSource, setArrowSource] = useState<string | null>(null);
   const [draftStroke, setDraftStroke] = useState<BrainViewCanvasStroke | null>(
@@ -997,6 +1000,11 @@ export function LiveViewCanvas({
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement;
       if (event.key === "Escape") {
+        if (toolsOpen) {
+          event.preventDefault();
+          setToolsOpen(false);
+          return;
+        }
         setArrowSource(null);
         setCanvasSelection([]);
         setTool("select");
@@ -1061,6 +1069,7 @@ export function LiveViewCanvas({
       removeSelection,
       selection,
       setCanvasSelection,
+      toolsOpen,
       updateNodePosition,
       zoomCanvas,
     ],
@@ -1091,6 +1100,9 @@ export function LiveViewCanvas({
   );
 
   const selectedCanDelete = selection.some((id) => !id.startsWith("block:"));
+  const activeTool =
+    TOOL_OPTIONS.find((option) => option.value === tool) ?? TOOL_OPTIONS[0];
+  const ActiveToolIcon = activeTool.icon;
 
   return (
     <section
@@ -1205,99 +1217,168 @@ export function LiveViewCanvas({
 
       <div
         data-canvas-toolbar
-        className="absolute left-3 top-1/2 z-30 flex -translate-y-1/2 flex-col items-center border border-foreground bg-background shadow-lg shadow-black/5"
+        data-state={toolsOpen ? "open" : "closed"}
+        className={`absolute left-3 top-3 z-30 max-w-[calc(100%-1.5rem)] overflow-hidden border border-foreground bg-background p-1 shadow-lg shadow-black/5 transition-[max-width,opacity,transform] duration-150 ease-out motion-reduce:transition-none ${
+          toolsOpen
+            ? "opacity-100"
+            : "max-w-36 opacity-75 hover:-translate-y-0.5 hover:opacity-100 focus-within:opacity-100"
+        }`}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || !toolsOpen) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setToolsOpen(false);
+          surfaceRef.current?.focus({ preventScroll: true });
+        }}
       >
-        {TOOL_OPTIONS.map((option) => {
-          const Icon = option.icon;
-          return (
+        {toolsOpen ? (
+          <div
+            data-testid="canvas-tools-panel"
+            className="flex max-w-full animate-in items-center overflow-x-auto fade-in slide-in-from-left-1 duration-150 motion-reduce:animate-none"
+          >
             <Button
-              key={option.value}
               type="button"
-              data-testid={`canvas-tool-${option.value}`}
               variant="ghost"
               size="icon"
-              aria-label={option.label}
-              aria-pressed={tool === option.value}
-              title={option.label}
-              className={`h-9 w-9 rounded-none border-b border-border ${
-                tool === option.value ? "bg-foreground text-background" : ""
-              }`}
+              data-testid="canvas-tools-close"
+              aria-label="close canvas tools"
+              title="close canvas tools"
+              className="h-8 w-8 shrink-0 rounded-none"
               onClick={() => {
-                setTool(option.value);
-                setArrowSource(null);
+                setToolsOpen(false);
+                surfaceRef.current?.focus({ preventScroll: true });
               }}
             >
-              <Icon className="h-3.5 w-3.5" />
-              <span className="sr-only">{option.label}</span>
+              <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
             </Button>
-          );
-        })}
-        <Button
-          type="button"
-          data-testid="canvas-arrange"
-          variant="ghost"
-          size="icon"
-          aria-label="arrange canvas"
-          title="arrange canvas"
-          className="h-9 w-9 rounded-none border-b border-border"
-          onClick={arrangeCanvas}
-        >
-          <LayoutGrid className="h-3.5 w-3.5" />
-          <span className="sr-only">arrange canvas</span>
-        </Button>
-        <Button
-          type="button"
-          data-testid="canvas-delete-selection"
-          variant="ghost"
-          size="icon"
-          aria-label="delete selected canvas item"
-          title="delete selected canvas item"
-          className="h-9 w-9 rounded-none"
-          disabled={!selectedCanDelete}
-          onClick={removeSelection}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
-      </div>
-
-      <div
-        data-canvas-toolbar
-        className="absolute bottom-3 left-3 z-30 flex items-center border border-foreground bg-background shadow-lg shadow-black/5"
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="zoom out"
-          className="h-8 w-8 rounded-none border-r border-border"
-          onClick={() => zoomCanvas(1 / 1.2)}
-        >
-          <ZoomOut className="h-3 w-3" />
-        </Button>
-        <span className="w-11 text-center font-mono text-[10px] tabular-nums">
-          {Math.round(document.viewport.zoom * 100)}%
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="zoom in"
-          className="h-8 w-8 rounded-none border-l border-border"
-          onClick={() => zoomCanvas(1.2)}
-        >
-          <ZoomIn className="h-3 w-3" />
-        </Button>
-        <Button
-          type="button"
-          data-testid="canvas-fit"
-          variant="ghost"
-          size="icon"
-          aria-label="fit canvas"
-          className="h-8 w-8 rounded-none border-l border-border"
-          onClick={fitCanvas}
-        >
-          <Maximize2 className="h-3 w-3" />
-        </Button>
+            <span
+              className="mx-0.5 h-5 w-px shrink-0 bg-border"
+              aria-hidden="true"
+            />
+            {TOOL_OPTIONS.map((option) => {
+              const Icon = option.icon;
+              return (
+                <Button
+                  key={option.value}
+                  type="button"
+                  data-testid={`canvas-tool-${option.value}`}
+                  variant="ghost"
+                  size="icon"
+                  aria-label={option.label}
+                  aria-pressed={tool === option.value}
+                  title={option.label}
+                  className={`h-8 w-8 shrink-0 rounded-none ${
+                    tool === option.value
+                      ? "bg-foreground text-background hover:bg-foreground hover:text-background"
+                      : ""
+                  }`}
+                  onClick={() => {
+                    setTool(option.value);
+                    setArrowSource(null);
+                    setToolsOpen(false);
+                    surfaceRef.current?.focus({ preventScroll: true });
+                  }}
+                >
+                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="sr-only">{option.label}</span>
+                </Button>
+              );
+            })}
+            <span
+              className="mx-0.5 h-5 w-px shrink-0 bg-border"
+              aria-hidden="true"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="zoom out"
+              title="zoom out (-)"
+              className="h-8 w-8 shrink-0 rounded-none"
+              onClick={() => zoomCanvas(1 / 1.2)}
+            >
+              <ZoomOut className="h-3 w-3" aria-hidden="true" />
+            </Button>
+            <button
+              type="button"
+              aria-label="reset zoom to 100%"
+              title="reset zoom to 100%"
+              className="h-8 w-11 shrink-0 text-center font-mono text-[10px] tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-foreground"
+              onClick={() =>
+                zoomCanvas(1 / latestDocumentRef.current.viewport.zoom)
+              }
+            >
+              {Math.round(document.viewport.zoom * 100)}%
+            </button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="zoom in"
+              title="zoom in (+)"
+              className="h-8 w-8 shrink-0 rounded-none"
+              onClick={() => zoomCanvas(1.2)}
+            >
+              <ZoomIn className="h-3 w-3" aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              data-testid="canvas-fit"
+              variant="ghost"
+              size="icon"
+              aria-label="fit canvas"
+              title="fit canvas"
+              className="h-8 w-8 shrink-0 rounded-none"
+              onClick={fitCanvas}
+            >
+              <Maximize2 className="h-3 w-3" aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              data-testid="canvas-arrange"
+              variant="ghost"
+              size="icon"
+              aria-label="arrange canvas"
+              title="arrange canvas"
+              className="h-8 w-8 shrink-0 rounded-none"
+              onClick={arrangeCanvas}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="sr-only">arrange canvas</span>
+            </Button>
+            <Button
+              type="button"
+              data-testid="canvas-delete-selection"
+              variant="ghost"
+              size="icon"
+              aria-label="delete selected canvas item"
+              title="delete selected canvas item"
+              className="h-8 w-8 shrink-0 rounded-none"
+              disabled={!selectedCanDelete}
+              onClick={removeSelection}
+            >
+              <Trash2 className="h-3 w-3" aria-hidden="true" />
+            </Button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            data-testid="canvas-tools-toggle"
+            aria-label={`open canvas tools. ${activeTool.label} tool active`}
+            aria-expanded="false"
+            className="flex h-8 max-w-32 items-center gap-2 px-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-foreground"
+            onClick={() => setToolsOpen(true)}
+          >
+            <ActiveToolIcon
+              className="h-3.5 w-3.5 shrink-0"
+              aria-hidden="true"
+            />
+            <span className="truncate">
+              {tool === "select" ? "tools" : activeTool.label}
+            </span>
+            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+          </button>
+        )}
       </div>
 
       {tool === "arrow" && arrowSource && (
@@ -1305,9 +1386,14 @@ export function LiveViewCanvas({
           choose another Block or note to connect
         </div>
       )}
-      <div className="pointer-events-none absolute bottom-3 right-3 z-20 border border-border bg-background/95 px-2 py-1 font-mono text-[9px] text-muted-foreground">
-        drag nodes · pan tool or middle-drag · ctrl/⌘ + wheel to zoom
-      </div>
+      {!toolsOpen && (
+        <div
+          data-testid="canvas-interaction-hint"
+          className="pointer-events-none absolute right-3 top-3 z-20 max-w-[calc(100%-11rem)] border border-border bg-background/95 px-2 py-1 text-right font-mono text-[9px] leading-tight text-muted-foreground"
+        >
+          drag nodes · pan tool or middle-drag · ctrl/⌘ + wheel to zoom
+        </div>
+      )}
     </section>
   );
 }

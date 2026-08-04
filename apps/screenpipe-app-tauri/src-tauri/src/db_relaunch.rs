@@ -15,7 +15,9 @@
 //! [`surface_manual_recovery`] publishes the "needs manual recovery" event once
 //! so the notification layer can tell the user what happened.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::{error, warn};
 
@@ -84,6 +86,55 @@ pub async fn surface_manual_recovery(reason: &str) {
     );
     let evt = screenpipe_events::DbRecoveryEvent::needs_recovery();
     let _ = screenpipe_events::send_event(evt.event_name(), evt);
+}
+
+/// Report a durable quarantine found at launch through the existing Sentry
+/// tracing layer. Only bounded marker metadata is attached: never its path,
+/// file identity, or free-form reason.
+pub async fn surface_quarantined_recovery_at_launch(database_path: &Path) {
+    if GAVE_UP_NOTIFIED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let marker = screenpipe_db::read_sqlite_quarantine(database_path)
+        .ok()
+        .flatten();
+    let sqlite_code = marker.as_ref().and_then(|marker| marker.sqlite_code);
+    let marker_age = marker
+        .as_ref()
+        .map(|marker| quarantine_age_bucket(marker.detected_at_unix_ms))
+        .unwrap_or("unknown");
+
+    error!(
+        sqlite_quarantine_state = "active_at_launch",
+        sqlite_marker_metadata = if marker.is_some() { "readable" } else { "unreadable" },
+        sqlite_extended_code = sqlite_code.unwrap_or(-1),
+        sqlite_primary_code = sqlite_code.map(|code| code & 0xff).unwrap_or(-1),
+        sqlite_marker_age = marker_age,
+        "db recovery: durable SQLite quarantine was present at app launch"
+    );
+    let evt = screenpipe_events::DbRecoveryEvent::needs_recovery();
+    let _ = screenpipe_events::send_event(evt.event_name(), evt);
+}
+
+fn quarantine_age_bucket(detected_at_unix_ms: u64) -> &'static str {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let Some(age) = now.checked_sub(detected_at_unix_ms) else {
+        return "clock_skew";
+    };
+
+    const HOUR: u64 = 60 * 60 * 1_000;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    match age {
+        0..HOUR => "under_1h",
+        HOUR..DAY => "1h_to_1d",
+        DAY..=WEEK => "1d_to_7d",
+        _ => "over_7d",
+    }
 }
 
 #[cfg(test)]

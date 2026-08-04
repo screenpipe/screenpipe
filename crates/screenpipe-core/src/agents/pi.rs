@@ -303,6 +303,41 @@ fn fallback_cloud_models() -> serde_json::Value {
     ])
 }
 
+pub(crate) const MALFORMED_TOOL_USE_ERROR: &str =
+    "provider_protocol_error: assistant ended with toolUse but emitted no executable tool call";
+
+pub(crate) fn pi_event_protocol_error(event: &serde_json::Value) -> Option<&'static str> {
+    if event.get("type").and_then(|value| value.as_str()) != Some("message_end") {
+        return None;
+    }
+    let message = event.get("message")?;
+    if message.get("role").and_then(|value| value.as_str()) != Some("assistant")
+        || message.get("stopReason").and_then(|value| value.as_str()) != Some("toolUse")
+    {
+        return None;
+    }
+
+    let has_executable_call = message
+        .get("content")
+        .and_then(|value| value.as_array())
+        .map(|content| {
+            content.iter().any(|block| {
+                block.get("type").and_then(|value| value.as_str()) == Some("toolCall")
+                    && block
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|id| !id.trim().is_empty())
+                    && block
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|name| !name.trim().is_empty())
+            })
+        })
+        .unwrap_or(false);
+
+    (!has_executable_call).then_some(MALFORMED_TOOL_USE_ERROR)
+}
+
 /// Pi agent executor.
 pub struct PiExecutor {
     /// Screenpipe cloud token (for LLM calls via screenpipe proxy).
@@ -1679,11 +1714,15 @@ impl PiExecutor {
             let line = String::from_utf8_lossy(&line_bytes).into_owned();
             let _ = line_tx.send(line.clone());
 
-            // Detect LLM-level errors (e.g. credits_exhausted) even when
+            // Detect LLM/protocol errors even when
             // the process exits 0.  We look for assistant message events
-            // with stopReason "error".
+            // with stopReason "error", and fail closed when a provider says
+            // toolUse without producing an executable structured call.
             if llm_error.is_none() {
                 if let Ok(evt) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if let Some(error) = pi_event_protocol_error(&evt) {
+                        llm_error = Some(error.to_string());
+                    }
                     let is_assistant = evt
                         .get("message")
                         .and_then(|m| m.get("role"))
@@ -1693,7 +1732,7 @@ impl PiExecutor {
                         .get("message")
                         .and_then(|m| m.get("stopReason"))
                         .and_then(|r| r.as_str());
-                    if is_assistant && stop_reason == Some("error") {
+                    if llm_error.is_none() && is_assistant && stop_reason == Some("error") {
                         llm_error = evt
                             .get("message")
                             .and_then(|m| m.get("errorMessage"))
@@ -3663,6 +3702,37 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_use_without_an_executable_call_is_a_protocol_error() {
+        let malformed = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": []
+            }
+        });
+        assert_eq!(
+            pi_event_protocol_error(&malformed),
+            Some(MALFORMED_TOOL_USE_ERROR)
+        );
+
+        let valid = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": [{
+                    "type": "toolCall",
+                    "id": "call-1",
+                    "name": "bash",
+                    "arguments": {"command": "pwd"}
+                }]
+            }
+        });
+        assert_eq!(pi_event_protocol_error(&valid), None);
+    }
 
     #[test]
     fn managed_pipe_guidance_only_ships_in_enterprise_team_skill() {

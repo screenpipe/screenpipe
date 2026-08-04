@@ -19,6 +19,20 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(LOW_DISK_CHECK_INTERVAL_SEC
 type DiskSpaceProbe = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
 type EventPublisher = Arc<dyn Fn(DiskSpaceLowEvent) -> Result<(), String> + Send + Sync>;
 
+#[cfg(any(debug_assertions, test))]
+fn seed_list_ignores_disk_pressure(seeds: &str) -> bool {
+    seeds
+        .split(',')
+        .any(|seed| seed.trim() == "ignore-disk-pressure")
+}
+
+#[cfg(debug_assertions)]
+fn e2e_ignores_disk_pressure() -> bool {
+    std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|seeds| seed_list_ignores_disk_pressure(&seeds))
+}
+
 /// Start a low-cost disk probe tied to the capture-session shutdown signal.
 ///
 /// Events repeat while the disk remains low. That makes enabling the opt-in
@@ -28,6 +42,16 @@ pub fn start_disk_pressure_monitor(
     data_dir: PathBuf,
     shutdown: broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
+    #[cfg(debug_assertions)]
+    if e2e_ignores_disk_pressure() {
+        info!("e2e: disk-pressure capture stop disabled for isolated fault probe");
+        let mut shutdown = shutdown;
+        return tokio::spawn(async move {
+            let _ = shutdown.recv().await;
+            info!("disk pressure monitor stopped");
+        });
+    }
+
     start_disk_pressure_monitor_with(
         data_dir,
         shutdown,
@@ -188,6 +212,16 @@ mod tests {
         assert!(!is_low_disk(LOW_DISK_THRESHOLD_BYTES + 1));
         assert!(is_low_disk(LOW_DISK_THRESHOLD_BYTES));
         assert!(is_low_disk(0));
+    }
+
+    #[test]
+    fn ignore_disk_pressure_seed_requires_exact_token() {
+        assert!(seed_list_ignores_disk_pressure(
+            "onboarding, ignore-disk-pressure ,capture-loop-silent-once"
+        ));
+        assert!(!seed_list_ignores_disk_pressure(
+            "ignore-disk-pressure-ish,no-recording"
+        ));
     }
 
     #[test]
