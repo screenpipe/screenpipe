@@ -75,18 +75,16 @@ import {
 } from "@/lib/active-ai-preset";
 import { Input } from "@/components/ui/input";
 import {
-  createTemplateCanvasDocument,
   reconcileCanvasDocument,
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
 import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
-import {
-  generateLiveViewWithPi,
-  type GeneratedLiveViewBlock,
-  type LiveViewGenerationScope,
-} from "@/lib/live-views/generate-live-view-with-pi";
+import type { LiveViewGenerationScope } from "@/lib/live-views/generate-live-view-with-pi";
 import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
-import { buildLiveViewPipeAgentPrompt } from "@/lib/live-views/pipe-agent-prompt";
+import {
+  buildLiveViewBuilderAgentPrompt,
+  type LiveViewBuilderTarget,
+} from "@/lib/live-views/pipe-agent-prompt";
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,
@@ -162,9 +160,7 @@ type LiveViewRefreshTrigger =
   | "item_changed"
   | "card_ai_edit";
 
-type PreviewSource =
-  | { kind: "ai"; scope: LiveViewGenerationScope }
-  | { kind: "template"; kit: BrainViewTemplateKit };
+type PreviewSource = { kind: "template"; kit: BrainViewTemplateKit };
 
 type PreviewDestination = "new" | "replace";
 
@@ -334,40 +330,6 @@ function normalizedSlots(slots: ViewSlot[]): ViewSlot[] {
     .map((slot, order) => ({ ...slot, order }));
 }
 
-function generatedSlots(
-  blocks: GeneratedLiveViewBlock[],
-  existingSlots: ViewSlot[] = [],
-): ViewSlot[] {
-  const usedIds = new Set(existingSlots.map((slot) => slot.id));
-  return blocks.map((block, index) => {
-    const stem =
-      block.title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 48) || `section-${index + 1}`;
-    let id = stem;
-    let suffix = 2;
-    while (usedIds.has(id)) {
-      id = `${stem}-${suffix}`;
-      suffix += 1;
-    }
-    usedIds.add(id);
-    return {
-      id,
-      title: block.title,
-      intent: block.intent,
-      component: block.component,
-      width: block.width,
-      order: existingSlots.length + index,
-      binding: block.pipeName ? { pipeName: block.pipeName } : null,
-      value: null,
-      feedback: { upCount: 0, downCount: 0, current: null },
-      itemActions: { items: [] },
-    };
-  });
-}
-
 function copyViewDefinition(view: ViewDefinition): ViewDefinition {
   return {
     ...view,
@@ -441,7 +403,6 @@ export function BrainOverview({
   const [draft, setDraft] = useState<ViewDefinition | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [editing, setEditing] = useState(false);
   const [aiPreview, setAiPreview] = useState(false);
   const [previewSource, setPreviewSource] = useState<PreviewSource | null>(
@@ -1278,163 +1239,95 @@ export function BrainOverview({
     setAiPreview(true);
   };
 
-  const generate = async (
-    prompt: string,
-    scope: LiveViewGenerationScope,
-    preset: AIPreset,
-    intent: LiveViewGenerationIntent,
-  ) => {
-    const startedAt = Date.now();
+  const openLiveViewBuilderAgent = async ({
+    request,
+    target,
+    reference,
+    template = null,
+    displayLabel = request,
+  }: {
+    request: string;
+    target: LiveViewBuilderTarget;
+    reference: ViewDefinition | null;
+    template?: BrainViewTemplateKit | null;
+    displayLabel?: string;
+  }): Promise<boolean> => {
     const analyticsProperties = {
       analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
-      scope,
-      intent,
-      prompt_length: prompt.length,
-      has_current_view: Boolean(view),
-      current_block_count: view?.slots.length ?? 0,
-      dashboard_count: views.length,
+      scope: target.scope,
+      operation: target.operation,
+      has_current_view: Boolean(reference),
+      current_block_count: reference?.slots.length ?? 0,
+      has_template_guide: Boolean(template),
+      prompt_length: request.length,
     };
-    posthog.capture("live_view_generation_started", analyticsProperties);
-    setTemplateGalleryOpen(false);
-    setGenerating(true);
+    posthog.capture(
+      "live_view_builder_agent_handoff_started",
+      analyticsProperties,
+    );
+
+    const agentPrompt = buildLiveViewBuilderAgentPrompt({
+      request,
+      view: reference,
+      target,
+      template,
+    });
+    const context =
+      target.scope === "block"
+        ? `Edit Block “${target.block.title}” in Live View “${reference?.title ?? "unknown"}”`
+        : target.operation === "create"
+          ? template
+            ? `Create a Live View guided by “${template.title}”`
+            : "Create a new Live View"
+          : `${target.operation === "replace" ? "Replace" : "Edit"} Live View “${reference?.title ?? "unknown"}”`;
+
     try {
-      const generated = await generateLiveViewWithPi({
-        prompt,
-        scope,
-        preset,
-        userToken: settings.user?.token ?? null,
-        pipes: installedPipes.map((pipe) => ({
-          name: pipe.config.name,
-          description:
-            pipe.prompt_body?.trim().slice(0, 500) ||
-            `${pipe.config.name} Screenpipe scheduled task`,
-        })),
-        currentViewRef:
-          view && intent !== "new-dashboard"
-            ? {
-                id: view.id,
-                revision: view.revision,
-              }
-            : null,
+      await showChatWithPrefill({
+        context,
+        prompt: agentPrompt,
+        displayLabel,
+        autoSend: true,
+        source: "live-view-builder-agent",
+        useHomeChat: true,
       });
-      const now = new Date().toISOString();
-      const base: ViewDefinition =
-        view && intent !== "new-dashboard"
-          ? copyViewDefinition(view)
-          : {
-              id: "my-overview",
-              title: generated.title,
-              revision: 0,
-              timeRange: generated.timeRange,
-              periodPolicy:
-                generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
-              slots: [],
-              createdAt: now,
-              updatedAt: now,
-            };
-      const slots =
-        scope === "block"
-          ? normalizedSlots([
-              ...base.slots,
-              ...generatedSlots(generated.blocks, base.slots),
-            ])
-          : generatedSlots(generated.blocks);
-      setDraft({
-        ...base,
-        title: scope === "dashboard" || !view ? generated.title : base.title,
-        timeRange:
-          (scope === "dashboard" || !view) &&
-          base.periodPolicy.type !== "fixed.v1"
-            ? generated.timeRange
-            : base.timeRange,
-        slots,
-        updatedAt: now,
-      });
-      setAiNote(generated.note);
-      setPreviewSource({ kind: "ai", scope });
-      setPreviewDestination(
-        scope === "block"
-          ? "replace"
-          : view && views.length >= MAX_DASHBOARDS
-            ? "replace"
-            : intent === "replace-dashboard"
-              ? "replace"
-              : "new",
-      );
-      setEditing(false);
-      setAiPreview(true);
-      posthog.capture("live_view_generation_completed", {
+      posthog.capture("live_view_builder_agent_handoff_completed", {
         ...analyticsProperties,
-        duration_ms: Math.max(0, Date.now() - startedAt),
-        generated_block_count: generated.blocks.length,
-        generated_bound_block_count: generated.blocks.filter(
-          (block) => block.pipeName,
-        ).length,
       });
       return true;
-    } catch (generateError) {
-      posthog.capture("live_view_generation_failed", {
+    } catch (handoffError) {
+      posthog.capture("live_view_builder_agent_handoff_failed", {
         ...analyticsProperties,
-        duration_ms: Math.max(0, Date.now() - startedAt),
-        failure_type: analyticsErrorType(generateError),
+        failure_type: analyticsErrorType(handoffError),
       });
       toast({
-        title: "failed to generate Live View",
+        title: "could not open the Live View agent",
         description:
-          generateError instanceof Error
-            ? generateError.message
-            : String(generateError),
+          handoffError instanceof Error
+            ? handoffError.message
+            : String(handoffError),
         variant: "destructive",
       });
       return false;
-    } finally {
-      setGenerating(false);
     }
   };
 
   const generateFromComposer = async (
     prompt: string,
-    scope: LiveViewGenerationScope,
-    preset: AIPreset,
+    _scope: LiveViewGenerationScope,
+    _preset: AIPreset,
     intent: LiveViewGenerationIntent,
   ) => {
-    if (intent === "pipe-agent") {
-      posthog.capture("live_view_pipe_agent_handoff", {
-        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
-        has_current_view: Boolean(view),
-        current_block_count: view?.slots.length ?? 0,
-        prompt_length: prompt.length,
-      });
-
-      const agentPrompt = buildLiveViewPipeAgentPrompt({
-        request: prompt,
-        view,
-      });
-
-      try {
-        await showChatWithPrefill({
-          context: view
-            ? `Live View “${view.title}” (revision ${view.revision})`
-            : "Create a scheduled task for a new Live View",
-          prompt: agentPrompt,
-          displayLabel: prompt,
-          autoSend: true,
-          source: "live-view-pipe-agent",
-          useHomeChat: true,
-        });
-      } catch (handoffError) {
-        toast({
-          title: "could not open the scheduled task agent",
-          description:
-            handoffError instanceof Error
-              ? handoffError.message
-              : String(handoffError),
-          variant: "destructive",
-        });
-      }
-      return;
-    }
-    await generate(prompt, scope, preset, intent);
+    const creating = intent === "new-dashboard";
+    setCreateDashboardOpen(false);
+    setTemplateGalleryOpen(false);
+    return await openLiveViewBuilderAgent({
+      request: prompt,
+      target: {
+        scope: "dashboard",
+        operation: creating ? "create" : "edit",
+      },
+      reference: creating ? null : view,
+    });
   };
 
   const recordCardFeedback = async (
@@ -1645,102 +1538,18 @@ export function BrainOverview({
       return false;
     }
 
-    const startedAt = Date.now();
-    const analyticsProperties = {
-      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
-      prompt_length: prompt.length,
-      component: slot.component,
-      has_pipe: Boolean(slot.binding),
-      time_range: view.timeRange,
-    };
-    posthog.capture("live_view_card_ai_edit_started", analyticsProperties);
     setAiEditingSlotId(slot.id);
     try {
-      const previousView = copyViewDefinition(view);
-      const generated = await generateLiveViewWithPi({
-        prompt: `Replace only the existing section "${slot.title}". Do not add another section. User request: ${prompt}`,
-        scope: "block",
-        preset: selectedAiPreset,
-        userToken: settings.user?.token ?? null,
-        pipes: installedPipes.map((pipe) => ({
-          name: pipe.config.name,
-          description:
-            pipe.prompt_body?.trim().slice(0, 500) ||
-            `${pipe.config.name} Screenpipe scheduled task`,
-        })),
-        currentView: {
-          title: view.title,
-          timeRange: view.timeRange,
-          blocks: [
-            {
-              title: slot.title,
-              intent: slot.intent ?? slot.title,
-              component: slot.component,
-              width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
-              pipeName: slot.binding?.pipeName ?? null,
-            },
-          ],
+      return await openLiveViewBuilderAgent({
+        request: prompt,
+        target: {
+          scope: "block",
+          operation: "edit",
+          block: { id: slot.id, title: slot.title },
         },
+        reference: view,
+        displayLabel: `Change “${slot.title}”: ${prompt}`,
       });
-      const replacement = generated.blocks[0];
-      const nextSlots = normalizedSlots(view.slots).map((current) =>
-        current.id === slot.id
-          ? {
-              ...current,
-              title: replacement.title,
-              intent: replacement.intent,
-              component: replacement.component,
-              width: replacement.width,
-              binding: replacement.pipeName
-                ? { pipeName: replacement.pipeName }
-                : null,
-              value: null,
-            }
-          : current,
-      );
-      const result = await commands.saveBrainView({
-        id: view.id,
-        title: view.title,
-        expectedRevision: view.revision,
-        timeRange: view.timeRange,
-        periodPolicy: view.periodPolicy,
-        slots: serializedSlots(nextSlots),
-      });
-      if (result.status === "error") throw new Error(result.error);
-      setView(result.data);
-      setUndoView(previousView);
-      setUndoRevision(previousView ? result.data.revision : null);
-      const refreshedSlot = result.data.slots.find(
-        (candidate) => candidate.id === slot.id,
-      );
-      if (refreshedSlot?.binding) {
-        void refreshConnectedPipes(
-          result.data,
-          [refreshedSlot],
-          "card_ai_edit",
-        );
-      }
-      posthog.capture("live_view_card_ai_edit_completed", {
-        ...analyticsProperties,
-        duration_ms: Math.max(0, Date.now() - startedAt),
-        next_component: replacement.component,
-        next_has_pipe: Boolean(replacement.pipeName),
-      });
-      toast({ title: `${replacement.title} updated` });
-      return true;
-    } catch (editError) {
-      posthog.capture("live_view_card_ai_edit_failed", {
-        ...analyticsProperties,
-        duration_ms: Math.max(0, Date.now() - startedAt),
-        failure_type: analyticsErrorType(editError),
-      });
-      toast({
-        title: "failed to edit this section",
-        description:
-          editError instanceof Error ? editError.message : String(editError),
-        variant: "destructive",
-      });
-      return false;
     } finally {
       setAiEditingSlotId(null);
     }
@@ -1854,138 +1663,34 @@ export function BrainOverview({
     destination: PreviewDestination,
   ) => {
     const creatingNew = destination === "new" || !view;
-    const previousView = !creatingNew && view ? copyViewDefinition(view) : null;
     setSaving(true);
     try {
-      if (creatingNew && views.length >= MAX_DASHBOARDS) {
-        throw new Error(
-          `You can keep up to ${MAX_DASHBOARDS} dashboards. Delete one before creating another.`,
-        );
-      }
-      await pumpCanvasSaves();
-      const requestedTitle = creatingNew
-        ? uniqueDashboardTitle(draft?.title.trim() || kit.title, views)
-        : draft?.title.trim() || kit.title;
-      const targetViewId = creatingNew
-        ? uniqueDashboardId(requestedTitle, views)
-        : view!.id;
-      const result = await commands.installBrainViewTemplateKit({
-        kitId: kit.id,
-        targetViewId,
-        expectedRevision: creatingNew ? null : view!.revision,
+      const opened = await openLiveViewBuilderAgent({
+        request: `Build a useful Live View for the “${kit.title}” outcome. Use the template as guidance, then personalize the Blocks and Pipe strategy from a small relevant sample of my local data.`,
+        target: {
+          scope: "dashboard",
+          operation: creatingNew ? "create" : "replace",
+        },
+        reference: creatingNew ? null : view,
+        template: kit,
+        displayLabel: `Build “${kit.title}” with the Live View agent`,
       });
-      if (result.status === "error") throw new Error(result.error);
-      let installedView = result.data;
-      if (requestedTitle && requestedTitle !== installedView.title) {
-        const renameResult = await commands.saveBrainView({
-          id: installedView.id,
-          title: requestedTitle,
-          expectedRevision: installedView.revision,
-          timeRange: installedView.timeRange,
-          periodPolicy: installedView.periodPolicy,
-          slots: serializedSlots(installedView.slots),
-        });
-        if (renameResult.status === "error")
-          throw new Error(renameResult.error);
-        installedView = renameResult.data;
-      }
-      let canvasSeedFailure: string | null = null;
-      const canvasSeed = createTemplateCanvasDocument(kit.id, installedView);
-      if (canvasSeed) {
-        const expectedCanvasRevision = creatingNew
-          ? null
-          : (canvasServerRevisionsRef.current.get(installedView.id) ?? null);
-        const canvasResult = await commands.saveBrainViewCanvas({
-          ...toSaveCanvasRequest({
-            ...canvasSeed,
-            revision: expectedCanvasRevision ?? 0,
-          }),
-          expectedRevision: expectedCanvasRevision,
-        });
-        if (canvasResult.status === "error") {
-          canvasSeedFailure = canvasResult.error;
-        } else {
-          canvasServerRevisionsRef.current.set(
-            installedView.id,
-            canvasResult.data.revision,
-          );
-          canvasLatestRef.current = canvasResult.data;
-          setCanvasDocument(canvasResult.data);
-        }
-      }
-      const pipeEnableFailures: string[] = [];
-      await Promise.all(
-        kit.pipes.map(async (pipe) => {
-          try {
-            const response = await localFetch(
-              `/pipes/${encodeURIComponent(pipe.name)}/enable`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ enabled: true }),
-              },
-            );
-            const body = (await response.json().catch(() => ({}))) as {
-              error?: string;
-            };
-            if (!response.ok || body.error) {
-              throw new Error(body.error || `HTTP ${response.status}`);
-            }
-          } catch {
-            pipeEnableFailures.push(pipe.name);
-          }
-        }),
-      );
-      setView(installedView);
-      setUndoView(previousView);
-      setUndoRevision(previousView ? installedView.revision : null);
+      if (!opened) return;
+
+      posthog.capture("live_view_template_agent_handoff", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        template_id: kit.id,
+        template_block_count: kit.slots.length,
+        template_pipe_count: kit.pipes.length,
+        destination,
+        dashboard_count: views.length,
+      });
       setDraft(null);
       setEditing(false);
       setAiPreview(false);
       setPreviewSource(null);
       setAiNote(null);
       setReplaceConfirmationOpen(false);
-      await refetchPipes();
-      toast({
-        title: creatingNew
-          ? `${installedView.title} created`
-          : `${installedView.title} replaced`,
-        description:
-          pipeEnableFailures.length > 0
-            ? `Open Scheduled to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
-            : canvasSeedFailure
-              ? `The source-backed Blocks were installed, but the process Canvas could not be arranged: ${canvasSeedFailure}`
-              : undefined,
-      });
-      posthog.capture("live_view_dashboard_saved", {
-        ...liveViewAnalyticsProperties(
-          installedView,
-          creatingNew ? views.length + 1 : views.length,
-        ),
-        action: creatingNew ? "created" : "replaced",
-        source: "template",
-        template_id: kit.id,
-        refresh_requested: true,
-      });
-      void refreshConnectedPipes(installedView, undefined, "template_applied");
-    } catch (installError) {
-      posthog.capture("live_view_dashboard_save_failed", {
-        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
-        action: creatingNew ? "created" : "replaced",
-        source: "template",
-        template_id: kit.id,
-        block_count: kit.slots.length,
-        dashboard_count: views.length,
-        failure_type: analyticsErrorType(installError),
-      });
-      toast({
-        title: "template was not installed",
-        description:
-          installError instanceof Error
-            ? installError.message
-            : String(installError),
-        variant: "destructive",
-      });
     } finally {
       setSaving(false);
     }
@@ -2295,7 +2000,7 @@ export function BrainOverview({
         className="mx-auto flex min-h-80 w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
       >
         <LiveViewAiComposer
-          busy={generating}
+          busy={false}
           selectedPresetId={selectedAiPreset?.id ?? null}
           onSelectedPresetIdChange={selectAiPreset}
           onGenerate={generateFromComposer}
@@ -2325,10 +2030,7 @@ export function BrainOverview({
     const previewSlots = normalizedSlots(draft.slots);
     const templatePreview =
       previewSource?.kind === "template" ? previewSource.kit : null;
-    const wholeDashboardPreview = Boolean(
-      templatePreview ||
-      (previewSource?.kind === "ai" && previewSource.scope === "dashboard"),
-    );
+    const wholeDashboardPreview = Boolean(templatePreview);
     const canChooseDestination = Boolean(view && wholeDashboardPreview);
     const dashboardLimitReached = views.length >= MAX_DASHBOARDS;
     const replacingDashboard = Boolean(
@@ -2419,11 +2121,11 @@ export function BrainOverview({
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 )}
                 {replacingDashboard
-                  ? "replace current dashboard"
-                  : previewSource?.kind === "ai" &&
-                      previewSource.scope === "block" &&
-                      view
-                    ? "add sections & load data"
+                  ? templatePreview
+                    ? "replace with agent"
+                    : "replace current dashboard"
+                  : templatePreview
+                    ? "build with agent"
                     : "create dashboard & load data"}
               </Button>
             </div>
@@ -2453,7 +2155,7 @@ export function BrainOverview({
                     <p>{templateReadiness?.explanation}</p>
                     <details className="mt-1 text-[11px]">
                       <summary className="cursor-pointer select-none hover:text-foreground">
-                        what powers this dashboard
+                        template starting points
                       </summary>
                       <p className="mt-1 font-mono">
                         {templatePreview.pipes
@@ -2461,7 +2163,8 @@ export function BrainOverview({
                           .join(", ")}
                       </p>
                       <p className="mt-1">
-                        Existing custom scheduled task instructions are kept.
+                        The agent decides which existing or new Pipes fit after
+                        checking a small relevant sample of your data.
                       </p>
                     </details>
                   </div>
@@ -2610,13 +2313,13 @@ export function BrainOverview({
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
-  const dashboardBusy = saving || refreshIsActive || generating;
+  const dashboardBusy = saving || refreshIsActive;
   const canvasReady =
     !canvasLoading && canvasDocument?.viewId === view.id && !canvasError;
   const refreshingSlotIds = new Set(
     refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
   );
-  const dashboardSelectionDisabled = saving || generating;
+  const dashboardSelectionDisabled = saving;
   const showOnboardingActivation = Boolean(
     onboardingActivation && !onboardingActivation.completedAt,
   );
@@ -2655,12 +2358,17 @@ export function BrainOverview({
           />
           <LiveViewCreateDashboardDialog
             open={createDashboardOpen}
-            busy={generating}
+            busy={false}
             selectedPresetId={selectedAiPreset?.id ?? null}
             onOpenChange={setCreateDashboardOpen}
             onSelectedPresetIdChange={selectAiPreset}
             onGenerate={(prompt, preset) =>
-              generate(prompt, "dashboard", preset, "new-dashboard")
+              generateFromComposer(
+                prompt,
+                "dashboard",
+                preset,
+                "new-dashboard",
+              )
             }
             onCreateBlank={beginManualCreate}
           />
@@ -2856,7 +2564,7 @@ export function BrainOverview({
         >
           <div className="pointer-events-auto w-full max-w-2xl shadow-lg shadow-black/5">
             <LiveViewAiComposer
-              busy={generating}
+              busy={false}
               compact
               currentViewTitle={view.title}
               selectedPresetId={selectedAiPreset?.id ?? null}

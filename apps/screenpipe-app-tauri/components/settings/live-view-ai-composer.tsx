@@ -39,26 +39,16 @@ type LiveViewAiComposerProps = {
     scope: LiveViewGenerationScope,
     preset: AIPreset,
     intent: LiveViewGenerationIntent,
-  ) => void | Promise<void>;
+  ) => void | boolean | Promise<void | boolean>;
 };
 
-export type LiveViewGenerationIntent =
-  "new-dashboard" | "replace-dashboard" | "pipe-agent";
-
-const PIPE_NOUN = /\b(?:pipe|pipes|piep|pieps)\b/i;
-const PIPE_AUTHORING_ACTION =
-  /\b(?:create|make|build|add|new|edit|change|modify|update|fix|improve|optimi[sz]e|customi[sz]e|fork|remix)\b/i;
-
-export function isPipeAuthoringRequest(prompt: string): boolean {
-  return PIPE_NOUN.test(prompt) && PIPE_AUTHORING_ACTION.test(prompt);
-}
+export type LiveViewGenerationIntent = "new-dashboard" | "edit-dashboard";
 
 export function inferLiveViewGenerationIntent(
-  prompt: string,
+  _prompt: string,
   hasCurrentView: boolean,
 ): LiveViewGenerationIntent {
-  if (isPipeAuthoringRequest(prompt)) return "pipe-agent";
-  return hasCurrentView ? "replace-dashboard" : "new-dashboard";
+  return hasCurrentView ? "edit-dashboard" : "new-dashboard";
 }
 
 export function LiveViewAiComposer({
@@ -95,16 +85,16 @@ export function LiveViewAiComposer({
   );
   const hostedUsageExhausted = Boolean(
     selectedPreset?.provider === "screenpipe-cloud" &&
-    usage &&
-    usage.remaining <= 0,
+      usage &&
+      usage.remaining <= 0,
   );
   const canUpgrade = Boolean(
     hostedUsageExhausted &&
-    usage?.upgrade_eligible === true &&
-    usage.upsell_banner !== false &&
-    usage.tier !== "subscribed" &&
-    usage.tier !== "business_max" &&
-    usage.tier !== "business_ultra",
+      usage?.upgrade_eligible === true &&
+      usage.upsell_banner !== false &&
+      usage.tier !== "subscribed" &&
+      usage.tier !== "business_max" &&
+      usage.tier !== "business_ultra",
   );
   const canSubmit = Boolean(
     prompt.trim() && selectedPreset && !busy && !hostedUsageExhausted,
@@ -117,18 +107,10 @@ export function LiveViewAiComposer({
   );
   const scope: LiveViewGenerationScope = "dashboard";
   const intentLabel =
-    intent === "pipe-agent"
-      ? currentViewTitle
-        ? `will open the agent for “${currentViewTitle}”`
-        : "will open the scheduled task agent"
-      : intent === "replace-dashboard"
-        ? `will edit “${currentViewTitle}”`
-        : "will create a new dashboard";
-  const actionLabel = busy
-    ? "creating"
-    : intent === "pipe-agent"
-      ? "open agent"
-      : "generate";
+    intent === "edit-dashboard"
+      ? `agent will edit “${currentViewTitle}”`
+      : "agent will create a new dashboard";
+  const actionLabel = busy ? "opening agent" : "open agent";
 
   const submit = () => {
     if (!canSubmit || !selectedPreset) return;
@@ -304,9 +286,7 @@ export function LiveViewAiComposer({
                 </>
               ) : (
                 <>
-                  <span className="mr-1.5">
-                    {intent === "pipe-agent" ? "open agent" : "generate"}
-                  </span>
+                  <span className="mr-1.5">open agent</span>
                   <ArrowUp className="h-3.5 w-3.5" />
                 </>
               )}
