@@ -303,6 +303,7 @@ describe("AccountSection subscription/login gating", () => {
 
   it("clears the trial date and refreshes entitlement when checkout activates", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-21T12:00:00.000Z"));
     mocks.state.user = {
       id: "u1",
       email: "trial@screenpipe.test",
