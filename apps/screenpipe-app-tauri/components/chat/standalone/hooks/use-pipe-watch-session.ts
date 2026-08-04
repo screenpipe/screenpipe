@@ -90,8 +90,8 @@ export function usePipeWatchSession({
           execution.error_message?.trim() ||
           execution.stderr?.trim() ||
           (execution.status === "failed"
-            ? "Pipe failed with no output."
-            : "Pipe completed with no output.");
+            ? "Scheduled task failed with no output."
+            : "Scheduled task completed with no output.");
         conversation.messages = [{
           id: `pipe-poll-${executionId}`,
           role: "assistant",

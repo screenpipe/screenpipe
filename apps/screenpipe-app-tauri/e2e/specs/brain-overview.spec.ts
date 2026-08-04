@@ -838,6 +838,7 @@ Refresh the assigned Live View output targets from source-backed activity.
           documentWidth: document.documentElement.scrollWidth,
           viewportHeight: document.documentElement.clientHeight,
           documentHeight: document.documentElement.scrollHeight,
+          sectionTop: sectionRect.top,
           sectionLeft: sectionRect.left,
           sectionRight: sectionRect.right,
           sectionBottom: sectionRect.bottom,
@@ -849,7 +850,7 @@ Refresh the assigned Live View output targets from source-backed activity.
             .filter((element) => {
               const rect = element.getBoundingClientRect();
               return (
-                rect.top < 32 ||
+                rect.top < sectionRect.top - 1 ||
                 rect.left < -1 ||
                 rect.right > document.documentElement.clientWidth + 1
               );
@@ -873,6 +874,7 @@ Refresh the assigned Live View output targets from source-backed activity.
         documentWidth: number;
         viewportHeight: number;
         documentHeight: number;
+        sectionTop: number;
         sectionLeft: number;
         sectionRight: number;
         sectionBottom: number;
@@ -889,7 +891,11 @@ Refresh the assigned Live View output targets from source-backed activity.
       } | null;
 
       expect(layout).not.toBeNull();
-      expect(layout!.firstContentTop).toBeGreaterThanOrEqual(32);
+      // Windows and Linux intentionally render the custom titlebar flush with
+      // the section top; macOS keeps extra space for the traffic lights.
+      expect(layout!.firstContentTop).toBeGreaterThanOrEqual(
+        layout!.sectionTop - 1,
+      );
       expect(layout!.sectionLeft).toBeGreaterThanOrEqual(-1);
       expect(layout!.sectionRight).toBeLessThanOrEqual(
         layout!.viewportWidth + 1,
@@ -926,7 +932,6 @@ Refresh the assigned Live View output targets from source-backed activity.
     const renderedText = (await browser.execute(
       () => document.body?.innerText || "",
     )) as string;
-    expect(renderedText).toContain("Live Views");
     expect(renderedText.toLowerCase()).toContain("dashboards");
     expect(renderedText.toLowerCase()).toContain("customize");
     expect(renderedText).toContain("Automation opportunities");

@@ -336,19 +336,17 @@ Common patterns: `GROUP BY date(timestamp)` (daily), `GROUP BY strftime('%H:00',
 # List all integrations (Telegram, Slack, Discord, Email, Todoist, Teams, 40+)
 curl http://localhost:3030/connections
 
-# Get saved credentials for a webhook/token integration
+# Get connection status and non-secret settings
 curl http://localhost:3030/connections/telegram
 ```
 
-**Credential integrations** — `GET /connections/<id>` returns saved fields to use with the service API directly:
-- **Telegram**: `bot_token` + `chat_id` → `POST https://api.telegram.org/bot{token}/sendMessage`
-- **Slack**: `webhook_url` → `POST {webhook_url}` with `{"text": "..."}`
-- **Discord**: `webhook_url` → `POST {webhook_url}` with `{"content": "..."}`
-- **Todoist**: `api_token` → `POST https://api.todoist.com/api/v1/tasks` with Bearer auth
-- **Teams**: `webhook_url` → `POST {webhook_url}` with `{"text": "..."}`
-- **Email**: `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `from_address`
+Connection reads return status and declared non-secret settings only. Stored secrets never appear in API responses. Use dedicated local endpoints or proxies:
+- **Telegram**: `POST /connections/telegram/send` with `{"text":"..."}`
+- **n8n / Zapier / Make**: `POST /connections/<id>/proxy` with arbitrary JSON
+- **Discord**: `POST /connections/discord/proxy` with `{"content":"..."}`
+- **Teams webhook**: `POST /connections/teams/proxy` with `{"text":"..."}`
 
-**OAuth/proxy integrations** — tokens are stored in SecretStore and are never exposed via `GET /connections/<id>`. Call the local proxy instead; it injects auth and forwards to the upstream API:
+**API proxy integrations** — credentials are stored server-side. Call the local wildcard proxy; it injects auth and forwards to the upstream API:
 
 ```bash
 # GitHub — create an issue (repo owner/name from pipe settings)

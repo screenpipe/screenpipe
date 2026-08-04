@@ -258,7 +258,7 @@ async function callActivitySummaryThroughMcp(
             )) as string
           )
             .toLowerCase()
-            .includes("what should screenpipe help you do"),
+            .includes("what do you want first?"),
         {
           timeout: t(15_000),
           interval: 250,

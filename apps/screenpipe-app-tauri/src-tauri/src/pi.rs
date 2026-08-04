@@ -1421,6 +1421,18 @@ fn ensure_screenpipe_skill(project_dir: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to install screenpipe skills: {}", e))
 }
 
+/// Stage the Enterprise-only team skill outside Pi's auto-discovery tree.
+/// Consumer builds return `None` without touching this path; the Enterprise
+/// app passes the returned file explicitly with `--skill` for this process.
+fn ensure_enterprise_team_skill(project_dir: &str) -> Result<Option<std::path::PathBuf>, String> {
+    use screenpipe_core::agents::pi::PiExecutor;
+    let skill_root = std::path::Path::new(project_dir)
+        .join(".screenpipe")
+        .join("enterprise-skills");
+    PiExecutor::ensure_screenpipe_team_skill(&skill_root)
+        .map_err(|e| format!("Failed to install Enterprise team skill: {}", e))
+}
+
 /// Ensure the web-search extension exists in the project's .pi/extensions directory
 /// Install or remove the web-search extension based on provider.
 /// Web search uses the screenpipe cloud backend (Gemini + Google Search),
@@ -2166,6 +2178,7 @@ pub async fn pi_start_inner(
 
     // Ensure screenpipe skills exist in project
     ensure_screenpipe_skill(&project_dir)?;
+    let enterprise_team_skill = ensure_enterprise_team_skill(&project_dir)?;
 
     if !use_acp {
         // These extensions and package/config checks belong to the native Pi
@@ -2378,6 +2391,13 @@ pub async fn pi_start_inner(
             "--model",
             &pi_model,
         ]);
+        if let Some(skill_path) = enterprise_team_skill.as_ref() {
+            command.arg("--skill").arg(skill_path);
+            info!(
+                "Injected Enterprise team skill for native Pi session from {:?}",
+                skill_path
+            );
+        }
         if extension_safe_mode {
             warn!(
                 "Starting Pi in extension safe mode for '{}'; third-party extension packages are disabled",

@@ -167,7 +167,7 @@ export function LiveViewItemControls({
                   <div>
                     <p className="text-xs font-medium">Fix this item</p>
                     <p className="mt-0.5 text-[10px] text-muted-foreground">
-                      The connected Pipe keeps your correction on later updates.
+                      The connected scheduled task keeps your correction on later updates.
                     </p>
                   </div>
                   <Input
@@ -226,7 +226,7 @@ export function LiveViewItemControls({
                         <span className="min-w-0">
                           <span className="block text-xs">Fix details</span>
                           <span className="mt-0.5 block whitespace-normal text-[10px] font-normal leading-snug text-muted-foreground">
-                            Teach the Pipe what it misunderstood
+                            Teach the scheduled task what it misunderstood
                           </span>
                         </span>
                       </Button>

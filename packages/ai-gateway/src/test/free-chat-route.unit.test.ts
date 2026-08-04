@@ -456,6 +456,110 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(await errorCode(response)).toBe('cost_control_unavailable');
 	});
 
+	it('reports Cloudflare-managed allowance without reading legacy cost controls', async () => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: 'user_cloudflare_usage',
+						cloud_subscribed: false,
+						app_entitled: true,
+						subscription_plan: 'standard',
+						entitlement: { active: true, plan: 'standard', features: { app: true } },
+					},
+				}), { status: 200 });
+			}
+			if (url.startsWith('https://supabase.test/rest/v1/user_credits')) {
+				return new Response('[]', { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+		const cloudflareEnv = {
+			...env,
+			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
+			CLOUDFLARE_AI_GATEWAY_ID: 'hosted-chat-test',
+			DB: { prepare: () => { throw new Error('legacy cost storage unavailable'); } },
+		} as unknown as Env;
+
+		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+			headers: { Authorization: 'Bearer eyJ.cloudflare.usage' },
+		}), cloudflareEnv, ctx);
+		const body = await response.json() as any;
+
+		expect(response.status).toBe(200);
+		expect(body.upsell_banner).toBe(false);
+		expect(body.cost_limit_reached).toBeNull();
+		expect(body.hosted_ai).toMatchObject({
+			plan: 'basic',
+			allowance_managed_by: 'cloudflare',
+			included_credits: null,
+			used_credits: null,
+			remaining_credits: null,
+		});
+	});
+
+	it('bypasses legacy paid admission and reaches Gateway routing when D1 is unavailable', async () => {
+		let gatewayCalls = 0;
+		const d1Statements: string[] = [];
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: 'user_cloudflare_chat',
+						cloud_subscribed: false,
+						app_entitled: true,
+						subscription_plan: 'standard',
+						entitlement: { active: true, plan: 'standard', features: { app: true } },
+					},
+				}), { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+		const cloudflareEnv = {
+			...env,
+			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
+			CLOUDFLARE_AI_GATEWAY_ID: 'hosted-chat-test',
+			OPENAI_API_KEY: '',
+			AI: {
+				gateway: () => ({
+					getUrl: async () => {
+						gatewayCalls++;
+						throw Object.assign(new Error('test reached Cloudflare Gateway routing'), { status: 502 });
+					},
+				}),
+			},
+			// trackUsage/reserveDailyCostCap would fail before inference. The
+			// completed-cost write is intentionally best-effort in this mode.
+			DB: {
+				prepare: (query: string) => {
+					d1Statements.push(query);
+					throw new Error('legacy admission storage unavailable');
+				},
+			},
+		} as unknown as Env;
+
+		const response = await handleRequest(
+			request(
+				{ Authorization: 'Bearer eyJ.cloudflare.chat' },
+				'/v1/chat/completions',
+				'gpt-5.6-luna',
+			),
+			cloudflareEnv,
+			ctx,
+		);
+
+		// A legacy admission read would return cost_control_unavailable before
+		// provider routing. The intentional 502 proves Gateway resolution ran.
+		expect(response.status).toBe(502);
+		expect(gatewayCalls).toBeGreaterThan(0);
+		expect(await response.text()).not.toContain('cost_control_unavailable');
+		expect(d1Statements.some((query) => query.includes('INSERT INTO cost_daily'))).toBe(false);
+	});
+
 	it('returns canonical Max and Ultra capacity from desktop-compatible user responses', async () => {
 		for (const [billingPlan, usageTier, dailyLimit] of [
 			['pro_max', 'business_max', 120],

@@ -6894,7 +6894,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "dirs 6.0.0",
  "screenpipe-cpu-features",
@@ -6906,7 +6906,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -6951,7 +6951,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6993,11 +6993,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-cpu-features"
-version = "0.4.36"
+version = "0.4.37"
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7025,7 +7025,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7063,7 +7063,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7141,7 +7141,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "libsqlite3-sys",
  "serde",
@@ -7170,7 +7170,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "argon2",
  "chacha20poly1305",

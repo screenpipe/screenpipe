@@ -51,18 +51,18 @@ export function buildPipeAdvisories(
   const advisory: PendingAdvisory = {
     id: "pipe:summary",
     title: singleFailure
-      ? `pipe "${failures[0].name}" couldn't run`
-      : `${failures.length} pipes couldn't run`,
+      ? `scheduled task "${failures[0].name}" couldn't run`
+      : `${failures.length} scheduled tasks couldn't run`,
     body:
       messages.length === 1
         ? messages[0]
-        : `${messages.length} issues are blocking these background pipes.`,
+        : `${messages.length} issues are blocking these background scheduled tasks.`,
     severity: "warn",
     ...(singleFailure
       ? {}
       : {
           details: {
-            label: `view ${failures.length} affected pipes`,
+            label: `view ${failures.length} affected scheduled tasks`,
             items: failures.map(({ name, parsed }) =>
               messages.length === 1 ? name : `${name} — ${parsed.message}`,
             ),

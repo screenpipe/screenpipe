@@ -1663,7 +1663,7 @@ const AISection = ({
                     <p>{selectedModel.warning}</p>
                     {models?.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 2).length > 0 && (
                       <p className="text-muted-foreground">
-                        recommended for pipes:{" "}
+                        recommended for scheduled tasks:{" "}
                         {models.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 3).map((m) => (
                           <button
                             key={m.id}
@@ -1692,7 +1692,7 @@ const AISection = ({
                 (all support tool calling)
               </p>
               <p>
-                GPU strongly recommended. without a dedicated GPU, local models will be very slow and pipes may time out.
+                GPU strongly recommended. without a dedicated GPU, local models will be very slow and scheduled tasks may time out.
                 for best results consider screenpipe cloud or groq as custom provider.
               </p>
             </div>

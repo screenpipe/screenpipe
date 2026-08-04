@@ -1122,8 +1122,8 @@ export function BrainOverview({
               filled,
               message:
                 filled > 0
-                  ? `${filled} of ${current.total} sections updated. The Pipes are still working on the rest.`
-                  : "The Pipes are still working. This view will update when they publish data.",
+                  ? `${filled} of ${current.total} sections updated. The scheduled tasks are still working on the rest.`
+                  : "The scheduled tasks are still working. This view will update when they publish data.",
             };
           }
           if (current.filled === filled) return current;
@@ -1307,7 +1307,7 @@ export function BrainOverview({
           name: pipe.config.name,
           description:
             pipe.prompt_body?.trim().slice(0, 500) ||
-            `${pipe.config.name} Screenpipe Pipe`,
+            `${pipe.config.name} Screenpipe scheduled task`,
         })),
         currentViewRef:
           view && intent !== "new-dashboard"
@@ -1415,7 +1415,7 @@ export function BrainOverview({
         await showChatWithPrefill({
           context: view
             ? `Live View “${view.title}” (revision ${view.revision})`
-            : "Create a Pipe for a new Live View",
+            : "Create a scheduled task for a new Live View",
           prompt: agentPrompt,
           displayLabel: prompt,
           autoSend: true,
@@ -1424,7 +1424,7 @@ export function BrainOverview({
         });
       } catch (handoffError) {
         toast({
-          title: "could not open the Pipe agent",
+          title: "could not open the scheduled task agent",
           description:
             handoffError instanceof Error
               ? handoffError.message
@@ -1666,7 +1666,7 @@ export function BrainOverview({
           name: pipe.config.name,
           description:
             pipe.prompt_body?.trim().slice(0, 500) ||
-            `${pipe.config.name} Screenpipe Pipe`,
+            `${pipe.config.name} Screenpipe scheduled task`,
         })),
         currentView: {
           title: view.title,
@@ -1952,7 +1952,7 @@ export function BrainOverview({
           : `${installedView.title} replaced`,
         description:
           pipeEnableFailures.length > 0
-            ? `Open Pipes to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
+            ? `Open Scheduled to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
             : canvasSeedFailure
               ? `The source-backed Blocks were installed, but the process Canvas could not be arranged: ${canvasSeedFailure}`
               : undefined,
@@ -2461,7 +2461,7 @@ export function BrainOverview({
                           .join(", ")}
                       </p>
                       <p className="mt-1">
-                        Existing custom Pipe instructions are kept.
+                        Existing custom scheduled task instructions are kept.
                       </p>
                     </details>
                   </div>

@@ -9,6 +9,15 @@ import { isFrontierModel } from '../services/cost-tracker';
 import { isFlexEligible } from '../utils/latency';
 import { routeTier, routerArm, TIER_HEAD } from './difficulty-router';
 import { captureException } from '@sentry/cloudflare';
+import {
+  HostedChatAllowanceExceededError,
+  gatewayProviderForModel,
+  getHostedChatGatewayConnection,
+  isCloudflareSpendLimitError,
+  isHostedChatAllowanceError,
+  withHostedChatLane,
+  type HostedChatGatewayContext,
+} from '../services/cloudflare-ai-gateway';
 
 // Auto model waterfall (INTERACTIVE) — use only current OpenAI/Anthropic models.
 // Keep a cross-provider option second so an OpenAI outage does not break chat.
@@ -213,13 +222,18 @@ async function tryModel(
   env: Env,
   ctx: 'auto' | 'fallback' | 'explicit',
   flexEligible: boolean = false,
+  gatewayContext?: HostedChatGatewayContext,
 ): Promise<Response> {
   try {
     // Resolve legacy aliases up front so both provider selection AND the
     // upstream request body see the canonical name. Otherwise the provider
     // receives a body.model that its registry rejects.
     model = resolveModelAlias(model);
-    const provider = createProvider(model, env);
+    const gatewayProvider = gatewayContext ? gatewayProviderForModel(model) : null;
+    const connection = gatewayProvider && gatewayContext
+      ? await getHostedChatGatewayConnection(env, gatewayProvider, gatewayContext)
+      : undefined;
+    const provider = createProvider(model, env, connection);
     const reqBody = { ...body, model };
     if (!provider.supportsTools) {
       delete (reqBody as Partial<RequestBody>).tools;
@@ -256,6 +270,19 @@ async function tryModel(
       throw flexErr;
     }
   } catch (error: any) {
+    if (gatewayContext && isCloudflareSpendLimitError(error)) {
+      error = new HostedChatAllowanceExceededError(gatewayContext);
+    }
+    if (isHostedChatAllowanceError(error)) {
+      console.warn(`${ctx}: Cloudflare hosted AI allowance reached`, {
+        model,
+        plan: error.allowance.plan,
+        lane: error.allowance.lane,
+      });
+      logModelOutcome(env, { model, outcome: 'rate_limited' }).catch(() => {});
+      throw error;
+    }
+
     // Prefer error.status (UpstreamError, etc); fall back to parsing the
     // message for providers that throw plain Error("... 524 ..."). Defaults
     // to 500 — i.e. retriable — to preserve historical cascade behavior.
@@ -366,24 +393,27 @@ async function tryModel(
  * longer controls cascade. Cost: a genuinely universal failure now tries the
  * whole (short) chain before surfacing — acceptable for a fallback chain.
  */
-async function runChain(
+export async function runChain(
   chain: string[],
   body: RequestBody,
   env: Env,
   ctx: 'auto' | 'fallback',
   flexEligible: boolean = false,
   maxAttempts: number = chain.length,
+  gatewayContext?: HostedChatGatewayContext,
+  attemptModel: typeof tryModel = tryModel,
 ): Promise<{ response: Response; model: string } | { error: any; lastModel: string }> {
   let lastError: any = null;
   let lastModel = chain[0];
   for (const model of boundedModelChain(chain, maxAttempts)) {
     lastModel = model;
     try {
-      const response = await tryModel(model, body, env, ctx, flexEligible);
+      const response = await attemptModel(model, body, env, ctx, flexEligible, gatewayContext);
       logModelOutcome(env, { model, outcome: 'ok' }).catch(() => {});
       return { response, model };
     } catch (error: any) {
       lastError = error;
+      if (isHostedChatAllowanceError(error)) break;
       // keep going — the next model in the chain may accept this request.
     }
   }
@@ -467,6 +497,45 @@ function errorResponse(body: RequestBody, status: number, message: string): Resp
   }));
 }
 
+function allowanceMessage(allowance: HostedChatAllowanceExceededError['allowance']): string {
+  if (allowance.lane === 'explicit') {
+    return 'Your 30-day hosted AI allowance for explicit models is used up. Switch to Auto, or use a local model or your own provider key.';
+  }
+  if (allowance.plan === 'free') {
+    return 'Your 30-day hosted AI allowance for Auto is used up. Upgrade, or use a local model or your own provider key.';
+  }
+  return 'Your 30-day hosted AI allowance for Auto is used up. Choose an explicit hosted model, or use a local model or your own provider key.';
+}
+
+/** Render the stable terminal contract Pi uses to avoid generic 429 retries. */
+export function allowanceErrorResponse(body: RequestBody, error: HostedChatAllowanceExceededError): Response {
+  const payload = {
+    error: {
+      message: allowanceMessage(error.allowance),
+      type: 'insufficient_quota',
+      code: 'hosted_ai_allowance_exceeded',
+    },
+    allowance: error.allowance,
+  };
+  if (body.stream) {
+    return addCorsHeaders(new Response(
+      `data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`,
+      {
+        status: 429,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      },
+    ));
+  }
+  return addCorsHeaders(new Response(JSON.stringify(payload), {
+    status: 429,
+    headers: { 'Content-Type': 'application/json' },
+  }));
+}
+
 /**
  * Handles chat completion requests.
  *
@@ -485,7 +554,11 @@ export async function handleChatCompletions(
   latency: 'interactive' | 'background' = 'interactive',
   deviceId: string = '',
   allowFrontierBackground: boolean = false,
-  options: { freePreview?: boolean; efficientOnly?: boolean } = {},
+  options: {
+    freePreview?: boolean;
+    efficientOnly?: boolean;
+    gatewayContext?: HostedChatGatewayContext;
+  } = {},
 ): Promise<Response> {
   // A request with no messages at all can never complete: OpenAI would
   // answer the injected system hint below, and Anthropic 400s outright once
@@ -522,6 +595,12 @@ export async function handleChatCompletions(
   }
 
   body = ensureScreenpipeHint(body);
+  // Background frontier policy can change an explicit request to Auto inside
+  // this handler. Resolve the lane only after that final rewrite, then keep the
+  // same metadata across difficulty routing and every provider fallback.
+  const gatewayContext = options.gatewayContext
+    ? withHostedChatLane(options.gatewayContext, body.model)
+    : undefined;
 
   // Flex (Vertex's 50%-off, cache-read-discounted Gemini lane) now applies to
   // interactive Gemini too, not just background — see isFlexEligible. tryModel
@@ -568,11 +647,15 @@ export async function handleChatCompletions(
       'auto',
       flexEligible,
       freePreview ? FREE_PREVIEW_MAX_UPSTREAM_ATTEMPTS : chain.length,
+      gatewayContext,
     );
     if ('response' in result) {
       const resp = addCorsHeaders(addModelHeader(result.response, result.model));
       if (routerTier) resp.headers.set('x-screenpipe-router-tier', routerTier);
       return resp;
+    }
+    if (isHostedChatAllowanceError(result.error)) {
+      return allowanceErrorResponse(body, result.error);
     }
     const status = result.error?.status || 503;
     const message = result.error?.userMessage || friendlyError(result.lastModel, status, true);
@@ -587,9 +670,12 @@ export async function handleChatCompletions(
     const chain = efficientOnly
       ? efficientModelChain([body.model, ...fallbacks])
       : [body.model, ...fallbacks];
-    const result = await runChain(chain, body, env, 'fallback', flexEligible);
+    const result = await runChain(chain, body, env, 'fallback', flexEligible, chain.length, gatewayContext);
     if ('response' in result) {
       return addCorsHeaders(addModelHeader(result.response, result.model));
+    }
+    if (isHostedChatAllowanceError(result.error)) {
+      return allowanceErrorResponse(body, result.error);
     }
     const status = result.error?.status || 500;
     const fellThrough = result.lastModel !== body.model;
@@ -602,10 +688,13 @@ export async function handleChatCompletions(
   // Single attempt — but still translate gateway errors to friendlier
   // messages instead of leaking raw "524 error code: 524" to the user.
   try {
-    const response = await tryModel(body.model, body, env, 'explicit', flexEligible);
+    const response = await tryModel(body.model, body, env, 'explicit', flexEligible, gatewayContext);
     logModelOutcome(env, { model: body.model, outcome: 'ok' }).catch(() => {});
     return addCorsHeaders(addModelHeader(response, body.model));
   } catch (error: any) {
+    if (isHostedChatAllowanceError(error)) {
+      return allowanceErrorResponse(body, error);
+    }
     const status = error?.status || 500;
     const message = error?.userMessage
       || (SENTRY_SKIP_STATUSES.has(status) || status === 413

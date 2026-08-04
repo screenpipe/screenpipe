@@ -22,7 +22,7 @@
     "@types/node": "^22.19.15",
     "miniflare": "3.20250718.3",
     "typescript": "^5.9.3",
-    "wrangler": "^3.114.17"
+    "wrangler": "4.118.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.33.1",

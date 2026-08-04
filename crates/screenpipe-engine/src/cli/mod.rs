@@ -24,13 +24,14 @@ pub(crate) mod store_file;
 pub mod survey;
 pub mod sync;
 pub mod team;
+pub mod team_pipes;
 pub mod vault;
 pub mod view;
 pub mod vision;
 
 use clap::parser::ValueSource;
 use clap::{ArgAction, ArgMatches, ValueEnum};
-use clap::{Parser, Subcommand, ValueHint};
+use clap::{Args, Parser, Subcommand, ValueHint};
 use screenpipe_audio::{
     audio_manager::builder::TranscriptionMode,
     core::engine::AudioTranscriptionEngine as CoreAudioTranscriptionEngine,
@@ -233,8 +234,8 @@ pub enum Command {
     Search(SearchArgs),
 
     /// Enterprise: query teammates' screen + audio history via
-    /// `screenpipe.com/api/enterprise/v1/*`. Admin-only — needs a
-    /// `team_api_token` minted at https://screenpipe.com/enterprise?tab=tokens.
+    /// `screenpi.pe/api/enterprise/v1/*`. Admin-only — needs a
+    /// `team_api_token` minted at https://screenpi.pe/enterprise?tab=tokens.
     Team {
         #[command(subcommand)]
         subcommand: TeamCommand,
@@ -2091,8 +2092,8 @@ pub struct SearchArgs {
 // Team (enterprise) subcommands
 // =============================================================================
 
-/// Mirrors the `screenpipe-team` skill 1:1 — same endpoints, same vocabulary.
-/// All three variants hit `https://screenpipe.com/api/enterprise/v1/*` directly
+/// Mirrors the `screenpipe-team` skill — same endpoints, same vocabulary.
+/// All variants hit `https://screenpi.pe/api/enterprise/v1/*` directly
 /// with the admin's `team_api_token` from `~/.screenpipe/enterprise.json`
 /// (or `SCREENPIPE_TEAM_API_TOKEN` env override). No daemon needed.
 #[derive(Subcommand, Debug)]
@@ -2104,6 +2105,122 @@ pub enum TeamCommand {
     /// Chronological dump for one device — use after `devices` + `search`
     /// have narrowed down a person and a moment
     Records(TeamRecordsArgs),
+    /// Manage the organization's hosted Pipes
+    Pipes {
+        #[command(subcommand)]
+        subcommand: TeamPipeCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TeamPipeCommand {
+    /// List managed Pipes and their deployed versions
+    List(TeamPipeListArgs),
+    /// Preview a pipe.md deployment without changing the organization
+    Preview(TeamPipePreviewArgs),
+    /// Preview, confirm, and deploy a pipe.md to the organization
+    Deploy(TeamPipeDeployArgs),
+    /// Preview, confirm, and change an existing managed Pipe's schedule
+    Schedule(TeamPipeScheduleArgs),
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamPipeListArgs {
+    /// Emit the complete API response as JSON instead of a compact table
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+pub struct TeamPipeSpecArgs {
+    /// Path to pipe.md, or a directory containing pipe.md
+    #[arg(value_hint = ValueHint::FilePath)]
+    pub source: PathBuf,
+
+    /// Managed Pipe slug. Defaults to the pipe.md parent directory name
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Human-readable name. Defaults to frontmatter title or the slug
+    #[arg(long)]
+    pub display_name: Option<String>,
+
+    /// Override the pipe.md schedule, e.g. "every 30m" or "0 9 * * *"
+    #[arg(long)]
+    pub schedule: Option<String>,
+
+    /// Execution timeout in seconds (5-3600)
+    #[arg(long)]
+    pub timeout: Option<u64>,
+
+    /// Organization AI preset id. Defaults to the organization's configured preset
+    #[arg(long)]
+    pub ai_preset: Option<String>,
+
+    /// Deploy disabled instead of using the pipe.md enabled state
+    #[arg(long)]
+    pub disabled: bool,
+
+    /// Target every enrolled device and Cloud Runner
+    #[arg(long)]
+    pub all_runtimes: bool,
+
+    /// Target one enrolled device id. Repeat for multiple devices
+    #[arg(long)]
+    pub device: Vec<String>,
+
+    /// Target one member email. Repeat for multiple members
+    #[arg(long)]
+    pub member: Vec<String>,
+
+    /// Include Cloud Runner with selected device targets
+    #[arg(long)]
+    pub cloud: bool,
+
+    /// Require this currently deployed version (0 means the Pipe must not exist)
+    #[arg(long)]
+    pub expected_version: Option<u64>,
+
+    /// Emit API receipts as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamPipePreviewArgs {
+    #[command(flatten)]
+    pub spec: TeamPipeSpecArgs,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamPipeDeployArgs {
+    #[command(flatten)]
+    pub spec: TeamPipeSpecArgs,
+
+    /// Deploy after preview without an interactive confirmation prompt
+    #[arg(long)]
+    pub yes: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct TeamPipeScheduleArgs {
+    /// Existing managed Pipe slug
+    pub name: String,
+
+    /// New schedule, e.g. "every 30m" or "0 9 * * *"
+    pub schedule: String,
+
+    /// Require this currently deployed version
+    #[arg(long)]
+    pub expected_version: Option<u64>,
+
+    /// Apply after preview without an interactive confirmation prompt
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Emit API receipts as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser, Clone, Debug)]

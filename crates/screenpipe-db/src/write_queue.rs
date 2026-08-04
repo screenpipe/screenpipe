@@ -401,6 +401,20 @@ pub(crate) fn persistent_failure_slot(
     })
 }
 
+/// Pool defaults for the long-lived capture database.
+///
+/// SQLx otherwise retires idle connections after 10 minutes and every
+/// connection after 30 minutes. Recycling the full set can tear down and
+/// recreate SQLite's memory-mapped WAL index while the process is active. On
+/// POSIX filesystems, touching a mapping after its `-shm` file was shortened
+/// terminates the process with SIGBUS. `DatabaseManager::close()` is the
+/// authoritative connection lifecycle, so capture pools must not self-reap.
+pub(crate) fn capture_pool_options() -> sqlx::sqlite::SqlitePoolOptions {
+    sqlx::sqlite::SqlitePoolOptions::new()
+        .idle_timeout(None)
+        .max_lifetime(None)
+}
+
 /// Rebuilds the write pool from the same options used at startup, so the drain
 /// loop can drop poisoned connections in-process without a full restart.
 #[derive(Clone)]
@@ -426,7 +440,7 @@ impl WritePoolRebuilder {
         }
     }
     async fn rebuild(&self) -> Result<Pool<Sqlite>, sqlx::Error> {
-        sqlx::sqlite::SqlitePoolOptions::new()
+        capture_pool_options()
             .max_connections(self.max_connections)
             .min_connections(self.min_connections)
             .acquire_timeout(self.acquire_timeout)
@@ -2399,6 +2413,13 @@ async fn ensure_db_openable(db_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_pool_connections_live_until_authoritative_shutdown() {
+        let options = capture_pool_options();
+        assert_eq!(options.get_idle_timeout(), None);
+        assert_eq!(options.get_max_lifetime(), None);
+    }
     use sqlx::sqlite::SqlitePoolOptions;
 
     // ── FatalRunEscalation (count / wall-clock / refire rules) ──────────

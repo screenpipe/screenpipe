@@ -120,7 +120,7 @@ export function LiveViewAiComposer({
     intent === "pipe-agent"
       ? currentViewTitle
         ? `will open the agent for “${currentViewTitle}”`
-        : "will open the Pipe agent"
+        : "will open the scheduled task agent"
       : intent === "replace-dashboard"
         ? `will edit “${currentViewTitle}”`
         : "will create a new dashboard";

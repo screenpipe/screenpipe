@@ -476,7 +476,7 @@ export async function generateLiveViewWithPi(
     options.requirePipeBinding &&
     generated.blocks.some((block) => !block.pipeName)
   ) {
-    throw new Error("AI created a section without a usable Pipe");
+    throw new Error("AI created a section without a usable scheduled task");
   }
   if (
     options.maxSelectedPipes &&

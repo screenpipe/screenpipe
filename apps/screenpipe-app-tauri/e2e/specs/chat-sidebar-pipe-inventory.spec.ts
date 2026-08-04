@@ -282,7 +282,7 @@ describe("chat sidebar pipe inventory", function () {
     });
     expect(fetchesWhileCollapsed).toEqual([0, 0, 0]);
 
-    await clickSection("pipes");
+    await clickSection("scheduled");
     const groupSelector = `[data-testid="pipe-group-pipe:${PIPE_NAME}"]`;
     await browser.waitUntil(
       async () => await browser.execute((selector: string) =>

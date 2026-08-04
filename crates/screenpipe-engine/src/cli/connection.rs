@@ -206,14 +206,20 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
             let has_oauth = oauth::read_oauth_token(id).await;
 
             if let Some(creds) = has_creds {
+                let safe = cm
+                    .find_def(id)
+                    .map(|def| screenpipe_connect::connections::safe_connection_config(def, &creds))
+                    .unwrap_or_default();
                 if *use_json {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&json!({ "id": id, "credentials": creds }))?
+                        serde_json::to_string_pretty(
+                            &json!({ "id": id, "connected": true, "credentials": safe })
+                        )?
                     );
                 } else {
-                    println!("{}", id);
-                    for (key, value) in &creds {
+                    println!("{}: connected", id);
+                    for (key, value) in &safe {
                         if let Some(s) = value.as_str() {
                             println!("  {}: {}", key, s);
                         }
@@ -231,7 +237,10 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                     println!("{}: connected (via OAuth)", id);
                 }
             } else if *use_json {
-                println!("{}", json!({ "id": id, "credentials": null }));
+                println!(
+                    "{}",
+                    json!({ "id": id, "connected": false, "credentials": {} })
+                );
             } else {
                 println!("{} is not connected", id);
                 println!("\nhint: screenpipe connection set {} key=value ...", id);

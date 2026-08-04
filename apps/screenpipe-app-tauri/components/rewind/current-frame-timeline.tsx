@@ -631,7 +631,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 						<>
 							<div className="h-px bg-border/30 my-0.5" />
 							<div className="px-3 py-1 text-[10px] text-muted-foreground uppercase tracking-wider">
-								run pipe
+								run scheduled task
 							</div>
 							{templatePipes.map((pipe) => (
 								<button

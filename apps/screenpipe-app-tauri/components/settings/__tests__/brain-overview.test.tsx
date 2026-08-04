@@ -575,7 +575,7 @@ describe("BrainOverview", () => {
     expect(await screen.findByText("How I worked today")).toBeTruthy();
     expect(screen.getByText("4.5")).toBeTruthy();
     expect(screen.getByText("hours")).toBeTruthy();
-    expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
+    expect(screen.getByText("Scheduled task: daily-summary")).toBeTruthy();
     expect(screen.getByText(/artifact #88 · v2/)).toBeTruthy();
   });
 
@@ -1297,7 +1297,7 @@ describe("BrainOverview", () => {
     expect(screen.getByText("Live View name")).toBeTruthy();
     expect(screen.getByText("Block title")).toBeTruthy();
     expect(screen.getByText("Block type")).toBeTruthy();
-    expect(screen.getByText("Connected Pipe")).toBeTruthy();
+    expect(screen.getByText("Connected scheduled task")).toBeTruthy();
     const cardTitle = screen.getByTestId(/^overview-block-title-/);
     fireEvent.change(cardTitle, {
       target: { value: "Automation opportunities" },
@@ -2557,7 +2557,7 @@ describe("BrainOverview", () => {
     expect(screen.queryByTestId("overview-mode-dashboard")).toBeNull();
     expect(screen.queryByTestId("overview-mode-canvas")).toBeNull();
     expect(screen.getByTestId("canvas-block-focus-time")).toBeTruthy();
-    expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
+    expect(screen.getByText("Scheduled task: daily-summary")).toBeTruthy();
     expect(screen.getByText(/artifact #88 · v2/)).toBeTruthy();
     await waitFor(() =>
       expect(mocks.saveBrainViewCanvas).toHaveBeenCalledWith(

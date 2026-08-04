@@ -58,7 +58,7 @@ export function LiveViewCreateDashboardDialog({
           </DialogTitle>
           <DialogDescription>
             Describe the outcome you want. AI will design the Blocks and connect
-            the best available Pipes for you.
+            the best available scheduled tasks for you.
           </DialogDescription>
         </DialogHeader>
 

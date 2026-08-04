@@ -11,7 +11,7 @@ import {
 const DAILY_LIMIT = JSON.stringify({
   error: "daily_cost_limit_exceeded",
   message:
-    "You've used your daily hosted AI allowance. Background pipes share this allowance.",
+    "You've used your daily hosted AI allowance. Background scheduled tasks share this allowance.",
 });
 
 function failingPipe(name: string, lastError = DAILY_LIMIT): PipeAdvisoryRow {
@@ -37,10 +37,10 @@ describe("buildPipeAdvisories", () => {
     expect(advisories).toHaveLength(1);
     expect(advisories[0]).toMatchObject({
       id: "pipe:summary",
-      title: "27 pipes couldn't run",
+      title: "27 scheduled tasks couldn't run",
       body:
-        "You've used your daily hosted AI allowance. Background pipes share this allowance.",
-      details: { label: "view 27 affected pipes" },
+        "You've used your daily hosted AI allowance. Background scheduled tasks share this allowance.",
+      details: { label: "view 27 affected scheduled tasks" },
       action: { label: "upgrade" },
     });
     expect(advisories[0].details?.items).toHaveLength(27);
@@ -55,9 +55,9 @@ describe("buildPipeAdvisories", () => {
     expect(advisories).toEqual([
       {
         id: "pipe:summary",
-        title: 'pipe "meeting-prep" couldn\'t run',
+        title: 'scheduled task "meeting-prep" couldn\'t run',
         body:
-          "You've used your daily hosted AI allowance. Background pipes share this allowance.",
+          "You've used your daily hosted AI allowance. Background scheduled tasks share this allowance.",
         severity: "warn",
       },
     ]);
@@ -80,10 +80,10 @@ describe("buildPipeAdvisories", () => {
       startUpgrade: vi.fn(),
     });
 
-    expect(advisory.title).toBe("2 pipes couldn't run");
-    expect(advisory.body).toBe("2 issues are blocking these background pipes.");
+    expect(advisory.title).toBe("2 scheduled tasks couldn't run");
+    expect(advisory.body).toBe("2 issues are blocking these background scheduled tasks.");
     expect(advisory.details?.items).toEqual([
-      `meeting-prep — You've used your daily hosted AI allowance. Background pipes share this allowance.`,
+      `meeting-prep — You've used your daily hosted AI allowance. Background scheduled tasks share this allowance.`,
       "support-triage — uses a model that needs business — switch to a free model (auto) or upgrade",
     ]);
     expect(advisory.action).toBeUndefined();

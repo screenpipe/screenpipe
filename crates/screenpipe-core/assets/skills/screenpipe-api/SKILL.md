@@ -222,19 +222,18 @@ Patterns: `GROUP BY date(timestamp)` (daily), `GROUP BY strftime('%H:00', timest
 
 ```bash
 curl http://localhost:3030/connections            # list all integrations (40+)
-curl http://localhost:3030/connections/telegram   # saved creds for a webhook/token integration
+curl http://localhost:3030/connections/telegram   # status + non-secret settings
 ```
 
 Each entry's `description` is self-describing — for control surfaces (browsers, gateways, OAuth proxies) it includes the exact endpoint + body shape. Read it before guessing. If not connected, tell the user to set it up from the Connections page in the desktop app.
 
-**Credential integrations** — `GET /connections/<id>` returns fields to call the service directly:
-- **Telegram**: `bot_token`+`chat_id` → `POST https://api.telegram.org/bot{token}/sendMessage`
-- **Slack** / **Teams**: `webhook_url` → `POST {webhook_url}` with `{"text":...}`
-- **Discord**: `webhook_url` → `POST {webhook_url}` with `{"content":...}`
-- **Todoist**: `api_token` → `POST https://api.todoist.com/api/v1/tasks` (Bearer)
-- **Email**: `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `from_address`
+Connection reads return status and declared non-secret settings only. Stored secrets never appear in API responses. Use local boundaries:
+- **Telegram**: `POST /connections/telegram/send` with `{"text":"..."}`
+- **n8n / Zapier / Make**: `POST /connections/<id>/proxy` with arbitrary JSON
+- **Discord**: `POST /connections/discord/proxy` with `{"content":"..."}`
+- **Teams webhook**: `POST /connections/teams/proxy` with `{"text":"..."}`
 
-**OAuth/proxy integrations** — tokens live in SecretStore, never exposed via `GET`. Call the local proxy; it injects auth and forwards upstream. There is no `/connections/<id>/token` endpoint.
+**API proxy integrations** — credentials stay server-side. Call the local wildcard proxy; it injects auth and forwards upstream. There is no `/connections/<id>/token` endpoint.
 
 ```bash
 # GitHub create issue (repo from pipe settings). Same shape for comments: .../issues/42/comments {"body":...}
