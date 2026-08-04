@@ -141,14 +141,23 @@ export class OpenAIProvider implements AIProvider {
 	supportsVision = true;
 	supportsJson = true;
 	private client: OpenAI;
+	private chatTemplateKwargs?: Record<string, unknown>;
 
 	constructor(
 		apiKey: string,
 		baseURL?: string,
 		defaultHeaders?: Record<string, string | null | undefined>,
 		maxRetries?: number,
+		chatTemplateKwargs?: Record<string, unknown>,
 	) {
 		this.client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}), defaultHeaders, maxRetries });
+		this.chatTemplateKwargs = chatTemplateKwargs;
+	}
+
+	private applyProviderOptions(params: ChatCompletionCreateParams): void {
+		if (this.chatTemplateKwargs) {
+			Object.assign(params, { chat_template_kwargs: this.chatTemplateKwargs });
+		}
 	}
 
 	private createJSONSchemaFormat(schema: Record<string, unknown>, name: string, description?: string): ResponseFormatJSONSchema {
@@ -290,6 +299,7 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
+		this.applyProviderOptions(params);
 		await applyGpt56PromptCaching(params);
 
 		const response = await this.createWithUnsupportedParamRetry(params, (p) =>
@@ -323,11 +333,31 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
+		this.applyProviderOptions(params);
 		await applyGpt56PromptCaching(params);
 
 		const stream = (await this.createWithUnsupportedParamRetry(params, (p) =>
 			this.client.chat.completions.create(p as ChatCompletionCreateParams & { stream: true }),
 		)) as OpenAIChatStream;
+
+		// OpenAI-compatible SDK streams are lazy: the HTTP request can succeed at
+		// `create()` time and only surface an upstream 429 when the first chunk is
+		// consumed. Prime that first chunk before returning a ReadableStream so the
+		// gateway's outer model cascade can still recognize allowance exhaustion and
+		// route paid background Pipes to Argus. Later mid-stream failures remain SSE
+		// errors because a response may already have reached the client by then.
+		const iterator = stream[Symbol.asyncIterator]();
+		const firstChunk = await iterator.next();
+		const primedStream = {
+			async *[Symbol.asyncIterator]() {
+				if (!firstChunk.done) yield firstChunk.value;
+				while (true) {
+					const next = await iterator.next();
+					if (next.done) return;
+					yield next.value;
+				}
+			},
+		};
 
 		// Capture scope fields for the error path below — `this` inside the
 		// ReadableStream start() refers to the controller, not the provider.
@@ -339,7 +369,7 @@ export class OpenAIProvider implements AIProvider {
 				try {
 					let finishReason: string | null = null;
 					let usage: any = null;
-					for await (const chunk of stream) {
+					for await (const chunk of primedStream) {
 						// include_usage delivers a final chunk with empty choices
 						// and the request's usage (incl. cached-token details)
 						if ((chunk as any).usage) {

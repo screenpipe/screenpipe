@@ -124,6 +124,7 @@ import {
   type MeetingSummaryExecution,
   type MeetingSummaryLifecycle,
 } from "./meeting-summary-lifecycle";
+import { MeetingSummaryTransition } from "./meeting-summary-transition";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -208,6 +209,7 @@ export function NoteView({
   );
   const [summaryLifecycle, setSummaryLifecycle] =
     useState<MeetingSummaryLifecycle>({ kind: "idle" });
+  const [summaryRevealKey, setSummaryRevealKey] = useState(0);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
   const [transcriptOpen, setTranscriptOpenState] = useState(() =>
     resolveTranscriptOpen(
@@ -243,6 +245,11 @@ export function NoteView({
     summaryLifecycle.kind === "finalizing" ||
     summaryLifecycle.kind === "queued" ||
     summaryLifecycle.kind === "running";
+  const summaryRevealPendingRef = useRef(false);
+
+  useEffect(() => {
+    if (summaryWorking) summaryRevealPendingRef.current = true;
+  }, [summaryWorking]);
 
   useEffect(() => {
     let cancelled = false;
@@ -306,7 +313,18 @@ export function NoteView({
           refreshedSummaryExecutionRef.current = next.execution.id;
           const meetingResponse = await localFetch(`/meetings/${meeting.id}`);
           if (meetingResponse.ok && !cancelled) {
-            onSavedRef.current((await meetingResponse.json()) as MeetingRecord);
+            const updatedMeeting =
+              (await meetingResponse.json()) as MeetingRecord;
+            if (
+              summaryRevealPendingRef.current &&
+              updatedMeeting.note !== meeting.note
+            ) {
+              summaryRevealPendingRef.current = false;
+              setSummaryRevealKey((key) => key + 1);
+            } else {
+              summaryRevealPendingRef.current = false;
+            }
+            onSavedRef.current(updatedMeeting);
           }
         }
 
@@ -341,6 +359,7 @@ export function NoteView({
     isLive,
     meeting.id,
     meeting.meeting_end,
+    meeting.note,
     summaryPipeSlug,
   ]);
 
@@ -659,7 +678,13 @@ export function NoteView({
     }
     if (last.note === note) {
       const next = meeting.note ?? "";
-      if (next !== note) setNote(next);
+      if (next !== note) {
+        setNote(next);
+        if (summaryRevealPendingRef.current) {
+          summaryRevealPendingRef.current = false;
+          setSummaryRevealKey((key) => key + 1);
+        }
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meeting.title, meeting.attendees, meeting.note]);
@@ -1256,6 +1281,11 @@ export function NoteView({
       : autoSummaryEnabled === false
         ? "stop meeting"
         : "stop and summarize";
+  const summaryTransitionPhase = summaryWorking
+    ? summaryLifecycle.kind === "finalizing"
+      ? "finalizing"
+      : "writing"
+    : null;
 
   return (
     <div ref={rootRef} className="relative flex h-full flex-col bg-background">
@@ -1395,14 +1425,23 @@ export function NoteView({
             )}
           </div>
 
-          <NoteEditor
-            ref={noteEditorRef}
-            key={meeting.id}
-            value={note}
-            onChange={setNote}
-            placeholder={'write notes, or type "/" for blocks'}
-            className="mt-10 [&_.ProseMirror]:min-h-[50vh] [&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-7"
-          />
+          <div className="mt-10">
+            <NoteEditor
+              ref={noteEditorRef}
+              key={meeting.id}
+              value={note}
+              onChange={setNote}
+              placeholder={'write notes, or type "/" for blocks'}
+              readOnly={summaryWorking}
+              summaryRevealKey={summaryRevealKey}
+              className="[&_.ProseMirror]:min-h-[50vh] [&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-7"
+            />
+            <MeetingSummaryTransition
+              phase={summaryTransitionPhase}
+              transcriptOpen={transcriptOpen}
+              onTranscriptToggle={() => setTranscriptOpen((open) => !open)}
+            />
+          </div>
 
           {meetingCtx?.activity && (
             <div className="mt-10 space-y-6">

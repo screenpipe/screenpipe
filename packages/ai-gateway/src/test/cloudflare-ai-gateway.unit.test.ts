@@ -48,10 +48,14 @@ describe('Cloudflare hosted-chat metadata', () => {
 		expect(first).toMatchObject({ plan: 'basic', lane: 'auto', workload: 'interactive' });
 	});
 
-	it('collapses business-family plans, preserves trials, and isolates internal traffic', async () => {
-		for (const accountPlan of ['business', 'business_max', 'business_ultra', 'team', 'enterprise'] as const) {
+	it('preserves Max and Ultra allowance tiers while collapsing catalog-equivalent plans', async () => {
+		for (const accountPlan of ['business', 'team', 'enterprise'] as const) {
 			const context = await buildHostedChatGatewayContext(auth({ accountPlan }), 'gpt-5.6-sol', 'background');
 			expect(context).toMatchObject({ plan: 'business', lane: 'explicit', workload: 'background' });
+		}
+		for (const accountPlan of ['business_max', 'business_ultra'] as const) {
+			const context = await buildHostedChatGatewayContext(auth({ accountPlan }), 'auto', 'background');
+			expect(context).toMatchObject({ plan: accountPlan, lane: 'auto', workload: 'background' });
 		}
 		const trial = await buildHostedChatGatewayContext(auth({ accountPlan: 'basic', hostedAiTrial: true }), 'auto', 'interactive');
 		expect(trial.plan).toBe('basic');

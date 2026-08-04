@@ -18,6 +18,12 @@ import {
   withHostedChatLane,
   type HostedChatGatewayContext,
 } from '../services/cloudflare-ai-gateway';
+import {
+  ARGUS_BACKGROUND_FALLBACK_MODEL,
+  prepareArgusBackgroundFallbackBody,
+  isProviderQuotaOrBillingLimitError,
+  shouldUseArgusBackgroundFallback,
+} from '../services/background-limit-fallback';
 
 // Auto model waterfall (INTERACTIVE) — use only current OpenAI/Anthropic models.
 // Keep a cross-provider option second so an OpenAI outage does not break chat.
@@ -402,8 +408,9 @@ export async function runChain(
   maxAttempts: number = chain.length,
   gatewayContext?: HostedChatGatewayContext,
   attemptModel: typeof tryModel = tryModel,
-): Promise<{ response: Response; model: string } | { error: any; lastModel: string }> {
+): Promise<{ response: Response; model: string } | { error: any; lastModel: string; limitError?: any }> {
   let lastError: any = null;
+  let limitError: any = null;
   let lastModel = chain[0];
   for (const model of boundedModelChain(chain, maxAttempts)) {
     lastModel = model;
@@ -413,11 +420,48 @@ export async function runChain(
       return { response, model };
     } catch (error: any) {
       lastError = error;
+      if (isHostedChatAllowanceError(error) || isProviderQuotaOrBillingLimitError(error)) {
+        limitError = error;
+      }
       if (isHostedChatAllowanceError(error)) break;
       // keep going — the next model in the chain may accept this request.
     }
   }
-  return { error: lastError, lastModel };
+  return { error: lastError, lastModel, limitError };
+}
+
+export async function tryArgusBackgroundFallback(
+  body: RequestBody,
+  env: Env,
+  enabled: boolean,
+  error: unknown,
+  attemptModel: typeof tryModel = tryModel,
+): Promise<Response | null> {
+  if (!shouldUseArgusBackgroundFallback({ enabled, error, body, env })) return null;
+  try {
+    const fallbackBody = prepareArgusBackgroundFallbackBody(body);
+    const response = await attemptModel(
+      ARGUS_BACKGROUND_FALLBACK_MODEL,
+      fallbackBody,
+      env,
+      'fallback',
+      false,
+      undefined,
+    );
+    console.warn('background hosted AI allowance exhausted; served by Argus', {
+      requestedModel: body.model,
+      fallbackModel: ARGUS_BACKGROUND_FALLBACK_MODEL,
+    });
+    const tagged = addModelHeader(response, ARGUS_BACKGROUND_FALLBACK_MODEL);
+    tagged.headers.set('x-screenpipe-background-fallback', 'argus');
+    return addCorsHeaders(tagged);
+  } catch (fallbackError: any) {
+    console.error('background Argus fallback failed; preserving original limit response', {
+      status: fallbackError?.status ?? 500,
+      message: String(fallbackError?.message ?? 'unknown').slice(0, 160),
+    });
+    return null;
+  }
 }
 
 /** User-friendly error message for a final cascade failure. */
@@ -558,6 +602,7 @@ export async function handleChatCompletions(
     freePreview?: boolean;
     efficientOnly?: boolean;
     gatewayContext?: HostedChatGatewayContext;
+    argusBackgroundFallback?: boolean;
   } = {},
 ): Promise<Response> {
   // A request with no messages at all can never complete: OpenAI would
@@ -654,6 +699,13 @@ export async function handleChatCompletions(
       if (routerTier) resp.headers.set('x-screenpipe-router-tier', routerTier);
       return resp;
     }
+    const argusResponse = await tryArgusBackgroundFallback(
+      body,
+      env,
+      options.argusBackgroundFallback === true,
+      result.limitError ?? result.error,
+    );
+    if (argusResponse) return argusResponse;
     if (isHostedChatAllowanceError(result.error)) {
       return allowanceErrorResponse(body, result.error);
     }
@@ -674,6 +726,13 @@ export async function handleChatCompletions(
     if ('response' in result) {
       return addCorsHeaders(addModelHeader(result.response, result.model));
     }
+    const argusResponse = await tryArgusBackgroundFallback(
+      body,
+      env,
+      options.argusBackgroundFallback === true,
+      result.limitError ?? result.error,
+    );
+    if (argusResponse) return argusResponse;
     if (isHostedChatAllowanceError(result.error)) {
       return allowanceErrorResponse(body, result.error);
     }
@@ -692,6 +751,13 @@ export async function handleChatCompletions(
     logModelOutcome(env, { model: body.model, outcome: 'ok' }).catch(() => {});
     return addCorsHeaders(addModelHeader(response, body.model));
   } catch (error: any) {
+    const argusResponse = await tryArgusBackgroundFallback(
+      body,
+      env,
+      options.argusBackgroundFallback === true,
+      error,
+    );
+    if (argusResponse) return argusResponse;
     if (isHostedChatAllowanceError(error)) {
       return allowanceErrorResponse(body, error);
     }
