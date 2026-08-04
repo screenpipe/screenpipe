@@ -338,6 +338,21 @@ pub fn screen_enumeration_denied() -> bool {
     state.screen_enum_denied
 }
 
+/// Best current answer to "is screen recording permission actually the
+/// problem right now?" — the last-known TCC state from the 5s poll and eager
+/// stream-error reports, ANDed with the enumeration verdict so the lapsed-
+/// grant case (preflight stale-reports granted, capture-side enumeration
+/// proved it's broken) still reads as denied. No new OS syscall.
+///
+/// Used by `/health` to decide whether a vision failure should tell the user
+/// to check permissions — that advice must never fire for intentional
+/// screenshot disablement (config/power profile) or for a stall that occurs
+/// while permission genuinely is granted (#5808).
+pub fn screen_recording_granted() -> bool {
+    let state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    state.screen.granted && !state.screen_enum_denied
+}
+
 /// Read-only probe of the OS keychain. Returns `true` if the encryption key
 /// is currently readable (user has opted into encryption AND the keychain
 /// hasn't locked us out). Non-macOS or missing-keychain environments report

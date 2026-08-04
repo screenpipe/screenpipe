@@ -313,6 +313,127 @@ fn classify_audio_status(
     }
 }
 
+/// Classifies vision frame-pipeline freshness. Mirrors `classify_audio_status`'s
+/// shape: reasons that make silence *expected* are checked before the bare
+/// timestamp comparison, so an intentional state never gets reported through
+/// the same "stale" value a real stall uses.
+///
+/// `disabled_by_config` / `disabled_by_power_profile` mirror the
+/// `disable_screenshots` setting/flag and a battery-saving power profile
+/// pausing pixels — the accessibility-tree walk keeps running either way,
+/// only screen pixels stop. Without this carve-out, a long idle-capture
+/// interval (power-saver tiers go up to 300s) outlives `threshold_secs` (60s)
+/// and /health misreports a permission failure that was actually the user's
+/// own setting (#5808). Config wins when both are somehow true, since it's
+/// the more direct/user-controlled reason.
+///
+/// The disable checks run before the `last_frame_ts == 0` branch, not just
+/// before the staleness comparison: on a fresh process with screenshots off,
+/// no frame timestamp is ever recorded, so gating on `== 0` first would
+/// permanently misreport `not_started`/`permission_denied` instead of the
+/// intentional reason (#5823).
+///
+/// `permission_granted` (the permission monitor's last-known state, not a
+/// fresh syscall) upgrades the two ambiguous cases — no frame has ever
+/// landed, or none landed recently — to `"permission_denied"` when it's
+/// actually false. This does NOT touch the bare `"stale"`/`"not_started"`
+/// values for the case where permission genuinely is granted: the desktop
+/// app deliberately debounces those (a starved-but-recoverable capture loop
+/// self-heals on user input — see #3939), and a real permission loss is an
+/// orthogonal, unambiguous signal that never depends on that heuristic.
+#[allow(clippy::too_many_arguments)]
+fn classify_frame_status(
+    vision_disabled: bool,
+    vision_capture_expected: bool,
+    screen_locked: bool,
+    last_frame_ts: u64,
+    now_ts: u64,
+    threshold_secs: u64,
+    disabled_by_config: bool,
+    disabled_by_power_profile: bool,
+    permission_granted: bool,
+) -> &'static str {
+    if vision_disabled {
+        "disabled"
+    } else if !vision_capture_expected {
+        "disabled" // all selected displays are user-paused or asleep/inactive
+    } else if screen_locked {
+        "ok" // screen locked — no captures expected, not a real stall
+    } else if last_frame_ts != 0 && now_ts.saturating_sub(last_frame_ts) < threshold_secs {
+        "ok"
+    } else if disabled_by_config {
+        "disabled_by_config"
+    } else if disabled_by_power_profile {
+        "disabled_by_power_profile"
+    } else if last_frame_ts == 0 {
+        if permission_granted {
+            "not_started"
+        } else {
+            "permission_denied"
+        }
+    } else if !permission_granted {
+        "permission_denied"
+    } else {
+        "stale"
+    }
+}
+
+/// Names why screenshot pixels are intentionally off, for the still-"healthy"
+/// /health message. `None` means neither source is active — callers only use
+/// this when `frame_status` is `disabled_by_config` or
+/// `disabled_by_power_profile`, so that shouldn't happen, but falling back to
+/// no note (rather than a misleading one) is the safe default.
+fn vision_accessibility_only_note(by_config: bool, by_power_profile: bool) -> Option<&'static str> {
+    if by_config {
+        Some(
+            "vision is capturing accessibility text only — \"Screenshot images\" is turned off \
+             in Settings → Recording, so no screen pixels are being captured or stored.",
+        )
+    } else if by_power_profile {
+        Some(
+            "vision is capturing accessibility text only — the active power-saving profile \
+             paused screenshots to save battery, so no screen pixels are being captured or stored.",
+        )
+    } else {
+        None
+    }
+}
+
+/// Whether /health's vision failure message should point the user at screen
+/// recording permissions. Only true when the last-known OS permission state
+/// actually says denied — a genuine stall while permission is granted (e.g.
+/// the #5378-class SCK wedge) needs a different message so it doesn't send
+/// users chasing a permission that was never the problem (#5808).
+fn vision_verbose_instruction(permission_granted: bool) -> &'static str {
+    if permission_granted {
+        "Vision capture is stalled even though screen recording permission looks granted. Try restarting screenpipe; if this keeps happening, please file a bug report with logs.\n"
+    } else {
+        "Vision system is not working properly. Check if screen recording permissions are enabled.\n"
+    }
+}
+
+/// Machine-readable vision failure reason, published as its own field rather
+/// than folded into `frame_status` (#5808). `frame_status` already carries
+/// `"permission_denied"` for the unambiguous permission-loss case — safe to
+/// add there because it was already lumped in with `"not_started"`'s
+/// existing fast-failure handling. It deliberately does NOT gain a
+/// `"capture_stalled"` value for the ambiguous `"stale"`/`"not_started"` +
+/// permission-granted case: the desktop app has a tested debounce keyed to
+/// the literal `"stale"` string specifically because that signature is often
+/// a self-healing starved capture loop, not a confirmed stall (#3939). This
+/// field carries the same "capture_stalled" reason for API/telemetry
+/// consumers that want it, without touching that debounce.
+fn vision_unhealthy_reason(frame_status: &str, vision_degraded: bool) -> Option<&'static str> {
+    if vision_degraded {
+        return Some("capture_stalled");
+    }
+    match frame_status {
+        "permission_denied" => Some("permission_denied"),
+        "not_started" | "stale" => Some("capture_stalled"),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn capture_status(
     audio_disabled: bool,
@@ -439,6 +560,13 @@ pub struct HealthCheckResponse {
     pub last_frame_timestamp: Option<chrono::DateTime<Utc>>,
     pub last_audio_timestamp: Option<chrono::DateTime<Utc>>,
     pub frame_status: String,
+    /// Machine-readable reason vision is unhealthy right now (#5808):
+    /// `"permission_denied"` or `"capture_stalled"`. `None` when `frame_status`
+    /// is a healthy or intentional-disablement value. Kept separate from
+    /// `frame_status` itself — see `vision_unhealthy_reason`'s doc comment for
+    /// why the ambiguous stall case isn't folded into `frame_status` directly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision_unhealthy_reason: Option<String>,
     pub audio_status: String,
     pub message: String,
     pub verbose_instructions: Option<String>,
@@ -746,6 +874,7 @@ fn degraded_response() -> HealthCheckResponse {
         last_frame_timestamp: None,
         last_audio_timestamp: None,
         frame_status: "unknown".to_string(),
+        vision_unhealthy_reason: None,
         audio_status: "unknown".to_string(),
         message: "health check timed out before producing a snapshot".to_string(),
         verbose_instructions: None,
@@ -1217,19 +1346,29 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         false
     };
 
-    let frame_status = if state.vision_disabled {
-        "disabled"
-    } else if !vision_capture_expected {
-        "disabled" // all selected displays are user-paused or asleep/inactive
-    } else if crate::sleep_monitor::screen_is_locked() {
-        "ok" // screen locked — no captures expected, not a real stall
-    } else if last_frame_ts == 0 {
-        "not_started"
-    } else if now.timestamp() as u64 - last_frame_ts < threshold_secs {
-        "ok"
-    } else {
-        "stale"
-    };
+    // Screenshots can be intentionally off (the "Screenshot images" setting /
+    // `--disable-screenshots` flag, or a battery-saving power profile) while
+    // the accessibility-tree walk keeps running. That's not a failure, but it
+    // does widen the gap between capture attempts past `threshold_secs` on a
+    // long idle-capture interval — see #5808. `classify_frame_status` keeps
+    // that case out of "stale" so /health stops blaming permissions for it.
+    //
+    // Read once and reused below for `verbose_instructions` — last-known
+    // state from the permission monitor's 5s poll + eager stream-error
+    // reports, not a fresh syscall (see its doc comment for why that's more
+    // reliable than a raw preflight check here).
+    let vision_permission_granted = crate::permission_monitor::screen_recording_granted();
+    let frame_status = classify_frame_status(
+        state.vision_disabled,
+        vision_capture_expected,
+        crate::sleep_monitor::screen_is_locked(),
+        last_frame_ts,
+        now.timestamp() as u64,
+        threshold_secs,
+        vision_snap.screenshots_disabled_by_config,
+        vision_snap.screenshots_disabled_by_power_profile,
+        vision_permission_granted,
+    );
 
     // Cross-check: if audio is enabled, uptime > 2 min, but zero chunks were ever
     // sent, the audio pipeline never started capturing (e.g. device retry loop).
@@ -1407,8 +1546,13 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         false
     };
 
+    let screenshots_intentionally_disabled =
+        frame_status == "disabled_by_config" || frame_status == "disabled_by_power_profile";
+    let vision_reason = vision_unhealthy_reason(frame_status, vision_degraded);
+
     let (overall_status, message, verbose_instructions, status_code) = if (frame_status == "ok"
-        || frame_status == "disabled")
+        || frame_status == "disabled"
+        || screenshots_intentionally_disabled)
         && (audio_status == "ok"
             || audio_status == "disabled"
             || audio_status == "no_input_device"
@@ -1416,15 +1560,23 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         && !vision_degraded
         && !audio_degraded
     {
-        (
-            "healthy",
-            "all systems are functioning normally.".to_string(),
-            None,
-            200,
-        )
+        // Intentional screenshot disablement is healthy, but silently folding
+        // it into the generic message would describe accessibility-only
+        // capture as if full vision recording were running — name the reason.
+        let message = match vision_accessibility_only_note(
+            vision_snap.screenshots_disabled_by_config,
+            vision_snap.screenshots_disabled_by_power_profile,
+        ) {
+            Some(note) if screenshots_intentionally_disabled => {
+                format!("all systems are functioning normally. {note}")
+            }
+            _ => "all systems are functioning normally.".to_string(),
+        };
+        ("healthy", message, None, 200)
     } else {
         let mut unhealthy_systems = Vec::new();
-        if frame_status != "ok" && frame_status != "disabled" {
+        if frame_status != "ok" && frame_status != "disabled" && !screenshots_intentionally_disabled
+        {
             unhealthy_systems.push("vision");
         }
         if vision_degraded && !unhealthy_systems.contains(&"vision") {
@@ -1513,7 +1665,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         (
             "degraded",
             msg,
-            Some(get_verbose_instructions(&unhealthy_systems)),
+            Some(get_verbose_instructions(
+                &unhealthy_systems,
+                vision_permission_granted,
+            )),
             503,
         )
     };
@@ -1586,6 +1741,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             None
         },
         frame_status: frame_status.to_string(),
+        vision_unhealthy_reason: vision_reason.map(str::to_string),
         audio_status,
         message,
         verbose_instructions,
@@ -1730,11 +1886,14 @@ pub(crate) async fn audio_metrics_handler(
     JsonResponse(state.audio_metrics.snapshot())
 }
 
-pub(crate) fn get_verbose_instructions(unhealthy_systems: &[&str]) -> String {
+pub(crate) fn get_verbose_instructions(
+    unhealthy_systems: &[&str],
+    vision_permission_granted: bool,
+) -> String {
     let mut instructions = String::new();
 
     if unhealthy_systems.contains(&"vision") {
-        instructions.push_str("Vision system is not working properly. Check if screen recording permissions are enabled.\n");
+        instructions.push_str(vision_verbose_instruction(vision_permission_granted));
     }
 
     if unhealthy_systems.contains(&"audio") {
@@ -1893,6 +2052,213 @@ mod vision_stall_classification_tests {
 mod tests {
     use super::*;
 
+    // ── #5808: intentional screenshot disablement must not read as a
+    // permission failure ────────────────────────────────────────────────
+
+    // `permission_granted = true` in most cases below — these tests are
+    // about the config/power-profile carve-out, not the permission axis.
+    // Permission-specific behavior is covered separately further down.
+
+    #[test]
+    fn frame_status_reports_config_disablement_not_stale() {
+        // Permission granted + "Screenshot images" off in Settings, gap past
+        // threshold: must name the real reason, not fall through to "stale".
+        assert_eq!(
+            classify_frame_status(false, true, false, 1_000, 1_100, 60, true, false, true),
+            "disabled_by_config"
+        );
+    }
+
+    #[test]
+    fn frame_status_reports_power_profile_disablement_not_stale() {
+        // Permission granted + battery-saver profile paused screenshots
+        // (Saver/AudioPaused/FullPause tiers): same carve-out, distinct reason.
+        assert_eq!(
+            classify_frame_status(false, true, false, 1_000, 1_100, 60, false, true, true),
+            "disabled_by_power_profile"
+        );
+    }
+
+    #[test]
+    fn frame_status_config_reason_wins_when_both_set() {
+        assert_eq!(
+            classify_frame_status(false, true, false, 1_000, 1_100, 60, true, true, true),
+            "disabled_by_config"
+        );
+    }
+
+    #[test]
+    fn frame_status_stays_stale_for_genuine_stall_with_permission_granted() {
+        // Neither config nor power profile disabled screenshots, permission
+        // is fine: a real gap past threshold is still reported as "stale",
+        // unchanged from before — this is the ambiguous, possibly
+        // self-healing case the desktop app's #3939 debounce depends on.
+        assert_eq!(
+            classify_frame_status(false, true, false, 1_000, 1_100, 60, false, false, true),
+            "stale"
+        );
+    }
+
+    #[test]
+    fn frame_status_fresh_capture_stays_ok_even_if_disabled() {
+        // Disablement alone must never override a fresh heartbeat.
+        assert_eq!(
+            classify_frame_status(false, true, false, 1_050, 1_060, 60, true, true, true),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn frame_status_vision_disabled_wins_over_screenshot_reasons() {
+        // The full vision pipeline being off takes precedence over the
+        // screenshot-only carve-outs — "disabled" is the pre-existing,
+        // stronger signal.
+        assert_eq!(
+            classify_frame_status(true, true, false, 1_000, 1_100, 60, true, true, true),
+            "disabled"
+        );
+    }
+
+    #[test]
+    fn frame_status_reports_permission_denied_never_started() {
+        // No frame has ever landed AND permission is actually denied: name
+        // the real cause instead of the generic "not_started".
+        assert_eq!(
+            classify_frame_status(false, true, false, 0, 1_100, 60, false, false, false),
+            "permission_denied"
+        );
+    }
+
+    #[test]
+    fn frame_status_reports_permission_denied_for_a_stale_gap() {
+        // A gap past threshold with permission actually denied is NOT the
+        // ambiguous self-healing case — permission loss doesn't self-heal,
+        // so it gets its own unambiguous reason instead of bare "stale".
+        assert_eq!(
+            classify_frame_status(false, true, false, 1_000, 1_100, 60, false, false, false),
+            "permission_denied"
+        );
+    }
+
+    #[test]
+    fn frame_status_config_disablement_wins_over_permission_denied() {
+        // If the user explicitly turned screenshots off, that's the more
+        // specific and actionable reason even if permission also happens to
+        // be denied — telling them to check permissions would be confusing
+        // when they disabled screenshots on purpose anyway.
+        assert_eq!(
+            classify_frame_status(false, true, false, 1_000, 1_100, 60, true, false, false),
+            "disabled_by_config"
+        );
+    }
+
+    #[test]
+    fn frame_status_reports_config_disablement_on_fresh_process() {
+        // Fresh process, no frame has ever landed (ts=0), screenshots off via
+        // config: must name the real reason, not "not_started" — a frame
+        // timestamp may never arrive while screenshots stay off, so this
+        // isn't transient (#5823).
+        assert_eq!(
+            classify_frame_status(false, true, false, 0, 1_100, 60, true, false, true),
+            "disabled_by_config"
+        );
+    }
+
+    #[test]
+    fn frame_status_reports_power_profile_disablement_on_fresh_process() {
+        // Same fresh-process carve-out for the power-saver reason.
+        assert_eq!(
+            classify_frame_status(false, true, false, 0, 1_100, 60, false, true, true),
+            "disabled_by_power_profile"
+        );
+    }
+
+    #[test]
+    fn frame_status_capture_not_expected_reports_disabled() {
+        // Focus-aware scheduling parked every selected display (all
+        // user-paused or asleep/inactive) — that's an intentional idle, not
+        // a stall, and takes precedence over the screenshot-specific carve-outs.
+        assert_eq!(
+            classify_frame_status(false, false, false, 1_000, 1_100, 60, false, false, true),
+            "disabled"
+        );
+    }
+
+    #[test]
+    fn vision_reason_matches_frame_status_permission_denied() {
+        assert_eq!(
+            vision_unhealthy_reason("permission_denied", false),
+            Some("permission_denied")
+        );
+    }
+
+    #[test]
+    fn vision_reason_reports_capture_stalled_for_ambiguous_stale_and_not_started() {
+        assert_eq!(
+            vision_unhealthy_reason("stale", false),
+            Some("capture_stalled")
+        );
+        assert_eq!(
+            vision_unhealthy_reason("not_started", false),
+            Some("capture_stalled")
+        );
+    }
+
+    #[test]
+    fn vision_reason_reports_capture_stalled_for_degradation_even_when_frame_status_ok() {
+        // High drop rate / DB latency is a real vision problem even while
+        // frame_status still reads "ok" (frames are technically arriving).
+        assert_eq!(vision_unhealthy_reason("ok", true), Some("capture_stalled"));
+    }
+
+    #[test]
+    fn vision_reason_is_none_for_healthy_and_intentional_states() {
+        for status in [
+            "ok",
+            "disabled",
+            "disabled_by_config",
+            "disabled_by_power_profile",
+        ] {
+            assert_eq!(
+                vision_unhealthy_reason(status, false),
+                None,
+                "frame_status={status}"
+            );
+        }
+    }
+
+    #[test]
+    fn vision_instruction_blames_permission_only_when_actually_denied() {
+        assert!(vision_verbose_instruction(false).contains("Check if screen recording permissions"));
+        // Granted case may still mention "permission" reassuringly ("permission
+        // looks granted") — what must never appear is the actionable check.
+        assert!(!vision_verbose_instruction(true).contains("Check if screen recording permissions"));
+    }
+
+    #[test]
+    fn accessibility_only_note_names_the_active_reason() {
+        assert!(vision_accessibility_only_note(true, false)
+            .unwrap()
+            .contains("Screenshot images"));
+        assert!(vision_accessibility_only_note(false, true)
+            .unwrap()
+            .contains("power-saving profile"));
+        assert!(vision_accessibility_only_note(false, false).is_none());
+    }
+
+    #[test]
+    fn verbose_instructions_omit_permission_text_for_disablement_reasons() {
+        // Even if a caller mistakenly includes "vision" in unhealthy_systems
+        // while permission is fine, the message must not tell the user to
+        // check permissions — that's the exact false alarm from #5808.
+        let msg = get_verbose_instructions(&["vision"], true);
+        assert!(!msg.contains("Check if screen recording permissions"));
+        assert!(msg.contains("stalled") || msg.contains("bug report"));
+
+        let msg = get_verbose_instructions(&["vision"], false);
+        assert!(msg.contains("Check if screen recording permissions"));
+    }
+
     #[test]
     fn transcription_mode_reports_configuration_not_activity() {
         // The #3989 bug fix: a batch-configured instance reports "batch"
@@ -1954,6 +2320,7 @@ mod tests {
             last_frame_timestamp: None,
             last_audio_timestamp: None,
             frame_status: "ok".to_string(),
+            vision_unhealthy_reason: None,
             audio_status: "ok".to_string(),
             message: "test".to_string(),
             verbose_instructions: None,

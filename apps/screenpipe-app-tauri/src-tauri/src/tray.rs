@@ -7,7 +7,7 @@ use crate::enterprise_policy::{is_app_ui_hidden, is_tray_item_hidden};
 use crate::health::{
     get_audio_device_status, get_high_fps_status, get_recording_info, get_recording_status,
     get_vision_device_status, set_high_fps_status, AudioCaptureStatus, DeviceKind,
-    HighFpsCacheEntry, RecordingStatus,
+    HighFpsCacheEntry, RecordingStatus, VisionCaptureStatus,
 };
 use crate::process_exit;
 use crate::recording::{local_api_context_from_app, RecordingState};
@@ -827,8 +827,9 @@ fn recording_status_text(
     status: RecordingStatus,
     all_capture_disabled: bool,
     audio_capture_status: Option<AudioCaptureStatus>,
-) -> &'static str {
-    match (status, all_capture_disabled, audio_capture_status) {
+    vision_capture_status: Option<VisionCaptureStatus>,
+) -> String {
+    let base = match (status, all_capture_disabled, audio_capture_status) {
         (RecordingStatus::Recording, true, _) => "○ Stopped",
         (RecordingStatus::Recording, false, Some(AudioCaptureStatus::WaitingForMeeting)) => {
             "● Screen recording · audio waiting for meeting"
@@ -844,6 +845,24 @@ fn recording_status_text(
         (RecordingStatus::ScheduledPause, _, _) => "○ Outside work hours",
         (RecordingStatus::Stopped, _, _) => "○ Stopped",
         (RecordingStatus::Error, _, _) => "○ Error",
+    };
+
+    // Only worth naming while capture is actually active (#5808) — a
+    // stopped/paused/errored tray already explains itself, and appending
+    // "screenshots off" there would read as a second, unrelated problem
+    // rather than the reason vision capture looks the way it does.
+    if all_capture_disabled || status != RecordingStatus::Recording {
+        return base.to_string();
+    }
+
+    match vision_capture_status {
+        Some(VisionCaptureStatus::ScreenshotsDisabledByConfig) => {
+            format!("{base} · screenshots off")
+        }
+        Some(VisionCaptureStatus::ScreenshotsDisabledByPowerProfile) => {
+            format!("{base} · screenshots paused (battery saver)")
+        }
+        None => base.to_string(),
     }
 }
 
@@ -921,6 +940,7 @@ fn create_dynamic_menu(
         effective_status,
         all_capture_disabled,
         info.audio_capture_status,
+        info.vision_capture_status,
     );
     menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
@@ -1921,6 +1941,7 @@ mod tests {
                 RecordingStatus::Recording,
                 false,
                 Some(AudioCaptureStatus::WaitingForMeeting),
+                None,
             ),
             "● Screen recording · audio waiting for meeting"
         );
@@ -1929,13 +1950,73 @@ mod tests {
                 RecordingStatus::Recording,
                 false,
                 Some(AudioCaptureStatus::MeetingDetectorUnavailable),
+                None,
             ),
             "● Screen recording · meeting detection unavailable"
         );
         assert_eq!(
-            recording_status_text(RecordingStatus::Recording, false, None),
+            recording_status_text(RecordingStatus::Recording, false, None, None),
             "● Recording"
         );
+    }
+
+    // ── #5808: the tray CTA must name the engine's screenshot-disable
+    // reason instead of staying silent (or, before this fix, implying a
+    // permission problem via the health status elsewhere in the app) ─────
+
+    #[test]
+    fn recording_status_text_names_screenshot_disable_reason_while_recording() {
+        assert_eq!(
+            recording_status_text(
+                RecordingStatus::Recording,
+                false,
+                None,
+                Some(VisionCaptureStatus::ScreenshotsDisabledByConfig),
+            ),
+            "● Recording · screenshots off"
+        );
+        assert_eq!(
+            recording_status_text(
+                RecordingStatus::Recording,
+                false,
+                None,
+                Some(VisionCaptureStatus::ScreenshotsDisabledByPowerProfile),
+            ),
+            "● Recording · screenshots paused (battery saver)"
+        );
+    }
+
+    #[test]
+    fn recording_status_text_suppresses_vision_reason_when_not_actively_recording() {
+        // A stopped/paused/errored tray already explains itself; appending
+        // "screenshots off" there would read as a second, unrelated problem.
+        for status in [
+            RecordingStatus::Starting,
+            RecordingStatus::Paused,
+            RecordingStatus::ScheduledPause,
+            RecordingStatus::Stopped,
+            RecordingStatus::Error,
+        ] {
+            let text = recording_status_text(
+                status,
+                false,
+                None,
+                Some(VisionCaptureStatus::ScreenshotsDisabledByConfig),
+            );
+            assert!(
+                !text.contains("screenshots"),
+                "status={status:?} text={text:?} must not mention screenshots"
+            );
+        }
+
+        // all_capture_disabled also suppresses it, even while nominally "Recording".
+        let text = recording_status_text(
+            RecordingStatus::Recording,
+            true,
+            None,
+            Some(VisionCaptureStatus::ScreenshotsDisabledByConfig),
+        );
+        assert_eq!(text, "○ Stopped");
     }
 
     #[test]

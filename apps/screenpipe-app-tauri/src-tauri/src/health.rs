@@ -217,6 +217,17 @@ pub enum AudioCaptureStatus {
     MeetingDetectorUnavailable,
 }
 
+/// Vision-specific state shown alongside the overall recording state (#5808).
+/// Mirrors `AudioCaptureStatus`: keeping this separate avoids claiming full
+/// screen-pixel capture is broken/stopped when it's intentionally off — the
+/// "Screenshot images" setting or a battery-saving power profile paused
+/// screenshots while accessibility-text capture keeps running.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum VisionCaptureStatus {
+    ScreenshotsDisabledByConfig,
+    ScreenshotsDisabledByPowerProfile,
+}
+
 /// Kind of recording device
 #[derive(Clone, PartialEq, Debug)]
 pub enum DeviceKind {
@@ -242,6 +253,7 @@ pub struct DeviceInfo {
 pub struct RecordingInfo {
     pub status: RecordingStatus,
     pub audio_capture_status: Option<AudioCaptureStatus>,
+    pub vision_capture_status: Option<VisionCaptureStatus>,
     pub devices: Vec<DeviceInfo>,
 }
 
@@ -249,6 +261,7 @@ static RECORDING_INFO: Lazy<RwLock<RecordingInfo>> = Lazy::new(|| {
     RwLock::new(RecordingInfo {
         status: RecordingStatus::Starting,
         audio_capture_status: None,
+        vision_capture_status: None,
         devices: Vec::new(),
     })
 });
@@ -361,11 +374,13 @@ pub fn set_recording_status(status: RecordingStatus) {
 fn set_recording_info(
     status: RecordingStatus,
     audio_capture_status: Option<AudioCaptureStatus>,
+    vision_capture_status: Option<VisionCaptureStatus>,
     devices: Vec<DeviceInfo>,
 ) {
     let mut info = RECORDING_INFO.write().unwrap_or_else(|e| e.into_inner());
     info.status = status;
     info.audio_capture_status = audio_capture_status;
+    info.vision_capture_status = vision_capture_status;
     info.devices = devices;
 }
 
@@ -518,6 +533,25 @@ fn audio_capture_status_from_health(
     }
 }
 
+/// Reads the engine's `frame_status` to tell the tray why screenshots are
+/// intentionally off right now (#5808), so it can say so instead of either
+/// staying silent or (before this fix) implying a permission failure.
+fn vision_capture_status_from_health(
+    health_result: &Result<HealthCheckResponse>,
+) -> Option<VisionCaptureStatus> {
+    match health_result
+        .as_ref()
+        .ok()
+        .and_then(|health| health.frame_status.as_deref())
+    {
+        Some("disabled_by_config") => Some(VisionCaptureStatus::ScreenshotsDisabledByConfig),
+        Some("disabled_by_power_profile") => {
+            Some(VisionCaptureStatus::ScreenshotsDisabledByPowerProfile)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct CaptureFailureSignals {
     audio: bool,
@@ -545,9 +579,16 @@ fn capture_failure_signals(
     // (wedged ScreenCaptureKit call during a static screen). That signature
     // self-heals the moment the user interacts, so it gets its own
     // user-presence-tiered debounce in the polling loop instead of the fast
-    // 90s incident path. The engine never emits permission_denied /
-    // capture_stalled / error for frame_status today; the arms are kept so a
-    // future engine that does gets the fast path automatically.
+    // 90s incident path. As of #5808 the engine DOES emit vision
+    // frame_status "permission_denied" — for the unambiguous case where the
+    // last-known OS permission state is actually denied — so that reaches
+    // this fast path immediately instead of waiting out the stale-tier
+    // debounce meant for the self-healing case. It still does not emit
+    // "capture_stalled" or "error" for frame_status (that reason, when
+    // ambiguous, is carried in the separate `vision_unhealthy_reason` field
+    // instead, precisely so it can't collide with "stale"'s debounce here);
+    // audio_status never emits any of the three. Those arms are kept so a
+    // future engine/audio path that does gets the fast path automatically.
     let vision_status_failed = matches!(
         health.frame_status.as_deref(),
         Some("not_started") | Some("permission_denied") | Some("capture_stalled") | Some("error")
@@ -1553,6 +1594,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             set_recording_info(
                 status,
                 audio_capture_status_from_health(&health_result),
+                vision_capture_status_from_health(&health_result),
                 devices,
             );
 
@@ -2469,6 +2511,47 @@ mod tests {
     }
 
     #[test]
+    fn tray_vision_status_names_the_screenshot_disable_reason() {
+        // #5808: the engine's frame_status must translate into the specific
+        // tray-visible reason, not a generic "vision unhealthy" state — the
+        // whole point is these are healthy, not failures.
+        let mut config_off = healthy_health();
+        config_off.frame_status = Some("disabled_by_config".to_string());
+        assert_eq!(
+            vision_capture_status_from_health(&Ok(config_off)),
+            Some(VisionCaptureStatus::ScreenshotsDisabledByConfig)
+        );
+
+        let mut power_off = healthy_health();
+        power_off.frame_status = Some("disabled_by_power_profile".to_string());
+        assert_eq!(
+            vision_capture_status_from_health(&Ok(power_off)),
+            Some(VisionCaptureStatus::ScreenshotsDisabledByPowerProfile)
+        );
+
+        for status in [
+            "ok",
+            "disabled",
+            "not_started",
+            "stale",
+            "permission_denied",
+        ] {
+            let mut health = healthy_health();
+            health.frame_status = Some(status.to_string());
+            assert_eq!(
+                vision_capture_status_from_health(&Ok(health)),
+                None,
+                "frame_status={status} must not be read as an intentional-disablement reason"
+            );
+        }
+
+        assert_eq!(
+            vision_capture_status_from_health(&make_connection_error()),
+            None
+        );
+    }
+
+    #[test]
     fn explicit_vision_capture_failures_are_detected() {
         for status in [
             "not_started",
@@ -2518,6 +2601,56 @@ mod tests {
         let mut health = healthy_health();
         health.frame_status = None;
         assert!(!vision_frame_flow_stale(&health));
+    }
+
+    // ── #5808: intentional screenshot disablement must reach neither the
+    // fast incident path nor the tiered stale-notification path ───────────
+    //
+    // The engine started emitting "disabled_by_config" / "disabled_by_power_
+    // profile" instead of overloading "stale" for a >60s gap caused by the
+    // user's own "Screenshot images" setting or a battery-saving power
+    // profile. Neither string is in this file's match arms (by design — see
+    // the engine's `classify_frame_status` doc comment), so this proves that
+    // omission actually holds instead of just asserting it never regresses
+    // silently: a typo'd new match arm here would flip these tests red.
+    #[test]
+    fn intentional_screenshot_disablement_is_not_a_fast_path_failure() {
+        for status in ["disabled_by_config", "disabled_by_power_profile"] {
+            let mut health = healthy_health();
+            health.frame_status = Some(status.to_string());
+            assert!(
+                !capture_failure_signals(&health, &mut VisionProgressTracker::default()).vision,
+                "{status} must not be treated as a fast-path capture failure"
+            );
+        }
+    }
+
+    #[test]
+    fn intentional_screenshot_disablement_does_not_feed_the_stale_tier() {
+        for status in ["disabled_by_config", "disabled_by_power_profile"] {
+            let mut health = healthy_health();
+            health.frame_status = Some(status.to_string());
+            assert!(
+                !vision_frame_flow_stale(&health),
+                "{status} must not advance the stale-tier counter, or the desktop \
+                 app would eventually log a false \"vision frame flow recovered\" \
+                 once the user turns screenshots back on"
+            );
+        }
+    }
+
+    #[test]
+    fn engine_permission_denied_reaches_the_fast_incident_path() {
+        // The engine now actually emits this literal (previously it was
+        // aspirational — see the comment on `vision_status_failed` above).
+        // Confirms the fast path this file already had prepared is reachable,
+        // not just retained for a hypothetical future engine.
+        let mut health = healthy_health();
+        health.frame_status = Some("permission_denied".to_string());
+        assert!(
+            capture_failure_signals(&health, &mut VisionProgressTracker::default()).vision,
+            "permission_denied must reach the fast incident path, not the debounced one"
+        );
     }
 
     #[test]

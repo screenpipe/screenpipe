@@ -913,6 +913,9 @@ pub(crate) async fn event_driven_capture_loop(
 
     let screenshots_disabled_by_config = config.disable_screenshots;
     let mut screenshot_disabled = screenshots_disabled_by_config;
+    // Publish the reason immediately so /health never sees a startup window
+    // where screenshots are off but the disable reason hasn't landed yet.
+    vision_metrics.set_screenshots_disabled(screenshots_disabled_by_config, false);
     let mut visual_check_enabled = config.visual_check_interval_ms > 0 && !screenshot_disabled;
     let mut visual_check_interval = Duration::from_millis(config.visual_check_interval_ms);
     let mut visual_change_threshold = config.visual_change_threshold;
@@ -1426,6 +1429,10 @@ pub(crate) async fn event_driven_capture_loop(
                 visual_check_interval = Duration::from_millis(profile.visual_check_interval_ms);
                 visual_change_threshold = profile.visual_change_threshold;
                 screenshot_disabled = screenshots_disabled_by_config || profile.screenshot_disabled;
+                vision_metrics.set_screenshots_disabled(
+                    screenshots_disabled_by_config,
+                    profile.screenshot_disabled,
+                );
                 visual_check_enabled = profile.visual_check_interval_ms > 0 && !screenshot_disabled;
                 if visual_check_enabled && frame_comparer.is_none() {
                     frame_comparer =

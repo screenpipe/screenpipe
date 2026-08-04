@@ -396,8 +396,14 @@ impl AnalyticsManager {
         let audio_status = health["audio_status"].as_str().unwrap_or("unknown");
         let ui_status = health["ui_status"].as_str().unwrap_or("unknown");
 
-        // Consider healthy if all enabled systems are "ok"
-        let is_healthy = (frame_status == "ok" || frame_status == "disabled")
+        // Consider healthy if all enabled systems are "ok". Screenshots
+        // intentionally off (config toggle or a battery-saving power
+        // profile) is healthy too — accessibility capture keeps running;
+        // see health.rs's own identical carve-out for #5808.
+        let is_healthy = (frame_status == "ok"
+            || frame_status == "disabled"
+            || frame_status == "disabled_by_config"
+            || frame_status == "disabled_by_power_profile")
             && (audio_status == "ok"
                 || audio_status == "disabled"
                 || audio_status == "waiting_for_meeting")
