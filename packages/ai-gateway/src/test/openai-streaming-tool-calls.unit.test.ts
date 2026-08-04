@@ -51,6 +51,21 @@ const body: RequestBody = {
 };
 
 describe('OpenAIProvider streaming — tool calls', () => {
+	it('rejects a first-chunk upstream error so the gateway can run its fallback', async () => {
+		async function* stream() {
+			throw Object.assign(new Error('provider quota or billing limit reached'), {
+				status: 429,
+				code: 'insufficient_quota',
+			});
+		}
+
+		const provider = makeOpenAIProvider(stream);
+		await expect(provider.createStreamingCompletion(body)).rejects.toMatchObject({
+			status: 429,
+			code: 'insufficient_quota',
+		});
+	});
+
 	it('forwards streamed tool_calls deltas (name + accumulated arguments + finish_reason)', async () => {
 		// Mirrors how OpenAI streams a tool call: name arrives first, then the
 		// JSON arguments arrive fragmented across chunks.

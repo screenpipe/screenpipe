@@ -86,9 +86,25 @@ import {
 	buildHostedChatGatewayContext,
 	isHostedChatGatewayEnabled,
 } from './services/cloudflare-ai-gateway';
+import {
+	ARGUS_BACKGROUND_FALLBACK_MODEL,
+	shouldUseArgusBackgroundFallback,
+} from './services/background-limit-fallback';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
 export { RateLimiter };
+
+/**
+ * Keep paid background-Pipe rescue independent from the flex-tier kill switch.
+ * The header identifies workload intent; resolveLatencyClass only controls
+ * whether the primary provider may use flex capacity.
+ */
+export function shouldEnableArgusBackgroundFallback(
+	request: Request,
+	authResult: AuthResult,
+): boolean {
+	return isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult);
+}
 
 type BoundedJsonRead =
 	| { ok: true; value: unknown; bytes: number }
@@ -556,6 +572,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 
 			const cloudflareGateway = isHostedChatGatewayEnabled(env);
+			let legacyArgusFallback = false;
 			// Legacy mode retains the paid weighted-query admission gate. In
 			// Cloudflare mode the provider-cost spend rules are authoritative for
 			// this endpoint; Free's separate two-message lease remains above.
@@ -571,7 +588,19 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					accountPlan: authResult.accountPlan,
 				});
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
+				const allowanceError = {
+					status: 429,
+					code: creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded',
+				};
+				if (shouldUseArgusBackgroundFallback({
+					enabled: isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult),
+					error: allowanceError,
+					body,
+					env,
+				})) {
+					legacyArgusFallback = true;
+					body = { ...body, model: ARGUS_BACKGROUND_FALLBACK_MODEL };
+				} else return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					...buildDailyUsageLimitError(
 						usage,
 						usageTier,
@@ -613,7 +642,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				? await buildHostedChatGatewayContext(authResult, body.model, latency)
 				: undefined;
 			let dailyCostReservation: DailyCostHold | null = null;
-			if (!cloudflareGateway) {
+			if (!cloudflareGateway && !legacyArgusFallback) {
 				const costReservation = await reserveDailyCostCap(
 					env,
 					authResult.deviceId,
@@ -649,10 +678,23 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						hostedAiTrial: authResult.hostedAiTrial === true,
 						status: costReservation.response.status,
 					});
-					if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
-					return costReservation.response;
+					const allowanceError = { status: costReservation.response.status, code: rejectionReason };
+					if (shouldUseArgusBackgroundFallback({
+						enabled: isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult),
+						error: allowanceError,
+						body,
+						env,
+					})) {
+						legacyArgusFallback = true;
+						body = { ...body, model: ARGUS_BACKGROUND_FALLBACK_MODEL };
+					} else {
+						if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
+						return costReservation.response;
+					}
 				}
-				dailyCostReservation = costReservation.reservation;
+				if (costReservation.allowed && !legacyArgusFallback) {
+					dailyCostReservation = costReservation.reservation;
+				}
 			}
 
 			// Route latency-tolerant (background) traffic to the cheaper flex tier.
@@ -693,8 +735,23 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						freePreview: freeChat.mode === 'metered',
 						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
 						gatewayContext,
+						argusBackgroundFallback: shouldEnableArgusBackgroundFallback(request, authResult),
 					},
 				);
+				if (response.status === 429 && body.stream) {
+					const userAgent = request.headers.get('user-agent')?.toLowerCase() ?? '';
+					console.warn('streaming hosted AI limit classification', {
+						backgroundHeader: isBackgroundRequest(request),
+						hasSessionAffinity: Boolean(
+							request.headers.get('x-session-id')
+							|| request.headers.get('x-screenpipe-session-id'),
+						),
+						piClient: userAgent.includes('pi-ai') || userAgent.includes('pi-coding-agent'),
+						model: body.model,
+						messageRoles: body.messages.map((message) => String(message.role)).join(',').slice(0, 256),
+						toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+					});
+				}
 				const latencyMs = Date.now() - reqStart;
 				// Difficulty-router decision (null unless the router ran) for A/B measurement.
 				const routerTier = response.headers.get('x-screenpipe-router-tier');

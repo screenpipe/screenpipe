@@ -6,7 +6,7 @@ import type { AuthResult, Env } from '../types';
 import { getHostedAiPlan } from './hosted-ai-policy';
 
 export type HostedChatGatewayMode = 'legacy' | 'cloudflare';
-export type HostedChatPlan = 'free' | 'basic' | 'business' | 'internal';
+export type HostedChatPlan = 'free' | 'basic' | 'business' | 'business_max' | 'business_ultra' | 'internal';
 export type HostedChatLane = 'auto' | 'explicit';
 export type HostedChatWorkload = 'interactive' | 'background';
 export type CloudflareGatewayProvider = 'openai' | 'anthropic';
@@ -70,6 +70,9 @@ export function isHostedChatGatewayEnabled(env: Pick<Env, 'HOSTED_CHAT_GATEWAY_M
 
 function collapsePlan(auth: AuthResult): HostedChatPlan {
 	if (auth.service === true) return 'internal';
+	if (auth.accountPlan === 'business_max' || auth.accountPlan === 'business_ultra') {
+		return auth.accountPlan;
+	}
 	const plan = getHostedAiPlan(auth.accountPlan);
 	if (!plan) {
 		throw new HostedChatGatewayConfigurationError('Hosted AI account plan is unavailable');

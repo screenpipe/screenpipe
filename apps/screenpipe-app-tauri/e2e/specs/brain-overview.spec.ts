@@ -377,7 +377,7 @@ describe("Brain Live Views", function () {
     }
   });
 
-  it("installs the process map template as a connected Canvas", async () => {
+  it("hands the process map template to the Live View builder agent", async () => {
     await waitForAppReady();
     await openHomeWithDiagnostics();
     const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
@@ -395,48 +395,66 @@ describe("Brain Live Views", function () {
     await waitForTestId("preview-live-view-template-process-map", 10_000).then(
       (element) => element.click(),
     );
+
+    const capturedPrefillKey = "e2eLiveViewBuilderPrefill";
+    await browser.execute((captureKey: string) => {
+      window.sessionStorage.removeItem(captureKey);
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (this === window.sessionStorage && key === "pendingChatPrefill") {
+          originalSetItem.call(this, captureKey, value);
+        }
+        originalSetItem.call(this, key, value);
+      };
+    }, capturedPrefillKey);
+
     await waitForTestId("overview-apply-template", 10_000).then((element) =>
       element.click(),
     );
 
-    const selector = await waitForTestId("overview-dashboard-selector", 20_000);
-    await browser.waitUntil(
-      async () => (await selector.getText()).includes("Process map"),
-      {
-        timeout: t(20_000),
-        timeoutMsg: "Process map dashboard was not selected after install",
-      },
-    );
-    await waitForTestId("live-view-canvas", 15_000);
-    expect(await $("textarea[aria-label='Canvas note']").getValue()).toContain(
-      "Observed workflow → handoffs → friction → controls → improvement",
-    );
-    expect(await $$(`[data-testid^='canvas-arrow-']`)).toHaveLength(5);
-    const canvasText = (await browser.execute(
-      () => document.body?.innerText || "",
-    )) as string;
-    expect(canvasText).toContain("moves through");
-    expect(canvasText).toContain("must preserve");
-    await waitForTestId("canvas-fit", 10_000).then((element) =>
-      element.click(),
-    );
-    await browser.pause(300);
-    const screenshot = await saveScreenshot("brain-process-map-template");
-    expect(existsSync(screenshot)).toBe(true);
+    await waitForTestId("section-home", 20_000);
+    const capturedPrefill = (await browser.execute((captureKey: string) => {
+      const value = window.sessionStorage.getItem(captureKey);
+      return value ? JSON.parse(value) : null;
+    }, capturedPrefillKey)) as {
+      context?: string;
+      prompt?: string;
+      displayLabel?: string;
+      autoSend?: boolean;
+      source?: string;
+      useHomeChat?: boolean;
+      targetWindow?: string;
+    } | null;
 
-    const saved = await invokeOrThrow<CanvasDocument | null>(
-      "load_brain_view_canvas",
-      { viewId: "process-map" },
+    expect(capturedPrefill).not.toBeNull();
+    expect(capturedPrefill?.context).toBe(
+      "Create a Live View guided by “Process map”",
     );
-    expect(saved?.mode).toBe("canvas");
-    expect(saved?.arrows.map((arrow) => arrow.label)).toEqual([
-      "starts",
-      "moves through",
-      "reveals",
-      "must preserve",
-      "enables",
-    ]);
-    await invokeOrThrow("delete_brain_view", { id: "process-map" });
+    expect(capturedPrefill?.displayLabel).toBe(
+      "Build “Process map” with the Live View agent",
+    );
+    expect(capturedPrefill?.source).toBe("live-view-builder-agent");
+    expect(capturedPrefill?.autoSend).toBe(true);
+    expect(capturedPrefill?.useHomeChat).toBe(true);
+    expect(capturedPrefill?.targetWindow).toBe("home");
+    expect(capturedPrefill?.prompt).toContain('"title":"Trigger and outcome"');
+    expect(capturedPrefill?.prompt).toContain(
+      '"title":"Safe improvement path"',
+    );
+    expect(capturedPrefill?.prompt).not.toContain("automate-my-work");
+
+    const viewsAfterHandoff = await invokeOrThrow<BrainView[]>(
+      "list_brain_views",
+    );
+    expect(viewsAfterHandoff.some((view) => view.id === "process-map")).toBe(
+      false,
+    );
+
+    const screenshot = await saveScreenshot("brain-process-map-agent-handoff");
+    expect(existsSync(screenshot)).toBe(true);
+    await browser.execute((captureKey: string) => {
+      window.sessionStorage.removeItem(captureKey);
+    }, capturedPrefillKey);
   });
 
   it("shows requested range and per-block freshness honestly", async () => {

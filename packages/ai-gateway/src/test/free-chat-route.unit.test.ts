@@ -14,7 +14,8 @@ mock.module('@clerk/backend', () => ({
 	verifyToken: verifyTokenMock,
 }));
 
-const { handleRequest } = await import('../index');
+const { handleRequest, shouldEnableArgusBackgroundFallback } = await import('../index');
+const { resolveLatencyClass } = await import('../utils/latency');
 
 describe('/v1/chat/completions free-plan route policy', () => {
 	const originalFetch = globalThis.fetch;
@@ -157,6 +158,29 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		// the machine identity cleared both human-user guards and paid-model gates.
 		expect(response.status).toBe(503);
 		expect(await response.text()).not.toContain('authentication_required');
+	});
+
+	it('keeps the paid background Argus rescue enabled when the flex-tier kill switch is off', () => {
+		const backgroundRequest = request({
+			'x-screenpipe-latency': 'background',
+		});
+		const flexDisabledEnv = {
+			...env,
+			FLEX_TIER_ENABLED: 'false',
+		} as unknown as Env;
+
+		// The flex switch may force standard provider latency, but it must not
+		// turn a paid Pipe into interactive traffic for allowance rescue.
+		expect(resolveLatencyClass(backgroundRequest, {
+			model: 'auto',
+			messages: [{ role: 'user', content: 'hello' }],
+		}, flexDisabledEnv)).toBe('interactive');
+		expect(shouldEnableArgusBackgroundFallback(backgroundRequest, {
+			isValid: true,
+			tier: 'subscribed',
+			accountPlan: 'basic',
+			deviceId: 'pipe-device',
+		})).toBe(true);
 	});
 
 	it('blocks a free hosted background request instead of trusting its header', async () => {

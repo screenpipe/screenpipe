@@ -186,6 +186,9 @@ export interface Env {
 	SENTRY_RELEASE?: string;
 	// Event classifier (self-hosted vLLM)
 	EVENT_CLASSIFIER_URL: string;
+	// Argus Trace 1 — internal text-only rescue lane for paid background Pipes.
+	SCREENPIPE_QWEN35_URL?: string;
+	SCREENPIPE_QWEN35_API_KEY?: string;
 	// Auto-reload settings
 	WEBSITE_URL: string;
 	AUTO_RELOAD_SECRET: string;
