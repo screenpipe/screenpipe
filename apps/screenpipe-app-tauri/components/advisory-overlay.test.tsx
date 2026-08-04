@@ -18,11 +18,11 @@ describe("AdvisoryOverlay", () => {
       advisories: [
         {
           id: "pipe:summary",
-          title: "27 pipes couldn't run",
+          title: "27 scheduled tasks couldn't run",
           body: "daily hosted AI allowance reached",
           severity: "warn",
           details: {
-            label: "view 27 affected pipes",
+            label: "view 27 affected scheduled tasks",
             items: ["meeting-prep", "support-triage"],
           },
           createdAt: 1,
@@ -33,7 +33,7 @@ describe("AdvisoryOverlay", () => {
     render(<AdvisoryOverlay />);
 
     expect(screen.getAllByRole("status")).toHaveLength(1);
-    const disclosure = screen.getByText("view 27 affected pipes");
+    const disclosure = screen.getByText("view 27 affected scheduled tasks");
     const details = disclosure.closest("details");
     expect(details).not.toHaveAttribute("open");
 

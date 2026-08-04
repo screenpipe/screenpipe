@@ -220,7 +220,7 @@ export function PostInstallConnectionsModal({
         body: JSON.stringify({ connections: updatedConnections }),
       });
       if (!res.ok) {
-        throw new Error(`failed to update pipe config: HTTP ${res.status}`);
+        throw new Error(`failed to update scheduled task settings: HTTP ${res.status}`);
       }
       setStatuses((prev) => {
         const next = { ...prev };
@@ -249,7 +249,7 @@ export function PostInstallConnectionsModal({
             set up connections for &quot;{pipeName}&quot;
           </DialogTitle>
           <DialogDescription className="text-xs">
-            this pipe requires the following connections to work properly.
+            this scheduled task requires the following connections to work properly.
             configure them now or skip and set them up later in settings.
           </DialogDescription>
         </DialogHeader>
@@ -326,9 +326,7 @@ export function PostInstallConnectionsModal({
                       <ConnectionCredentialForm
                         integrationId={integration.id}
                         fields={integration.fields}
-                        initialCredentials={
-                          status?.configured ? undefined : undefined
-                        }
+                        configured={status?.configured ?? false}
                         onSaved={() => handleSaved(connId)}
                       />
                     </div>
@@ -340,7 +338,7 @@ export function PostInstallConnectionsModal({
                         <>
                           <p className="text-xs text-muted-foreground">
                             this MCP server was deleted or is no longer available.
-                            remove it from this pipe or add a new MCP server from the dropdown.
+                            remove it from this scheduled task or add a new MCP server from the dropdown.
                           </p>
                           {status.serverId && (
                             <p className="text-[10px] text-muted-foreground font-mono">
@@ -351,7 +349,7 @@ export function PostInstallConnectionsModal({
                       ) : status?.missingReason === "disabled_mcp" ? (
                         <p className="text-xs text-muted-foreground">
                           this MCP server is disabled. enable it in custom MCP
-                          settings or remove it from this pipe.
+                          settings or remove it from this scheduled task.
                         </p>
                       ) : status?.missingReason === "unknown_mcp" ? (
                         <p className="text-xs text-muted-foreground">
@@ -360,7 +358,7 @@ export function PostInstallConnectionsModal({
                         </p>
                       ) : (
                         <p className="text-xs text-muted-foreground">
-                          custom MCP servers are configured once, then selected by pipes.
+                          custom MCP servers are configured once, then selected by scheduled tasks.
                         </p>
                       )}
                       <div className="flex flex-wrap gap-2">
@@ -378,7 +376,7 @@ export function PostInstallConnectionsModal({
                                 removing...
                               </>
                             ) : (
-                              "remove from pipe"
+                              "remove from scheduled task"
                             )}
                           </Button>
                         )}

@@ -496,7 +496,17 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "A local provider returns the gateway's structured daily-cost rejection for a Basic account; the request crosses the real Pi and foreground-event path, then the UI shows account-budget copy and a Business action without depending on the separate query counter."
+      "notes": "A local provider returns the gateway's structured daily-limit rejection for a Business account; the request crosses the real Pi and foreground-event path, then the UI shows usage-limit copy and a targeted Business Max billing action."
+    },
+    {
+      "spec": "chat-local-ai-gateway.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai", "real-ui-e2e", "tauri-command"],
+      "features": ["chat", "chat-streaming"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opt-in full-stack hosted-AI path: the E2E app and real Pi route through the Rust-validated loopback URL into the production Worker bundle under Miniflare, with migrated local D1 and network-closed fake provider egress, then the streamed answer reaches the real chat UI."
     },
     {
       "spec": "chat-source-file-preview.spec.ts",
@@ -647,6 +657,16 @@
       "confidence": "partial",
       "ux": "mixed",
       "notes": "Notification local file links rewrite into in-app viewer links."
+    },
+    {
+      "spec": "onboarding-background-ai-tools.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["onboarding", "real-ui-e2e", "storage-privacy"],
+      "features": ["onboarding", "settings-ai"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide."
     },
     {
       "spec": "onboarding-redirect.spec.ts",

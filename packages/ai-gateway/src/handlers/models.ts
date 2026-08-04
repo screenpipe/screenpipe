@@ -8,6 +8,7 @@ import { getTierConfig, getModelWeight, isModelGatingEnabled } from '../services
 import { getHostedAiAllowedModels, getHostedAiPlan } from '../services/hosted-ai-policy';
 import { getModelHealth, ModelHealthStatus } from '../services/model-health';
 import { isGooglePolicyBlockedModel } from '../utils/model-policy';
+import { isHostedChatGatewayEnabled } from '../services/cloudflare-ai-gateway';
 
 /** Enriched model metadata — OpenAI-compatible (extra fields ignored by standard clients) */
 interface ModelEntry {
@@ -43,6 +44,8 @@ interface ModelEntry {
    * How many "daily query" units one message on this model consumes.
    * 0 = doesn't count against the user's daily query cap (`auto`). Higher =
    * fewer messages before the cap; the separate cash cap still applies.
+   * Cloudflare Gateway mode publishes 0 for every hosted-chat model because
+   * provider spend rules replace this proactive legacy query meter.
    * UI uses `floor(remaining / query_weight)` to warn when the user is
    * about to run out for a weighted model. Populated server-side from
    * `getModelWeight()` so client doesn't have to mirror the table.
@@ -301,7 +304,12 @@ export async function handleModelListing(
 
     // Avoid advertising models that would immediately fail because their
     // provider secret is not configured in the Worker environment yet.
-    models = models.filter(model => !model.requires_env || hasConfiguredSecret(env[model.requires_env]));
+    const cloudflareGateway = isHostedChatGatewayEnabled(env);
+    models = models.filter(model =>
+      !model.requires_env ||
+      hasConfiguredSecret(env[model.requires_env]) ||
+      (cloudflareGateway && model.requires_env === 'OPENAI_API_KEY')
+    );
     models = models.filter(model => !isGooglePolicyBlockedModel(model.id));
 
     // Non-Business tiers used to have above-tier models filtered OUT of the
@@ -326,7 +334,7 @@ export async function handleModelListing(
 
       // Attach per-message query weight so UIs can warn the user before
       // they run out for a weighted model. 0 means "doesn't count."
-      model.query_weight = getModelWeight(model.id);
+      model.query_weight = cloudflareGateway ? 0 : getModelWeight(model.id);
     }
 
     const responseModels = models.map(({ requires_env, ...model }) => {

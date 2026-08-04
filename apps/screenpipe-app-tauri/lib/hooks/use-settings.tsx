@@ -253,7 +253,7 @@ export type Settings = SettingsStore & {
 	useSystemDefaultAudio?: boolean;
 	/** Enable AI workflow event detection (cloud, triggers event-based pipes) */
 	enableWorkflowEvents?: boolean;
-	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
+	/** Audio transcription scheduling: "batch" (default, longer chunks for quality) or "realtime". */
 	transcriptionMode?: "realtime" | "smart" | "batch";
 	/** Live notes for manually-started meetings. Separate from background 24/7 transcription. */
 	meetingLiveTranscriptionEnabled?: boolean;
@@ -743,7 +743,7 @@ let DEFAULT_SETTINGS: Settings = {
 			cloudArchiveEnabled: false,
 			cloudArchiveRetentionDays: 7,
 			meetingSummaryPipeSlug: "meeting-summary",
-			filterMusic: false,
+			filterMusic: true,
 			ignoreIncognitoWindows: true,
 			enhancedIncognitoDetection: false,
 			pauseOnDrmContent: false,
@@ -752,7 +752,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableClickCapture: false,
 			keepComputerAwake: false,
 			showRestartNotifications: false,
-			experimentalCoreaudioSystemAudio: false,
+			experimentalCoreaudioSystemAudio: true,
 			experimentalMeetingPiggyback: false,
 			alwaysRecordBluetoothMic: false,
 			windowsInputAecEnabled: false,
@@ -1034,6 +1034,23 @@ function createSettingsStore() {
 		if (!(settings as any).coreaudioTapMigrationV2) {
 			settings.experimentalCoreaudioSystemAudio = false;
 			(settings as any).coreaudioTapMigrationV2 = true;
+			needsUpdate = true;
+		}
+
+		// One-time migration (V3 — supersedes V2): flip CoreAudio Process Tap
+		// back ON. The VoiceProcessing AudioUnit issue from V2 is resolved;
+		// toggle removed from UI, auto-enabled when available (#5236).
+		if (!(settings as any).coreaudioTapMigrationV3) {
+			settings.experimentalCoreaudioSystemAudio = true;
+			(settings as any).coreaudioTapMigrationV3 = true;
+			needsUpdate = true;
+		}
+
+		// One-time migration: default filterMusic to ON — transcribing music
+		// as speech is noise, users can turn it off in advanced settings (#5236).
+		if (!(settings as any).filterMusicDefaultedOn) {
+			settings.filterMusic = true;
+			(settings as any).filterMusicDefaultedOn = true;
 			needsUpdate = true;
 		}
 

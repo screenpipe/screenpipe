@@ -4,7 +4,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  classifyMcpClientName,
   createMcpQualifiedValueReporter,
+  type McpClient,
+  resolveMcpClient,
   safeMcpClient,
 } from "./qualified-value";
 
@@ -34,5 +37,38 @@ describe("createMcpQualifiedValueReporter", () => {
     expect(safeMcpClient("codex")).toBe("codex");
     expect(safeMcpClient("private-customer-project")).toBe("unknown");
     expect(safeMcpClient(undefined)).toBe("unknown");
+  });
+
+  it("classifies real Claude Code and Codex client names", () => {
+    expect(classifyMcpClientName("claude-code")).toBe("claude");
+    expect(classifyMcpClientName("codex-mcp-client")).toBe("codex");
+  });
+
+  it("classifies only allowlisted app names", () => {
+    expect(classifyMcpClientName("Cursor_vscode")).toBe("cursor");
+    expect(classifyMcpClientName("private-customer-project")).toBe("unknown");
+  });
+
+  it("prefers an explicit safe client over the protocol client name", () => {
+    expect(resolveMcpClient("hermes", "Claude Desktop")).toBe("hermes");
+    expect(resolveMcpClient("unknown", "Claude Desktop")).toBe("claude");
+    expect(resolveMcpClient(undefined, "custom-client")).toBe("unknown");
+  });
+
+  it("resolves the protocol client lazily after initialization", () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    let protocolClient: McpClient = "unknown";
+    const reporter = createMcpQualifiedValueReporter(
+      send,
+      () => protocolClient,
+    );
+
+    protocolClient = "codex";
+    reporter.artifactResult();
+
+    expect(send).toHaveBeenCalledWith({
+      outcome: "artifact_result",
+      client: "codex",
+    });
   });
 });

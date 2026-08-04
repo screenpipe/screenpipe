@@ -37,6 +37,13 @@ const SCHEMA = [
      bucket_epoch INTEGER NOT NULL, model TEXT NOT NULL, outcome TEXT NOT NULL,
      requests INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bucket_epoch, model, outcome)
    ) WITHOUT ROWID`,
+  `CREATE TABLE hosted_ai_settlements (
+     settlement_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+     cost_micro_cents INTEGER NOT NULL, day TEXT NOT NULL, month_period TEXT NOT NULL,
+     hour TEXT NOT NULL, lane TEXT NOT NULL, hosted_ai_trial INTEGER NOT NULL,
+     ledger_epoch TEXT NOT NULL, applied_at TEXT,
+     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+   ) WITHOUT ROWID`,
 ];
 
 describe('runtime state maintenance against workerd D1', () => {
@@ -77,6 +84,12 @@ describe('runtime state maintenance against workerd D1', () => {
         VALUES ((CAST(strftime('%s','now') AS INTEGER)-7200)/10,'old','ok',1)`),
       env.DB.prepare(`INSERT INTO model_health_window (bucket_epoch,model,outcome,requests)
         VALUES (CAST(strftime('%s','now') AS INTEGER)/10,'current','ok',1)`),
+      env.DB.prepare(`INSERT INTO hosted_ai_settlements
+        (settlement_id,fingerprint,cost_micro_cents,day,month_period,hour,lane,hosted_ai_trial,ledger_epoch,applied_at,created_at)
+        VALUES ('old-settlement','old',1,date('now'),strftime('%Y-%m','now'),strftime('%Y-%m-%dT%H','now'),'interactive',0,'default',datetime('now'),datetime('now','-3 days'))`),
+      env.DB.prepare(`INSERT INTO hosted_ai_settlements
+        (settlement_id,fingerprint,cost_micro_cents,day,month_period,hour,lane,hosted_ai_trial,ledger_epoch,applied_at,created_at)
+        VALUES ('current-settlement','current',1,date('now'),strftime('%Y-%m','now'),strftime('%Y-%m-%dT%H','now'),'interactive',0,'default',datetime('now'),datetime('now'))`),
       env.DB.prepare(`INSERT INTO usage (device_id,last_reset,tier,updated_at)
         VALUES ('old-ip',date('now','-8 days'),'ip_tracking',datetime('now','-8 days'))`),
       env.DB.prepare(`INSERT INTO usage (device_id,last_reset,tier,updated_at)
@@ -92,6 +105,9 @@ describe('runtime state maintenance against workerd D1', () => {
     expect((await env.DB.prepare('SELECT COUNT(*) AS count FROM cost_daily').first<{ count: number }>())?.count).toBe(1);
     expect((await env.DB.prepare('SELECT COUNT(*) AS count FROM transcription_daily').first<{ count: number }>())?.count).toBe(1);
     expect((await env.DB.prepare('SELECT model FROM model_health_window').first<{ model: string }>())?.model).toBe('current');
+    expect((await env.DB.prepare(
+      'SELECT settlement_id FROM hosted_ai_settlements',
+    ).first<{ settlement_id: string }>())?.settlement_id).toBe('current-settlement');
     const usage = await env.DB.prepare('SELECT device_id FROM usage ORDER BY device_id').all<{ device_id: string }>();
     expect((usage.results ?? []).map((row) => row.device_id)).toEqual(['current-ip', 'current-user']);
   });

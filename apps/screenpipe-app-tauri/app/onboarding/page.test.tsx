@@ -92,10 +92,12 @@ vi.mock("@/components/onboarding/timeline-choice", () => ({
   default: () => <div>timeline choice</div>,
 }));
 vi.mock("@/components/onboarding/engine-startup", () => ({
-  default: () => <div>engine</div>,
-}));
-vi.mock("@/components/onboarding/connect-apps", () => ({
-  default: () => <div>connect apps</div>,
+  default: ({ handleNextSlide }: { handleNextSlide: () => void }) => (
+    <div>
+      <span>engine</span>
+      <button onClick={handleNextSlide}>finish engine</button>
+    </div>
+  ),
 }));
 vi.mock("@/components/onboarding/first-dashboard", () => ({
   default: () => <div>first dashboard</div>,
@@ -161,7 +163,7 @@ describe("enterprise onboarding authentication", () => {
       screen.queryByRole("button", { name: /use enterprise key/i }),
     ).not.toBeInTheDocument();
     expect(mocks.capture).toHaveBeenCalledWith("onboarding_funnel_step", {
-      funnel_version: "onboarding_ui_v1",
+      funnel_version: "onboarding_ui_v2",
       step: "started",
     });
   });
@@ -225,6 +227,34 @@ describe("enterprise onboarding authentication", () => {
       "overflow-y-auto",
     );
   });
+
+  it("moves directly from engine startup to the first dashboard", async () => {
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "finish engine" }));
+
+    await waitFor(() =>
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("first-dashboard"),
+    );
+    expect(await screen.findByText("first dashboard")).toBeInTheDocument();
+    expect(screen.queryByText("connect apps")).not.toBeInTheDocument();
+  });
+
+  it.each(["connect-apps", "integrations", "connections"])(
+    "resumes legacy %s state at the first dashboard",
+    async (legacyStep) => {
+      onboardingData.currentStep = legacyStep;
+
+      render(<OnboardingPage />);
+
+      expect(await screen.findByText("first dashboard")).toBeInTheDocument();
+      expect(screen.queryByText("connect apps")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 720),
+      );
+    },
+  );
 
   it("advances after either enterprise credential is verified", async () => {
     mocks.enterprisePolicy.authenticationState = "authenticated";

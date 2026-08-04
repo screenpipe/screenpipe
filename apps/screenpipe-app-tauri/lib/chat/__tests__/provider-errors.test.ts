@@ -82,7 +82,7 @@ describe("provider error copy", () => {
       '{"error":"free_plan_hosted_background_disabled"}',
       { provider: "screenpipe-cloud", model: "auto" },
     );
-    expect(msg).toContain("background pipes");
+    expect(msg).toContain("background scheduled tasks");
     expect(msg).toContain("Ollama");
   });
 

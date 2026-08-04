@@ -180,11 +180,11 @@ async function requireFreshSuccessfulPipeTests(
     );
     const status = payload?.data;
     if (!status || typeof status !== "object") {
-      throw new Error(`Pipe "${name}" is not installed`);
+      throw new Error(`Scheduled task "${name}" is not installed`);
     }
     if (status.is_running === true) {
       throw new Error(
-        `Pipe "${name}" is still running. Wait for its test to finish before saving this Live View.`,
+        `Scheduled task "${name}" is still running. Wait for its test to finish before saving this Live View.`,
       );
     }
 
@@ -198,12 +198,12 @@ async function requireFreshSuccessfulPipeTests(
           ? ` Latest error: ${status.last_error.trim().split("\n")[0]}`
           : "";
       throw new Error(
-        `Pipe "${name}" must complete a successful test before it can be bound to this Live View.${detail}`,
+        `Scheduled task "${name}" must complete a successful test before it can be bound to this Live View.${detail}`,
       );
     }
     if (lastRun < loadedAt) {
       throw new Error(
-        `Pipe "${name}" must be tested after the current Live View is loaded so this edit cannot reuse a stale success.`,
+        `Scheduled task "${name}" must be tested after the current Live View is loaded so this edit cannot reuse a stale success.`,
       );
     }
   }

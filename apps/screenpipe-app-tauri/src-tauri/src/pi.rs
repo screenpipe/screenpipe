@@ -1421,6 +1421,18 @@ fn ensure_screenpipe_skill(project_dir: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to install screenpipe skills: {}", e))
 }
 
+/// Stage the Enterprise-only team skill outside Pi's auto-discovery tree.
+/// Consumer builds return `None` without touching this path; the Enterprise
+/// app passes the returned file explicitly with `--skill` for this process.
+fn ensure_enterprise_team_skill(project_dir: &str) -> Result<Option<std::path::PathBuf>, String> {
+    use screenpipe_core::agents::pi::PiExecutor;
+    let skill_root = std::path::Path::new(project_dir)
+        .join(".screenpipe")
+        .join("enterprise-skills");
+    PiExecutor::ensure_screenpipe_team_skill(&skill_root)
+        .map_err(|e| format!("Failed to install Enterprise team skill: {}", e))
+}
+
 /// Ensure the web-search extension exists in the project's .pi/extensions directory
 /// Install or remove the web-search extension based on provider.
 /// Web search uses the screenpipe cloud backend (Gemini + Google Search),
@@ -1444,7 +1456,9 @@ fn ensure_web_search_extension(
         std::fs::create_dir_all(&ext_dir)
             .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
 
-        let ext_content = include_str!("../assets/extensions/web-search.ts");
+        let api_url = crate::config::screenpipe_ai_gateway_url()?;
+        let ext_content = include_str!("../assets/extensions/web-search.ts")
+            .replace(SCREENPIPE_API_URL, &api_url);
         std::fs::write(&ext_path, ext_content)
             .map_err(|e| format!("Failed to write web-search extension: {}", e))?;
 
@@ -1700,9 +1714,18 @@ fn anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
 /// Returns a map of provider entries to merge into the existing models.json.
 /// We merge instead of rebuilding from scratch to avoid a race condition where
 /// concurrent pipes overwrite each other's providers.
+#[cfg(test)]
 async fn build_models_json(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
+) -> serde_json::Value {
+    build_models_json_with_api_url(user_token, provider_config, SCREENPIPE_API_URL).await
+}
+
+async fn build_models_json_with_api_url(
+    user_token: Option<&str>,
+    provider_config: Option<&PiProviderConfig>,
+    api_url: &str,
 ) -> serde_json::Value {
     let mut providers_map = serde_json::Map::new();
 
@@ -1710,9 +1733,9 @@ async fn build_models_json(
     // literal; the logged-out fallback must use `$` env-var syntax (pi >= 0.80
     // treats bare names as literal keys).
     let api_key_value = user_token.unwrap_or("$SCREENPIPE_API_KEY");
-    let models = screenpipe_cloud_models(SCREENPIPE_API_URL, user_token).await;
+    let models = screenpipe_cloud_models(api_url, user_token).await;
     let screenpipe_provider = json!({
-        "baseUrl": SCREENPIPE_API_URL,
+        "baseUrl": api_url,
         "api": "openai-completions",
         "apiKey": api_key_value,
         "authHeader": true,
@@ -1855,7 +1878,9 @@ async fn ensure_pi_config(
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
 
-    let new_providers = build_models_json(user_token, provider_config).await;
+    let api_url = crate::config::screenpipe_ai_gateway_url()?;
+    let new_providers =
+        build_models_json_with_api_url(user_token, provider_config, &api_url).await;
 
     // Merge into existing models.json to avoid race conditions with concurrent pipes
     let models_path = config_dir.join("models.json");
@@ -2153,6 +2178,7 @@ pub async fn pi_start_inner(
 
     // Ensure screenpipe skills exist in project
     ensure_screenpipe_skill(&project_dir)?;
+    let enterprise_team_skill = ensure_enterprise_team_skill(&project_dir)?;
 
     if !use_acp {
         // These extensions and package/config checks belong to the native Pi
@@ -2365,6 +2391,13 @@ pub async fn pi_start_inner(
             "--model",
             &pi_model,
         ]);
+        if let Some(skill_path) = enterprise_team_skill.as_ref() {
+            command.arg("--skill").arg(skill_path);
+            info!(
+                "Injected Enterprise team skill for native Pi session from {:?}",
+                skill_path
+            );
+        }
         if extension_safe_mode {
             warn!(
                 "Starting Pi in extension safe mode for '{}'; third-party extension packages are disabled",
@@ -3101,12 +3134,7 @@ async fn await_prompt_start(
 
 async fn open_secret_store_for_connection_context() -> Option<screenpipe_secrets::SecretStore> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let db_path = data_dir.join("db.sqlite");
-    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-        crate::secrets::KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-    screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), secret_key)
+    screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
         .await
         .ok()
 }
@@ -4290,7 +4318,7 @@ pub async fn cleanup_pi(state: &PiState) {
 }
 
 /// Find bun executable (shared by pi_install and ensure_pi_installed_background)
-fn find_bun_executable() -> Option<String> {
+pub(crate) fn find_bun_executable() -> Option<String> {
     // Pre-AVX2 CPU: the bundled/stock bun.exe requires AVX2 and dies with
     // 0xC000001D at spawn. Prefer the baseline build screenpipe-core
     // downloads; if it isn't on disk yet, kick the background download and
@@ -5810,7 +5838,9 @@ error: InstallFailed extracting tarball"#;
 
     // -- build_models_json tests --
 
-    use super::{build_models_json, resolve_pi_model, PiProviderConfig};
+    use super::{
+        build_models_json, build_models_json_with_api_url, resolve_pi_model, PiProviderConfig,
+    };
 
     fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
         PiProviderConfig {
@@ -5857,6 +5887,16 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(sp["apiKey"], "$SCREENPIPE_API_KEY");
         assert_eq!(sp["authHeader"], true);
         assert!(sp["models"].as_array().unwrap().len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_uses_resolved_gateway_url() {
+        let config =
+            build_models_json_with_api_url(None, None, "http://127.0.0.1:8787/v1").await;
+        assert_eq!(
+            config["providers"]["screenpipe"]["baseUrl"],
+            "http://127.0.0.1:8787/v1"
+        );
     }
 
     #[tokio::test]

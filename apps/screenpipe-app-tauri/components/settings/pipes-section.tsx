@@ -268,9 +268,9 @@ function navigateHomeAndPrefill(data: ChatPrefillData): void {
 
 function buildCreatePipeDisplayLabel(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, " ").trim();
-  if (!normalized) return "Create pipe";
+  if (!normalized) return "Create scheduled task";
   const compact = normalized.length > 60 ? `${normalized.slice(0, 57).trimEnd()}...` : normalized;
-  return `Create pipe: ${compact}`;
+  return `Create scheduled task: ${compact}`;
 }
 
 // Starter prompts shown next to the create-pipe box. A concrete, named example
@@ -331,7 +331,7 @@ after analyzing, show me the improved pipe.md and explain what you changed and w
 }
 
 function buildOptimizeDisplayLabel(pipeName: string): string {
-  return `Optimize pipe: ${pipeName.trim()}`;
+  return `Optimize scheduled task: ${pipeName.trim()}`;
 }
 
 // "fork" = make your own version of an existing pipe. We don't mutate the
@@ -1172,7 +1172,7 @@ export function PipesSection() {
   const starredEmptyTitle = React.useMemo(() => {
     if (!pipeFavorites.showOnly) return null;
 
-    return "no starred pipes";
+    return "no starred scheduled tasks";
   }, [pipeFavorites.showOnly]);
 
   const sharePipePublic = async (pipe: PipeStatus) => {
@@ -1194,7 +1194,7 @@ export function PipesSection() {
       posthog.capture("pipe_shared_public", { pipe_name: pipe.config.name, pipe_id: data.id });
       toast({ title: "link copied!", description: data.url });
     } catch (err: any) {
-      toast({ title: "failed to share pipe", description: err.message, variant: "destructive" });
+      toast({ title: "failed to share scheduled task", description: err.message, variant: "destructive" });
     } finally {
       setSharingPublic(null);
     }
@@ -1220,7 +1220,7 @@ export function PipesSection() {
         : "/pipes?include_executions=true&execution_limit=1&include_execution_counts=true";
       const res = await localFetch(pipesEndpoint, { signal: controller.signal }).finally(() => clearTimeout(timeout));
       if (!res.ok) {
-        throw new Error(`pipes api returned ${res.status}`);
+        throw new Error(`scheduled tasks API returned ${res.status}`);
       }
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
@@ -1306,7 +1306,7 @@ export function PipesSection() {
         toast({ title: "update failed", description: err.error || "unknown error", variant: "destructive" });
         return;
       }
-      toast({ title: "pipe updated", description: `${pipeName} updated successfully` });
+      toast({ title: "scheduled task updated", description: `${pipeName} updated successfully` });
       // Remove from updates map and refresh
       setAvailableUpdates(prev => {
         const next = { ...prev };
@@ -1421,7 +1421,7 @@ export function PipesSection() {
         title: existing ? `update pushed (v${version})` : "shared with team",
         description: existing
           ? "teammates' copies will update automatically"
-          : "teammates can turn it on from their pipes page",
+          : "teammates can turn it on from their Scheduled page",
       });
     } catch (err: any) {
       toast({
@@ -1556,7 +1556,7 @@ export function PipesSection() {
       if (updatedPipes.length > 0) {
         posthog.capture("team_pipe_auto_updated", { pipes: updatedPipes });
         toast({
-          title: "team pipes updated",
+          title: "team scheduled tasks updated",
           description: updatedPipes.join(", "),
         });
       }
@@ -1755,7 +1755,7 @@ export function PipesSection() {
     if (isEnterpriseManagedName(name)) {
       toast({
         title: "managed by your organization",
-        description: "an organization admin controls this pipe's schedule and enabled state",
+        description: "an organization admin controls this scheduled task's schedule and enabled state",
       });
       return;
     }
@@ -1796,7 +1796,7 @@ export function PipesSection() {
         )
       );
       toast({
-        title: "pipe toggle failed",
+        title: "scheduled task toggle failed",
         description: `could not ${enabled ? "enable" : "disable"} "${name}"`,
         variant: "destructive",
       });
@@ -1859,7 +1859,7 @@ export function PipesSection() {
       }
     } catch (error) {
       toast({
-        title: "pipe stop failed",
+        title: "scheduled task stop failed",
         description:
           error instanceof Error ? error.message : `could not stop "${name}"`,
         variant: "destructive",
@@ -1922,8 +1922,8 @@ export function PipesSection() {
       const failed = results.filter((r) => r.status === "rejected").length;
       if (failed > 0) {
         toast({
-          title: "some pipes failed to delete",
-          description: `${failed} of ${selectedPipes.size} pipes could not be deleted`,
+          title: "some scheduled tasks failed to delete",
+          description: `${failed} of ${selectedPipes.size} scheduled tasks could not be deleted`,
           variant: "destructive",
         });
       }
@@ -2137,7 +2137,7 @@ export function PipesSection() {
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
-              placeholder="search pipes..."
+              placeholder="search scheduled tasks..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-8 h-8 text-sm"
@@ -2175,7 +2175,7 @@ export function PipesSection() {
             size="icon"
             className="h-8 w-8"
             onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
-            title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
+            title={pipeFavorites.showOnly ? "show all scheduled tasks" : "show only starred scheduled tasks"}
           >
             <Star
               className={cn(
@@ -2237,12 +2237,12 @@ export function PipesSection() {
               <AlertCircle className="h-7 w-7 mx-auto text-muted-foreground/70" />
               <div>
                 <p className="text-foreground font-medium text-base">
-                  {isRemote ? "couldn't load pipes from this device" : "screenpipe backend is unavailable"}
+                  {isRemote ? "couldn't load scheduled tasks from this device" : "screenpipe backend is unavailable"}
                 </p>
                 <p className="text-sm mt-1">
                   {isRemote
                     ? `the remote API at ${apiBase} did not answer. check that screenpipe is running on that device.`
-                    : `your pipe files may still be installed, but the local API at ${apiBase} did not answer.`}
+                    : `your scheduled task files may still be installed, but the local API at ${apiBase} did not answer.`}
                 </p>
                 <p className="text-xs mt-2 font-mono text-muted-foreground/80">{loadError}</p>
               </div>
@@ -2256,7 +2256,7 @@ export function PipesSection() {
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
             {searchQuery ? (
-              <p>no pipes match your search</p>
+              <p>no scheduled tasks match your search</p>
             ) : pipeFavorites.showOnly && tabCounts[pipeTypeFilter] > 0 ? (
               <div className="space-y-4">
                 <div>
@@ -2265,8 +2265,8 @@ export function PipesSection() {
                   </p>
                   <p className="text-sm mt-1">
                     {pipeFavorites.favorites.size === 0
-                      ? "star any pipe to keep your favorites here"
-                      : "none of your starred pipes match this filter right now"}
+                      ? "star any scheduled task to keep your favorites here"
+                      : "none of your starred scheduled tasks match this filter right now"}
                   </p>
                 </div>
                 <div>
@@ -2275,16 +2275,16 @@ export function PipesSection() {
                     size="sm"
                     onClick={() => pipeFavorites.setShowOnly(false)}
                   >
-                    show all pipes
+                    show all scheduled tasks
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="space-y-4">
                 <div>
-                  <p className="text-foreground font-medium text-base">no pipes installed yet</p>
+                  <p className="text-foreground font-medium text-base">no scheduled tasks installed yet</p>
                   <p className="text-sm mt-1">
-                    pipes are AI agents that run on a schedule over your screen data — they summarize your day, track your time, sync your notes, and more.
+                    scheduled tasks are AI agents that run over your screen data — they summarize your day, track your time, sync your notes, and more.
                   </p>
                 </div>
                 <div className="space-y-2 max-w-md mx-auto text-left">
@@ -2311,7 +2311,7 @@ export function PipesSection() {
                   }}
                   className="inline-flex items-center gap-2 px-4 py-2 border border-border text-sm font-medium hover:bg-muted transition-colors"
                 >
-                  or browse the pipe store →
+                  or browse the Store →
                 </button>
               </div>
             )}
@@ -2400,7 +2400,7 @@ export function PipesSection() {
                       ? "text-foreground"
                       : "text-muted-foreground/40 hover:text-muted-foreground"
                   )}
-                  title={pipeFavorites.isFavorite(pipe.config.name) ? "unstar" : "star this pipe"}
+                  title={pipeFavorites.isFavorite(pipe.config.name) ? "unstar" : "star this scheduled task"}
                   aria-pressed={pipeFavorites.isFavorite(pipe.config.name)}
                 >
                   <Star
@@ -2450,7 +2450,7 @@ export function PipesSection() {
                   <Badge
                     variant="secondary"
                     className="text-[10px] h-5 shrink-0"
-                    title={`team pipe v${parseTeamVersion(pipe.raw_content)} — read-only, updates automatically when the author re-shares`}
+                    title={`team scheduled task v${parseTeamVersion(pipe.raw_content)} — read-only, updates automatically when the author re-shares`}
                   >
                     {sharerNameForPipe(pipe.config.name)
                       ? `team v${parseTeamVersion(pipe.raw_content)} · ${sharerNameForPipe(pipe.config.name)}`
@@ -2580,8 +2580,8 @@ export function PipesSection() {
                         className="h-9 w-9"
                         onClick={() => stopPipe(pipe.config.name)}
                         disabled={stoppingPipe === pipe.config.name}
-                        title="stop pipe"
-                        aria-label="stop pipe"
+                        title="stop scheduled task"
+                        aria-label="stop scheduled task"
                       >
                         {stoppingPipe === pipe.config.name ? (
                           <Loader2 className="h-5 w-5 animate-spin" />
@@ -2602,8 +2602,8 @@ export function PipesSection() {
                           }
                         }}
                         disabled={runningPipe === pipe.config.name}
-                        title={hasMissingConnections ? "configure required connections first" : "run pipe"}
-                        aria-label={hasMissingConnections ? "configure required connections first" : "run pipe"}
+                        title={hasMissingConnections ? "configure required connections first" : "run scheduled task"}
+                        aria-label={hasMissingConnections ? "configure required connections first" : "run scheduled task"}
                       >
                         {hasMissingConnections
                           ? <AlertCircle className="h-5 w-5" />
@@ -2628,7 +2628,7 @@ export function PipesSection() {
                         autoSend: true,
                       });
                     }}
-                    title="optimize this pipe with ai — reads recent runs and improves the prompt"
+                    title="optimize this scheduled task with ai — reads recent runs and improves the prompt"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
                     optimize with ai
@@ -2646,11 +2646,11 @@ export function PipesSection() {
                       navigateHomeAndPrefill({
                         context: "the user wants to fork their pipe into a new one",
                         prompt: buildForkPrompt(pipe.config.name),
-                        displayLabel: `Fork pipe: ${pipe.config.name}`,
+                        displayLabel: `Fork scheduled task: ${pipe.config.name}`,
                         autoSend: true,
                       });
                     }}
-                    title="fork — create a new pipe based on this one and customize it"
+                    title="fork — create a new scheduled task based on this one and customize it"
                   >
                     <GitFork className="h-3.5 w-3.5" />
                     fork
@@ -2801,7 +2801,7 @@ export function PipesSection() {
                       ? "configure required connections before enabling auto-run"
                       : pipe.config.enabled
                         ? "auto-running on schedule — click to disable"
-                        : "auto-run disabled — pipe can still be run manually"
+                        : "auto-run disabled — scheduled task can still be run manually"
                   }
                 >
                   <Switch
@@ -3159,7 +3159,7 @@ export function PipesSection() {
                       {/* Notification API permission */}
                       <div className="flex items-center justify-between gap-3 border px-3 py-2.5">
                         <div className="min-w-0">
-                          <span className="text-xs font-medium cursor-help" title="allows this pipe to call POST /notify">Allow notification API</span>
+                          <span className="text-xs font-medium cursor-help" title="allows this scheduled task to call POST /notify">Allow notification API</span>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
                             Blocks hardcoded POST /notify calls when turned off.
                           </p>
@@ -3172,7 +3172,7 @@ export function PipesSection() {
 
                       {/* Timeout */}
                       <div>
-                        <Label className="text-xs mb-2 block cursor-help" title="max execution time before the pipe is killed — increase for slow LLMs or complex pipes">timeout</Label>
+                        <Label className="text-xs mb-2 block cursor-help" title="max execution time before the scheduled task is stopped — increase for slow LLMs or complex tasks">timeout</Label>
                         <Select
                           value={String(pipe.config.timeout || 600)}
                           onValueChange={(value) => {
@@ -3441,7 +3441,7 @@ export function PipesSection() {
       <div className="space-y-2 pt-2">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-muted-foreground shrink-0" />
-          <p className="text-sm font-medium text-foreground">create your own pipe</p>
+          <p className="text-sm font-medium text-foreground">create your own scheduled task</p>
         </div>
         <p className="text-xs text-muted-foreground">
           describe what you want in plain english — screenpipe builds, installs, and schedules it for you.
@@ -3464,7 +3464,7 @@ export function PipesSection() {
             />
             <button
               type="submit"
-              aria-label="create pipe"
+              aria-label="create scheduled task"
               className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
             >
               <ArrowRight className="h-4 w-4" />
@@ -3550,7 +3550,7 @@ export function PipesSection() {
           <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
             <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-muted-foreground">
-              you have local edits to this pipe. updating will overwrite your prompt changes.
+              you have local edits to this scheduled task. updating will overwrite your prompt changes.
               a backup will be saved as <code className="text-xs">pipe.md.bak</code>.
               your schedule, model, and enabled state will be preserved.
             </p>
@@ -3577,9 +3577,9 @@ export function PipesSection() {
       <Dialog open={bulkDeleteConfirm} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteConfirm(false); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>delete {selectedPipes.size} pipe{selectedPipes.size !== 1 ? "s" : ""}?</DialogTitle>
+            <DialogTitle>delete {selectedPipes.size} scheduled task{selectedPipes.size !== 1 ? "s" : ""}?</DialogTitle>
             <DialogDescription>
-              this will permanently remove the selected pipes and their configurations. this action cannot be undone.
+              this will permanently remove the selected scheduled tasks and their configurations. this action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">

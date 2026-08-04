@@ -273,6 +273,7 @@
         "src/cli/service.rs",
         "src/cli/store_file.rs",
         "src/cli/team.rs",
+        "src/cli/team_pipes.rs",
         "src/cli/view.rs",
         "src/cloud_search.rs",
         "src/connections_api.rs",
@@ -449,6 +450,7 @@
         "tests/close_severs_connections_test.rs",
         "tests/memory_pressure_test.rs",
         "tests/multi_pool_wal_parity_test.rs",
+        "tests/sqlite_architecture_invariants_test.rs",
         "tests/sqlite_runtime_version.rs",
         "tests/wal_chaos_e2e_test.rs"
       ],

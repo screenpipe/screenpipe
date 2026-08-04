@@ -185,9 +185,8 @@ impl DatabaseManager {
                 })?;
         }
 
-        // This process-wide coordinator is also used by the standalone
-        // SecretStore pool. It keeps screenpipe-controlled writes and explicit
-        // checkpoints from overlapping on independent SQLite connections.
+        // Every screenpipe-controlled capture writer and checkpoint resolves
+        // this process-wide coordinator for the physical database path.
         let write_semaphore = screenpipe_sqlite_coordinator::sqlite_write_lock(database_path);
 
         // busy_timeout is per-connection; setting it here ensures ALL pooled
@@ -197,14 +196,26 @@ impl DatabaseManager {
         // handles retries with backoff.
         //
         // cache_size + mmap_size are tier-configurable and applied here; the
-        // WAL-safety pragmas that MUST be identical on every other pool over this
-        // file (the secret-store pool in screenpipe-secrets) come from the single
-        // source of truth `WAL_SAFETY_PRAGMAS` so the two pools cannot drift.
+        // WAL-safety pragmas that MUST be identical on every connection over this
+        // file come from the single source of truth `WAL_SAFETY_PRAGMAS`.
+        let is_in_memory =
+            database_path.contains(":memory:") || database_path.contains("mode=memory");
         let mut connect_options: SqliteConnectOptions = connection_string
             .parse::<SqliteConnectOptions>()?
             .busy_timeout(Duration::from_secs(5))
             .pragma("cache_size", format!("-{}", config.cache_size_kb))
             .pragma("mmap_size", config.mmap_size.to_string());
+        // macOS delivers an uncatchable SIGBUS when APFS invalidates a page in
+        // SQLite's file-backed WAL index after the `-shm` file was shortened.
+        // `unix-excl` keeps the WAL index in process memory and takes one OS
+        // lock for the recorder process, while SQLite still coordinates all
+        // SQLx connections internally. Screenpipe already requires exclusive
+        // ownership for live capture, recovery, and maintenance operations.
+        #[cfg(target_os = "macos")]
+        if !is_in_memory {
+            connect_options = connect_options.vfs("unix-excl");
+            info!("macOS capture database using unix-excl VFS with a process-local WAL index");
+        }
         for (pragma, value) in screenpipe_config::WAL_SAFETY_PRAGMAS {
             connect_options = connect_options.pragma(pragma, value);
         }
@@ -234,24 +245,27 @@ impl DatabaseManager {
                 .map_err(|error| quarantine_startup_error(database_file, error))?;
         }
 
-        // File-backed query connections have two independent write barriers:
-        // SQLite opens the file with mode=ro, and query_only rejects mutations
-        // at the connection level. In-memory databases cannot use mode=ro and
-        // remain writable for the many isolated test fixtures that seed them
-        // directly; production databases are always file-backed.
-        let is_in_memory =
-            database_path.contains(":memory:") || database_path.contains("mode=memory");
+        // Every file-backed query connection enables query_only. Non-macOS
+        // builds also open the file with mode=ro as an independent physical
+        // barrier. macOS keeps all unix-excl handles physically RW so they
+        // share one process-local WAL index instead of reopening `-shm`.
+        // In-memory test databases remain writable for fixtures that seed them
+        // directly.
         let read_connect_options = if is_in_memory {
             connect_options.clone()
         } else {
-            connect_options
-                .clone()
-                .read_only(true)
-                .pragma("query_only", "ON")
+            let options = connect_options.clone().pragma("query_only", "ON");
+            // A read-only unix-excl handle falls back to POSIX file locks and a
+            // file-backed WAL index. Keep macOS query handles physically RW so
+            // every connection shares the process-local WAL index; query_only
+            // remains the connection-level write barrier.
+            #[cfg(not(target_os = "macos"))]
+            let options = options.read_only(true);
+            options
         };
 
         // Read pool: handles all SELECT queries (search, timeline, API, pipes).
-        let read_pool = SqlitePoolOptions::new()
+        let read_pool = crate::write_queue::capture_pool_options()
             .max_connections(config.read_pool_max)
             .min_connections(config.read_pool_min)
             .acquire_timeout(Duration::from_secs(5))
@@ -262,7 +276,7 @@ impl DatabaseManager {
         // Write pool: dedicated to INSERT/UPDATE/DELETE via begin_immediate_with_retry().
         // Writes are serialized by write_semaphore so only 1 is active
         // at a time; extras absorb connection detach without killing the pool.
-        let write_pool = SqlitePoolOptions::new()
+        let write_pool = crate::write_queue::capture_pool_options()
             .max_connections(config.write_pool_max)
             .min_connections(1)
             .acquire_timeout(Duration::from_secs(10))
@@ -270,10 +284,9 @@ impl DatabaseManager {
             .await
             .map_err(|error| quarantine_startup_error(database_file, error))?;
 
-        // Recovery wiring: let the drain loop reopen its write pool in-process on a
-        // persistent disk-I/O wedge, surface degradation via `write_queue_health`,
-        // and (via the hook, set by the app) request an engine restart — the only
-        // cure for a shared WAL-index desync. See write_queue::WriteDrainOpts.
+        // Recovery wiring: transient contention may rebuild a pool, but a typed
+        // IOERR/CORRUPT/FULL/NOTADB fault permanently closes this generation's
+        // admission and requests offline recovery through the app hook.
         let write_queue_health =
             crate::write_queue::WriteQueueHealth::for_database_path(database_path);
         let write_pool_rebuilder = crate::write_queue::WritePoolRebuilder::new(
@@ -308,13 +321,14 @@ impl DatabaseManager {
         };
 
         // Checkpoint any stale WAL before running migrations or starting captures.
-        // A large WAL (500MB+) from a previous crash slows every read/write until
-        // checkpointed. TRUNCATE mode resets it to zero bytes.
+        // RESTART copies all safe frames and waits out readers without deleting or
+        // shortening the WAL underneath another connection. Physical WAL cleanup
+        // is deliberately left to offline recovery after every owner has closed.
         let _checkpoint_guard = Arc::clone(&db_manager.write_semaphore)
             .acquire_owned()
             .await
             .map_err(|_| SqlxError::PoolClosed)?;
-        match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        match sqlx::query("PRAGMA wal_checkpoint(RESTART)")
             .fetch_one(&db_manager.write_pool)
             .await
         {
@@ -807,7 +821,7 @@ mod shutdown_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
-    async fn file_query_pool_remains_read_only_when_query_only_is_disabled() {
+    async fn file_query_pool_enforces_its_platform_write_barrier() {
         let dir = tempfile::tempdir().expect("temp dir");
         let db_path = dir.path().join("read-only-query-pool.sqlite");
         let database = DatabaseManager::new(
@@ -828,22 +842,41 @@ mod shutdown_tests {
             .await
             .expect("read query_only");
         assert_eq!(query_only, 1, "query connections must enable query_only");
+        let guarded_write = sqlx::query("INSERT INTO query_pool_probe (value) VALUES (0)")
+            .execute(&mut *reader)
+            .await
+            .expect_err("query_only connection unexpectedly accepted a write");
+        assert!(
+            guarded_write
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("readonly"),
+            "unexpected query_only write error: {guarded_write}"
+        );
 
         sqlx::query("PRAGMA query_only = OFF")
             .execute(&mut *reader)
             .await
             .expect("disable connection-level guard for physical-mode test");
-        let write_error = sqlx::query("INSERT INTO query_pool_probe (value) VALUES (1)")
+        #[cfg(not(target_os = "macos"))]
+        {
+            let write_error = sqlx::query("INSERT INTO query_pool_probe (value) VALUES (1)")
+                .execute(&mut *reader)
+                .await
+                .expect_err("mode=ro query connection unexpectedly accepted a write");
+            assert!(
+                write_error
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("readonly"),
+                "unexpected query-pool write error: {write_error}"
+            );
+        }
+        #[cfg(target_os = "macos")]
+        sqlx::query("INSERT INTO query_pool_probe (value) VALUES (1)")
             .execute(&mut *reader)
             .await
-            .expect_err("mode=ro query connection unexpectedly accepted a write");
-        assert!(
-            write_error
-                .to_string()
-                .to_ascii_lowercase()
-                .contains("readonly"),
-            "unexpected query-pool write error: {write_error}"
-        );
+            .expect("unix-excl query handles are physically RW behind query_only");
         sqlx::query("PRAGMA query_only = ON")
             .execute(&mut *reader)
             .await
@@ -858,7 +891,18 @@ mod shutdown_tests {
             .fetch_one(&database.pool)
             .await
             .expect("query pool remains readable");
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(count, 1);
+        #[cfg(target_os = "macos")]
+        assert_eq!(count, 2);
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            !db_path
+                .with_file_name("read-only-query-pool.sqlite-shm")
+                .exists(),
+            "unix-excl must keep the live WAL index out of an APFS-backed -shm mapping"
+        );
 
         database.close().await;
     }

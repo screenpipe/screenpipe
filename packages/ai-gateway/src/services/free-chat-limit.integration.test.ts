@@ -12,12 +12,16 @@ import {
 } from './cost-cap';
 import { loadHostedAiReservationControls } from './hosted-ai-reservation-controls';
 import {
+	costLedgerEpoch,
+	dailyLaneCostKey,
 	GLOBAL_DAILY_COST_KEY,
 	GLOBAL_HOURLY_COST_KEY,
 	getCostReservationMicroUsd,
 	getStreamSettlementCost,
 	logCost,
 	monthlyCostKey,
+	totalCostLedgerEpoch,
+	totalLaneCostKey,
 	trialCostKey,
 	utcHour,
 	utcMonth,
@@ -68,6 +72,15 @@ const USAGE_SCHEMA = [
 		latency_samples INTEGER NOT NULL DEFAULT 0,
 		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 		PRIMARY KEY (date, tier, provider, model, endpoint, stream, router_tier)
+	) WITHOUT ROWID`,
+	`CREATE TABLE hosted_ai_settlements (
+		settlement_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+		cost_micro_cents INTEGER NOT NULL CHECK (cost_micro_cents >= 0),
+		day TEXT NOT NULL, month_period TEXT NOT NULL, hour TEXT NOT NULL,
+		lane TEXT NOT NULL CHECK (lane IN ('interactive', 'background')),
+		hosted_ai_trial INTEGER NOT NULL CHECK (hosted_ai_trial IN (0, 1)),
+		ledger_epoch TEXT NOT NULL, applied_at TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	) WITHOUT ROWID`,
 ];
 
@@ -438,7 +451,7 @@ describe('usage reservations against workerd D1', () => {
 		const controls = loadHostedAiReservationControls(env);
 		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
 		const dailyForOneBackgroundHold = holdUsd * 1.5
-			/ controls.maxBackgroundReservedFraction;
+			/ controls.maxBackgroundBudgetFraction;
 		setUniformTextWindows(env, {
 			request: dailyForOneBackgroundHold,
 			daily: dailyForOneBackgroundHold,
@@ -480,9 +493,132 @@ describe('usage reservations against workerd D1', () => {
 		);
 		expect(largePipe.allowed).toBe(false);
 		if (!largePipe.allowed) {
-			expect(await largePipe.response.text()).toContain('hosted_ai_capacity_reserved');
+			expect(await largePipe.response.text()).toContain('background_cost_limit_exceeded');
 		}
 		expect(separateChat.allowed).toBe(true);
+	});
+
+	it('bounds cumulative Pipe spend while preserving foreground Chat headroom', async () => {
+		const now = new Date();
+		const deviceId = 'user-d1-cumulative-pipe-headroom';
+		const controls = loadHostedAiReservationControls(env);
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const dailyCap = 1;
+		const monthlyCap = 2;
+		const backgroundSpend = dailyCap * controls.maxBackgroundBudgetFraction - holdUsd / 2;
+		setUniformTextWindows(env, {
+			request: holdUsd * 2,
+			daily: dailyCap,
+			monthly: monthlyCap,
+		});
+
+		expect(await logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: backgroundSpend,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+			lane: 'background',
+		})).toBe(true);
+
+		const pipe = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		expect(pipe.allowed).toBe(false);
+		if (!pipe.allowed) {
+			const body = await pipe.response.text();
+			expect(body).toContain('background_cost_limit_exceeded');
+			expect(body).toContain('Foreground chat remains available');
+		}
+
+		const chat = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
+		expect(chat.allowed).toBe(true);
+		if (chat.allowed && chat.reservation) {
+			await releaseDailyCostReservation(env, chat.reservation);
+		}
+
+		const laneRow = await env.DB.prepare(
+			'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(dailyLaneCostKey(deviceId, 'background', costLedgerEpoch(env)))
+			.first<{ cost_day: string; daily_cost_usd: number }>();
+		expect(laneRow).toEqual({
+			cost_day: now.toISOString().slice(0, 10),
+			daily_cost_usd: backgroundSpend,
+		});
+	});
+
+	it('resets daily and monthly Pipe ledgers together with the incident epoch', async () => {
+		const now = new Date();
+		const deviceId = 'user-d1-pipe-incident-epoch';
+		const controls = loadHostedAiReservationControls(env);
+		const holdUsd = getCostReservationMicroUsd('claude-sonnet-5') / 1_000_000;
+		const dailyCap = 1;
+		const monthlyCap = 1;
+		const backgroundSpend = monthlyCap * controls.maxBackgroundBudgetFraction - holdUsd / 2;
+		setUniformTextWindows(env, {
+			request: holdUsd * 2,
+			daily: dailyCap,
+			monthly: monthlyCap,
+		});
+
+		expect(await logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: backgroundSpend,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+			lane: 'background',
+		})).toBe(true);
+
+		const blocked = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		expect(blocked.allowed).toBe(false);
+
+		env.PRIVATE_COST_CAP_EPOCH = 'chat-headroom-recovery-v1';
+		const fresh = await reserveDailyCostCap(
+			env, deviceId, 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		expect(fresh.allowed).toBe(true);
+		if (!fresh.allowed || !fresh.reservation) throw new Error('expected fresh Pipe reservation');
+		expect(fresh.reservation.ledgerEpoch).toBe(costLedgerEpoch(env));
+		expect(fresh.reservation.totalLedgerEpoch).toBe(totalCostLedgerEpoch(env, false));
+
+		expect(await logCost(env, {
+			device_id: deviceId,
+			tier: 'subscribed',
+			provider: 'anthropic',
+			model: 'claude-sonnet-5',
+			input_tokens: 1_000,
+			output_tokens: 100,
+			estimated_cost_usd: holdUsd,
+			endpoint: '/v1/chat/completions',
+			stream: false,
+			lane: fresh.reservation.lane,
+			cost_ledger_epoch: fresh.reservation.ledgerEpoch,
+			cost_total_ledger_epoch: fresh.reservation.totalLedgerEpoch,
+		})).toBe(true);
+		await releaseDailyCostReservation(env, fresh.reservation);
+
+		const resetTotal = await env.DB.prepare(
+			'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(totalLaneCostKey(
+			deviceId,
+			'background',
+			false,
+			totalCostLedgerEpoch(env, false),
+		)).first<{ cost_day: string; daily_cost_usd: number }>();
+		expect(resetTotal).toEqual({ cost_day: utcMonth(now), daily_cost_usd: holdUsd });
 	});
 
 	it('rejects a request whose own measured shape cannot fit the cash cap', async () => {
@@ -694,6 +830,63 @@ describe('usage reservations against workerd D1', () => {
 			'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
 		).bind(deviceId).first<{ daily_cost_usd: number }>();
 		expect(account?.daily_cost_usd).toBeCloseTo(expectedCost, 8);
+		expect(await env.DB.prepare(
+			'SELECT device_id FROM usage WHERE device_id = ?',
+		).bind(result.reservation.key).first()).toBeNull();
+	});
+
+	it('attributes a failed background request to its admitted budget epoch', async () => {
+		const now = new Date();
+		const deviceId = 'user-d1-provider-exception-background';
+		const model = 'claude-sonnet-5';
+		env.PRIVATE_COST_CAP_EPOCH = 'provider-exception-background-v1';
+		const result = await reserveDailyCostCap(
+			env,
+			deviceId,
+			'subscribed',
+			model,
+			now,
+			'background',
+			{},
+			'business',
+		);
+		if (!result.allowed || !result.reservation) {
+			throw new Error('expected background provider-exception reservation');
+		}
+
+		await settleProviderException(env, result.reservation, reservedCostAttribution({
+			isValid: true,
+			tier: 'subscribed',
+			accountPlan: 'business',
+			deviceId,
+			userId: deviceId,
+		}, model, '/v1/chat/completions', false));
+
+		const expectedCost = result.reservation.reservedMicroUsd / 1_000_000;
+		const dailyLane = await env.DB.prepare(
+			'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(dailyLaneCostKey(
+			deviceId,
+			'background',
+			result.reservation.ledgerEpoch,
+		)).first<{ cost_day: string; daily_cost_usd: number }>();
+		expect(dailyLane).toEqual({
+			cost_day: now.toISOString().slice(0, 10),
+			daily_cost_usd: expectedCost,
+		});
+
+		const monthlyLane = await env.DB.prepare(
+			'SELECT cost_day, daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(totalLaneCostKey(
+			deviceId,
+			'background',
+			false,
+			result.reservation.totalLedgerEpoch,
+		)).first<{ cost_day: string; daily_cost_usd: number }>();
+		expect(monthlyLane).toEqual({
+			cost_day: utcMonth(now),
+			daily_cost_usd: expectedCost,
+		});
 		expect(await env.DB.prepare(
 			'SELECT device_id FROM usage WHERE device_id = ?',
 		).bind(result.reservation.key).first()).toBeNull();

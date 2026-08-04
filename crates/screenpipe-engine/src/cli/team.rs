@@ -9,9 +9,9 @@
 //! Authoritative spec for parameters + permissions is the
 //! `screenpipe-team` skill at
 //! `crates/screenpipe-core/assets/skills/screenpipe-team/SKILL.md` — this
-//! command exposes the same three endpoints (`/devices`, `/search`,
-//! `/records`) so a terminal user and the pi-agent skill share one
-//! vocabulary.
+//! command exposes the same read endpoints (`/devices`, `/search`, `/records`)
+//! plus the hosted managed-Pipe control plane, so a terminal user and the
+//! pi-agent skill share one vocabulary.
 //!
 //! Auth: `team_api_token` from `~/.screenpipe/enterprise.json` (admin
 //! mints it once at <https://screenpi.pe/enterprise?tab=tokens>). Override
@@ -25,8 +25,9 @@
 //! so this works on any machine the admin has signed into (CI, a fresh
 //! laptop, a server), not just one running screenpipe locally.
 //!
-//! All responses are passed through as JSON with no shape coercion. The
-//! cloud API is the schema; jq + the skill docs are the contract.
+//! Read responses are passed through as JSON with no shape coercion. Managed
+//! Pipe commands render a compact human receipt by default and preserve the
+//! complete API response behind `--json`.
 
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
@@ -44,7 +45,7 @@ const ENV_TOKEN: &str = "SCREENPIPE_TEAM_API_TOKEN";
 const ENV_TEAM_API_URL: &str = "SCREENPIPE_TEAM_API_URL";
 const ENV_BASE_URL: &str = "SCREENPIPE_CLOUD_BASE_URL";
 
-const TOKEN_HELP: &str = "no team_api_token found.
+const READ_TOKEN_HELP: &str = "no team_api_token found.
 
 Open https://screenpi.pe/enterprise?tab=tokens, mint a token with scopes
 `read:devices`, `read:search`, `read:records`, then either:
@@ -54,6 +55,10 @@ Open https://screenpi.pe/enterprise?tab=tokens, mint a token with scopes
   - export SCREENPIPE_TEAM_API_TOKEN=<token> for this shell.";
 
 pub async fn handle_team_command(cmd: &TeamCommand) -> anyhow::Result<()> {
+    if let TeamCommand::Pipes { subcommand } = cmd {
+        return super::team_pipes::handle_team_pipe_command(subcommand).await;
+    }
+
     let env = TeamEnv::resolve()?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -64,14 +69,15 @@ pub async fn handle_team_command(cmd: &TeamCommand) -> anyhow::Result<()> {
         TeamCommand::Devices(args) => devices(&client, &env, args).await,
         TeamCommand::Search(args) => search(&client, &env, args).await,
         TeamCommand::Records(args) => records(&client, &env, args).await,
+        TeamCommand::Pipes { .. } => unreachable!("handled before read-only team commands"),
     }
 }
 
-struct TeamEnv {
-    token: String,
+pub(crate) struct TeamEnv {
+    pub(crate) token: String,
     /// Full v1 base, e.g. `https://screenpi.pe/api/enterprise/v1` or a
     /// gateway's `https://gateway.corp.internal:3040/api/enterprise/v1`.
-    v1_base: String,
+    pub(crate) v1_base: String,
 }
 
 impl TeamEnv {
@@ -79,12 +85,29 @@ impl TeamEnv {
         let ent = read_enterprise_json();
         let token = match std::env::var(ENV_TOKEN) {
             Ok(t) if !t.is_empty() => t,
-            _ => token_from_enterprise_json(ent.as_ref())?,
+            _ => token_from_enterprise_json(ent.as_ref(), READ_TOKEN_HELP)?,
         };
         let v1_base = resolve_v1_base(
             std::env::var(ENV_TEAM_API_URL).ok().as_deref(),
             std::env::var(ENV_BASE_URL).ok().as_deref(),
             ent.as_ref(),
+        );
+        Ok(Self { token, v1_base })
+    }
+
+    /// Resolve the hosted control plane. Managed Pipe mutations are not served
+    /// by customer query gateways, so enterprise.json.gateway_url is
+    /// deliberately ignored here. Explicit environment overrides still work
+    /// for staging and local contract tests.
+    pub(crate) fn resolve_hosted(token_help: &str) -> anyhow::Result<Self> {
+        let ent = read_enterprise_json();
+        let token = match std::env::var(ENV_TOKEN) {
+            Ok(t) if !t.is_empty() => t,
+            _ => token_from_enterprise_json(ent.as_ref(), token_help)?,
+        };
+        let v1_base = resolve_hosted_v1_base(
+            std::env::var(ENV_TEAM_API_URL).ok().as_deref(),
+            std::env::var(ENV_BASE_URL).ok().as_deref(),
         );
         Ok(Self { token, v1_base })
     }
@@ -116,6 +139,16 @@ fn resolve_v1_base(
     DEFAULT_V1_BASE.to_string()
 }
 
+fn resolve_hosted_v1_base(team_api_env: Option<&str>, legacy_origin_env: Option<&str>) -> String {
+    if let Some(base) = team_api_env.map(str::trim).filter(|s| !s.is_empty()) {
+        return base.trim_end_matches('/').to_string();
+    }
+    if let Some(origin) = legacy_origin_env.map(str::trim).filter(|s| !s.is_empty()) {
+        return format!("{}/api/enterprise/v1", origin.trim_end_matches('/'));
+    }
+    DEFAULT_V1_BASE.to_string()
+}
+
 fn read_enterprise_json() -> Option<Value> {
     let home = dirs::home_dir()?;
     let path: PathBuf = home.join(".screenpipe").join("enterprise.json");
@@ -123,12 +156,12 @@ fn read_enterprise_json() -> Option<Value> {
     serde_json::from_str(&raw).ok()
 }
 
-fn token_from_enterprise_json(parsed: Option<&Value>) -> anyhow::Result<String> {
+fn token_from_enterprise_json(parsed: Option<&Value>, help: &str) -> anyhow::Result<String> {
     let tok = parsed
         .and_then(|v| v.get("team_api_token"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("{TOKEN_HELP}"))?;
+        .ok_or_else(|| anyhow::anyhow!(help.to_string()))?;
     Ok(tok.to_string())
 }
 
@@ -532,6 +565,20 @@ mod tests {
                 Some(&ent)
             ),
             "http://127.0.0.1:3041/api/enterprise/v1"
+        );
+
+        // Hosted-only managed Pipe controls never follow the query gateway
+        // stored in enterprise.json. Explicit environment bases still win.
+        assert_eq!(
+            resolve_hosted_v1_base(None, None),
+            "https://screenpi.pe/api/enterprise/v1"
+        );
+        assert_eq!(
+            resolve_hosted_v1_base(
+                Some("http://127.0.0.1:3042/api/enterprise/v1/"),
+                Some("https://staging.screenpi.pe"),
+            ),
+            "http://127.0.0.1:3042/api/enterprise/v1"
         );
     }
 }

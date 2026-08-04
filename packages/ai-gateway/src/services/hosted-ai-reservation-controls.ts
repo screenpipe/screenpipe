@@ -17,7 +17,8 @@ export type HostedAiReservationControls = {
 	capacityActivitySeconds: number;
 	maxActiveInteractive: number;
 	maxActiveBackground: number;
-	maxBackgroundReservedFraction: number;
+	/** Maximum cumulative-plus-in-flight share available to background work. */
+	maxBackgroundBudgetFraction: number;
 };
 
 export class PrivateReservationControlError extends Error {
@@ -80,7 +81,8 @@ export function loadHostedAiReservationControls(
 			env.PRIVATE_MAX_ACTIVE_BACKGROUND_RESERVATIONS,
 			'PRIVATE_MAX_ACTIVE_BACKGROUND_RESERVATIONS',
 		),
-		maxBackgroundReservedFraction: requiredPrivateFraction(
+		// Keep the existing production binding name for a no-config migration.
+		maxBackgroundBudgetFraction: requiredPrivateFraction(
 			env.PRIVATE_MAX_BACKGROUND_RESERVED_FRACTION,
 			'PRIVATE_MAX_BACKGROUND_RESERVED_FRACTION',
 		),

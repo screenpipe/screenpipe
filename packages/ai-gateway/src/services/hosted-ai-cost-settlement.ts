@@ -52,6 +52,7 @@ export function logReservedCost(
 ): Promise<boolean> {
 	if (!reservation) return Promise.resolve(true);
 	return logCost(env, {
+		settlement_id: reservation.key,
 		device_id: attribution.deviceId,
 		user_id: attribution.userId,
 		tier: attribution.tier,
@@ -65,6 +66,9 @@ export function logReservedCost(
 		stream: attribution.stream,
 		latency_ms: attribution.latencyMs,
 		router_tier: attribution.routerTier,
+		lane: reservation.lane,
+		cost_ledger_epoch: reservation.ledgerEpoch,
+		cost_total_ledger_epoch: reservation.totalLedgerEpoch,
 	});
 }
 
@@ -96,8 +100,8 @@ export async function settleProviderException(
 /**
  * Prefer exact non-stream usage, but conservatively attribute the reservation
  * when the provider response cannot be decoded. A false accounting result is
- * not retried here because the exact write may have partially updated
- * best-effort telemetry; the caller retains the hold until expiry instead.
+ * not retried in the response path; the caller retains the bounded hold until
+ * expiry, while an identical retry remains safe through the settlement ID.
  */
 export async function settleActualOrReservedCost(
 	env: Env,

@@ -12,6 +12,11 @@ vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => settingsState,
 }));
 
+vi.mock("@/lib/ai-gateway-url", () => ({
+  fetchAiGateway: async (path: string, init?: RequestInit) =>
+    fetch(`https://api.screenpipe.com/v1${path}`, init),
+}));
+
 function response(data: any[], status = 200, upgradeEligible = false) {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
