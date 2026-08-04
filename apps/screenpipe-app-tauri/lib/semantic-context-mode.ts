@@ -11,7 +11,7 @@ export const SEMANTIC_CONTEXT_MODE_COPY: Record<
   memory: {
     label: "Memory",
     description:
-      "For finding past work, creating summaries, and running Pipes. This keeps the information sent to AI smaller.",
+      "For finding past work, creating summaries, and running scheduled tasks. This keeps the information sent to AI smaller.",
   },
   computerUse: {
     label: "Automation",

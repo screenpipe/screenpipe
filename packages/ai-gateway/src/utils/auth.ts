@@ -170,6 +170,7 @@ interface ScreenpipeUserData {
   cloud_subscribed?: boolean;
   app_entitled?: boolean;
   subscription_plan?: string | null;
+  billing_plan?: string | null;
   hosted_ai_trial?: boolean;
   entitlement?: {
     active?: boolean;
@@ -264,26 +265,54 @@ function usageTierField(
   return usageTier === tier ? {} : { usageTier };
 }
 
-function resolveAccountPlan(user: ScreenpipeUserData): AccountPlan {
-	// /api/user is the fresh authenticated source of truth. Free accounts return
-	// an explicit app/cloud denial and no entitlement object; `users.plan` may
-	// still contain a stale pre-cancel label, so do not let that advisory field
-	// turn a refunded account into paid access.
-	if (user.app_entitled === false && user.cloud_subscribed === false) {
-		return 'free';
-	}
+function billingPlanMatchesAccessPlan(
+  billingPlan: Exclude<AccountPlan, 'unknown'>,
+  accessPlan: Exclude<AccountPlan, 'unknown'>,
+): boolean {
+  if (billingPlan === accessPlan) return true;
 
-	const accountPlan = normalizeAccountPlan(user.subscription_plan);
-	const entitlementPlan = normalizeAccountPlan(user.entitlement?.plan);
+  // /api/user keeps the established Business access label for desktop builds
+  // released before Max and Ultra existed. The canonical billing plan is a
+  // capacity refinement of that same access grant, not a separate entitlement.
+  return accessPlan === 'business' &&
+    (billingPlan === 'business_max' || billingPlan === 'business_ultra');
+}
+
+function resolveAccountPlan(user: ScreenpipeUserData): AccountPlan {
+  // /api/user is the fresh authenticated source of truth. Free accounts return
+  // an explicit app/cloud denial and no entitlement object; `users.plan` may
+  // still contain a stale pre-cancel label, so do not let that advisory field
+  // turn a refunded account into paid access.
+  if (user.app_entitled === false && user.cloud_subscribed === false) {
+    return 'free';
+  }
+
+  const accessPlan = normalizeAccountPlan(user.subscription_plan);
+  const entitlementPlan = normalizeAccountPlan(user.entitlement?.plan);
 
   // Plan labels alone are stale advisory data in older rows. Require the fresh
   // /api/user entitlement tuple to agree end-to-end so a refunded account with
-  // users.plan=standard/pro cannot bypass the daily Free limit.
-  if (!accountPlan || !entitlementPlan || accountPlan !== entitlementPlan) {
+  // users.plan=standard/pro cannot bypass the daily Free limit. billing_plan is
+  // deliberately not used to prove app access: it only refines a valid access
+  // tuple into the hosted-AI capacity tier purchased by the customer.
+  if (!accessPlan || !entitlementPlan || accessPlan !== entitlementPlan) {
     return 'unknown';
   }
 
-	if (accountPlan === 'free') return 'unknown';
+  if (accessPlan === 'free') return 'unknown';
+
+  let accountPlan = accessPlan;
+  if (user.billing_plan !== undefined) {
+    const billingPlan = normalizeAccountPlan(user.billing_plan);
+    if (
+      !billingPlan ||
+      billingPlan === 'free' ||
+      !billingPlanMatchesAccessPlan(billingPlan, accessPlan)
+    ) {
+      return 'unknown';
+    }
+    accountPlan = billingPlan;
+  }
 
   return user.app_entitled === true &&
     user.entitlement?.active === true &&

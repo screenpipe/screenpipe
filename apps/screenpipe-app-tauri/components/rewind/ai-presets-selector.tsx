@@ -1062,7 +1062,7 @@ export const AIPresetsSelector = ({
   controlledPresetId,
   onControlledSelect,
   allowNone = false,
-  noneLabel = "none (use pipe defaults)",
+  noneLabel = "none (use scheduled task defaults)",
   compact = false,
   containerClassName,
   triggerClassName,

@@ -312,6 +312,35 @@ const dailyMemoryTemplate = {
   ],
 };
 
+const processMapTemplate = {
+  id: "process-map",
+  title: "Process map",
+  description: "Map one repeated workflow from trigger to improvement.",
+  version: 1,
+  timeRange: "7d" as const,
+  periodPolicy: {
+    type: "selectable.v1" as const,
+    values: ["7d" as const, "30d" as const],
+  },
+  pipes: [{ name: "automate-my-work", distribution: "bundled" }],
+  slots: [
+    "trigger-and-outcome",
+    "observed-steps",
+    "handoffs",
+    "bottlenecks",
+    "controls-and-exceptions",
+    "improvement-path",
+  ].map((id, order) => ({
+    id,
+    title: id,
+    component: "markdown.v1" as const,
+    width: 6,
+    order,
+    intent: `Build ${id}`,
+    binding: { pipeName: "automate-my-work" },
+  })),
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.usageState = null;
@@ -546,8 +575,8 @@ describe("BrainOverview", () => {
     expect(await screen.findByText("How I worked today")).toBeTruthy();
     expect(screen.getByText("4.5")).toBeTruthy();
     expect(screen.getByText("hours")).toBeTruthy();
-    expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
-    expect(screen.getByText("artifact #88 · v2")).toBeTruthy();
+    expect(screen.getByText("Scheduled task: daily-summary")).toBeTruthy();
+    expect(screen.getByText(/artifact #88 · v2/)).toBeTruthy();
   });
 
   it("captures a privacy-safe Live View impression with result readiness", async () => {
@@ -682,6 +711,18 @@ describe("BrainOverview", () => {
     ).toHaveTextContent("Weekly total");
     expect(screen.queryByText("Focus time")).toBeNull();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
+  });
+
+  it("places section navigation beside the dashboard selector", async () => {
+    render(
+      <BrainOverview
+        navigation={<button data-testid="section-navigation">views</button>}
+      />,
+    );
+
+    const row = await screen.findByTestId("overview-dashboard-row");
+    expect(within(row).getByTestId("section-navigation")).toBeTruthy();
+    expect(within(row).getByTestId("overview-dashboard-selector")).toBeTruthy();
   });
 
   it("opens AI creation first and keeps blank manual creation available", async () => {
@@ -959,8 +1000,8 @@ describe("BrainOverview", () => {
     await screen.findByTestId("overview-dashboard-selector");
     expect(screen.queryByTestId("overview-fixed-period")).toBeNull();
     expect(screen.queryByTestId("overview-time-range")).toBeNull();
-    expect(screen.getByTestId("overview-data-status").textContent).toMatch(
-      /^Updated /,
+    expect(screen.getByTestId("overview-data-status")).toHaveTextContent(
+      /^1 of 1 block ready · updated /,
     );
 
     await openDashboardMenu();
@@ -1055,6 +1096,76 @@ describe("BrainOverview", () => {
     );
   });
 
+  it("shows block readiness and the oldest/latest update instead of one misleading dashboard timestamp", async () => {
+    const oldValue = populatedView.slots[0].value!;
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          ...populatedView,
+          slots: [
+            populatedView.slots[0],
+            {
+              ...populatedView.slots[0],
+              id: "newer-result",
+              order: 1,
+              value: {
+                ...oldValue,
+                artifactOutputId: 89,
+                updatedAt: "2026-07-26T17:00:00Z",
+              },
+            },
+            {
+              ...populatedView.slots[0],
+              id: "waiting-result",
+              order: 2,
+              value: null,
+            },
+          ],
+        },
+      ],
+    });
+    render(<BrainOverview />);
+
+    const status = await screen.findByTestId("overview-data-status");
+    expect(status).toHaveTextContent(/^2 of 3 blocks ready · oldest /);
+    expect(status).toHaveTextContent(/ · latest /);
+    expect(status).not.toHaveTextContent(/^Updated /);
+  });
+
+  it("treats blocks published within one minute as one coherent update", async () => {
+    const firstValue = populatedView.slots[0].value!;
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          ...populatedView,
+          slots: [
+            populatedView.slots[0],
+            {
+              ...populatedView.slots[0],
+              id: "same-refresh",
+              order: 1,
+              value: {
+                ...firstValue,
+                artifactOutputId: 89,
+                updatedAt: "2026-07-23T17:00:30Z",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    render(<BrainOverview />);
+
+    expect(await screen.findByTestId("overview-data-status")).toHaveTextContent(
+      /^2 of 2 blocks ready · updated /,
+    );
+    expect(screen.getByTestId("overview-data-status")).not.toHaveTextContent(
+      "oldest",
+    );
+  });
+
   it("keeps vertical scrolling on the dashboard while dense tables can scroll sideways", async () => {
     const advancedView: ViewDefinition = {
       ...populatedView,
@@ -1104,7 +1215,9 @@ describe("BrainOverview", () => {
     expect(
       await screen.findByRole("img", { name: "Focus trend time series" }),
     ).toBeTruthy();
-    expect(screen.getByText("Line chart · Last 7 days")).toBeTruthy();
+    expect(
+      screen.getByText("Line chart · requested: Last 7 days"),
+    ).toBeTruthy();
     expect(screen.getByText("Project 30")).toBeTruthy();
     const trendBody = screen.getByTestId("overview-card-scroll-focus-trend");
     const tableBody = screen.getByTestId("overview-card-scroll-project-table");
@@ -1184,7 +1297,7 @@ describe("BrainOverview", () => {
     expect(screen.getByText("Live View name")).toBeTruthy();
     expect(screen.getByText("Block title")).toBeTruthy();
     expect(screen.getByText("Block type")).toBeTruthy();
-    expect(screen.getByText("Connected Pipe")).toBeTruthy();
+    expect(screen.getByText("Connected scheduled task")).toBeTruthy();
     const cardTitle = screen.getByTestId(/^overview-block-title-/);
     fireEvent.change(cardTitle, {
       target: { value: "Automation opportunities" },
@@ -1456,6 +1569,64 @@ describe("BrainOverview", () => {
         expectedRevision: 4,
         slots: [expect.objectContaining({ id: "focus-time" })],
       }),
+    );
+  });
+
+  it("installs the process map template with its connected Canvas seed", async () => {
+    const installedTemplateView: ViewDefinition = {
+      ...populatedView,
+      id: "process-map",
+      title: processMapTemplate.title,
+      revision: 1,
+      timeRange: processMapTemplate.timeRange,
+      periodPolicy: processMapTemplate.periodPolicy,
+      slots: processMapTemplate.slots.map((slot) => ({
+        ...slot,
+        value: null,
+        feedback: { upCount: 0, downCount: 0, current: null },
+        itemActions: { items: [] },
+      })),
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.listBrainViewTemplateKits.mockResolvedValue({
+      status: "ok",
+      data: [processMapTemplate],
+    });
+    mocks.installBrainViewTemplateKit.mockResolvedValue({
+      status: "ok",
+      data: installedTemplateView,
+    });
+    render(<BrainOverview />);
+
+    await openDashboardMenu();
+    fireEvent.click(await screen.findByTestId("overview-templates"));
+    fireEvent.click(
+      await screen.findByTestId("preview-live-view-template-process-map"),
+    );
+    fireEvent.click(await screen.findByTestId("overview-apply-template"));
+
+    await waitFor(() =>
+      expect(mocks.saveBrainViewCanvas).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewId: "process-map",
+          expectedRevision: null,
+          mode: "canvas",
+          arrows: [
+            expect.objectContaining({ label: "starts" }),
+            expect.objectContaining({ label: "moves through" }),
+            expect.objectContaining({ label: "reveals" }),
+            expect.objectContaining({ label: "must preserve" }),
+            expect.objectContaining({ label: "enables" }),
+          ],
+        }),
+      ),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/automate-my-work/enable",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 
@@ -2036,7 +2207,7 @@ describe("BrainOverview", () => {
 
     await waitFor(() =>
       expect(mocks.capture).toHaveBeenCalledWith("onboarding_funnel_step", {
-        funnel_version: "onboarding_ui_v1",
+        funnel_version: "onboarding_ui_v2",
         step: "first_result_accepted",
         goal_category: "work_memory",
         acceptance_action: "positive_feedback",
@@ -2386,8 +2557,8 @@ describe("BrainOverview", () => {
     expect(screen.queryByTestId("overview-mode-dashboard")).toBeNull();
     expect(screen.queryByTestId("overview-mode-canvas")).toBeNull();
     expect(screen.getByTestId("canvas-block-focus-time")).toBeTruthy();
-    expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
-    expect(screen.getByText("artifact #88 · v2")).toBeTruthy();
+    expect(screen.getByText("Scheduled task: daily-summary")).toBeTruthy();
+    expect(screen.getByText(/artifact #88 · v2/)).toBeTruthy();
     await waitFor(() =>
       expect(mocks.saveBrainViewCanvas).toHaveBeenCalledWith(
         expect.objectContaining({

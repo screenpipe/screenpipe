@@ -113,6 +113,83 @@ export function createCanvasDocument(
   };
 }
 
+export function createTemplateCanvasDocument(
+  templateId: string,
+  view: BrainViewDefinition,
+): BrainViewCanvasDocument | null {
+  if (templateId !== "process-map") return null;
+  const available = new Set(view.slots.map((slot) => slot.id));
+  const blocks: BrainViewCanvasBlock[] = [
+    {
+      slotId: "trigger-and-outcome",
+      x: 64,
+      y: 240,
+      width: 360,
+      height: 280,
+    },
+    {
+      slotId: "observed-steps",
+      x: 480,
+      y: 240,
+      width: 360,
+      height: 280,
+    },
+    { slotId: "handoffs", x: 896, y: 240, width: 360, height: 280 },
+    { slotId: "bottlenecks", x: 896, y: 608, width: 360, height: 280 },
+    {
+      slotId: "controls-and-exceptions",
+      x: 480,
+      y: 608,
+      width: 360,
+      height: 280,
+    },
+    {
+      slotId: "improvement-path",
+      x: 64,
+      y: 608,
+      width: 360,
+      height: 280,
+    },
+  ].filter((block) => available.has(block.slotId));
+  const connections = [
+    ["trigger-and-outcome", "observed-steps", "starts"],
+    ["observed-steps", "handoffs", "moves through"],
+    ["handoffs", "bottlenecks", "reveals"],
+    ["bottlenecks", "controls-and-exceptions", "must preserve"],
+    ["controls-and-exceptions", "improvement-path", "enables"],
+  ] as const;
+  const arrows = connections
+    .filter(([fromId, toId]) => available.has(fromId) && available.has(toId))
+    .map(([fromId, toId, label], index) => ({
+      id: `process-step-${index + 1}`,
+      fromId: canvasBlockNodeId(fromId),
+      toId: canvasBlockNodeId(toId),
+      label,
+    }));
+
+  return {
+    schema: "live-view-canvas.v1",
+    viewId: view.id,
+    revision: 0,
+    mode: "canvas",
+    viewport: { x: 16, y: 8, zoom: 0.82 },
+    blocks,
+    notes: [
+      {
+        id: "process-map-guide",
+        text: "Observed workflow → handoffs → friction → controls → improvement\n\nMove the Blocks and connections until the map matches how the work actually happens.",
+        x: 64,
+        y: 64,
+        width: 776,
+        height: 128,
+      },
+    ],
+    arrows,
+    strokes: [],
+    updatedAt: "",
+  };
+}
+
 function canvasNodeIds(
   blocks: BrainViewCanvasBlock[],
   notes: BrainViewCanvasNote[],

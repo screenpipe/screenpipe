@@ -155,7 +155,7 @@ Manage integrations (Telegram, Slack, Discord, Email, Todoist, Teams) from the C
 ```bash
 bun x screenpipe@latest connection list              # List all connections + status
 bun x screenpipe@latest connection list --json       # JSON output
-bun x screenpipe@latest connection get <id>          # Show saved credentials
+bun x screenpipe@latest connection get <id>          # Show status + non-secret settings
 bun x screenpipe@latest connection get <id> --json   # JSON output
 bun x screenpipe@latest connection set <id> key=val  # Save credentials
 bun x screenpipe@latest connection test <id>         # Test a connection
@@ -180,9 +180,9 @@ bun x screenpipe@latest connection list
 
 Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `openclaw`
 
-Credentials are stored locally at `~/.screenpipe/connections.json`.
+Credentials are stored locally and are not printed by `connection get`.
 
-**Per-integration details**: don't guess API shapes from this skill. Run `connection list` or `connection get <id>` — each entry includes a self-describing `description` with credential fields, endpoints, and example bodies. Only fetch the integration you need.
+**Per-integration details**: don't guess API shapes from this skill. Run `connection list` for self-describing local endpoints. `connection get <id>` returns only status and non-secret settings.
 
 ## Publishing pipes to the store
 

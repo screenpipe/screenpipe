@@ -1445,7 +1445,7 @@ export function NoteView({
                       summaryLifecycle.kind === "queued" ||
                       summaryLifecycle.kind === "running" ||
                       summaryLifecycle.kind === "completed"
-                    ? "border-[#4A6B00] bg-[#C7FF3E] text-black"
+                    ? "border-foreground bg-foreground text-background"
                     : summaryLifecycle.kind === "failed"
                     ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                     : "bg-muted text-muted-foreground",
@@ -1511,17 +1511,17 @@ export function NoteView({
                 {!isLive && (
                   <MeetingControlTooltip label={summaryActionLabel}>
                     <Button
-                      variant="outline"
+                      variant={
+                        summaryLifecycle.kind === "idle" ||
+                        summaryLifecycle.kind === "failed"
+                          ? "default"
+                          : "outline"
+                      }
                       size="sm"
                       onClick={handleSummaryAction}
                       disabled={summaryWorking || !canSummarizeMeeting}
                       aria-label={summaryActionLabel}
-                      className={cn(
-                        "h-9 w-9 rounded-none p-0",
-                        (summaryLifecycle.kind === "idle" ||
-                          summaryLifecycle.kind === "failed") &&
-                          "border-[#4A6B00] bg-[#C7FF3E] text-black hover:border-black hover:bg-black hover:text-[#C7FF3E]",
-                      )}
+                      className="h-9 w-9 rounded-none p-0"
                     >
                       {summaryWorking ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1599,11 +1599,7 @@ export function NoteView({
                       onClick={() => void handleStopClick()}
                       disabled={stopping || savingBeforeStop}
                       aria-label={stopActionLabel}
-                      className={cn(
-                        "h-9 w-9 rounded-none border-[#4A6B00] bg-[#C7FF3E] p-0 text-black hover:border-black hover:bg-black hover:text-[#C7FF3E] active:bg-black disabled:border-border disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-100",
-                        autoSummaryEnabled === false &&
-                          "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground",
-                      )}
+                      className="h-9 w-9 rounded-none p-0 disabled:border-border disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-100"
                     >
                       {stopping || savingBeforeStop ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />

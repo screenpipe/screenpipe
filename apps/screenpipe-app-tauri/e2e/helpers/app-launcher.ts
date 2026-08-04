@@ -98,6 +98,17 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // meeting without touching the developer's normal data directory or API port.
 export const E2E_SEED_FLAGS =
   process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording,search-fixture';
+const backgroundAiToolsEnabled = E2E_SEED_FLAGS.split(',').some(
+  (flag) => flag.trim().toLowerCase() === 'background-ai-tools',
+);
+export const E2E_AI_TOOLS_HOME = resolve(E2E_DATA_DIR, 'ai-tools-home');
+export const E2E_BUN_PATH = resolve(
+  APP_ROOT,
+  'src-tauri',
+  'target',
+  'debug',
+  process.platform === 'win32' ? 'bun.exe' : 'bun',
+);
 
 export function getAppPath(): string {
   const base = resolve(APP_ROOT, 'src-tauri/target/debug');
@@ -190,6 +201,24 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
   mkdirSync(E2E_DATA_DIR, { recursive: true });
   removeSpotlightExclusion(E2E_DATA_DIR);
 
+  if (backgroundAiToolsEnabled) {
+    // Cross-platform fake agent homes. The app's e2e-only home override keeps
+    // the native background writer away from real ~/.codex and ~/.cursor.
+    mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.codex'), { recursive: true });
+    writeFileSync(
+      resolve(E2E_AI_TOOLS_HOME, '.codex', 'config.toml'),
+      'model = "gpt-5"\n',
+    );
+    mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.cursor'), { recursive: true });
+    writeFileSync(
+      resolve(E2E_AI_TOOLS_HOME, '.cursor', 'mcp.json'),
+      JSON.stringify({
+        mcpServers: { existing: { command: 'existing-server' } },
+        theme: 'dark',
+      }),
+    );
+  }
+
   appProcess = spawn(appPath, [], {
     env: {
       ...process.env,
@@ -197,6 +226,12 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       SCREENPIPE_E2E_SEED: E2E_SEED_FLAGS,
       SCREENPIPE_FOCUS_PORT: String(FOCUS_PORT),
       TAURI_WEBDRIVER_PORT: String(port),
+      ...(backgroundAiToolsEnabled
+        ? {
+            SCREENPIPE_E2E_AI_TOOLS_HOME: E2E_AI_TOOLS_HOME,
+            SCREENPIPE_E2E_BUN_PATH: E2E_BUN_PATH,
+          }
+        : {}),
       // When the app panics under E2E (common during early platform bring-up),
       // a backtrace in CI logs is far more actionable than the default "run with
       // RUST_BACKTRACE=1" hint.

@@ -154,7 +154,9 @@ fn require_isolated_db_hard_fault_seed() -> Result<PathBuf, String> {
         .canonicalize()
         .map_err(|error| format!("cannot resolve isolated E2E directory: {error}"))?;
     if canonical_dir != configured {
-        return Err("refusing database hard-fault injection through a symlinked parent".to_string());
+        return Err(
+            "refusing database hard-fault injection through a symlinked parent".to_string(),
+        );
     }
 
     let database_path = canonical_dir.join("db.sqlite");
@@ -174,19 +176,27 @@ fn require_isolated_db_hard_fault_seed() -> Result<PathBuf, String> {
 
 #[cfg(feature = "e2e")]
 async fn checkpoint_hard_fault_fixture(database: &DatabaseManager) -> Result<(), String> {
+    let mut last_checkpoint = None;
     for attempt in 1..=DB_HARD_FAULT_CHECKPOINT_ATTEMPTS {
         let (busy, log_pages, checkpointed_pages) = database
             .wal_checkpoint()
             .await
             .map_err(|error| format!("failed to checkpoint corruption fixture: {error}"))?;
-        if busy == 0 && log_pages == 0 && checkpointed_pages == 0 {
+        last_checkpoint = Some((busy, log_pages, checkpointed_pages));
+        // Production checkpoints deliberately use RESTART instead of TRUNCATE:
+        // the WAL can remain physically allocated even after every logical
+        // frame is durable in the main database. Requiring zero frames here
+        // confuses that safe allocation reuse with an incomplete checkpoint.
+        if busy == 0 && checkpointed_pages == log_pages {
             return Ok(());
         }
         if attempt < DB_HARD_FAULT_CHECKPOINT_ATTEMPTS {
             tokio::time::sleep(TokioDuration::from_millis(100)).await;
         }
     }
-    Err("corruption fixture WAL did not fully truncate".to_string())
+    Err(format!(
+        "corruption fixture did not fully checkpoint: last result {last_checkpoint:?}"
+    ))
 }
 
 /// Damage only an E2E-owned table in the disposable database, then route the
@@ -232,12 +242,29 @@ async fn e2e_inject_db_hard_fault_impl(
         .map_err(|error| format!("failed to create corruption fixture: {error}"))?;
     database
         .execute_raw_sql_write(
+            "CREATE TABLE IF NOT EXISTS e2e_hard_fault_wal_reset(\
+             id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)",
+        )
+        .await
+        .map_err(|error| format!("failed to create WAL reset fixture: {error}"))?;
+    database
+        .execute_raw_sql_write(
             "WITH RECURSIVE rows(id) AS (SELECT 1 UNION ALL SELECT id + 1 FROM rows WHERE id < 200) \
              INSERT INTO e2e_hard_fault_probe(id, payload) SELECT id, randomblob(3000) FROM rows",
         )
         .await
         .map_err(|error| format!("failed to populate corruption fixture: {error}"))?;
     checkpoint_hard_fault_fixture(&database).await?;
+    // RESTART makes the next writer begin a new logical WAL generation. Force
+    // that writer onto an unrelated page so the target leaf below is served
+    // from the checkpointed main database rather than an old WAL frame.
+    database
+        .execute_raw_sql_write(
+            "INSERT INTO e2e_hard_fault_wal_reset(id, generation) VALUES(1, 1) \
+             ON CONFLICT(id) DO UPDATE SET generation = generation + 1",
+        )
+        .await
+        .map_err(|error| format!("failed to reset corruption fixture WAL: {error}"))?;
 
     let page_size = database
         .query_raw_sql("PRAGMA page_size")

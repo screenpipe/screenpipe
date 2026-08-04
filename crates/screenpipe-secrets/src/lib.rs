@@ -4,9 +4,10 @@
 
 //! Unified credential store for screenpipe.
 //!
-//! All secrets (OAuth tokens, API keys, session data) are stored in a single
-//! `secrets` table in the main SQLite database, encrypted with AES-256-GCM.
-//! The encryption key lives in the OS keychain.
+//! Secrets (OAuth tokens, API keys, session data) live in a dedicated
+//! `secrets.sqlite` database, encrypted with AES-256-GCM. Keeping credentials
+//! out of the high-write capture WAL gives each file one authoritative
+//! lifecycle. The encryption key lives in the OS keychain.
 
 mod crypto;
 pub mod keychain;
@@ -18,4 +19,7 @@ mod telemetry;
 pub use migration::{fix_secret_file_permissions, migrate_legacy_secrets, MigrationReport};
 pub use screenpipe_sqlite_coordinator::sqlite_write_lock;
 pub use state::{is_encryption_requested, mark_encryption_disabled, mark_encryption_enabled};
-pub use store::{close_all_secret_pools, shared_secret_pool, DatabaseErrorHook, SecretStore};
+pub use store::{
+    close_all_secret_pools, secrets_database_path, shared_secret_pool, DatabaseErrorHook,
+    SecretStore, SECRETS_DATABASE_FILENAME,
+};

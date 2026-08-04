@@ -5,8 +5,8 @@
 //! Pipe-facing integrations — credential storage + context for Pi.
 //!
 //! Each integration defines its fields and a test function.
-//! Pi receives credential-safe proxy or local endpoint instructions whenever
-//! an integration supports them; raw credentials are a legacy fallback.
+//! Pi receives credential-safe proxy or local endpoint instructions. Stored
+//! credentials are never rendered into model context.
 
 pub mod airtable;
 pub mod asana;
@@ -135,6 +135,13 @@ pub struct ProxyConfig {
     pub extra_headers: &'static [(&'static str, &'static str)],
 }
 
+/// A narrow send-only boundary for integrations whose target URL is itself a
+/// secret. The model supplies only a JSON body; the server resolves the target.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct WebhookProxyConfig {
+    pub credential_key: &'static str,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub enum ProxyAuth {
     /// Send as `Authorization: Bearer <token>`. Token comes from OAuth or credential field.
@@ -219,6 +226,19 @@ pub trait Integration: Send + Sync {
     /// and the server injects auth automatically — no secrets in the LLM context.
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         None
+    }
+
+    /// Return the send-only webhook capability for this integration.
+    /// Secret `webhook_url` fields inherit it automatically so future webhook
+    /// providers cannot accidentally fall back to credential rendering.
+    fn webhook_proxy_config(&self) -> Option<WebhookProxyConfig> {
+        self.def()
+            .fields
+            .iter()
+            .any(|field| field.key == "webhook_url" && field.secret)
+            .then_some(WebhookProxyConfig {
+                credential_key: "webhook_url",
+            })
     }
 
     /// Path-prefix routing overrides for the credential proxy.
@@ -686,6 +706,14 @@ impl ConnectionManager {
             .and_then(|i| i.proxy_config())
     }
 
+    /// Look up the exact, send-only webhook boundary for a connection by ID.
+    pub fn find_webhook_proxy_config(&self, id: &str) -> Option<WebhookProxyConfig> {
+        self.integrations
+            .iter()
+            .find(|i| i.def().id == id)
+            .and_then(|i| i.webhook_proxy_config())
+    }
+
     /// Look up path-prefix routing overrides for a connection by ID.
     pub fn find_path_routes(&self, id: &str) -> &'static [(&'static str, &'static str)] {
         self.integrations
@@ -802,12 +830,7 @@ pub struct ConnectionInfo {
     pub supports_oauth_instances: bool,
 }
 
-type CredentialConnection<'a> = (
-    &'a dyn Integration,
-    &'static IntegrationDef,
-    Option<String>,
-    Map<String, Value>,
-);
+type CredentialConnection<'a> = (&'a dyn Integration, &'static IntegrationDef, Option<String>);
 
 // ---------------------------------------------------------------------------
 // Pi context rendering — uses proxy URLs instead of raw credentials
@@ -822,11 +845,11 @@ pub async fn render_context(
 
     // Credential-based integrations
     let mut cred_connected: Vec<CredentialConnection<'_>> = Vec::new();
-    for integration in integrations.iter().filter(|i| i.oauth_config().is_none()) {
+    for integration in &integrations {
         let def = integration.def();
         for (instance, conn) in load_all_instances(secret_store, screenpipe_dir, def.id).await {
             if conn.enabled && !conn.credentials.is_empty() {
-                cred_connected.push((integration.as_ref(), def, instance, conn.credentials));
+                cred_connected.push((integration.as_ref(), def, instance));
             }
         }
     }
@@ -869,11 +892,21 @@ pub async fn render_context(
          The proxy injects authentication automatically. NEVER fetch or use raw API keys.\n",
     );
 
-    for (integration, def, instance, creds) in &cred_connected {
+    for (integration, def, instance) in &cred_connected {
         out.push_str(&connection_context_header(def, instance.as_deref()));
         out.push_str(&format!("{}\n", def.description));
 
-        if integration.proxy_config().is_some() {
+        if integration.webhook_proxy_config().is_some() {
+            let suffix = instance_query(instance.as_deref());
+            out.push_str(&format!(
+                "  webhook: POST {}/{}/proxy{}  (JSON body; target stays server-side)\n",
+                base, def.id, suffix
+            ));
+            out.push_str(&format!(
+                "  config: {}/{}/config{}  (non-secret settings)\n",
+                base, def.id, suffix
+            ));
+        } else if integration.proxy_config().is_some() {
             let suffix = instance_query(instance.as_deref());
             out.push_str(&format!(
                 "  proxy: {}/{}/proxy/<api-path>{}  (append the API path, e.g. /v1/pages)\n",
@@ -888,18 +921,25 @@ pub async fn render_context(
             // served by dedicated local endpoints instead.
             out.push_str(note);
         } else {
-            // No proxy config — fall back to raw credentials (webhook-style integrations)
-            for (key, value) in creds {
-                if let Some(s) = value.as_str() {
-                    out.push_str(&format!("  {}: {}\n", key, s));
-                }
-            }
+            let suffix = instance_query(instance.as_deref());
+            out.push_str(&format!(
+                "  config: {}/{}/config{}  (non-secret settings; credentials stay server-side)\n",
+                base, def.id, suffix
+            ));
         }
     }
 
+    let manual_instances = cred_connected
+        .iter()
+        .map(|(_, def, instance)| (def.id, instance.clone()))
+        .collect::<HashSet<_>>();
+
     for (integration, def, instance) in &oauth_connected {
-        out.push_str(&connection_context_header(def, instance.as_deref()));
-        out.push_str(&format!("{}\n", def.description));
+        let shares_manual_instance = manual_instances.contains(&(def.id, instance.clone()));
+        if !shares_manual_instance {
+            out.push_str(&connection_context_header(def, instance.as_deref()));
+            out.push_str(&format!("{}\n", def.description));
+        }
 
         if integration.proxy_config().is_some() {
             let suffix = instance_query(instance.as_deref());
@@ -907,10 +947,12 @@ pub async fn render_context(
                 "  proxy: {}/{}/proxy/<api-path>{}  (append the API path, e.g. /v1/pages)\n",
                 base, def.id, suffix
             ));
-            out.push_str(&format!(
-                "  config: {}/{}/config{}  (non-secret settings)\n",
-                base, def.id, suffix
-            ));
+            if !shares_manual_instance {
+                out.push_str(&format!(
+                    "  config: {}/{}/config{}  (non-secret settings)\n",
+                    base, def.id, suffix
+                ));
+            }
         } else {
             // OAuth without proxy — still don't expose the token
             out.push_str("  (connected via OAuth — use the endpoints listed above; no raw token is exposed)\n");
@@ -1048,6 +1090,23 @@ pub fn require_str<'a>(map: &'a Map<String, Value>, key: &str) -> Result<&'a str
         .ok_or_else(|| anyhow::anyhow!("missing required field: {}", key))
 }
 
+/// Return only explicitly declared non-secret settings. Unknown persisted keys
+/// default to secret so future or stale fields cannot escape through read APIs.
+pub fn safe_connection_config(
+    def: &IntegrationDef,
+    credentials: &Map<String, Value>,
+) -> Map<String, Value> {
+    credentials
+        .iter()
+        .filter(|(key, _)| {
+            def.fields
+                .iter()
+                .any(|field| field.key == key.as_str() && !field.secret)
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1144,6 +1203,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn webhook_proxy_capability_is_inherited_by_every_secret_webhook_provider() {
+        let mut ids = all_integrations()
+            .into_iter()
+            .filter(|integration| {
+                integration
+                    .def()
+                    .fields
+                    .iter()
+                    .any(|field| field.key == "webhook_url" && field.secret)
+            })
+            .map(|integration| {
+                assert_eq!(
+                    integration
+                        .webhook_proxy_config()
+                        .expect("secret webhook_url must inherit the safe proxy")
+                        .credential_key,
+                    "webhook_url"
+                );
+                integration.def().id
+            })
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, ["discord", "make", "n8n", "teams", "zapier"]);
+    }
+
+    #[test]
+    fn safe_connection_config_is_default_deny() {
+        let integration = all_integrations()
+            .into_iter()
+            .find(|integration| integration.def().id == "imap")
+            .unwrap();
+        let credentials = serde_json::from_value(serde_json::json!({
+            "username": "reader@example.com",
+            "password": "secret-password",
+            "unknown_future_secret": {"nested": "secret"}
+        }))
+        .unwrap();
+
+        let safe = safe_connection_config(integration.def(), &credentials);
+        assert_eq!(
+            safe.get("username"),
+            Some(&Value::String("reader@example.com".into()))
+        );
+        assert!(!safe.contains_key("password"));
+        assert!(!safe.contains_key("unknown_future_secret"));
+    }
+
     #[tokio::test]
     async fn integration_clients_bound_request_duration() {
         let server = MockServer::start().await;
@@ -1200,7 +1307,181 @@ mod tests {
 
         let context = render_context(&dir, 3030, None).await;
         assert!(context.contains("## Discord (discord, instance: work)"));
-        assert!(context.contains("webhook_url: https://example.com/webhook"));
+        assert!(
+            context.contains("POST http://localhost:3030/connections/discord/proxy?instance=work")
+        );
+        assert!(!context.contains("webhook_url"));
+        assert!(!context.contains("https://example.com/webhook"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn render_context_never_exposes_manual_webhook_urls() {
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), None);
+        let webhook_integrations = ["n8n", "zapier", "make", "discord"];
+
+        for id in webhook_integrations {
+            let mut credentials = Map::new();
+            credentials.insert(
+                "webhook_url".to_string(),
+                Value::String(format!("https://secret.example/{id}/credential")),
+            );
+            mgr.connect(id, credentials).await.unwrap();
+        }
+
+        let context = render_context(&dir, 3030, None).await;
+        for id in webhook_integrations {
+            let secret = format!("https://secret.example/{id}/credential");
+            assert!(
+                !context.contains(&secret),
+                "model context exposed the {id} webhook URL: {context}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn render_context_never_exposes_secret_store_webhook_url() {
+        use sqlx::SqlitePool;
+
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let store = Arc::new(SecretStore::new(pool, None).await.unwrap());
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), Some(store.clone()));
+        let secret = "https://secret.example/n8n/from-secret-store";
+        let mut credentials = Map::new();
+        credentials.insert("webhook_url".to_string(), Value::String(secret.to_string()));
+        mgr.connect("n8n", credentials).await.unwrap();
+
+        let context = render_context(&dir, 3030, Some(store.as_ref())).await;
+        assert!(
+            !context.contains(secret),
+            "model context exposed a SecretStore webhook URL: {context}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn render_context_gives_every_webhook_provider_the_same_safe_boundary() {
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), None);
+        let webhook_integrations = ["discord", "make", "n8n", "teams", "zapier"];
+
+        for id in webhook_integrations {
+            mgr.connect(id, manual_webhook_creds()).await.unwrap();
+        }
+
+        let context = render_context(&dir, 3030, None).await;
+        for id in webhook_integrations {
+            assert!(
+                context.contains(&format!(
+                    "POST http://localhost:3030/connections/{id}/proxy"
+                )),
+                "missing safe webhook proxy for {id}: {context}"
+            );
+        }
+        assert!(!context.contains("https://example.com/webhook"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn render_context_never_exposes_any_declared_secret_field() {
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), None);
+        let mut sentinels = Vec::new();
+
+        for integration in all_integrations() {
+            if integration.def().fields.is_empty() {
+                continue;
+            }
+            let mut credentials = Map::new();
+            for field in integration.def().fields {
+                let value = format!("sentinel-{}-{}", integration.def().id, field.key);
+                if field.secret {
+                    sentinels.push(value.clone());
+                }
+                credentials.insert(field.key.to_string(), Value::String(value));
+            }
+            mgr.connect(integration.def().id, credentials)
+                .await
+                .unwrap();
+        }
+
+        let context = render_context(&dir, 3030, None).await;
+        for sentinel in sentinels {
+            assert!(
+                !context.contains(&sentinel),
+                "model context exposed declared secret value {sentinel}: {context}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn render_context_includes_teams_manual_and_oauth_boundaries_without_tokens() {
+        use sqlx::SqlitePool;
+
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let store = Arc::new(SecretStore::new(pool, None).await.unwrap());
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), Some(store.clone()));
+        mgr.connect("teams", manual_webhook_creds()).await.unwrap();
+        store
+            .set_json(
+                "oauth:teams:work",
+                &serde_json::json!({"access_token": "secret-teams-oauth-token"}),
+            )
+            .await
+            .unwrap();
+
+        let context = render_context(&dir, 3030, Some(store.as_ref())).await;
+        assert!(context.contains("POST http://localhost:3030/connections/teams/proxy"));
+        assert!(context
+            .contains("http://localhost:3030/connections/teams/proxy/<api-path>?instance=work"));
+        assert!(!context.contains("https://example.com/webhook"));
+        assert!(!context.contains("secret-teams-oauth-token"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn render_context_deduplicates_hybrid_named_instances() {
+        use sqlx::SqlitePool;
+
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let store = Arc::new(SecretStore::new(pool, None).await.unwrap());
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), Some(store.clone()));
+        mgr.connect_instance("teams", Some("work"), manual_webhook_creds())
+            .await
+            .unwrap();
+        store
+            .set_json(
+                "oauth:teams:work",
+                &serde_json::json!({"access_token": "secret-teams-oauth-token"}),
+            )
+            .await
+            .unwrap();
+
+        let context = render_context(&dir, 3030, Some(store.as_ref())).await;
+        assert_eq!(
+            context
+                .matches("## Microsoft Teams (teams, instance: work)")
+                .count(),
+            1,
+            "hybrid manual/OAuth instances must render under one header: {context}"
+        );
+        assert!(
+            context.contains("POST http://localhost:3030/connections/teams/proxy?instance=work")
+        );
+        assert!(context
+            .contains("http://localhost:3030/connections/teams/proxy/<api-path>?instance=work"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -1337,98 +1337,9 @@ impl DatabaseManager {
     }
 
     pub async fn repair_database(&self) -> Result<(), anyhow::Error> {
-        let _write_guard = Arc::clone(&self.write_semaphore)
-            .acquire_owned()
-            .await
-            .map_err(|_| anyhow::anyhow!("SQLite write coordinator closed"))?;
-        let mut conn = self.write_pool.acquire().await?;
-        debug!("starting aggressive database repair process");
-
-        // Force close any pending transactions
-        let emergency_steps = [
-            "PRAGMA locking_mode = EXCLUSIVE;",
-            "ROLLBACK;",                    // Force rollback any stuck transactions
-            "PRAGMA busy_timeout = 60000;", // Increase timeout to 60s
-        ];
-
-        for step in emergency_steps {
-            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
-                warn!("emergency step failed (continuing anyway): {}", e);
-            }
-        }
-
-        // Force checkpoint and cleanup WAL files
-        let wal_cleanup = [
-            "PRAGMA wal_checkpoint(TRUNCATE);",
-            "PRAGMA journal_mode = DELETE;", // Temporarily disable WAL
-            "PRAGMA journal_size_limit = 0;", // Clear journal
-        ];
-
-        for step in wal_cleanup {
-            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
-                warn!("wal cleanup failed (continuing anyway): {}", e);
-            }
-        }
-
-        // Aggressive recovery steps
-        let recovery_steps = [
-            ("PRAGMA synchronous = OFF;", "disable synchronous"),
-            ("PRAGMA cache_size = -2000000;", "increase cache"), // 2GB cache
-            ("VACUUM;", "vacuum database"),
-            ("PRAGMA integrity_check;", "check integrity"),
-            ("PRAGMA foreign_key_check;", "check foreign keys"),
-            ("REINDEX;", "rebuild indexes"),
-            ("ANALYZE;", "update statistics"),
-            ("VACUUM;", "final vacuum"), // Second vacuum after reindex
-        ];
-
-        for (query, step) in recovery_steps {
-            debug!("running aggressive recovery step: {}", step);
-            match sqlx::query(query).execute(&mut *conn).await {
-                Ok(_) => debug!("recovery step '{}' succeeded", step),
-                Err(e) => warn!("recovery step '{}' failed: {}", step, e),
-            }
-        }
-
-        // Restore safe settings
-        let restore_steps = [
-            "PRAGMA synchronous = NORMAL;",
-            "PRAGMA journal_mode = WAL;",
-            // 0 = no inline auto-checkpoint (matches WAL_SAFETY_PRAGMAS); the
-            // maintenance task owns checkpointing. Must NOT re-enable inline
-            // auto-checkpoint here or a repaired DB re-opens the corruption path.
-            "PRAGMA wal_autocheckpoint = 0;",
-            "PRAGMA cache_size = -2000;", // Back to 2MB cache
-            "PRAGMA locking_mode = NORMAL;",
-            "PRAGMA busy_timeout = 5000;", // Back to 5s timeout
-        ];
-
-        for step in restore_steps {
-            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
-                warn!("restore step failed: {}", e);
-            }
-        }
-
-        // Final verification
-        match sqlx::query_scalar::<_, String>("PRAGMA quick_check;")
-            .fetch_one(&mut *conn)
-            .await
-        {
-            Ok(result) if result == "ok" => {
-                debug!("database successfully repaired");
-                Ok(())
-            }
-            Ok(result) => {
-                let msg = format!("database still corrupted after repair: {}", result);
-                error!("{}", msg);
-                Err(anyhow::anyhow!(msg))
-            }
-            Err(e) => {
-                let msg = format!("database repair failed catastrophically: {}", e);
-                error!("{}", msg);
-                Err(anyhow::anyhow!(msg))
-            }
-        }
+        anyhow::bail!(
+            "online SQLite repair is disabled; stop every screenpipe process and run `screenpipe db recover` so recovery operates on a preserved offline generation"
+        )
     }
 
     /// Spawn the background task that owns ALL WAL checkpointing.
@@ -1437,9 +1348,8 @@ impl DatabaseManager {
     /// connections do not checkpoint inline. This task therefore owns routine
     /// checkpointing: it runs a non-truncating `PASSIVE` checkpoint often enough
     /// to copy safe frames into the main database without shortening the WAL
-    /// underneath long-lived readers. Explicit startup, backup, and compaction
-    /// paths still use serialized `TRUNCATE` checkpoints when a physical reset
-    /// is required.
+    /// underneath long-lived readers. No live path truncates the WAL; physical
+    /// cleanup belongs exclusively to offline recovery after all owners close.
     pub fn start_wal_maintenance(&self) {
         let pool = self.write_pool.clone();
         let shutdown = self.close_token.clone();
@@ -1470,7 +1380,7 @@ impl DatabaseManager {
                 // The upstream WAL-reset race requires a checkpoint and write
                 // to overlap on independent connections. Every routine pass,
                 // including the common below-cap path, shares the same
-                // process-wide coordinator as the write queue and SecretStore.
+                // process-wide coordinator as every capture writer.
                 let _write_guard = tokio::select! {
                     permit = Arc::clone(&write_semaphore).acquire_owned() => {
                         match permit {
@@ -1641,8 +1551,8 @@ impl DatabaseManager {
         });
     }
 
-    /// Run `PRAGMA wal_checkpoint(TRUNCATE)` on demand, flushing WAL into the
-    /// main database file so it can be safely copied.
+    /// Run a serialized non-truncating checkpoint on demand, flushing safe WAL
+    /// frames into the main database file without shortening the live WAL.
     /// Returns (busy, log_pages, checkpointed_pages).
     pub async fn wal_checkpoint(&self) -> Result<(i32, i32, i32), sqlx::Error> {
         let _write_guard = Arc::clone(&self.write_semaphore)
@@ -1653,7 +1563,7 @@ impl DatabaseManager {
             return Err(SqlxError::PoolClosed);
         }
         let mut conn = self.write_pool.acquire().await?;
-        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        let row = sqlx::query("PRAGMA wal_checkpoint(RESTART)")
             .fetch_one(&mut *conn)
             .await?;
         Ok((row.get(0), row.get(1), row.get(2)))
@@ -1683,8 +1593,7 @@ impl DatabaseManager {
     ///
     /// Concurrency: VACUUM needs an exclusive lock and would otherwise fail
     /// with SQLITE_BUSY against the live capture pipeline (the pool's default
-    /// busy_timeout is only 5s). We make it reliable the way `repair_database`
-    /// does: hold the single-permit `write_semaphore` so writers queue instead
+    /// busy_timeout is only 5s). Hold the single-permit `write_semaphore` so writers queue instead
     /// of contending (the "recording briefly pauses" the UI warns about —
     /// writes resume the moment VACUUM commits), and run checkpoint + VACUUM on
     /// one connection with busy_timeout bumped to 60s so VACUUM waits out active
@@ -1702,7 +1611,7 @@ impl DatabaseManager {
         let _ = sqlx::query("PRAGMA busy_timeout = 60000")
             .execute(&mut *conn)
             .await;
-        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        let _ = sqlx::query("PRAGMA wal_checkpoint(RESTART)")
             .execute(&mut *conn)
             .await;
         let result = sqlx::query("VACUUM").execute(&mut *conn).await.map(|_| ());

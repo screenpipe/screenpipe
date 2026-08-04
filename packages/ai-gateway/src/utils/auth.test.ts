@@ -475,7 +475,7 @@ describe('validateAuth — verified identities only', () => {
 		});
 	});
 
-  it('keeps Max and Ultra on subscribed model access with separate capacity tiers', async () => {
+  it('uses canonical Max and Ultra billing plans with desktop-compatible access labels', async () => {
     for (const [plan, accountPlan, usageTier] of [
       ['pro_max', 'business_max', 'business_max'],
       ['pro_ultra', 'business_ultra', 'business_ultra'],
@@ -489,8 +489,9 @@ describe('validateAuth — verified identities only', () => {
           clerk_id: clerkId,
           cloud_subscribed: true,
           app_entitled: true,
-          subscription_plan: plan,
-          entitlement: { active: true, plan, features: { app: true } },
+          subscription_plan: 'pro',
+          billing_plan: plan,
+          entitlement: { active: true, plan: 'pro', features: { app: true } },
         },
       }), { status: 200 })) as typeof fetch;
 
@@ -502,6 +503,73 @@ describe('validateAuth — verified identities only', () => {
         deviceId: clerkId,
         userId: clerkId,
       });
+    }
+  });
+
+  it('continues accepting exact legacy power-plan entitlement tuples', async () => {
+    for (const [plan, accountPlan, usageTier] of [
+      ['pro_max', 'business_max', 'business_max'],
+      ['pro_ultra', 'business_ultra', 'business_ultra'],
+    ] as const) {
+      __resetAuthEntitlementCacheForTests();
+      const clerkId = `user_legacy_${plan}`;
+      verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
+      globalThis.fetch = mock(async () => new Response(JSON.stringify({
+        success: true,
+        user: {
+          clerk_id: clerkId,
+          cloud_subscribed: true,
+          app_entitled: true,
+          subscription_plan: plan,
+          entitlement: { active: true, plan, features: { app: true } },
+        },
+      }), { status: 200 })) as typeof fetch;
+
+      expect(await validateAuth(requestFor(`eyJ.legacy.${plan}.clerk`), env)).toEqual({
+        isValid: true,
+        tier: 'subscribed',
+        usageTier,
+        accountPlan,
+        deviceId: clerkId,
+        userId: clerkId,
+      });
+    }
+  });
+
+  it('fails plan truth closed for malformed or contradictory billing plans', async () => {
+    for (const [suffix, accessPlan, billingPlan] of [
+      ['null', 'pro', null],
+      ['free', 'pro', 'free'],
+      ['unknown', 'pro', 'premium'],
+      ['wrong-access', 'standard', 'pro_max'],
+    ] as const) {
+      __resetAuthEntitlementCacheForTests();
+      const clerkId = `user_bad_billing_${suffix}`;
+      verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
+      const fetchMock = mock(async () => new Response(JSON.stringify({
+        success: true,
+        user: {
+          clerk_id: clerkId,
+          cloud_subscribed: true,
+          app_entitled: true,
+          subscription_plan: accessPlan,
+          billing_plan: billingPlan,
+          entitlement: { active: true, plan: accessPlan, features: { app: true } },
+        },
+      }), { status: 200 }));
+      globalThis.fetch = fetchMock as typeof fetch;
+
+      const expected = {
+        isValid: true,
+        tier: 'subscribed',
+        accountPlan: 'unknown',
+        deviceId: clerkId,
+        userId: clerkId,
+      } as const;
+      expect(await validateAuth(requestFor(`eyJ.bad-billing.${suffix}.1`), env)).toEqual(expected);
+      expect(await validateAuth(requestFor(`eyJ.bad-billing.${suffix}.2`), env)).toEqual(expected);
+      // Unknown plan truth must never be cached; the next request revalidates it.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     }
   });
 

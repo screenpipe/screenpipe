@@ -157,7 +157,7 @@ export function buildProviderErrorMessage(
       return "This free message reached its 8-step agent limit. Upgrade for longer agent runs, or switch your AI preset to your own provider.";
     }
     if (normalized.includes("free_plan_hosted_background_disabled")) {
-      return "Hosted AI for background pipes requires a paid plan. You can still run this pipe with Ollama or your own provider key.";
+      return "Hosted AI for background scheduled tasks requires a paid plan. You can still run this scheduled task with Ollama or your own provider key.";
     }
     if (normalized.includes("free_chat_client_update_required")) {
       return "Update screenpipe to use your 2 daily free hosted AI messages.";

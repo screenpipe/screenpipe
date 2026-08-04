@@ -185,9 +185,8 @@ impl DatabaseManager {
                 })?;
         }
 
-        // This process-wide coordinator is also used by the standalone
-        // SecretStore pool. It keeps screenpipe-controlled writes and explicit
-        // checkpoints from overlapping on independent SQLite connections.
+        // Every screenpipe-controlled capture writer and checkpoint resolves
+        // this process-wide coordinator for the physical database path.
         let write_semaphore = screenpipe_sqlite_coordinator::sqlite_write_lock(database_path);
 
         // busy_timeout is per-connection; setting it here ensures ALL pooled
@@ -197,9 +196,8 @@ impl DatabaseManager {
         // handles retries with backoff.
         //
         // cache_size + mmap_size are tier-configurable and applied here; the
-        // WAL-safety pragmas that MUST be identical on every other pool over this
-        // file (the secret-store pool in screenpipe-secrets) come from the single
-        // source of truth `WAL_SAFETY_PRAGMAS` so the two pools cannot drift.
+        // WAL-safety pragmas that MUST be identical on every connection over this
+        // file come from the single source of truth `WAL_SAFETY_PRAGMAS`.
         let mut connect_options: SqliteConnectOptions = connection_string
             .parse::<SqliteConnectOptions>()?
             .busy_timeout(Duration::from_secs(5))
@@ -270,10 +268,9 @@ impl DatabaseManager {
             .await
             .map_err(|error| quarantine_startup_error(database_file, error))?;
 
-        // Recovery wiring: let the drain loop reopen its write pool in-process on a
-        // persistent disk-I/O wedge, surface degradation via `write_queue_health`,
-        // and (via the hook, set by the app) request an engine restart — the only
-        // cure for a shared WAL-index desync. See write_queue::WriteDrainOpts.
+        // Recovery wiring: transient contention may rebuild a pool, but a typed
+        // IOERR/CORRUPT/FULL/NOTADB fault permanently closes this generation's
+        // admission and requests offline recovery through the app hook.
         let write_queue_health =
             crate::write_queue::WriteQueueHealth::for_database_path(database_path);
         let write_pool_rebuilder = crate::write_queue::WritePoolRebuilder::new(
@@ -308,13 +305,14 @@ impl DatabaseManager {
         };
 
         // Checkpoint any stale WAL before running migrations or starting captures.
-        // A large WAL (500MB+) from a previous crash slows every read/write until
-        // checkpointed. TRUNCATE mode resets it to zero bytes.
+        // RESTART copies all safe frames and waits out readers without deleting or
+        // shortening the WAL underneath another connection. Physical WAL cleanup
+        // is deliberately left to offline recovery after every owner has closed.
         let _checkpoint_guard = Arc::clone(&db_manager.write_semaphore)
             .acquire_owned()
             .await
             .map_err(|_| SqlxError::PoolClosed)?;
-        match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        match sqlx::query("PRAGMA wal_checkpoint(RESTART)")
             .fetch_one(&db_manager.write_pool)
             .await
         {

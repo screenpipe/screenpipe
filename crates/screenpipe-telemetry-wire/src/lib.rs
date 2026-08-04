@@ -35,6 +35,6 @@ pub use manifest::{
     DIRECT_UPLOAD_CONTENT_TYPE, DIRECT_UPLOAD_READABLE_MODE, DIRECT_UPLOAD_WRITE_ONLY_MODE,
 };
 pub use records::{
-    build_feedback_jsonl, build_jsonl, parse_jsonl, AudioRow, FeedbackRow, FrameRow, MemoryRow,
-    ParsedBatch, SnapshotRow, TelemetryRecord, UiEventRow,
+    build_feedback_jsonl, build_jsonl, build_jsonl_with_parsed, parse_jsonl, AudioRow, FeedbackRow,
+    FrameRow, MemoryRow, ParsedBatch, ParsedRow, SnapshotRow, TelemetryRecord, UiEventRow,
 };

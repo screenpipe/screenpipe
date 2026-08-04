@@ -6,6 +6,8 @@ import { Env, type AccountPlan } from '../types';
 import { addCorsHeaders, createErrorResponse } from '../utils/cors';
 import { withResponseLifecycle } from '../utils/response-finalizer';
 import {
+	costLedgerEpoch,
+	dailyLaneCostKey,
 	getCostReservationMicroUsd,
 	getCostAccumulatorOrThrow,
 	getDailyUserCost,
@@ -13,11 +15,14 @@ import {
 	GLOBAL_DAILY_COST_KEY,
 	GLOBAL_HOURLY_COST_KEY,
 	monthlyCostKey,
+	totalCostLedgerEpoch,
+	totalLaneCostKey,
 	trialCostKey,
 	utcHour,
 	utcMonth,
 	isZeroCostModel,
 	type CostReservationShape,
+	type HostedAiCostLane,
 } from './cost-tracker';
 import {
 	accountPlanFromTier,
@@ -37,12 +42,15 @@ export type DailyCostHold = {
 	deviceId: string;
 	tier: string;
 	reservedMicroUsd: number;
+	lane: DailyCostLane;
+	ledgerEpoch: string;
+	totalLedgerEpoch: string;
 	expiresAt: string;
 	reservationTtlSeconds: number;
 	capacityActivitySeconds: number;
 };
 
-export type DailyCostLane = 'interactive' | 'background';
+export type DailyCostLane = HostedAiCostLane;
 
 export type DailyCostReservation =
 	| { allowed: true; reservation: DailyCostHold | null }
@@ -246,6 +254,30 @@ function capResponse(accountPlan: AccountPlan, period: 'request' | 'day' | 'mont
 	})));
 }
 
+function backgroundCapResponse(
+	accountPlan: AccountPlan,
+	period: 'day' | 'month' | 'trial',
+): Response {
+	const resetsAt = new Date();
+	if (period === 'month') {
+		resetsAt.setUTCMonth(resetsAt.getUTCMonth() + 1, 1);
+		resetsAt.setUTCHours(0, 0, 0, 0);
+	} else {
+		resetsAt.setUTCHours(24, 0, 0, 0);
+	}
+	const periodLabel = period === 'month' ? 'monthly' : period === 'trial' ? 'trial' : 'daily';
+	return addCorsHeaders(createErrorResponse(429, JSON.stringify({
+		error: 'background_cost_limit_exceeded',
+		message: `Scheduled pipes reached their ${periodLabel} hosted AI budget. Foreground chat remains available.`,
+		resets_at: period === 'trial' ? null : resetsAt.toISOString(),
+		plan: accountPlan,
+		required_plan: null,
+		upgrade_url: null,
+		can_buy_credits: false,
+		byok_supported: true,
+	})));
+}
+
 function globalCapResponse(period: 'hour' | 'day'): Response {
 	const response = addCorsHeaders(createErrorResponse(503, JSON.stringify({
 		error: 'hosted_ai_global_spend_limit',
@@ -404,8 +436,24 @@ export async function reserveDailyCostCap(
 			: reservationControls.maxActiveInteractive;
 		const lanePrefix = `${reservationKeyPrefix(lane)}%`;
 		const backgroundPrefix = `${reservationKeyPrefix('background')}%`;
+		const ledgerEpoch = costLedgerEpoch(env);
+		const totalLedgerEpoch = totalCostLedgerEpoch(env, hostedAiTrial);
+		const backgroundCostKey = dailyLaneCostKey(
+			deviceId,
+			'background',
+			ledgerEpoch,
+		);
+		const backgroundTotalCostKey = totalLaneCostKey(
+			deviceId,
+			'background',
+			hostedAiTrial,
+			totalLedgerEpoch,
+		);
 		const backgroundBudgetMicroUsd = Math.floor(
-			dailyCapMicroUsd * reservationControls.maxBackgroundReservedFraction,
+			dailyCapMicroUsd * reservationControls.maxBackgroundBudgetFraction,
+		);
+		const backgroundTotalBudgetMicroUsd = Math.floor(
+			monthlyCapMicroUsd * reservationControls.maxBackgroundBudgetFraction,
 		);
 		const key = `${reservationKeyPrefix(lane)}${crypto.randomUUID()}`;
 
@@ -488,11 +536,30 @@ export async function reserveDailyCostCap(
 			), 0) < ?
 			AND (
 				? = 'interactive'
-				OR COALESCE((
-					SELECT SUM(daily_count) FROM usage
-					WHERE user_id = ? AND tier = ? AND last_reset > ?
-						AND device_id LIKE ?
-				), 0) + ? <= ?
+				OR (
+					(
+						COALESCE((
+							SELECT CASE WHEN cost_day = ? THEN daily_cost_usd ELSE 0 END
+							FROM usage WHERE device_id = ?
+						), 0) * 1000000
+						+ COALESCE((
+							SELECT SUM(daily_count) FROM usage
+							WHERE user_id = ? AND tier = ? AND last_reset > ?
+								AND device_id LIKE ?
+						), 0) + ?
+					) <= ?
+					AND (
+						COALESCE((
+							SELECT CASE WHEN cost_day = ? THEN daily_cost_usd ELSE 0 END
+							FROM usage WHERE device_id = ?
+						), 0) * 1000000
+						+ COALESCE((
+							SELECT SUM(daily_count) FROM usage
+							WHERE user_id = ? AND tier = ? AND last_reset > ?
+								AND device_id LIKE ?
+						), 0) + ?
+					) <= ?
+				)
 			)
 			RETURNING device_id AS reservation_key
 		`).bind(
@@ -541,12 +608,22 @@ export async function reserveDailyCostCap(
 			lanePrefix,
 			laneLimit,
 			lane,
+			day,
+			backgroundCostKey,
 			deviceId,
 			holdTier,
 			nowIso,
 			backgroundPrefix,
 			reservedMicroUsd,
 			backgroundBudgetMicroUsd,
+			monthPeriod,
+			backgroundTotalCostKey,
+			deviceId,
+			holdTier,
+			nowIso,
+			backgroundPrefix,
+			reservedMicroUsd,
+			backgroundTotalBudgetMicroUsd,
 		).first<{ reservation_key: string }>();
 
 		if (claimed?.reservation_key === key) {
@@ -557,6 +634,9 @@ export async function reserveDailyCostCap(
 					deviceId,
 					tier: holdTier,
 					reservedMicroUsd,
+					lane,
+					ledgerEpoch,
+					totalLedgerEpoch,
 					expiresAt,
 					reservationTtlSeconds: reservationControls.reservationTtlSeconds,
 					capacityActivitySeconds: reservationControls.capacityActivitySeconds,
@@ -564,17 +644,23 @@ export async function reserveDailyCostCap(
 			};
 		}
 
-		const [dailyCost, monthlyCost, globalDailyCost, globalHourlyCost, accountHolds, globalHolds] = await Promise.all([
+		const [
+			dailyCost,
+			monthlyCost,
+			globalDailyCost,
+			globalHourlyCost,
+			backgroundCost,
+			backgroundTotalCost,
+			globalHolds,
+		] = await Promise.all([
 			getDailyUserCostForCapOrThrow(env, deviceId, now),
 			hostedAiTrial
 				? getTrialUserCostForCapOrThrow(env, deviceId)
 				: getMonthlyUserCostForCapOrThrow(env, deviceId, now),
 			getCostAccumulatorOrThrow(env, GLOBAL_DAILY_COST_KEY, day),
 			getCostAccumulatorOrThrow(env, GLOBAL_HOURLY_COST_KEY, hour),
-			env.DB.prepare(`
-				SELECT COALESCE(SUM(daily_count), 0) AS reserved
-				FROM usage WHERE user_id = ? AND tier = ? AND last_reset > ?
-			`).bind(deviceId, holdTier, nowIso).first<{ reserved: number }>(),
+			getCostAccumulatorOrThrow(env, backgroundCostKey, day),
+			getCostAccumulatorOrThrow(env, backgroundTotalCostKey, monthPeriod),
 			env.DB.prepare(`
 				SELECT COALESCE(SUM(daily_count), 0) AS reserved
 				FROM usage WHERE tier = ? AND last_reset > ?
@@ -584,18 +670,39 @@ export async function reserveDailyCostCap(
 		const monthlyCostMicroUsd = Math.max(0, Math.ceil(monthlyCost * 1_000_000));
 		const globalDailyCostMicroUsd = Math.max(0, Math.ceil(globalDailyCost * 1_000_000));
 		const globalHourlyCostMicroUsd = Math.max(0, Math.ceil(globalHourlyCost * 1_000_000));
-		const accountReservedMicroUsd = Math.max(0, Number(accountHolds?.reserved ?? 0));
+		const backgroundCostMicroUsd = Math.max(0, Math.ceil(backgroundCost * 1_000_000));
+		const backgroundTotalCostMicroUsd = Math.max(0, Math.ceil(backgroundTotalCost * 1_000_000));
 		const globalReservedMicroUsd = Math.max(0, Number(globalHolds?.reserved ?? 0));
 		let response: Response;
+		// Settled spend is a durable quota failure. Active holds are temporary and
+		// fall through to the retryable capacity response below.
 		if (reservedMicroUsd > requestCapMicroUsd) {
 			response = capResponse(accountPlan, 'request');
-		} else if (dailyCostMicroUsd + accountReservedMicroUsd + reservedMicroUsd > dailyCapMicroUsd) {
+		} else if (
+			lane === 'background'
+			&& backgroundCostMicroUsd + reservedMicroUsd > backgroundBudgetMicroUsd
+		) {
+			response = backgroundCapResponse(accountPlan, 'day');
+		} else if (
+			lane === 'background'
+			&& backgroundTotalCostMicroUsd + reservedMicroUsd > backgroundTotalBudgetMicroUsd
+		) {
+			response = backgroundCapResponse(accountPlan, hostedAiTrial ? 'trial' : 'month');
+		} else if (dailyCostMicroUsd + reservedMicroUsd > dailyCapMicroUsd) {
 			response = capResponse(accountPlan, 'day');
-		} else if (monthlyCostMicroUsd + accountReservedMicroUsd + reservedMicroUsd > monthlyCapMicroUsd) {
+		} else if (monthlyCostMicroUsd + reservedMicroUsd > monthlyCapMicroUsd) {
 			response = capResponse(accountPlan, hostedAiTrial ? 'trial' : 'month');
-		} else if (globalHourlyCostMicroUsd + globalReservedMicroUsd + reservedMicroUsd > globalHourlyCapMicroUsd) {
+		} else if (globalHourlyCostMicroUsd + reservedMicroUsd > globalHourlyCapMicroUsd) {
 			response = globalCapResponse('hour');
-		} else if (globalDailyCostMicroUsd + globalReservedMicroUsd + reservedMicroUsd > globalDailyCapMicroUsd) {
+		} else if (globalDailyCostMicroUsd + reservedMicroUsd > globalDailyCapMicroUsd) {
+			response = globalCapResponse('day');
+		} else if (
+			globalHourlyCostMicroUsd + globalReservedMicroUsd + reservedMicroUsd > globalHourlyCapMicroUsd
+		) {
+			response = globalCapResponse('hour');
+		} else if (
+			globalDailyCostMicroUsd + globalReservedMicroUsd + reservedMicroUsd > globalDailyCapMicroUsd
+		) {
 			response = globalCapResponse('day');
 		} else {
 			response = capacityResponse(accountPlan, lane);

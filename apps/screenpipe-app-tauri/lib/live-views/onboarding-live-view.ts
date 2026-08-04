@@ -210,7 +210,7 @@ export function rankOnboardingPipeCandidates(
           slug,
           name: slug,
           title,
-          description: `${title}. ${description || "Screenpipe Pipe"}`,
+          description: `${title}. ${description || "Screenpipe scheduled task"}`,
           category,
           featured: pipe.featured === true,
           installCount,
@@ -357,7 +357,7 @@ async function loadStoreCandidates(
       throw new OnboardingLiveViewSetupError(
         "store_unavailable",
         "planning",
-        "The Pipe Store is unavailable. Check your connection and try again.",
+        "The Store is unavailable. Check your connection and try again.",
       );
     }
   }
@@ -365,7 +365,7 @@ async function loadStoreCandidates(
     throw new OnboardingLiveViewSetupError(
       "no_store_candidates",
       "planning",
-      "No ready-to-run Pipes matched this setup yet.",
+      "No ready-to-run scheduled tasks matched this setup yet.",
     );
   }
   return candidates;
@@ -729,7 +729,7 @@ export async function createOnboardingLiveView(options: {
       throw new OnboardingLiveViewSetupError(
         "ai_plan_failed",
         "planning",
-        "AI did not choose a valid Pipe set.",
+        "AI did not choose a valid scheduled task set.",
       );
     }
 
@@ -785,7 +785,7 @@ export async function createOnboardingLiveView(options: {
       throw new OnboardingLiveViewSetupError(
         "refresh_failed",
         "refreshing",
-        "The dashboard is ready, but its Pipes did not start. Try again.",
+        "The dashboard is ready, but its scheduled tasks did not start. Try again.",
       );
     }
 

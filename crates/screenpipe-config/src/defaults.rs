@@ -167,18 +167,9 @@ impl Default for DbConfig {
 }
 
 /// SQLite pragmas that MUST be identical on **every** connection/pool opened
-/// against the same `db.sqlite`. The single source of truth shared by the engine
-/// `DatabaseManager` pools (`screenpipe-db`) and the secret-store pool
-/// (`screenpipe-secrets`).
-///
-/// Why this exists: those two long-lived pools both write the same WAL and its
-/// shared `-shm` WAL-index. If they disagree on these pragmas they race
-/// checkpoints on `-shm` and it desyncs into "database disk image is malformed"
-/// (`SQLITE_CORRUPT`, code 11). The historical bug: the secret pool set only
-/// `journal_mode`/`synchronous` and silently inherited SQLite's default
-/// `wal_autocheckpoint=1000` while the engine used `4000`, so the two pools
-/// checkpointed the same WAL on different thresholds. Apply EXACTLY these on
-/// every pool; never set any of them to a different value on a side pool.
+/// against the same capture `db.sqlite`. The `DatabaseManager` read and write
+/// pools are the only production owners. Credentials use an independent
+/// rollback-journal `secrets.sqlite` and must never consume this WAL policy.
 ///
 /// `wal_autocheckpoint = 0` disables SQLite's INLINE auto-checkpoint entirely.
 /// With a non-zero threshold, whichever connection's COMMIT pushes the WAL past

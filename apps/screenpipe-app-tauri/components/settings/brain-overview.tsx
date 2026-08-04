@@ -75,6 +75,7 @@ import {
 } from "@/lib/active-ai-preset";
 import { Input } from "@/components/ui/input";
 import {
+  createTemplateCanvasDocument,
   reconcileCanvasDocument,
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
@@ -170,6 +171,33 @@ type PreviewDestination = "new" | "replace";
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
+const LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS = 60_000;
+
+const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+function liveViewDataStatus(slots: BrainViewSlot[]): string {
+  const timestamps = slots.flatMap((slot) => {
+    const timestamp = slot.value?.updatedAt
+      ? Date.parse(slot.value.updatedAt)
+      : Number.NaN;
+    return Number.isFinite(timestamp) ? [timestamp] : [];
+  });
+  if (timestamps.length === 0) return "No data yet";
+
+  const blockLabel = slots.length === 1 ? "block" : "blocks";
+  const readiness = `${timestamps.length} of ${slots.length} ${blockLabel} ready`;
+  const oldest = Math.min(...timestamps);
+  const latest = Math.max(...timestamps);
+  if (latest - oldest <= LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS) {
+    return `${readiness} · updated ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
+  }
+  return `${readiness} · oldest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(oldest)} · latest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
+}
 
 function analyticsErrorType(error: unknown): string {
   return error instanceof Error ? error.name : "unknown";
@@ -398,8 +426,10 @@ function uniqueDashboardTitle(title: string, views: ViewDefinition[]): string {
 }
 
 export function BrainOverview({
+  navigation,
   onViewCountChange,
 }: {
+  navigation?: React.ReactNode;
   onViewCountChange?: (count: number) => void;
 } = {}) {
   const { toast } = useToast();
@@ -1092,8 +1122,8 @@ export function BrainOverview({
               filled,
               message:
                 filled > 0
-                  ? `${filled} of ${current.total} sections updated. The Pipes are still working on the rest.`
-                  : "The Pipes are still working. This view will update when they publish data.",
+                  ? `${filled} of ${current.total} sections updated. The scheduled tasks are still working on the rest.`
+                  : "The scheduled tasks are still working. This view will update when they publish data.",
             };
           }
           if (current.filled === filled) return current;
@@ -1277,7 +1307,7 @@ export function BrainOverview({
           name: pipe.config.name,
           description:
             pipe.prompt_body?.trim().slice(0, 500) ||
-            `${pipe.config.name} Screenpipe Pipe`,
+            `${pipe.config.name} Screenpipe scheduled task`,
         })),
         currentViewRef:
           view && intent !== "new-dashboard"
@@ -1385,7 +1415,7 @@ export function BrainOverview({
         await showChatWithPrefill({
           context: view
             ? `Live View “${view.title}” (revision ${view.revision})`
-            : "Create a Pipe for a new Live View",
+            : "Create a scheduled task for a new Live View",
           prompt: agentPrompt,
           displayLabel: prompt,
           autoSend: true,
@@ -1394,7 +1424,7 @@ export function BrainOverview({
         });
       } catch (handoffError) {
         toast({
-          title: "could not open the Pipe agent",
+          title: "could not open the scheduled task agent",
           description:
             handoffError instanceof Error
               ? handoffError.message
@@ -1636,7 +1666,7 @@ export function BrainOverview({
           name: pipe.config.name,
           description:
             pipe.prompt_body?.trim().slice(0, 500) ||
-            `${pipe.config.name} Screenpipe Pipe`,
+            `${pipe.config.name} Screenpipe scheduled task`,
         })),
         currentView: {
           title: view.title,
@@ -1832,6 +1862,7 @@ export function BrainOverview({
           `You can keep up to ${MAX_DASHBOARDS} dashboards. Delete one before creating another.`,
         );
       }
+      await pumpCanvasSaves();
       const requestedTitle = creatingNew
         ? uniqueDashboardTitle(draft?.title.trim() || kit.title, views)
         : draft?.title.trim() || kit.title;
@@ -1857,6 +1888,30 @@ export function BrainOverview({
         if (renameResult.status === "error")
           throw new Error(renameResult.error);
         installedView = renameResult.data;
+      }
+      let canvasSeedFailure: string | null = null;
+      const canvasSeed = createTemplateCanvasDocument(kit.id, installedView);
+      if (canvasSeed) {
+        const expectedCanvasRevision = creatingNew
+          ? null
+          : (canvasServerRevisionsRef.current.get(installedView.id) ?? null);
+        const canvasResult = await commands.saveBrainViewCanvas({
+          ...toSaveCanvasRequest({
+            ...canvasSeed,
+            revision: expectedCanvasRevision ?? 0,
+          }),
+          expectedRevision: expectedCanvasRevision,
+        });
+        if (canvasResult.status === "error") {
+          canvasSeedFailure = canvasResult.error;
+        } else {
+          canvasServerRevisionsRef.current.set(
+            installedView.id,
+            canvasResult.data.revision,
+          );
+          canvasLatestRef.current = canvasResult.data;
+          setCanvasDocument(canvasResult.data);
+        }
       }
       const pipeEnableFailures: string[] = [];
       await Promise.all(
@@ -1897,8 +1952,10 @@ export function BrainOverview({
           : `${installedView.title} replaced`,
         description:
           pipeEnableFailures.length > 0
-            ? `Open Pipes to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
-            : undefined,
+            ? `Open Scheduled to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
+            : canvasSeedFailure
+              ? `The source-backed Blocks were installed, but the process Canvas could not be arranged: ${canvasSeedFailure}`
+              : undefined,
       });
       posthog.capture("live_view_dashboard_saved", {
         ...liveViewAnalyticsProperties(
@@ -2404,7 +2461,7 @@ export function BrainOverview({
                           .join(", ")}
                       </p>
                       <p className="mt-1">
-                        Existing custom Pipe instructions are kept.
+                        Existing custom scheduled task instructions are kept.
                       </p>
                     </details>
                   </div>
@@ -2549,13 +2606,7 @@ export function BrainOverview({
   const slots = normalizedSlots(view.slots);
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
-  const latestDataTimestamp = slots.reduce<number | null>((latest, slot) => {
-    const timestamp = slot.value?.updatedAt
-      ? Date.parse(slot.value.updatedAt)
-      : Number.NaN;
-    if (!Number.isFinite(timestamp)) return latest;
-    return latest === null ? timestamp : Math.max(latest, timestamp);
-  }, null);
+  const dataStatus = liveViewDataStatus(slots);
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
@@ -2580,7 +2631,11 @@ export function BrainOverview({
           data-onboarding-guide-target="dashboard"
           className="mb-3 flex shrink-0 flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
         >
-          <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+          <div
+            data-testid="overview-dashboard-row"
+            className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1"
+          >
+          {navigation}
           <LiveViewDashboardSwitcher
             views={views}
             current={view}
@@ -2611,13 +2666,11 @@ export function BrainOverview({
           />
           <p
             data-testid="overview-data-status"
-            className="shrink-0 font-mono text-[9px] text-muted-foreground"
+            className="basis-full pl-12 font-mono text-[9px] text-muted-foreground sm:basis-auto sm:pl-0"
           >
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : latestDataTimestamp !== null
-                ? `Updated ${new Date(latestDataTimestamp).toLocaleString()}`
-                : "No data yet"}
+              : dataStatus}
           </p>
           </div>
           <div

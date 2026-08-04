@@ -7120,7 +7120,6 @@ dependencies = [
  "chrono",
  "keyring",
  "rand 0.9.4",
- "screenpipe-config",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",

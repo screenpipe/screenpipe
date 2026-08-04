@@ -7,7 +7,9 @@ import { Env } from '../types';
 export const TELEMETRY_RETENTION_DAYS = 90;
 export const USAGE_RETENTION_DAYS = 90;
 export const EPHEMERAL_USAGE_RETENTION_DAYS = 7;
+export const SETTLEMENT_RETENTION_DAYS = 2;
 export const MAINTENANCE_DELETE_BATCH = 5_000;
+export const SETTLEMENT_DELETE_BATCH = 10_000;
 
 /**
  * Keep every D1 table bounded. Each usage delete is capped so a single cron
@@ -21,6 +23,12 @@ export async function pruneRuntimeState(env: Env): Promise<void> {
       .bind(`-${TELEMETRY_RETENTION_DAYS} days`),
     env.DB.prepare(`DELETE FROM model_health_window
                     WHERE bucket_epoch < (CAST(strftime('%s', 'now') AS INTEGER) - 3600) / 10`),
+    env.DB.prepare(`DELETE FROM hosted_ai_settlements WHERE settlement_id IN (
+                      SELECT settlement_id FROM hosted_ai_settlements
+                      WHERE created_at < datetime('now', ?)
+                      ORDER BY created_at
+                      LIMIT ?
+                    )`).bind(`-${SETTLEMENT_RETENTION_DAYS} days`, SETTLEMENT_DELETE_BATCH),
     env.DB.prepare(`DELETE FROM usage WHERE device_id IN (
                       SELECT device_id FROM usage
                       WHERE tier = 'ip_tracking'

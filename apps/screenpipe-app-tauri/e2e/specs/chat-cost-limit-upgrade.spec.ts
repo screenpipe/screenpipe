@@ -163,7 +163,7 @@ describe("Hosted AI cost-limit Business recovery", function () {
       error: JSON.stringify({
         error: "daily_cost_limit_exceeded",
         message:
-          "You've used your daily hosted AI allowance. Background pipes share this allowance.",
+          "You've used your daily hosted AI allowance. Background scheduled tasks share this allowance.",
         resets_at: "2026-08-02T00:00:00.000Z",
         plan: "basic",
         required_plan: "business",
@@ -185,7 +185,7 @@ describe("Hosted AI cost-limit Business recovery", function () {
       },
     );
     expect(await assistant.getText()).toContain("account budget");
-    expect(await assistant.getText()).not.toContain("Background pipes");
+    expect(await assistant.getText()).not.toContain("Background scheduled tasks");
 
     const banner = await $('[data-testid="cost-limit-upgrade-banner"]');
     await banner.waitForDisplayed({ timeout: t(10_000) });
@@ -196,7 +196,7 @@ describe("Hosted AI cost-limit Business recovery", function () {
     await banner.$("button=Upgrade to Business").waitForDisplayed({
       timeout: t(10_000),
     });
-    const reviewPipes = await banner.$("button=Review pipes");
+    const reviewPipes = await banner.$("button=Review scheduled tasks");
     await reviewPipes.waitForDisplayed({ timeout: t(10_000) });
 
     const screenshot = await saveScreenshot("chat-cost-limit-business-upgrade");
@@ -209,7 +209,7 @@ describe("Hosted AI cost-limit Business recovery", function () {
       {
         timeout: t(10_000),
         interval: 100,
-        timeoutMsg: "Review pipes did not navigate to the Pipes section",
+        timeoutMsg: "Review scheduled tasks did not navigate to the Scheduled section",
       },
     );
   });

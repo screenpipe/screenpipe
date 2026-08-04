@@ -40,12 +40,24 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		DB: {
 			prepare: (sql: string) => ({
 				bind: (...values: unknown[]) => ({
+					sql,
+					values,
 					first: async () => sql.includes('INSERT OR IGNORE INTO usage')
 						? { reservation_key: values[0] }
 						: null,
 					run: async () => ({ success: true, meta: { changes: 1 } }),
 				}),
 			}),
+			batch: async (statements: Array<{ sql: string; values: unknown[] }>) => {
+				const last = statements.at(-1);
+				return statements.map((_, index) => ({
+					success: true,
+					meta: { changes: 1 },
+					results: index === statements.length - 1 && last?.sql.includes('hosted_ai_settlements')
+						? [{ settlement_id: last.values[0], applied_at: new Date().toISOString() }]
+						: [],
+				}));
+			},
 		},
 	} as unknown as Env;
 	const ctx = {
@@ -444,33 +456,144 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(await errorCode(response)).toBe('cost_control_unavailable');
 	});
 
-	it('returns the Max capacity tier from the authenticated usage route', async () => {
-		verifyTokenMock.mockImplementation(async () => ({ sub: 'user_pro_max' }) as any);
-		globalThis.fetch = mock(async () => new Response(JSON.stringify({
-			success: true,
-			user: {
-				clerk_id: 'user_pro_max',
-				cloud_subscribed: true,
-				app_entitled: true,
-				subscription_plan: 'pro_max',
-				entitlement: { active: true, plan: 'pro_max', features: { app: true } },
-			},
-		}), { status: 200 })) as typeof fetch;
+	it('reports Cloudflare-managed allowance without reading legacy cost controls', async () => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: 'user_cloudflare_usage',
+						cloud_subscribed: false,
+						app_entitled: true,
+						subscription_plan: 'standard',
+						entitlement: { active: true, plan: 'standard', features: { app: true } },
+					},
+				}), { status: 200 });
+			}
+			if (url.startsWith('https://supabase.test/rest/v1/user_credits')) {
+				return new Response('[]', { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+		const cloudflareEnv = {
+			...env,
+			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
+			CLOUDFLARE_AI_GATEWAY_ID: 'hosted-chat-test',
+			DB: { prepare: () => { throw new Error('legacy cost storage unavailable'); } },
+		} as unknown as Env;
 
 		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
-			headers: { Authorization: 'Bearer eyJ.pro-max.paid' },
-		}), env, ctx);
-		const body = await response.json() as Record<string, unknown>;
+			headers: { Authorization: 'Bearer eyJ.cloudflare.usage' },
+		}), cloudflareEnv, ctx);
+		const body = await response.json() as any;
 
 		expect(response.status).toBe(200);
-		expect(body).toMatchObject({
-			tier: 'business_max',
-			limit_today: 120,
-			remaining: 120,
-			upsell_banner: false,
-			upgrade_eligible: false,
-			cost_limit_reached: false,
+		expect(body.upsell_banner).toBe(false);
+		expect(body.cost_limit_reached).toBeNull();
+		expect(body.hosted_ai).toMatchObject({
+			plan: 'basic',
+			allowance_managed_by: 'cloudflare',
+			included_credits: null,
+			used_credits: null,
+			remaining_credits: null,
 		});
+	});
+
+	it('bypasses legacy paid admission and reaches Gateway routing when D1 is unavailable', async () => {
+		let gatewayCalls = 0;
+		const d1Statements: string[] = [];
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url === 'https://screenpipe.com/api/user') {
+				return new Response(JSON.stringify({
+					success: true,
+					user: {
+						clerk_id: 'user_cloudflare_chat',
+						cloud_subscribed: false,
+						app_entitled: true,
+						subscription_plan: 'standard',
+						entitlement: { active: true, plan: 'standard', features: { app: true } },
+					},
+				}), { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+		const cloudflareEnv = {
+			...env,
+			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
+			CLOUDFLARE_AI_GATEWAY_ID: 'hosted-chat-test',
+			OPENAI_API_KEY: '',
+			AI: {
+				gateway: () => ({
+					getUrl: async () => {
+						gatewayCalls++;
+						throw Object.assign(new Error('test reached Cloudflare Gateway routing'), { status: 502 });
+					},
+				}),
+			},
+			// trackUsage/reserveDailyCostCap would fail before inference. The
+			// completed-cost write is intentionally best-effort in this mode.
+			DB: {
+				prepare: (query: string) => {
+					d1Statements.push(query);
+					throw new Error('legacy admission storage unavailable');
+				},
+			},
+		} as unknown as Env;
+
+		const response = await handleRequest(
+			request(
+				{ Authorization: 'Bearer eyJ.cloudflare.chat' },
+				'/v1/chat/completions',
+				'gpt-5.6-luna',
+			),
+			cloudflareEnv,
+			ctx,
+		);
+
+		// A legacy admission read would return cost_control_unavailable before
+		// provider routing. The intentional 502 proves Gateway resolution ran.
+		expect(response.status).toBe(502);
+		expect(gatewayCalls).toBeGreaterThan(0);
+		expect(await response.text()).not.toContain('cost_control_unavailable');
+		expect(d1Statements.some((query) => query.includes('INSERT INTO cost_daily'))).toBe(false);
+	});
+
+	it('returns canonical Max and Ultra capacity from desktop-compatible user responses', async () => {
+		for (const [billingPlan, usageTier, dailyLimit] of [
+			['pro_max', 'business_max', 120],
+			['pro_ultra', 'business_ultra', 240],
+		] as const) {
+			const clerkId = `user_${billingPlan}`;
+			verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
+			globalThis.fetch = mock(async () => new Response(JSON.stringify({
+				success: true,
+				user: {
+					clerk_id: clerkId,
+					cloud_subscribed: true,
+					app_entitled: true,
+					subscription_plan: 'pro',
+					billing_plan: billingPlan,
+					entitlement: { active: true, plan: 'pro', features: { app: true } },
+				},
+			}), { status: 200 })) as typeof fetch;
+
+			const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+				headers: { Authorization: `Bearer eyJ.${billingPlan}.paid` },
+			}), env, ctx);
+			const body = await response.json() as Record<string, unknown>;
+
+			expect(response.status).toBe(200);
+			expect(body).toMatchObject({
+				tier: usageTier,
+				limit_today: dailyLimit,
+				remaining: dailyLimit,
+				upsell_banner: false,
+				upgrade_eligible: false,
+				cost_limit_reached: false,
+			});
+		}
 	});
 
 	it('normalizes a removed model before gating and reaches the fallback provider', async () => {
