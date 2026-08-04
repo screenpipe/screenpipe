@@ -6,6 +6,7 @@ import { Env, UserTier, UsageTier, TierLimits, UsageResult, UsageStatus, type Ac
 import { isGooglePolicyBlockedModel } from '../utils/model-policy';
 import {
   getHostedAiAllowedModels,
+  getHostedAiCapacityUpgrade,
   getHostedAiPlan,
   isHostedAiModelAllowed,
 } from './hosted-ai-policy';
@@ -344,6 +345,29 @@ async function resolveDailyLimitExceeded(
     allowed: false,
     resetsAt: getNextResetTime(),
     creditsRemaining: balance,
+  };
+}
+
+/** Build one additive 429 contract for every hosted-AI daily-query endpoint. */
+export function buildDailyUsageLimitError(
+  usage: UsageResult,
+  tier: UsageTier,
+  accountPlan: AccountPlan,
+  message: string,
+) {
+  const upgrade = getHostedAiCapacityUpgrade(accountPlan);
+  return {
+    error: (usage.creditsRemaining ?? 0) <= 0
+      ? 'credits_exhausted'
+      : 'daily_limit_exceeded',
+    message,
+    used_today: usage.used,
+    limit_today: usage.limit,
+    resets_at: usage.resetsAt,
+    tier,
+    credits_remaining: usage.creditsRemaining ?? 0,
+    required_plan: upgrade?.requiredPlan ?? null,
+    upgrade_url: upgrade?.upgradeUrl ?? null,
   };
 }
 

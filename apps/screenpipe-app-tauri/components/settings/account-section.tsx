@@ -27,8 +27,8 @@ import {
   Lock,
 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
+import { openExternalUrl } from "@/lib/open-external-url";
 import {
   getBusinessCapacityUpgrade,
   planDisplayName,
@@ -95,24 +95,6 @@ function isBusinessSubscriptionPlan(plan: string | null | undefined): boolean {
     "monthly",
     "annual",
   ].includes(plan.toLowerCase());
-}
-
-async function openExternalUrl(url: string): Promise<void> {
-  const e2eWindow =
-    typeof window !== "undefined"
-      ? (window as Window & {
-          __SCREENPIPE_E2E_OPEN_URLS?: string[];
-          __SCREENPIPE_E2E_INTERCEPT_OPEN_URLS?: boolean;
-        })
-      : null;
-
-  if (Array.isArray(e2eWindow?.__SCREENPIPE_E2E_OPEN_URLS)) {
-    e2eWindow.__SCREENPIPE_E2E_OPEN_URLS.push(url);
-  }
-  if (e2eWindow?.__SCREENPIPE_E2E_INTERCEPT_OPEN_URLS) {
-    return;
-  }
-  await openUrl(url);
 }
 
 function analyticsDistinctId(enabled: boolean): string | undefined {

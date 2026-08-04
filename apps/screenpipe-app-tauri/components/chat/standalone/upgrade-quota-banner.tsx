@@ -5,27 +5,35 @@
 
 import { useState } from "react";
 import { X, Zap } from "lucide-react";
-import { useRouter } from "next/navigation";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { useUsageStatus, formatResetTime } from "@/lib/hooks/use-usage-status";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { clearQuotaUpgrade, useQuotaUpgrade } from "@/lib/chat/quota-upgrade";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
+
+const PLAN_LABELS = {
+  basic: "Basic",
+  business: "Business",
+  business_max: "Business Max",
+  business_ultra: "Business Ultra",
+} as const;
 
 /**
  * At-the-cap upgrade prompt (the "intensity" lever). Appears in the composer
  * only when a non-Business user has spent their full daily premium-message
  * budget (`remaining <= 0`). Free models keep working, so this is a soft,
- * dismissible nudge — not a wall. One click opens the native Business offer so
- * price and billing cadence are reviewed before sign-in or checkout. Hidden for Business (`subscribed`) and BYOK users
+ * dismissible nudge — not a wall. A structured server rejection can instead
+ * provide a validated next-plan billing URL for an immediate action, including
+ * Business Max and Business Ultra. Hidden for proactive Business prompts and
+ * BYOK users
  * (usage is null when the worker is bypassed).
  *
  * To reproduce the exhausted state on demand without burning real quota, see
  * the dev force-flag in use-usage-status.tsx.
  */
 export function UpgradeQuotaBanner() {
-  const router = useRouter();
   const usage = useUsageStatus();
   const upsellEnabled = useModelUpsellGating(usage?.upgrade_eligible);
   const blockedUpgrade = useQuotaUpgrade();
@@ -35,8 +43,8 @@ export function UpgradeQuotaBanner() {
   if (!blockedUpgrade) {
     if (dismissed) return null;
     // Proactive prompts require settings, PostHog, and server plan truth. A
-    // structured cost-limit rejection below is already an authoritative,
-    // server-scoped Business decision and deliberately bypasses these gates.
+    // structured usage-limit rejection below is already an authoritative,
+    // server-scoped next-plan decision and deliberately bypasses these gates.
     if (!upsellEnabled) return null;
     if (!usage) return null;
     if (
@@ -54,7 +62,7 @@ export function UpgradeQuotaBanner() {
   const resets = formatResetTime(
     blockedUpgrade?.resetsAt ?? usage?.resets_at ?? "",
   );
-  const source = blockedUpgrade ? "ai-cost-limit-banner" : "ai-quota-banner";
+  const source = blockedUpgrade ? "ai-usage-limit-banner" : "ai-quota-banner";
 
   const onUpgrade = async () => {
     if (busy) return;
@@ -62,30 +70,28 @@ export function UpgradeQuotaBanner() {
     try {
       posthog.capture("desktop_upgrade_entry_clicked", {
         source,
+        target_plan: blockedUpgrade?.requiredPlan,
       });
-      await openBusinessUpgradeSurface(source);
+      if (blockedUpgrade) {
+        await openExternalUrl(blockedUpgrade.upgradeUrl);
+      } else {
+        await openBusinessUpgradeSurface(source);
+      }
     } catch (e) {
-      console.error("failed to open Business upgrade:", e);
+      console.error("failed to open AI plan upgrade:", e);
     } finally {
       setBusy(false);
     }
   };
 
-  const onReviewPipes = () => {
-    posthog.capture("desktop_cost_limit_recovery_clicked", {
-      action: "review-pipes",
-      source,
-    });
-    router.push("/?section=pipes");
-  };
-
-  const blockedTitle = resets
-    ? `Hosted AI paused until ${resets}`
-    : "Hosted AI is paused for today";
+  const requiredPlanLabel = blockedUpgrade
+    ? PLAN_LABELS[blockedUpgrade.requiredPlan]
+    : "Business";
+  const blockedTitle = "Hosted AI usage limit reached";
 
   return (
     <div
-      className="mt-2 rounded-lg border border-border bg-muted/30 px-3 py-2.5"
+      className="mb-2 border border-border bg-background px-3 py-2.5 shadow-lg shadow-black/5"
       data-testid={
         blockedUpgrade ? "cost-limit-upgrade-banner" : "quota-upgrade-banner"
       }
@@ -102,9 +108,9 @@ export function UpgradeQuotaBanner() {
           <div className="mt-0.5 text-muted-foreground">
             {blockedUpgrade ? (
               <>
-                Background scheduled tasks share this budget. The website message
-                allowance is separate. Choose a local or own-key AI preset below
-                to keep working.
+                {resets ? `Resets ${resets}. ` : ""}
+                Upgrade to {requiredPlanLabel} for a higher limit, or switch to a
+                local or own-key AI preset.
               </>
             ) : (
               <>Free models still work{resets ? ` · resets ${resets}` : ""}.</>
@@ -112,23 +118,17 @@ export function UpgradeQuotaBanner() {
           </div>
         </div>
         <span className="flex shrink-0 items-center gap-1.5">
-          {blockedUpgrade && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-[12px]"
-              onClick={onReviewPipes}
-            >
-              Review scheduled tasks
-            </Button>
-          )}
           <Button
+            type="button"
             size="sm"
+            variant="outline"
             className="h-7 text-[12px]"
             onClick={onUpgrade}
             disabled={busy}
           >
-            {blockedUpgrade ? "Upgrade to Business" : "View Business"}
+            {blockedUpgrade
+              ? `Upgrade to ${requiredPlanLabel}`
+              : "View Business"}
           </Button>
           <button
             type="button"

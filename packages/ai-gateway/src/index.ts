@@ -7,7 +7,14 @@ import { Env, RequestBody, type AuthResult } from './types';
 import { handleOptions, createSuccessResponse, createErrorResponse, addCorsHeaders } from './utils/cors';
 import { validateAuth } from './utils/auth';
 import { RateLimiter, checkRateLimit } from './utils/rate-limiter';
-import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate } from './services/usage-tracker';
+import {
+	buildDailyUsageLimitError,
+	trackUsage,
+	getUsageStatus,
+	isModelAllowed,
+	isFreeModel,
+	resolveModelGate,
+} from './services/usage-tracker';
 import { handleChatCompletions } from './handlers/chat';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
@@ -565,15 +572,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				});
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: creditsExhausted
-						? `You've used all free queries and have no credits remaining. Buy more at screenpi.pe`
-						: `You've used all ${usage.limit} free AI queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
+					...buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						creditsExhausted
+							? `You've used all free queries and have no credits remaining. Buy more at screenpi.pe`
+							: `You've used all ${usage.limit} free AI queries for today. Resets at ${usage.resetsAt}`,
+					),
 					upgrade_options: {
 						buy_credits: {
 							url: 'https://screenpi.pe/onboarding',
@@ -825,15 +831,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, 'gemini-2.5-flash');
 			if (!usage.allowed) {
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: `You've used all ${usage.limit} free queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
-				})));
+				return addCorsHeaders(createErrorResponse(429, JSON.stringify(
+					buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						`You've used all ${usage.limit} free queries for today. Resets at ${usage.resetsAt}`,
+					),
+				)));
 			}
 			const costReservation = await reserveDailyCostCap(
 				env,
@@ -1055,15 +1060,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, parsedModel);
 			if (!usage.allowed) {
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: `You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
-				})));
+				return addCorsHeaders(createErrorResponse(429, JSON.stringify(
+					buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						`You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
+					),
+				)));
 			}
 			const costReservation = await reserveDailyCostCap(
 				env,
@@ -1211,15 +1215,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, ocModel);
 			if (!usage.allowed) {
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: `You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
-				})));
+				return addCorsHeaders(createErrorResponse(429, JSON.stringify(
+					buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						`You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
+					),
+				)));
 			}
 			const costReservation = await reserveDailyCostCap(
 				env,

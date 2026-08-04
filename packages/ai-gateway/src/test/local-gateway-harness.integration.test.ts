@@ -102,8 +102,8 @@ describe('local AI gateway harness', () => {
 		expect(contract).toMatchObject({
 			error: 'daily_cost_limit_exceeded',
 			plan: 'business',
-			required_plan: null,
-			upgrade_url: null,
+			required_plan: 'business_max',
+			upgrade_url: 'https://screenpipe.com/account/billing?target_plan=pro_max&interval=month',
 			can_buy_credits: false,
 			byok_supported: true,
 		});
