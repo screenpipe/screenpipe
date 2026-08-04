@@ -103,14 +103,86 @@ export interface KeywordSearchState {
 const fuzzy_default = true;
 const offset_default = 0;
 export const visibleMatchVerificationConcurrency = 3;
-const visibleMatchVerificationCacheLimit = 500;
-const visibleMatchVerificationCache = new Map<
-	string,
-	SearchMatch["text_positions"]
+const frameTextPositionsCacheLimit = 500;
+
+/**
+ * A frame's screenshot text, keyed by frame id alone.
+ *
+ * Deliberately not keyed by query: OCR output does not depend on what was
+ * searched for, so caching per (frame, query) re-OCRs the same frames on every
+ * keystroke — each edit produces new tokens, hence a new key, hence a full
+ * re-run of an identical job. Verification requests are `persist=false`, so the
+ * server does not memoize either and the work is genuinely repeated. Keying on
+ * the frame makes each frame cost at most one OCR per session; the query filter
+ * is applied to the cached positions instead.
+ */
+const frameTextPositionsCache = new Map<number, SearchMatch["text_positions"]>();
+
+/** In-flight fetches keyed by frame id, so overlapping searches share one request. */
+const inflightFrameTextRequests = new Map<
+	number,
+	Promise<SearchMatch["text_positions"] | null>
 >();
 
 interface FrameTextResponse {
 	text_positions?: SearchMatch["text_positions"];
+}
+
+function rememberFrameTextPositions(
+	frameId: number,
+	positions: SearchMatch["text_positions"],
+): void {
+	// Re-insert to move the entry to the end — Map iteration order is insertion
+	// order, so the first key is the least recently used.
+	frameTextPositionsCache.delete(frameId);
+	frameTextPositionsCache.set(frameId, positions);
+	if (frameTextPositionsCache.size > frameTextPositionsCacheLimit) {
+		const oldestKey = frameTextPositionsCache.keys().next().value;
+		if (oldestKey !== undefined) frameTextPositionsCache.delete(oldestKey);
+	}
+}
+
+/**
+ * Fetch a frame's screenshot text, at most once per frame.
+ *
+ * The request carries no abort signal on purpose. Aborting only cancels the
+ * client's wait — the server's OCR keeps running to completion regardless — so
+ * dropping the response would discard work already paid for and force the next
+ * keystroke to pay for it again. Letting it land populates the cache instead.
+ * Callers still check their own signal afterwards, and the loop below stops
+ * issuing new work as soon as its epoch is aborted.
+ */
+async function frameTextPositions(
+	frameId: number,
+): Promise<SearchMatch["text_positions"] | null> {
+	const cached = frameTextPositionsCache.get(frameId);
+	if (cached) {
+		rememberFrameTextPositions(frameId, cached);
+		return cached;
+	}
+
+	const inflight = inflightFrameTextRequests.get(frameId);
+	if (inflight) return inflight;
+
+	const request = (async () => {
+		try {
+			const response = await localFetch(`/frames/${frameId}/text?persist=false`, {
+				method: "POST",
+			});
+			if (!response.ok) return null;
+			const data = (await response.json()) as FrameTextResponse;
+			const positions = data.text_positions ?? [];
+			rememberFrameTextPositions(frameId, positions);
+			return positions;
+		} catch {
+			return null;
+		} finally {
+			inflightFrameTextRequests.delete(frameId);
+		}
+	})();
+
+	inflightFrameTextRequests.set(frameId, request);
+	return request;
 }
 
 export function queryHighlightTokens(query: string): string[] {
@@ -195,7 +267,6 @@ async function verifyVisibleSearchMatches(
 	}
 	if (immediate.length > 0) onVerifiedBatch?.(immediate);
 
-	const tokens = queryHighlightTokens(query);
 	for (
 		let start = 0;
 		start < pendingAccessibility.length;
@@ -209,41 +280,11 @@ async function verifyVisibleSearchMatches(
 		);
 		const batch = await Promise.all(
 			slice.map(async ({ index, result }) => {
-				const cacheKey = `${result.frame_id}:${tokens.join("\u0000")}`;
-				let matchingPositions = visibleMatchVerificationCache.get(cacheKey);
+				const positions = await frameTextPositions(result.frame_id);
+				if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+				if (!positions) return null;
 
-				if (matchingPositions) {
-					visibleMatchVerificationCache.delete(cacheKey);
-					visibleMatchVerificationCache.set(cacheKey, matchingPositions);
-				} else {
-					try {
-						const response = await localFetch(
-							`/frames/${result.frame_id}/text?persist=false`,
-							{ method: "POST", signal },
-						);
-						if (!response.ok) return null;
-						const data = (await response.json()) as FrameTextResponse;
-						matchingPositions = visibleMatchingPositions(
-							data.text_positions ?? [],
-							query,
-						);
-						visibleMatchVerificationCache.set(cacheKey, matchingPositions);
-						if (
-							visibleMatchVerificationCache.size >
-							visibleMatchVerificationCacheLimit
-						) {
-							const oldestKey =
-								visibleMatchVerificationCache.keys().next().value;
-							if (oldestKey !== undefined) {
-								visibleMatchVerificationCache.delete(oldestKey);
-							}
-						}
-					} catch (error) {
-						if (signal.aborted) throw error;
-						return null;
-					}
-				}
-
+				const matchingPositions = visibleMatchingPositions(positions, query);
 				if (matchingPositions.length === 0) return null;
 				const match = { ...result, text_positions: matchingPositions };
 				verified[index] = match;

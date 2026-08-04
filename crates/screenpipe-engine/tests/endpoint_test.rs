@@ -1298,4 +1298,74 @@ mod tests {
             }
         }
     }
+
+    /// On-demand OCR must wait on the *shared* capture permit, not run freely.
+    ///
+    /// Search verifies candidates by POSTing to this route, up to three at a
+    /// time, while capture is OCR'ing too. The test holds the one global permit
+    /// and asserts the route cannot proceed, which only passes if the handler
+    /// acquires the same semaphore capture uses.
+    #[tokio::test]
+    async fn on_demand_ocr_waits_for_the_shared_capture_permit() {
+        let (app, db) = setup_test_app().await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let snapshot_path = temp_dir.path().join("permit-fixture.jpg");
+        RgbImage::from_pixel(320, 240, Rgb([12, 12, 12]))
+            .save(&snapshot_path)
+            .unwrap();
+
+        // No stored OCR text, so the handler cannot short-circuit and must take
+        // the real extraction + OCR path the permit guards.
+        db.insert_video_chunk("permit-placeholder.mp4", "permit-device")
+            .await
+            .unwrap();
+        let frame_id = db
+            .insert_frame(
+                "permit-device",
+                Some(Utc::now()),
+                None,
+                Some("PermitFixture"),
+                Some("Permit Fixture"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE frames SET snapshot_path = ?1 WHERE id = ?2")
+            .bind(snapshot_path.to_string_lossy().to_string())
+            .bind(frame_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let permit = screenpipe_capture::ocr_semaphore().acquire().await.unwrap();
+
+        let uri = format!("/frames/{frame_id}/text?persist=false");
+        let mut pending = tokio::spawn(async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        });
+
+        assert!(
+            tokio::time::timeout(StdDuration::from_millis(500), &mut pending)
+                .await
+                .is_err(),
+            "on-demand OCR ran while the shared capture permit was held"
+        );
+
+        drop(permit);
+
+        let response = tokio::time::timeout(StdDuration::from_secs(60), pending)
+            .await
+            .expect("request should complete once the permit is released")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

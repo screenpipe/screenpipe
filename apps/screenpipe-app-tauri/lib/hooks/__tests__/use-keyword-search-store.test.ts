@@ -513,6 +513,110 @@ describe("useKeywordSearchStore search scheduling", () => {
 		expect(frameTextRequests).toBe(1);
 		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(1);
 	});
+
+	it("reuses screenshot verification for the same frame across different queries", async () => {
+		// A frame's OCR text does not depend on the query, so editing the query
+		// must not re-OCR frames already read. Keying the cache on (frame, query)
+		// re-ran every frame on every keystroke.
+		let frameTextRequests = 0;
+		const candidate = {
+			frame_id: 12_002,
+			timestamp: "2026-07-30T09:00:00.000Z",
+			text_positions: [],
+			app_name: "Safari",
+			window_name: "requeried candidate",
+			confidence: 1,
+			text: "retentionverify",
+			url: "",
+			text_source: "accessibility" as const,
+		};
+
+		vi.mocked(localFetch).mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return jsonResponse([candidate]);
+			}
+			if (url === "/frames/12002/text?persist=false") {
+				frameTextRequests += 1;
+				return jsonResponse({
+					text_positions: [{
+						text: "visible retentionverify",
+						confidence: 0.98,
+						bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
+					}],
+				});
+			}
+			if (url.startsWith("/search?")) {
+				return jsonResponse({ data: [] });
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		await useKeywordSearchStore.getState().searchKeywords("retentionverify");
+		useKeywordSearchStore.getState().resetSearch();
+		// Same frame, different query — the backspace case from the bug report.
+		await useKeywordSearchStore.getState().searchKeywords("retentionverif");
+
+		expect(frameTextRequests).toBe(1);
+		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(1);
+	});
+
+	it("shares one screenshot verification request between overlapping searches", async () => {
+		// Two search epochs in flight at once must not each start their own OCR
+		// for the same frame: the server cannot cancel OCR already running, so a
+		// duplicate is work that is paid for twice and thrown away once.
+		let frameTextRequests = 0;
+		const frameText = deferred<Response>();
+		const candidate = {
+			frame_id: 12_003,
+			timestamp: "2026-07-30T09:00:00.000Z",
+			text_positions: [],
+			app_name: "Safari",
+			window_name: "coalesced candidate",
+			confidence: 1,
+			text: "retentionverify",
+			url: "",
+			text_source: "accessibility" as const,
+		};
+
+		vi.mocked(localFetch).mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return jsonResponse([candidate]);
+			}
+			if (url === "/frames/12003/text?persist=false") {
+				frameTextRequests += 1;
+				return frameText.promise;
+			}
+			if (url.startsWith("/search?")) {
+				return jsonResponse({ data: [] });
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		const first = useKeywordSearchStore
+			.getState()
+			.searchKeywords("retentionverify");
+		await waitFor(() => expect(frameTextRequests).toBe(1));
+
+		// Second epoch starts while the first frame read is still outstanding.
+		const second = useKeywordSearchStore
+			.getState()
+			.searchKeywords("retentionverif");
+
+		frameText.resolve(
+			jsonResponse({
+				text_positions: [{
+					text: "visible retentionverify",
+					confidence: 0.98,
+					bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
+				}],
+			}),
+		);
+		await Promise.all([first, second]);
+
+		expect(frameTextRequests).toBe(1);
+	});
 });
 
 describe("visibleMatchingPositions", () => {

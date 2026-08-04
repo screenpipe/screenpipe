@@ -21,7 +21,10 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     num::NonZeroUsize,
-    sync::{Arc, Weak},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Weak,
+    },
     time::{Duration, Instant, UNIX_EPOCH},
 };
 use tokio::fs::File;
@@ -1295,6 +1298,38 @@ pub async fn get_frame_text_data(
     }))
 }
 
+/// Counts on-demand OCR jobs actually executing, for diagnosing CPU contention
+/// between search verification and capture.
+///
+/// Incremented/decremented *inside* the blocking closure, not around the
+/// `.await`. That distinction is the point: when a search is aborted the
+/// handler future is dropped, but the blocking task keeps running to
+/// completion. Counting around the await would report the client's view (jobs
+/// it is still waiting for); counting inside reports the machine's view (jobs
+/// burning CPU, including abandoned ones). With the shared permit held across
+/// the closure this should never exceed 1 — a higher value means the permit
+/// was released before the work finished.
+static ON_DEMAND_OCR_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Decrements the in-flight count on drop so a panicking OCR call cannot leak
+/// the counter upward.
+struct OcrInflightGuard;
+
+impl OcrInflightGuard {
+    fn enter(frame_id: i64) -> Self {
+        let inflight = ON_DEMAND_OCR_INFLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+        debug!("on-demand ocr start frame={} inflight={}", frame_id, inflight);
+        Self
+    }
+}
+
+impl Drop for OcrInflightGuard {
+    fn drop(&mut self) {
+        let inflight = ON_DEMAND_OCR_INFLIGHT.fetch_sub(1, Ordering::SeqCst) - 1;
+        debug!("on-demand ocr end inflight={}", inflight);
+    }
+}
+
 /// Run on-demand OCR on a frame that has no stored bounding boxes.
 /// Loads the snapshot JPEG, runs platform OCR, and returns the text positions.
 /// Results are stored by default so subsequent GET requests hit the cached DB
@@ -1316,6 +1351,16 @@ pub async fn run_frame_ocr(
         }
         _ => {}
     }
+
+    // Everything below is expensive: a video-backed frame is extracted with
+    // ffmpeg and then OCR'd, and search fires these in bursts while capture is
+    // also OCR'ing. Take the shared capture permit for the whole span so the
+    // two producers cannot add up. Acquired *after* the stored-positions check
+    // above so cache hits stay fully concurrent.
+    let ocr_permit = screenpipe_capture::ocr_semaphore()
+        .acquire()
+        .await
+        .expect("OCR semaphore is never closed");
 
     // Resolve image path from DB
     let (file_path, offset_index, is_snapshot) = match state.db.get_frame(frame_id).await {
@@ -1391,9 +1436,18 @@ pub async fn run_frame_ocr(
         }
     };
 
-    // Run OCR on the image
+    // Run OCR on the image.
+    //
+    // The permit is *moved into* the blocking closure rather than held by this
+    // handler. Aborting a search drops the handler future, but the blocking
+    // task is not cancellable and runs to completion — releasing the permit on
+    // drop would hand the slot to the next request while this OCR still owns a
+    // CPU. Moving it in means the slot frees when the work actually ends, so
+    // abandoned requests stay bounded too.
     #[cfg(target_os = "macos")]
     let ocr_result = tokio::task::spawn_blocking(move || {
+        let _permit = ocr_permit;
+        let _watch = OcrInflightGuard::enter(frame_id);
         let (text, json, _confidence) = screenpipe_screen::perform_ocr_apple(&image, &[]);
         (text, json)
     })
@@ -1401,16 +1455,27 @@ pub async fn run_frame_ocr(
     .unwrap_or_else(|_| (String::new(), "[]".to_string()));
 
     #[cfg(target_os = "windows")]
-    let ocr_result = match screenpipe_screen::perform_ocr_windows(&image, &[]).await {
-        Ok((text, json, _confidence)) => (text, json),
-        Err(e) => {
-            error!("Windows on-demand OCR failed: {}", e);
-            (String::new(), "[]".to_string())
+    let ocr_result = {
+        // Windows OCR is async, so there is no orphaned blocking task to
+        // outlive the permit: dropping the handler cancels this future and
+        // releases the slot, which is correct. `perform_ocr_windows` also
+        // serializes internally; holding this permit too is what extends the
+        // bound to cover frame extraction.
+        let _permit = ocr_permit;
+        let _watch = OcrInflightGuard::enter(frame_id);
+        match screenpipe_screen::perform_ocr_windows(&image, &[]).await {
+            Ok((text, json, _confidence)) => (text, json),
+            Err(e) => {
+                error!("Windows on-demand OCR failed: {}", e);
+                (String::new(), "[]".to_string())
+            }
         }
     };
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let ocr_result = tokio::task::spawn_blocking(move || {
+        let _permit = ocr_permit;
+        let _watch = OcrInflightGuard::enter(frame_id);
         let (text, json, _confidence) = screenpipe_screen::perform_ocr_tesseract(&image, vec![]);
         (text, json)
     })
