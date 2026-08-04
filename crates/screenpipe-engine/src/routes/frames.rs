@@ -1318,7 +1318,10 @@ struct OcrInflightGuard;
 impl OcrInflightGuard {
     fn enter(frame_id: i64) -> Self {
         let inflight = ON_DEMAND_OCR_INFLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
-        debug!("on-demand ocr start frame={} inflight={}", frame_id, inflight);
+        debug!(
+            "on-demand ocr start frame={} inflight={}",
+            frame_id, inflight
+        );
         Self
     }
 }
