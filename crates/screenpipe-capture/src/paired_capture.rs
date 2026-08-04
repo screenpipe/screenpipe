@@ -27,10 +27,8 @@ use screenpipe_screen::OcrGateDecision;
 
 use crate::ocr_gate::{OcrDecision, OcrGate};
 use std::sync::Arc;
-#[cfg(not(target_os = "windows"))]
 use std::sync::OnceLock;
 use std::time::Instant;
-#[cfg(not(target_os = "windows"))]
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
