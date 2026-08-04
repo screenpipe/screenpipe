@@ -864,8 +864,9 @@ export function useEnterprisePolicyRuntime() {
       }
 
       // Persist admin status into ~/.screenpipe/enterprise.json so the
-      // pi-agent can decide whether to install the screenpipe-team skill
-      // on its next boot. Only meaningful when we sent a cloud token in
+      // Enterprise app can decide whether to inject the screenpipe-team
+      // skill on its next native Pi boot. Only meaningful when we sent a
+      // cloud token in
       // the request — without one, the server has no way to identify the
       // user, so `data.isAdmin` is always false (don't accidentally wipe
       // an existing admin marker just because the user was signed-out at

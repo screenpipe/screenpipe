@@ -1490,13 +1490,13 @@ export function BrainSection() {
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span>
             memories haven&apos;t updated in {staleDays} day{staleDays !== 1 ? "s" : ""}.
-            check that a memory-writing pipe is installed and enabled
+            check that a memory-writing scheduled task is installed and enabled
             &mdash;{" "}
             <a
               href="?section=pipes&tab=discover&q=memory"
               className="underline hover:opacity-80 transition-opacity"
             >
-              browse pipes
+              browse scheduled tasks
             </a>
             .
           </span>
@@ -1974,16 +1974,16 @@ export function BrainSection() {
           {!debouncedQuery && activeTags.length === 0 && typeFilter === "memories" && (
             <>
               <p className="text-xs">
-                memories are automatically created by pipes that learn from your
+                memories are automatically created by scheduled tasks that learn from your
                 screen & audio activity.
               </p>
               <p className="text-xs mt-3">
-                install pipes from the{" "}
+                install scheduled tasks from the{" "}
                 <a
                   href="?section=pipes&tab=discover"
                   className="underline text-foreground hover:text-foreground/80 transition-colors"
                 >
-                  pipe store
+                  Store
                 </a>{" "}
                 to start building memories.
               </p>
@@ -2065,7 +2065,7 @@ export function BrainSection() {
                         }
                       >
                         <MessageSquare className="mr-2 h-3.5 w-3.5" />
-                        {target.mode === "pipe-run" ? "go to pipe run" : "go to chat"}
+                        {target.mode === "pipe-run" ? "go to scheduled run" : "go to chat"}
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuItem
@@ -2630,7 +2630,7 @@ export function BrainSection() {
                               >
                                 <MessageSquare className="mr-2 h-3.5 w-3.5" />
                                 {target.mode === "pipe-run"
-                                  ? "go to pipe run"
+                                  ? "go to scheduled run"
                                   : "go to chat"}
                               </DropdownMenuItem>
                             )}

@@ -366,6 +366,12 @@ mod tests {
         )
         .unwrap();
 
+        // SQLite stores updated_at with millisecond precision while APFS file
+        // mtimes have nanosecond precision. Keep the fixture unambiguously
+        // older so the second pass tests the already-migrated path instead of
+        // occasionally exercising the intentional newer-file re-import path.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
         let store = make_store().await;
 
         // First migration — file migrated (kept for legacy readers)

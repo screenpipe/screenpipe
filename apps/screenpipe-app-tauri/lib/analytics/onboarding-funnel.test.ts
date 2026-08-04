@@ -63,6 +63,21 @@ describe("onboardingFunnel", () => {
     });
   });
 
+  it("keeps the AI-context choice in the stable goal-submission funnel", () => {
+    onboardingFunnel.goalSubmitted(
+      "ai_context",
+      onboardingLiveViewFlowProperties(0),
+    );
+
+    expect(capture).toHaveBeenCalledWith("onboarding_funnel_step", {
+      funnel_version: "onboarding_ui_v2",
+      step: "goal_submitted",
+      goal_category: "ai_context",
+      live_view_flow_variant: "first_live_view",
+      existing_live_view_count_bucket: "none",
+    });
+  });
+
   it("marks accepted value only as persisted positive feedback", () => {
     onboardingFunnel.firstResultAccepted("work_memory", "positive_feedback");
 

@@ -1032,7 +1032,7 @@ export function usePiForegroundEvents({
           // Pipe execution finished — clean up streaming state
           if (piMessageIdRef.current?.startsWith("pipe-")) {
             const msgId = piMessageIdRef.current;
-            const content = piStreamingTextRef.current || "Pipe completed with no output.";
+            const content = piStreamingTextRef.current || "Scheduled task completed with no output.";
             const blocksSnapshot = [...piContentBlocksRef.current];
             setMessages((prev) =>
               prev.map((m) => m.id === msgId ? { ...m, content, contentBlocks: blocksSnapshot } : m)

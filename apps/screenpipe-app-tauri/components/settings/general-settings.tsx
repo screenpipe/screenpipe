@@ -39,7 +39,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Auto-start", keywords: ["autostart", "launch", "startup"] },
   { label: "Auto-update", keywords: ["updates"] },
   { label: "Check for updates", keywords: ["version"] },
-  { label: "Auto-Update Pipes" },
+  { label: "Auto-Update Scheduled" },
   { label: "Reset Onboarding", keywords: ["setup"] },
   { label: "Your goal", keywords: ["onboarding", "purpose", "personalization"] },
 ];
@@ -336,8 +336,8 @@ export default function GeneralSettings() {
               <div className="flex items-center space-x-2.5">
                 <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Auto-Update Pipes</h3>
-                  <p className="text-xs text-muted-foreground">Update store pipes you haven&apos;t modified</p>
+                  <h3 className="text-sm font-medium text-foreground">Auto-Update Scheduled</h3>
+                  <p className="text-xs text-muted-foreground">Update Store tasks you haven&apos;t modified</p>
                 </div>
               </div>
               <Switch

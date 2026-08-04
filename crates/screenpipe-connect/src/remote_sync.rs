@@ -627,16 +627,25 @@ pub async fn sync_to_remote_with_opts(
 
 /// Open a short-lived sqlx pool against the live DB and run `VACUUM INTO`
 /// to produce a self-contained snapshot at `dest`. SQLite's WAL mode lets
-/// our connection coexist with the engine's writer pool; readers don't block
-/// writers and vice versa. The pool is dropped (connections closed) before
-/// we return — important because we then SFTP the snapshot file.
+/// our connection coexist with the engine's writer pool; on macOS it joins
+/// the recorder's unix-excl domain and process-local WAL index. The pool is
+/// dropped before we return — important because we then SFTP the snapshot.
 async fn snapshot_db(live_db: &Path, dest: &Path) -> Result<()> {
     let url = format!("sqlite://{}", live_db.to_string_lossy());
-    let opts = SqliteConnectOptions::from_str(&url)
+    let mut opts = SqliteConnectOptions::from_str(&url)
         .with_context(|| format!("invalid sqlite url: {}", url))?
-        .read_only(true)
-        // No journal file is created for read-only opens, but be explicit:
         .create_if_missing(false);
+    #[cfg(not(target_os = "macos"))]
+    {
+        opts = opts.read_only(true);
+    }
+    // The recorder uses unix-excl on macOS so its WAL index lives in process
+    // memory instead of an APFS-backed `-shm` mapping. Snapshot connections
+    // run in that same process and must join the same VFS/locking domain.
+    #[cfg(target_os = "macos")]
+    {
+        opts = opts.vfs("unix-excl");
+    }
 
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -1113,6 +1122,64 @@ async fn discover_tailscale() -> Vec<DiscoveredHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn snapshot_reads_the_live_wal_without_a_file_backed_index_on_macos() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let live = dir.path().join("live.sqlite");
+        let snapshot = dir.path().join("snapshot.sqlite");
+        let mut live_options = SqliteConnectOptions::new()
+            .filename(&live)
+            .create_if_missing(true);
+        #[cfg(target_os = "macos")]
+        {
+            live_options = live_options.vfs("unix-excl");
+        }
+        let live_pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .min_connections(2)
+            .connect_with(live_options)
+            .await
+            .expect("open live pool");
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&live_pool)
+            .await
+            .expect("enable WAL");
+        sqlx::query("CREATE TABLE capture_probe (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)")
+            .execute(&live_pool)
+            .await
+            .expect("create probe");
+        sqlx::query(
+            "WITH RECURSIVE rows(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM rows WHERE id<256) \
+             INSERT INTO capture_probe(id, payload) SELECT id, randomblob(2048) FROM rows",
+        )
+        .execute(&live_pool)
+        .await
+        .expect("seed live WAL");
+
+        snapshot_db(&live, &snapshot)
+            .await
+            .expect("snapshot live database");
+        let snapshot_url = format!("sqlite://{}?mode=ro", snapshot.to_string_lossy());
+        let snapshot_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&snapshot_url)
+            .await
+            .expect("open snapshot");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM capture_probe")
+            .fetch_one(&snapshot_pool)
+            .await
+            .expect("read snapshot");
+        assert_eq!(count, 256);
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            !live.with_file_name("live.sqlite-shm").exists(),
+            "unix-excl snapshotting must not create a file-backed WAL index"
+        );
+        snapshot_pool.close().await;
+        live_pool.close().await;
+    }
 
     #[test]
     fn test_parse_ssh_config() {

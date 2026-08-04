@@ -523,10 +523,7 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
     Json(json!({ "data": data }))
 }
 
-/// GET /connections/:id — get saved credentials.
-///
-/// DEPRECATED: Exposes raw API keys to callers. Use /connections/:id/proxy/*path
-/// instead — the proxy injects auth server-side so secrets never enter the LLM context.
+/// GET /connections/:id — get connection status and non-secret settings.
 async fn get_connection(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
@@ -552,34 +549,24 @@ async fn get_connection(
     }
 
     let mgr = state.cm.lock().await;
-    let has_proxy = mgr.find_proxy_config(&id).is_some();
-
     let (status, body) = match mgr.get_credentials(&id).await {
-        Ok(Some(creds)) => (StatusCode::OK, json!({ "credentials": creds })),
-        Ok(None) => (StatusCode::OK, json!({ "credentials": {} })),
+        Ok(Some(creds)) => {
+            let safe = mgr
+                .find_def(&id)
+                .map(|def| screenpipe_connect::connections::safe_connection_config(def, &creds))
+                .unwrap_or_default();
+            (
+                StatusCode::OK,
+                json!({ "connected": !creds.is_empty(), "credentials": safe }),
+            )
+        }
+        Ok(None) => (
+            StatusCode::OK,
+            json!({ "connected": false, "credentials": {} }),
+        ),
         Err(e) => (StatusCode::BAD_REQUEST, json!({ "error": e.to_string() })),
     };
-
-    let mut response = (status, Json(body)).into_response();
-
-    if has_proxy {
-        tracing::debug!(
-            "raw credential access for '{}' — consider using /connections/{}/proxy/ instead",
-            id,
-            id
-        );
-        response.headers_mut().insert(
-            "X-Deprecation-Warning",
-            format!(
-                "Use /connections/{}/proxy/ instead — raw credential access will be removed in a future version",
-                id
-            )
-            .parse()
-            .unwrap(),
-        );
-    }
-
-    response
+    (status, Json(body)).into_response()
 }
 
 /// PUT/POST /connections/:id — save credentials.
@@ -648,10 +635,10 @@ async fn list_instances(
         .and_then(|i| i.oauth_config())
         .is_some();
 
+    let mut items = Vec::new();
     if is_oauth {
         let instances =
             oauth_store::list_connected_oauth_instances(state.secret_store.as_deref(), &id).await;
-        let mut items = Vec::new();
         for inst in instances {
             let token =
                 oauth_store::load_oauth_json(state.secret_store.as_deref(), &id, inst.as_deref())
@@ -675,21 +662,44 @@ async fn list_instances(
                 "display_name": display_name,
             }));
         }
-        return (StatusCode::OK, Json(json!({ "instances": items })));
     }
 
     match mgr.get_all_instances(&id).await {
         Ok(instances) => {
-            let items: Vec<Value> = instances
-                .into_iter()
-                .map(|(inst, conn)| {
-                    json!({
-                        "instance": inst,
-                        "enabled": conn.enabled,
-                        "credentials": conn.credentials,
-                    })
-                })
-                .collect();
+            if let Some(def) = mgr.find_def(&id) {
+                for (inst, conn) in instances {
+                    let safe = screenpipe_connect::connections::safe_connection_config(
+                        def,
+                        &conn.credentials,
+                    );
+                    let connected = conn.enabled && !conn.credentials.is_empty();
+                    let instance_value = json!(inst);
+                    if let Some(existing) = items
+                        .iter_mut()
+                        .find(|item| item.get("instance") == Some(&instance_value))
+                    {
+                        if let Some(object) = existing.as_object_mut() {
+                            let oauth_connected = object
+                                .get("connected")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false);
+                            object.insert(
+                                "connected".to_string(),
+                                json!(oauth_connected || connected),
+                            );
+                            object.insert("enabled".to_string(), json!(conn.enabled));
+                            object.insert("credentials".to_string(), json!(safe));
+                        }
+                    } else {
+                        items.push(json!({
+                            "instance": inst,
+                            "connected": connected,
+                            "enabled": conn.enabled,
+                            "credentials": safe,
+                        }));
+                    }
+                }
+            }
             (StatusCode::OK, Json(json!({ "instances": items })))
         }
         Err(e) => (
@@ -1899,6 +1909,112 @@ fn split_instance_query(raw_query: Option<&str>) -> (Option<String>, Option<Stri
     (instance, forwarded_query)
 }
 
+/// Send a JSON payload to a stored secret webhook target. Unlike the generic
+/// API proxy, this exact route never exposes the target or upstream body.
+async fn webhook_proxy(
+    State(state): State<ConnectionsState>,
+    Path(id): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let (instance, forwarded_query) = split_instance_query(raw_query.as_deref());
+    if forwarded_query.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "error": "unsupported_query"})),
+        )
+            .into_response();
+    }
+
+    let mgr = state.cm.lock().await;
+    let Some(config) = mgr.find_webhook_proxy_config(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "error": "webhook_proxy_unavailable"})),
+        )
+            .into_response();
+    };
+    let credentials = match mgr.get_credentials_instance(&id, instance.as_deref()).await {
+        Ok(Some(credentials)) => credentials,
+        _ => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "error": "connection_not_configured"})),
+            )
+                .into_response()
+        }
+    };
+    let Some(target) = credentials
+        .get(config.credential_key)
+        .and_then(Value::as_str)
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "error": "invalid_webhook_target"})),
+        )
+            .into_response();
+    };
+    let target = match url::Url::parse(target) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => url,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"success": false, "error": "invalid_webhook_target"})),
+            )
+                .into_response()
+        }
+    };
+    drop(mgr);
+
+    let mut request = build_default_client().post(target).body(body.to_vec());
+    if let Some(content_type) = headers.get(axum::http::header::CONTENT_TYPE) {
+        request = request.header(axum::http::header::CONTENT_TYPE, content_type);
+    }
+
+    match request.send().await {
+        Ok(response) => {
+            let upstream_status = response.status().as_u16();
+            if response.status().is_success() {
+                tracing::info!(connection = %id, instance = ?instance, upstream_status, "webhook proxy completed");
+                (
+                    StatusCode::OK,
+                    Json(json!({"success": true, "upstream_status": upstream_status})),
+                )
+                    .into_response()
+            } else {
+                tracing::warn!(connection = %id, instance = ?instance, upstream_status, "webhook proxy upstream rejected request");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({
+                        "success": false,
+                        "error": "upstream_rejected",
+                        "upstream_status": upstream_status
+                    })),
+                )
+                    .into_response()
+            }
+        }
+        Err(error) => {
+            let class = if error.is_timeout() {
+                "timeout"
+            } else if error.is_connect() {
+                "connect"
+            } else {
+                "request"
+            };
+            tracing::warn!(connection = %id, instance = ?instance, error_class = class, "webhook proxy transport failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"success": false, "error": "transport_failed", "class": class})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// Proxy handler: forward requests to third-party APIs with credentials injected.
 /// Route: ANY /connections/:id/proxy/*path
 ///
@@ -2231,21 +2347,10 @@ async fn connection_config(
     let mgr = state.cm.lock().await;
     match mgr.get_credentials_instance(&id, instance.as_deref()).await {
         Ok(Some(creds)) => {
-            // Filter out secret fields
-            let def = mgr.find_def(&id);
-            let secret_keys: std::collections::HashSet<&str> = def
-                .map(|d| {
-                    d.fields
-                        .iter()
-                        .filter(|f| f.secret)
-                        .map(|f| f.key)
-                        .collect()
-                })
+            let safe = mgr
+                .find_def(&id)
+                .map(|def| screenpipe_connect::connections::safe_connection_config(def, &creds))
                 .unwrap_or_default();
-            let safe: Map<String, Value> = creds
-                .into_iter()
-                .filter(|(k, _)| !secret_keys.contains(k.as_str()))
-                .collect();
             (StatusCode::OK, Json(json!({ "config": safe })))
         }
         Ok(None) => (StatusCode::OK, Json(json!({ "config": {} }))),
@@ -3391,6 +3496,8 @@ where
         // Bee one-click device-pairing (must be before /:id to avoid conflict)
         .route("/bee/pair/start", post(bee_pair_start))
         .route("/bee/pair/poll", post(bee_pair_poll))
+        // Exact send-only webhook boundary must coexist with the wildcard API proxy.
+        .route("/:id/proxy", post(webhook_proxy))
         // Credential proxy — pipes call this instead of external APIs directly
         .route("/:id/proxy/*path", axum::routing::any(connection_proxy))
         .route("/:id/config", get(connection_config))
@@ -3622,10 +3729,26 @@ mod tests {
     use axum::http::{header, Request};
     use screenpipe_connect::connections::ConnectionManager;
     use screenpipe_connect::whatsapp::WhatsAppGateway;
-    use std::sync::Arc;
+    use std::io::{self, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
     use tempfile::TempDir;
     use tokio::sync::Mutex;
     use tower::ServiceExt;
+
+    #[derive(Clone)]
+    struct CapturedLogs(Arc<StdMutex<Vec<u8>>>);
+
+    impl Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn write_ics_store(dir: &TempDir, entries: serde_json::Value) {
         let store = json!({
@@ -3656,6 +3779,263 @@ mod tests {
             BrowserRegistry::new(),
             None,
         )
+    }
+
+    async fn webhook_test_router(
+        dir: &TempDir,
+        id: &str,
+        instance: Option<&str>,
+        url: String,
+    ) -> Router<()> {
+        let screenpipe_dir = dir.path().to_path_buf();
+        let cm = Arc::new(Mutex::new(ConnectionManager::new(
+            screenpipe_dir.clone(),
+            None,
+        )));
+        cm.lock()
+            .await
+            .connect_instance(
+                id,
+                instance,
+                serde_json::from_value(json!({"webhook_url": url})).unwrap(),
+            )
+            .await
+            .unwrap();
+        let wa = Arc::new(Mutex::new(WhatsAppGateway::new(screenpipe_dir.clone())));
+        router(
+            cm,
+            wa,
+            screenpipe_dir,
+            None,
+            crate::routes::browser::BrowserBridge::new(),
+            BrowserRegistry::new(),
+            None,
+        )
+    }
+
+    async fn hybrid_connection_test_router(dir: &TempDir) -> Router<()> {
+        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        let store = Arc::new(SecretStore::new(pool, None).await.unwrap());
+        let screenpipe_dir = dir.path().to_path_buf();
+        let cm = Arc::new(Mutex::new(ConnectionManager::new(
+            screenpipe_dir.clone(),
+            Some(store.clone()),
+        )));
+        cm.lock()
+            .await
+            .connect_instance(
+                "teams",
+                Some("work"),
+                serde_json::from_value(json!({
+                    "webhook_url": "https://secret.example/teams/work"
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                "oauth:teams:work",
+                &json!({"access_token": "oauth-secret-sentinel", "email": "work@example.com"}),
+            )
+            .await
+            .unwrap();
+        let wa = Arc::new(Mutex::new(WhatsAppGateway::new(screenpipe_dir.clone())));
+        router(
+            cm,
+            wa,
+            screenpipe_dir,
+            Some(store),
+            crate::routes::browser::BrowserBridge::new(),
+            BrowserRegistry::new(),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn connection_reads_deduplicate_hybrid_named_instances() {
+        let dir = TempDir::new().unwrap();
+        let app = hybrid_connection_test_router(&dir).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/teams/instances")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let work = payload["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["instance"] == "work")
+            .collect::<Vec<_>>();
+        assert_eq!(work.len(), 1, "hybrid instance was duplicated: {payload}");
+        assert_eq!(work[0]["connected"], true);
+        assert_eq!(work[0]["enabled"], true);
+        let serialized = payload.to_string();
+        assert!(!serialized.contains("secret.example"));
+        assert!(!serialized.contains("oauth-secret-sentinel"));
+    }
+
+    async fn spawn_webhook_upstream(
+        status: StatusCode,
+        response_body: &'static str,
+        calls: Arc<AtomicUsize>,
+        captured: Arc<Mutex<Vec<Vec<u8>>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/hook/credential-sentinel",
+            post(move |body: axum::body::Bytes| {
+                let calls = calls.clone();
+                let captured = captured.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    captured.lock().await.push(body.to_vec());
+                    (status, response_body)
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}/hook/credential-sentinel"), server)
+    }
+
+    #[tokio::test]
+    async fn webhook_proxy_forwards_json_without_returning_target() {
+        let dir = TempDir::new().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (url, server) =
+            spawn_webhook_upstream(StatusCode::NO_CONTENT, "", calls.clone(), captured.clone())
+                .await;
+        let app = webhook_test_router(&dir, "n8n", None, url.clone()).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/n8n/proxy")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"event":"hello"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload, json!({"success": true, "upstream_status": 204}));
+        assert!(!String::from_utf8_lossy(&body).contains(&url));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            captured.lock().await.as_slice(),
+            &[br#"{"event":"hello"}"#.to_vec()]
+        );
+
+        for uri in ["/n8n", "/n8n/instances", "/n8n/config"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert!(!text.contains(&url), "{uri} exposed webhook target: {text}");
+            assert!(!text.contains("credential-sentinel"));
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn webhook_proxy_never_returns_error_body_or_retries() {
+        let dir = TempDir::new().unwrap();
+        let logs = Arc::new(StdMutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer({
+                let logs = logs.clone();
+                move || CapturedLogs(logs.clone())
+            })
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let secret_echo = "Bearer credential-sentinel secret_field=credential-sentinel";
+        let (url, server) = spawn_webhook_upstream(
+            StatusCode::SERVICE_UNAVAILABLE,
+            secret_echo,
+            calls.clone(),
+            captured,
+        )
+        .await;
+        let app = webhook_test_router(&dir, "zapier", None, url.clone()).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/zapier/proxy")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains(secret_echo));
+        assert!(!text.contains(&url));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("connection=zapier"));
+        assert!(logs.contains("upstream_status=503"));
+        assert!(!logs.contains(secret_echo));
+        assert!(!logs.contains(&url));
+        assert!(!logs.contains("credential-sentinel"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn webhook_proxy_supports_named_instances_and_teams_manual_mode() {
+        for (id, instance) in [("discord", Some("work")), ("teams", None)] {
+            let dir = TempDir::new().unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let (url, server) =
+                spawn_webhook_upstream(StatusCode::OK, "ignored", calls.clone(), captured).await;
+            let app = webhook_test_router(&dir, id, instance, url).await;
+            let suffix = instance
+                .map(|value| format!("?instance={value}"))
+                .unwrap_or_default();
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/{id}/proxy{suffix}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            server.abort();
+        }
     }
 
     async fn spawn_ics_feed(body: String) -> (String, tokio::task::JoinHandle<()>) {

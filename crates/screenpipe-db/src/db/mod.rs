@@ -9,7 +9,7 @@ use screenpipe_config::DbConfig;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::pool::PoolConnection;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::Column;
 use sqlx::ConnectOptions;
 use sqlx::Connection;

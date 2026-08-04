@@ -829,12 +829,13 @@ pub async fn set_cloud_token(
 }
 
 /// Persist the user's enterprise admin status, team API token, and the org's
-/// team API base URL so the pi-agent's `screenpipe-team` skill knows whether
-/// to install itself and where to point.
+/// team API base URL. The Enterprise app uses the role/license/token fields to
+/// decide whether to inject `screenpipe-team`; the native CLI resolves the API
+/// base and token from the same file when that skill invokes it.
 ///
 /// Called by the frontend right after a policy fetch confirms admin
 /// role. Storing this alongside the license key in `enterprise.json`
-/// keeps everything pi-agent needs in one file the skill can read
+/// keeps the Enterprise app and native CLI on one local configuration contract
 /// without a Tauri round-trip.
 ///
 /// All fields are optional so callers can update one at a time —

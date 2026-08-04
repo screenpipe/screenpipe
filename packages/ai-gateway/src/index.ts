@@ -7,7 +7,14 @@ import { Env, RequestBody, type AuthResult } from './types';
 import { handleOptions, createSuccessResponse, createErrorResponse, addCorsHeaders } from './utils/cors';
 import { validateAuth } from './utils/auth';
 import { RateLimiter, checkRateLimit } from './utils/rate-limiter';
-import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate } from './services/usage-tracker';
+import {
+	buildDailyUsageLimitError,
+	trackUsage,
+	getUsageStatus,
+	isModelAllowed,
+	isFreeModel,
+	resolveModelGate,
+} from './services/usage-tracker';
 import { handleChatCompletions } from './handlers/chat';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
@@ -42,6 +49,7 @@ import {
 	reserveDailyCostCap,
 	withDailyCostSettlement,
 	getDailyUserCostForCap,
+	type DailyCostHold,
 } from './services/cost-cap';
 import {
 	logReservedCost,
@@ -74,6 +82,10 @@ import {
 	paidHostedAiRouteError,
 } from './services/hosted-ai-errors';
 import { resolveModelAlias } from './providers';
+import {
+	buildHostedChatGatewayContext,
+	isHostedChatGatewayEnabled,
+} from './services/cloudflare-ai-gateway';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
 export { RateLimiter };
@@ -309,13 +321,42 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const usageAccountPlan = authResult.tier === 'anonymous' && authResult.accountPlan === 'unknown'
 				? 'free'
 				: authResult.accountPlan;
+			const cloudflareManaged = isHostedChatGatewayEnabled(env);
 			const status = await getUsageStatus(
 				env,
 				authResult.deviceId,
 				usageTier,
-				authResult.userId,
+				cloudflareManaged ? undefined : authResult.userId,
 				usageAccountPlan,
 			);
+			if (cloudflareManaged) {
+				const enriched = {
+					...status,
+					// Cloudflare owns the 30-day spend allowance in this mode. The
+					// legacy query counters remain in the compatibility envelope, but
+					// cannot be presented as a live provider-cost meter.
+					upsell_banner: false,
+					cost_limit_reached: null,
+					upgrade_eligible: isHostedAiUpgradeEligible(authResult),
+					hosted_ai: {
+						plan: authResult.service === true
+							? 'internal'
+							: getHostedAiPlan(usageAccountPlan) ?? 'unknown',
+						trial: authResult.hostedAiTrial === true,
+						allowance_managed_by: 'cloudflare',
+						included_credits: null,
+						used_credits: null,
+						remaining_credits: null,
+						model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
+						upgrade_url: isHostedAiUpgradeEligible(authResult)
+							? 'https://screenpi.pe/account/billing'
+							: null,
+						can_buy_credits: false,
+						byok_supported: true,
+					},
+				};
+				return addCorsHeaders(createSuccessResponse(enriched));
+			}
 			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
 			// are our internal margin and shouldn't leak to any client/user).
 			// Stored query credits do not raise the cash ceiling. Credit-funded
@@ -514,10 +555,16 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				return rateLimit.response;
 			}
 
-			// Track usage and check daily limit (includes IP-based abuse prevention)
-			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
-			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, body.model);
-			if (!usage.allowed) {
+			const cloudflareGateway = isHostedChatGatewayEnabled(env);
+			// Legacy mode retains the paid weighted-query admission gate. In
+			// Cloudflare mode the provider-cost spend rules are authoritative for
+			// this endpoint; Free's separate two-message lease remains above.
+			let usage: Awaited<ReturnType<typeof trackUsage>> | null = null;
+			if (!cloudflareGateway) {
+				const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
+				usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, body.model);
+			}
+			if (usage && !usage.allowed) {
 				console.warn('hosted AI admission rejected', {
 					gate: 'daily_query',
 					tier: authResult.tier,
@@ -525,15 +572,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				});
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: creditsExhausted
-						? `You've used all free queries and have no credits remaining. Buy more at screenpi.pe`
-						: `You've used all ${usage.limit} free AI queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
+					...buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						creditsExhausted
+							? `You've used all free queries and have no credits remaining. Buy more at screenpi.pe`
+							: `You've used all ${usage.limit} free AI queries for today. Resets at ${usage.resetsAt}`,
+					),
 					upgrade_options: {
 						buy_credits: {
 							url: 'https://screenpi.pe/onboarding',
@@ -563,45 +609,51 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// Serialize priced work within its foreground/background lane. A scheduled
 			// pipe must not block a user who is actively waiting in chat.
 			const latency = resolveLatencyClass(request, body, env);
-			const costReservation = await reserveDailyCostCap(
-				env,
-				authResult.deviceId,
-				authResult.tier,
-				body.model,
-				new Date(),
-				isBackgroundRequest(request) ? 'background' : 'interactive',
-				costReservationShape(body, rawRequestBytes),
-				authResult.accountPlan,
-				authResult.hostedAiTrial === true,
-			);
-			if (!costReservation.allowed) {
-				let rejectionReason: string | undefined;
-				try {
-					const payload = await costReservation.response.clone().json() as { error?: unknown };
-					if (typeof payload.error === 'string') {
-						rejectionReason = payload.error;
-						try {
-							const nested = JSON.parse(payload.error) as { error?: unknown };
-							if (typeof nested.error === 'string') rejectionReason = nested.error;
-						} catch {
-							// The error was already a plain code.
+			const gatewayContext = cloudflareGateway
+				? await buildHostedChatGatewayContext(authResult, body.model, latency)
+				: undefined;
+			let dailyCostReservation: DailyCostHold | null = null;
+			if (!cloudflareGateway) {
+				const costReservation = await reserveDailyCostCap(
+					env,
+					authResult.deviceId,
+					authResult.tier,
+					body.model,
+					new Date(),
+					isBackgroundRequest(request) ? 'background' : 'interactive',
+					costReservationShape(body, rawRequestBytes),
+					authResult.accountPlan,
+					authResult.hostedAiTrial === true,
+				);
+				if (!costReservation.allowed) {
+					let rejectionReason: string | undefined;
+					try {
+						const payload = await costReservation.response.clone().json() as { error?: unknown };
+						if (typeof payload.error === 'string') {
+							rejectionReason = payload.error;
+							try {
+								const nested = JSON.parse(payload.error) as { error?: unknown };
+								if (typeof nested.error === 'string') rejectionReason = nested.error;
+							} catch {
+								// The error was already a plain code.
+							}
 						}
+					} catch {
+						// Preserve the original response even if diagnostic decoding fails.
 					}
-				} catch {
-					// Preserve the original response even if diagnostic decoding fails.
+					console.warn('hosted AI admission rejected', {
+						gate: 'cost_reservation',
+						reason: rejectionReason,
+						tier: authResult.tier,
+						accountPlan: authResult.accountPlan,
+						hostedAiTrial: authResult.hostedAiTrial === true,
+						status: costReservation.response.status,
+					});
+					if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
+					return costReservation.response;
 				}
-				console.warn('hosted AI admission rejected', {
-					gate: 'cost_reservation',
-					reason: rejectionReason,
-					tier: authResult.tier,
-					accountPlan: authResult.accountPlan,
-					hostedAiTrial: authResult.hostedAiTrial === true,
-					status: costReservation.response.status,
-				});
-				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
-				return costReservation.response;
+				dailyCostReservation = costReservation.reservation;
 			}
-			const dailyCostReservation = costReservation.reservation;
 
 			// Route latency-tolerant (background) traffic to the cheaper flex tier.
 			let leaseReleased = false;
@@ -640,6 +692,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					{
 						freePreview: freeChat.mode === 'metered',
 						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
+						gatewayContext,
 					},
 				);
 				const latencyMs = Date.now() - reqStart;
@@ -660,8 +713,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					? `${servedModel}:flex`
 					: servedModel;
 
-				// Log cost — for streaming, intercept SSE events to get real token counts
-				if (body.stream) {
+				// Cloudflare records blocked attempts with no provider cost. Keep D1 as
+				// a completed-cost comparison only; estimating a 429 with default token
+				// counts would manufacture spend that the Gateway correctly reports as $0.
+				if (cloudflareGateway && !response.ok) {
+					costSettlement = Promise.resolve(true);
+				// Log cost — for streaming, intercept SSE events to get real token counts.
+				} else if (body.stream) {
 					const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(response, 'openai');
 					response = trackedResponse;
 					costSettlement = usagePromise.then(u => logCost(env, {
@@ -670,6 +728,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						user_id: authResult.userId,
 						tier: authResult.tier,
 						hosted_ai_trial: authResult.hostedAiTrial === true,
+						budgeted: !cloudflareGateway,
 						provider: inferProvider(servedModel),
 						model: pricedModel,
 						input_tokens: u.input_tokens ?? null,
@@ -717,6 +776,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 								user_id: authResult.userId,
 								tier: authResult.tier,
 								hosted_ai_trial: authResult.hostedAiTrial === true,
+								budgeted: !cloudflareGateway,
 								provider: inferProvider(servedModel),
 								model: pricedModel,
 								input_tokens: inputTokens,
@@ -739,7 +799,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					);
 				}
 
-				if (usage.paidVia === 'credits' && usage.creditsRemaining !== undefined) {
+				if (usage?.paidVia === 'credits' && usage.creditsRemaining !== undefined) {
 					const newResponse = new Response(response.body, response);
 					newResponse.headers.set('X-Credits-Remaining', String(usage.creditsRemaining));
 					newResponse.headers.set('X-Paid-Via', 'credits');
@@ -771,15 +831,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, 'gemini-2.5-flash');
 			if (!usage.allowed) {
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: `You've used all ${usage.limit} free queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
-				})));
+				return addCorsHeaders(createErrorResponse(429, JSON.stringify(
+					buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						`You've used all ${usage.limit} free queries for today. Resets at ${usage.resetsAt}`,
+					),
+				)));
 			}
 			const costReservation = await reserveDailyCostCap(
 				env,
@@ -1001,15 +1060,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, parsedModel);
 			if (!usage.allowed) {
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: `You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
-				})));
+				return addCorsHeaders(createErrorResponse(429, JSON.stringify(
+					buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						`You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
+					),
+				)));
 			}
 			const costReservation = await reserveDailyCostCap(
 				env,
@@ -1157,15 +1215,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, ocModel);
 			if (!usage.allowed) {
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
-					message: `You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
-					used_today: usage.used,
-					limit_today: usage.limit,
-					resets_at: usage.resetsAt,
-					tier: usageTier,
-					credits_remaining: usage.creditsRemaining ?? 0,
-				})));
+				return addCorsHeaders(createErrorResponse(429, JSON.stringify(
+					buildDailyUsageLimitError(
+						usage,
+						usageTier,
+						authResult.accountPlan,
+						`You've used all ${usage.limit} AI queries for today. Resets at ${usage.resetsAt}`,
+					),
+				)));
 			}
 			const costReservation = await reserveDailyCostCap(
 				env,

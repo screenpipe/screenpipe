@@ -21,7 +21,8 @@ export type OnboardingCompletionContext = {
     | "live_view_deferred"
     | "hidden_enterprise"
     | "live_view_created"
-    | "existing_live_view_selected";
+    | "existing_live_view_selected"
+    | "ai_connections_selected";
   pipeCount?: number;
   customized?: boolean;
   dashboardBlockCount?: number;
@@ -32,7 +33,7 @@ interface OnboardingState {
   onboardingData: OnboardingStore;
   isLoading: boolean;
   error: string | null;
-  
+
   // Actions
   loadOnboardingStatus: () => Promise<void>;
   completeOnboarding: (context: OnboardingCompletionContext) => Promise<void>;
@@ -52,7 +53,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
       const result = await commands.getOnboardingStatus();
-      
+
       if (result.status === "ok") {
         set({ onboardingData: result.data, isLoading: false });
       } else {
@@ -60,9 +61,12 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       }
     } catch (error) {
       console.error("Error loading onboarding status:", error);
-      set({ 
-        error: error instanceof Error ? error.message : "Failed to load onboarding status",
-        isLoading: false 
+      set({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to load onboarding status",
+        isLoading: false,
       });
     }
   },
@@ -75,17 +79,17 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       // The generic app tour remains available explicitly from Help.
       setFirstRunGuidePending(false);
       const result = await commands.completeOnboarding();
-      
+
       if (result.status === "ok") {
         setFirstRunGuideReplayAfterOnboarding(false);
         // Update local state
-        set(state => ({
+        set((state) => ({
           onboardingData: {
             ...state.onboardingData,
             isCompleted: true,
             completedAt: new Date().toISOString(),
           },
-          isLoading: false
+          isLoading: false,
         }));
         posthog.capture("onboarding_completed", {
           completion_method: context.method,
@@ -105,10 +109,15 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
               }
             : {}),
         });
-        // Rust routes a newly created Home to Brain. This covers a reused Home.
+        const destination =
+          context.method === "ai_connections_selected"
+            ? "connections"
+            : "brain";
+        // Rust routes a newly created Home to Brain. This covers a reused Home
+        // and sends the explicit AI-context path to Connections instead.
         try {
           void emit("navigate", {
-            url: "screenpipe://home?section=brain",
+            url: `screenpipe://home?section=${destination}`,
           }).catch(() => {});
         } catch {
           // not in tauri (preview/tests)
@@ -119,9 +128,12 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
     } catch (error) {
       setFirstRunGuidePending(firstRunGuideWasPending);
       console.error("Error completing onboarding:", error);
-      set({ 
-        error: error instanceof Error ? error.message : "Failed to complete onboarding",
-        isLoading: false 
+      set({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to complete onboarding",
+        isLoading: false,
       });
       throw error;
     }
@@ -131,29 +143,30 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
       const result = await commands.resetOnboarding();
-      
+
       if (result.status === "ok") {
         // Reset setup without replaying the separate optional app tour.
         setFirstRunGuidePending(false);
         setFirstRunGuideReplayAfterOnboarding(false);
         // Update local state
-        set(state => ({
+        set((state) => ({
           onboardingData: {
             ...state.onboardingData,
             isCompleted: false,
             completedAt: null,
             currentStep: null,
           },
-          isLoading: false
+          isLoading: false,
         }));
       } else {
         throw new Error(result.error);
       }
     } catch (error) {
       console.error("Error resetting onboarding:", error);
-      set({ 
-        error: error instanceof Error ? error.message : "Failed to reset onboarding",
-        isLoading: false 
+      set({
+        error:
+          error instanceof Error ? error.message : "Failed to reset onboarding",
+        isLoading: false,
       });
       throw error;
     }
@@ -163,11 +176,11 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
 // Hook to automatically load onboarding status on mount
 export const useOnboardingWithLoader = () => {
   const store = useOnboarding();
-  
+
   useEffect(() => {
     store.loadOnboardingStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  
+
   return store;
 };

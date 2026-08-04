@@ -30,6 +30,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
 import { RegistryBrowser } from "./registry-browser";
 import type { McpHeader, McpServer, McpServerDraft } from "@/lib/mcp-registry";
 
@@ -204,7 +205,7 @@ export function CustomMcpCard() {
               official registry, or add an HTTP endpoint like Brave Search,
               Linear, Notion, or a local stdio process like{" "}
               <code className="text-xs bg-muted px-1 rounded">uvx mcp-server-brave</code>
-              {" "}— so pipes and chat can call their tools via{" "}
+              {" "}— so scheduled tasks and chat can call their tools via{" "}
               <code className="text-xs bg-muted px-1 rounded">sp_mcp_call</code>
               .
             </p>
@@ -721,6 +722,10 @@ function ServerEditor({
       if (!effectiveName || !url.trim()) return;
       const targetId = duplicateServer?.id ?? initial.id;
       if (mode === "edit" && !(await saveConfig())) return;
+      // A manual (non-DCR) client_id is registered against the engine's
+      // localhost callback, so only DCR flows go through the HTTPS relay.
+      const manualClientId = Boolean(initial.oauth?.client_id?.trim());
+      const appScheme = manualClientId ? undefined : await appDeepLinkScheme();
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
         {
@@ -733,8 +738,9 @@ function ServerEditor({
                   url: url.trim(),
                   headers: headersForRequest(),
                   enabled,
+                  app_scheme: appScheme,
                 }
-              : {}
+              : { app_scheme: appScheme }
           ),
         }
       );
@@ -775,7 +781,9 @@ function ServerEditor({
           oauthTimerRef.current = setTimeout(poll, 2000);
         } else {
           setOauthWaiting(false);
-          setOauthMessage("Sign-in was not completed");
+          setOauthMessage(
+            "Sign-in was not completed — if your browser blocks http://localhost (e.g. Safari HTTPS-Only mode), click \"Open screenpipe\" on the confirmation page"
+          );
         }
       };
       oauthTimerRef.current = setTimeout(poll, 2000);
@@ -1054,7 +1062,7 @@ function ServerEditor({
           checked={enabled}
           onChange={(e) => setEnabled(e.target.checked)}
         />
-        <span>Enabled — make tools available to pipes and chat</span>
+        <span>Enabled — make tools available to scheduled tasks and chat</span>
       </label>
 
       {testResult && (
@@ -1076,7 +1084,7 @@ function ServerEditor({
                 {testResult.data.tools.map((t) => t.name).join(", ")}
               </div>
               <p className="text-[11px] text-muted-foreground pt-1">
-                Heads up — when a pipe calls these tools they run with
+                Heads up — when a scheduled task calls these tools they run with
                 screenpipe&apos;s grants. Review what each tool can do
                 before enabling on a sensitive workspace.
               </p>

@@ -13,7 +13,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Sign in to Screenpipe", keywords: ["login", "log in", "sign in"] },
   { label: "Logout", keywords: ["signout", "sign out", "log out"] },
   { label: "Screenpipe Business", keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
-  { label: "pipe sync across devices", keywords: ["pipe sync", "sync"] },
+  { label: "scheduled sync across devices", keywords: ["scheduled sync", "pipe sync", "sync"] },
   { label: "memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
   { label: "connection sync across devices", keywords: ["connection sync", "sync", "slack", "notion"] },
 ];
@@ -27,8 +27,8 @@ import {
   Lock,
 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
+import { openExternalUrl } from "@/lib/open-external-url";
 import {
   getBusinessCapacityUpgrade,
   planDisplayName,
@@ -95,24 +95,6 @@ function isBusinessSubscriptionPlan(plan: string | null | undefined): boolean {
     "monthly",
     "annual",
   ].includes(plan.toLowerCase());
-}
-
-async function openExternalUrl(url: string): Promise<void> {
-  const e2eWindow =
-    typeof window !== "undefined"
-      ? (window as Window & {
-          __SCREENPIPE_E2E_OPEN_URLS?: string[];
-          __SCREENPIPE_E2E_INTERCEPT_OPEN_URLS?: boolean;
-        })
-      : null;
-
-  if (Array.isArray(e2eWindow?.__SCREENPIPE_E2E_OPEN_URLS)) {
-    e2eWindow.__SCREENPIPE_E2E_OPEN_URLS.push(url);
-  }
-  if (e2eWindow?.__SCREENPIPE_E2E_INTERCEPT_OPEN_URLS) {
-    return;
-  }
-  await openUrl(url);
 }
 
 function analyticsDistinctId(enabled: boolean): string | undefined {
@@ -562,9 +544,9 @@ export function AccountSection() {
           <div className="mt-4 pt-4 border-t border-border/50">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">pipe sync across devices</p>
+                <p className="text-sm font-medium">scheduled sync across devices</p>
                 <p className="text-xs text-muted-foreground">
-                  sync your pipes & configs to all devices linked to your account
+                  sync your scheduled tasks & configs to all devices linked to your account
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -575,10 +557,10 @@ export function AccountSection() {
                     onCheckedChange={async (checked) => {
                       await updateSettings({ pipeSyncEnabled: checked });
                       toast({
-                        title: checked ? "pipe sync enabled" : "pipe sync disabled",
+                        title: checked ? "scheduled sync enabled" : "scheduled sync disabled",
                         description: checked
-                          ? "pipes will sync across your devices"
-                          : "pipes will no longer sync",
+                          ? "scheduled tasks will sync across your devices"
+                          : "scheduled tasks will no longer sync",
                       });
                     }}
                   />
@@ -602,7 +584,7 @@ export function AccountSection() {
                       try {
                         await syncFetchOrThrow("/sync/pipes/pull", { method: "POST" });
                         await syncFetchOrThrow("/sync/pipes/push", { method: "POST" });
-                        toast({ title: "pipes synced" });
+                        toast({ title: "scheduled tasks synced" });
                       } catch (e) {
                         toast({
                           title: "sync failed",
@@ -802,9 +784,9 @@ export function AccountSection() {
           <Card className="p-4 opacity-75">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">pipe sync across devices</p>
+                <p className="text-sm font-medium">scheduled sync across devices</p>
                 <p className="text-xs text-muted-foreground">
-                  sync your pipes & configs to all devices linked to your account
+                  sync your scheduled tasks & configs to all devices linked to your account
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -857,9 +839,9 @@ export function AccountSection() {
           <Card className="p-4 opacity-75">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">pipe sync across devices</p>
+                <p className="text-sm font-medium">scheduled sync across devices</p>
                 <p className="text-xs text-muted-foreground">
-                  sync your pipes & configs to all devices linked to your account
+                  sync your scheduled tasks & configs to all devices linked to your account
                 </p>
               </div>
               <div className="flex items-center gap-2">

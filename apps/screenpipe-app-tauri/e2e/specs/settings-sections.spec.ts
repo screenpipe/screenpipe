@@ -255,14 +255,14 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it('keeps the low-disk guard off by default, then stops capture and persists a notification when enabled', async () => {
+  it('keeps the low-disk guard on by default, preserves explicit opt-out, and stops capture when enabled', async () => {
     const navStorage = await $('[data-testid="settings-nav-storage"]');
     await navStorage.click();
 
     const toggle = await $('[data-testid="low-disk-recording-guard-toggle"]');
     await toggle.waitForExist({ timeout: t(8_000) });
-    expect(await toggle.getAttribute('data-state')).toBe('unchecked');
-    expect(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')).toBe(false);
+    expect(await toggle.getAttribute('data-state')).toBe('checked');
+    expect(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')).toBe(true);
     const config = await invokeOrThrow<{
       thresholdBytes: number;
       checkIntervalSeconds: number;
@@ -293,6 +293,18 @@ describe('Settings sections', () => {
       // CaptureSession is torn down.
       await invokeOrThrow('e2e_mark_capture_intended');
       expect(await invokeOrThrow<boolean>('is_capture_paused')).toBe(false);
+
+      // An explicit user opt-out remains authoritative even though missing
+      // settings now fail safe to enabled.
+      await toggle.click();
+      await browser.waitUntil(
+        async () => !(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')),
+        {
+          timeout: t(8_000),
+          interval: 200,
+          timeoutMsg: 'low-disk guard opt-out was not persisted',
+        },
+      );
       expect(
         await invokeOrThrow<string>('e2e_handle_disk_space_low', {
           availableBytes: 1024 * 1024 * 1024,
@@ -356,7 +368,7 @@ describe('Settings sections', () => {
     } finally {
       // Leave the isolated E2E store at production defaults for later specs,
       // including when an assertion above fails.
-      await invokeOrThrow('e2e_set_low_disk_guard_enabled', { enabled: false });
+      await invokeOrThrow('e2e_set_low_disk_guard_enabled', { enabled: true });
       await invokeOrThrow('e2e_set_notification_master_enabled', {
         enabled: true,
       });

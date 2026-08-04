@@ -181,7 +181,7 @@ function pipeExecutionConversation(execution: SidebarPipeExecution): ChatConvers
     const detail =
       execution.error_message?.trim() ||
       execution.stderr?.trim() ||
-      `pipe execution ${execution.status}`;
+      `scheduled task execution ${execution.status}`;
     conversation.messages = [{
       id: `pipe-execution-status-${execution.id}`,
       role: "assistant",
@@ -977,7 +977,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       !isTerminalPipeExecutionStatus(fullExecution.status)
     ) {
       toast({
-        title: "couldn't load pipe run",
+        title: "couldn't load scheduled run",
         description: "the execution output is temporarily unavailable",
         variant: "destructive",
       });
@@ -1322,7 +1322,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
           <div className="group/pipes min-h-0 flex flex-col shrink-0">
               <Section
-                title="pipes"
+                title="scheduled"
                 collapsed={pipesCollapsed}
                 onCollapsedChange={updatePipesCollapsed}
                 headerAction={
@@ -1338,7 +1338,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   </div>
                 ) : pipeItems.length === 0 ? (
                   <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                    no pipe runs yet
+                    no scheduled runs yet
                   </div>
                 ) : pipeItems.map((item) => (
                     <PipeGroupRow
@@ -1373,7 +1373,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     onClick={() => void fetchPipeInventory(true)}
                     disabled={pipeInventoryLoadingMore}
                   >
-                    {pipeInventoryLoadingMore ? "loading…" : "show more pipes"}
+                    {pipeInventoryLoadingMore ? "loading…" : "show more scheduled tasks"}
                   </button>
                 )}
               </Section>

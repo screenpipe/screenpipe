@@ -15,7 +15,7 @@ import {
   PanelLeftOpen,
   Search,
   Plug,
-  NotebookPen,
+  CalendarClock,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import {
@@ -964,10 +964,9 @@ function HomeContent() {
     // conversation". Each click allocates a new session id (empty
     // rows are not reused — that felt like opening an old recent).
     { id: "home", label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
-    { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
-    { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
-    { id: "meetings", label: "Meetings", icon: <NotebookPen className="h-3.5 w-3.5" /> },
     { id: "brain", label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
+    { id: "pipes", label: "Scheduled", icon: <Workflow className="h-3.5 w-3.5" /> },
+    { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   ]
     .filter((s) => !isSectionHidden(s.id) && !(s.id === "brain" && isSectionHidden("memories")))
@@ -1014,7 +1013,7 @@ function HomeContent() {
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
           {/* Top-left chrome strip — pinned next to the macOS traffic
-              lights: sidebar toggle, search and recording-status dot.
+              lights: sidebar toggle, search, meetings and recording-status dot.
               No wordmark, no header row (Claude / Codex style). When
               the sidebar is collapsed it is hidden entirely and the
               strip floats over the content, reduced to toggle + status
@@ -1081,6 +1080,44 @@ function HomeContent() {
                       {formatShortcutDisplay(settings.searchShortcut, isMac)}
                     </kbd>
                   ) : null}
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {!sidebarCollapsed && !isSectionHidden("meetings") && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => setActiveSection("meetings")}
+                    aria-label={meetingState.active ? "meetings — recording" : "meetings"}
+                    aria-current={activeSection === "meetings" ? "page" : undefined}
+                    data-testid="nav-meetings"
+                    data-announcement-anchor="top-meetings"
+                    className={cn(
+                      "relative p-1 rounded-md transition-colors",
+                      activeSection === "meetings"
+                        ? isTranslucent
+                          ? "vibrant-nav-active"
+                          : "bg-muted text-foreground"
+                        : isTranslucent
+                          ? "vibrant-nav-item"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                    )}
+                  >
+                    <CalendarClock className="h-3.5 w-3.5" />
+                    {meetingState.active && (
+                      <>
+                        <span
+                          aria-hidden="true"
+                          className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-background"
+                        />
+                        <span className="sr-only">meeting recording active</span>
+                      </>
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  {meetingState.active ? "meetings — recording" : "meetings"}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -1154,7 +1191,7 @@ function HomeContent() {
                           label={runningPipeCount}
                           className="ml-auto shrink-0"
                           labelClassName="text-muted-foreground/60"
-                          ariaLabel={`${runningPipeCount} running pipe${runningPipeCount === 1 ? "" : "s"}`}
+                          ariaLabel={`${runningPipeCount} running scheduled task${runningPipeCount === 1 ? "" : "s"}`}
                         />
                       )}
                     </button>

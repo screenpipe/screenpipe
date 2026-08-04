@@ -5,7 +5,7 @@
 import { describe, it, expect, mock } from 'bun:test';
 import { handleModelListing } from '../handlers/models';
 import { createProvider } from '../providers';
-import { OpenAIProvider } from '../providers/openai';
+import { OpenAIProvider, applyGpt56PromptCaching } from '../providers/openai';
 import { getModelCost, inferProvider, isZeroCostModel } from '../services/cost-tracker';
 import { getModelWeight, isModelAllowed } from '../services/usage-tracker';
 
@@ -77,6 +77,15 @@ describe('OpenAI API model catalog', () => {
 
 		expect(ids).not.toContain('gpt-5.5');
 		expect(ids).not.toContain('gpt-5.4-mini');
+	});
+
+	it('publishes zero query weights when Cloudflare manages hosted-chat allowance', async () => {
+		const models = await listedModels({
+			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
+			CLOUDFLARE_AI_GATEWAY_ID: 'screenpipe-staging',
+		});
+		expect(models.length).toBeGreaterThan(0);
+		expect(models.every((model) => model.query_weight === 0)).toBe(true);
 	});
 
 	it('keeps frontier OpenAI models gated while Basic gets efficient models', () => {
@@ -248,6 +257,60 @@ describe('OpenAI API accounting and routing', () => {
 		const params = capturedParams!;
 		expect(params['max_completion_tokens']).toBe(32);
 		expect(params['max_tokens']).toBeUndefined();
+	});
+
+	it('adds stable GPT-5.6 explicit prompt-cache fields at the last leading system block', async () => {
+		const params: any = {
+			model: 'gpt-5.6-luna',
+			messages: [
+				{ role: 'system', content: 'stable base' },
+				{ role: 'system', content: [{ type: 'text', text: 'stable tools policy' }] },
+				{ role: 'user', content: 'dynamic turn' },
+			],
+			tools: [{ type: 'function', function: { name: 'search', parameters: { type: 'object' } } }],
+		};
+		const samePrefix: any = structuredClone(params);
+		samePrefix.messages[2].content = 'another dynamic turn';
+
+		await applyGpt56PromptCaching(params);
+		await applyGpt56PromptCaching(samePrefix);
+
+		expect(params.prompt_cache_options).toEqual({ mode: 'explicit' });
+		expect(params.prompt_cache_key).toMatch(/^sp:[a-f0-9]{48}$/);
+		expect(params.prompt_cache_key).toBe(samePrefix.prompt_cache_key);
+		expect(params.messages[0].content).toBe('stable base');
+		expect(params.messages[1].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' });
+		expect(params.messages[2].prompt_cache_breakpoint).toBeUndefined();
+	});
+
+	it('changes the GPT-5.6 cache key when the system prefix or tools change', async () => {
+		const base: any = {
+			model: 'gpt-5.6-sol',
+			messages: [{ role: 'system', content: 'base' }, { role: 'user', content: 'hello' }],
+			tools: [],
+		};
+		const changedSystem = structuredClone(base);
+		changedSystem.messages[0].content = 'different';
+		const changedTools = structuredClone(base);
+		changedTools.tools = [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }];
+		await Promise.all([
+			applyGpt56PromptCaching(base),
+			applyGpt56PromptCaching(changedSystem),
+			applyGpt56PromptCaching(changedTools),
+		]);
+		expect(changedSystem.prompt_cache_key).not.toBe(base.prompt_cache_key);
+		expect(changedTools.prompt_cache_key).not.toBe(base.prompt_cache_key);
+	});
+
+	it('leaves pre-GPT-5.6 requests unchanged', async () => {
+		const params: any = {
+			model: 'gpt-5.5',
+			messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'hello' }],
+		};
+		await applyGpt56PromptCaching(params);
+		expect(params.prompt_cache_key).toBeUndefined();
+		expect(params.prompt_cache_options).toBeUndefined();
+		expect(params.messages[0].content).toBe('stable');
 	});
 
 	it('omits temperature for GPT-5 chat completions', async () => {

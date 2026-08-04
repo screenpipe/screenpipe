@@ -70,6 +70,10 @@ default = ["security"]
 # declaring the feature silences "unexpected cfg" warnings in macOS builds
 # without changing behavior (it's never enabled at compile time).
 cargo-clippy = []
+# Enables Enterprise-app-only agent affordances. The desktop app forwards this
+# feature only for its separately distributed Enterprise build; consumer and
+# standalone CLI builds leave it disabled.
+enterprise-build = []
 security = ["dep:regex", "dep:lazy_static"]
 secrets = ["dep:screenpipe-secrets", "dep:screenpipe-vault"]
 cloud-sync = [

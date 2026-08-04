@@ -216,7 +216,7 @@ export function LiveViewDashboardSwitcher({
             <AlertDialogTitle>Delete “{current.title}”?</AlertDialogTitle>
             <AlertDialogDescription>
               This removes the dashboard and its layout. Other dashboards and
-              Pipe artifacts stay available.
+              Scheduled task artifacts stay available.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

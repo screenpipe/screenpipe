@@ -107,7 +107,7 @@ function LiveViewCardBody({
         ) : slot.binding ? (
           `${slot.binding.pipeName} has not published this data yet`
         ) : (
-          "connect a Pipe to fill this Block"
+          "connect a scheduled task to fill this Block"
         )}
       </div>
     );
@@ -510,7 +510,7 @@ export function LiveViewCard({
                 <div>
                   <p className="text-xs font-medium">What should improve?</p>
                   <p className="mt-0.5 text-[10px] text-muted-foreground">
-                    Optional. The connected Pipe will use this next time.
+                    Optional. The connected scheduled task will use this next time.
                   </p>
                 </div>
                 <Input
@@ -640,8 +640,8 @@ export function LiveViewCard({
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
           {slot.binding
-            ? `Pipe: ${slot.binding.pipeName}`
-            : "No Pipe connected"}
+            ? `Scheduled task: ${slot.binding.pipeName}`
+            : "No scheduled task connected"}
         </span>
         {slot.value && (
           <span
