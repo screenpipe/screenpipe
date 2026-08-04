@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Input, InputProps } from "./input";
 import { Label } from "./label";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,26 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
     const [value, setValue] = useState(props.value?.toString() || "");
     const [validationResult, setValidationResult] = useState<FieldValidationResult>({ isValid: true });
     const [isTouched, setIsTouched] = useState(false);
+    const innerRef = useRef<HTMLInputElement | null>(null);
+
+    // Sync external value changes (e.g. an auto-generated preset name or a
+    // provider switch rewriting the URL) into the field. Never while the
+    // user is focused in it: their keystrokes reach the parent through a
+    // debounce, so the prop can briefly lag what they typed.
+    const propValue = props.value?.toString() || "";
+    useEffect(() => {
+      if (document.activeElement === innerRef.current) return;
+      setValue((current) => (current === propValue ? current : propValue));
+    }, [propValue]);
+
+    const setRefs = useCallback(
+      (node: HTMLInputElement | null) => {
+        innerRef.current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      },
+      [ref],
+    );
 
     // Debounced validation function
     const debouncedValidation = useMemo(
@@ -136,7 +156,7 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
         
         <div className="relative">
           <Input
-            ref={ref}
+            ref={setRefs}
             {...props}
             value={value}
             onChange={handleChange}
