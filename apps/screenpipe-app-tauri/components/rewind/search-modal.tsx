@@ -12,6 +12,7 @@ import {
   queryHighlightTokens,
   type SearchAnalyticsSurface,
 } from "@/lib/hooks/use-keyword-search-store";
+import { buildResultTimeRanges } from "@/lib/search/result-facets";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSearchFocus } from "./hooks/use-search-focus";
 import { listen, emit } from "@tauri-apps/api/event";
@@ -33,7 +34,6 @@ import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
 import { getFrameThumbnailSources } from "@/lib/frame-thumbnails";
 import { NearViewport } from "./near-viewport";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
-import { buildBoundedFacetSql, sanitizeFts5Query } from "@/lib/search/facet-sql";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
@@ -780,103 +780,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     removeSearchResult,
   } = useKeywordSearchStore();
 
-  // --- Facet state (loaded async, independent of paginated results) ---
-  const [facetTimeRanges, setFacetTimeRanges] = useState<{ label: string; dateKey: string; timestamp: string; count: number }[]>([]);
-  const [facetsLoading, setFacetsLoading] = useState(false);
-  const hasKeywordResults = searchResults.length > 0;
-
-  // Build time range labels from raw rows
-  const buildTimeRanges = useCallback((rows: { dateKey: string; timestamp: string; count: number }[]) => {
-    // Re-bucket by local date since SQL DATE() operates on UTC strings.
-    // Multiple UTC dates can map to the same local date, so merge counts.
-    const buckets = new Map<string, { label: string; dateKey: string; timestamp: string; count: number }>();
-    for (const r of rows) {
-      const d = new Date(r.timestamp);
-      const localDateKey = format(d, "yyyy-MM-dd");
-      const existing = buckets.get(localDateKey);
-      if (existing) {
-        existing.count += r.count;
-      } else {
-        let label: string;
-        if (isToday(d)) {
-          label = format(d, "h a");
-        } else if (isYesterday(d)) {
-          label = "yesterday " + format(d, "h a");
-        } else {
-          label = format(d, "MMM d");
-        }
-        buckets.set(localDateKey, { label, dateKey: localDateKey, timestamp: r.timestamp, count: r.count });
-      }
-    }
-    return [...buckets.values()]
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-      .slice(0, 10);
-  }, []);
-
-  // Async facet loading — keep it behind the first keyword page so large DB
-  // aggregations do not compete with the initial visible result.
-  useEffect(() => {
-    const q = debouncedQuery.trim();
-    if (query.trim() !== q || !q || q.length < 3 || q.startsWith("#") || q.startsWith("@") || searchQuery.trim() !== q || !hasKeywordResults) {
-      setFacetTimeRanges([]);
-      setFacetsLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-    setFacetsLoading(true);
-    const ftsQuery = sanitizeFts5Query(q);
-    if (!ftsQuery) {
-      setFacetTimeRanges([]);
-      setFacetsLoading(false);
-      return;
-    }
-    const facetSql = buildBoundedFacetSql(ftsQuery);
-
-    const run = async () => {
-      try {
-        const resp = await localFetch("/raw_sql", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: facetSql }),
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
-        });
-        if (!resp.ok || cancelled) return;
-
-        const rows: { facet: "app" | "domain" | "time"; value: string; timestamp: string | null; cnt: number }[] = await resp.json();
-        if (cancelled) return;
-
-        setFacetTimeRanges(buildTimeRanges(rows
-          .filter((row) => row.facet === "time" && row.timestamp)
-          .map((row) => ({ dateKey: row.value, timestamp: row.timestamp!, count: row.cnt }))));
-      } catch {
-        // Facets are optional; loaded-result counts remain available as fallback.
-      } finally {
-        if (!cancelled) setFacetsLoading(false);
-      }
-    };
-
-    const w = window as typeof window & {
-      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-    let idleHandle = 0;
-    let timeoutHandle = 0;
-    if (typeof w.requestIdleCallback === "function") {
-      idleHandle = w.requestIdleCallback(() => void run(), { timeout: 1000 });
-    } else {
-      timeoutHandle = window.setTimeout(() => void run(), 0);
-    }
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (idleHandle && typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(idleHandle);
-      if (timeoutHandle) window.clearTimeout(timeoutHandle);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQuery, buildTimeRanges, hasKeywordResults, query, searchEpoch, searchQuery]);
+  // --- Facet state ---
+  // Date chips are derived from verified results, not from a raw FTS
+  // aggregation. The raw counts included accessibility-only candidates that
+  // screenshot verification removes, so a chip could advertise a day that has
+  // no visible results at all — clicking it then showed an empty grid.
 
   // Speaker time ranges (from loaded transcriptions — these are small enough)
   const speakerTimeRanges = useMemo(() => {
@@ -902,7 +810,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       .slice(0, 10);
   }, [speakerTranscriptions]);
 
-  const timeRanges = facetTimeRanges;
+
 
   // Compute app distribution from speaker transcription frames
   const speakerAppCounts = useMemo(() => {
@@ -964,6 +872,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       .sort((a, b) => b[1] - a[1])
       .slice(0, 8);
   }, [appFilter, matchesTimeFilter, searchResults, timeFilter]);
+
+  // Same rule as the app and domain chips: count only results the grid can
+  // show, narrowed by the other active filters but not by the time filter
+  // itself, so every day chip stays selectable.
+  const timeRanges = useMemo(
+    () => buildResultTimeRanges(searchResults, { appFilter, domainFilter }),
+    [appFilter, domainFilter, searchResults],
+  );
 
   const filteredResults = useMemo(() => {
     let results = searchResults;
@@ -2662,7 +2578,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           )}
 
           {/* Loading skeleton — filter chips + thumbnail grid */}
-          {!isTagSearch && !isPeopleSearch && (isSearching || facetsLoading) && searchResults.length === 0 && uiEventResults.length === 0 && speakerResults.length === 0 && (
+          {!isTagSearch && !isPeopleSearch && isSearching && searchResults.length === 0 && uiEventResults.length === 0 && speakerResults.length === 0 && (
             <>
               {/* Skeleton filter chips */}
               <div className="flex gap-1.5 mb-2 overflow-hidden">
