@@ -8,6 +8,7 @@
 // once-per-reset-window conversion sheet).
 
 import { useSyncExternalStore } from "react";
+import { screenpipeWebUrl } from "@/lib/web-url";
 
 export type FreeWallState = {
   /** Pricing page reviewed against the allow-list below. */
@@ -15,7 +16,7 @@ export type FreeWallState = {
   resetsAt: string | null;
 };
 
-const DEFAULT_PLANS_URL = "https://screenpi.pe/onboarding";
+const defaultPlansUrl = () => screenpipeWebUrl("/onboarding", "https://screenpi.pe");
 
 function structuredString(errorStr: string, field: string): string | null {
   const normalized = errorStr.replace(/\\"/g, '"');
@@ -51,7 +52,7 @@ export function parseFreeWall(errorStr: string): FreeWallState | null {
   return {
     plansUrl:
       validateFreeWallPlansUrl(structuredString(errorStr, "upgrade_url")) ??
-      DEFAULT_PLANS_URL,
+      defaultPlansUrl(),
     resetsAt: structuredString(errorStr, "resets_at"),
   };
 }
