@@ -61,7 +61,7 @@ export function FreePlanCounterChip() {
         data-testid="free-plan-counter-chip"
         className="inline-flex items-center gap-1 border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
       >
-        {usage.remaining} of {usage.limit_today} free hosted messages left
+        {usage.remaining} of {usage.limit_today} free messages left
       </span>
     </div>
   );
@@ -81,7 +81,7 @@ export function FreePlanWallStrip() {
       <div className="flex items-center gap-3">
         <Zap className="h-4 w-4 shrink-0 text-foreground/70" />
         <div className="min-w-0 flex-1 text-[12px] leading-snug">
-          <span className="font-medium">Out of free hosted messages</span>
+          <span className="font-medium">Ran out of messages</span>
           <span className="text-muted-foreground">
             {resets ? ` · resets ${resets}` : ""} · local &amp; own-key models
             still work
@@ -131,7 +131,7 @@ export function FreeUpgradeSheet() {
         <DialogHeader>
           <DialogTitle>upgrade to keep going</DialogTitle>
           <DialogDescription>
-            Free hosted messages{resets ? ` reset ${resets}` : " reset daily"}.
+            Free messages{resets ? ` reset ${resets}` : " reset daily"}.
             Upgrading unlocks:
           </DialogDescription>
         </DialogHeader>

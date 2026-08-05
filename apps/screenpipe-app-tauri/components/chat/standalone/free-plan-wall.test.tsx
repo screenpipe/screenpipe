@@ -59,7 +59,7 @@ describe("FreePlanCounterChip", () => {
     mocks.usageState = { tier: "logged_in", limit_today: 2, remaining: 1 };
     render(<FreePlanCounterChip />);
     expect(screen.getByTestId("free-plan-counter-chip")).toHaveTextContent(
-      "1 of 2 free hosted messages left",
+      "1 of 2 free messages left",
     );
   });
 
@@ -96,7 +96,7 @@ describe("FreePlanWallStrip", () => {
     mocks.wallState = WALL;
     render(<FreePlanWallStrip />);
     const strip = screen.getByTestId("free-plan-wall-strip");
-    expect(strip).toHaveTextContent("Out of free hosted messages");
+    expect(strip).toHaveTextContent("Ran out of messages");
     expect(strip).toHaveTextContent("resets Aug 6, 3:38 AM");
     expect(strip).toHaveTextContent("local & own-key models still work");
     // Non-dismissible: no close affordance while the wall holds.
