@@ -1737,20 +1737,19 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     // a dead frame.
     if (!readyThumbnailFrameIdsRef.current.has(result.frame_id)) return;
 
-    // Timeline cycles exactly what the grid was showing.
+    // Timeline cycles the filtered results whose exact frame has proven it can
+    // render.
     //
-    // Two ways this used to diverge. Scoping the set to frames whose
-    // thumbnails had decoded made the count depend on how far the user had
-    // scrolled, because thumbnails load lazily as cards enter the viewport —
-    // a 20-result search reported 1/6. And sending the unfiltered store meant
-    // an active app or site chip left Timeline cycling results the grid had
-    // filtered out; those chips narrow client-side only, unlike the date chip,
-    // which re-runs the query with server-side bounds.
-    //
-    // `filteredResults` is the rendered set, and it already excludes
-    // hidden-only candidates and frames proven missing (see
-    // `removeSearchResult`/`unavailableFrameIds`).
-    const navigationResults = filteredResultsRef.current;
+    // Both halves matter. Sending the unfiltered store let an active app or
+    // site chip leave Timeline cycling results the grid had filtered out —
+    // those chips narrow client-side only, unlike the date chip, which re-runs
+    // the query with server-side bounds. And dropping the readiness check sent
+    // frames whose exact thumbnail was still retrying; a missing frame is only
+    // removed after those retries fail, so clicking during that window handed
+    // Timeline dead frames and an inflated count (1/7 for five real results).
+    const navigationResults = filteredResultsRef.current.filter((candidate) =>
+      readyThumbnailFrameIdsRef.current.has(candidate.frame_id),
+    );
     trackSearchResultSelected("screen", selectionMethod, "timeline");
     if (queryTokens.length > 0) {
       setHighlight(queryTokens, result.frame_id);
