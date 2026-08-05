@@ -43,6 +43,7 @@
     "test:e2e:sck-startup-recovery:macos": "SCREENPIPE_E2E_SEED=onboarding,no-audio,sck-enumeration-hang-once bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/sck-startup-recovery.spec.ts",
     "test:e2e:capture-loop-liveness:macos": "SCREENPIPE_E2E_SEED=onboarding,no-audio,visual-check-hang-once bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/capture-loop-liveness.spec.ts",
     "test:e2e:capture-stall-recovery:macos": "SCREENPIPE_E2E_SEED=onboarding,no-audio,ignore-disk-pressure,sck-capture-hang-once,capture-loop-silent-once,sck-lookup-hang-once SCREENPIPE_PORT=3041 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/capture-stall-recovery.spec.ts",
+    "test:e2e:recording-health-focus-cold:macos": "SCREENPIPE_E2E_SEED=onboarding,no-audio,ignore-disk-pressure,focus-cold-heartbeat SCREENPIPE_PORT=3047 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/recording-health-focus-cold.spec.ts",
     "test:e2e:recording-health-return-race": "SCREENPIPE_E2E_SEED=onboarding,no-recording,recording-health-return-race SCREENPIPE_PORT=3044 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/recording-health-return-race.spec.ts",
     "test:e2e:search-bugs": "SCREENPIPE_E2E_SEED=onboarding,no-recording,search-fixture SCREENPIPE_PORT=3041 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/search/search-bugs-4645.spec.ts",
     "typecheck": "bunx tsc --noEmit",

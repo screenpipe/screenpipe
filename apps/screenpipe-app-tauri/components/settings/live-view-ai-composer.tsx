@@ -117,7 +117,6 @@ export function LiveViewAiComposer({
   );
   const [prompt, setPrompt] = useState("");
   const [compactFocused, setCompactFocused] = useState(false);
-  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
 
   const selectedPreset = presets.find(
     (preset) => preset.id === selectedPresetId,
@@ -147,7 +146,12 @@ export function LiveViewAiComposer({
   const compactExpanded =
     compact &&
     !hostedUsageExhausted &&
-    (compactFocused || modelSelectorOpen || busy || Boolean(feedback));
+    (compactFocused || busy || Boolean(feedback));
+  // Keep the model control independent from the textarea's focus disclosure.
+  // Radix renders its menu in a portal, so hiding this row on blur can make the
+  // trigger disappear while the user is moving focus into the menu.
+  const compactOptionsVisible =
+    compact && !hostedUsageExhausted && !busy && !feedback;
   const intent = inferLiveViewGenerationIntent(
     prompt,
     Boolean(currentViewTitle),
@@ -265,33 +269,33 @@ export function LiveViewAiComposer({
           ))}
       </div>
       {compact ? (
-        compactExpanded &&
-        !busy &&
-        !feedback && (
-          <div
-            data-testid="live-view-ai-options"
-            className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border px-2 py-2"
-          >
-            <AIPresetsSelector
-              controlledPresetId={selectedPresetId}
-              onControlledSelect={onSelectedPresetIdChange}
-              compact
-              showModelOnly
-              showLoginCta
-              containerClassName="w-auto min-w-36"
-              triggerClassName="h-8 rounded-none"
-              onOpenChange={setModelSelectorOpen}
-            />
-            {prompt.trim() && (
-              <span
-                data-testid="live-view-generation-intent"
-                className="max-w-72 truncate text-[11px] text-muted-foreground"
-              >
-                {intentLabel}
-              </span>
-            )}
-          </div>
-        )
+        <div
+          data-testid="live-view-ai-options"
+          aria-hidden={!compactOptionsVisible}
+          className={
+            compactOptionsVisible
+              ? "flex min-w-0 flex-wrap items-center gap-2 border-t border-border px-2 py-2"
+              : "pointer-events-none invisible flex h-0 min-w-0 overflow-hidden px-2 py-0"
+          }
+        >
+          <AIPresetsSelector
+            controlledPresetId={selectedPresetId}
+            onControlledSelect={onSelectedPresetIdChange}
+            compact
+            showModelOnly
+            showLoginCta
+            containerClassName="w-auto min-w-36"
+            triggerClassName="h-8 rounded-none"
+          />
+          {prompt.trim() && (
+            <span
+              data-testid="live-view-generation-intent"
+              className="max-w-72 truncate text-[11px] text-muted-foreground"
+            >
+              {intentLabel}
+            </span>
+          )}
+        </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-2 py-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">

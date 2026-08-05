@@ -1600,6 +1600,10 @@ pub struct PiProviderConfig {
     /// Optional system prompt from AI preset (appended to Pi's built-in system prompt)
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Optional exact Pi tool allowlist for bounded agent surfaces. `None`
+    /// preserves the normal Chat tool surface; an empty list disables tools.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 fn default_max_tokens() -> i32 {
@@ -1655,6 +1659,23 @@ fn pi_launch_fingerprint(
         Option::<u8>::None.hash(&mut hasher);
     }
     hasher.finish()
+}
+
+fn apply_pi_tool_allowlist(command: &mut Command, provider_config: Option<&PiProviderConfig>) {
+    let Some(allowed_tools) = provider_config.and_then(|config| config.allowed_tools.as_ref())
+    else {
+        return;
+    };
+    let allowed_tools = allowed_tools
+        .iter()
+        .map(|tool| tool.trim())
+        .filter(|tool| !tool.is_empty())
+        .collect::<Vec<_>>();
+    if allowed_tools.is_empty() {
+        command.arg("--no-tools");
+    } else {
+        command.arg("--tools").arg(allowed_tools.join(","));
+    }
 }
 
 fn model_supports_reasoning(provider: &str, model: &str) -> bool {
@@ -2434,6 +2455,7 @@ pub async fn pi_start_inner(
             );
             apply_pi_extension_safe_mode(&mut command, &project_dir);
         }
+        apply_pi_tool_allowlist(&mut command, provider_config.as_ref());
         command
     };
 
@@ -4685,6 +4707,7 @@ mod tests {
             max_tokens: 4096,
             max_context_chars: Some(512_000),
             system_prompt: Some("system context".to_string()),
+            allowed_tools: None,
         };
         let first = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
         let duplicate = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
@@ -5897,6 +5920,7 @@ error: InstallFailed extracting tarball"#;
             max_tokens: 4096,
             max_context_chars: Some(512_000),
             system_prompt: None,
+            allowed_tools: None,
         }
     }
 
@@ -6028,6 +6052,34 @@ error: InstallFailed extracting tarball"#;
         assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
         assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
+    }
+
+    #[test]
+    fn test_tool_allowlist_restricts_bounded_pi_sessions() {
+        let mut config = make_provider_config("screenpipe-cloud", "auto");
+        config.allowed_tools = Some(vec!["screenpipe_live_view".to_string()]);
+        let mut command = Command::new("pi");
+        super::apply_pi_tool_allowlist(&mut command, Some(&config));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args, vec!["--tools", "screenpipe_live_view"]);
+    }
+
+    #[test]
+    fn test_empty_tool_allowlist_disables_all_pi_tools() {
+        let mut config = make_provider_config("screenpipe-cloud", "auto");
+        config.allowed_tools = Some(vec![]);
+        let mut command = Command::new("pi");
+        super::apply_pi_tool_allowlist(&mut command, Some(&config));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args, vec!["--no-tools"]);
     }
 
     #[tokio::test]

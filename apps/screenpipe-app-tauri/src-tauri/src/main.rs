@@ -1229,7 +1229,14 @@ async fn main() {
             }
             if e2e_flags
                 .iter()
-                .any(|f| f == "recording-health-return-race" || f == "capture-loop-silent-once")
+                .any(|f| {
+                    matches!(
+                        f.as_str(),
+                        "recording-health-return-race"
+                            | "capture-loop-silent-once"
+                            | "focus-cold-heartbeat"
+                    )
+                })
             {
                 store.show_restart_notifications = true;
                 store.extra.insert(

@@ -3119,7 +3119,12 @@ maxContextChars?: number | null;
 /**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
-systemPrompt?: string | null }
+systemPrompt?: string | null;
+/**
+ * Optional exact Pi tool allowlist for bounded agent surfaces. `None`
+ * preserves the normal Chat tool surface; an empty list disables tools.
+ */
+allowedTools?: string[] | null }
 /**
  * A user prompt that's been enqueued but not yet written to Pi's stdin.
  * Surfaced to the UI so the chat can render "queued" cards while a prior

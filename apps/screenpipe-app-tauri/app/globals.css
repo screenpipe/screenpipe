@@ -452,7 +452,13 @@
       color: hsl(0 0% 0%) !important;
     }
     html:not(.dark) .vibrant-sidebar-fg-muted {
-      color: hsl(0 0% 40%) !important;
+      color: hsl(0 0% 0% / 0.65) !important;
+    }
+    html:not(.dark) .sidebar-text-secondary {
+      color: hsl(0 0% 0% / 0.65) !important;
+    }
+    html:not(.dark) .sidebar-text-tertiary {
+      color: hsl(0 0% 0% / 0.55) !important;
     }
     html:not(.dark) .vibrant-nav-active {
       color: hsl(0 0% 0%) !important;
@@ -461,7 +467,7 @@
       color: hsl(0 0% 0%) !important;
     }
     html:not(.dark) .vibrant-nav-item {
-      color: hsl(0 0% 40%) !important;
+      color: hsl(0 0% 0% / 0.65) !important;
     }
     html:not(.dark) .vibrant-nav-item:hover {
       color: hsl(0 0% 0%) !important;
@@ -499,7 +505,13 @@
       color: hsl(0 0% 100%) !important;
     }
     html:not(.light) .vibrant-sidebar-fg-muted {
-      color: hsl(0 0% 75%) !important;
+      color: hsl(0 0% 100% / 0.65) !important;
+    }
+    html:not(.light) .sidebar-text-secondary {
+      color: hsl(0 0% 100% / 0.65) !important;
+    }
+    html:not(.light) .sidebar-text-tertiary {
+      color: hsl(0 0% 100% / 0.55) !important;
     }
     html:not(.light) .vibrant-nav-active {
       color: hsl(0 0% 100%) !important;
@@ -508,7 +520,7 @@
       color: hsl(0 0% 100%) !important;
     }
     html:not(.light) .vibrant-nav-item {
-      color: hsl(0 0% 80%) !important;
+      color: hsl(0 0% 100% / 0.65) !important;
     }
     html:not(.light) .vibrant-nav-item:hover {
       color: hsl(0 0% 100%) !important;
@@ -540,8 +552,16 @@
   .vibrant-sidebar-fg {
     color: hsl(var(--foreground));
   }
+  /* Derive sidebar hierarchy directly from foreground. Starting with the
+     already-muted global token and then adding alpha double-mutes small text. */
   .vibrant-sidebar-fg-muted {
-    color: hsl(var(--muted-foreground));
+    color: hsl(var(--foreground) / 0.65);
+  }
+  .sidebar-text-secondary {
+    color: hsl(var(--foreground) / 0.65);
+  }
+  .sidebar-text-tertiary {
+    color: hsl(var(--foreground) / 0.55);
   }
   .vibrant-nav-active {
     color: hsl(var(--foreground));
@@ -551,7 +571,7 @@
     color: hsl(var(--foreground));
   }
   .vibrant-nav-item {
-    color: hsl(var(--muted-foreground));
+    color: hsl(var(--foreground) / 0.65);
   }
   .vibrant-nav-item:hover {
     color: hsl(var(--foreground));

@@ -911,12 +911,13 @@ describe("Brain Live Views", function () {
     await waitForTestId("canvas-block-tracked-work", 10_000);
     await setCssWindowSize(1440, 900);
 
-    const statusText = (
-      await waitForTestId("overview-data-status", 10_000)
-    ).getText();
-    expect((await statusText).toLowerCase()).toContain("2 of 2 blocks ready");
-    expect((await statusText).toLowerCase()).toContain("updated");
-    expect((await statusText).toLowerCase()).not.toMatch(/^updated /);
+    const timeRange = await waitForTestId("overview-time-range", 10_000);
+    expect((await timeRange.getAttribute("title"))?.toLowerCase()).toContain(
+      "latest update:",
+    );
+    expect(await $("[data-testid='overview-data-status']").isExisting()).toBe(
+      false,
+    );
 
     const cardText = (
       await waitForTestId("overview-card-tracked-work", 10_000)
@@ -1193,9 +1194,13 @@ Refresh the assigned Live View output targets from source-backed activity.
     );
     await selectDashboard(SELECTABLE_VIEW_ID);
     await waitForTestId("live-view-canvas", 15_000);
-    const freshnessStatus = await waitForTestId("overview-data-status", 10_000);
-    expect((await freshnessStatus.getText()).toLowerCase()).toContain("oldest");
-    expect((await freshnessStatus.getText()).toLowerCase()).toContain("latest");
+    const timeRangeFreshness = await waitForTestId(
+      "overview-time-range",
+      10_000,
+    );
+    expect(
+      (await timeRangeFreshness.getAttribute("title"))?.toLowerCase(),
+    ).toContain("latest update:");
     for (const size of SUPPORTED_WINDOW_SIZES) {
       await setCssWindowSize(size.width, size.height);
       await browser.pause(150);
@@ -1215,9 +1220,6 @@ Refresh the assigned Live View output targets from source-backed activity.
         const dashboardSwitcher = document.querySelector<HTMLElement>(
           "[data-testid='live-view-dashboard-switcher']",
         );
-        const freshness = document.querySelector<HTMLElement>(
-          "[data-testid='overview-data-status']",
-        );
         const headerControls = document.querySelector<HTMLElement>(
           "[data-testid='overview-header-controls']",
         );
@@ -1227,7 +1229,6 @@ Refresh the assigned Live View output targets from source-backed activity.
           !overview ||
           !canvas ||
           !dashboardSwitcher ||
-          !freshness ||
           !headerControls
         )
           return null;
@@ -1235,9 +1236,6 @@ Refresh the assigned Live View output targets from source-backed activity.
         const canvasRect = canvas.getBoundingClientRect();
         const dashboardSwitcherRect = dashboardSwitcher.getBoundingClientRect();
         const headerControlsRect = headerControls.getBoundingClientRect();
-        const freshnessTextRange = document.createRange();
-        freshnessTextRange.selectNodeContents(freshness);
-        const freshnessTextRect = freshnessTextRange.getBoundingClientRect();
         const overlaps = (left: DOMRect, right: DOMRect) =>
           left.left < right.right &&
           left.right > right.left &&
@@ -1271,21 +1269,10 @@ Refresh the assigned Live View output targets from source-backed activity.
           sectionBottom: sectionRect.bottom,
           canvasBottom: canvasRect.bottom,
           canvasHeight: canvasRect.height,
-          freshnessTextOverlapsDashboard: overlaps(
-            freshnessTextRect,
+          headerControlsOverlapDashboard: overlaps(
+            headerControlsRect,
             dashboardSwitcherRect,
           ),
-          freshnessTextOverlapsControls: overlaps(
-            freshnessTextRect,
-            headerControlsRect,
-          ),
-          freshnessBelowHeaderControls:
-            freshnessTextRect.top >=
-            Math.max(dashboardSwitcherRect.bottom, headerControlsRect.bottom) -
-              1,
-          freshnessTextInsideSection:
-            freshnessTextRect.left >= sectionRect.left - 1 &&
-            freshnessTextRect.right <= sectionRect.right + 1,
           overviewOverflowY: getComputedStyle(overview).overflowY,
           firstContentTop,
           clippedControls: visibleControls
@@ -1322,10 +1309,7 @@ Refresh the assigned Live View output targets from source-backed activity.
         sectionBottom: number;
         canvasBottom: number;
         canvasHeight: number;
-        freshnessTextOverlapsDashboard: boolean;
-        freshnessTextOverlapsControls: boolean;
-        freshnessBelowHeaderControls: boolean;
-        freshnessTextInsideSection: boolean;
+        headerControlsOverlapDashboard: boolean;
         overviewOverflowY: string;
         firstContentTop: number;
         clippedControls: Array<{
@@ -1360,10 +1344,7 @@ Refresh the assigned Live View output targets from source-backed activity.
         layout!.sectionBottom + 1,
       );
       expect(layout!.canvasHeight).toBeGreaterThan(200);
-      expect(layout!.freshnessTextOverlapsDashboard).toBe(false);
-      expect(layout!.freshnessTextOverlapsControls).toBe(false);
-      expect(layout!.freshnessBelowHeaderControls).toBe(true);
-      expect(layout!.freshnessTextInsideSection).toBe(true);
+      expect(layout!.headerControlsOverlapDashboard).toBe(false);
       expect(layout!.clippedControls).toEqual([]);
     }
     await setCssWindowSize(1440, 900);
@@ -1424,11 +1405,9 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(await $("[data-testid='overview-time-range']").isExisting()).toBe(
       false,
     );
-    const fixedDashboardText = (await browser.execute(
-      () => document.body?.innerText || "",
-    )) as string;
-    expect(fixedDashboardText.toLowerCase()).toContain("blocks ready");
-    expect(fixedDashboardText.toLowerCase()).toContain("updated");
+    expect(await $("[data-testid='overview-data-status']").isExisting()).toBe(
+      false,
+    );
     const fixedScreenshot = await saveScreenshot(
       "brain-overview-fixed-range-hidden",
     );

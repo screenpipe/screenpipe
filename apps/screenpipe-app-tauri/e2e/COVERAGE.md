@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 93
-- Declared test blocks: 259
-- Weighted coverage points: 199.9
+- Mapped specs: 94
+- Declared test blocks: 260
+- Weighted coverage points: 200.3
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -20,7 +20,7 @@ can execute more runtime cases than this number shows.
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
 | windows | 74 | 228 | 185.2 | 15 | 77 | 91% |
-| macos | 89 | 222 | 170.7 | 17 | 79 | 89% |
+| macos | 90 | 223 | 171.1 | 17 | 79 | 89% |
 | linux | 64 | 188 | 155.0 | 14 | 72 | 88% |
 
 ## Runtime Results
@@ -36,16 +36,16 @@ pass/fail/skip counts.
 | audio-device | 3 specs / 29 tests / 20.6 pts | 3 specs / 3 tests / 1.7 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
-| capture-ocr | 2 specs / 16 tests / 6.4 pts | 6 specs / 10 tests / 4.0 pts | 1 specs / 3 tests / 1.2 pts |
+| capture-ocr | 2 specs / 16 tests / 6.4 pts | 7 specs / 11 tests / 4.4 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 23 specs / 37 tests / 28.1 pts | 31 specs / 51 tests / 34.7 pts | 22 specs / 36 tests / 27.6 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 18 specs / 102 tests / 84.8 pts | 20 specs / 80 tests / 67.0 pts | 14 specs / 73 tests / 64.2 pts |
+| local-api | 18 specs / 102 tests / 84.8 pts | 21 specs / 81 tests / 67.4 pts | 14 specs / 73 tests / 64.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 4 specs / 10 tests / 7.6 pts | 4 specs / 10 tests / 7.6 pts | 4 specs / 10 tests / 7.6 pts |
-| os-integration | 6 specs / 18 tests / 17.1 pts | 9 specs / 11 tests / 5.9 pts | 1 specs / 1 tests / 1.0 pts |
+| os-integration | 6 specs / 18 tests / 17.1 pts | 10 specs / 12 tests / 6.3 pts | 1 specs / 1 tests / 1.0 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 6 specs / 18 tests / 18.0 pts | 6 specs / 18 tests / 18.0 pts | 6 specs / 18 tests / 18.0 pts |
-| real-ui-e2e | 51 specs / 145 tests / 118.0 pts | 57 specs / 137 tests / 111.3 pts | 47 specs / 123 tests / 104.4 pts |
+| real-ui-e2e | 51 specs / 145 tests / 118.0 pts | 58 specs / 138 tests / 111.7 pts | 47 specs / 123 tests / 104.4 pts |
 | settings | 14 specs / 37 tests / 34.0 pts | 16 specs / 32 tests / 27.7 pts | 13 specs / 29 tests / 26.0 pts |
 | storage-privacy | 9 specs / 39 tests / 30.3 pts | 8 specs / 20 tests / 19.1 pts | 6 specs / 18 tests / 17.1 pts |
 | tauri-command | 13 specs / 22 tests / 15.3 pts | 16 specs / 26 tests / 17.8 pts | 12 specs / 21 tests / 14.3 pts |
@@ -166,6 +166,7 @@ pass/fail/skip counts.
 | privacy-api-auth-enforcement.spec.ts | windows, macos, linux | settings, local-api, storage-privacy | settings-privacy-api-auth, local-api-auth, restart-flow | high | conditional | mixed | 1 | Opt-in restart smoke toggles API auth and verifies backend behavior. |
 | privacy-api-auth.spec.ts | windows, macos, linux | settings, storage-privacy, real-ui-e2e | settings-privacy-api-auth, local-api-auth | high | strong | real-user-flow | 1 | Privacy settings reveal/copy local API key flow. |
 | privacy-installed-apps.spec.ts | windows, macos, linux | settings, storage-privacy, real-ui-e2e | settings-privacy-filters, installed-apps | medium | strong | real-user-flow | 1 | Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism). |
+| recording-health-focus-cold.spec.ts | macos | capture-ocr, local-api, os-integration, real-ui-e2e | app-launch, capture-ocr, health, recording-health-alerts | high | conditional | mixed | 1 | Opt-in macOS focus-aware Cold-state reproduction proves capture attempts can remain intentionally flat while the independent loop heartbeat advances, /health stays ok, and the recording-health overlay remains normal in the original process. |
 | recording-health-return-race.spec.ts | windows, macos, linux | tauri-command, os-integration, real-ui-e2e | app-launch, recording-health-alerts | high | strong | command | 1 | Accelerated app-level replay of the idle-to-attended stale race verifies that return input does not raise the recording-health failure overlay before capture recovery can be observed. |
 | sck-startup-recovery.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr, health, local-api-search | high | conditional | api | 1 | Opt-in macOS fault injection verifies bounded SCK enumeration recovery, same-process capture, and OCR persistence. |
 | search-request-priority.spec.ts | windows, macos, linux | real-ui-e2e, local-api | home-search, local-api-search | medium | partial | synthetic | 1 | Verifies keyword search request fires before secondary search, facet, and speaker requests. |

@@ -36,7 +36,7 @@ const FIXING_CONFIRM_TICKS: u32 = 2;
 const PASSIVE_RECOVERY_CONFIRM_TICKS: u32 = 90;
 
 fn passive_recovery_confirm_ticks() -> u32 {
-    if crate::stale_tier::capture_loop_silent_e2e_armed() {
+    if crate::stale_tier::capture_loop_silent_e2e_started() {
         3
     } else {
         PASSIVE_RECOVERY_CONFIRM_TICKS

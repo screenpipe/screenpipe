@@ -79,12 +79,14 @@ type GenerateLiveViewOptions = {
   currentView?: {
     title: string;
     timeRange: BrainViewTimeRange;
+    periodPolicy?: BrainViewPeriodPolicy;
     blocks: GeneratedLiveViewBlock[];
   } | null;
   currentViewRef?: {
     id: string;
     revision: number;
   } | null;
+  targetBlockId?: string | null;
   signal?: AbortSignal;
   onPhase?: (phase: "starting" | "working" | "reviewing") => void;
 };
@@ -166,6 +168,8 @@ export function parseGeneratedLiveView(
   raw: string,
   allowedPipeNames: string[],
   scope: LiveViewGenerationScope,
+  currentView: GenerateLiveViewOptions["currentView"] = null,
+  targetBlockId: string | null = null,
 ): GeneratedLiveView {
   const response = firstJsonObject(raw);
   const wrappedView = asRecord(response.view);
@@ -177,42 +181,121 @@ export function parseGeneratedLiveView(
       ? [parsed.block]
       : [];
   const allowedPipes = new Set(allowedPipeNames);
-  const maxBlocks = scope === "block" ? 1 : 8;
-  const blocks = rawBlocks
-    .slice(0, maxBlocks)
-    .map(asRecord)
-    .filter((block): block is Record<string, unknown> => Boolean(block))
-    .map((block) => {
-      const component = componentValue(
-        block.component ?? block.kind ?? block.type,
-      );
-      const title = typeof block.title === "string" ? block.title.trim() : "";
-      if (!component || !title) return null;
-      const intent =
-        typeof block.intent === "string" && block.intent.trim()
-          ? block.intent.trim().slice(0, 800)
-          : title;
-      const requestedPipe =
-        typeof block.pipeName === "string"
-          ? block.pipeName
-          : typeof block.pipe === "string"
-            ? block.pipe
-            : nestedPipeName(block);
-      return {
-        ...(typeof block.id === "string" && block.id.trim()
-          ? { id: block.id.trim().slice(0, 120) }
-          : {}),
-        title: title.slice(0, 120),
-        intent,
-        component,
-        width: widthValue(block.width),
-        pipeName:
-          requestedPipe && allowedPipes.has(requestedPipe)
-            ? requestedPipe
-            : null,
-      } satisfies GeneratedLiveViewBlock;
-    })
-    .filter((block): block is GeneratedLiveViewBlock => Boolean(block));
+  const parseBlocks = (
+    values: unknown[],
+    maxBlocks: number,
+  ): GeneratedLiveViewBlock[] =>
+    values
+      .slice(0, maxBlocks)
+      .map(asRecord)
+      .filter((block): block is Record<string, unknown> => Boolean(block))
+      .map((block) => {
+        const component = componentValue(
+          block.component ?? block.kind ?? block.type,
+        );
+        const title = typeof block.title === "string" ? block.title.trim() : "";
+        if (!component || !title) return null;
+        const intent =
+          typeof block.intent === "string" && block.intent.trim()
+            ? block.intent.trim().slice(0, 800)
+            : title;
+        const requestedPipe =
+          typeof block.pipeName === "string"
+            ? block.pipeName
+            : typeof block.pipe === "string"
+              ? block.pipe
+              : nestedPipeName(block);
+        return {
+          ...(typeof block.id === "string" && block.id.trim()
+            ? { id: block.id.trim().slice(0, 120) }
+            : {}),
+          title: title.slice(0, 120),
+          intent,
+          component,
+          width: widthValue(block.width),
+          pipeName:
+            requestedPipe && allowedPipes.has(requestedPipe)
+              ? requestedPipe
+              : null,
+        } satisfies GeneratedLiveViewBlock;
+      })
+      .filter((block): block is GeneratedLiveViewBlock => Boolean(block));
+
+  let blocks: GeneratedLiveViewBlock[];
+  let operationCount = 0;
+  if (currentView) {
+    if (!Array.isArray(parsed.operations)) {
+      throw new Error("AI did not return targeted Live View changes");
+    }
+    if (parsed.operations.length > 12) {
+      throw new Error("AI proposed too many Live View changes");
+    }
+    blocks = currentView.blocks.map((block) => ({ ...block }));
+    for (const value of parsed.operations) {
+      const operation = asRecord(value);
+      if (!operation || typeof operation.op !== "string") {
+        throw new Error("AI returned an invalid Live View operation");
+      }
+      const op = operation.op.trim().toLowerCase();
+      const blockId =
+        typeof operation.blockId === "string"
+          ? operation.blockId.trim()
+          : typeof operation.id === "string"
+            ? operation.id.trim()
+            : "";
+      if (scope === "block" && targetBlockId) {
+        if (op !== "update" || blockId !== targetBlockId) {
+          throw new Error(
+            `AI tried to change a Block outside the requested target ${targetBlockId}`,
+          );
+        }
+      }
+      if (op === "remove") {
+        const index = blocks.findIndex((block) => block.id === blockId);
+        if (index < 0)
+          throw new Error(`AI tried to remove unknown Block ${blockId}`);
+        blocks.splice(index, 1);
+        operationCount += 1;
+        continue;
+      }
+      const rawBlock = asRecord(operation.block ?? operation.changes);
+      if (!rawBlock) {
+        throw new Error(`AI returned an invalid ${op} operation`);
+      }
+      if (op === "add") {
+        const [added] = parseBlocks([rawBlock], 1);
+        if (!added) throw new Error("AI returned an invalid Block to add");
+        if (added.id && blocks.some((block) => block.id === added.id)) {
+          throw new Error(`AI tried to add existing Block ${added.id}`);
+        }
+        blocks.push(added);
+        operationCount += 1;
+        continue;
+      }
+      if (op === "update") {
+        const index = blocks.findIndex((block) => block.id === blockId);
+        if (index < 0)
+          throw new Error(`AI tried to update unknown Block ${blockId}`);
+        const previous = blocks[index];
+        const [updated] = parseBlocks(
+          [{ ...previous, ...rawBlock, id: blockId }],
+          1,
+        );
+        if (!updated)
+          throw new Error(`AI returned an invalid update for ${blockId}`);
+        blocks[index] = updated;
+        operationCount += 1;
+        continue;
+      }
+      throw new Error(`AI returned unsupported Live View operation ${op}`);
+    }
+    if (operationCount === 0) {
+      throw new Error("AI did not propose any targeted Live View changes");
+    }
+  } else {
+    const maxBlocks = scope === "block" ? 1 : 8;
+    blocks = parseBlocks(rawBlocks, maxBlocks);
+  }
 
   if (blocks.length === 0) {
     throw new Error("AI did not create any usable sections");
@@ -221,9 +304,11 @@ export function parseGeneratedLiveView(
   const title =
     typeof parsed.title === "string" && parsed.title.trim()
       ? parsed.title.trim().slice(0, 120)
-      : scope === "block"
-        ? blocks[0].title
-        : "My Live View";
+      : currentView?.title
+        ? currentView.title
+        : scope === "block"
+          ? blocks[0].title
+          : "My Live View";
   const note =
     typeof parsed.note === "string" && parsed.note.trim()
       ? parsed.note.trim().slice(0, 240)
@@ -231,25 +316,38 @@ export function parseGeneratedLiveView(
         ? `Created ${blocks[0].title}.`
         : `Created ${blocks.length} sections.`;
 
-  const timeRange = timeRangeValue(parsed.timeRange ?? parsed.time_range);
+  const hasTimeRange =
+    typeof (parsed.timeRange ?? parsed.time_range) === "string";
+  const timeRange = hasTimeRange
+    ? timeRangeValue(parsed.timeRange ?? parsed.time_range)
+    : (currentView?.timeRange ?? "today");
   return {
     title,
     timeRange,
-    periodPolicy: periodPolicyValue(
-      parsed.timeRangeBehavior ?? parsed.time_range_behavior,
-      timeRange,
-    ),
+    periodPolicy:
+      currentView && !hasTimeRange && parsed.timeRangeBehavior == null
+        ? currentView.periodPolicy
+        : periodPolicyValue(
+            parsed.timeRangeBehavior ?? parsed.time_range_behavior,
+            timeRange,
+          ),
     blocks,
     note,
   };
 }
 
-function generationSystemPrompt(): string {
+function generationSystemPrompt(editing: boolean): string {
+  const outputContract = editing
+    ? `Return only targeted operations. Never return a complete blocks array.
+Use {"op":"add","block":{...}} to append a new Block, {"op":"update","blockId":"existing-id","block":{...}} to update one existing Block, and {"op":"remove","blockId":"existing-id"} only when the user explicitly requested removal. An update may include only changed fields; omitted fields are preserved by the app.
+JSON shape: {"operations":[{"op":"add","block":{"id":"new-stable-id","title":"Block title","intent":"Precise source-backed calculation or summary.","component":"metric.v1","width":6,"pipeName":null}}],"note":"Short explanation"}`
+    : `For a new dashboard, return the complete blocks array.
+JSON shape: {"title":"View title","timeRange":"today","timeRangeBehavior":"selectable","blocks":[{"id":"stable-id","title":"Block title","intent":"Precise source-backed calculation or summary.","component":"metric.v1","width":6,"pipeName":null}],"note":"Short explanation"}`;
   return `Design a safe Screenpipe Live View and return only one JSON object, with no markdown or prose.
 If a current view id is supplied, you may only call screenpipe_live_view action "get" for that exact id. Never call "save" or any other tool. The app reviews changes before saving. Preserve every unchanged Block id and reuse the id of every edited Block.
 Use only these components: metric.v1, list.v1, bar-chart.v1, line-chart.v1, table.v1, timeline.v1, markdown.v1. Width must be 3, 6, or 12. Use only supplied pipe names, otherwise null. Never invent a pipe.
-Each Block needs a precise, source-backed intent describing the calculation or summary for the selected period and how missing evidence is handled. Avoid duplicate Blocks. For new dashboards create 4 to 7 Blocks; edits may return 1 to 8. Use timeRange today, 24h, 7d, or 30d. Use timeRangeBehavior fixed only when the view is inherently tied to that period, otherwise selectable.
-JSON shape: {"title":"View title","timeRange":"today","timeRangeBehavior":"selectable","blocks":[{"id":"existing-id-when-editing","title":"Block title","intent":"Precise source-backed calculation or summary.","component":"metric.v1","width":6,"pipeName":null}],"note":"Short explanation"}`;
+Each Block needs a precise, source-backed intent describing the calculation or summary for the selected period and how missing evidence is handled. Avoid duplicate Blocks. For new dashboards create 4 to 7 Blocks; edits may propose 1 to 8 operations. Use timeRange today, 24h, 7d, or 30d. Use timeRangeBehavior fixed only when the view is inherently tied to that period, otherwise selectable.
+${outputContract}`;
 }
 
 export function buildLiveViewGenerationPrompt(
@@ -257,9 +355,11 @@ export function buildLiveViewGenerationPrompt(
 ): string {
   const scopeInstruction =
     options.scope === "block"
-      ? "Create exactly one new section to add to the existing Live View."
+      ? options.currentViewRef
+        ? `Propose exactly one update operation for Block id ${JSON.stringify(options.targetBlockId)}. Do not add, remove, or change any other Block.`
+        : "Create exactly one new section to add to the existing Live View."
       : options.currentViewRef
-        ? "Edit the referenced current Live View. Preserve every existing section the user did not ask to change, apply the request, and return the complete revised dashboard. Do not create a separate dashboard."
+        ? "Edit the referenced current Live View with the smallest explicit operation set. Do not restate, remove, or update unrelated Blocks."
         : "Create a complete Live View with 4 to 7 useful, visually varied sections. Return the full dashboard.";
   const pipes = relevantPipes(options.prompt, options.pipes).map((pipe) => ({
     name: pipe.name,
@@ -276,7 +376,7 @@ export function buildLiveViewGenerationPrompt(
       ? `These are reviewed Pipe Store candidates available for automatic installation. Bind every section to one of them. Use at most ${options.maxSelectedPipes ?? 2} distinct pipes across the dashboard. Prefer the smallest set that works from Screenpipe's local capture alone. Avoid a pipe that mentions syncing or saving to a named external app unless the user explicitly asked for that app.`
       : "These pipes are already installed. Use null only when no installed pipe can produce the requested section.";
 
-  return `${generationSystemPrompt()}
+  return `${generationSystemPrompt(Boolean(options.currentViewRef))}
 
 ${scopeInstruction}
 
@@ -293,7 +393,7 @@ Current Live View reference:
 ${options.currentViewRef ? JSON.stringify(options.currentViewRef) : "null"}
 
 Focused section context:
-${options.currentView ? JSON.stringify(options.currentView) : "null"}
+${options.targetBlockId ? JSON.stringify({ blockId: options.targetBlockId }) : "null"}
 
 Choose the simplest useful layout. Reply with only the required JSON object.`;
 }
@@ -348,6 +448,10 @@ function providerConfig(preset: AIPreset): PiProviderConfig {
       ? { maxContextChars: preset.maxContextChars }
       : {}),
     systemPrompt: null,
+    // This foreground editor only needs a read of the referenced Live View.
+    // Restrict the runtime itself so normal Chat, MCP, web, filesystem, and
+    // artifact tools are never advertised on this private editing surface.
+    allowedTools: ["screenpipe_live_view"],
   };
 }
 
@@ -524,6 +628,8 @@ export async function generateLiveViewWithPi(
     raw,
     options.pipes.map((pipe) => pipe.name),
     options.scope,
+    options.currentView,
+    options.targetBlockId ?? null,
   );
   const selectedPipes = new Set(
     generated.blocks

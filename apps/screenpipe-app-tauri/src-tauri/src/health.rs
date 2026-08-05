@@ -1657,7 +1657,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 Ok(health) => health_confirms_recording(health),
                 Err(_) => false,
             };
-            let tracking_delay = if crate::stale_tier::capture_loop_silent_e2e_armed() {
+            let tracking_delay = if crate::stale_tier::capture_loop_silent_e2e_started() {
                 Duration::ZERO
             } else {
                 NOTIFICATION_COOLDOWN

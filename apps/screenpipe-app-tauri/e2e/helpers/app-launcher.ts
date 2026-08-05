@@ -89,6 +89,9 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // `capture-loop-silent-once` parks every vision loop after an explicitly armed
 // healthy baseline, accelerates only the debug liveness thresholds, and proves
 // the real stale -> failure pill -> watchdog restart -> recovery sequence.
+// `focus-cold-heartbeat` parks every vision loop through the normal focus-aware
+// Cold branch. It reproduces the false alert where attempts stop while the loop
+// remains healthy and continues waking on its bounded backstop.
 // `sck-lookup-hang-once` parks one id-based SCShareableContent callback; the
 // same spec proves shared admission bounds it and preserves a fresh retry.
 // `sck-capture-hang-once` parks the first SCK frame worker. The liveness lane

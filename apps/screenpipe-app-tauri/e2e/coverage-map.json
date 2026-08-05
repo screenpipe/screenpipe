@@ -739,6 +739,16 @@
       "notes": "Opt-in macOS full-stack lane proves all selected user-paused monitors remain an intentional disabled/normal state and resume cleanly, bounds a wedged SCK frame worker, proves the privacy-gated CoreGraphics fallback, reproduces a status-Running capture loop going silent, verifies stale and the failure pill, independent per-monitor stall detection with a VisionManager restart and resumed terminal capture progress, same-process UI recovery, and bounded id-based SCK lookup retry."
     },
     {
+      "spec": "recording-health-focus-cold.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["capture-ocr", "local-api", "os-integration", "real-ui-e2e"],
+      "features": ["app-launch", "capture-ocr", "health", "recording-health-alerts"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in macOS focus-aware Cold-state reproduction proves capture attempts can remain intentionally flat while the independent loop heartbeat advances, /health stays ok, and the recording-health overlay remains normal in the original process."
+    },
+    {
       "spec": "recording-health-return-race.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["tauri-command", "os-integration", "real-ui-e2e"],

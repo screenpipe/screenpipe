@@ -456,6 +456,22 @@ export function LiveViewCanvas({
   const drawSessionRef = useRef<DrawSession | null>(null);
   const latestDocumentRef = useRef(document);
   const isMountedRef = useRef(true);
+  const callbacksRef = useRef({
+    onFeedback,
+    onRegenerate,
+    onAiEdit,
+    onItemAction,
+    onItemHandoff,
+    onProposalDecision,
+  });
+  callbacksRef.current = {
+    onFeedback,
+    onRegenerate,
+    onAiEdit,
+    onItemAction,
+    onItemHandoff,
+    onProposalDecision,
+  };
   const slotsById = useMemo(
     () => new Map(slots.map((slot) => [slot.id, slot])),
     [slots],
@@ -697,7 +713,7 @@ export function LiveViewCanvas({
             aiEditing: aiEditingSlotId === slot.id,
             proposal: proposals.get(slot.id) ?? null,
             onProposalDecision: (decision) =>
-              onProposalDecision(slot.id, decision),
+              callbacksRef.current.onProposalDecision(slot.id, decision),
             tool,
             selected: selection.includes(id),
             connectPending: arrowSource === id,
@@ -705,11 +721,13 @@ export function LiveViewCanvas({
             onConnectIntent: connectNode,
             onResize: updateNodeGeometry,
             onFeedback: (rating, correction) =>
-              onFeedback(slot, rating, correction),
-            onRegenerate: () => onRegenerate(slot),
-            onAiEdit: (prompt) => onAiEdit(slot, prompt),
-            onItemAction: (request) => onItemAction(slot, request),
-            onItemHandoff: (item) => onItemHandoff(slot, item),
+              callbacksRef.current.onFeedback(slot, rating, correction),
+            onRegenerate: () => callbacksRef.current.onRegenerate(slot),
+            onAiEdit: (prompt) => callbacksRef.current.onAiEdit(slot, prompt),
+            onItemAction: (request) =>
+              callbacksRef.current.onItemAction(slot, request),
+            onItemHandoff: (item) =>
+              callbacksRef.current.onItemHandoff(slot, item),
           },
         },
       ];
@@ -765,12 +783,6 @@ export function LiveViewCanvas({
     connectNode,
     document.blocks,
     document.notes,
-    onAiEdit,
-    onFeedback,
-    onItemAction,
-    onItemHandoff,
-    onRegenerate,
-    onProposalDecision,
     proposals,
     refreshingSlotIds,
     selection,

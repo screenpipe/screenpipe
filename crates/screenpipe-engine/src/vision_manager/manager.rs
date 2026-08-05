@@ -96,6 +96,7 @@ pub(crate) struct MonitorLivenessSnapshot {
     pub monitor_id: u32,
     pub uptime_secs: f64,
     pub last_capture_attempt_ts: u64,
+    pub last_capture_loop_heartbeat_ts: u64,
     pub last_db_write_ts: u64,
 }
 
@@ -857,6 +858,7 @@ impl VisionManager {
                     monitor_id: *entry.key(),
                     uptime_secs: snap.uptime_secs,
                     last_capture_attempt_ts: snap.last_capture_attempt_ts,
+                    last_capture_loop_heartbeat_ts: snap.last_capture_loop_heartbeat_ts,
                     last_db_write_ts: snap.last_db_write_ts,
                 }
             })

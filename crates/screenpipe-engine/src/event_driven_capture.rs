@@ -53,6 +53,8 @@ const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
 static E2E_CAPTURE_LOOP_SILENT_PHASE: AtomicU8 = AtomicU8::new(0);
 #[cfg(debug_assertions)]
 static E2E_CAPTURE_LOOP_SILENT_ARMED: AtomicBool = AtomicBool::new(false);
+#[cfg(debug_assertions)]
+static E2E_FOCUS_COLD_MARKED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(any(debug_assertions, test))]
 fn seed_list_has_capture_loop_silent(seeds: &str) -> bool {
@@ -66,6 +68,41 @@ fn e2e_capture_loop_silent_enabled() -> bool {
     std::env::var("SCREENPIPE_E2E_SEED")
         .ok()
         .is_some_and(|seeds| seed_list_has_capture_loop_silent(&seeds))
+}
+
+#[cfg(any(debug_assertions, test))]
+fn seed_list_has_focus_cold_heartbeat(seeds: &str) -> bool {
+    seeds
+        .split(',')
+        .any(|seed| seed.trim() == "focus-cold-heartbeat")
+}
+
+/// Deterministically reproduce a selected display remaining intentionally
+/// parked while the user works on another monitor. Production reaches this
+/// state through the focus tracker; the E2E seed removes physical-display and
+/// cursor placement from the regression test.
+#[cfg(debug_assertions)]
+fn e2e_force_focus_cold(monitor_id: u32) -> bool {
+    let enabled = std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|seeds| seed_list_has_focus_cold_heartbeat(&seeds));
+    if enabled
+        && E2E_FOCUS_COLD_MARKED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        info!(
+            "e2e: forcing focus-aware Cold state for monitor {} (focus-cold-heartbeat)",
+            monitor_id
+        );
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-focus-cold-heartbeat-fired"),
+                b"1",
+            );
+        }
+    }
+    enabled
 }
 
 /// Park every initial monitor loop after the pipeline has proved it can both
@@ -100,6 +137,12 @@ async fn e2e_park_capture_loop_once(
                 b"1",
             );
         }
+        // The arm command wakes the watcher, but the capture loop may not
+        // enter the fault until a later focus/backstop wake. Notify again only
+        // after phase 1 is observable so accelerated watchdog thresholds can
+        // never classify the healthy pre-fault interval as the injected stall.
+        #[cfg(target_os = "macos")]
+        crate::sleep_monitor::display_reconfig_notify().notify_one();
     }
 
     if E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst) == 1 {
@@ -128,12 +171,22 @@ pub fn e2e_arm_capture_loop_silent_fault() -> bool {
     true
 }
 
-/// Whether the full-stack liveness probe has explicitly entered its fault
-/// window. App-side alert acceleration uses this instead of the seed alone so
-/// slow debug startup can never be mistaken for the injected incident.
+/// Whether the full-stack liveness probe has entered or completed its fault
+/// window. Threshold acceleration starts only after a capture loop actually
+/// parks (phase 1), then remains enabled through recovery (phase 2). Merely
+/// arming the probe is not enough: a healthy loop may still be waiting on its
+/// normal focus/backstop cadence.
 #[cfg(debug_assertions)]
-pub fn e2e_capture_loop_silent_fault_armed() -> bool {
-    e2e_capture_loop_silent_enabled() && E2E_CAPTURE_LOOP_SILENT_ARMED.load(Ordering::SeqCst)
+pub fn e2e_capture_loop_silent_fault_started() -> bool {
+    e2e_capture_loop_silent_enabled()
+        && e2e_capture_loop_silent_phase_started(
+            E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst),
+        )
+}
+
+#[cfg(any(debug_assertions, test))]
+fn e2e_capture_loop_silent_phase_started(phase: u8) -> bool {
+    phase != 0
 }
 
 #[cfg(not(debug_assertions))]
@@ -142,7 +195,7 @@ pub fn e2e_arm_capture_loop_silent_fault() -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-pub fn e2e_capture_loop_silent_fault_armed() -> bool {
+pub fn e2e_capture_loop_silent_fault_started() -> bool {
     false
 }
 
@@ -793,6 +846,14 @@ fn record_capture_attempt(
     monitor.record_capture_attempt();
 }
 
+fn record_capture_loop_heartbeat(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+) {
+    aggregate.record_capture_loop_heartbeat();
+    monitor.record_capture_loop_heartbeat();
+}
+
 fn record_persisted_capture(
     aggregate: &screenpipe_screen::PipelineMetrics,
     monitor: &screenpipe_screen::PipelineMetrics,
@@ -989,9 +1050,8 @@ pub(crate) async fn event_driven_capture_loop(
         state.last_capture = Instant::now()
             .checked_sub(Duration::from_millis(500))
             .unwrap_or(Instant::now());
-        // Startup capture is a real attempt too. Counting it makes liveness
-        // truthful from the first frame instead of waiting for the next idle
-        // fallback before the attempt heartbeat exists.
+        // Startup capture is a real attempt too. Count capture work from the
+        // first frame instead of waiting for the next idle fallback.
         record_capture_attempt(&vision_metrics, &monitor_liveness);
         match capture_with_timeout(
             CAPTURE_OPERATION_TIMEOUT,
@@ -1106,6 +1166,12 @@ pub(crate) async fn event_driven_capture_loop(
             break;
         }
 
+        // This is the task-liveness clock. Keep it independent from capture
+        // attempts: focus-aware scheduling intentionally parks non-focused
+        // monitors in Warm/Cold state, but the loop is still healthy and wakes
+        // on focus notifications or its bounded backstop.
+        record_capture_loop_heartbeat(&vision_metrics, &monitor_liveness);
+
         #[cfg(debug_assertions)]
         e2e_park_capture_loop_once(&vision_metrics, monitor_id).await;
 
@@ -1123,7 +1189,11 @@ pub(crate) async fn event_driven_capture_loop(
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
-            let capture_state = focus_controller.state_for_monitor(&monitor);
+            let mut capture_state = focus_controller.state_for_monitor(&monitor);
+            #[cfg(debug_assertions)]
+            if e2e_force_focus_cold(monitor_id) {
+                capture_state = CaptureState::Cold;
+            }
 
             // Fires exactly once per focus-away transition, not every Cold
             // loop iteration, so the log line is meaningful and we don't
@@ -1713,8 +1783,9 @@ pub(crate) async fn event_driven_capture_loop(
                     }
                 }
 
-                // Heartbeat: record that the loop is alive and attempting a capture.
-                // This keeps health "ok" even if the DB write below times out.
+                // Record the capture operation separately from the loop heartbeat.
+                // This distinguishes active-but-failing work from intentional
+                // focus-aware Warm/Cold idling.
                 record_capture_attempt(&vision_metrics, &monitor_liveness);
 
                 // Compute elements_ref for frame-to-frame element dedup.
@@ -3383,10 +3454,30 @@ mod tests {
     }
 
     #[test]
+    fn capture_loop_silent_acceleration_starts_after_parking_and_survives_recovery() {
+        assert!(!e2e_capture_loop_silent_phase_started(0));
+        assert!(e2e_capture_loop_silent_phase_started(1));
+        assert!(e2e_capture_loop_silent_phase_started(2));
+    }
+
+    #[test]
+    fn focus_cold_heartbeat_seed_requires_exact_token() {
+        assert!(seed_list_has_focus_cold_heartbeat(
+            "onboarding,no-audio,focus-cold-heartbeat"
+        ));
+        assert!(seed_list_has_focus_cold_heartbeat(" focus-cold-heartbeat "));
+        assert!(!seed_list_has_focus_cold_heartbeat("focus-cold"));
+        assert!(!seed_list_has_focus_cold_heartbeat(
+            "prefix-focus-cold-heartbeat"
+        ));
+    }
+
+    #[test]
     fn aggregate_and_per_monitor_liveness_advance_together() {
         let aggregate = screenpipe_screen::PipelineMetrics::new();
         let monitor = screenpipe_screen::PipelineMetrics::new();
 
+        record_capture_loop_heartbeat(&aggregate, &monitor);
         record_capture_attempt(&aggregate, &monitor);
         record_persisted_capture(&aggregate, &monitor, Duration::from_millis(7));
         record_capture_attempt(&aggregate, &monitor);
@@ -3396,6 +3487,14 @@ mod tests {
 
         let aggregate = aggregate.snapshot();
         let monitor = monitor.snapshot();
+        assert_eq!(
+            aggregate.capture_loop_heartbeats,
+            monitor.capture_loop_heartbeats
+        );
+        assert_eq!(
+            aggregate.last_capture_loop_heartbeat_ts,
+            monitor.last_capture_loop_heartbeat_ts
+        );
         assert_eq!(aggregate.capture_attempts, monitor.capture_attempts);
         assert_eq!(aggregate.frames_db_written, monitor.frames_db_written);
         assert_eq!(aggregate.dedup_skips, monitor.dedup_skips);
