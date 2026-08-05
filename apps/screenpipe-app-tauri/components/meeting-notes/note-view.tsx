@@ -116,11 +116,13 @@ import {
 } from "./transcript-open-state";
 import {
   findMeetingSummaryExecution,
-  meetingSummaryFailureCopy,
+  meetingSummaryFailure,
   meetingSummaryLifecycle,
   type MeetingSummaryExecution,
   type MeetingSummaryLifecycle,
 } from "./meeting-summary-lifecycle";
+import { QUOTA_PLAN_LABELS } from "@/lib/chat/quota-errors";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { MeetingSummaryTransition } from "./meeting-summary-transition";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
@@ -1238,7 +1240,7 @@ export function NoteView({
     if (summaryLifecycle.kind === "failed") {
       return {
         title: "summary needs attention",
-        detail: meetingSummaryFailureCopy(summaryLifecycle.execution),
+        detail: meetingSummaryFailure(summaryLifecycle.execution).copy,
       };
     }
     return {
@@ -1249,6 +1251,10 @@ export function NoteView({
           : "notes and transcript saved locally",
     };
   })();
+  const summaryUpgrade =
+    summaryLifecycle.kind === "failed"
+      ? meetingSummaryFailure(summaryLifecycle.execution).upgrade
+      : null;
   const transcriptActionLabel = transcriptOpen
     ? "hide transcript"
     : "show transcript";
@@ -1524,6 +1530,24 @@ export function NoteView({
                   </span>
                   <span aria-hidden>·</span>
                   <span>{summaryStatus.detail}</span>
+                  {summaryUpgrade && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <button
+                        type="button"
+                        data-testid="meeting-summary-upgrade-link"
+                        className="underline underline-offset-2 transition-colors hover:text-foreground"
+                        onClick={() =>
+                          void openExternalUrl(summaryUpgrade.upgradeUrl)
+                        }
+                      >
+                        upgrade to{" "}
+                        {QUOTA_PLAN_LABELS[
+                          summaryUpgrade.requiredPlan
+                        ].toLowerCase()}
+                      </button>
+                    </>
+                  )}
                   {hasSaveStatus && (
                     <>
                       <span aria-hidden>·</span>

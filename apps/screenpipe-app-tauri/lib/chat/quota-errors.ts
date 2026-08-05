@@ -170,6 +170,16 @@ export function buildDailyLimitMessage(errorStr: string): string {
   }
 }
 
+export const QUOTA_PLAN_LABELS: Record<
+  QuotaUpgradeAction["requiredPlan"],
+  string
+> = {
+  basic: "Basic",
+  business: "Business",
+  business_max: "Business Max",
+  business_ultra: "Business Ultra",
+};
+
 export type QuotaErrorType = "daily" | "hosted_busy" | "rate" | "none";
 
 export function classifyQuotaError(errorStr: string): QuotaErrorType {
@@ -200,6 +210,43 @@ export function classifyQuotaError(errorStr: string): QuotaErrorType {
     normalized.includes("requests per minute") ||
     normalized.includes("too many requests");
   return isRateLimit ? "rate" : "none";
+}
+
+export type QuotaErrorPresentation = {
+  kind: QuotaErrorType;
+  message: string;
+  upgrade: QuotaUpgradeAction | null;
+};
+
+/**
+ * One-call classification for surfaces outside chat (daily summary, meeting
+ * notes, region OCR, Live Views): friendly copy for known quota/rate errors,
+ * plus the validated upgrade action when the gateway offered one. `kind:
+ * "none"` means the error is not quota-shaped — the caller keeps its own
+ * fallback copy and must never show the raw error body.
+ */
+export function presentQuotaError(errorStr: string): QuotaErrorPresentation {
+  const kind = classifyQuotaError(errorStr);
+  const upgrade = parseQuotaUpgradeAction(errorStr);
+  switch (kind) {
+    case "daily": {
+      // buildDailyLimitMessage's upgrade variant points at the chat recovery
+      // panel ("below"), which doesn't exist on these surfaces — each surface
+      // renders its own upgrade action next to this copy instead.
+      const message = buildDailyLimitMessage(errorStr).endsWith(
+        "Choose a recovery option below.",
+      )
+        ? "Your plan's hosted AI usage limit is reached. Upgrade for a higher limit, or switch to a local model or your own provider key."
+        : buildDailyLimitMessage(errorStr);
+      return { kind, message, upgrade };
+    }
+    case "rate":
+      return { kind, message: buildRateLimitMessage(errorStr), upgrade };
+    case "hosted_busy":
+      return { kind, message: buildHostedBusyFinalMessage(), upgrade };
+    default:
+      return { kind, message: "", upgrade };
+  }
 }
 
 export function buildHostedBusyMessage(): string {
