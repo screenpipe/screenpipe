@@ -353,6 +353,7 @@ const FrameThumbnail = ({
   // host (localhost:3030) so the screenpipe_auth cookie isn't sent.
   const [retryNonce, setRetryNonce] = useState(0);
   const retryCount = useRef(0);
+  const imgRef = useRef<HTMLImageElement>(null);
   const sources = getFrameThumbnailSources(frameId, retryNonce, {
     fallback: !exact,
   });
@@ -360,6 +361,19 @@ const FrameThumbnail = ({
   useLayoutEffect(() => {
     onStatusChange?.(frameId, "loading");
   }, [frameId, onStatusChange]);
+
+  // A cached image can finish decoding before React attaches `onLoad`, so that
+  // event never fires and the card stays "loading" forever — greyed out,
+  // unclickable, and absent from keyboard nav and the Timeline result set,
+  // with no retry to rescue it because `onError` never fires either. Ask the
+  // element directly. `complete` is also true for a failed load, so require
+  // decoded pixels before calling it ready and leave failures to `onError`.
+  useEffect(() => {
+    const image = imgRef.current;
+    if (!image || !image.complete || image.naturalWidth === 0) return;
+    setIsLoading(false);
+    onStatusChange?.(frameId, "ready");
+  }, [frameId, onStatusChange, retryNonce]);
 
   // State resets on a new frameId via `key={frameId}` at each render site —
   // the initializers above already produce the correct fresh values, so no
@@ -394,6 +408,7 @@ const FrameThumbnail = ({
       ) : (
         // eslint-disable-next-line @next/next/no-img-element
         <img
+          ref={imgRef}
           src={sources.src}
           srcSet={sources.srcSet}
           sizes="(max-width: 640px) 100vw, 300px"
