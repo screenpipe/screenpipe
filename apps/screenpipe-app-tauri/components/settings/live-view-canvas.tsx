@@ -31,8 +31,8 @@ import {
 } from "@xyflow/react";
 import {
   ArrowRight,
+  Check,
   ChevronLeft,
-  ChevronRight,
   Hand,
   LayoutGrid,
   Maximize2,
@@ -43,6 +43,7 @@ import {
   Trash2,
   ZoomIn,
   ZoomOut,
+  X,
 } from "lucide-react";
 import {
   LiveViewCard,
@@ -93,6 +94,11 @@ type LiveViewFlowNodeData = CanvasNodeActions & {
   feedback: "up" | "down" | null;
   feedbackCorrection: string | null;
   aiEditing: boolean;
+  proposal: {
+    kind: "add" | "update" | "remove";
+    status: "pending" | "accepted" | "rejected";
+  } | null;
+  onProposalDecision: (decision: "accepted" | "rejected") => void;
   onFeedback: (
     rating: "up" | "down" | null,
     correction?: string,
@@ -213,7 +219,13 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
     <article
       data-canvas-node
       data-testid={`canvas-block-${slot.id}`}
-      className={`h-full w-full bg-background ${
+      className={`h-full w-full bg-background transition-[outline,opacity] ${
+        data.proposal?.status === "rejected" ? "opacity-45" : ""
+      } ${
+        data.proposal?.status === "pending"
+          ? "outline outline-2 outline-amber-500 outline-offset-2"
+          : ""
+      } ${
         data.selected || data.connectPending
           ? "outline outline-2 outline-foreground outline-offset-2"
           : ""
@@ -257,6 +269,48 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
           )}
           <span className="truncate">{slot.title}</span>
         </button>
+        {data.proposal && (
+          <div
+            data-testid={`canvas-proposal-controls-${slot.id}`}
+            className="nodrag nopan ml-1 flex shrink-0 items-center gap-1"
+          >
+            <span className="px-1 font-mono text-[9px] uppercase text-muted-foreground">
+              {data.proposal.kind}
+            </span>
+            <Button
+              data-testid={`canvas-proposal-accept-${slot.id}`}
+              type="button"
+              size="icon"
+              variant={
+                data.proposal.status === "accepted" ? "default" : "ghost"
+              }
+              className="h-6 w-6 rounded-none"
+              aria-label={`accept change to ${slot.title}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                data.onProposalDecision("accepted");
+              }}
+            >
+              <Check className="h-3 w-3" />
+            </Button>
+            <Button
+              data-testid={`canvas-proposal-reject-${slot.id}`}
+              type="button"
+              size="icon"
+              variant={
+                data.proposal.status === "rejected" ? "destructive" : "ghost"
+              }
+              className="h-6 w-6 rounded-none"
+              aria-label={`reject change to ${slot.title}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                data.onProposalDecision("rejected");
+              }}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        )}
       </div>
       <div className="nowheel h-[calc(100%-2rem)] overflow-auto border border-t-0 border-border [&>article]:min-h-full">
         <LiveViewCard
@@ -356,6 +410,9 @@ export function LiveViewCanvas({
   onAiEdit,
   onItemAction,
   onItemHandoff,
+  proposals = new Map(),
+  focusSlotId = null,
+  onProposalDecision = () => {},
 }: {
   document: BrainViewCanvasDocument;
   slots: BrainViewSlot[];
@@ -375,6 +432,18 @@ export function LiveViewCanvas({
     request: LiveViewItemActionRequest,
   ) => Promise<boolean>;
   onItemHandoff: (slot: BrainViewSlot, item: LiveViewListItem) => void;
+  proposals?: Map<
+    string,
+    {
+      kind: "add" | "update" | "remove";
+      status: "pending" | "accepted" | "rejected";
+    }
+  >;
+  focusSlotId?: string | null;
+  onProposalDecision?: (
+    slotId: string,
+    decision: "accepted" | "rejected",
+  ) => void;
 }) {
   const [tool, setTool] = useState<CanvasTool>("select");
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -415,6 +484,32 @@ export function LiveViewCanvas({
     },
     [onChange],
   );
+
+  useEffect(() => {
+    if (!focusSlotId) return;
+    const block = latestDocumentRef.current.blocks.find(
+      (candidate) => candidate.slotId === focusSlotId,
+    );
+    const surface = surfaceRef.current?.getBoundingClientRect();
+    if (!block || !surface) return;
+    const zoom = clampCanvasZoom(
+      Math.min(
+        1,
+        (surface.width - 96) / block.width,
+        (surface.height - 96) / block.height,
+      ),
+    );
+    const next = {
+      ...latestDocumentRef.current,
+      viewport: {
+        zoom,
+        x: surface.width / 2 - (block.x + block.width / 2) * zoom,
+        y: surface.height / 2 - (block.y + block.height / 2) * zoom,
+      },
+    };
+    applyDocument(next, false);
+    setCanvasSelection([canvasBlockNodeId(focusSlotId)]);
+  }, [applyDocument, focusSlotId, setCanvasSelection]);
 
   const updateNodeGeometry = useCallback(
     (
@@ -600,6 +695,9 @@ export function LiveViewCanvas({
             feedback: slot.feedback?.current?.rating ?? null,
             feedbackCorrection: slot.feedback?.current?.correction ?? null,
             aiEditing: aiEditingSlotId === slot.id,
+            proposal: proposals.get(slot.id) ?? null,
+            onProposalDecision: (decision) =>
+              onProposalDecision(slot.id, decision),
             tool,
             selected: selection.includes(id),
             connectPending: arrowSource === id,
@@ -672,6 +770,8 @@ export function LiveViewCanvas({
     onItemAction,
     onItemHandoff,
     onRegenerate,
+    onProposalDecision,
+    proposals,
     refreshingSlotIds,
     selection,
     setCanvasSelection,
@@ -1366,17 +1466,11 @@ export function LiveViewCanvas({
             data-testid="canvas-tools-toggle"
             aria-label={`open canvas tools. ${activeTool.label} tool active`}
             aria-expanded="false"
-            className="flex h-8 max-w-32 items-center gap-2 px-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-foreground"
+            title={`open canvas tools · ${activeTool.label} active`}
+            className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-foreground"
             onClick={() => setToolsOpen(true)}
           >
-            <ActiveToolIcon
-              className="h-3.5 w-3.5 shrink-0"
-              aria-hidden="true"
-            />
-            <span className="truncate">
-              {tool === "select" ? "tools" : activeTool.label}
-            </span>
-            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <ActiveToolIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
           </button>
         )}
       </div>

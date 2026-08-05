@@ -68,4 +68,24 @@ describe("LiveViewAiComposer", () => {
 
     portaledInput.remove();
   });
+
+  it("shows one compact live status and lets the user stop", () => {
+    const onCancel = vi.fn();
+    render(
+      <LiveViewAiComposer
+        busy
+        compact
+        feedback={{ tone: "working", label: "updating Live View" }}
+        onCancel={onCancel}
+        selectedPresetId="auto"
+        onSelectedPresetIdChange={vi.fn()}
+        onGenerate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("updating Live View");
+    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "stop update" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
 });

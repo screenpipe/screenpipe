@@ -299,44 +299,26 @@ jobs:
             Write-Host "Tauri signature regenerated"
           }
 
-      - name: Create .intunewin and upload to R2
+      - name: Create .intunewin
         shell: pwsh
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
         run: |
           cd apps/screenpipe-app-tauri
-          $intunewinPath = $null
           try { .\scripts\exe-to-intunewin.ps1 } catch { Write-Host ".intunewin creation failed: $_" }
-          $intunewin = Get-ChildItem "scripts\intunewin\out\*.intunewin" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($intunewin) { $intunewinPath = $intunewin.FullName }
 
-          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing AWS CLI..."
-            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\awscli.msi"
-            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\awscli.msi /quiet"
-            $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
-          }
-          $version = (Get-Content src-tauri/Cargo.toml | Select-String -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          $r2Prefix = "s3://screenpipe-releases/enterprise/releases/$version/x86_64-pc-windows-msvc"
-          $nsisDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
-
-          Write-Host "Uploading enterprise Windows bundles for v$version to R2..."
-          Get-ChildItem "$nsisDir/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  $($_.Name)"
-          }
-          Get-ChildItem "$nsisDir/*.nsis.zip","$nsisDir/*.sig" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  $($_.Name)"
-          }
-          if ($intunewinPath) {
-            aws s3 cp $intunewinPath "$r2Prefix/$(Split-Path -Leaf $intunewinPath)" --endpoint-url $r2Endpoint
-            Write-Host "  $(Split-Path -Leaf $intunewinPath)"
-          }
-          Write-Host "R2 enterprise upload complete for Windows"
+      - name: Upload enterprise Windows artifacts
+        shell: bash
+        env:
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
+        run: |
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          TARGET="x86_64-pc-windows-msvc"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/nsis/*.exe \
+            "${BUNDLE_DIR}"/nsis/*.nsis.zip \
+            "${BUNDLE_DIR}"/nsis/*.sig \
+            apps/screenpipe-app-tauri/scripts/intunewin/out/*.intunewin
 
       - name: Upload enterprise NSIS installer (artifact)
         uses: actions/upload-artifact@v4
@@ -547,39 +529,18 @@ jobs:
       - name: Upload to R2
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
           TARGET="x86_64-unknown-linux-gnu"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          R2_PREFIX="s3://screenpipe-releases/enterprise/releases/${VERSION}/${TARGET}"
-
-          echo "Uploading enterprise Linux bundles for v${VERSION} to R2..."
-          echo "Bundle dir contents:"
-          find "${BUNDLE_DIR}" -type f 2>/dev/null || echo "  (bundle dir not found)"
-
-          UPLOADED=0
-          for artifact in \
+          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/appimage/*.AppImage \
             "${BUNDLE_DIR}"/appimage/*.AppImage.sig \
             "${BUNDLE_DIR}"/appimage/*.tar.gz \
             "${BUNDLE_DIR}"/appimage/*.tar.gz.sig \
-            "${BUNDLE_DIR}"/deb/*.deb; do
-            if [ -f "$artifact" ]; then
-              aws s3 cp "$artifact" "${R2_PREFIX}/$(basename "$artifact")" --endpoint-url "$R2_ENDPOINT"
-              echo "  $(basename "$artifact")"
-              UPLOADED=$((UPLOADED + 1))
-            fi
-          done
-
-          if [ "$UPLOADED" -eq 0 ]; then
-            echo "::error::No enterprise Linux artifacts found to upload"
-            exit 1
-          fi
-          echo "R2 enterprise upload complete for Linux (${UPLOADED} files)"
+            "${BUNDLE_DIR}"/deb/*.deb
 
       - name: Upload enterprise Linux artifacts
         uses: actions/upload-artifact@v4
@@ -1137,27 +1098,17 @@ jobs:
       - name: Upload to R2
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          R2_PREFIX="s3://screenpipe-releases/enterprise/releases/${VERSION}/${TARGET}"
-
-          echo "Uploading enterprise macOS bundles for v${VERSION} to R2..."
-          for dmg in "${BUNDLE_DIR}"/dmg/*.dmg; do
-            [ -f "$dmg" ] && aws s3 cp "$dmg" "${R2_PREFIX}/$(basename "$dmg")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$dmg")"
-          done
-          for pkg in "${BUNDLE_DIR}"/pkg/*.pkg; do
-            [ -f "$pkg" ] && aws s3 cp "$pkg" "${R2_PREFIX}/$(basename "$pkg")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$pkg")"
-          done
-          for updater in "${BUNDLE_DIR}"/macos/*.app.tar.gz "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig; do
-            [ -f "$updater" ] && aws s3 cp "$updater" "${R2_PREFIX}/$(basename "$updater")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$updater")"
-          done
-          echo "R2 enterprise upload complete for macOS"
+          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/dmg/*.dmg \
+            "${BUNDLE_DIR}"/pkg/*.pkg \
+            "${BUNDLE_DIR}"/macos/*.app.tar.gz \
+            "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig
 
       - name: Upload enterprise macOS artifacts
         uses: actions/upload-artifact@v4
@@ -1176,34 +1127,3 @@ jobs:
           BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
           security delete-keychain "$BUILD_KC" 2>/dev/null || true
           security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
-
-  # ─── Notify subscribers after all builds complete ─────────────────────────
-  notify:
-    needs: [release-enterprise-windows, release-enterprise-linux, release-enterprise-macos]
-    runs-on: ubuntu-latest
-    if: always() && (needs.release-enterprise-windows.result == 'success' || needs.release-enterprise-linux.result == 'success' || needs.release-enterprise-macos.result == 'success')
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Notify enterprise build subscribers
-        shell: bash
-        env:
-          ENTERPRISE_NOTIFY_SECRET: ${{ secrets.ENTERPRISE_NOTIFY_SECRET }}
-        run: |
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          if [ -z "$ENTERPRISE_NOTIFY_SECRET" ]; then
-            echo "::error::ENTERPRISE_NOTIFY_SECRET is not set in GitHub secrets"
-            exit 1
-          fi
-          HTTP_CODE=$(curl -s -o /tmp/notify_response.txt -w "%{http_code}" -X POST "https://screenpi.pe/api/enterprise/builds/notify" \
-            -H "Authorization: Bearer $ENTERPRISE_NOTIFY_SECRET" \
-            -H "Content-Type: application/json" \
-            -d "{\"version\": \"$VERSION\"}")
-          BODY=$(cat /tmp/notify_response.txt)
-          echo "Response: HTTP $HTTP_CODE — $BODY"
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Notified subscribers for v$VERSION"
-          else
-            echo "::error::Notification failed (HTTP $HTTP_CODE)"
-            exit 1
-          fi

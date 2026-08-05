@@ -51,6 +51,7 @@ export type LiveViewPipeSummary = {
 };
 
 export type GeneratedLiveViewBlock = {
+  id?: string;
   title: string;
   intent: string;
   component: BrainViewComponent;
@@ -84,6 +85,8 @@ type GenerateLiveViewOptions = {
     id: string;
     revision: number;
   } | null;
+  signal?: AbortSignal;
+  onPhase?: (phase: "starting" | "working" | "reviewing") => void;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -150,10 +153,7 @@ function periodPolicyValue(
   value: unknown,
   timeRange: BrainViewTimeRange,
 ): BrainViewPeriodPolicy {
-  if (
-    typeof value === "string" &&
-    value.trim().toLowerCase() === "fixed"
-  ) {
+  if (typeof value === "string" && value.trim().toLowerCase() === "fixed") {
     return { type: "fixed.v1", value: timeRange };
   }
   return {
@@ -199,6 +199,9 @@ export function parseGeneratedLiveView(
             ? block.pipe
             : nestedPipeName(block);
       return {
+        ...(typeof block.id === "string" && block.id.trim()
+          ? { id: block.id.trim().slice(0, 120) }
+          : {}),
         title: title.slice(0, 120),
         intent,
         component,
@@ -242,30 +245,11 @@ export function parseGeneratedLiveView(
 }
 
 function generationSystemPrompt(): string {
-  return `You design Screenpipe Live Views. A Live View is a safe dashboard made from a fixed component palette.
-
-Return exactly one JSON object. Do not use markdown fences, prose outside JSON, HTML, JavaScript, or SQL.
-When the request names a current Live View reference, first call screenpipe_live_view with action "get" and that exact id. Use no other tools and never call action "save"; the app validates and previews your proposed edit before it persists anything.
-The get tool returns native Blocks with kind and source.pipeName. In your final JSON, convert kind to component and source.pipeName to pipeName. Do not wrap the final dashboard in a view property.
-
-Allowed components:
-- metric.v1: one important number
-- list.v1: ranked or actionable items
-- bar-chart.v1: categorical numeric comparison
-- line-chart.v1: one numeric measure changing across timestamps
-- table.v1: dense rows with label, value, optional detail, and optional status
-- timeline.v1: events in time order
-- markdown.v1: a short narrative brief
-
-Allowed widths are 3, 6, or 12. Prefer 6 for most sections, 12 for timelines or detailed briefs, and 3 only for compact metrics.
-Only use a pipeName from the available pipes supplied by the user. Use null when none fits. Do not invent pipes.
-Every section must include an intent: one precise, self-contained sentence describing what the Pipe should calculate, classify, or summarize. The intent is data logic, not display copy. Define percentages and scores explicitly, name the selected-period denominator, require source evidence, and say how to handle unclassified or missing evidence. Never use a vague intent such as "show this metric".
-For a new dashboard, create 4 to 7 distinct sections. When editing a current Live View, preserve its useful existing sections and change only what the user requested; the complete result may contain 1 to 8 sections. Prefer a useful mix with at least one metric, one bar chart, and one list or timeline when the request supports them. Never return placeholder titles such as "test", duplicate sections, or multiple metrics that show the same number.
-Choose one timeRange for the whole dashboard: "today", "24h", "7d", or "30d". Infer it from the request. Use "today" when the request does not specify a period. Also choose timeRangeBehavior. Use "fixed" only when the dashboard's identity is inherently tied to that exact period, such as a daily memory or a standup for the last 24 hours. Use "selectable" when the same analysis remains useful across different periods. If unsure, use "selectable". This choice is automatic and is never presented to the user as a setup decision. Prefer line-chart.v1 over bar-chart.v1 when the user asks how something changed over time.
-For one section, return exactly one focused section.
-
-Required JSON shape:
-{"title":"View title","timeRange":"today","timeRangeBehavior":"selectable","blocks":[{"title":"Section title","intent":"Precise source-backed question or calculation for this section and selected period.","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
+  return `Design a safe Screenpipe Live View and return only one JSON object, with no markdown or prose.
+If a current view id is supplied, you may only call screenpipe_live_view action "get" for that exact id. Never call "save" or any other tool. The app reviews changes before saving. Preserve every unchanged Block id and reuse the id of every edited Block.
+Use only these components: metric.v1, list.v1, bar-chart.v1, line-chart.v1, table.v1, timeline.v1, markdown.v1. Width must be 3, 6, or 12. Use only supplied pipe names, otherwise null. Never invent a pipe.
+Each Block needs a precise, source-backed intent describing the calculation or summary for the selected period and how missing evidence is handled. Avoid duplicate Blocks. For new dashboards create 4 to 7 Blocks; edits may return 1 to 8. Use timeRange today, 24h, 7d, or 30d. Use timeRangeBehavior fixed only when the view is inherently tied to that period, otherwise selectable.
+JSON shape: {"title":"View title","timeRange":"today","timeRangeBehavior":"selectable","blocks":[{"id":"existing-id-when-editing","title":"Block title","intent":"Precise source-backed calculation or summary.","component":"metric.v1","width":6,"pipeName":null}],"note":"Short explanation"}`;
 }
 
 export function buildLiveViewGenerationPrompt(
@@ -292,7 +276,9 @@ export function buildLiveViewGenerationPrompt(
       ? `These are reviewed Pipe Store candidates available for automatic installation. Bind every section to one of them. Use at most ${options.maxSelectedPipes ?? 2} distinct pipes across the dashboard. Prefer the smallest set that works from Screenpipe's local capture alone. Avoid a pipe that mentions syncing or saving to a named external app unless the user explicitly asked for that app.`
       : "These pipes are already installed. Use null only when no installed pipe can produce the requested section.";
 
-  return `${scopeInstruction}
+  return `${generationSystemPrompt()}
+
+${scopeInstruction}
 
 Pipe rules:
 ${pipeInstruction}
@@ -343,18 +329,46 @@ export function relevantPipes(
 }
 
 function providerConfig(preset: AIPreset): PiProviderConfig {
-  const prompt = [preset.prompt?.trim(), generationSystemPrompt()]
-    .filter(Boolean)
-    .join("\n\n");
+  // This editor is deliberately isolated from the normal Chat preset prompt.
+  // Its bounded contract travels with the private user turn instead of the Pi
+  // launch args, which also avoids reusing any normal Chat system context.
+  const isAcp = preset.provider === "acp";
   return {
+    ...(isAcp
+      ? { backend: "acp" as const, acpAgent: preset.acpAgent ?? null }
+      : {}),
     provider: preset.provider,
     url: preset.url || "",
     model: preset.model || "",
     apiKey: preset.apiKey || null,
-    maxTokens: Math.max(2_048, Math.min(preset.maxTokens ?? 4_096, 8_192)),
-    maxContextChars: preset.maxContextChars,
-    systemPrompt: prompt,
+    // Respect small/local-model limits instead of silently forcing 2k output
+    // tokens, which can exceed the model context before egress even starts.
+    maxTokens: Math.max(64, Math.min(preset.maxTokens ?? 4_096, 8_192)),
+    ...(preset.maxContextChars != null
+      ? { maxContextChars: preset.maxContextChars }
+      : {}),
+    systemPrompt: null,
   };
+}
+
+async function liveViewProjectDir(): Promise<string> {
+  // Resolve beside the active screenpipe data directory so relocated installs
+  // and isolated E2E runs never fall back to, or write into, the real home.
+  try {
+    const chatsDir = await commands.getChatsDir();
+    if (chatsDir.status === "ok" && chatsDir.data) {
+      const separator = chatsDir.data.includes("\\") ? "\\" : "/";
+      const chatsSuffix = `${separator}chats`;
+      const dataDir = chatsDir.data.endsWith(chatsSuffix)
+        ? chatsDir.data.slice(0, -chatsSuffix.length)
+        : chatsDir.data;
+      return `${dataDir}${separator}${PROJECT_DIR}`;
+    }
+  } catch {
+    // Unit tests and SSR do not expose Tauri commands. Keep the legacy path as
+    // a compatibility fallback only when the native resolver is unavailable.
+  }
+  return await join(await homeDir(), ".screenpipe", PROJECT_DIR);
 }
 
 function textFromAgentEnd(envelope: AgentEventEnvelope): string {
@@ -378,10 +392,10 @@ function textFromAgentEnd(envelope: AgentEventEnvelope): string {
 async function rawGeneration(
   options: GenerateLiveViewOptions,
 ): Promise<string> {
+  if (options.signal?.aborted) throw abortError();
   const sessionId = `${INTERNAL_TITLE_PREFIX}live-view-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await mountAgentEventBus();
-  const home = await homeDir();
-  const projectDir = await join(home, ".screenpipe", PROJECT_DIR);
+  const projectDir = await liveViewProjectDir();
 
   let accumulated = "";
   let settled = false;
@@ -406,6 +420,14 @@ async function rawGeneration(
     rejectResponse(new Error(message));
   };
 
+  const abort = () => {
+    if (settled) return;
+    settled = true;
+    if (timeoutId) clearTimeout(timeoutId);
+    rejectResponse(abortError());
+    void commands.piStop(sessionId);
+  };
+
   const handler = (envelope: AgentEventEnvelope) => {
     const event = envelope.event;
     const delta =
@@ -416,7 +438,22 @@ async function rawGeneration(
           ? event.assistantMessageEvent.delta
           : "";
     if (typeof delta === "string") accumulated += delta;
+    if (event.type === "agent_start") options.onPhase?.("working");
+    if (event.type === "tool_execution_start") {
+      if (event.toolName !== "screenpipe_live_view") {
+        fail("Live View editor tried to use an unrelated tool");
+        void commands.piStop(sessionId);
+        return;
+      }
+      const action = event.args?.action;
+      if (action !== "get" && action !== "list") {
+        fail("Live View editor tried to change data before review");
+        void commands.piStop(sessionId);
+        return;
+      }
+    }
     if (event.type === "agent_end") {
+      options.onPhase?.("reviewing");
       settle(accumulated || textFromAgentEnd(envelope));
     } else if (event.type === "error") {
       fail("AI failed to generate the Live View");
@@ -424,7 +461,9 @@ async function rawGeneration(
   };
 
   const unregister = registerForeground(sessionId, handler);
+  options.signal?.addEventListener("abort", abort, { once: true });
   try {
+    options.onPhase?.("starting");
     const started = await commands.piStart(
       sessionId,
       projectDir,
@@ -436,14 +475,18 @@ async function rawGeneration(
         started.status === "error" ? started.error : "AI did not start",
       );
     }
+    if (options.signal?.aborted) throw abortError();
+
+    // piStart completes the native RPC handshake. Submit only after that
+    // boundary; the combined start-and-prompt command can acknowledge a turn
+    // before a newly-created private session is ready to reach the provider.
     const prompted = await commands.piPrompt(
       sessionId,
       buildLiveViewGenerationPrompt(options),
       null,
       null,
     );
-    if (prompted.status !== "ok") throw new Error(prompted.error);
-
+    if (prompted.status === "error") throw new Error(prompted.error);
     timeoutId = setTimeout(
       () => fail("AI generation timed out"),
       GENERATION_TIMEOUT_MS,
@@ -452,15 +495,30 @@ async function rawGeneration(
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     unregister();
+    options.signal?.removeEventListener("abort", abort);
     void commands.piStop(sessionId);
   }
+}
+
+function abortError(): Error {
+  const error = new Error("Live View update stopped");
+  error.name = "AbortError";
+  return error;
 }
 
 export async function generateLiveViewWithPi(
   options: GenerateLiveViewOptions,
 ): Promise<GeneratedLiveView> {
   if (!options.prompt.trim()) throw new Error("Describe what you want to see");
-  if (!options.preset.model?.trim()) throw new Error("Select an AI model");
+  if (options.preset.provider !== "acp" && !options.preset.model?.trim()) {
+    throw new Error("Select an AI model");
+  }
+  if (
+    options.preset.provider === "acp" &&
+    !options.preset.acpAgent?.id?.trim()
+  ) {
+    throw new Error("Select an ACP agent");
+  }
   const raw = await rawGeneration(options);
   const generated = parseGeneratedLiveView(
     raw,

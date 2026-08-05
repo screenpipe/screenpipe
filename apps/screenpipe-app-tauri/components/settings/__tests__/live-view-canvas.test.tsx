@@ -158,6 +158,9 @@ describe("LiveViewCanvas", () => {
     const toggle = screen.getByTestId("canvas-tools-toggle");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.getAttribute("aria-label")).toContain("select tool active");
+    expect(toggle.getAttribute("title")).toContain("select active");
+    expect(toggle.textContent).toBe("");
+    expect(toggle.className).toContain("w-8");
     expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
     expect(screen.getByTestId("canvas-interaction-hint")).toBeTruthy();
 

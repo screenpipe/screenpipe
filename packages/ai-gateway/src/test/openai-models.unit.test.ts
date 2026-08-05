@@ -113,6 +113,13 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).toContain('claude-fable-5');
 	});
 
+	it('publishes the full Claude 5 output budget for agent tool calls', async () => {
+		const models = await listedModels();
+		for (const id of ['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']) {
+			expect(models.find(model => model.id === id)?.max_output_tokens).toBe(128_000);
+		}
+	});
+
 	it('does not expose provider-secret gates in /v1/models responses', async () => {
 		const models = await listedModels();
 		const openAiModel = models.find(model => model.id === 'gpt-5.5');
