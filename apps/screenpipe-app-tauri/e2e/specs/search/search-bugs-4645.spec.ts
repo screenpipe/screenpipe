@@ -213,23 +213,31 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
       },
     );
     await browser.switchToWindow(timelineHandle as string);
+    // Timeline must receive every verified result, not just the cards whose
+    // thumbnails had decoded — those load lazily, so a subset would make the
+    // result count depend on how far the grid had been scrolled. Compared
+    // against the grid count rather than a literal so the invariant holds if
+    // the fixture ever grows.
+    const expectedResultsLength = String(audit.cardCount);
     await browser.waitUntil(
       async () =>
         (await browser.execute(
-          () => {
+          (expected: string) => {
             const navigation = document.querySelector(
               "[data-search-result-navigation]",
             );
             return (
-              navigation?.getAttribute("data-results-length") === "2" &&
+              navigation?.getAttribute("data-results-length") === expected &&
               navigation?.getAttribute("data-active-result-index") === "0"
             );
           },
+          expectedResultsLength,
         )) as boolean,
       {
         timeout: t(20_000),
         interval: 200,
-        timeoutMsg: "timeline navigation did not use the two verified results",
+        timeoutMsg:
+          "timeline navigation did not use every verified result",
       },
     );
   });

@@ -1733,20 +1733,24 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     selectionMethod: SearchSelectionMethod = "click",
   ) => {
     // A missing exact thumbnail is removed asynchronously after retries. Guard
-    // this boundary too so a click or Enter queued during loading cannot send
-    // a dead frame and stale result count to Timeline.
+    // the clicked frame so a click or Enter queued during loading cannot open
+    // a dead frame.
     if (!readyThumbnailFrameIdsRef.current.has(result.frame_id)) return;
-    const navigableResults = searchResults.filter((candidate) =>
-      readyThumbnailFrameIdsRef.current.has(candidate.frame_id),
-    );
+
+    // Timeline receives every verified result, not just the ones whose
+    // thumbnails happen to have decoded. Thumbnails load lazily as cards enter
+    // the viewport, so scoping this set to loaded frames made Timeline's result
+    // count depend on how far the user had scrolled — 1/6 for a 20-result
+    // search. `searchResults` already excludes both hidden-only candidates and
+    // frames proven missing (see `removeSearchResult`/`unavailableFrameIds`).
     trackSearchResultSelected("screen", selectionMethod, "timeline");
     if (queryTokens.length > 0) {
       setHighlight(queryTokens, result.frame_id);
     }
     // Track which result was selected so timeline arrow keys can cycle from here
-    const idx = navigableResults.findIndex((r) => r.frame_id === result.frame_id);
+    const idx = searchResults.findIndex((r) => r.frame_id === result.frame_id);
     if (idx >= 0) setCurrentResultIndex(idx);
-    const resultsJson = JSON.stringify(navigableResults);
+    const resultsJson = JSON.stringify(searchResults);
     await navigateToResult(
       result.timestamp,
       result.frame_id,
