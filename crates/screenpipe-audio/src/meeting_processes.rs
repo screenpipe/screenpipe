@@ -708,27 +708,50 @@ mod platform {
 
     pub fn current_input_processes() -> AudioProcessSnapshot {
         let self_pid = std::process::id() as i32;
-        // pw-dump can be installed but failing (e.g. PipeWire not running on a
-        // plain PulseAudio system), so pactl is the fallback for BOTH the
-        // missing and the failed case, and both errors are preserved when
-        // neither tool produces a snapshot.
-        let pw = run_tool("pw-dump", &[]);
-        if let ToolResult::Output(json) = pw {
-            return snapshot_from(parse_pw_dump(&json, self_pid));
+        // pw-dump can be installed but unusable — failing to run (PipeWire not
+        // running on a plain PulseAudio system) or emitting output the parser
+        // rejects (contract drift) — so pactl is the fallback for every
+        // pw-dump outcome short of a parsed snapshot. Both errors are
+        // preserved when neither tool produces one.
+        let (pw_missing, pw_err) =
+            match attempt("pw-dump", &[], parse_pw_dump, self_pid) {
+                Ok(snapshot) => return snapshot,
+                Err(outcome) => outcome,
+            };
+        let (pactl_missing, pactl_err) = match attempt(
+            "pactl",
+            &["--format=json", "list", "source-outputs"],
+            parse_pactl_source_outputs,
+            self_pid,
+        ) {
+            Ok(snapshot) => return snapshot,
+            Err(outcome) => outcome,
+        };
+        if pw_missing && pactl_missing {
+            return AudioProcessSnapshot::unsupported("linux (neither pw-dump nor pactl found)");
         }
-        let pactl = run_tool("pactl", &["--format=json", "list", "source-outputs"]);
-        match (pw, pactl) {
-            (_, ToolResult::Output(json)) => {
-                snapshot_from(parse_pactl_source_outputs(&json, self_pid))
-            }
-            (ToolResult::Missing, ToolResult::Missing) => {
-                AudioProcessSnapshot::unsupported("linux (neither pw-dump nor pactl found)")
-            }
-            (pw, pactl) => failed_snapshot(&format!(
-                "pw-dump: {}; pactl: {}",
-                tool_error(pw),
-                tool_error(pactl)
-            )),
+        failed_snapshot(&format!("pw-dump: {pw_err}; pactl: {pactl_err}"))
+    }
+
+    /// Run one tool end-to-end. `Ok` is a usable snapshot; `Err` carries
+    /// (was_missing, error_description) for the combined failure report.
+    fn attempt(
+        bin: &str,
+        args: &[&str],
+        parse: fn(&str, i32) -> Result<Vec<AudioInputProcess>, String>,
+        self_pid: i32,
+    ) -> Result<AudioProcessSnapshot, (bool, String)> {
+        match run_tool(bin, args) {
+            ToolResult::Output(json) => match parse(&json, self_pid) {
+                Ok(processes) => Ok(AudioProcessSnapshot {
+                    supported: true,
+                    processes,
+                    error: None,
+                }),
+                Err(e) => Err((false, e)),
+            },
+            ToolResult::Missing => Err((true, "not found".to_string())),
+            ToolResult::Failed(e) => Err((false, e)),
         }
     }
 
@@ -738,88 +761,65 @@ mod platform {
         Failed(String),
     }
 
-    fn tool_error(result: ToolResult) -> String {
-        match result {
-            ToolResult::Output(_) => "ok".to_string(),
-            ToolResult::Missing => "not found".to_string(),
-            ToolResult::Failed(e) => e,
-        }
-    }
-
     fn run_tool(bin: &str, args: &[&str]) -> ToolResult {
-        use std::io::Read;
+        use std::os::unix::process::CommandExt;
         use std::process::Stdio;
-        use std::time::Instant;
+        use std::sync::mpsc;
 
-        let mut child = match Command::new(bin)
+        // The child gets its own process group so a timeout can SIGKILL the
+        // whole tree: killing only the direct child would leave a grandchild
+        // holding the pipe fds, and the collector thread below would stay
+        // blocked on them forever.
+        let child = match Command::new(bin)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .spawn()
         {
             Ok(child) => child,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ToolResult::Missing,
             Err(e) => return ToolResult::Failed(format!("failed to spawn {bin}: {e}")),
         };
+        let pgid = child.id() as i32;
 
-        // Drain stdout on a thread so a large dump can't deadlock the pipe
-        // while we poll for exit below.
-        let mut stdout = child.stdout.take().expect("stdout piped above");
-        let reader = std::thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = stdout.read_to_string(&mut buf);
-            buf
+        // wait_with_output drains stdout AND stderr concurrently and reaps the
+        // child, so neither a large dump nor a chatty failure can deadlock the
+        // pipes. It runs on its own thread so this (synchronous, poll-path)
+        // caller can bound it with a channel timeout.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
         });
 
-        let deadline = Instant::now() + TOOL_TIMEOUT;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap; no zombie
-                    return ToolResult::Failed(format!(
-                        "{bin} timed out after {}s",
-                        TOOL_TIMEOUT.as_secs()
-                    ));
-                }
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-                Err(e) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return ToolResult::Failed(format!("failed to wait on {bin}: {e}"));
-                }
+        let output = match rx.recv_timeout(TOOL_TIMEOUT) {
+            Ok(result) => result,
+            Err(_) => {
+                // SAFETY: plain kill(2) on the process group we created above;
+                // no memory safety concerns. Negative pid = whole group.
+                unsafe { libc::kill(-pgid, libc::SIGKILL) };
+                // The group is gone, so the pipes close and the collector
+                // thread finishes promptly — join it via the channel to avoid
+                // leaking a thread per timeout on this long-lived poll loop.
+                let _ = rx.recv_timeout(TOOL_TIMEOUT);
+                return ToolResult::Failed(format!(
+                    "{bin} timed out after {}s",
+                    TOOL_TIMEOUT.as_secs()
+                ));
             }
         };
 
-        let stdout = reader.join().unwrap_or_default();
-        if status.success() {
-            ToolResult::Output(stdout)
-        } else {
-            let mut stderr_buf = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                let _ = stderr.read_to_string(&mut stderr_buf);
+        match output {
+            Ok(out) if out.status.success() => {
+                ToolResult::Output(String::from_utf8_lossy(&out.stdout).into_owned())
             }
-            ToolResult::Failed(format!(
-                "{bin} exited with {status}: {}",
-                stderr_buf.trim()
-            ))
-        }
-    }
-
-    fn snapshot_from(parsed: Result<Vec<AudioInputProcess>, String>) -> AudioProcessSnapshot {
-        match parsed {
-            Ok(processes) => AudioProcessSnapshot {
-                supported: true,
-                processes,
-                error: None,
-            },
-            Err(error) => AudioProcessSnapshot {
-                supported: true,
-                processes: Vec::new(),
-                error: Some(error),
-            },
+            Ok(out) => ToolResult::Failed(format!(
+                "{bin} exited with {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+            Err(e) => ToolResult::Failed(format!("failed to wait on {bin}: {e}")),
         }
     }
 

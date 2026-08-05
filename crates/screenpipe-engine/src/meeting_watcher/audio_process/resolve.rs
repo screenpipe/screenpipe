@@ -536,7 +536,16 @@ pub(crate) fn known_native_bundle_platform(field_lower: &str) -> Option<&'static
     // Signal is kept here (not gated) because its Electron AX tree is opaque
     // — we can't distinguish calls from voice notes, so requires_call_signal
     // is false and it doesn't need a profile index for the gate (#4776).
-    if field_lower.contains("signal") {
+    // Matched by explicit bundle/app/exe forms rather than a bare `contains`:
+    // the Linux collector reports the process binary `signal-desktop` with no
+    // bundle ids, so a substring match would resolve it here and the
+    // voice-note bundle gate would fail open — every Linux voice note would
+    // start a phantom meeting. Until Linux has a discriminating signal, that
+    // binary must fall through unresolved (fail closed).
+    if field_lower.starts_with("org.whispersystems")
+        || field_lower == "signal"
+        || field_lower == "signal.exe"
+    {
         return Some("Signal");
     }
     // WhatsApp and Telegram are intentionally NOT matched here. They must

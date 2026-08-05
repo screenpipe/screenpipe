@@ -93,6 +93,8 @@ url = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 libpulse-binding = { version = "2.28", optional = true }
 libpulse-simple-binding = { version = "2.28", optional = true }
+# meeting_processes: SIGKILL of a timed-out snapshot tool's process group.
+libc = { workspace = true }
 # Bundle ONNX Runtime on Linux (same as macOS). load-dynamic was tried but
 # broke systems without a system-installed libonnxruntime.so (see #2506).
 ort = { workspace = true, features = ["download-binaries", "tls-native"] }
