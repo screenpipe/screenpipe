@@ -14,6 +14,16 @@ const ARGUS_CONTEXT_TRUNCATION_MARKER = '\n…[older background context truncate
 
 const ARGUS_JSON_SYSTEM_PROMPT = 'Return only one valid JSON object matching the requested response format. Do not include markdown or prose.';
 
+export class SafetyRefusalError extends Error {
+	readonly code = 'safety_refusal';
+	readonly retryable = false;
+
+	constructor(message = 'Provider finish_reason: content_filter') {
+		super(message.toLowerCase().includes('safety_refusal') ? message : `safety_refusal: ${message}`);
+		this.name = 'SafetyRefusalError';
+	}
+}
+
 const ACCOUNT_LOCAL_ALLOWANCE_CODES = new Set([
 	'credits_exhausted',
 	'daily_limit_exceeded',
@@ -60,7 +70,8 @@ function compactArgusSchema(value: unknown): unknown {
  * Pi's full tool schemas can consume most of Argus's 8k window before the Pipe
  * prompt is tokenized. Keep the executable JSON contract while removing prose
  * that is redundant with the agent instructions. The primary request remains
- * untouched; this compact copy is used only after its hosted allowance fails.
+ * untouched; this compact copy is used only after its hosted request needs
+ * the internal rescue lane.
  */
 function compactArgusTools(tools: RequestBody['tools']): RequestBody['tools'] {
 	if (!Array.isArray(tools)) return tools;
@@ -231,6 +242,7 @@ export function prepareArgusBackgroundFallbackBody(body: RequestBody): RequestBo
 }
 
 function errorText(error: unknown): string {
+	if (typeof error === 'string') return error;
 	const candidate = error as {
 		message?: unknown;
 		code?: unknown;
@@ -254,6 +266,23 @@ function errorText(error: unknown): string {
 		}
 	}
 	return values.filter((value): value is string => typeof value === 'string').join(' ');
+}
+
+export function isSafetyRefusalError(error: unknown): boolean {
+	if (error instanceof SafetyRefusalError) return true;
+	const candidate = error as {
+		code?: unknown;
+		type?: unknown;
+		error?: { code?: unknown; type?: unknown };
+	};
+	const classifiers = [candidate?.code, candidate?.type, candidate?.error?.code, candidate?.error?.type]
+		.filter((value): value is string => typeof value === 'string')
+		.map((value) => value.toLowerCase());
+	if (classifiers.some((value) => ['content_filter', 'content-filter', 'safety_refusal', 'refusal'].includes(value))) {
+		return true;
+	}
+	const text = errorText(error);
+	return /\bcontent[_ -]?filter\b|(?:finish|stop)[_ -]?reason[^\n]{0,40}\brefusal\b|flagged for (?:possible )?(?:cybersecurity|safety) risk/i.test(text);
 }
 
 /**
@@ -287,7 +316,8 @@ export function shouldUseArgusBackgroundFallback(input: {
 		isArgusBackgroundFallbackConfigured(input.env) &&
 		(isHostedChatAllowanceError(input.error) ||
 			isAccountLocalAllowanceError(input.error) ||
-			isProviderQuotaOrBillingLimitError(input.error));
+			isProviderQuotaOrBillingLimitError(input.error) ||
+			isSafetyRefusalError(input.error));
 }
 
 /**

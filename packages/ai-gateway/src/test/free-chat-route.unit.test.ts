@@ -14,7 +14,11 @@ mock.module('@clerk/backend', () => ({
 	verifyToken: verifyTokenMock,
 }));
 
-const { handleRequest, shouldEnableArgusBackgroundFallback } = await import('../index');
+const {
+	handleRequest,
+	shouldEnableArgusBackgroundFallback,
+	shouldEnableArgusSafetyRefusalFallback,
+} = await import('../index');
 const { resolveLatencyClass } = await import('../utils/latency');
 
 describe('/v1/chat/completions free-plan route policy', () => {
@@ -176,6 +180,23 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			messages: [{ role: 'user', content: 'hello' }],
 		}, flexDisabledEnv)).toBe('interactive');
 		expect(shouldEnableArgusBackgroundFallback(backgroundRequest, {
+			isValid: true,
+			tier: 'subscribed',
+			accountPlan: 'basic',
+			deviceId: 'pipe-device',
+		})).toBe(true);
+		expect(shouldEnableArgusSafetyRefusalFallback(backgroundRequest, {
+			isValid: true,
+			tier: 'subscribed',
+			accountPlan: 'basic',
+			deviceId: 'pipe-device',
+		})).toBe(false);
+
+		const pipeRequest = request({
+			'x-screenpipe-latency': 'background',
+			'x-screenpipe-workload': 'pipe',
+		});
+		expect(shouldEnableArgusSafetyRefusalFallback(pipeRequest, {
 			isValid: true,
 			tier: 'subscribed',
 			accountPlan: 'basic',

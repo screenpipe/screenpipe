@@ -1050,7 +1050,9 @@ impl PiExecutor {
             // PiExecutor only runs pipes (PipeManager: scheduled / run-now),
             // which are latency-tolerant, so tag every cloud LLM call as
             // background. The gateway then serves it on the cheaper, best-effort
-            // Vertex flex tier (resolveLatencyClass). Pi merges provider
+            // Vertex flex tier (resolveLatencyClass). The workload marker keeps
+            // safety-refusal rescue scoped to unattended Pipes rather than
+            // interactive chat or other background helpers. Pi merges provider
             // `headers` into each request (see pi-coding-agent model-registry),
             // and an old gateway simply ignores the unknown header (→ standard),
             // so there's no deploy-order coupling.
@@ -1059,7 +1061,10 @@ impl PiExecutor {
                 "api": "openai-completions",
                 "apiKey": api_key_value,
                 "authHeader": true,
-                "headers": { "x-screenpipe-latency": "background" },
+                "headers": {
+                    "x-screenpipe-latency": "background",
+                    "x-screenpipe-workload": "pipe"
+                },
                 "models": models
             });
 

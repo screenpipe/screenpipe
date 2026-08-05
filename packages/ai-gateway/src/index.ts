@@ -108,6 +108,14 @@ export function shouldEnableArgusBackgroundFallback(
 	return isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult);
 }
 
+export function shouldEnableArgusSafetyRefusalFallback(
+	request: Request,
+	authResult: AuthResult,
+): boolean {
+	return shouldEnableArgusBackgroundFallback(request, authResult)
+		&& request.headers.get('x-screenpipe-workload')?.toLowerCase() === 'pipe';
+}
+
 type BoundedJsonRead =
 	| { ok: true; value: unknown; bytes: number }
 	| { ok: false; tooLarge: boolean };
@@ -762,6 +770,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
 						gatewayContext,
 						argusBackgroundFallback: shouldEnableArgusBackgroundFallback(request, authResult),
+						argusSafetyRefusalFallback: shouldEnableArgusSafetyRefusalFallback(request, authResult),
 					},
 				);
 				if (response.status === 429 && body.stream) {
