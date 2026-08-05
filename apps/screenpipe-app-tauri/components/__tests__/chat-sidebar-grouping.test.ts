@@ -18,6 +18,7 @@ import {
 import {
   buildPipeExecutionHistoryPage,
   isTerminalPipeExecutionStatus,
+  shouldReloadPipeExecutionHistory,
 } from "@/lib/pipe-execution-status";
 import type { SessionRecord } from "@/lib/stores/chat-store";
 
@@ -60,6 +61,16 @@ describe("buildPipeExecutionHistoryPage", () => {
       12, 11, 10, 9, 8, 7, 6, 5, 4, 3,
     ]);
     expect(page.nextCursor).toBe(3);
+  });
+});
+
+describe("shouldReloadPipeExecutionHistory", () => {
+  it("invalidates an expanded history when inventory advances", () => {
+    expect(shouldReloadPipeExecutionHistory(41, 42)).toBe(true);
+    expect(shouldReloadPipeExecutionHistory(undefined, 42)).toBe(true);
+    expect(shouldReloadPipeExecutionHistory(42, 42)).toBe(false);
+    expect(shouldReloadPipeExecutionHistory(43, 42)).toBe(false);
+    expect(shouldReloadPipeExecutionHistory(42, undefined)).toBe(false);
   });
 });
 

@@ -10,8 +10,9 @@ use screenpipe_config::SemanticContextMode;
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::monitor::{get_monitor_by_id, list_monitors};
 use screenpipe_screen::PipelineMetrics;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::runtime::Handle;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
@@ -86,6 +87,18 @@ pub enum VisionManagerStatus {
     ShuttingDown,
 }
 
+/// Per-monitor heartbeat exposed to the monitor watcher. The public health
+/// endpoint intentionally keeps aggregate metrics, while recovery must inspect
+/// each capture loop independently so one healthy display cannot hide another
+/// display that stopped attempting or persisting frames.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MonitorLivenessSnapshot {
+    pub monitor_id: u32,
+    pub uptime_secs: f64,
+    pub last_capture_attempt_ts: u64,
+    pub last_db_write_ts: u64,
+}
+
 /// Manages vision recording across multiple monitors with dynamic detection
 pub struct VisionManager {
     config: VisionManagerConfig,
@@ -94,6 +107,10 @@ pub struct VisionManager {
     status: Arc<RwLock<VisionManagerStatus>>,
     /// Map of monitor_id -> JoinHandle
     recording_tasks: Arc<DashMap<u32, JoinHandle<()>>>,
+    /// Per-monitor pipeline heartbeat. Aggregate metrics remain in `config` for
+    /// `/health`; these independent clocks are exclusively the recovery source
+    /// so partial multi-display stalls are observable.
+    monitor_liveness: Arc<DashMap<u32, Arc<PipelineMetrics>>>,
     /// Map of monitor_id -> high-fps HD recorder JoinHandle. Spawned alongside
     /// each capture loop; idles until an HD session is active. Aborted in
     /// `stop_monitor` (ffmpeg self-finalizes on stdin EOF).
@@ -136,6 +153,16 @@ pub struct VisionManager {
     /// them on reconcile, so a paused display stays paused until the user
     /// resumes it — mirrors the audio manager's user-disabled device set.
     user_disabled: Arc<DashSet<u32>>,
+    /// Connected displays selected for recording, including user-paused ones.
+    /// Keeping intent separate from active tasks lets health distinguish “all
+    /// displays intentionally paused” from “one paused display plus one dead
+    /// capture task.”
+    expected_monitors: Arc<StdRwLock<HashSet<u32>>>,
+    /// Watcher-owned answer to “should any selected display be producing
+    /// frames now?” False for all-user-paused or all-displays-asleep states.
+    /// Health reads this cached value without introducing CoreGraphics calls
+    /// into the 1 Hz endpoint.
+    monitor_capture_expected: Arc<AtomicBool>,
 }
 
 impl VisionManager {
@@ -188,6 +215,7 @@ impl VisionManager {
             vision_handle,
             status: Arc::new(RwLock::new(VisionManagerStatus::Stopped)),
             recording_tasks: Arc::new(DashMap::new()),
+            monitor_liveness: Arc::new(DashMap::new()),
             hd_recording_tasks: Arc::new(DashMap::new()),
             trigger_tx,
             linker_tx,
@@ -199,6 +227,8 @@ impl VisionManager {
             semantic_tx,
             stale_allowlist_fallback: Arc::new(AtomicBool::new(false)),
             user_disabled: Arc::new(DashSet::new()),
+            expected_monitors: Arc::new(StdRwLock::new(HashSet::new())),
+            monitor_capture_expected: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -250,12 +280,22 @@ impl VisionManager {
         *self.status.read().await
     }
 
-    /// Shared capture-pipeline metrics. The monitor watcher's silent-wedge
-    /// watchdog reads this to tell a real stall (attempts firing but nothing
-    /// persisted) apart from a healthy static screen (which still ticks
-    /// `last_db_write_ts` via dedup-skip). Mirrors what /health reports.
+    /// Aggregate capture-pipeline metrics exposed through `/health`. Recovery
+    /// uses independent per-monitor clocks instead, so activity on one display
+    /// cannot conceal a silent sibling.
     pub fn vision_metrics(&self) -> &Arc<PipelineMetrics> {
         &self.config.vision_metrics
+    }
+
+    /// True when the power manager deliberately put capture into FullPause.
+    /// The monitor watcher uses this alongside lock/DRM/schedule state so a
+    /// frozen heartbeat that is expected by policy never trips the stall
+    /// watchdog.
+    pub(crate) fn power_capture_paused(&self) -> bool {
+        self.power_profile_rx
+            .as_ref()
+            .map(|rx| rx.borrow().capture_paused)
+            .unwrap_or(false)
     }
 
     /// Check whether a monitor is allowed by the user's monitor filter settings.
@@ -297,6 +337,7 @@ impl VisionManager {
         info!("Starting VisionManager");
         *status = VisionManagerStatus::Running;
         drop(status);
+        self.set_expected_monitors(std::iter::empty());
 
         // Get all monitors and start recording on each (filtered by user selection)
         let monitors = list_monitors().await;
@@ -311,7 +352,7 @@ impl VisionManager {
                 continue;
             }
             let monitor_id = monitor.id();
-            if let Err(e) = self.start_monitor(monitor_id).await {
+            if let Err(e) = self.start_monitor_handle(monitor).await {
                 warn!(
                     "Failed to start recording on monitor {}: {:?}",
                     monitor_id, e
@@ -320,6 +361,15 @@ impl VisionManager {
         }
 
         let mut task_count = self.recording_tasks.len();
+        if task_count == 0 && self.all_expected_monitors_user_disabled() {
+            self.monitor_capture_expected
+                .store(false, std::sync::atomic::Ordering::Release);
+            info!(
+                "VisionManager running with all {} selected monitor(s) intentionally user-paused",
+                self.expected_monitor_count()
+            );
+            return Ok(());
+        }
         if task_count == 0 && total_monitors > 0 && !self.config.use_all_monitors {
             warn!(
                 "VisionManager: allowlist {:?} matched 0/{} display(s) — \
@@ -330,7 +380,7 @@ impl VisionManager {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             for monitor in list_monitors().await {
                 let monitor_id = monitor.id();
-                if let Err(e) = self.start_monitor(monitor_id).await {
+                if let Err(e) = self.start_monitor_handle(monitor).await {
                     warn!(
                         "Failed to start recording on monitor {} during stale-id fallback: {:?}",
                         monitor_id, e
@@ -342,6 +392,15 @@ impl VisionManager {
                 info!(
                     "VisionManager started via stale monitor_ids fallback ({}/{} monitor(s))",
                     task_count, total_monitors
+                );
+                return Ok(());
+            }
+            if self.all_expected_monitors_user_disabled() {
+                self.monitor_capture_expected
+                    .store(false, std::sync::atomic::Ordering::Release);
+                info!(
+                    "VisionManager running via stale monitor_ids fallback with all {} connected monitor(s) intentionally user-paused",
+                    self.expected_monitor_count()
                 );
                 return Ok(());
             }
@@ -417,6 +476,9 @@ impl VisionManager {
                 );
             }
         }
+        self.set_expected_monitors(std::iter::empty());
+        self.monitor_capture_expected
+            .store(false, std::sync::atomic::Ordering::Release);
 
         // Aborting capture tasks does NOT release sck_rs's global SCStream handles.
         // Explicitly tear them down so macOS sees no active ScreenCaptureKit usage.
@@ -440,6 +502,39 @@ impl VisionManager {
 
     /// Start recording on a specific monitor
     pub async fn start_monitor(&self, monitor_id: u32) -> Result<()> {
+        // Preserve the cheap intent/idempotency guards before any OS lookup.
+        if self.user_disabled.contains(&monitor_id) {
+            debug!("Monitor {} is user-paused; skipping start", monitor_id);
+            return Ok(());
+        }
+        if self.recording_tasks.contains_key(&monitor_id) {
+            debug!("Monitor {} is already recording", monitor_id);
+            return Ok(());
+        }
+        // Public id-only callers (resume APIs and external control surfaces)
+        // still need a lookup. On macOS this path is bounded by the shared SCK
+        // enumeration admission budget in screenpipe-screen.
+        let monitor = get_monitor_by_id(monitor_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Monitor {} not found", monitor_id))?;
+        self.start_monitor_handle(monitor).await
+    }
+
+    /// Start from a monitor handle that was already returned by a bounded
+    /// enumeration. Startup, watchdog recovery, and hot-plug reconciliation
+    /// all have this handle in hand; re-enumerating by id here used to create
+    /// an unbounded second `SCShareableContent` callback during recovery.
+    pub(crate) async fn start_monitor_handle(
+        &self,
+        monitor: screenpipe_screen::monitor::SafeMonitor,
+    ) -> Result<()> {
+        let monitor_id = monitor.id();
+        // Record selection intent before the user-pause guard. A paused display
+        // remains expected even though it intentionally has no active task.
+        self.expected_monitors
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(monitor_id);
         // Honour an explicit user pause from the recording popover. Both
         // `start()` and the monitor watcher funnel through here, so this single
         // guard keeps a paused display paused without either path overriding it.
@@ -447,16 +542,13 @@ impl VisionManager {
             debug!("Monitor {} is user-paused; skipping start", monitor_id);
             return Ok(());
         }
+        self.monitor_capture_expected
+            .store(true, std::sync::atomic::Ordering::Release);
         // Check if already recording
         if self.recording_tasks.contains_key(&monitor_id) {
             debug!("Monitor {} is already recording", monitor_id);
             return Ok(());
         }
-
-        // Verify monitor exists
-        let monitor = get_monitor_by_id(monitor_id)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Monitor {} not found", monitor_id))?;
 
         info!(
             "Starting vision recording for monitor {} ({}x{})",
@@ -465,8 +557,12 @@ impl VisionManager {
             monitor.height()
         );
 
-        let handle = self.start_event_driven_monitor(monitor_id, monitor).await?;
+        let liveness = Arc::new(PipelineMetrics::new());
+        let handle = self
+            .start_event_driven_monitor(monitor_id, monitor, liveness.clone())
+            .await?;
 
+        self.monitor_liveness.insert(monitor_id, liveness);
         self.recording_tasks.insert(monitor_id, handle);
 
         Ok(())
@@ -477,6 +573,7 @@ impl VisionManager {
         &self,
         monitor_id: u32,
         monitor: screenpipe_screen::monitor::SafeMonitor,
+        monitor_liveness: Arc<PipelineMetrics>,
     ) -> Result<JoinHandle<()>> {
         use crate::event_driven_capture::{event_driven_capture_loop, EventDrivenCaptureConfig};
         use screenpipe_a11y::tree::TreeWalkerConfig;
@@ -643,6 +740,7 @@ impl VisionManager {
                 trigger_rx,
                 stop_signal,
                 vision_metrics,
+                monitor_liveness,
                 hot_frame_cache,
                 use_pii_removal,
                 pause_on_drm_content,
@@ -668,6 +766,7 @@ impl VisionManager {
 
     /// Stop recording on a specific monitor
     pub async fn stop_monitor(&self, monitor_id: u32) -> Result<()> {
+        self.monitor_liveness.remove(&monitor_id);
         // Stop the HD recorder first. Aborting drops its ffmpeg stdin, which
         // sends EOF so ffmpeg finalizes the .mp4 (moov atom) on its own.
         if let Some((_, hd_handle)) = self.hd_recording_tasks.remove(&monitor_id) {
@@ -716,6 +815,7 @@ impl VisionManager {
             .collect();
 
         for id in &dead {
+            self.monitor_liveness.remove(id);
             if let Some((_, handle)) = self.recording_tasks.remove(id) {
                 // Await to clean up the JoinHandle and capture exit reason
                 match handle.await {
@@ -744,12 +844,35 @@ impl VisionManager {
             .collect()
     }
 
+    /// Independent liveness for each active capture loop. Never derive this
+    /// from aggregate `vision_metrics`: on a multi-monitor system a healthy
+    /// loop continually refreshes those global timestamps and can otherwise
+    /// mask a sibling loop that is fully silent.
+    pub(crate) fn monitor_liveness_snapshots(&self) -> Vec<MonitorLivenessSnapshot> {
+        self.monitor_liveness
+            .iter()
+            .map(|entry| {
+                let snap = entry.value().snapshot();
+                MonitorLivenessSnapshot {
+                    monitor_id: *entry.key(),
+                    uptime_secs: snap.uptime_secs,
+                    last_capture_attempt_ts: snap.last_capture_attempt_ts,
+                    last_db_write_ts: snap.last_db_write_ts,
+                }
+            })
+            .collect()
+    }
+
     /// Pause recording on a specific monitor in response to a user action
     /// (the recording popover). Records the intent first — so the monitor
     /// watcher won't auto-restart it on the next reconcile tick — then tears
     /// down its capture task. Audio keeps recording independently.
     pub async fn pause_monitor(&self, monitor_id: u32) -> Result<()> {
         self.user_disabled.insert(monitor_id);
+        if self.all_expected_monitors_user_disabled() {
+            self.monitor_capture_expected
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
         info!("user paused vision recording for monitor {}", monitor_id);
         self.stop_monitor(monitor_id).await
     }
@@ -759,6 +882,15 @@ impl VisionManager {
     /// manager isn't running (global capture paused), records resume intent only.
     pub async fn resume_monitor(&self, monitor_id: u32) -> Result<()> {
         self.user_disabled.remove(&monitor_id);
+        if self
+            .expected_monitors
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&monitor_id)
+        {
+            self.monitor_capture_expected
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         info!("user resumed vision recording for monitor {}", monitor_id);
 
         if self.status().await != VisionManagerStatus::Running {
@@ -776,6 +908,50 @@ impl VisionManager {
     /// Monitor IDs the user has explicitly paused from the recording popover.
     pub fn user_disabled_monitors(&self) -> Vec<u32> {
         self.user_disabled.iter().map(|entry| *entry).collect()
+    }
+
+    /// Refresh the connected monitor-intent set after a successful bounded
+    /// enumeration. The watcher passes only monitors allowed by current
+    /// selection policy; paused monitors remain in the set.
+    pub(crate) fn set_expected_monitors<I>(&self, monitor_ids: I)
+    where
+        I: IntoIterator<Item = u32>,
+    {
+        let replacement: HashSet<u32> = monitor_ids.into_iter().collect();
+        *self
+            .expected_monitors
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = replacement;
+    }
+
+    fn expected_monitor_count(&self) -> usize {
+        self.expected_monitors
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
+    /// True only when at least one selected connected display exists and every
+    /// one was explicitly paused by the user.
+    pub(crate) fn all_expected_monitors_user_disabled(&self) -> bool {
+        let expected = self
+            .expected_monitors
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        !expected.is_empty()
+            && expected
+                .iter()
+                .all(|monitor_id| self.user_disabled.contains(monitor_id))
+    }
+
+    pub(crate) fn set_monitor_capture_expected(&self, expected: bool) {
+        self.monitor_capture_expected
+            .store(expected, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn monitor_capture_expected(&self) -> bool {
+        self.monitor_capture_expected
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Shutdown the VisionManager
@@ -886,6 +1062,38 @@ mod tests {
         vm.stop().await.expect("stop after fallback start");
     }
 
+    /// Stale-selection fallback must preserve an intentional all-paused state.
+    /// Starting zero tasks here is valid; rolling back to Stopped would make
+    /// the watcher retry forever and turn a user pause into a false incident.
+    #[tokio::test]
+    async fn stale_allowlist_with_every_connected_monitor_paused_stays_running() {
+        let monitors = list_monitors().await;
+        if monitors.is_empty() {
+            return;
+        }
+
+        let stale = vec!["Display 999_9999x9999_0,0".to_string()];
+        let vm = make_vm_with_monitor_ids(stale).await;
+        for monitor in &monitors {
+            vm.user_disabled.insert(monitor.id());
+        }
+
+        vm.start()
+            .await
+            .expect("stale allowlist plus all-user-paused is intentional idle");
+        assert_eq!(vm.status().await, VisionManagerStatus::Running);
+        assert!(vm.recording_tasks.is_empty());
+        assert!(vm.all_expected_monitors_user_disabled());
+        assert!(!vm.monitor_capture_expected());
+        assert!(
+            vm.stale_allowlist_fallback
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "the fallback policy must remain active for later resume/reconcile"
+        );
+
+        vm.stop().await.expect("stop paused fallback manager");
+    }
+
     /// With zero physical monitors, a stale allowlist still fails cleanly.
     #[tokio::test]
     async fn start_with_no_connected_monitors_returns_err() {
@@ -956,6 +1164,55 @@ mod tests {
             !vm.recording_tasks.contains_key(&id),
             "stopped manager must not start capture on resume"
         );
+    }
+
+    #[tokio::test]
+    async fn only_all_selected_user_pauses_disable_capture_expectation() {
+        let mut vm = make_vm_with_monitor_ids(vec![]).await;
+        vm.config.use_all_monitors = true;
+        vm.set_expected_monitors([101, 202]);
+
+        vm.pause_monitor(101).await.expect("pause first monitor");
+        assert!(!vm.all_expected_monitors_user_disabled());
+        assert!(
+            vm.monitor_capture_expected(),
+            "one remaining selected monitor should still be expected"
+        );
+
+        vm.pause_monitor(202).await.expect("pause second monitor");
+        assert!(vm.all_expected_monitors_user_disabled());
+        assert!(
+            !vm.monitor_capture_expected(),
+            "all selected monitors paused is intentional idle"
+        );
+
+        vm.resume_monitor(101).await.expect("resume first monitor");
+        assert!(!vm.all_expected_monitors_user_disabled());
+        assert!(vm.monitor_capture_expected());
+    }
+
+    #[tokio::test]
+    async fn start_with_every_connected_monitor_user_paused_stays_running() {
+        let monitors = list_monitors().await;
+        if monitors.is_empty() {
+            return;
+        }
+
+        let mut vm = make_vm_with_monitor_ids(vec![]).await;
+        vm.config.use_all_monitors = true;
+        for monitor in &monitors {
+            vm.user_disabled.insert(monitor.id());
+        }
+
+        vm.start()
+            .await
+            .expect("all-user-paused is a valid running state");
+        assert_eq!(vm.status().await, VisionManagerStatus::Running);
+        assert!(vm.recording_tasks.is_empty());
+        assert!(vm.all_expected_monitors_user_disabled());
+        assert!(!vm.monitor_capture_expected());
+
+        vm.stop().await.expect("stop paused manager");
     }
 
     /// Verify that stop_monitor completes promptly when the task finishes normally.

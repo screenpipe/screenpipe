@@ -71,6 +71,10 @@ PIPE_FRONTIER_POLICY = "reject"
 # - HOSTED_CHAT_GATEWAY_MODE: "legacy" (default/rollback) or "cloudflare".
 # - CLOUDFLARE_AI_GATEWAY_ID: same-account Gateway with default OpenAI and
 #   Anthropic BYOK keys. See CLOUDFLARE_AI_GATEWAY_ROLLOUT.md.
+# - CLOUDFLARE_ACCOUNT_ID: account that owns the Gateway and Analytics data.
+# - CLOUDFLARE_API_TOKEN: read-only AI Gateway + Account Analytics token used
+#   by /v1/usage to calculate per-user allowance percentages. Raw provider
+#   amounts are never returned to the client.
 
 # Cost / flex tuning knobs — read with a code default, so they live in the CF
 # dashboard (Settings → Variables), not here, and take effect with no redeploy:

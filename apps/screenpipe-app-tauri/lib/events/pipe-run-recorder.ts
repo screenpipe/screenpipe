@@ -161,15 +161,19 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
   // no-op rather than re-saving.
   buffers.delete(sid);
 
-  // If the chat-store already has a session record for this sid, the
-  // panel was the foreground owner at some point during the run — its
-  // persistence pipeline (chat-store → saveConversationFile via the
-  // background-router) is the authoritative writer. Skipping here
-  // avoids clobbering the panel's view with the recorder's
-  // recorder-only NDJSON replay.
+  // A live pipe-watch (or a session with messages already hydrated) has an
+  // authoritative panel/writer, so avoid clobbering it with recorder-only
+  // NDJSON replay. Do not treat every store row as ownership: the sidebar's
+  // execution poll can upsert a metadata-only `pipe-run` row just before the
+  // terminal event reaches us. Returning for that row loses the completed
+  // transcript permanently and leaves an expanded history stale.
   try {
     const { useChatStore } = await import("@/lib/stores/chat-store");
-    if (useChatStore.getState().sessions[sid]) {
+    const existing = useChatStore.getState().sessions[sid];
+    if (
+      existing?.kind === "pipe-watch" ||
+      (existing?.messages?.length ?? 0) > 0
+    ) {
       return;
     }
   } catch {

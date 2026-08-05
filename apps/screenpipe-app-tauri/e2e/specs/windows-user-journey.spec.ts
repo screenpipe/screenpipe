@@ -529,9 +529,47 @@ describe("Windows user journey", function () {
 
       await clickFirstButtonWithText("stop", t(15_000));
 
+      // A successful stop may immediately advance into summary lifecycle
+      // copy or return to the meeting list. The invariant is that the live
+      // stop control disappears and a user-visible post-stop state replaces
+      // it, not that one transient status string remains on screen.
+      await browser.waitUntil(
+        async () => {
+          const buttons = await $$("button");
+          for (const button of buttons) {
+            if (!(await button.isDisplayed().catch(() => false))) continue;
+            const label = (await button.getText().catch(() => ""))
+              .trim()
+              .toLowerCase();
+            const ariaLabel = (
+              (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+            )
+              .trim()
+              .toLowerCase();
+            if (label === "stop" || ariaLabel.startsWith("stop ")) {
+              return false;
+            }
+          }
+          return true;
+        },
+        {
+          timeout: t(20_000),
+          interval: 250,
+          timeoutMsg: "Manual meeting remained visibly active after stop",
+        },
+      );
+
       await waitForBodyText(
-        (bodyText) => bodyText.includes("meeting saved"),
-        "Manual meeting did not transition to the saved state after stop",
+        (bodyText) =>
+          bodyText.includes("meeting saved") ||
+          bodyText.includes("finalizing transcript") ||
+          bodyText.includes("summarizing meeting") ||
+          bodyText.includes("summary ready") ||
+          bodyText.includes("summary needs attention") ||
+          bodyText.includes("new meeting") ||
+          bodyText.includes("no meetings yet") ||
+          bodyText.includes("no past meetings yet"),
+        "Manual meeting did not show a post-stop state",
       );
 
       const savedMeetingScreenshot = await saveScreenshot("windows-user-journey-meeting-saved");

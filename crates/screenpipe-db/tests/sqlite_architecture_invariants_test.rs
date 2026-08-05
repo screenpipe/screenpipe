@@ -77,6 +77,20 @@ fn sqlite_lifecycle_has_one_owner_per_physical_database() {
     assert!(!maintenance.contains("PRAGMA synchronous = OFF"));
     assert!(maintenance.contains("online SQLite repair is disabled"));
 
+    let setup = production_source(&crate_dir.join("src/db/setup.rs"));
+    assert_eq!(
+        setup.matches("capture_pool_options()").count(),
+        2,
+        "both capture read and write pools must disable autonomous connection reaping"
+    );
+    let write_queue = production_source(&crate_dir.join("src/write_queue.rs"));
+    assert!(write_queue.contains(".idle_timeout(None)"));
+    assert!(write_queue.contains(".max_lifetime(None)"));
+    assert!(
+        write_queue.matches("capture_pool_options()").count() >= 2,
+        "the write-pool rebuilder must preserve the capture pool lifecycle policy"
+    );
+
     let secrets = production_source(&repository.join("crates/screenpipe-secrets/src/store.rs"));
     assert!(secrets.contains("SECRETS_DATABASE_FILENAME: &str = \"secrets.sqlite\""));
     assert!(secrets.contains("journal_mode(SqliteJournalMode::Delete)"));

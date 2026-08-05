@@ -113,6 +113,13 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).toContain('claude-fable-5');
 	});
 
+	it('publishes the full Claude 5 output budget for agent tool calls', async () => {
+		const models = await listedModels();
+		for (const id of ['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']) {
+			expect(models.find(model => model.id === id)?.max_output_tokens).toBe(128_000);
+		}
+	});
+
 	it('does not expose provider-secret gates in /v1/models responses', async () => {
 		const models = await listedModels();
 		const openAiModel = models.find(model => model.id === 'gpt-5.5');
@@ -183,6 +190,34 @@ describe('OpenAI API accounting and routing', () => {
 		expect(inferProvider('gpt-5.4-mini')).toBe('openai');
 		expect(inferProvider('gpt-5.6-luna')).toBe('openai');
 		expect(inferProvider('o4-mini')).toBe('openai');
+	});
+
+	it('keeps Argus internal and sends the non-thinking tool-compatible template option', async () => {
+		const ids = await listedModelIds({
+			SCREENPIPE_QWEN35_URL: 'https://argus.example/v1',
+			SCREENPIPE_QWEN35_API_KEY: 'argus-test-key',
+		});
+		expect(ids).not.toContain('argus-trace-1');
+
+		const provider = createProvider('argus-trace-1', env({
+			SCREENPIPE_QWEN35_URL: 'https://argus.example/v1',
+			SCREENPIPE_QWEN35_API_KEY: 'argus-test-key',
+		})) as any;
+		expect(provider.supportsVision).toBe(false);
+		let capturedParams: Record<string, unknown> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, unknown>) => {
+			capturedParams = params;
+			return { choices: [{ message: { content: 'ok' } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'argus-trace-1',
+			messages: [{ role: 'user', content: 'synthetic background task' }],
+			tools: [{ type: 'function', function: { name: 'save', parameters: { type: 'object' } } }],
+			tool_choice: 'required',
+		});
+		expect(capturedParams).not.toBeNull();
+		expect(capturedParams!['chat_template_kwargs']).toEqual({ enable_thinking: false });
 	});
 
 	it('rejects placeholder OpenAI keys before making upstream calls', () => {

@@ -13,6 +13,7 @@ export interface ProviderConnectionOptions {
 	apiKey?: string;
 	maxRetries?: number;
 	defaultHeaders?: Record<string, string | null | undefined>;
+	chatTemplateKwargs?: Record<string, unknown>;
 }
 
 // Retired/removed hosted model IDs stay accepted so saved presets and old pipes
@@ -144,6 +145,20 @@ export function createProvider(model: string, env: Env, connection?: ProviderCon
 		const vllmUrl = env.EVENT_CLASSIFIER_URL || 'http://34.122.128.37:8080/v1';
 		return new OpenAIProvider('none', vllmUrl);
 	}
+	// Internal background-only rescue model. Normal model access policy never
+	// exposes this ID; chat.ts selects it only for a paid, text-only Pipe after
+	// an account allowance or provider billing quota is exhausted.
+	if (model === 'argus-trace-1') {
+		const provider = new OpenAIProvider(
+			requireSecret(env.SCREENPIPE_QWEN35_API_KEY, 'Argus Trace API key not configured'),
+			requireSecret(env.SCREENPIPE_QWEN35_URL, 'Argus Trace endpoint not configured'),
+			undefined,
+			0,
+			{ enable_thinking: false },
+		);
+		provider.supportsVision = false;
+		return provider;
+	}
 	if (model.toLowerCase().includes('claude')) {
 		return new AnthropicProvider(
 			connection?.apiKey ?? requireSecret(env.ANTHROPIC_API_KEY, 'Anthropic API key not configured'),
@@ -167,6 +182,7 @@ export function createProvider(model: string, env: Env, connection?: ProviderCon
 		connection?.baseURL,
 		connection?.defaultHeaders,
 		connection?.maxRetries,
+		connection?.chatTemplateKwargs,
 	);
 }
 

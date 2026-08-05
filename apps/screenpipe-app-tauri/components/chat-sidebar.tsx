@@ -109,6 +109,7 @@ import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import {
   buildPipeExecutionHistoryPage,
   isTerminalPipeExecutionStatus,
+  shouldReloadPipeExecutionHistory,
 } from "@/lib/pipe-execution-status";
 import { parsePipeSessionId, pipeSessionId } from "@/lib/events/types";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
@@ -526,6 +527,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const executionConversationsRef = useRef<Map<string, ChatConversation>>(new Map());
   const executionMetadataRef = useRef<Map<string, SidebarPipeExecution>>(new Map());
   const syntheticExecutionIdsRef = useRef<Set<string>>(new Set());
+  const loadedPipeLatestExecutionIdsRef = useRef<Record<string, number>>({});
   const pipeDataGenerationRef = useRef(0);
 
   const releasePipeData = useCallback(() => {
@@ -541,6 +543,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         : new Set();
     executionConversationsRef.current.clear();
     executionMetadataRef.current.clear();
+    loadedPipeLatestExecutionIdsRef.current = {};
     setLoadedPipeRuns({});
     setPipeRunCursors({});
     setPipeRunsHaveMore({});
@@ -562,7 +565,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     (event) => updatePipesCollapsed(event.payload.collapsed),
   );
 
-  const fetchPipeInventory = useCallback(async (append = false) => {
+  const fetchPipeInventory = useCallback(async (
+    append = false,
+    preserveExisting = false,
+  ) => {
     const generation = pipeDataGenerationRef.current;
     if (append) setPipeInventoryLoadingMore(true);
     try {
@@ -591,16 +597,20 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         });
       }
       setPipeInventory((previous) => {
-        if (!append) return page;
+        if (!append && !preserveExisting) return page;
         const merged = new Map(previous.map((pipe) => [pipe.name, pipe]));
         for (const pipe of page) merged.set(pipe.name, pipe);
         return Array.from(merged.values()).sort(
           (a, b) => b.latestExecutionId - a.latestExecutionId,
         );
       });
-      setPipeInventoryHasMore(payload.has_more === true);
-      pipeInventoryCursorRef.current =
-        typeof payload.next_before_id === "number" ? payload.next_before_id : null;
+      // A heartbeat refreshes only the newest page. Preserve the pagination
+      // cursor and older inventory rows the user explicitly loaded.
+      if (!preserveExisting) {
+        setPipeInventoryHasMore(payload.has_more === true);
+        pipeInventoryCursorRef.current =
+          typeof payload.next_before_id === "number" ? payload.next_before_id : null;
+      }
       setPipeInventoryAuthoritative(true);
     } catch {
       // Keep recent in-memory pipe groups available if the engine is still
@@ -619,12 +629,25 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     if (!pipesCollapsed) void fetchPipeInventory(false);
   }, [pipesCollapsed, fetchPipeInventory]);
   useInterval(
-    () => void fetchPipeInventory(false),
-    pipesCollapsed || pipeInventory.length > PIPE_INVENTORY_PAGE_SIZE ? null : 15_000,
+    () => void fetchPipeInventory(false, true),
+    pipesCollapsed ? null : 15_000,
   );
 
-  const loadPipeRuns = useCallback(async (pipeName: string, append = false) => {
-    if (loadingPipeRuns.has(pipeName) || (!append && loadedPipeRuns[pipeName])) return;
+  const loadPipeRuns = useCallback(async (
+    pipeName: string,
+    append = false,
+    latestExecutionId?: number,
+  ) => {
+    const loadedLatestExecutionId =
+      loadedPipeLatestExecutionIdsRef.current[pipeName];
+    const loadedPageIsCurrent = !shouldReloadPipeExecutionHistory(
+      loadedLatestExecutionId,
+      latestExecutionId,
+    );
+    if (
+      loadingPipeRuns.has(pipeName) ||
+      (!append && loadedPipeRuns[pipeName] && loadedPageIsCurrent)
+    ) return;
     const generation = pipeDataGenerationRef.current;
     setLoadingPipeRuns((prev) => new Set(prev).add(pipeName));
     try {
@@ -674,6 +697,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       const records = candidates.flatMap((candidate) =>
         candidate?.belongsInPipeGroup ? [candidate.record] : [],
       );
+      if (!append) {
+        loadedPipeLatestExecutionIdsRef.current[pipeName] =
+          terminalExecutions[0]?.id ?? 0;
+      }
       setLoadedPipeRuns((prev) => ({
         ...prev,
         [pipeName]: append
@@ -718,6 +745,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     const orderedNames = visibleSidebarPipeNames(pipeInventory, pipes);
 
     return orderedNames.map((name) => {
+      const inventoryItem = pipeInventory.find((pipe) => pipe.name === name);
       // Keep a newly completed run visible before the activity inventory
       // refreshes, while deduping the same saved row returned by both sources.
       // Filter out sessions deleted from the store but still in the lazy cache.
@@ -745,6 +773,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         kind: "group" as const,
         key: `pipe:${name}`,
         title: name,
+        latestExecutionId: inventoryItem?.latestExecutionId,
         sessions,
       };
     });
@@ -833,7 +862,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       return next;
     });
     if (!wasExpanded && key.startsWith("pipe:")) {
-      void loadPipeRuns(key.slice("pipe:".length));
+      const pipeName = key.slice("pipe:".length);
+      const latestExecutionId = pipeInventory.find(
+        (pipe) => pipe.name === pipeName,
+      )?.latestExecutionId;
+      void loadPipeRuns(pipeName, false, latestExecutionId);
     }
   };
 
@@ -844,7 +877,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     if (pipesCollapsed) return;
     for (const item of pipeItems) {
       if (expandedGroups.has(item.key)) {
-        void loadPipeRuns(item.title);
+        void loadPipeRuns(item.title, false, item.latestExecutionId);
       }
     }
   }, [expandedGroups, loadPipeRuns, pipeItems, pipesCollapsed]);

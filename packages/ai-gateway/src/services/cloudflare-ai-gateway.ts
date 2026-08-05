@@ -6,7 +6,7 @@ import type { AuthResult, Env } from '../types';
 import { getHostedAiPlan } from './hosted-ai-policy';
 
 export type HostedChatGatewayMode = 'legacy' | 'cloudflare';
-export type HostedChatPlan = 'free' | 'basic' | 'business' | 'internal';
+export type HostedChatPlan = 'free' | 'basic' | 'business' | 'business_max' | 'business_ultra' | 'internal';
 export type HostedChatLane = 'auto' | 'explicit';
 export type HostedChatWorkload = 'interactive' | 'background';
 export type CloudflareGatewayProvider = 'openai' | 'anthropic';
@@ -16,6 +16,7 @@ export interface HostedChatGatewayContext {
 	plan: HostedChatPlan;
 	lane: HostedChatLane;
 	workload: HostedChatWorkload;
+	trial: boolean;
 }
 
 export interface HostedChatGatewayConnection {
@@ -28,7 +29,7 @@ export interface HostedChatGatewayConnection {
 export interface HostedChatAllowance {
 	lane: HostedChatLane;
 	plan: HostedChatPlan;
-	window: '30d';
+	managed_by: 'cloudflare';
 }
 
 export class HostedChatAllowanceExceededError extends Error {
@@ -43,7 +44,7 @@ export class HostedChatAllowanceExceededError extends Error {
 		this.allowance = {
 			lane: context.lane,
 			plan: context.plan,
-			window: '30d',
+			managed_by: 'cloudflare',
 		};
 	}
 }
@@ -70,6 +71,9 @@ export function isHostedChatGatewayEnabled(env: Pick<Env, 'HOSTED_CHAT_GATEWAY_M
 
 function collapsePlan(auth: AuthResult): HostedChatPlan {
 	if (auth.service === true) return 'internal';
+	if (auth.accountPlan === 'business_max' || auth.accountPlan === 'business_ultra') {
+		return auth.accountPlan;
+	}
 	const plan = getHostedAiPlan(auth.accountPlan);
 	if (!plan) {
 		throw new HostedChatGatewayConfigurationError('Hosted AI account plan is unavailable');
@@ -83,7 +87,7 @@ async function sha256Hex(value: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** Build the only four metadata fields Cloudflare receives. No prompt data is included. */
+/** Build the five reviewed metadata fields Cloudflare receives. No prompt data is included. */
 export async function buildHostedChatGatewayContext(
 	auth: AuthResult,
 	model: string,
@@ -102,6 +106,7 @@ export async function buildHostedChatGatewayContext(
 		plan: collapsePlan(auth),
 		lane: model.toLowerCase() === 'auto' ? 'auto' : 'explicit',
 		workload,
+		trial: auth.hostedAiTrial === true,
 	};
 }
 

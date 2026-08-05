@@ -4,9 +4,24 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const saveSpy = vi.fn(async () => undefined);
+const { saveSpy } = vi.hoisted(() => ({
+  saveSpy: vi.fn(async () => undefined),
+}));
 vi.mock("@/lib/chat-storage", () => ({
   saveConversationFile: saveSpy,
+  conversationMetaFromJson: (conversation: any) => ({
+    id: conversation.id,
+    title: conversation.title,
+    titleSource: conversation.titleSource,
+    messageCount: conversation.messages.length,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    lastContentAt: conversation.lastContentAt,
+    lastViewedAt: conversation.lastViewedAt,
+    pinned: false,
+    kind: conversation.kind,
+    pipeContext: conversation.pipeContext,
+  }),
 }));
 
 vi.mock("@/lib/hooks/use-settings", async () => {
@@ -19,6 +34,7 @@ vi.mock("@/lib/hooks/use-settings", async () => {
 
 import { __testing } from "../pipe-run-recorder";
 import type { AgentEventEnvelope } from "../types";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 const SID = "pipe:my-pipe:42";
 const env = (event: any): AgentEventEnvelope => ({
@@ -30,6 +46,7 @@ const env = (event: any): AgentEventEnvelope => ({
 beforeEach(() => {
   saveSpy.mockClear();
   __testing.reset();
+  useChatStore.getState().actions.drop(SID);
 });
 
 describe("pipe-run-recorder: buffering", () => {
@@ -89,6 +106,62 @@ describe("pipe-run-recorder: finalize on terminal event", () => {
     expect(arg.lastContentAt).toBe(arg.updatedAt);
     expect(arg.lastViewedAt).toBe(0);
     expect(arg.messages.some((m: any) => m.role === "assistant" && m.content?.includes("result"))).toBe(true);
+  });
+
+  it("saves when the sidebar poll raced in a metadata-only pipe row", async () => {
+    useChatStore.getState().actions.upsert({
+      id: SID,
+      title: "my-pipe #42",
+      titleSource: "user",
+      preview: "",
+      status: "idle",
+      messageCount: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      pinned: false,
+      unread: false,
+      kind: "pipe-run",
+      pipeContext: { pipeName: "my-pipe", executionId: 42 },
+    });
+
+    await __testing.inject(env({ type: "message_start", message: { role: "assistant" } }));
+    await __testing.inject(
+      env({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "result" },
+      }),
+    );
+    await __testing.inject(env({ type: "agent_end" }));
+
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a live pipe-watch session to its authoritative writer", async () => {
+    useChatStore.getState().actions.upsert({
+      id: SID,
+      title: "my-pipe #42",
+      titleSource: "user",
+      preview: "",
+      status: "streaming",
+      messageCount: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      pinned: false,
+      unread: false,
+      kind: "pipe-watch",
+      pipeContext: { pipeName: "my-pipe", executionId: 42 },
+    });
+
+    await __testing.inject(env({ type: "message_start", message: { role: "assistant" } }));
+    await __testing.inject(
+      env({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "result" },
+      }),
+    );
+    await __testing.inject(env({ type: "agent_end" }));
+
+    expect(saveSpy).not.toHaveBeenCalled();
   });
 
   it("clears the buffer after finalize (idempotent)", async () => {

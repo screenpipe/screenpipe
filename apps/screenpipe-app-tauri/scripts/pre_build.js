@@ -35,7 +35,7 @@ const config = {
 	ffmpegRealname: 'ffmpeg',
 	windows: {
 		ffmpegName: 'ffmpeg-8.0.1-full_build-shared',
-		ffmpegUrl: 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-full_build-shared.7z',
+		ffmpegUrl: 'https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-full_build-shared.7z',
 		// Windows ARM64 (aarch64-pc-windows-msvc) — tordona/ffmpeg-win-arm64
 		// Resolved dynamically at build time via GitHub API (daily autobuilds change filenames)
 		ffmpegArm64GithubRepo: 'tordona/ffmpeg-win-arm64',

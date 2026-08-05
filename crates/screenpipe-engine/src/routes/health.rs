@@ -817,6 +817,13 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // These are updated on every DB write by the vision/audio pipelines.
     let vision_snap = state.vision_metrics.snapshot();
     let audio_snap = state.audio_metrics.snapshot();
+    let vision_capture_expected = state
+        .vision_manager
+        .load()
+        .as_ref()
+        .as_ref()
+        .map(|manager| manager.monitor_capture_expected())
+        .unwrap_or(true);
 
     // Use the most recent of DB write or capture attempt for "is alive" check.
     // The capture loop records a heartbeat before each capture attempt, so even
@@ -908,12 +915,34 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     // 60 seconds — tight enough to detect real stalls, loose enough to
     // tolerate adaptive FPS (0.1-0.5 fps) and brief DB contention spikes.
-    let threshold_secs = 60u64;
+    // The explicit debug fault shortens only this freshness window so the E2E
+    // lane can observe the same `frame_status=stale` transition in seconds.
+    // Four seconds still leaves three 1Hz healthy confirmations after restart;
+    // a two-second window made one recovered frame expire before the pill
+    // could prove sustained recovery.
+    let threshold_secs = {
+        #[cfg(debug_assertions)]
+        if std::env::var("SCREENPIPE_E2E_SEED")
+            .ok()
+            .is_some_and(|seeds| {
+                seeds
+                    .split(',')
+                    .any(|seed| seed.trim() == "capture-loop-silent-once")
+            })
+        {
+            4u64
+        } else {
+            60u64
+        }
+        #[cfg(not(debug_assertions))]
+        60u64
+    };
 
     // Detect DB write stalls: capture loop is alive (heartbeat fresh) but DB
     // writes have stopped. This indicates pool exhaustion or DB lock contention
     // — data is being captured but silently lost.
     let vision_db_write_stalled = if !state.vision_disabled
+        && vision_capture_expected
         && vision_snap.last_capture_attempt_ts > 0
         && vision_snap.uptime_secs > 120.0
     {
@@ -1043,6 +1072,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     let frame_status = if state.vision_disabled {
         "disabled"
+    } else if !vision_capture_expected {
+        "disabled" // all selected displays are user-paused or asleep/inactive
     } else if crate::sleep_monitor::screen_is_locked() {
         "ok" // screen locked — no captures expected, not a real stall
     } else if last_frame_ts == 0 {

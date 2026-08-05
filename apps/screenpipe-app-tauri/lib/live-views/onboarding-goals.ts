@@ -9,6 +9,8 @@ export type OnboardingGoalCategory =
   | "process_automation"
   | "custom";
 
+export type OnboardingChoiceCategory = OnboardingGoalCategory | "ai_context";
+
 export type OnboardingGoalSuggestion = {
   category: Exclude<OnboardingGoalCategory, "custom">;
   title: string;
@@ -20,8 +22,8 @@ export type OnboardingGoalSuggestion = {
 export const ONBOARDING_GOALS: OnboardingGoalSuggestion[] = [
   {
     category: "work_memory",
-    title: "remember and resume my work",
-    description: "return to the right task with the context you left behind",
+    title: "ask about my work",
+    description: "find anything I saw, heard, or did",
     prompt:
       "Build a personal work memory dashboard that helps me resume what I was doing, recover loose ends, and find the source-backed context behind recent work.",
     preferredStorePipeSlugs: ["digital-clone"],
@@ -36,10 +38,10 @@ export const ONBOARDING_GOALS: OnboardingGoalSuggestion[] = [
   },
   {
     category: "work_patterns",
-    title: "understand how I work",
-    description: "see where time goes and which patterns shape the day",
+    title: "review my day",
+    description: "tasks, meetings, and where my time went",
     prompt:
-      "Build a work patterns dashboard that shows how I spend time across applications and projects, where focus changes, and what is supported by captured activity.",
+      "Build a daily review dashboard with source-backed tasks, meeting follow-through, and how I spent time across applications and projects.",
     preferredStorePipeSlugs: [
       "chronos-time-tracker",
       "daily-productivity-audit",
@@ -47,8 +49,8 @@ export const ONBOARDING_GOALS: OnboardingGoalSuggestion[] = [
   },
   {
     category: "process_automation",
-    title: "turn repeated work into a process",
-    description: "observe a workflow, review its steps, then improve it",
+    title: "automate repeated work",
+    description: "turn real steps into a workflow or SOP",
     prompt:
       "Build a process discovery dashboard from repeated captured work. Show a source-backed workflow map, concrete steps and exceptions, likely time cost, and one small human-reviewed automation opportunity.",
     preferredStorePipeSlugs: [
@@ -57,6 +59,10 @@ export const ONBOARDING_GOALS: OnboardingGoalSuggestion[] = [
     ],
   },
 ];
+
+export const ONBOARDING_GOAL_CHOICES = ONBOARDING_GOALS.filter(
+  (goal) => goal.category !== "meeting_follow_through",
+);
 
 export function preferredStorePipeSlugs(
   category: OnboardingGoalCategory,

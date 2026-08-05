@@ -11,6 +11,7 @@ use crate::{
     updates::is_enterprise_build,
     window::{RewindWindowId, ShowRewindWindow},
 };
+use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 use tracing::{debug, error, info, warn};
 
@@ -42,8 +43,11 @@ fn log_webview_build_failure(label: &str, url_hint: &str, err: &(impl std::fmt::
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::{
-        fallback_local_api_config, is_login_callback_scheme, read_enterprise_config_from_path,
-        save_enterprise_team_config, scan_chat_entries_by_mtime,
+        enterprise_license_key_sha256, fallback_local_api_config, is_login_callback_scheme,
+        merge_enterprise_file_configs, persist_enterprise_device_config,
+        persist_recovered_enterprise_device_config, read_enterprise_config_from_path,
+        recovery_anchor_license_key, save_enterprise_team_config, scan_chat_entries_by_mtime,
+        EnterpriseFileConfig, RecoveredEnterpriseDeviceConfig,
     };
 
     /// The whole point of SCR-300: `gateway_url` is the ONE name the server,
@@ -92,7 +96,75 @@ mod tests {
         save_enterprise_team_config(None, None, None, Some(String::new())).unwrap();
         assert!(read()["gateway_url"].is_null());
 
+        persist_recovered_enterprise_device_config(
+            "rejected-key",
+            "replacement-key",
+            Some("https://new.example/api/enterprise/ingest"),
+        )
+        .unwrap();
+        let persisted = read();
+        assert_eq!(
+            persisted["credential_recovery"]["replaces_license_key_sha256"],
+            enterprise_license_key_sha256("rejected-key")
+        );
+        assert_eq!(
+            persisted["credential_recovery"]["license_key"],
+            "replacement-key"
+        );
+        assert_ne!(
+            persisted["credential_recovery"]["replaces_license_key_sha256"],
+            "rejected-key"
+        );
+
+        persist_enterprise_device_config(Some("manual-key"), None).unwrap();
+        assert!(read().get("credential_recovery").is_none());
+
         std::env::remove_var("SCREENPIPE_DATA_DIR");
+    }
+
+    #[test]
+    fn bundled_config_accepts_only_its_matching_recovery_record() {
+        let bundled = EnterpriseFileConfig {
+            license_key: Some("bundled-rejected-key".to_string()),
+            ingest_url: Some("https://old.example/api/enterprise/ingest".to_string()),
+            recovered_device_config: None,
+        };
+        let user = EnterpriseFileConfig {
+            license_key: Some("replacement-key".to_string()),
+            ingest_url: Some("https://new.example/api/enterprise/ingest".to_string()),
+            recovered_device_config: Some(RecoveredEnterpriseDeviceConfig {
+                replaces_license_key_sha256: enterprise_license_key_sha256("bundled-rejected-key"),
+                license_key: "replacement-key".to_string(),
+                ingest_url: Some("https://new.example/api/enterprise/ingest".to_string()),
+            }),
+        };
+
+        let recovered = merge_enterprise_file_configs(Some(bundled.clone()), Some(user.clone()));
+        assert_eq!(recovered.license_key.as_deref(), Some("replacement-key"));
+        assert_eq!(
+            recovered.ingest_url.as_deref(),
+            Some("https://new.example/api/enterprise/ingest")
+        );
+
+        let updated_mdm = EnterpriseFileConfig {
+            license_key: Some("new-mdm-key".to_string()),
+            ..bundled
+        };
+        let authoritative = merge_enterprise_file_configs(Some(updated_mdm), Some(user));
+        assert_eq!(authoritative.license_key.as_deref(), Some("new-mdm-key"));
+        assert_eq!(
+            authoritative.ingest_url.as_deref(),
+            Some("https://old.example/api/enterprise/ingest")
+        );
+
+        assert_eq!(
+            recovery_anchor_license_key(Some("bundled-rejected-key"), "recovered-key-now-rejected"),
+            "bundled-rejected-key"
+        );
+        assert_eq!(
+            recovery_anchor_license_key(None, "unbundled-rejected-key"),
+            "unbundled-rejected-key"
+        );
     }
 
     #[test]
@@ -457,6 +529,14 @@ pub fn set_cloud_media_analysis_skill(enabled: bool) -> Result<(), String> {
 pub struct EnterpriseFileConfig {
     pub license_key: Option<String>,
     pub ingest_url: Option<String>,
+    recovered_device_config: Option<RecoveredEnterpriseDeviceConfig>,
+}
+
+#[derive(Debug, Clone)]
+struct RecoveredEnterpriseDeviceConfig {
+    replaces_license_key_sha256: String,
+    license_key: String,
+    ingest_url: Option<String>,
 }
 
 impl EnterpriseFileConfig {
@@ -465,26 +545,63 @@ impl EnterpriseFileConfig {
     }
 }
 
-/// Read the full enterprise device config from `enterprise.json`.
-/// Checks in order (first file found wins entirely):
-/// 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
-/// 2. `~/.screenpipe/enterprise.json` (in-app prompt or sign-in auto-config)
-pub fn get_enterprise_file_config() -> EnterpriseFileConfig {
-    if let Some(cfg) = read_enterprise_config_from_exe_dir() {
-        return cfg;
+fn enterprise_license_key_sha256(license_key: &str) -> String {
+    format!("{:x}", Sha256::digest(license_key.trim().as_bytes()))
+}
+
+fn recovery_anchor_license_key<'a>(
+    bundled_license_key: Option<&'a str>,
+    rejected_license_key: &'a str,
+) -> &'a str {
+    bundled_license_key.unwrap_or(rejected_license_key)
+}
+
+/// Preserve bundled/MDM precedence except for a recovery record tied to the
+/// exact bundled key it replaces. A later MDM key automatically wins because
+/// its fingerprint no longer matches.
+fn merge_enterprise_file_configs(
+    bundled: Option<EnterpriseFileConfig>,
+    user: Option<EnterpriseFileConfig>,
+) -> EnterpriseFileConfig {
+    let Some(mut bundled) = bundled else {
+        return user.unwrap_or_default();
+    };
+    let Some(bundled_key) = bundled.license_key.as_deref() else {
+        return bundled;
+    };
+    let Some(recovered) = user.and_then(|user| user.recovered_device_config) else {
+        return bundled;
+    };
+    if recovered.replaces_license_key_sha256 != enterprise_license_key_sha256(bundled_key) {
+        return bundled;
     }
+
+    bundled.license_key = Some(recovered.license_key);
+    if recovered.ingest_url.is_some() {
+        bundled.ingest_url = recovered.ingest_url;
+    }
+    info!("enterprise: applied persisted credential recovery over bundled config");
+    bundled
+}
+
+/// Read enterprise device config. Bundled/MDM config is authoritative unless
+/// the user file carries a validated recovery for that exact bundled key.
+pub fn get_enterprise_file_config() -> EnterpriseFileConfig {
+    let bundled = read_enterprise_config_from_exe_dir();
     let user_path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
-    if user_path.exists() {
+    let user = if user_path.exists() {
         info!(
             "enterprise: checking user config at {}",
             user_path.display()
         );
-        if let Some(cfg) = read_enterprise_config_from_path(&user_path) {
-            return cfg;
-        }
+        read_enterprise_config_from_path(&user_path)
+    } else {
+        None
+    };
+    if bundled.is_none() && user.is_none() {
+        info!("enterprise: no enterprise.json found in any location");
     }
-    info!("enterprise: no enterprise.json found in any location");
-    EnterpriseFileConfig::default()
+    merge_enterprise_file_configs(bundled, user)
 }
 
 /// Read the enterprise license key from `enterprise.json`.
@@ -552,6 +669,24 @@ fn read_enterprise_config_from_path(path: &std::path::Path) -> Option<Enterprise
     let cfg = EnterpriseFileConfig {
         license_key: string_field("license_key"),
         ingest_url: string_field("ingest_url"),
+        recovered_device_config: parsed
+            .get("credential_recovery")
+            .and_then(|value| value.as_object())
+            .and_then(|recovery| {
+                let string = |name: &str| {
+                    recovery
+                        .get(name)
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                };
+                Some(RecoveredEnterpriseDeviceConfig {
+                    replaces_license_key_sha256: string("replaces_license_key_sha256")?,
+                    license_key: string("license_key")?,
+                    ingest_url: string("ingest_url"),
+                })
+            }),
     };
 
     match &cfg.license_key {
@@ -572,9 +707,10 @@ fn read_enterprise_config_from_path(path: &std::path::Path) -> Option<Enterprise
 /// preserving any other keys already in the file. Used by the in-app
 /// license prompt and by the sign-in-driven auto-config
 /// (enterprise/device_config.rs).
-pub fn persist_enterprise_device_config(
+fn persist_enterprise_device_config_inner(
     license_key: Option<&str>,
     ingest_url: Option<&str>,
+    replaces_license_key: Option<&str>,
 ) -> Result<(), String> {
     let dir = screenpipe_core::paths::default_screenpipe_data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
@@ -590,6 +726,20 @@ pub fn persist_enterprise_device_config(
     if let Some(url) = ingest_url {
         json["ingest_url"] = serde_json::Value::String(url.to_string());
     }
+    if let Some(replaced) = replaces_license_key {
+        let mut recovery = serde_json::json!({
+            "replaces_license_key_sha256": enterprise_license_key_sha256(replaced),
+            "license_key": license_key.expect("recovery includes a replacement key"),
+        });
+        if let Some(url) = ingest_url {
+            recovery["ingest_url"] = serde_json::Value::String(url.to_string());
+        }
+        json["credential_recovery"] = recovery;
+    } else if license_key.is_some() {
+        json.as_object_mut()
+            .expect("enterprise device config is a JSON object")
+            .remove("credential_recovery");
+    }
     std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
         .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
 
@@ -597,12 +747,40 @@ pub fn persist_enterprise_device_config(
     Ok(())
 }
 
+pub fn persist_enterprise_device_config(
+    license_key: Option<&str>,
+    ingest_url: Option<&str>,
+) -> Result<(), String> {
+    persist_enterprise_device_config_inner(license_key, ingest_url, None)
+}
+
+pub fn persist_recovered_enterprise_device_config(
+    replaced_license_key: &str,
+    license_key: &str,
+    ingest_url: Option<&str>,
+) -> Result<(), String> {
+    // A user recovery overlays the executable-adjacent file. Keep every
+    // subsequent rotation tied to that immutable source key so recovery B can
+    // replace recovery A without making the overlay disappear on restart.
+    let bundled_license_key = read_enterprise_config_from_exe_dir().and_then(|cfg| cfg.license_key);
+    let recovery_anchor =
+        recovery_anchor_license_key(bundled_license_key.as_deref(), replaced_license_key);
+    persist_enterprise_device_config_inner(Some(license_key), ingest_url, Some(recovery_anchor))
+}
+
 /// Save the enterprise license key to `~/.screenpipe/enterprise.json`.
 /// Used by the in-app prompt when enterprise.json is not deployed via MDM.
 #[tauri::command]
 #[specta::specta]
 pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
-    persist_enterprise_device_config(Some(&license_key), None)
+    let bundled_key = read_enterprise_config_from_exe_dir().and_then(|cfg| cfg.license_key);
+    match bundled_key
+        .as_deref()
+        .filter(|key| *key != license_key.as_str())
+    {
+        Some(replaced) => persist_recovered_enterprise_device_config(replaced, &license_key, None),
+        None => persist_enterprise_device_config(Some(&license_key), None),
+    }
 }
 
 /// Persist the resolved "hide app UI" decision into `~/.screenpipe/enterprise.json`
@@ -829,12 +1007,13 @@ pub async fn set_cloud_token(
 }
 
 /// Persist the user's enterprise admin status, team API token, and the org's
-/// team API base URL so the pi-agent's `screenpipe-team` skill knows whether
-/// to install itself and where to point.
+/// team API base URL. The Enterprise app uses the role/license/token fields to
+/// decide whether to inject `screenpipe-team`; the native CLI resolves the API
+/// base and token from the same file when that skill invokes it.
 ///
 /// Called by the frontend right after a policy fetch confirms admin
 /// role. Storing this alongside the license key in `enterprise.json`
-/// keeps everything pi-agent needs in one file the skill can read
+/// keeps the Enterprise app and native CLI on one local configuration contract
 /// without a Tauri round-trip.
 ///
 /// All fields are optional so callers can update one at a time —
@@ -3293,6 +3472,55 @@ pub async fn hide_shortcut_reminder(app_handle: tauri::AppHandle) -> Result<(), 
 #[specta::specta]
 pub async fn get_recording_health_state() -> String {
     crate::overlay_health::current_state_payload()
+}
+
+/// Arm the full-stack gone-silent capture fault after the E2E client has
+/// observed a healthy baseline. The engine validates the explicit seed again;
+/// release builds always return false.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_arm_capture_loop_silent_fault() -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("capture-loop silent probe requires the e2e feature".into());
+    }
+    let armed = screenpipe_engine::event_driven_capture::e2e_arm_capture_loop_silent_fault();
+    if !armed {
+        return Err("capture-loop silent probe was not seeded or was already consumed".into());
+    }
+    Ok(true)
+}
+
+/// Arm the debug-only one-shot SCK id-lookup wedge after startup is healthy,
+/// preventing unrelated monitor-list consumers from racing the E2E assertion.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_arm_sck_lookup_hang_fault() -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("SCK lookup probe requires the e2e feature".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let armed = screenpipe_screen::monitor::e2e_arm_sck_lookup_hang_fault();
+        if !armed {
+            return Err(
+                "SCK lookup probe was not seeded, was already armed, or was consumed".into(),
+            );
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("SCK lookup probe requires macOS".into())
+}
+
+/// Read the real OS lock state for platform E2E setup. The capture recovery
+/// lane must skip rather than bypass an intentional lock-screen privacy pause.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_screen_is_locked() -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("screen-lock probe requires the e2e feature".into());
+    }
+    Ok(screenpipe_engine::sleep_monitor::screen_is_locked())
 }
 
 /// E2E-only accelerated reproduction of an idle capture heartbeat pause that

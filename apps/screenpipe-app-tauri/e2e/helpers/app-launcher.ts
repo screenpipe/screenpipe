@@ -86,6 +86,18 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // opt-in capture-loop liveness spec; the first visual-change probe hangs far
 // past VISUAL_PROBE_TIMEOUT so the spec can assert the loop stays live
 // (attempts keep advancing, /health stays "ok") instead of freezing.
+// `capture-loop-silent-once` parks every vision loop after an explicitly armed
+// healthy baseline, accelerates only the debug liveness thresholds, and proves
+// the real stale -> failure pill -> watchdog restart -> recovery sequence.
+// `sck-lookup-hang-once` parks one id-based SCShareableContent callback; the
+// same spec proves shared admission bounds it and preserves a fresh retry.
+// `sck-capture-hang-once` parks the first SCK frame worker. The liveness lane
+// clears window filters, then proves the bounded, unfiltered CoreGraphics
+// escape hatch establishes a real terminal capture outcome. Production capture
+// remains fail-closed whenever any SCK window exclusions are active.
+// `ignore-disk-pressure` disables the capture-stop guard in debug builds for
+// isolated recording fault probes. This prevents host free-space fluctuations
+// from replacing the intended fault with a real low-disk shutdown.
 // `recording-health-return-race` enables alerts for an accelerated app-level
 // replay of 114 idle stale ticks followed by user input and immediate capture
 // recovery. It verifies the return input cannot itself raise the failure pill.
@@ -240,7 +252,9 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  appProcess.stdout?.on('data', (d) => process.stdout.write(`[app] ${d}`));
+  if (process.env.SCREENPIPE_E2E_QUIET_APP_LOGS !== 'true') {
+    appProcess.stdout?.on('data', (d) => process.stdout.write(`[app] ${d}`));
+  }
   appProcess.stderr?.on('data', (d) => process.stderr.write(`[app] ${d}`));
   appProcess.on('error', (err) => console.error('[app error]', err));
   appProcess.on('exit', (code) => {

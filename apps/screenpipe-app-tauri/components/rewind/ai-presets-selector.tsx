@@ -976,6 +976,8 @@ interface AIPresetsSelectorProps {
   triggerClassName?: string;
   /** For tight composer UIs, show the active model instead of preset details. */
   showModelOnly?: boolean;
+  /** Notify parent surfaces when the preset popover opens or closes. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 export const AIPresetDialog = ({
@@ -1067,6 +1069,7 @@ export const AIPresetsSelector = ({
   containerClassName,
   triggerClassName,
   showModelOnly = false,
+  onOpenChange,
 }: AIPresetsSelectorProps) => {
   const { settings, updateSettings } = useSettings();
   const [open, setOpen] = useState(false);
@@ -1081,6 +1084,13 @@ export const AIPresetsSelector = ({
 
   const { piModels, upgradeEligible } = usePiModels();
   const showUpsell = useModelUpsellGating(upgradeEligible);
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      setOpen(nextOpen);
+      onOpenChange?.(nextOpen);
+    },
+    [onOpenChange],
+  );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {
@@ -1421,7 +1431,7 @@ export const AIPresetsSelector = ({
           </div>
         )}
         <div className="flex w-full items-center gap-2">
-        <Popover open={open} onOpenChange={setOpen}>
+        <Popover open={open} onOpenChange={handleOpenChange}>
           <TooltipProvider>
             <Tooltip>
               <PopoverTrigger asChild>
@@ -1518,7 +1528,7 @@ export const AIPresetsSelector = ({
                         if (isControlled) {
                           onControlledSelect(null);
                         }
-                        setOpen(false);
+                        handleOpenChange(false);
                       }}
                     >
                       <Check
@@ -1630,7 +1640,7 @@ export const AIPresetsSelector = ({
                             description: `${preset.id} is now active`,
                           });
                         }
-                        setOpen(false);
+                        handleOpenChange(false);
                       }}
                       className="flex py-2"
                     >
@@ -1731,7 +1741,7 @@ export const AIPresetsSelector = ({
                   <CommandGroup>
                     <CommandItem
                       onSelect={() => {
-                        setOpen(false);
+                        handleOpenChange(false);
                         setSelectedPresetToEdit(undefined);
                         setDialogOpen(true);
                       }}

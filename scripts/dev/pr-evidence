@@ -6,11 +6,12 @@
 # pr-evidence — headless before/after evidence GIF for a PR.
 # Runs a BEFORE command and an AFTER command in one terminal session, records it
 # with asciinema, and renders a single GIF with agg. No browser, no GUI — for
-# engine / CLI / DB / log evidence, where there's no window to film. An agent can
-# run it start to finish.
+# engine / CLI / DB / log behavior that is easiest to demonstrate in a terminal.
 #
-# This is the evidence the `potential-ai-slop` bot asks for on changes that have
-# no UI: show the old behavior, then the fixed behavior, in the terminal.
+# Backend work normally needs regression tests and relevant logs or results; this
+# helper is optional supporting evidence, not a fabricated video requirement.
+# If an agent runs it, the accountable contributor must personally verify the
+# recording before citing it in a PR.
 #
 #   deps:  brew install asciinema agg
 #   usage:

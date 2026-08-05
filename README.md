@@ -128,7 +128,7 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs. AI/vibe-coded PRs welcome!
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
 
 Thanks to all contributors:
 

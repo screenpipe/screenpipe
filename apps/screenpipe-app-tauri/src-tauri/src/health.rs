@@ -609,8 +609,22 @@ fn should_track_capture_stalls(
     elapsed_since_start: Duration,
     in_restart_grace: bool,
 ) -> bool {
+    should_track_capture_stalls_after(
+        status,
+        elapsed_since_start,
+        in_restart_grace,
+        NOTIFICATION_COOLDOWN,
+    )
+}
+
+fn should_track_capture_stalls_after(
+    status: RecordingStatus,
+    elapsed_since_start: Duration,
+    in_restart_grace: bool,
+    tracking_delay: Duration,
+) -> bool {
     status == RecordingStatus::Recording
-        && elapsed_since_start > NOTIFICATION_COOLDOWN
+        && elapsed_since_start > tracking_delay
         && !in_restart_grace
 }
 
@@ -1643,7 +1657,17 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 Ok(health) => health_confirms_recording(health),
                 Err(_) => false,
             };
-            if should_track_capture_stalls(status, start_time.elapsed(), in_restart_grace) {
+            let tracking_delay = if crate::stale_tier::capture_loop_silent_e2e_armed() {
+                Duration::ZERO
+            } else {
+                NOTIFICATION_COOLDOWN
+            };
+            if should_track_capture_stalls_after(
+                status,
+                start_time.elapsed(),
+                in_restart_grace,
+                tracking_delay,
+            ) {
                 if let Ok(ref health) = health_result {
                     // Only raw capture health drives the recording overlay.
                     // `audio_db_write_stalled` is a transcription-reconciliation

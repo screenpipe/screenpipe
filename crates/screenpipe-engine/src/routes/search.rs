@@ -46,7 +46,7 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalPipePerms {
 
 impl oasgen::OaParameter for OptionalPipePerms {}
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Local, Timelike, Utc};
 use screenpipe_db::{
     ContentType, DatabaseManager, Order, SearchResult, SemanticContextQuery, SemanticFrameContext,
 };
@@ -104,6 +104,18 @@ impl SearchContentType {
             Self::Accessibility => Some(ContentType::Accessibility),
             Self::Memory => Some(ContentType::Memory),
             Self::Parsed => None,
+        }
+    }
+
+    fn permission_name(&self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::OCR => Some("ocr"),
+            Self::Audio => Some("audio"),
+            Self::Input => Some("input"),
+            Self::Accessibility => Some("accessibility"),
+            Self::Memory => Some("memory"),
+            Self::Parsed => Some("parsed"),
         }
     }
 }
@@ -229,6 +241,109 @@ pub(crate) struct PaginationQuery {
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_number_from_string")]
     offset: u32,
+}
+
+fn validate_pipe_search_permissions(
+    permissions: &PipePermissions,
+    query: &SearchQuery,
+) -> Result<(), String> {
+    if permissions.has_content_type_restrictions() {
+        let Some(content_type) = query.content_type.permission_name() else {
+            return Err(
+                "content_type must be specified explicitly when Pipe content permissions are active"
+                    .to_string(),
+            );
+        };
+        if !permissions.is_content_type_allowed(content_type) {
+            return Err(format!(
+                "content type \"{content_type}\" is not permitted for this Pipe"
+            ));
+        }
+    }
+
+    if let Some(app_name) = query.app_name.as_deref() {
+        if !permissions.is_app_allowed(app_name) {
+            return Err(format!(
+                "access to app \"{app_name}\" is not permitted for this Pipe"
+            ));
+        }
+    }
+    if let Some(window_name) = query.window_name.as_deref() {
+        if !permissions.is_window_allowed(window_name) {
+            return Err(format!(
+                "access to window \"{window_name}\" is not permitted for this Pipe"
+            ));
+        }
+    }
+    if query.include_related && permissions.has_data_restrictions() {
+        return Err(
+            "include_related is unavailable when Pipe data permissions are active".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn pipe_can_access_content_item(permissions: &PipePermissions, item: &ContentItem) -> bool {
+    let (app_name, window_name, content_type, timestamp) = match item {
+        ContentItem::OCR(content) => (
+            Some(content.app_name.as_str()),
+            Some(content.window_name.as_str()),
+            if content
+                .text_source
+                .as_deref()
+                .is_some_and(|source| source.eq_ignore_ascii_case("accessibility"))
+            {
+                "accessibility"
+            } else {
+                "ocr"
+            },
+            Some(content.timestamp),
+        ),
+        ContentItem::Audio(content) => (None, None, "audio", Some(content.timestamp)),
+        ContentItem::UI(content) => (
+            Some(content.app_name.as_str()),
+            Some(content.window_name.as_str()),
+            "accessibility",
+            Some(content.timestamp),
+        ),
+        ContentItem::Input(content) => (
+            content.app_name.as_deref(),
+            content.window_title.as_deref(),
+            "input",
+            Some(content.timestamp),
+        ),
+        ContentItem::Memory(content) => (
+            None,
+            None,
+            "memory",
+            DateTime::parse_from_rfc3339(&content.created_at)
+                .ok()
+                .map(|timestamp| timestamp.with_timezone(&Utc)),
+        ),
+        ContentItem::Parsed(content) => (
+            Some(content.app_name.as_str()),
+            Some(content.window_name.as_str()),
+            "parsed",
+            Some(content.timestamp),
+        ),
+    };
+
+    let timestamp = match timestamp {
+        Some(timestamp) => timestamp,
+        None if permissions.time_range.is_some() || permissions.days.is_some() => return false,
+        None => Utc::now(),
+    };
+
+    let local_timestamp = timestamp.with_timezone(&Local);
+    permissions.is_item_allowed(
+        app_name,
+        window_name,
+        content_type,
+        local_timestamp.hour(),
+        local_timestamp.minute(),
+        local_timestamp.weekday(),
+    )
 }
 
 pub(crate) fn deserialize_number_from_string<'de, D>(deserializer: D) -> Result<u32, D::Error>
@@ -848,12 +963,23 @@ pub(crate) async fn search(
     let fields = parse_fields(&query.fields);
     let cacheable_render = is_passthrough(format, &fields);
 
-    // Server-authoritative privacy filter: if the request comes from a
+    let pipe_data_restricted = pipe_perms
+        .as_ref()
+        .map(|permissions| permissions.has_data_restrictions())
+        .unwrap_or(false);
+
+    // Server-authoritative permission validation and privacy filter: if the request comes from a
     // pipe whose manifest declares `privacy_filter: true`, force PII
     // redaction regardless of what the request payload says. The pipe's
     // LLM agent has no schema-level way to bypass this — the permissions
     // are looked up from the bearer token by `pipe_permissions_middleware`.
     if let Some(perms) = &pipe_perms {
+        validate_pipe_search_permissions(perms, &query).map_err(|message| {
+            (
+                StatusCode::FORBIDDEN,
+                JsonResponse(json!({ "error": message })),
+            )
+        })?;
         if perms.privacy_filter {
             query.filter_pii = true;
         }
@@ -878,7 +1004,7 @@ pub(crate) async fn search(
 
     // Check cache first (only for queries without frame extraction)
     let cache_key = compute_search_cache_key(&query);
-    if !query.include_frames && cacheable_render {
+    if !query.include_frames && cacheable_render && !pipe_data_restricted {
         if let Some(cached) = state.search_cache.get(&cache_key).await {
             debug!("search cache hit for key {}", cache_key);
             capture_direct_api_search_value(&api_client, cached.result_count);
@@ -1009,7 +1135,7 @@ pub(crate) async fn search(
         }
     };
 
-    let (results, total) = match database_result {
+    let (results, mut total) = match database_result {
         Ok(result) => result,
         Err(error) => {
             if let Some(response) = classified_search_database_response(&error) {
@@ -1090,6 +1216,16 @@ pub(crate) async fn search(
             })
             .collect(),
     };
+
+    if let Some(permissions) = &pipe_perms {
+        content_items.retain(|item| pipe_can_access_content_item(permissions, item));
+        if pipe_data_restricted {
+            // The unrestricted DB count can reveal denied rows. A fully accurate
+            // restricted count requires pushing every rule into SQL, so return
+            // only the visible page size until that exists.
+            total = content_items.len() as _;
+        }
+    }
 
     deduplicate_ocr_and_ui(&mut content_items);
 
@@ -1283,7 +1419,7 @@ pub(crate) async fn search(
     // Cache the result (only for queries without frame extraction). Cache hits
     // serve the pre-serialized JSON bytes directly for the common response
     // shape, avoiding repeated deep clones of text-heavy search payloads.
-    if !query.include_frames && cacheable_render {
+    if !query.include_frames && cacheable_render && !pipe_data_restricted {
         if let Some(cache_entry) = build_search_cache_entry(&response) {
             let rendered = render_cached_search(&cache_entry);
             state
@@ -1457,6 +1593,61 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use screenpipe_core::pipes::permissions::PermissionRule;
+
+    fn restricted_pipe_permissions(
+        allow_rules: Vec<PermissionRule>,
+        deny_rules: Vec<PermissionRule>,
+    ) -> PipePermissions {
+        PipePermissions {
+            pipe_name: "test-pipe".to_string(),
+            allow_rules,
+            deny_rules,
+            use_default_allowlist: true,
+            time_range: None,
+            days: None,
+            pipe_token: Some("sp_pipe_test".to_string()),
+            pipe_dir: None,
+            privacy_filter: false,
+        }
+    }
+
+    fn search_query(content_type: SearchContentType, app_name: Option<&str>) -> SearchQuery {
+        SearchQuery {
+            q: None,
+            pagination: PaginationQuery {
+                limit: 20,
+                offset: 0,
+            },
+            content_type,
+            order: Order::Descending,
+            input_context_only: false,
+            start_time: None,
+            end_time: None,
+            app_name: app_name.map(str::to_string),
+            window_name: None,
+            frame_id: None,
+            actor_id: None,
+            frame_name: None,
+            include_frames: false,
+            min_length: None,
+            max_length: None,
+            speaker_ids: None,
+            focused: None,
+            on_screen: None,
+            browser_url: None,
+            speaker_name: None,
+            include_cloud: false,
+            max_content_length: None,
+            device_name: None,
+            machine_id: None,
+            filter_pii: false,
+            tags: None,
+            include_related: false,
+            format: None,
+            fields: None,
+        }
+    }
 
     #[derive(Debug)]
     struct InterruptedDatabaseError;
@@ -1541,6 +1732,65 @@ mod tests {
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         }
+    }
+
+    #[test]
+    fn pipe_search_rejects_broad_and_denied_content_types() {
+        let permissions = restricted_pipe_permissions(
+            vec![],
+            vec![PermissionRule::Content {
+                value: "input".to_string(),
+            }],
+        );
+
+        assert!(validate_pipe_search_permissions(
+            &permissions,
+            &search_query(SearchContentType::All, None)
+        )
+        .unwrap_err()
+        .contains("specified explicitly"));
+        assert!(validate_pipe_search_permissions(
+            &permissions,
+            &search_query(SearchContentType::Input, None)
+        )
+        .unwrap_err()
+        .contains("not permitted"));
+        assert!(validate_pipe_search_permissions(
+            &permissions,
+            &search_query(SearchContentType::OCR, None)
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn pipe_search_rejects_denied_app_filters_and_rows() {
+        let permissions = restricted_pipe_permissions(
+            vec![PermissionRule::App {
+                value: "slack".to_string(),
+            }],
+            vec![],
+        );
+
+        assert!(validate_pipe_search_permissions(
+            &permissions,
+            &search_query(SearchContentType::OCR, Some("1Password"))
+        )
+        .unwrap_err()
+        .contains("not permitted"));
+
+        let mut denied = test_ocr(1, "denied.mp4");
+        denied.app_name = "1Password".to_string();
+        assert!(!pipe_can_access_content_item(
+            &permissions,
+            &ContentItem::OCR(denied)
+        ));
+
+        let mut allowed = test_ocr(2, "allowed.mp4");
+        allowed.app_name = "Slack".to_string();
+        assert!(pipe_can_access_content_item(
+            &permissions,
+            &ContentItem::OCR(allowed)
+        ));
     }
 
     #[test]

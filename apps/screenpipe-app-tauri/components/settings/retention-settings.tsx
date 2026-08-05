@@ -435,8 +435,8 @@ export function RetentionSettings({
                   data-testid="low-disk-recording-guard-copy"
                 >
                   when free space falls to {lowDiskThreshold}, stop capture and
-                  notify you. search, scheduled tasks, and existing data stay available.
-                  off by default.
+                  notify you. search, scheduled tasks, and existing data stay
+                  available. on by default.
                 </p>
               </div>
             </div>
@@ -444,7 +444,7 @@ export function RetentionSettings({
               id="stop-recording-on-low-disk"
               data-testid="low-disk-recording-guard-toggle"
               aria-label="stop recording before disk is full"
-              checked={settings.stopRecordingOnLowDisk ?? false}
+              checked={settings.stopRecordingOnLowDisk ?? true}
               onCheckedChange={(checked) =>
                 updateSettings({ stopRecordingOnLowDisk: checked })
               }

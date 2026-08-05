@@ -65,8 +65,31 @@ describe('enforceDailyCostCap', () => {
 		});
 	});
 
-	it('does not offer a false upgrade when Business, Max, or Ultra reaches its cost budget', async () => {
-		for (const plan of ['business', 'business_max', 'business_ultra'] as const) {
+	it.each([
+		['business', 'business_max', 'https://screenpipe.com/account/billing?target_plan=pro_max&interval=month'],
+		['business_max', 'business_ultra', 'https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month'],
+	] as const)('returns the next capacity action when %s reaches its cost budget', async (
+		plan,
+		requiredPlan,
+		upgradeUrl,
+	) => {
+		const response = await enforceDailyCostCap(
+			dbEnv(200), 'dev', 'subscribed', 'gemini-3.5-flash', plan,
+		);
+		expect(response?.status).toBe(429);
+		const wireBody = await response!.json() as { error: string };
+		expect(JSON.parse(wireBody.error)).toMatchObject({
+			error: 'daily_cost_limit_exceeded',
+			plan,
+			required_plan: requiredPlan,
+			upgrade_url: upgradeUrl,
+			can_buy_credits: false,
+		});
+	});
+
+	it.each(['business_ultra', 'team', 'enterprise'] as const)(
+		'does not offer a false self-serve upgrade when %s reaches its cost budget',
+		async (plan) => {
 			const response = await enforceDailyCostCap(
 				dbEnv(200), 'dev', 'subscribed', 'gemini-3.5-flash', plan,
 			);
@@ -79,8 +102,8 @@ describe('enforceDailyCostCap', () => {
 				upgrade_url: null,
 				can_buy_credits: false,
 			});
-		}
-	});
+		},
+		);
 
 	it('allows the same priced model while under the ceiling', async () => {
 		expect(
