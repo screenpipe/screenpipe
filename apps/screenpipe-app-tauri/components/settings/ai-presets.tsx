@@ -26,6 +26,10 @@ import {
   messagesLeftForModel,
   shouldWarnLowQuota,
   formatResetTime,
+  formatAllowanceReset,
+  formatUsagePercent,
+  hostedAiAllowanceForModel,
+  shouldWarnLowHostedAiAllowance,
 } from "@/lib/hooks/use-usage-status";
 import {
   buildChatTestBody,
@@ -279,8 +283,8 @@ const AISection = ({
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
   const employeePresetsAllowed =
     !isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets || (preset ? isEnterpriseManagedPreset(preset) : false);
-  // Daily quota snapshot — drives the "N left today" chip on weighted
-  // models. Null on BYOK providers; we render nothing in that case.
+  // Hosted usage snapshot — Cloudflare rules drive the current dollar meter;
+  // legacy deployments keep the weighted "N left today" fallback.
   const usage = useUsageStatus();
   // Whether to surface the proactive "Business" lock UI. Off unless the PostHog
   // flag, hydrated local entitlement, and gateway eligibility all agree. The
@@ -1585,6 +1589,10 @@ const AISection = ({
                           const costLabel = model.cost_tier === 'low' ? '$' : model.cost_tier === 'medium' ? '$$' : model.cost_tier === 'high' ? '$$$' : model.cost_tier === 'very_high' ? '$$$$' : '';
                           // Effective lock = gateway said so AND we're allowed to surface it.
                           const locked = !!model.locked && showUpsell;
+                          const cloudflareAllowance = hostedAiAllowanceForModel(usage, model.id);
+                          const lowCloudflareAllowance = shouldWarnLowHostedAiAllowance(cloudflareAllowance);
+                          const lowLegacyAllowance = !usage?.hosted_ai &&
+                            shouldWarnLowQuota(usage, model.query_weight);
                           return (
                           <CommandItem
                             key={model.id}
@@ -1616,18 +1624,20 @@ const AISection = ({
                                   )}
                                   {!locked && costLabel && <Badge variant="outline" className="text-[10px]">{costLabel}</Badge>}
                                   {!locked && model.speed === "fast" && <Badge variant="outline" className="text-[10px]">fast</Badge>}
-                                  {/* Low-quota warning — only renders when the user is within
-                                      ~30% of exhausting their daily cap for this specific model.
-                                      Silent otherwise (normal state = no extra clutter). Never on a
-                                      locked model — the Business lock already says "not available",
-                                      so a "N left" count on top would be contradictory. */}
-                                  {!locked && shouldWarnLowQuota(usage, model.query_weight) && (
+                                  {/* Cloudflare lanes always show percentage remaining; the badge
+                                      turns yellow near exhaustion. Legacy counters stay quiet until
+                                      they are low. Never render either beside a locked model. */}
+                                  {!locked && (cloudflareAllowance || lowLegacyAllowance) && (
                                     <Badge
                                       variant="outline"
-                                      className="text-[10px] bg-yellow-500/10 text-yellow-700 border-yellow-500/40 dark:text-yellow-400"
-                                      title={`approaching daily limit${usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : ""}`}
+                                      className={`text-[10px] ${lowCloudflareAllowance || lowLegacyAllowance ? "bg-yellow-500/10 text-yellow-700 border-yellow-500/40 dark:text-yellow-400" : ""}`}
+                                      title={cloudflareAllowance
+                                        ? `${formatUsagePercent(cloudflareAllowance.used_percent)} used${cloudflareAllowance.resets_at ? ` — resets ${formatAllowanceReset(cloudflareAllowance.resets_at)}` : ""}`
+                                        : `approaching daily limit${usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : ""}`}
                                     >
-                                      ≈ {messagesLeftForModel(usage, model.query_weight)} left
+                                      {cloudflareAllowance
+                                        ? `${formatUsagePercent(cloudflareAllowance.remaining_percent)} left`
+                                        : `≈ ${messagesLeftForModel(usage, model.query_weight)} left`}
                                     </Badge>
                                   )}
                                 </div>

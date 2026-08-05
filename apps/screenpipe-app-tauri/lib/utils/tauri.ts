@@ -390,6 +390,31 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check", { initialCheck });
 },
 /**
+ * Arm the full-stack gone-silent capture fault after the E2E client has
+ * observed a healthy baseline. The engine validates the explicit seed again;
+ * release builds always return false.
+ */
+async e2eArmCaptureLoopSilentFault() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_arm_capture_loop_silent_fault") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Arm the debug-only one-shot SCK id-lookup wedge after startup is healthy,
+ * preventing unrelated monitor-list consumers from racing the E2E assertion.
+ */
+async e2eArmSckLookupHangFault() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_arm_sck_lookup_hang_fault") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: distinguish a real CaptureSession from capture intent alone.
  */
 async e2eCaptureSessionRunning() : Promise<Result<boolean, string>> {
@@ -588,6 +613,18 @@ async e2eOwnedBrowserVisible() : Promise<boolean> {
 async e2eRecordingHealthReturnRace() : Promise<Result<JsonValue, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_recording_health_return_race") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read the real OS lock state for platform E2E setup. The capture recovery
+ * lane must skip rather than bypass an intentional lock-screen privacy pause.
+ */
+async e2eScreenIsLocked() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_screen_is_locked") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1758,6 +1795,19 @@ async piStart(sessionId: string | null, projectDir: string, userToken: string | 
 }
 },
 /**
+ * Start a private Pi session and submit its first prompt as one operation.
+ * Foreground surfaces that only care about agent events should not have to
+ * round-trip through WebView between process readiness and prompt acceptance.
+ */
+async piStartAndPrompt(sessionId: string, projectDir: string, userToken: string | null, providerConfig: PiProviderConfig | null, message: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_start_and_prompt", { sessionId, projectDir, userToken, providerConfig, message }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Steer the active Pi reply using Pi's native steering command.
  * Unlike `pi_prompt`, this is intentionally not added to the follow-up queue:
  * Pi interrupts the current stream and resumes with the steering instruction.
@@ -2200,12 +2250,13 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 },
 /**
  * Persist the user's enterprise admin status, team API token, and the org's
- * team API base URL so the pi-agent's `screenpipe-team` skill knows whether
- * to install itself and where to point.
+ * team API base URL. The Enterprise app uses the role/license/token fields to
+ * decide whether to inject `screenpipe-team`; the native CLI resolves the API
+ * base and token from the same file when that skill invokes it.
  *
  * Called by the frontend right after a policy fetch confirms admin
  * role. Storing this alongside the license key in `enterprise.json`
- * keeps everything pi-agent needs in one file the skill can read
+ * keeps the Enterprise app and native CLI on one local configuration contract
  * without a Tauri round-trip.
  *
  * All fields are optional so callers can update one at a time —
@@ -3085,7 +3136,12 @@ maxContextChars?: number | null;
 /**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
-systemPrompt?: string | null }
+systemPrompt?: string | null;
+/**
+ * Optional exact Pi tool allowlist for bounded agent surfaces. `None`
+ * preserves the normal Chat tool surface; an empty list disables tools.
+ */
+allowedTools?: string[] | null }
 /**
  * A user prompt that's been enqueued but not yet written to Pi's stdin.
  * Surfaced to the UI so the chat can render "queued" cards while a prior
@@ -3809,7 +3865,7 @@ chatAlwaysOnTop?: boolean;
 showRestartNotifications?: boolean;
 /**
  * Stop capture before the data volume is completely full. Search, pipes,
- * and the local API remain available. Explicitly opt-in for now.
+ * and the local API remain available. Safety-on unless explicitly disabled.
  */
 stopRecordingOnLowDisk?: boolean;
 /**

@@ -556,6 +556,11 @@ async fn main() -> anyhow::Result<()> {
                             r"Library not loaded.*libx265\.",
                             // Linux system library missing — distro-local, not our bug
                             r"Failed to load ayatana-appindicator3 or appindicator3 dynamic library",
+                            // libwayshot reports an older Wayland compositor's wl_output
+                            // protocol as an error even though it deliberately ignores that
+                            // output and continues (CLI-ZY: 130 duplicate events, one user).
+                            // Keep the local log for diagnosis, but do not send it to Sentry.
+                            r"^Ignoring a wl_output with version < 4\.$",
                             // Deepgram DNS / connectivity blips — already logged locally
                             r"deepgram transcription failed: Cannot resolve audio transcription server",
                         ]

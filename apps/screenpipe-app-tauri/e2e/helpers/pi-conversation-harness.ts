@@ -14,6 +14,11 @@ export interface PiWirePrompt {
   message: string;
 }
 
+export interface ScriptedToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
 type InvokeResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 async function invokePi<T>(
@@ -58,6 +63,9 @@ export class PiConversationHarness {
   private responseDelayMs = 0;
   private remainingRetryFailures = 0;
   private gatewayErrorResponse: unknown | null = null;
+  private scriptedToolCalls: ScriptedToolCall[] = [];
+  private scriptedToolCallIndex = 0;
+  private textResponse = "mock-ok";
   private readonly requests: unknown[] = [];
 
   constructor(private readonly sessionId: string) {}
@@ -97,12 +105,12 @@ export class PiConversationHarness {
     const rid = await invokePi<number | null>("plugin:store|get_store", {
       path: storePath,
     });
-    if (rid == null) throw new Error(`settings store is not loaded: ${storePath}`);
+    if (rid == null)
+      throw new Error(`settings store is not loaded: ${storePath}`);
 
-    const [settings, exists] = await invokePi<[Record<string, unknown>, boolean]>(
-      "plugin:store|get",
-      { rid, key: "settings" },
-    );
+    const [settings, exists] = await invokePi<
+      [Record<string, unknown>, boolean]
+    >("plugin:store|get", { rid, key: "settings" });
     if (!exists || !settings) throw new Error("settings are not loaded");
 
     await invokePi("plugin:store|set", {
@@ -154,7 +162,8 @@ export class PiConversationHarness {
    * gateway seam instead of supplying a custom-provider URL here.
    */
   async restartHostedGateway(userToken: string): Promise<void> {
-    if (!userToken) throw new Error("local hosted-AI gateway token is required");
+    if (!userToken)
+      throw new Error("local hosted-AI gateway token is required");
     await invokePi("pi_stop", { sessionId: this.sessionId }).catch(() => {});
     const started = await invokePi<{ running: boolean; pid: number | null }>(
       "pi_start",
@@ -168,7 +177,8 @@ export class PiConversationHarness {
           model: "gpt-5.4-mini",
           apiKey: null,
           maxTokens: 64,
-          systemPrompt: "Reply briefly for the local hosted-AI gateway E2E test.",
+          systemPrompt:
+            "Reply briefly for the local hosted-AI gateway E2E test.",
         },
       },
     );
@@ -195,12 +205,14 @@ export class PiConversationHarness {
       },
     );
     await browser.pause(t(3_250));
-    const synchronized = await invokePi<{ running: boolean; pid: number | null }>(
-      "pi_info",
-      { sessionId: this.sessionId },
-    );
+    const synchronized = await invokePi<{
+      running: boolean;
+      pid: number | null;
+    }>("pi_info", { sessionId: this.sessionId });
     if (!synchronized.running || synchronized.pid !== started.pid) {
-      throw new Error("hosted-gateway Pi process changed before UI synchronization");
+      throw new Error(
+        "hosted-gateway Pi process changed before UI synchronization",
+      );
     }
     await this.clearCaptures();
   }
@@ -208,7 +220,9 @@ export class PiConversationHarness {
   async clearCaptures(): Promise<void> {
     this.requests.length = 0;
     await browser.execute(() => {
-      (globalThis as any).__e2ePiWirePrompts = [];
+      const global = globalThis as any;
+      global.__e2ePiWirePrompts = [];
+      global.__e2ePiAgentEvents = [];
     });
   }
 
@@ -225,15 +239,25 @@ export class PiConversationHarness {
     this.gatewayErrorResponse = body;
   }
 
-  async waitForRequestCount(expectedCount: number, label: string): Promise<void> {
-    await browser.waitUntil(
-      async () => this.requests.length >= expectedCount,
-      {
-        timeout: t(45_000),
-        interval: 100,
-        timeoutMsg: `${label} did not reach ${expectedCount} model requests`,
-      },
-    );
+  /** Return these tool calls on consecutive model turns, then finish normally. */
+  setToolCallSequence(toolCalls: ScriptedToolCall[]): void {
+    this.scriptedToolCalls = [...toolCalls];
+    this.scriptedToolCallIndex = 0;
+  }
+
+  setTextResponse(value: string): void {
+    this.textResponse = value;
+  }
+
+  async waitForRequestCount(
+    expectedCount: number,
+    label: string,
+  ): Promise<void> {
+    await browser.waitUntil(async () => this.requests.length >= expectedCount, {
+      timeout: t(45_000),
+      interval: 100,
+      timeoutMsg: `${label} did not reach ${expectedCount} model requests`,
+    });
   }
 
   async prompt(message: string, displayPreview: string): Promise<void> {
@@ -325,8 +349,23 @@ export class PiConversationHarness {
     }, this.sessionId)) as PiWirePrompt[];
   }
 
+  async agentEvents(): Promise<unknown[]> {
+    return (await browser.execute(() => {
+      const global = globalThis as any;
+      return global.__e2ePiAgentEvents || [];
+    })) as unknown[];
+  }
+
   requestOccurrences(index: number, needle: string): number {
     return JSON.stringify(this.requests[index]).split(needle).length - 1;
+  }
+
+  requestCount(): number {
+    return this.requests.length;
+  }
+
+  requestAt(index: number): unknown {
+    return this.requests[index];
   }
 
   private async installWireRecorder(): Promise<void> {
@@ -334,19 +373,23 @@ export class PiConversationHarness {
       (done: (ok: boolean) => void) => {
         const global = globalThis as any;
         global.__e2ePiWirePrompts = [];
+        global.__e2ePiAgentEvents = [];
         const listen = global.__TAURI__?.event?.listen;
         if (typeof listen !== "function") {
           done(false);
           return;
         }
-        void listen(
-          "e2e_pi_wire_prompt",
-          (event: { payload: PiWirePrompt }) => {
+        void Promise.all([
+          listen("e2e_pi_wire_prompt", (event: { payload: PiWirePrompt }) => {
             global.__e2ePiWirePrompts.push(event.payload);
-          },
-        )
-          .then((unlisten: () => void) => {
-            global.__e2ePiWirePromptUnlisten = unlisten;
+          }),
+          listen("agent_event", (event: { payload: unknown }) => {
+            global.__e2ePiAgentEvents.push(event.payload);
+          }),
+        ])
+          .then((unlisteners: Array<() => void>) => {
+            global.__e2ePiWirePromptUnlisten = () =>
+              unlisteners.forEach((unlisten) => unlisten());
             done(true);
           })
           .catch(() => done(false));
@@ -363,6 +406,16 @@ export class PiConversationHarness {
         rawBody += chunk;
       });
       request.on("end", () => {
+        if (request.method === "GET" && request.url?.endsWith("/models")) {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              object: "list",
+              data: [{ id: "screenpipe-e2e", object: "model" }],
+            }),
+          );
+          return;
+        }
         let body: unknown = rawBody;
         try {
           body = JSON.parse(rawBody);
@@ -383,13 +436,15 @@ export class PiConversationHarness {
             "content-type": "application/json",
             "retry-after": "1",
           });
-          response.end(JSON.stringify({
-            error: {
-              message: "priced_request_in_flight",
-              type: "rate_limit_error",
-              code: "priced_request_in_flight",
-            },
-          }));
+          response.end(
+            JSON.stringify({
+              error: {
+                message: "priced_request_in_flight",
+                type: "rate_limit_error",
+                code: "priced_request_in_flight",
+              },
+            }),
+          );
           return;
         }
 
@@ -404,15 +459,43 @@ export class PiConversationHarness {
             model: "screenpipe-e2e",
             choices: [{ index: 0, delta, finish_reason: finishReason }],
           });
+        const scriptedToolCall =
+          this.scriptedToolCalls[this.scriptedToolCallIndex] ?? null;
+        if (scriptedToolCall) this.scriptedToolCallIndex += 1;
         setTimeout(() => {
           response.writeHead(200, {
             "content-type": "text/event-stream",
             "cache-control": "no-cache",
             connection: "keep-alive",
           });
+          if (scriptedToolCall) {
+            const callId = `call_screenpipe_e2e_${this.scriptedToolCallIndex}`;
+            response.end(
+              `data: ${chunk({ role: "assistant", content: "" }, null)}\n\n` +
+                `data: ${chunk(
+                  {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: callId,
+                        type: "function",
+                        function: {
+                          name: scriptedToolCall.name,
+                          arguments: JSON.stringify(scriptedToolCall.arguments),
+                        },
+                      },
+                    ],
+                  },
+                  null,
+                )}\n\n` +
+                `data: ${chunk({}, "tool_calls")}\n\n` +
+                "data: [DONE]\n\n",
+            );
+            return;
+          }
           response.end(
             `data: ${chunk({ role: "assistant", content: "" }, null)}\n\n` +
-              `data: ${chunk({ content: "mock-ok" }, null)}\n\n` +
+              `data: ${chunk({ content: this.textResponse }, null)}\n\n` +
               `data: ${chunk({}, "stop")}\n\n` +
               "data: [DONE]\n\n",
           );

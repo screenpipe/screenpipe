@@ -77,65 +77,15 @@ jobs:
             echo "should_test=${{ github.event.inputs.needs_testing }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Check self-hosted runner availability
+      - name: Select release runners
         id: check-runner
-        env:
-          GH_TOKEN: ${{ secrets.RUNNER_CHECK_TOKEN }}
         run: |
-          # Check runner: returns "available" (online+idle), "busy" (online+busy), or "offline"
-          check_runner() {
-            local label="$1"
-            local info
-            info=$(gh api repos/${{ github.repository }}/actions/runners \
-              --jq ".runners[] | select(.labels[].name == \"$label\") | {status: .status, busy: .busy}" 2>/dev/null || echo '{"status":"offline","busy":true}')
-            local status=$(echo "$info" | jq -r '.status // "offline"')
-            local busy=$(echo "$info" | jq -r 'if .busy then "true" else "false" end')
-            if [ "$status" = "online" ] && [ "$busy" = "false" ]; then
-              echo "available"
-            elif [ "$status" = "online" ]; then
-              echo "busy"
-            else
-              echo "offline"
-            fi
-          }
-
-          # Wait up to TIMEOUT seconds for a runner to become available
-          # Returns "available" or "timeout"
-          wait_for_runner() {
-            local label="$1"
-            local timeout="$2"
-            local elapsed=0
-            local interval=10
-            echo "⏳ Waiting up to ${timeout}s for $label to become available..." >&2
-            while [ $elapsed -lt $timeout ]; do
-              local state=$(check_runner "$label")
-              if [ "$state" = "available" ]; then
-                echo "available"
-                return
-              elif [ "$state" = "offline" ]; then
-                echo "offline"
-                return
-              fi
-              echo "  $label is busy, waiting... (${elapsed}s/${timeout}s)" >&2
-              sleep $interval
-              elapsed=$((elapsed + interval))
-            done
-            echo "timeout"
-          }
-
-          # Force GitHub-hosted runners if requested
           if [ "${{ github.event.inputs.force_github_runners }}" = "true" ]; then
             echo "macos_arm_runner=macos-latest" >> $GITHUB_OUTPUT
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
-            echo "⚠️ Forcing GitHub-hosted runners (manual override)"
           else
-            # macOS aarch64: GitHub-hosted macos-26 runner
             echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
-            echo "✅ Using GitHub-hosted macos-26 runner"
-
-            # Always use GH-hosted Windows - self-hosted is unreliable for builds
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
-            echo "ℹ️ Using GH-hosted Windows runner (windows-2022)"
           fi
 
   draft:
@@ -167,7 +117,7 @@ jobs:
     needs: [check_commit, draft]
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -1491,206 +1441,47 @@ jobs:
         if: matrix.os_type == 'macos'
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
-          # Upload helper: tries aws s3 cp first, falls back to curl.
-          # The self-hosted macOS ARM runner has broken LibreSSL 3.3.6 that causes
-          # SSLV3_ALERT_BAD_RECORD_MAC on large uploads to R2. Both aws cli (Python SSL)
-          # and system curl (LibreSSL) are affected. Use homebrew curl (OpenSSL 3.6.1)
-          # as the reliable fallback.
-          CURL_BIN="/opt/homebrew/opt/curl/bin/curl"
-          if [ ! -x "$CURL_BIN" ]; then
-            CURL_BIN="curl"  # fallback to system curl on non-macOS
-          fi
-          upload_with_retry() {
-            local src="$1" dst="$2"
-            local bucket_path="${dst#s3://}"
-            local r2_key="${bucket_path#*/}"
-            local bucket="${bucket_path%%/*}"
-
-            # Try aws cli first
-            for attempt in 1 2 3; do
-              if AWS_MAX_ATTEMPTS=3 aws s3 cp "$src" "$dst" \
-                  --endpoint-url "$R2_ENDPOINT" \
-                  --no-verify-ssl \
-                  --no-progress \
-                  --expected-size "$(stat -f%z "$src" 2>/dev/null || stat -c%s "$src" 2>/dev/null)" \
-                  --cli-read-timeout 300 --cli-connect-timeout 30 \
-                  --region auto 2>&1; then
-                echo "  ✅ $(basename "$src") (aws)"
-                return 0
-              fi
-              echo "  ⚠️ aws attempt $attempt failed for $(basename "$src")"
-              sleep $((attempt * 5))
-            done
-
-            # Fallback: curl with S3 v4 signing (uses macOS SecureTransport, bypasses Python SSL)
-            echo "  🔄 falling back to curl for $(basename "$src")..."
-            local content_type="application/octet-stream"
-            local date_stamp=$(date -u +%Y%m%d)
-            local amz_date=$(date -u +%Y%m%dT%H%M%SZ)
-            local region="auto"
-            local service="s3"
-            local host="${R2_ENDPOINT#https://}"
-
-            sign_and_upload() {
-              local method="PUT"
-              local canonical_uri="/${r2_key}"
-              local content_sha256=$(shasum -a 256 "$src" | awk '{print $1}')
-              local canonical_headers="content-type:${content_type}\nhost:${host}\nx-amz-content-sha256:${content_sha256}\nx-amz-date:${amz_date}\n"
-              local signed_headers="content-type;host;x-amz-content-sha256;x-amz-date"
-              local canonical_request="${method}\n${canonical_uri}\n\n${canonical_headers}\n${signed_headers}\n${content_sha256}"
-              local cr_hash=$(printf "${canonical_request}" | shasum -a 256 | awk '{print $1}')
-              local scope="${date_stamp}/${region}/${service}/aws4_request"
-              local string_to_sign="AWS4-HMAC-SHA256\n${amz_date}\n${scope}\n${cr_hash}"
-
-              local k_date=$(printf "${date_stamp}" | openssl dgst -sha256 -hex -mac HMAC -macopt "key:AWS4${AWS_SECRET_ACCESS_KEY}" | awk '{print $NF}')
-              local k_region=$(printf "${region}" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_date}" | awk '{print $NF}')
-              local k_service=$(printf "${service}" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_region}" | awk '{print $NF}')
-              local k_signing=$(printf "aws4_request" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_service}" | awk '{print $NF}')
-              local signature=$(printf "${string_to_sign}" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_signing}" | awk '{print $NF}')
-
-              local auth="AWS4-HMAC-SHA256 Credential=${AWS_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signed_headers}, Signature=${signature}"
-
-              $CURL_BIN -fSs --retry 3 --retry-delay 5 \
-                -X PUT \
-                -H "Content-Type: ${content_type}" \
-                -H "x-amz-date: ${amz_date}" \
-                -H "x-amz-content-sha256: ${content_sha256}" \
-                -H "Authorization: ${auth}" \
-                --data-binary "@${src}" \
-                "${R2_ENDPOINT}/${r2_key}"
-            }
-
-            for attempt in 1 2 3; do
-              if sign_and_upload 2>&1; then
-                echo "  ✅ $(basename "$src") (curl)"
-                return 0
-              fi
-              echo "  ⚠️ curl attempt $attempt failed for $(basename "$src")"
-              sleep $((attempt * 10))
-            done
-            echo "  ❌ failed to upload $(basename "$src") after all attempts"
-            return 1
-          }
-
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          R2_PREFIX="s3://screenpipe-releases/releases/${VERSION}/${TARGET}"
-
-          echo "uploading ${TARGET} bundles for v${VERSION} to R2..."
-          echo "aws cli: $(aws --version)"
-
-          # Clean any stale artifacts from previous (failed) runs for this version+target
-          echo "cleaning stale R2 artifacts at ${R2_PREFIX}/ ..."
-          aws s3 rm "${R2_PREFIX}/" --recursive --endpoint-url "$R2_ENDPOINT" --no-verify-ssl 2>/dev/null || true
-
-          UPLOAD_FAILED=0
-
-          # Upload DMG
-          for f in "${BUNDLE_DIR}"/dmg/*.dmg; do
-            [ -f "$f" ] && { upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")" || UPLOAD_FAILED=1; }
-          done
-
-          # Upload updater artifacts (.tar.gz + .sig)
-          for f in "${BUNDLE_DIR}"/macos/*.tar.gz "${BUNDLE_DIR}"/macos/*.sig; do
-            [ -f "$f" ] && { upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")" || UPLOAD_FAILED=1; }
-          done
-
-          if [ "$UPLOAD_FAILED" -eq 1 ]; then
-            echo "❌ Some uploads failed - marking step as failed"
-            exit 1
-          fi
-          echo "R2 upload complete for ${TARGET}"
+          .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/dmg/*.dmg \
+            "${BUNDLE_DIR}"/macos/*.tar.gz \
+            "${BUNDLE_DIR}"/macos/*.sig
 
       - name: Upload to Cloudflare R2 (Windows)
         if: matrix.os_type == 'windows'
-        shell: pwsh
+        shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
-          # Install AWS CLI if not present
-          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing AWS CLI..."
-            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\awscli.msi"
-            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\awscli.msi /quiet"
-            $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
-          }
-          $version = (Select-String -Path apps/screenpipe-app-tauri/src-tauri/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $bundleDir = "apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
-          $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          $r2Prefix = "s3://screenpipe-releases/releases/$version/${{ matrix.target }}"
-
-          Write-Host "uploading Windows bundles for v$version to R2..."
-
-          # Clean any stale artifacts from previous (failed) runs for this version+target
-          Write-Host "cleaning stale R2 artifacts at $r2Prefix/ ..."
-          aws s3 rm "$r2Prefix/" --recursive --endpoint-url $r2Endpoint 2>$null
-
-          # Upload ALL bundle artifacts (.exe, .nsis.zip, .sig files)
-          Write-Host "Files in nsis bundle dir:"
-          Get-ChildItem "$bundleDir/nsis" -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Host "  found: $($_.Name) ($($_.Length) bytes)"
-          }
-          Get-ChildItem "$bundleDir/nsis" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  ✅ $($_.Name)"
-          }
-
-          Write-Host "R2 upload complete for Windows"
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          TARGET="${{ matrix.target }}"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/nsis/*.exe \
+            "${BUNDLE_DIR}"/nsis/*.nsis.zip \
+            "${BUNDLE_DIR}"/nsis/*.sig
 
       - name: Upload to Cloudflare R2 (Linux)
         if: matrix.os_type == 'linux'
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          R2_PREFIX="s3://screenpipe-releases/releases/${VERSION}/${TARGET}"
-
-          echo "uploading Linux bundles for v${VERSION} to R2..."
-
-          # Clean any stale artifacts from previous (failed) runs for this version+target
-          echo "cleaning stale R2 artifacts at ${R2_PREFIX}/ ..."
-          aws s3 rm "${R2_PREFIX}/" --recursive --endpoint-url "$R2_ENDPOINT" --no-verify-ssl 2>/dev/null || true
-
-          echo "bundle dir contents:"
-          find "${BUNDLE_DIR}" -type f 2>/dev/null || echo "  (bundle dir not found)"
-
-          UPLOADED=0
-
-          # Upload AppImage
-          for f in "${BUNDLE_DIR}"/appimage/*.AppImage; do
-            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
-          done
-
-          # Upload deb
-          for f in "${BUNDLE_DIR}"/deb/*.deb; do
-            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
-          done
-
-          # Upload updater artifacts (.tar.gz + .sig) if present
-          for f in "${BUNDLE_DIR}"/appimage/*.tar.gz "${BUNDLE_DIR}"/appimage/*.sig; do
-            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
-          done
-
-          if [ "$UPLOADED" -eq 0 ]; then
-            echo "❌ No Linux artifacts found to upload!"
-            exit 1
-          fi
-
-          echo "R2 upload complete for Linux ($UPLOADED files)"
+          .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/appimage/*.AppImage \
+            "${BUNDLE_DIR}"/appimage/*.tar.gz \
+            "${BUNDLE_DIR}"/appimage/*.sig \
+            "${BUNDLE_DIR}"/deb/*.deb
 
       # Sentry uploads run AFTER R2 so they don't delay release artifacts
       - name: Upload debug symbols to Sentry (Windows)
@@ -1719,34 +1510,3 @@ jobs:
           fi
           echo "Uploading debug symbols to Sentry..."
           sentry-cli debug-files upload --org $SENTRY_ORG --project screenpipe-app apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
-
-  generate-changelog:
-    needs: [check_commit, publish-tauri]
-    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 100
-
-      - name: Get version and previous bump
-        id: params
-        run: |
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
-
-          # Find the previous "Bump" or "release-app" commit to diff from
-          PREV=$(git log --oneline --skip=1 --grep="release-app\|Bump app" -1 --format="%H" 2>/dev/null || echo "")
-          if [ -z "$PREV" ]; then
-            PREV="HEAD~50"
-          fi
-          echo "since=${PREV}" >> $GITHUB_OUTPUT
-          echo "Changelog: v${VERSION} since ${PREV}"
-
-      - name: Trigger changelog generation on website repo
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.WEBSITE_REPO_TOKEN }}
-          repository: screenpipe/website
-          event-type: generate-changelog
-          client-payload: '{"version": "${{ steps.params.outputs.version }}", "since": "${{ steps.params.outputs.since }}"}'

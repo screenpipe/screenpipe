@@ -247,6 +247,12 @@ pub async fn run_pipe_now(
 ) -> Json<Value> {
     let mut mgr = pm.lock().await;
 
+    if !mgr.has_execution_store() {
+        return Json(json!({
+            "error": "pipe execution history is unavailable; refusing to start an untrackable run"
+        }));
+    }
+
     // Re-scan disk so newly installed pipes are discovered before lookup
     if let Err(e) = mgr.reload_pipes().await {
         tracing::warn!("failed to reload pipes from disk: {}", e);
@@ -312,7 +318,13 @@ pub async fn run_pipe_now(
         .await;
 
     match result {
-        Ok(()) => Json(json!({ "success": true })),
+        Ok(Some(execution_id)) => Json(json!({
+            "success": true,
+            "execution_id": execution_id,
+        })),
+        Ok(None) => Json(json!({
+            "error": "pipe run started without a persisted execution id"
+        })),
         Err(e) => Json(json!({ "error": e.to_string() })),
     }
 }
@@ -370,6 +382,25 @@ pub async fn get_pipe_executions(
     match result {
         Ok(executions) => Json(json!({ "data": executions })),
         Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
+/// GET /pipes/:id/executions/:exec_id — one exact persisted execution.
+pub async fn get_pipe_execution(
+    State(pm): State<SharedPipeManager>,
+    Path((id, exec_id)): Path<(String, i64)>,
+) -> (StatusCode, Json<Value>) {
+    let mgr = pm.lock().await;
+    match mgr.get_execution(&id, exec_id).await {
+        Ok(Some(execution)) => (StatusCode::OK, Json(json!({ "data": execution }))),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "execution not found" })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
     }
 }
 
@@ -521,13 +552,15 @@ pub async fn set_pipe_favorite(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipe_store::SqlitePipeStore;
     use axum::body::{to_bytes, Body};
     use axum::http::Request;
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use axum::Router;
     use screenpipe_core::agents::{
         install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle, SharedPid,
     };
+    use screenpipe_core::pipes::PipeStore;
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -756,6 +789,13 @@ mod tests {
             .with_state(pm)
     }
 
+    fn tracked_run_router(pm: SharedPipeManager) -> Router {
+        Router::new()
+            .route("/pipes/:id/run", post(run_pipe_now))
+            .route("/pipes/:id/executions/:exec_id", get(get_pipe_execution))
+            .with_state(pm)
+    }
+
     async fn stop_payload(app: Router, pipe_name: &str) -> Value {
         let response = app
             .oneshot(
@@ -783,6 +823,86 @@ mod tests {
         mgr.start_pipe_background(name).await.unwrap();
         drop(mgr);
         executor.started.notified().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_api_returns_and_reads_the_exact_new_execution() {
+        let dir = TempDir::new().unwrap();
+        write_test_pipe(&dir, "demo");
+
+        let db_path = dir.path().join("test.db");
+        let db = Arc::new(
+            screenpipe_db::DatabaseManager::new(db_path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqlitePipeStore::new(db));
+        let stale_id = store
+            .create_execution("demo", "manual", "fake", None)
+            .await
+            .unwrap();
+
+        let executor = Arc::new(FakeExecutor::new(FakePublishMode::Immediate, 4242));
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("fake".to_string(), executor.clone());
+        let persisted_store: Arc<dyn PipeStore> = store;
+        let mgr = PipeManager::new(
+            dir.path().to_path_buf(),
+            executors,
+            Some(persisted_store),
+            3030,
+        );
+        mgr.reload_pipes().await.unwrap();
+        let pm = Arc::new(Mutex::new(mgr));
+        let app = tracked_run_router(pm);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/pipes/demo/run")
+                    .method("POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["success"], true);
+        let execution_id = payload["execution_id"].as_i64().unwrap();
+        assert!(execution_id > stale_id);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/pipes/demo/executions/{execution_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["data"]["id"], execution_id);
+        assert_eq!(payload["data"]["pipe_name"], "demo");
+
+        let wrong_pipe = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/pipes/other/executions/{execution_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong_pipe.status(), StatusCode::NOT_FOUND);
+
+        executor.allow_finish.notify_one();
     }
 
     #[tokio::test]

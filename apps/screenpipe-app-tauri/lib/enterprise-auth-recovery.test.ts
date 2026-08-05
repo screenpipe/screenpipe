@@ -17,6 +17,7 @@ describe("enterprise key rotation recovery", () => {
   it("routes a signed-out device to account login instead of another key prompt", () => {
     expect(authenticationStateAfterKeyRejection(false)).toBe("account");
     expect(ROTATED_ENTERPRISE_KEY_ERROR).toContain("sign in");
+    expect(ROTATED_ENTERPRISE_KEY_ERROR).toContain("uploads are paused");
   });
 
   it("lets the updater fall through from a rotated key to account membership", () => {

@@ -20,6 +20,8 @@ interface ModelEntry {
   tags: string[];
   free: boolean;
   context_window: number;
+  /** Maximum completion budget clients should request from this model. */
+  max_output_tokens?: number;
   best_for: string[];
   speed: 'fast' | 'medium' | 'slow';
   intelligence: 'standard' | 'high' | 'highest';
@@ -244,6 +246,7 @@ const CURATED_MODELS: ModelEntry[] = [
     tags: ['premium', 'balanced', 'agentic', 'new'],
     free: false,
     context_window: 1000000,
+    max_output_tokens: 128000,
     best_for: ['agentic work', 'coding', 'computer use', 'complex analysis'],
     speed: 'medium',
     intelligence: 'highest',
@@ -260,6 +263,7 @@ const CURATED_MODELS: ModelEntry[] = [
     tags: ['business', 'frontier', 'agentic', 'new'],
     free: false,
     context_window: 1000000,
+    max_output_tokens: 128000,
     best_for: ['hard reasoning', 'agentic coding', 'complex analysis'],
     speed: 'slow',
     intelligence: 'highest',
@@ -276,6 +280,7 @@ const CURATED_MODELS: ModelEntry[] = [
     tags: ['business', 'frontier', 'agentic', 'new'],
     free: false,
     context_window: 1000000,
+    max_output_tokens: 128000,
     best_for: ['hard reasoning', 'agentic coding', 'complex analysis'],
     speed: 'slow',
     intelligence: 'highest',

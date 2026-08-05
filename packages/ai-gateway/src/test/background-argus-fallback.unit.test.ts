@@ -7,10 +7,12 @@ import { tryArgusBackgroundFallback } from '../handlers/chat';
 import {
 	ARGUS_BACKGROUND_FALLBACK_MODEL,
 	ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS,
+	ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET,
 	hasArgusUnsupportedInput,
 	isAccountLocalAllowanceError,
 	isProviderQuotaOrBillingLimitError,
 	prepareArgusBackgroundFallbackBody,
+	resolveArgusBackgroundFallbackBody,
 	shouldUseArgusBackgroundFallback,
 } from '../services/background-limit-fallback';
 import { HostedChatAllowanceExceededError } from '../services/cloudflare-ai-gateway';
@@ -54,6 +56,34 @@ describe('paid background Pipe Argus fallback', () => {
 		};
 		expect(hasArgusUnsupportedInput(imageBody)).toBe(true);
 		expect(shouldUseArgusBackgroundFallback({ enabled: true, error: allowanceError, body: imageBody, env })).toBe(false);
+	});
+
+	it('resolves eligibility and the complete Argus request shape together', () => {
+		const fallbackBody = resolveArgusBackgroundFallbackBody({
+			enabled: true,
+			error: { status: 429, code: 'daily_cost_limit_exceeded' },
+			body: {
+				...body,
+				messages: [
+					{ role: 'developer', content: 'Run this background Pipe.' } as any,
+					{ role: 'user', content: 'Summarize today.' },
+				],
+				max_completion_tokens: 32_000,
+			},
+			env,
+		});
+
+		expect(fallbackBody).not.toBeNull();
+		expect(fallbackBody?.model).toBe(ARGUS_BACKGROUND_FALLBACK_MODEL);
+		expect(fallbackBody?.messages[0].role).toBe('user');
+		expect(fallbackBody?.max_completion_tokens).toBeUndefined();
+		expect(fallbackBody?.max_tokens).toBe(ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS);
+		expect(resolveArgusBackgroundFallbackBody({
+			enabled: false,
+			error: allowanceError,
+			body,
+			env,
+		})).toBeNull();
 	});
 
 	it('serves streaming or JSON Pipe responses directly from Argus without Cloudflare metadata', async () => {
@@ -102,6 +132,22 @@ describe('paid background Pipe Argus fallback', () => {
 		expect(textBody.messages).toBe(body.messages);
 	});
 
+	it('preserves Pi developer instructions in an Argus-compatible user message', () => {
+		const piBody = prepareArgusBackgroundFallbackBody({
+			...body,
+			messages: [
+				{ role: 'developer', content: 'Run this background Pipe safely.' } as any,
+				{ role: 'user', content: 'Summarize the meeting.' },
+			],
+		});
+
+		expect(piBody.messages).toEqual([
+			{ role: 'user', content: '[Background agent instructions]\nRun this background Pipe safely.' },
+			{ role: 'user', content: 'Summarize the meeting.' },
+		]);
+		expect(piBody.messages.every((message) => String(message.role) !== 'developer')).toBe(true);
+	});
+
 	it('normalizes Pi\'s 32k output request to the bounded Argus vLLM field', () => {
 		const capped = prepareArgusBackgroundFallbackBody({
 			...body,
@@ -113,6 +159,71 @@ describe('paid background Pipe Argus fallback', () => {
 
 		const alreadyBounded = prepareArgusBackgroundFallbackBody({ ...body, max_tokens: 512 });
 		expect(alreadyBounded.max_tokens).toBe(512);
+	});
+
+	it('compacts only Argus tool-schema prose while preserving the executable contract', () => {
+		const originalTools = [{
+			type: 'function',
+			function: {
+				name: 'lookup_events',
+				description: 'Find matching events. '.repeat(20),
+				parameters: {
+					type: 'object',
+					title: 'Lookup input',
+					properties: {
+						query: {
+							type: 'string',
+							description: 'A long explanation repeated in every Pi tool schema.',
+							enum: ['recent', 'all'],
+						},
+					},
+					required: ['query'],
+				},
+			},
+		}];
+		const prepared = prepareArgusBackgroundFallbackBody({ ...body, tools: originalTools });
+		const fn = prepared.tools?.[0].function;
+
+		expect(prepared.tools).not.toBe(originalTools);
+		expect(originalTools[0].function.parameters.properties.query.description).toContain('long explanation');
+		expect(fn.name).toBe('lookup_events');
+		expect(fn.description.length).toBeLessThanOrEqual(160);
+		expect(fn.parameters).toEqual({
+			type: 'object',
+			properties: { query: { type: 'string', enum: ['recent', 'all'] } },
+			required: ['query'],
+		});
+	});
+
+	it('bounds oversized Pipe context while preserving instructions, chronology, and the newest task', () => {
+		const prepared = prepareArgusBackgroundFallbackBody({
+			...body,
+			messages: [
+				{ role: 'developer', content: `agent-start:${' instruction'.repeat(12_000)}:agent-end` } as any,
+				{ role: 'assistant', content: null, tool_calls: [{
+					id: 'call-1',
+					type: 'function',
+					function: { name: 'lookup', arguments: '{"query":"recent"}' },
+				}] },
+				{ role: 'tool', tool_call_id: 'call-1', content: `tool-start:${' result'.repeat(12_000)}:tool-end` },
+				{ role: 'user', content: `latest-start:${' context'.repeat(12_000)}:latest-end` },
+			],
+		});
+
+		expect(JSON.stringify({
+			messages: prepared.messages,
+			tools: prepared.tools,
+			response_format: prepared.response_format,
+		}).length).toBeLessThanOrEqual(ARGUS_BACKGROUND_REQUEST_CHAR_BUDGET);
+		expect(prepared.messages).toHaveLength(4);
+		expect(prepared.messages[0].content).toContain('agent-start:');
+		expect(prepared.messages[0].content).toContain(':agent-end');
+		expect(prepared.messages[1].tool_calls?.[0].id).toBe('call-1');
+		expect(prepared.messages[1].content).toBeNull();
+		expect(prepared.messages[2].tool_call_id).toBe('call-1');
+		expect(prepared.messages[3].content).toContain('latest-start:');
+		expect(prepared.messages[3].content).toContain(':latest-end');
+		expect(JSON.stringify(prepared.messages)).toContain('older background context truncated for Argus rescue');
 	});
 
 	it('preserves the original allowance response when Argus is unavailable', async () => {

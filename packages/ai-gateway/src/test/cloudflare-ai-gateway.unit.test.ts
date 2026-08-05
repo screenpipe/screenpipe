@@ -32,7 +32,7 @@ describe('Cloudflare hosted-chat metadata', () => {
 		expect(getHostedChatGatewayMode({ HOSTED_CHAT_GATEWAY_MODE: 'CLOUDFLARE' })).toBe('cloudflare');
 	});
 
-	it('hashes the account identity and sends only the four reviewed fields', async () => {
+	it('hashes the account identity and sends only the five reviewed fields', async () => {
 		const first = await buildHostedChatGatewayContext(auth(), 'auto', 'interactive');
 		const second = await buildHostedChatGatewayContext(
 			auth({ deviceId: 'different-device' }),
@@ -44,8 +44,8 @@ describe('Cloudflare hosted-chat metadata', () => {
 		expect(first.user_id).toMatch(/^[a-f0-9]{64}$/);
 		expect(JSON.stringify(first)).not.toContain('account-123');
 		expect(JSON.stringify(first)).not.toContain('device-secret');
-		expect(Object.keys(first).sort()).toEqual(['lane', 'plan', 'user_id', 'workload']);
-		expect(first).toMatchObject({ plan: 'basic', lane: 'auto', workload: 'interactive' });
+		expect(Object.keys(first).sort()).toEqual(['lane', 'plan', 'trial', 'user_id', 'workload']);
+		expect(first).toMatchObject({ plan: 'basic', lane: 'auto', workload: 'interactive', trial: false });
 	});
 
 	it('preserves Max and Ultra allowance tiers while collapsing catalog-equivalent plans', async () => {
@@ -58,9 +58,9 @@ describe('Cloudflare hosted-chat metadata', () => {
 			expect(context).toMatchObject({ plan: accountPlan, lane: 'auto', workload: 'background' });
 		}
 		const trial = await buildHostedChatGatewayContext(auth({ accountPlan: 'basic', hostedAiTrial: true }), 'auto', 'interactive');
-		expect(trial.plan).toBe('basic');
+		expect(trial).toMatchObject({ plan: 'basic', trial: true });
 		const internal = await buildHostedChatGatewayContext(auth({ service: true, userId: undefined }), 'auto', 'background');
-		expect(internal.plan).toBe('internal');
+		expect(internal).toMatchObject({ plan: 'internal', trial: false });
 	});
 
 	it('fails closed before Gateway routing when identity or plan truth is missing', async () => {

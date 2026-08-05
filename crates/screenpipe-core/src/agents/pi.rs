@@ -21,6 +21,7 @@ pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.83.0";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 const CUSTOM_PROVIDER_USER_AGENT: &str = "screenpipe";
+const DEFAULT_CLOUD_MAX_OUTPUT_TOKENS: u64 = 32_000;
 
 /// Apply compatibility settings required by OpenAI-compatible custom endpoints.
 ///
@@ -263,7 +264,14 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
             let ctx = m
                 .get("context_window")
                 .and_then(|v| v.as_u64())
+                .filter(|value| *value > 0)
                 .unwrap_or(128000);
+            let max_tokens = m
+                .get("max_output_tokens")
+                .and_then(|v| v.as_u64())
+                .filter(|value| *value > 0)
+                .unwrap_or(DEFAULT_CLOUD_MAX_OUTPUT_TOKENS)
+                .min(ctx);
             let intelligence = m
                 .get("intelligence")
                 .and_then(|v| v.as_str())
@@ -277,7 +285,7 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
                 "input": ["text", "image"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
-                "maxTokens": 32000,
+                "maxTokens": max_tokens,
                 // Pi sends its stable agent session ID as x-session-affinity.
                 // The hosted gateway uses that plus the user-message ordinal to
                 // count one visible turn once across a multi-call tool loop.
@@ -299,8 +307,43 @@ fn selectable_gateway_models(data: &[serde_json::Value]) -> Option<Vec<serde_jso
 /// Only auto — if the gateway is down, nothing works anyway.
 fn fallback_cloud_models() -> serde_json::Value {
     json!([
-        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000, "compat": {"sendSessionAffinityHeaders": true}},
+        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": DEFAULT_CLOUD_MAX_OUTPUT_TOKENS, "compat": {"sendSessionAffinityHeaders": true}},
     ])
+}
+
+pub(crate) const MALFORMED_TOOL_USE_ERROR: &str =
+    "provider_protocol_error: assistant ended with toolUse but emitted no executable tool call";
+
+pub(crate) fn pi_event_protocol_error(event: &serde_json::Value) -> Option<&'static str> {
+    if event.get("type").and_then(|value| value.as_str()) != Some("message_end") {
+        return None;
+    }
+    let message = event.get("message")?;
+    if message.get("role").and_then(|value| value.as_str()) != Some("assistant")
+        || message.get("stopReason").and_then(|value| value.as_str()) != Some("toolUse")
+    {
+        return None;
+    }
+
+    let has_executable_call = message
+        .get("content")
+        .and_then(|value| value.as_array())
+        .map(|content| {
+            content.iter().any(|block| {
+                block.get("type").and_then(|value| value.as_str()) == Some("toolCall")
+                    && block
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|id| !id.trim().is_empty())
+                    && block
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|name| !name.trim().is_empty())
+            })
+        })
+        .unwrap_or(false);
+
+    (!has_executable_call).then_some(MALFORMED_TOOL_USE_ERROR)
 }
 
 /// Pi agent executor.
@@ -1679,11 +1722,15 @@ impl PiExecutor {
             let line = String::from_utf8_lossy(&line_bytes).into_owned();
             let _ = line_tx.send(line.clone());
 
-            // Detect LLM-level errors (e.g. credits_exhausted) even when
+            // Detect LLM/protocol errors even when
             // the process exits 0.  We look for assistant message events
-            // with stopReason "error".
+            // with stopReason "error", and fail closed when a provider says
+            // toolUse without producing an executable structured call.
             if llm_error.is_none() {
                 if let Ok(evt) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if let Some(error) = pi_event_protocol_error(&evt) {
+                        llm_error = Some(error.to_string());
+                    }
                     let is_assistant = evt
                         .get("message")
                         .and_then(|m| m.get("role"))
@@ -1693,7 +1740,7 @@ impl PiExecutor {
                         .get("message")
                         .and_then(|m| m.get("stopReason"))
                         .and_then(|r| r.as_str());
-                    if is_assistant && stop_reason == Some("error") {
+                    if llm_error.is_none() && is_assistant && stop_reason == Some("error") {
                         llm_error = evt
                             .get("message")
                             .and_then(|m| m.get("errorMessage"))
@@ -2528,21 +2575,17 @@ fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<()> {
     write_auth_json(auth_path, &auth)
 }
 
+fn stock_bun_is_safe(is_windows: bool, has_avx2: bool) -> bool {
+    !is_windows || has_avx2
+}
+
 pub fn find_bun_executable() -> Option<String> {
-    // Pre-AVX2 CPU: the bundled/stock bun.exe requires AVX2 and dies with
-    // 0xC000001D (STATUS_ILLEGAL_INSTRUCTION) at spawn. Prefer the
-    // runtime-downloaded baseline build; if it isn't on disk yet, kick off
-    // the download in the background and fall through to the stock bun for
-    // this run (its failure is diagnosed by describe_exit_status_code; the
-    // next spawn picks up the baseline).
-    #[cfg(windows)]
-    if !crate::cpu_features::has_avx2() {
-        if let Some(baseline) = baseline_bun_path() {
-            if baseline.exists() {
-                return Some(baseline.to_string_lossy().to_string());
-            }
-        }
-        spawn_baseline_bun_download();
+    // Stock bun.exe requires AVX2. On older Windows CPUs, wait for the
+    // verified baseline build instead of returning a binary that will die
+    // immediately with STATUS_ILLEGAL_INSTRUCTION.
+    if !stock_bun_is_safe(cfg!(windows), crate::cpu_features::has_avx2()) {
+        #[cfg(windows)]
+        return ensure_baseline_bun_available();
     }
 
     // Check next to our own executable (bundled bun)
@@ -2613,11 +2656,11 @@ pub fn describe_exit_status_code(code: i32) -> String {
         // 0xC000001D == STATUS_ILLEGAL_INSTRUCTION == exit code -1073741795.
         // The stock bun.exe requires AVX2; on pre-AVX2 CPUs it dies with this
         // code before writing a single byte to stderr — exactly the case that
-        // used to surface as an empty error. find_bun_executable downloads
-        // bun's official baseline build in the background on such CPUs.
+        // used to surface as an empty error. Current installs fail closed onto
+        // bun's official baseline build before any subprocess is launched.
         if code == -1073741795i32 {
             return format!(
-                "exit code {code} (0xC000001D, illegal instruction; this CPU may lack AVX2 — the stock bun build requires it; the baseline bun variant will be used after download)"
+                "exit code {code} (0xC000001D, illegal instruction; this CPU may lack AVX2 — the stock bun build requires it; use the baseline bun variant)"
             );
         }
     }
@@ -3464,25 +3507,35 @@ pub fn baseline_bun_path() -> Option<PathBuf> {
     )
 }
 
-/// One-shot guard for the background baseline-bun download (per process).
+/// One-shot guard for baseline-bun setup. Concurrent callers wait for the
+/// same verified result instead of launching stock bun while setup is active.
 #[cfg(windows)]
-static BASELINE_BUN_DOWNLOAD_ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+static BASELINE_BUN_PATH_ONCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
-/// Kick off (at most once per process) a background download of bun's
-/// official baseline Windows build. Non-blocking on purpose: the caller
-/// falls through to the stock bun for the current run, and the next spawn
-/// picks up the baseline from disk.
+/// Ensure bun's official baseline Windows build is ready. This blocks only on
+/// non-AVX2 Windows CPUs and is normally called by the existing Pi install
+/// worker. Returning `None` prevents an unsafe stock-bun fallback.
 #[cfg(windows)]
-pub fn spawn_baseline_bun_download() {
-    BASELINE_BUN_DOWNLOAD_ONCE.get_or_init(|| {
-        std::thread::spawn(|| match download_baseline_bun() {
-            Ok(path) => info!("baseline bun installed at: {}", path),
-            Err(e) => warn!(
-                "baseline bun download failed (pipes/AI chat may not work on this pre-AVX2 CPU): {}",
-                e
-            ),
-        });
-    });
+fn ensure_baseline_bun_available() -> Option<String> {
+    if let Some(path) = baseline_bun_path().filter(|path| path.exists()) {
+        return Some(path.to_string_lossy().to_string());
+    }
+
+    BASELINE_BUN_PATH_ONCE
+        .get_or_init(|| match download_baseline_bun() {
+            Ok(path) => {
+                info!("baseline bun installed at: {}", path);
+                Some(path)
+            }
+            Err(e) => {
+                warn!(
+                    "baseline bun setup failed (pipes/AI chat cannot run on this pre-AVX2 CPU): {}",
+                    e
+                );
+                None
+            }
+        })
+        .clone()
 }
 
 /// Download bun's official `windows-x64-baseline` build (runs on any x86-64,
@@ -3665,6 +3718,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tool_use_without_an_executable_call_is_a_protocol_error() {
+        let malformed = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": []
+            }
+        });
+        assert_eq!(
+            pi_event_protocol_error(&malformed),
+            Some(MALFORMED_TOOL_USE_ERROR)
+        );
+
+        let valid = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": [{
+                    "type": "toolCall",
+                    "id": "call-1",
+                    "name": "bash",
+                    "arguments": {"command": "pwd"}
+                }]
+            }
+        });
+        assert_eq!(pi_event_protocol_error(&valid), None);
+    }
+
+    #[test]
     fn managed_pipe_guidance_only_ships_in_enterprise_team_skill() {
         let consumer_skill = include_str!("../../assets/skills/screenpipe-cli/SKILL.md");
         let enterprise_skill = include_str!("../../assets/skills/screenpipe-team/SKILL.md");
@@ -3706,6 +3790,13 @@ mod tests {
         let s = describe_exit_status_code(-1073741795);
         assert!(s.contains("illegal instruction"));
         assert!(s.to_lowercase().contains("avx2"));
+    }
+
+    #[test]
+    fn stock_bun_is_never_selected_on_windows_without_avx2() {
+        assert!(!stock_bun_is_safe(true, false));
+        assert!(stock_bun_is_safe(true, true));
+        assert!(stock_bun_is_safe(false, false));
     }
 
     #[cfg(windows)]
@@ -4477,6 +4568,70 @@ mod tests {
             "locked": true,
         })])
         .is_none());
+    }
+
+    #[test]
+    fn gateway_catalog_uses_advertised_output_budget_with_safe_fallback() {
+        let models = gateway_models_to_pi_models(&[
+            json!({
+                "id": "claude-sonnet-5",
+                "context_window": 1_000_000,
+                "max_output_tokens": 128_000,
+            }),
+            json!({
+                "id": "legacy-model-without-output-metadata",
+                "context_window": 128_000,
+            }),
+            json!({
+                "id": "invalid-model-budget",
+                "context_window": 64_000,
+                "max_output_tokens": 0,
+            }),
+            json!({
+                "id": "oversized-model-budget",
+                "context_window": 64_000,
+                "max_output_tokens": 128_000,
+            }),
+        ]);
+
+        assert_eq!(models[0].get("maxTokens"), Some(&json!(128_000)));
+        assert_eq!(models[1].get("maxTokens"), Some(&json!(32_000)));
+        assert_eq!(models[2].get("maxTokens"), Some(&json!(32_000)));
+        assert_eq!(models[3].get("maxTokens"), Some(&json!(64_000)));
+    }
+
+    #[tokio::test]
+    async fn gateway_output_budget_flows_from_http_to_pi_catalog() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {
+                        "id": "claude-sonnet-5",
+                        "name": "Claude Sonnet 5",
+                        "context_window": 1_000_000,
+                        "max_output_tokens": 128_000,
+                        "intelligence": "highest",
+                    },
+                    {
+                        "id": "legacy-model",
+                        "name": "Legacy model",
+                        "context_window": 128_000,
+                    },
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let models = screenpipe_cloud_models(&server.uri(), None).await;
+        assert_eq!(models.pointer("/0/maxTokens"), Some(&json!(128_000)));
+        assert_eq!(models.pointer("/1/maxTokens"), Some(&json!(32_000)));
     }
 
     #[tokio::test]

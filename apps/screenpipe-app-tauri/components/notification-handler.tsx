@@ -20,6 +20,7 @@ import {
   notificationAnalyticsProperties,
   type NotificationAnalyticsContext,
 } from "@/lib/notification-analytics";
+import { appServerFetch } from "@/lib/notifications/app-server";
 
 // notify_rust on Linux calls block_on for D-Bus inside the tokio runtime,
 // which panics and kills the worker thread. Skip OS notifications on Linux.
@@ -251,7 +252,7 @@ const NotificationHandler: React.FC = () => {
           // knows HD capture actually started. Gated on res.ok so a failed
           // start never shows a false "started" toast.
           if (action.action === "record-hd" && res.ok) {
-            await localFetch("/notify", {
+            await appServerFetch("/notify", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({

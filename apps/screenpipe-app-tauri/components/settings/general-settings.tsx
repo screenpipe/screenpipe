@@ -51,9 +51,12 @@ import {
   describeEnterpriseUpdateMode,
   normalizeEnterpriseAppUpdatePolicy,
 } from "@/lib/enterprise/app-update-policy";
+import { getRemoteAutoUpdatePolicy } from "@/lib/desktop-remote-control";
+import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 
 export default function GeneralSettings() {
   const { isManagedDeployment } = useManagedPolicy();
+  const enterpriseBuild = useEnterpriseBuildStatus();
   const { settings, updateSettings } = useSettings();
   const resetOnboarding = useOnboarding((state) => state.resetOnboarding);
   const { toast } = useToast();
@@ -63,6 +66,11 @@ export default function GeneralSettings() {
   const userGoal =
     normalizeUserGoalCategory(settings.userGoalCategory) ??
     DEFAULT_USER_GOAL_CATEGORY;
+  const autoUpdateRemotePolicy = getRemoteAutoUpdatePolicy(settings);
+  const autoUpdateForcedByRemote =
+    enterpriseBuild.resolved &&
+    !enterpriseBuild.isEnterprise &&
+    autoUpdateRemotePolicy.forceEnabled;
 
   const handleUserGoalChange = async (category: UserGoalCategory) => {
     try {
@@ -259,12 +267,17 @@ export default function GeneralSettings() {
                   <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
                     <h3 className="text-sm font-medium text-foreground">Auto-update</h3>
-                    <p className="text-xs text-muted-foreground">Restart automatically when an update is downloaded. Off: a &quot;restart to update&quot; banner appears instead.</p>
+                    <p className="text-xs text-muted-foreground">
+                      {autoUpdateForcedByRemote
+                        ? "Required temporarily so this installation receives reliability fixes."
+                        : "Restart automatically when an update is downloaded. Off: a \"restart to update\" banner appears instead."}
+                    </p>
                   </div>
                 </div>
                 <Switch
                   id="auto-update-toggle"
-                  checked={settings?.autoUpdate ?? false}
+                  checked={settings?.autoUpdate ?? true}
+                  disabled={autoUpdateForcedByRemote}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ autoUpdate: checked })
                   }

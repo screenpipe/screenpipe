@@ -11,7 +11,8 @@
  * 2. opening Pipes loads the compact activity inventory;
  * 3. expanding one pipe omits the running execution;
  * 4. the first page contains exactly 10 completed executions; and
- * 5. older executions paginate only when requested.
+ * 5. older executions paginate only when requested; and
+ * 6. a newly completed Brain/background run invalidates an expanded group.
  */
 
 import { randomUUID } from "node:crypto";
@@ -151,22 +152,25 @@ async function mockPipeActivityApi(): Promise<void> {
       __pipeActivityFetches?: number;
       __pipeExecutionFetches?: number;
       __pipeFullOutputFetches?: number;
+      __pipeLatestCompletedId?: number;
       __pipeSidebarOriginalFetch?: typeof window.fetch;
     };
     testWindow.__pipeActivityFetches = 0;
     testWindow.__pipeExecutionFetches = 0;
     testWindow.__pipeFullOutputFetches = 0;
+    testWindow.__pipeLatestCompletedId = 12;
     const originalFetch = testWindow.__pipeSidebarOriginalFetch ?? window.fetch.bind(window);
     testWindow.__pipeSidebarOriginalFetch = originalFetch;
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : (input as Request)?.url ?? String(input);
       if (url.includes("/pipes/activity?")) {
         testWindow.__pipeActivityFetches = (testWindow.__pipeActivityFetches ?? 0) + 1;
+        const latestCompletedId = testWindow.__pipeLatestCompletedId ?? 12;
         return Promise.resolve(new Response(JSON.stringify({
           data: [{
             pipe_name: pipeName,
-            execution_count: 12,
-            latest_execution_id: 12,
+            execution_count: latestCompletedId,
+            latest_execution_id: latestCompletedId,
             last_run_at: new Date().toISOString(),
             status: "completed",
           }],
@@ -180,17 +184,21 @@ async function mockPipeActivityApi(): Promise<void> {
         const beforeId = Number(parsed.searchParams.get("before_id") ?? Number.POSITIVE_INFINITY);
         const limit = Number(parsed.searchParams.get("limit") ?? 11);
         const includeOutput = parsed.searchParams.get("include_output") !== "false";
+        const latestCompletedId = testWindow.__pipeLatestCompletedId ?? 12;
         if (includeOutput) {
           testWindow.__pipeFullOutputFetches =
             (testWindow.__pipeFullOutputFetches ?? 0) + 1;
         }
-        const data = Array.from({ length: 13 }, (_, index) => 13 - index)
+        const data = Array.from(
+          { length: latestCompletedId + 1 },
+          (_, index) => latestCompletedId + 1 - index,
+        )
           .filter((id) => id < beforeId)
           .slice(0, limit)
           .map((id) => ({
             id,
             pipe_name: pipeName,
-            status: id === 13 ? "running" : "completed",
+            status: id === latestCompletedId + 1 ? "running" : "completed",
             trigger_type: "scheduled",
             started_at: new Date(Date.now() - id * 60_000).toISOString(),
             finished_at: new Date(Date.now() - id * 60_000 + 1_000).toISOString(),
@@ -357,6 +365,26 @@ describe("chat sidebar pipe inventory", function () {
         timeout: t(15_000),
         interval: 100,
         timeoutMsg: "the selected pipe execution did not open in chat",
+      },
+    );
+
+    // Model a Brain-triggered background completion after this group has
+    // already loaded. The activity heartbeat must notice the newer terminal
+    // execution and replace the cached first page without a collapse/reopen.
+    await browser.execute(() => {
+      const testWindow = window as typeof window & {
+        __pipeLatestCompletedId?: number;
+      };
+      testWindow.__pipeLatestCompletedId = 14;
+    });
+    await browser.waitUntil(
+      async () => await browser.execute((id: string) =>
+        Boolean(document.querySelector(`[data-testid="chat-row-${id}"]`)),
+      `pipe:${PIPE_NAME}:14`),
+      {
+        timeout: t(25_000),
+        interval: 250,
+        timeoutMsg: "new terminal execution did not refresh the expanded pipe history",
       },
     );
   });

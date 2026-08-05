@@ -27,15 +27,194 @@ use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use screenpipe_screen::utils::capture_monitor_image;
 use std::collections::HashMap;
+#[cfg(debug_assertions)]
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, warn};
 
+// macOS reserves a bounded 12s SCK attempt plus a 2s CoreGraphics escape
+// hatch. Give exclusion resolution and the fallback enough room to finish and
+// latch its backend preference before the whole capture/OCR/DB future is
+// cancelled. Other platforms preserve the existing 15s operation budget.
+#[cfg(target_os = "macos")]
+const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(not(target_os = "macos"))]
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Debug-only one-shot fault state for the exact production symptom where all
+/// monitor tasks remain alive but stop issuing capture heartbeats:
+/// 0 = armed, 1 = capture loops parked, 2 = watchdog observed and released it.
+#[cfg(debug_assertions)]
+static E2E_CAPTURE_LOOP_SILENT_PHASE: AtomicU8 = AtomicU8::new(0);
+#[cfg(debug_assertions)]
+static E2E_CAPTURE_LOOP_SILENT_ARMED: AtomicBool = AtomicBool::new(false);
+#[cfg(debug_assertions)]
+static E2E_FOCUS_COLD_MARKED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(any(debug_assertions, test))]
+fn seed_list_has_capture_loop_silent(seeds: &str) -> bool {
+    seeds
+        .split(',')
+        .any(|seed| seed.trim() == "capture-loop-silent-once")
+}
+
+#[cfg(debug_assertions)]
+fn e2e_capture_loop_silent_enabled() -> bool {
+    std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|seeds| seed_list_has_capture_loop_silent(&seeds))
+}
+
+#[cfg(any(debug_assertions, test))]
+fn seed_list_has_focus_cold_heartbeat(seeds: &str) -> bool {
+    seeds
+        .split(',')
+        .any(|seed| seed.trim() == "focus-cold-heartbeat")
+}
+
+/// Deterministically reproduce a selected display remaining intentionally
+/// parked while the user works on another monitor. Production reaches this
+/// state through the focus tracker; the E2E seed removes physical-display and
+/// cursor placement from the regression test.
+#[cfg(debug_assertions)]
+fn e2e_force_focus_cold(monitor_id: u32) -> bool {
+    let enabled = std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|seeds| seed_list_has_focus_cold_heartbeat(&seeds));
+    if enabled
+        && E2E_FOCUS_COLD_MARKED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        info!(
+            "e2e: forcing focus-aware Cold state for monitor {} (focus-cold-heartbeat)",
+            monitor_id
+        );
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-focus-cold-heartbeat-fired"),
+                b"1",
+            );
+        }
+    }
+    enabled
+}
+
+/// Park every initial monitor loop after the pipeline has proved it can both
+/// attempt and reach a healthy terminal outcome (persist, dedup, or an explicit
+/// corrupt-frame skip). The tasks stay cancellable so VisionManager::stop can
+/// preempt them, while their metrics reproduce the real gone-silent shape.
+#[cfg(debug_assertions)]
+async fn e2e_park_capture_loop_once(
+    vision_metrics: &screenpipe_screen::PipelineMetrics,
+    monitor_id: u32,
+) {
+    if !e2e_capture_loop_silent_enabled()
+        || !E2E_CAPTURE_LOOP_SILENT_ARMED.load(Ordering::SeqCst)
+        || E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst) == 2
+    {
+        return;
+    }
+
+    let snap = vision_metrics.snapshot();
+    if snap.last_capture_attempt_ts == 0 || snap.last_db_write_ts == 0 {
+        return;
+    }
+
+    if E2E_CAPTURE_LOOP_SILENT_PHASE
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        warn!("e2e: parking all capture loops after a healthy baseline (capture-loop-silent-once)");
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-capture-loop-silent-fired"),
+                b"1",
+            );
+        }
+        // The arm command wakes the watcher, but the capture loop may not
+        // enter the fault until a later focus/backstop wake. Notify again only
+        // after phase 1 is observable so accelerated watchdog thresholds can
+        // never classify the healthy pre-fault interval as the injected stall.
+        #[cfg(target_os = "macos")]
+        crate::sleep_monitor::display_reconfig_notify().notify_one();
+    }
+
+    if E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst) == 1 {
+        warn!("e2e: capture loop parked for monitor {}", monitor_id);
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Arm the gone-silent fault only after the E2E spec has observed a healthy
+/// baseline. This prevents app/WebDriver startup time from racing the short
+/// accelerated recovery window.
+#[cfg(debug_assertions)]
+pub fn e2e_arm_capture_loop_silent_fault() -> bool {
+    if !e2e_capture_loop_silent_enabled()
+        || E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst) != 0
+    {
+        return false;
+    }
+    E2E_CAPTURE_LOOP_SILENT_ARMED.store(true, Ordering::SeqCst);
+    // The production watcher may already be inside its 60-second event-driven
+    // backstop sleep. Wake that existing wait so it can observe the newly
+    // armed one-second E2E profile immediately; otherwise this deterministic
+    // probe depends on an unrelated display-reconfiguration event.
+    #[cfg(target_os = "macos")]
+    crate::sleep_monitor::display_reconfig_notify().notify_one();
+    true
+}
+
+/// Whether the full-stack liveness probe has entered or completed its fault
+/// window. Threshold acceleration starts only after a capture loop actually
+/// parks (phase 1), then remains enabled through recovery (phase 2). Merely
+/// arming the probe is not enough: a healthy loop may still be waiting on its
+/// normal focus/backstop cadence.
+#[cfg(debug_assertions)]
+pub fn e2e_capture_loop_silent_fault_started() -> bool {
+    e2e_capture_loop_silent_enabled()
+        && e2e_capture_loop_silent_phase_started(
+            E2E_CAPTURE_LOOP_SILENT_PHASE.load(Ordering::SeqCst),
+        )
+}
+
+#[cfg(any(debug_assertions, test))]
+fn e2e_capture_loop_silent_phase_started(phase: u8) -> bool {
+    phase != 0
+}
+
+#[cfg(not(debug_assertions))]
+pub fn e2e_arm_capture_loop_silent_fault() -> bool {
+    false
+}
+
+#[cfg(not(debug_assertions))]
+pub fn e2e_capture_loop_silent_fault_started() -> bool {
+    false
+}
+
+/// Called by the independent monitor watcher immediately before it restarts a
+/// detected stall. New-generation monitor tasks must not re-arm the one-shot.
+#[cfg(debug_assertions)]
+pub(crate) fn e2e_complete_capture_loop_silent_fault() {
+    if E2E_CAPTURE_LOOP_SILENT_PHASE.swap(2, Ordering::SeqCst) == 1 {
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-capture-loop-watchdog-fired"),
+                b"1",
+            );
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn e2e_complete_capture_loop_silent_fault() {}
 
 fn warm_visual_wait_duration(elapsed: Duration) -> Duration {
     WARM_VISUAL_CHECK_INTERVAL
@@ -659,6 +838,47 @@ fn idle_phase_delay(
 /// 2. ActivityFeed state transitions (typing pause, idle) via polling
 ///
 /// Each trigger results in a paired capture (screenshot + accessibility tree walk).
+fn record_capture_attempt(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+) {
+    aggregate.record_capture_attempt();
+    monitor.record_capture_attempt();
+}
+
+fn record_capture_loop_heartbeat(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+) {
+    aggregate.record_capture_loop_heartbeat();
+    monitor.record_capture_loop_heartbeat();
+}
+
+fn record_persisted_capture(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+    duration: Duration,
+) {
+    aggregate.record_capture();
+    aggregate.record_db_write(duration);
+    monitor.record_capture();
+    monitor.record_db_write(duration);
+}
+
+fn record_capture_skip(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+    corrupt_is_green: Option<bool>,
+) {
+    if let Some(is_green) = corrupt_is_green {
+        aggregate.record_corrupt_skip(is_green);
+        monitor.record_corrupt_skip(is_green);
+    } else {
+        aggregate.record_dedup_skip();
+        monitor.record_dedup_skip();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn event_driven_capture_loop(
     db: Arc<DatabaseManager>,
@@ -672,6 +892,7 @@ pub(crate) async fn event_driven_capture_loop(
     mut trigger_rx: TriggerReceiver,
     stop_signal: Arc<AtomicBool>,
     vision_metrics: Arc<screenpipe_screen::PipelineMetrics>,
+    monitor_liveness: Arc<screenpipe_screen::PipelineMetrics>,
     hot_frame_cache: Option<Arc<HotFrameCache>>,
     use_pii_removal: bool,
     pause_on_drm_content: bool,
@@ -825,9 +1046,13 @@ pub(crate) async fn event_driven_capture_loop(
     {
         // Small delay to let the monitor settle after startup
         tokio::time::sleep(Duration::from_millis(500)).await;
+        // Let the capture proceed immediately after the settle delay.
         state.last_capture = Instant::now()
             .checked_sub(Duration::from_millis(500))
-            .unwrap_or(Instant::now()); // allow capture
+            .unwrap_or(Instant::now());
+        // Startup capture is a real attempt too. Count capture work from the
+        // first frame instead of waiting for the next idle fallback.
+        record_capture_attempt(&vision_metrics, &monitor_liveness);
         match capture_with_timeout(
             CAPTURE_OPERATION_TIMEOUT,
             do_capture(
@@ -859,8 +1084,11 @@ pub(crate) async fn event_driven_capture_loop(
                     if let Some(hash) = result.content_hash {
                         last_elements_cache.insert(device_name.clone(), (result.frame_id, hash));
                     }
-                    vision_metrics.record_capture();
-                    vision_metrics.record_db_write(Duration::from_millis(result.duration_ms));
+                    record_persisted_capture(
+                        &vision_metrics,
+                        &monitor_liveness,
+                        Duration::from_millis(result.duration_ms),
+                    );
                     // OCR metrics: record once per OCR run (each run = cache miss).
                     if let Some(ocr_ms) = result.ocr_duration_ms {
                         vision_metrics.record_ocr(Duration::from_millis(ocr_ms), 0, 1);
@@ -879,13 +1107,17 @@ pub(crate) async fn event_driven_capture_loop(
                 } else if let Some(kind) = output.corrupt {
                     // Frame rejected as corrupt (black / green band) — distinct
                     // counter, not a dedup. Both tick the stall clock.
-                    vision_metrics.record_corrupt_skip(matches!(kind, CorruptKind::GreenBand));
+                    record_capture_skip(
+                        &vision_metrics,
+                        &monitor_liveness,
+                        Some(matches!(kind, CorruptKind::GreenBand)),
+                    );
                 } else {
                     // Symmetry with the live loop — startup capture rarely
                     // hits dedup (no prior hash on first frame) but if it
                     // does, treat it the same way: pipeline cycled fine,
                     // nothing new to write.
-                    vision_metrics.record_dedup_skip();
+                    record_capture_skip(&vision_metrics, &monitor_liveness, None);
                 }
             }
             Ok(Err(e)) => {
@@ -934,6 +1166,15 @@ pub(crate) async fn event_driven_capture_loop(
             break;
         }
 
+        // This is the task-liveness clock. Keep it independent from capture
+        // attempts: focus-aware scheduling intentionally parks non-focused
+        // monitors in Warm/Cold state, but the loop is still healthy and wakes
+        // on focus notifications or its bounded backstop.
+        record_capture_loop_heartbeat(&vision_metrics, &monitor_liveness);
+
+        #[cfg(debug_assertions)]
+        e2e_park_capture_loop_once(&vision_metrics, monitor_id).await;
+
         // Focus-aware gating — always on. Skips or pauses capture on
         // non-focused monitors. If focus resolution fails on this platform
         // (Linux Wayland, permission denied, etc.) the controller's
@@ -948,7 +1189,11 @@ pub(crate) async fn event_driven_capture_loop(
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
-            let capture_state = focus_controller.state_for_monitor(&monitor);
+            let mut capture_state = focus_controller.state_for_monitor(&monitor);
+            #[cfg(debug_assertions)]
+            if e2e_force_focus_cold(monitor_id) {
+                capture_state = CaptureState::Cold;
+            }
 
             // Fires exactly once per focus-away transition, not every Cold
             // loop iteration, so the log line is meaningful and we don't
@@ -1538,9 +1783,10 @@ pub(crate) async fn event_driven_capture_loop(
                     }
                 }
 
-                // Heartbeat: record that the loop is alive and attempting a capture.
-                // This keeps health "ok" even if the DB write below times out.
-                vision_metrics.record_capture_attempt();
+                // Record the capture operation separately from the loop heartbeat.
+                // This distinguishes active-but-failing work from intentional
+                // focus-aware Warm/Cold idling.
+                record_capture_attempt(&vision_metrics, &monitor_liveness);
 
                 // Compute elements_ref for frame-to-frame element dedup.
                 // If the current content_hash matches the previous frame's hash
@@ -1562,9 +1808,10 @@ pub(crate) async fn event_driven_capture_loop(
                 };
 
                 // Timeout prevents the capture loop from blocking indefinitely
-                // if the DB is truly stuck. 15s is generous — normal captures take
-                // 1-3s on debug builds. The semaphore serializes writes so they
-                // don't pile up, but each write still needs time.
+                // if the DB is truly stuck. Normal captures take 1-3s on debug
+                // builds; macOS gets a little more room for its bounded SCK ->
+                // CoreGraphics recovery chain. The semaphore serializes writes
+                // so they don't pile up, but each write still needs time.
                 let capture_result = capture_with_timeout(
                     CAPTURE_OPERATION_TIMEOUT,
                     do_capture(
@@ -1644,9 +1891,11 @@ pub(crate) async fn event_driven_capture_loop(
                                 }
                             }
 
-                            vision_metrics.record_capture();
-                            vision_metrics
-                                .record_db_write(Duration::from_millis(result.duration_ms));
+                            record_persisted_capture(
+                                &vision_metrics,
+                                &monitor_liveness,
+                                Duration::from_millis(result.duration_ms),
+                            );
                             // OCR metrics: record once per OCR run. Each run is a
                             // cache miss (no OCR result cache exists). `ocr_duration_ms`
                             // is Some only when OCR actually ran for this frame.
@@ -1714,10 +1963,13 @@ pub(crate) async fn event_driven_capture_loop(
                             // broken. Corrupt frames get their own counter so a
                             // spike is visible instead of inflating dedup_skips.
                             if let Some(kind) = output.corrupt {
-                                vision_metrics
-                                    .record_corrupt_skip(matches!(kind, CorruptKind::GreenBand));
+                                record_capture_skip(
+                                    &vision_metrics,
+                                    &monitor_liveness,
+                                    Some(matches!(kind, CorruptKind::GreenBand)),
+                                );
                             } else {
-                                vision_metrics.record_dedup_skip();
+                                record_capture_skip(&vision_metrics, &monitor_liveness, None);
                             }
                             debug!(
                                 "capture skipped DB write for monitor {} (trigger={})",
@@ -3186,6 +3438,73 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_loop_silent_seed_requires_exact_token() {
+        assert!(seed_list_has_capture_loop_silent(
+            "onboarding,no-audio,capture-loop-silent-once"
+        ));
+        assert!(seed_list_has_capture_loop_silent(
+            " capture-loop-silent-once "
+        ));
+        assert!(!seed_list_has_capture_loop_silent("capture-loop-silent"));
+        assert!(!seed_list_has_capture_loop_silent(
+            "prefix-capture-loop-silent-once"
+        ));
+    }
+
+    #[test]
+    fn capture_loop_silent_acceleration_starts_after_parking_and_survives_recovery() {
+        assert!(!e2e_capture_loop_silent_phase_started(0));
+        assert!(e2e_capture_loop_silent_phase_started(1));
+        assert!(e2e_capture_loop_silent_phase_started(2));
+    }
+
+    #[test]
+    fn focus_cold_heartbeat_seed_requires_exact_token() {
+        assert!(seed_list_has_focus_cold_heartbeat(
+            "onboarding,no-audio,focus-cold-heartbeat"
+        ));
+        assert!(seed_list_has_focus_cold_heartbeat(" focus-cold-heartbeat "));
+        assert!(!seed_list_has_focus_cold_heartbeat("focus-cold"));
+        assert!(!seed_list_has_focus_cold_heartbeat(
+            "prefix-focus-cold-heartbeat"
+        ));
+    }
+
+    #[test]
+    fn aggregate_and_per_monitor_liveness_advance_together() {
+        let aggregate = screenpipe_screen::PipelineMetrics::new();
+        let monitor = screenpipe_screen::PipelineMetrics::new();
+
+        record_capture_loop_heartbeat(&aggregate, &monitor);
+        record_capture_attempt(&aggregate, &monitor);
+        record_persisted_capture(&aggregate, &monitor, Duration::from_millis(7));
+        record_capture_attempt(&aggregate, &monitor);
+        record_capture_skip(&aggregate, &monitor, None);
+        record_capture_attempt(&aggregate, &monitor);
+        record_capture_skip(&aggregate, &monitor, Some(true));
+
+        let aggregate = aggregate.snapshot();
+        let monitor = monitor.snapshot();
+        assert_eq!(
+            aggregate.capture_loop_heartbeats,
+            monitor.capture_loop_heartbeats
+        );
+        assert_eq!(
+            aggregate.last_capture_loop_heartbeat_ts,
+            monitor.last_capture_loop_heartbeat_ts
+        );
+        assert_eq!(aggregate.capture_attempts, monitor.capture_attempts);
+        assert_eq!(aggregate.frames_db_written, monitor.frames_db_written);
+        assert_eq!(aggregate.dedup_skips, monitor.dedup_skips);
+        assert_eq!(aggregate.frames_corrupt_green, monitor.frames_corrupt_green);
+        assert_eq!(
+            aggregate.last_capture_attempt_ts,
+            monitor.last_capture_attempt_ts
+        );
+        assert_eq!(aggregate.last_db_write_ts, monitor.last_db_write_ts);
+    }
 
     #[test]
     fn warm_visual_wait_duration_tracks_remaining_cadence_with_backstop() {
