@@ -6,11 +6,49 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNoResponseMessage,
   buildProviderErrorMessage,
+  buildProviderErrorPresentation,
   normalizeOllamaBaseUrl,
   preflightChatProvider,
+  SafetyRefusalError,
 } from "../provider-errors";
 
 describe("provider error copy", () => {
+  it.each([
+    "Provider finish_reason: content_filter",
+    "safety_refusal: request declined",
+    'data: {"choices":[{"finish_reason":"content_filter"}]}',
+    'message_delta stop_reason: refusal',
+    "This content was flagged for possible cybersecurity risk.",
+  ])("classifies safety refusal signature %j as non-retryable", (raw) => {
+    const refusal = SafetyRefusalError.from(raw);
+    const presentation = buildProviderErrorPresentation(raw, {
+      provider: "screenpipe-cloud",
+      model: "claude-opus-5",
+    });
+
+    expect(refusal).toBeInstanceOf(SafetyRefusalError);
+    expect(refusal?.code).toBe("safety_refusal");
+    expect(refusal?.retryable).toBe(false);
+    expect(presentation).toEqual({
+      kind: "safety_refusal",
+      message: refusal?.message,
+      retryable: false,
+    });
+    expect(presentation?.message).toContain("selected model declined");
+    expect(presentation?.message).toContain("Start a new chat");
+    expect(presentation?.message).not.toContain("finish_reason");
+  });
+
+  it("does not classify an ordinary provider error as a safety refusal", () => {
+    expect(SafetyRefusalError.from("Connection error.")).toBeNull();
+    expect(
+      buildProviderErrorPresentation("Connection error.", {
+        provider: "screenpipe-cloud",
+        model: "auto",
+      })
+    ).toMatchObject({ kind: "provider", retryable: true });
+  });
+
   it("maps native Ollama connection errors to actionable copy", () => {
     const msg = buildProviderErrorMessage("Connection error.", {
       provider: "native-ollama",
