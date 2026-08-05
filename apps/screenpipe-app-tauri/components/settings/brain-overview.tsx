@@ -82,6 +82,7 @@ import {
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
 import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
+import { presentQuotaError } from "@/lib/chat/quota-errors";
 import {
   generateLiveViewWithPi,
   type GeneratedLiveView,
@@ -1627,20 +1628,28 @@ export function BrainOverview({
         ...analyticsProperties,
         failure_type: analyticsErrorType(handoffError),
       });
+      // Quota/rate-limit failures get friendly copy (never the raw gateway
+      // body); other errors keep their message, which is already human-scale.
+      const quota = presentQuotaError(
+        handoffError instanceof Error ? handoffError.message : "",
+      );
+      const failureDetail =
+        quota.kind !== "none"
+          ? quota.message
+          : handoffError instanceof Error
+            ? handoffError.message
+            : "The AI editor stopped before creating a review.";
       setBuilderFeedback({
         tone: "error",
-        label: "could not update · try again",
-        detail:
-          handoffError instanceof Error
-            ? handoffError.message
-            : "The AI editor stopped before creating a review.",
+        label:
+          quota.kind === "daily"
+            ? "AI usage limit reached"
+            : "could not update · try again",
+        detail: failureDetail,
       });
       toast({
         title: "could not update the Live View",
-        description:
-          handoffError instanceof Error
-            ? handoffError.message
-            : String(handoffError),
+        description: failureDetail,
         variant: "destructive",
       });
       builderFeedbackTimerRef.current = window.setTimeout(

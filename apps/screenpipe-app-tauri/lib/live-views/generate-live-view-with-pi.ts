@@ -12,6 +12,7 @@ import {
   type PiProviderConfig,
 } from "@/lib/utils/tauri";
 import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
+import { agentEventErrorText } from "@/lib/events/error-text";
 import type { AgentEventEnvelope } from "@/lib/events/types";
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 
@@ -560,7 +561,8 @@ async function rawGeneration(
       options.onPhase?.("reviewing");
       settle(accumulated || textFromAgentEnd(envelope));
     } else if (event.type === "error") {
-      fail("AI failed to generate the Live View");
+      // Keep the provider error intact for quota/rate-limit classification.
+      fail(agentEventErrorText(event, "AI failed to generate the Live View"));
     }
   };
 
