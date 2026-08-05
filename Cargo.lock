@@ -8619,6 +8619,8 @@ dependencies = [
  "futures",
  "hostname",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "image",
  "libc",
  "lru",
