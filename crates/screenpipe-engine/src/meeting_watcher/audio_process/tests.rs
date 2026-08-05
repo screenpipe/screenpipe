@@ -2186,3 +2186,54 @@ fn zoom_still_resolves_on_linux_via_known_native_arm() {
     assert!(result.is_some(), "zoom should resolve on Linux");
     assert_eq!(result.unwrap().0, "Zoom");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn electron_chromium_masquerade_resolves_native_not_browser() {
+    // Real-world PipeWire identity for teams-for-linux (observed live):
+    // application.name = "Chromium input", application.process.binary =
+    // "teams-for-linux". The generic Chromium owner name must not classify
+    // the stream as a browser — the binary is ground truth and must reach
+    // linux_process_names matching.
+    let profiles = load_detection_profiles();
+    let process = linux_process("teams-for-linux", "Chromium input");
+    assert_eq!(browser_app_name(&process), None);
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(
+            candidate,
+            ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "Microsoft Teams"
+        ),
+        "expected Native Microsoft Teams, got {candidate:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_chromium_browser_still_classifies_as_browser_on_linux() {
+    // A genuine Chromium browser's binary is itself a browser name, so the
+    // masquerade gate must not fire and the stream stays on the browser
+    // (fail-closed, evidence-gated) path.
+    let process = linux_process("chromium", "Chromium");
+    assert!(browser_app_name(&process).is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn electron_masquerade_signal_still_fails_closed_on_linux() {
+    // Signal is also Electron and also masquerades as Chromium. Bypassing
+    // the browser gate must NOT open a resolution path for it: voice notes
+    // hold the mic exactly like a call and must stay fail-closed.
+    let profiles = load_detection_profiles();
+    let process = linux_process("signal-desktop", "Chromium input");
+    assert_eq!(browser_app_name(&process), None);
+    assert_eq!(resolve_native_platform(&process, &profiles), None);
+}

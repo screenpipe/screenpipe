@@ -578,8 +578,30 @@ pub(crate) fn browser_app_name(process: &AudioInputProcess) -> Option<String> {
         }
     }
 
+    // Electron apps on Linux surface PipeWire streams as
+    // `application.name = "Chromium"`/"Chromium input" while
+    // `application.process.binary` names the real app (e.g. teams-for-linux).
+    // The binary is ground truth there: when it exists and is not itself a
+    // browser, the generic Chromium owner name must not classify the stream
+    // as a browser — that would trap native Electron call apps in the
+    // unresolved-browser state forever.
+    // cfg-gated: the masquerade shape is a PipeWire artifact; macOS/Windows
+    // identity fields must keep their existing classification unchanged.
+    let owner_is_electron_masquerade = cfg!(target_os = "linux")
+        && process
+            .owner_app_name
+            .as_deref()
+            .map(is_electron_chromium_masquerade)
+            .unwrap_or(false)
+        && process
+            .process_name
+            .as_deref()
+            .is_some_and(|binary| !is_browser_app(binary));
+
     [
-        process.owner_app_name.as_deref(),
+        (!owner_is_electron_masquerade)
+            .then_some(process.owner_app_name.as_deref())
+            .flatten(),
         process.process_name.as_deref(),
         process.bundle_id.as_deref(),
     ]
@@ -587,6 +609,17 @@ pub(crate) fn browser_app_name(process: &AudioInputProcess) -> Option<String> {
     .flatten()
     .find(|name| is_browser_app(name))
     .map(normalize_browser_display_name)
+}
+
+/// PipeWire identity Electron's Chromium engine reports for ALL Electron
+/// apps: exactly "Chromium" or "Chromium input"/"Chromium output". A real
+/// Chromium browser still classifies as a browser through its process
+/// binary ("chromium"), which `browser_app_name` consults separately.
+pub(crate) fn is_electron_chromium_masquerade(owner_app_name: &str) -> bool {
+    let owner = owner_app_name.trim();
+    owner.eq_ignore_ascii_case("chromium")
+        || owner.eq_ignore_ascii_case("chromium input")
+        || owner.eq_ignore_ascii_case("chromium output")
 }
 
 pub(crate) fn browser_name_for_bundle(bundle: &str) -> Option<&'static str> {
