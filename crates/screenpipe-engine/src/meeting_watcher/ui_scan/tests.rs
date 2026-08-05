@@ -70,6 +70,7 @@ fn zoom_test_profile() -> MeetingDetectionProfile {
             // macos_app_names are stored lowercase by convention.
             macos_app_names: &["zoom.us", "zoom"],
             windows_process_names: &["Zoom.exe"],
+            linux_process_names: &["zoom"],
             browser_url_patterns: &["zoom.us/j", "zoom.us/wc"],
             browser_title_patterns: &[],
         },

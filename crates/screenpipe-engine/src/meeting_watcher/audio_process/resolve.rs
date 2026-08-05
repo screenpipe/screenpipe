@@ -449,17 +449,18 @@ pub(crate) fn resolve_native_platform(
     }
 
     for (idx, profile) in profiles.iter().enumerate() {
-        // Match against both macOS app names and Windows process names: identity
-        // fields are macOS bundle ids/app names on macOS and Windows exe names
-        // (e.g. "whatsapp.exe") on Windows, so a profile with only
-        // `macos_app_names` populated (WhatsApp, Telegram, ...) would otherwise
-        // never resolve on Windows once it's not also in
-        // `known_native_bundle_platform` (#4998 review).
+        // Match against every platform's name list: identity fields are macOS
+        // bundle ids/app names on macOS, Windows exe names (e.g.
+        // "whatsapp.exe") on Windows, and PipeWire process binaries (e.g.
+        // "teams-for-linux") on Linux, so a profile with only one platform's
+        // list populated would otherwise never resolve elsewhere once it's not
+        // also in `known_native_bundle_platform` (#4998 review).
         let matches = profile
             .app_identifiers
             .macos_app_names
             .iter()
             .chain(profile.app_identifiers.windows_process_names.iter())
+            .chain(profile.app_identifiers.linux_process_names.iter())
             .any(|name| {
                 fields
                     .iter()

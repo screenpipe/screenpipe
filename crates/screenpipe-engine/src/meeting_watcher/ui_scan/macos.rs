@@ -539,6 +539,7 @@ pub(crate) fn discord_profile() -> Option<MeetingDetectionProfile> {
         app_identifiers: AppIdentifiers {
             macos_app_names: &["discord"],
             windows_process_names: &[],
+            linux_process_names: &[],
             browser_url_patterns: &[],
             browser_title_patterns: &[],
         },

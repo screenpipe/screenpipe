@@ -11,6 +11,9 @@ pub struct AppIdentifiers {
     pub macos_app_names: &'static [&'static str],
     /// Process names to match on Windows (with `.exe` suffix).
     pub windows_process_names: &'static [&'static str],
+    /// Process binary names to match on Linux (as reported by PipeWire's
+    /// `application.process.binary` / PulseAudio's equivalent property).
+    pub linux_process_names: &'static [&'static str],
     /// URL substrings to match in browser window titles/AXDocument.
     pub browser_url_patterns: &'static [&'static str],
     /// Page title patterns to match when the URL isn't in the window title.
@@ -117,6 +120,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["microsoft teams", "teams", "msteams"],
+                linux_process_names: &["teams-for-linux", "teams"],
                 windows_process_names: &["ms-teams.exe", "teams.exe"],
                 browser_url_patterns: &["teams.microsoft.com", "teams.live.com", "Microsoft Teams"],
                 browser_title_patterns: &[],
@@ -164,6 +168,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["zoom.us", "zoom"],
+                linux_process_names: &["zoom"],
                 windows_process_names: &["zoom.exe"],
                 browser_url_patterns: &[
                     "zoom.us/j",
@@ -231,6 +236,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &[],
                 windows_process_names: &[],
+                linux_process_names: &[],
                 browser_url_patterns: &["meet.google.com"],
                 // Arc and other browsers show just "Meet" as the page title
                 browser_title_patterns: &["Meet"],
@@ -255,6 +261,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["slack"],
+                linux_process_names: &["slack"],
                 windows_process_names: &["slack.exe"],
                 browser_url_patterns: &["app.slack.com/huddle"],
                 browser_title_patterns: &[],
@@ -277,6 +284,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["facetime"],
+                linux_process_names: &[],
                 windows_process_names: &[],
                 browser_url_patterns: &[],
                 browser_title_patterns: &[],
@@ -299,6 +307,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["webex", "cisco webex meetings"],
+                linux_process_names: &[],
                 windows_process_names: &["webexmta.exe", "ciscowebex.exe"],
                 browser_url_patterns: &["webex.com"],
                 browser_title_patterns: &[],
@@ -343,6 +352,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &[],
                 windows_process_names: &[],
+                linux_process_names: &[],
                 browser_url_patterns: &["discord.com", "discordapp.com"],
                 browser_title_patterns: &[],
             },
@@ -365,6 +375,10 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["signal"],
+                // No Linux names: Signal grabs the mic for voice notes and the
+                // Linux collector has no call-signal scanner to tell a call from
+                // a note, so listing signal-desktop would start phantom meetings.
+                linux_process_names: &[],
                 windows_process_names: &["signal.exe"],
                 browser_url_patterns: &[],
                 browser_title_patterns: &[],
@@ -414,6 +428,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["whatsapp"],
+                linux_process_names: &[],
                 windows_process_names: &["whatsapp.exe"],
                 browser_url_patterns: &["web.whatsapp.com"],
                 browser_title_patterns: &[],
@@ -448,6 +463,10 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["telegram"],
+                // No Linux names: this profile requires call-signal evidence and
+                // the Linux call-signal scanner is a stub, so telegram-desktop
+                // would resolve and then be dropped on every poll.
+                linux_process_names: &[],
                 windows_process_names: &["telegram.exe"],
                 browser_url_patterns: &["web.telegram.org"],
                 browser_title_patterns: &[],
@@ -510,6 +529,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "bluejeans.exe",
                     "gotomeeting.exe",
                 ],
+                linux_process_names: &["skypeforlinux", "jitsi-meet"],
                 browser_url_patterns: &[
                     // Public Jitsi host. NOTE: a bare "jitsi" substring used to
                     // live here too, but it matched any URL containing the word

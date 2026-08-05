@@ -82,9 +82,14 @@ enum MeetingDetectorMode {
 fn selected_detector_mode() -> MeetingDetectorMode {
     // AudioProcess (mic-capture sensor) is the default on every platform where
     // `meeting_processes::current_input_processes()` is implemented: macOS
-    // (CoreAudio) and Windows (WASAPI). Linux has no sensor yet, so it falls
-    // back to UI scanning. Override on any platform with SCREENPIPE_MEETING_DETECTOR.
-    let audio_process_is_default = cfg!(target_os = "macos") || cfg!(target_os = "windows");
+    // (CoreAudio), Windows (WASAPI), and Linux (PipeWire/PulseAudio). On a
+    // Linux system without pw-dump or pactl the sensor reports unsupported and
+    // the detector idles; UI scanning is no loss there because its Linux
+    // backend is a stub anyway. Override on any platform with
+    // SCREENPIPE_MEETING_DETECTOR.
+    let audio_process_is_default = cfg!(target_os = "macos")
+        || cfg!(target_os = "windows")
+        || cfg!(target_os = "linux");
     selected_detector_mode_from(
         std::env::var("SCREENPIPE_MEETING_DETECTOR").ok().as_deref(),
         audio_process_is_default,
@@ -122,12 +127,13 @@ mod tests {
 
     #[test]
     fn default_detector_mode_follows_audio_process_default() {
-        // Platforms with a mic-capture sensor (macOS, Windows) default to AudioProcess.
+        // Platforms with a mic-capture sensor (macOS, Windows, Linux) default
+        // to AudioProcess.
         assert_eq!(
             selected_detector_mode_from(None, true),
             MeetingDetectorMode::AudioProcess
         );
-        // Platforms without one (e.g. Linux) default to UI scanning.
+        // Platforms without one default to UI scanning.
         assert_eq!(
             selected_detector_mode_from(None, false),
             MeetingDetectorMode::UiScan

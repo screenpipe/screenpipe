@@ -684,7 +684,364 @@ mod platform {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+#[cfg(target_os = "linux")]
+mod platform {
+    //! Linux collector: PipeWire capture-stream clients via `pw-dump`, with a
+    //! `pactl` (PulseAudio / pipewire-pulse) fallback.
+    //!
+    //! Both tools emit JSON over a one-shot subprocess, so this stays
+    //! compositor- and distro-agnostic: any system running PipeWire (or plain
+    //! PulseAudio for the fallback) reports the same shape regardless of
+    //! Wayland/X11 or desktop environment. Graph-internal nodes (filter
+    //! chains, loopbacks) carry no `application.process.id` and are dropped —
+    //! only real client processes count as meeting evidence.
+    use super::{is_screenpipe_process, AudioInputProcess, AudioProcessSnapshot};
+    use std::collections::HashSet;
+    use std::process::Command;
+    use tracing::debug;
+
+    /// Upper bound on a snapshot subprocess. The collector runs synchronously
+    /// on the detector's poll path, so a wedged audio service must not be able
+    /// to stall meeting detection (or shutdown) behind a child that never
+    /// exits.
+    const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+    pub fn current_input_processes() -> AudioProcessSnapshot {
+        let self_pid = std::process::id() as i32;
+        // pw-dump can be installed but failing (e.g. PipeWire not running on a
+        // plain PulseAudio system), so pactl is the fallback for BOTH the
+        // missing and the failed case, and both errors are preserved when
+        // neither tool produces a snapshot.
+        let pw = run_tool("pw-dump", &[]);
+        if let ToolResult::Output(json) = pw {
+            return snapshot_from(parse_pw_dump(&json, self_pid));
+        }
+        let pactl = run_tool("pactl", &["--format=json", "list", "source-outputs"]);
+        match (pw, pactl) {
+            (_, ToolResult::Output(json)) => {
+                snapshot_from(parse_pactl_source_outputs(&json, self_pid))
+            }
+            (ToolResult::Missing, ToolResult::Missing) => {
+                AudioProcessSnapshot::unsupported("linux (neither pw-dump nor pactl found)")
+            }
+            (pw, pactl) => failed_snapshot(&format!(
+                "pw-dump: {}; pactl: {}",
+                tool_error(pw),
+                tool_error(pactl)
+            )),
+        }
+    }
+
+    enum ToolResult {
+        Output(String),
+        Missing,
+        Failed(String),
+    }
+
+    fn tool_error(result: ToolResult) -> String {
+        match result {
+            ToolResult::Output(_) => "ok".to_string(),
+            ToolResult::Missing => "not found".to_string(),
+            ToolResult::Failed(e) => e,
+        }
+    }
+
+    fn run_tool(bin: &str, args: &[&str]) -> ToolResult {
+        use std::io::Read;
+        use std::process::Stdio;
+        use std::time::Instant;
+
+        let mut child = match Command::new(bin)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ToolResult::Missing,
+            Err(e) => return ToolResult::Failed(format!("failed to spawn {bin}: {e}")),
+        };
+
+        // Drain stdout on a thread so a large dump can't deadlock the pipe
+        // while we poll for exit below.
+        let mut stdout = child.stdout.take().expect("stdout piped above");
+        let reader = std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = stdout.read_to_string(&mut buf);
+            buf
+        });
+
+        let deadline = Instant::now() + TOOL_TIMEOUT;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap; no zombie
+                    return ToolResult::Failed(format!(
+                        "{bin} timed out after {}s",
+                        TOOL_TIMEOUT.as_secs()
+                    ));
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return ToolResult::Failed(format!("failed to wait on {bin}: {e}"));
+                }
+            }
+        };
+
+        let stdout = reader.join().unwrap_or_default();
+        if status.success() {
+            ToolResult::Output(stdout)
+        } else {
+            let mut stderr_buf = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                let _ = stderr.read_to_string(&mut stderr_buf);
+            }
+            ToolResult::Failed(format!(
+                "{bin} exited with {status}: {}",
+                stderr_buf.trim()
+            ))
+        }
+    }
+
+    fn snapshot_from(parsed: Result<Vec<AudioInputProcess>, String>) -> AudioProcessSnapshot {
+        match parsed {
+            Ok(processes) => AudioProcessSnapshot {
+                supported: true,
+                processes,
+                error: None,
+            },
+            Err(error) => AudioProcessSnapshot {
+                supported: true,
+                processes: Vec::new(),
+                error: Some(error),
+            },
+        }
+    }
+
+    fn failed_snapshot(error: &str) -> AudioProcessSnapshot {
+        // Parity with the Windows collector: a present-but-failing sensor is a
+        // transient runtime error, not an unsupported platform.
+        AudioProcessSnapshot {
+            supported: true,
+            processes: Vec::new(),
+            error: Some(error.to_string()),
+        }
+    }
+
+    /// `pw-dump` emits every PipeWire object; capture streams are Node objects
+    /// whose `media.class` is `Stream/Input/Audio`.
+    fn parse_pw_dump(json: &str, self_pid: i32) -> Result<Vec<AudioInputProcess>, String> {
+        let objects: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| format!("pw-dump parse error: {e}"))?;
+        let objects = objects
+            .as_array()
+            .ok_or_else(|| "pw-dump output is not a JSON array".to_string())?;
+
+        let mut out = Vec::new();
+        let mut seen: HashSet<(i32, String)> = HashSet::new();
+        for obj in objects {
+            if obj["type"].as_str() != Some("PipeWire:Interface:Node") {
+                continue;
+            }
+            let props = &obj["info"]["props"];
+            if props["media.class"].as_str() != Some("Stream/Input/Audio") {
+                continue;
+            }
+            let Some(pid) = prop_i32(&props["application.process.id"]) else {
+                // Graph-internal node (filter chain, loopback): not a client.
+                debug!(
+                    "audio-process snapshot: skip pid-less capture node {:?}",
+                    props["node.name"].as_str().unwrap_or("?")
+                );
+                continue;
+            };
+            let process = AudioInputProcess {
+                // Deliberately no audio_session_id: PipeWire node names are
+                // stream labels, not stable process identity — they rotate on
+                // device switches and stream recreation, and ProcessKey would
+                // prefer them over the pid.
+                audio_session_id: None,
+                audio_object_id: obj["id"].as_u64().map(|id| id as u32),
+                pid: Some(pid),
+                bundle_id: None,
+                process_name: props["application.process.binary"].as_str().map(str::to_string),
+                owner_app_name: props["application.name"].as_str().map(str::to_string),
+                owner_bundle_id: None,
+                first_seen_at_ms: None,
+            };
+            push_deduped(&mut out, &mut seen, process, self_pid);
+        }
+        Ok(out)
+    }
+
+    /// `pactl --format=json list source-outputs`: one object per client
+    /// recording from a source, with the same PulseAudio-style property keys.
+    fn parse_pactl_source_outputs(
+        json: &str,
+        self_pid: i32,
+    ) -> Result<Vec<AudioInputProcess>, String> {
+        let objects: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| format!("pactl parse error: {e}"))?;
+        let objects = objects
+            .as_array()
+            .ok_or_else(|| "pactl output is not a JSON array".to_string())?;
+
+        let mut out = Vec::new();
+        let mut seen: HashSet<(i32, String)> = HashSet::new();
+        for obj in objects {
+            let props = &obj["properties"];
+            let Some(pid) = prop_i32(&props["application.process.id"]) else {
+                continue;
+            };
+            let process = AudioInputProcess {
+                // No audio_session_id here either — pactl media.name is a
+                // stream label, same instability as PipeWire node names.
+                audio_session_id: None,
+                audio_object_id: obj["index"].as_u64().map(|id| id as u32),
+                pid: Some(pid),
+                bundle_id: None,
+                process_name: props["application.process.binary"].as_str().map(str::to_string),
+                owner_app_name: props["application.name"].as_str().map(str::to_string),
+                owner_bundle_id: None,
+                first_seen_at_ms: None,
+            };
+            push_deduped(&mut out, &mut seen, process, self_pid);
+        }
+        Ok(out)
+    }
+
+    /// Both PipeWire (number) and PulseAudio (string) spellings of a pid.
+    fn prop_i32(value: &serde_json::Value) -> Option<i32> {
+        value
+            .as_i64()
+            .map(|v| v as i32)
+            .or_else(|| value.as_str().and_then(|s| s.trim().parse().ok()))
+    }
+
+    fn push_deduped(
+        out: &mut Vec<AudioInputProcess>,
+        seen: &mut HashSet<(i32, String)>,
+        process: AudioInputProcess,
+        self_pid: i32,
+    ) {
+        if is_screenpipe_process(&process, self_pid) {
+            return;
+        }
+        let key = (
+            process.pid.unwrap_or(-1),
+            process.process_name.clone().unwrap_or_default(),
+        );
+        // The same app commonly holds several capture streams (one per device).
+        if seen.insert(key) {
+            out.push(process);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // Trimmed from a real `pw-dump` on PipeWire 1.4 (Arch): an rnnoise
+        // filter-chain capture node (no pid — must be dropped), screenpipe's
+        // own capture streams (must be dropped), and a teams-for-linux client.
+        const PW_DUMP_FIXTURE: &str = r#"[
+            {"id":35,"type":"PipeWire:Interface:Node","info":{"props":{
+                "media.class":"Stream/Input/Audio","node.name":"effect_input.rnnoise"}}},
+            {"id":87,"type":"PipeWire:Interface:Node","info":{"props":{
+                "media.class":"Stream/Input/Audio","node.name":"screenpipe",
+                "application.name":"screenpipe","application.process.binary":"screenpipe-app",
+                "application.process.id":1401111}}},
+            {"id":93,"type":"PipeWire:Interface:Node","info":{"props":{
+                "media.class":"Stream/Output/Audio","node.name":"spotify",
+                "application.name":"Spotify","application.process.binary":"spotify",
+                "application.process.id":4242}}},
+            {"id":210,"type":"PipeWire:Interface:Node","info":{"props":{
+                "media.class":"Stream/Input/Audio","node.name":"alsa_capture.teams-for-linux",
+                "application.name":"teams-for-linux","application.process.binary":"teams-for-linux",
+                "application.process.id":31337}}},
+            {"id":211,"type":"PipeWire:Interface:Node","info":{"props":{
+                "media.class":"Stream/Input/Audio","node.name":"alsa_capture.teams-for-linux.2",
+                "application.name":"teams-for-linux","application.process.binary":"teams-for-linux",
+                "application.process.id":31337}}}
+        ]"#;
+
+        const PACTL_FIXTURE: &str = r#"[
+            {"index":12,"properties":{
+                "media.name":"recStream","application.name":"Zoom",
+                "application.process.binary":"zoom","application.process.id":"555"}},
+            {"index":13,"properties":{
+                "media.name":"capture","application.name":"screenpipe",
+                "application.process.binary":"screenpipe-app","application.process.id":"999"}}
+        ]"#;
+
+        #[test]
+        fn pw_dump_keeps_only_client_capture_streams() {
+            let processes = parse_pw_dump(PW_DUMP_FIXTURE, 1).unwrap();
+            assert_eq!(processes.len(), 1, "{processes:?}");
+            let teams = &processes[0];
+            assert_eq!(teams.pid, Some(31337));
+            assert_eq!(teams.process_name.as_deref(), Some("teams-for-linux"));
+            assert_eq!(teams.owner_app_name.as_deref(), Some("teams-for-linux"));
+            assert_eq!(teams.audio_object_id, Some(210));
+        }
+
+        #[test]
+        fn pw_dump_drops_screenpipe_and_pidless_nodes() {
+            let processes = parse_pw_dump(PW_DUMP_FIXTURE, 1).unwrap();
+            assert!(processes
+                .iter()
+                .all(|p| p.process_name.as_deref() != Some("screenpipe-app")));
+            // The pid-less rnnoise filter-chain node must not survive, and no
+            // surviving process may carry a stream label as session identity.
+            assert!(processes.iter().all(|p| p.pid.is_some()));
+            assert!(processes.iter().all(|p| p.audio_session_id.is_none()));
+        }
+
+        #[test]
+        fn pactl_parses_string_pids_and_drops_screenpipe() {
+            let processes = parse_pactl_source_outputs(PACTL_FIXTURE, 1).unwrap();
+            assert_eq!(processes.len(), 1, "{processes:?}");
+            assert_eq!(processes[0].pid, Some(555));
+            assert_eq!(processes[0].owner_app_name.as_deref(), Some("Zoom"));
+        }
+
+        #[test]
+        fn malformed_json_is_an_error_not_a_panic() {
+            assert!(parse_pw_dump("not json", 1).is_err());
+            assert!(parse_pactl_source_outputs("{}", 1).is_err());
+        }
+
+        /// Live smoke test: the collector must return a coherent snapshot on
+        /// whatever this machine has (PipeWire, PulseAudio, or neither) and
+        /// never hang past the tool timeout.
+        #[test]
+        fn live_collector_returns_coherent_snapshot() {
+            let snapshot = super::current_input_processes();
+            if snapshot.supported {
+                // Errors and processes are exclusive: a parse/tool failure
+                // yields an error with no processes.
+                if snapshot.error.is_some() {
+                    assert!(snapshot.processes.is_empty());
+                }
+                assert!(snapshot.processes.iter().all(|p| p.pid.is_some()));
+            } else {
+                assert!(snapshot.processes.is_empty());
+                assert!(snapshot.error.is_some());
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_os = "linux")
+))]
 mod platform {
     use super::AudioProcessSnapshot;
 
@@ -716,7 +1073,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     #[test]
     fn unsupported_platform_stub_reports_no_processes() {
         let snapshot = current_input_processes();
