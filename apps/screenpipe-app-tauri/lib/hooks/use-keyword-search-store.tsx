@@ -95,6 +95,7 @@ export interface KeywordSearchState {
 	) => Promise<void>;
 	setCurrentResultIndex: (index: number) => void;
 	removeSearchResult: (frameId: number) => void;
+	prepareForReplacementSearch: (replacementQuery: string) => void;
 	resetSearch: () => void;
 	nextResult: () => void;
 	previousResult: () => void;
@@ -118,10 +119,15 @@ const frameTextPositionsCacheLimit = 500;
  */
 const frameTextPositionsCache = new Map<number, SearchMatch["text_positions"]>();
 
+interface InflightFrameTextRequest {
+	promise: Promise<SearchMatch["text_positions"] | null>;
+	controller: AbortController;
+}
+
 /** In-flight fetches keyed by frame id, so overlapping searches share one request. */
 const inflightFrameTextRequests = new Map<
 	number,
-	Promise<SearchMatch["text_positions"] | null>
+	InflightFrameTextRequest
 >();
 
 interface FrameTextResponse {
@@ -145,12 +151,10 @@ function rememberFrameTextPositions(
 /**
  * Fetch a frame's screenshot text, at most once per frame.
  *
- * The request carries no abort signal on purpose. Aborting only cancels the
- * client's wait — the server's OCR keeps running to completion regardless — so
- * dropping the response would discard work already paid for and force the next
- * keystroke to pay for it again. Letting it land populates the cache instead.
- * Callers still check their own signal afterwards, and the loop below stops
- * issuing new work as soon as its epoch is aborted.
+ * Each request has its own controller instead of inheriting one search epoch's
+ * signal. A replacement query can then keep work for frames it still needs and
+ * abort only obsolete frames. That preserves same-frame coalescing while
+ * removing queued stale OCR before it takes the capture-shared permit.
  */
 async function frameTextPositions(
 	frameId: number,
@@ -162,12 +166,17 @@ async function frameTextPositions(
 	}
 
 	const inflight = inflightFrameTextRequests.get(frameId);
-	if (inflight) return inflight;
+	if (inflight && !inflight.controller.signal.aborted) {
+		return inflight.promise;
+	}
 
-	const request = (async () => {
+	const controller = new AbortController();
+	let request!: Promise<SearchMatch["text_positions"] | null>;
+	request = (async () => {
 		try {
 			const response = await localFetch(`/frames/${frameId}/text?persist=false`, {
 				method: "POST",
+				signal: controller.signal,
 			});
 			if (!response.ok) return null;
 			const data = (await response.json()) as FrameTextResponse;
@@ -177,12 +186,24 @@ async function frameTextPositions(
 		} catch {
 			return null;
 		} finally {
-			inflightFrameTextRequests.delete(frameId);
+			if (inflightFrameTextRequests.get(frameId)?.promise === request) {
+				inflightFrameTextRequests.delete(frameId);
+			}
 		}
 	})();
 
-	inflightFrameTextRequests.set(frameId, request);
+	inflightFrameTextRequests.set(frameId, { promise: request, controller });
 	return request;
+}
+
+/**
+ * Cancel queued verification that the active result page no longer needs.
+ * Requests for retained frame ids stay shared across consecutive query epochs.
+ */
+function retainInflightFrameTextRequests(frameIds: ReadonlySet<number>): void {
+	for (const [frameId, request] of inflightFrameTextRequests) {
+		if (!frameIds.has(frameId)) request.controller.abort();
+	}
 }
 
 export function queryHighlightTokens(query: string): string[] {
@@ -511,6 +532,13 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			}
 
 			const rawResults: SearchMatch[] = await response.json();
+			retainInflightFrameTextRequests(
+				new Set(
+					rawResults
+						.filter((result) => result.text_source !== "ocr")
+						.map((result) => result.frame_id),
+				),
+			);
 			loadUiEventsAfterKeyword();
 			const publishVerifiedBatch = (batch: SearchMatch[]) => {
 				if (get().activeRequestId !== requestId) return;
@@ -605,10 +633,19 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === "AbortError") {
+				if (get().activeRequestId === requestId) {
+					retainInflightFrameTextRequests(new Set());
+					set({
+						activeRequestId: null,
+						isSearching: false,
+						currentAbortController: null,
+					});
+				}
 				return;
 			}
 
 			if (get().activeRequestId === requestId) {
+				retainInflightFrameTextRequests(new Set());
 				if (isInitialSearch) {
 					posthog.capture("search_ui_query_failed", {
 						...analyticsProperties,
@@ -663,11 +700,46 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 		});
 	},
 
+	prepareForReplacementSearch: (replacementQuery) => {
+		const { currentAbortController } = get();
+		currentAbortController?.abort();
+		const trimmedQuery = replacementQuery.trim();
+		const willRunKeywordSearch =
+			trimmedQuery.length >= 3 &&
+			!trimmedQuery.startsWith("#") &&
+			!trimmedQuery.startsWith("@");
+		if (!willRunKeywordSearch) {
+			retainInflightFrameTextRequests(new Set());
+		}
+
+		// Clear the superseded epoch immediately, but keep frame reads alive until
+		// an eligible replacement keyword response identifies which frames it still
+		// needs. This lets consecutive queries share OCR for the same frame while
+		// the replacement search aborts different-frame work. Queries that cannot
+		// start keyword search cancel all frame work above.
+		set({
+			searchResults: [],
+			searchGroups: [],
+			uiEventResults: [],
+			isSearchingUiEvents: false,
+			currentResultIndex: -1,
+			isSearching: false,
+			searchQuery: "",
+			error: null,
+			lastCandidatePageSize: 0,
+			unavailableFrameIds: new Set(),
+			lastRequest: null,
+			activeRequestId: null,
+			currentAbortController: null,
+		});
+	},
+
 	resetSearch: () => {
 		const { currentAbortController } = get();
 		if (currentAbortController) {
 			currentAbortController.abort();
 		}
+		retainInflightFrameTextRequests(new Set());
 
 		set({
 			searchResults: [],

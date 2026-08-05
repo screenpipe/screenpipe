@@ -790,6 +790,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     error: searchError,
     lastCandidatePageSize,
     searchKeywords,
+    prepareForReplacementSearch,
     resetSearch,
     setCurrentResultIndex,
     removeSearchResult,
@@ -1177,10 +1178,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   }, [analyticsSurface, isOpen, resetSearch, standalone]);
 
   // A raw keystroke starts a new search epoch immediately. Abort and clear the
-  // previous epoch now; the debounced effect below starts its replacement.
+  // previous epoch now; the debounced effect below starts its replacement. Keep
+  // any frame verification alive briefly so the replacement result page can
+  // reuse matching frame reads and abort only obsolete ones.
   useEffect(() => {
-    if (query.trim() !== debouncedQuery.trim()) resetSearch();
-  }, [debouncedQuery, query, resetSearch]);
+    if (query.trim() !== debouncedQuery.trim()) {
+      prepareForReplacementSearch(query);
+    }
+  }, [debouncedQuery, prepareForReplacementSearch, query]);
 
   // Perform search when query changes
   useEffect(() => {

@@ -462,6 +462,118 @@ describe("useKeywordSearchStore search scheduling", () => {
 		expect(maxConcurrentFrameRequests).toBeLessThanOrEqual(3);
 	});
 
+	it("aborts obsolete different-frame verification when a replacement query arrives", async () => {
+		let obsoleteSignal: AbortSignal | undefined;
+		const obsoleteStarted = deferred<void>();
+		const candidate = (
+			frameId: number,
+			text: string,
+			textSource: "accessibility" | "ocr",
+		) => ({
+			frame_id: frameId,
+			timestamp: "2026-07-30T09:00:00.000Z",
+			text_positions: textSource === "ocr"
+				? [{
+						text,
+						confidence: 1,
+						bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
+					}]
+				: [],
+			app_name: "Safari",
+			window_name: `candidate ${frameId}`,
+			confidence: 1,
+			text,
+			url: "",
+			text_source: textSource,
+		});
+
+		vi.mocked(localFetch).mockImplementation((input, init) => {
+			const url = String(input);
+			if (url.includes("query=oldtoken")) {
+				return Promise.resolve(jsonResponse([
+					candidate(12_010, "oldtoken", "accessibility"),
+				]));
+			}
+			if (url.includes("query=newtoken")) {
+				return Promise.resolve(jsonResponse([
+					candidate(12_011, "newtoken", "ocr"),
+				]));
+			}
+			if (url === "/frames/12010/text?persist=false") {
+				obsoleteSignal = init?.signal ?? undefined;
+				obsoleteStarted.resolve();
+				return new Promise<Response>((_resolve, reject) => {
+					obsoleteSignal?.addEventListener(
+						"abort",
+						() => reject(new DOMException("Aborted", "AbortError")),
+						{ once: true },
+					);
+				});
+			}
+			if (url.startsWith("/search?")) {
+				return Promise.resolve(jsonResponse({ data: [] }));
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		const oldSearch = useKeywordSearchStore.getState().searchKeywords("oldtoken");
+		await obsoleteStarted.promise;
+		expect(obsoleteSignal?.aborted).toBe(false);
+
+		const newSearch = useKeywordSearchStore.getState().searchKeywords("newtoken");
+		await newSearch;
+		expect(obsoleteSignal?.aborted).toBe(true);
+		await oldSearch;
+
+		expect(
+			useKeywordSearchStore.getState().searchResults.map((result) => result.frame_id),
+		).toEqual([12_011]);
+	});
+
+	it("aborts queued frame verification when search is reset", async () => {
+		let frameSignal: AbortSignal | undefined;
+		const frameStarted = deferred<void>();
+
+		vi.mocked(localFetch).mockImplementation((input, init) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return Promise.resolve(jsonResponse([{
+					frame_id: 12_012,
+					timestamp: "2026-07-30T09:00:00.000Z",
+					text_positions: [],
+					app_name: "Safari",
+					window_name: "reset candidate",
+					confidence: 1,
+					text: "resettoken",
+					url: "",
+					text_source: "accessibility",
+				}]));
+			}
+			if (url === "/frames/12012/text?persist=false") {
+				frameSignal = init?.signal ?? undefined;
+				frameStarted.resolve();
+				return new Promise<Response>((_resolve, reject) => {
+					frameSignal?.addEventListener(
+						"abort",
+						() => reject(new DOMException("Aborted", "AbortError")),
+						{ once: true },
+					);
+				});
+			}
+			if (url.startsWith("/search?")) {
+				return Promise.resolve(jsonResponse({ data: [] }));
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		const search = useKeywordSearchStore.getState().searchKeywords("resettoken");
+		await frameStarted.promise;
+		useKeywordSearchStore.getState().resetSearch();
+		expect(frameSignal?.aborted).toBe(true);
+		await search;
+		expect(useKeywordSearchStore.getState().isSearching).toBe(false);
+	});
+
 	it("reuses screenshot verification for the same frame and query", async () => {
 		let frameTextRequests = 0;
 		const candidate = {
@@ -616,6 +728,107 @@ describe("useKeywordSearchStore search scheduling", () => {
 		await Promise.all([first, second]);
 
 		expect(frameTextRequests).toBe(1);
+	});
+
+	it("keeps same-frame verification alive while a replacement query debounces", async () => {
+		let frameTextRequests = 0;
+		let frameSignal: AbortSignal | undefined;
+		const frameText = deferred<Response>();
+		const candidate = {
+			frame_id: 12_013,
+			timestamp: "2026-07-30T09:00:00.000Z",
+			text_positions: [],
+			app_name: "Safari",
+			window_name: "replacement candidate",
+			confidence: 1,
+			text: "retentionverify",
+			url: "",
+			text_source: "accessibility" as const,
+		};
+
+		vi.mocked(localFetch).mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) return jsonResponse([candidate]);
+			if (url === "/frames/12013/text?persist=false") {
+				frameTextRequests += 1;
+				frameSignal = init?.signal ?? undefined;
+				return frameText.promise;
+			}
+			if (url.startsWith("/search?")) return jsonResponse({ data: [] });
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		const first = useKeywordSearchStore
+			.getState()
+			.searchKeywords("retentionverify");
+		await waitFor(() => expect(frameTextRequests).toBe(1));
+
+		useKeywordSearchStore
+			.getState()
+			.prepareForReplacementSearch("retentionverif");
+		expect(frameSignal?.aborted).toBe(false);
+		const second = useKeywordSearchStore
+			.getState()
+			.searchKeywords("retentionverif");
+
+		frameText.resolve(jsonResponse({
+			text_positions: [{
+				text: "visible retentionverify",
+				confidence: 0.98,
+				bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
+			}],
+		}));
+		await Promise.all([first, second]);
+
+		expect(frameTextRequests).toBe(1);
+		expect(useKeywordSearchStore.getState().searchQuery).toBe("retentionverif");
+		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(1);
+	});
+
+	it("cancels frame verification when the replacement cannot run keyword search", async () => {
+		let frameSignal: AbortSignal | undefined;
+		const frameStarted = deferred<void>();
+
+		vi.mocked(localFetch).mockImplementation((input, init) => {
+			const url = String(input);
+			if (url.startsWith("/search/keyword?")) {
+				return Promise.resolve(jsonResponse([{
+					frame_id: 12_014,
+					timestamp: "2026-07-30T09:00:00.000Z",
+					text_positions: [],
+					app_name: "Safari",
+					window_name: "short replacement candidate",
+					confidence: 1,
+					text: "retentionverify",
+					url: "",
+					text_source: "accessibility",
+				}]));
+			}
+			if (url === "/frames/12014/text?persist=false") {
+				frameSignal = init?.signal ?? undefined;
+				frameStarted.resolve();
+				return new Promise<Response>((_resolve, reject) => {
+					frameSignal?.addEventListener(
+						"abort",
+						() => reject(new DOMException("Aborted", "AbortError")),
+						{ once: true },
+					);
+				});
+			}
+			if (url.startsWith("/search?")) {
+				return Promise.resolve(jsonResponse({ data: [] }));
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
+
+		const search = useKeywordSearchStore
+			.getState()
+			.searchKeywords("retentionverify");
+		await frameStarted.promise;
+		useKeywordSearchStore.getState().prepareForReplacementSearch("re");
+
+		expect(frameSignal?.aborted).toBe(true);
+		await search;
 	});
 });
 

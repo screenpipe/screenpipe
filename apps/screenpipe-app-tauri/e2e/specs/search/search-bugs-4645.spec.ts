@@ -391,6 +391,90 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
     console.log("search real-OCR highlight screenshot:", screenshot);
   });
 
+  it("keeps embedded Timeline navigation scoped to the selected client-side facet", async () => {
+    await openHomeWindow();
+    const timelineNav = await $('[data-testid="nav-timeline"]');
+    await timelineNav.waitForExist({ timeout: t(15_000) });
+    await timelineNav.click();
+    await $('[data-testid="section-timeline"]').waitForExist({
+      timeout: t(20_000),
+    });
+
+    // Embedded Timeline owns an inline SearchModal. `/` is its public shortcut
+    // and avoids the standalone search window exercised above.
+    await browser.keys(["/"]);
+    const input = await $('input[placeholder*="search memory"]');
+    await input.waitForExist({ timeout: t(10_000) });
+    await input.setValue("retentionverify");
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => document.querySelectorAll("[data-index]").length,
+        )) === 2,
+      {
+        timeout: t(20_000),
+        interval: 200,
+        timeoutMsg: "embedded search did not settle on two visible matches",
+      },
+    );
+
+    const clickedFacet = await browser.execute(() => {
+      const facet = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("e2e-visible-a (1)"),
+      );
+      if (!(facet instanceof HTMLButtonElement)) return false;
+      facet.click();
+      return true;
+    });
+    expect(clickedFacet).toBe(true);
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () => document.querySelectorAll("[data-index]").length,
+        )) === 1,
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "embedded app facet did not narrow the grid to one result",
+      },
+    );
+    await browser.waitUntil(
+      async () =>
+        (await $('[data-index="0"]').getAttribute("data-thumbnail-ready")) ===
+        "true",
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "embedded filtered thumbnail did not become selectable",
+      },
+    );
+
+    await $('[data-index="0"]').click();
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => {
+          const navigation = document.querySelector(
+            "[data-search-result-navigation]",
+          );
+          return (
+            navigation?.getAttribute("data-results-length") === "1" &&
+            navigation?.getAttribute("data-active-result-index") === "0"
+          );
+        })) as boolean,
+      {
+        timeout: t(20_000),
+        interval: 200,
+        timeoutMsg:
+          "embedded Timeline navigation revived results hidden by the app facet",
+      },
+    );
+
+    const screenshot = await saveScreenshot(
+      "search-4645-embedded-filtered-navigation",
+    );
+    console.log("embedded filtered navigation screenshot:", screenshot);
+  });
+
   it("removes a search result when its exact thumbnail is unavailable", async () => {
     await openSearch("exactthumbnailverify");
 
