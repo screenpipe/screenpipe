@@ -36,6 +36,7 @@ import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-
 import {
   firstAgentEndAssistantError,
   isRecord,
+  isTerminalQuotaError,
   piEventDataFromUnknown,
   stringValue,
   textFromAssistantMessages,
@@ -722,10 +723,23 @@ export function usePiForegroundEvents({
           const isPipeWatch = piMessageIdRef.current?.startsWith("pipe-");
 
           if (!isPipeWatch && data.willRetry === true) {
-            setIsLoading(true);
-            setIsStreaming(true);
-            emitSessionActivity({ status: "streaming" });
-            return;
+            // Pi retries anything that mentions 429 — including terminal
+            // usage-limit rejections it can't recognize (gateway codes like
+            // daily_cost_limit_exceeded). Retrying those can't succeed and
+            // burns more gateway calls while the UI shows "analyzing…" under
+            // the limit message. Stop the session and finalize the turn now.
+            if (isTerminalQuotaError(piLastErrorRef.current ?? "")) {
+              const sid = piSessionIdRef.current;
+              if (sid) {
+                piStoppedIntentionallyRef.current = true;
+                void commands.piStop(sid);
+              }
+            } else {
+              setIsLoading(true);
+              setIsStreaming(true);
+              emitSessionActivity({ status: "streaming" });
+              return;
+            }
           }
 
           // Always clear loading/streaming state on agent_end, even if piMessageIdRef is null
