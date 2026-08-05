@@ -1136,6 +1136,10 @@ impl SCServer {
                     axum::routing::get(crate::pipes_api::get_pipe_executions),
                 )
                 .route(
+                    "/:id/executions/:exec_id",
+                    axum::routing::get(crate::pipes_api::get_pipe_execution),
+                )
+                .route(
                     "/:id/history",
                     axum::routing::delete(crate::pipes_api::clear_pipe_history),
                 )

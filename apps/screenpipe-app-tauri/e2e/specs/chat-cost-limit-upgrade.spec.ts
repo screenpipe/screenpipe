@@ -8,7 +8,7 @@
  * A local OpenAI-compatible provider returns the exact structured 429 contract
  * used by the gateway for a Business account. The request travels through Pi and the real
  * foreground event bus, proving desktop renders a concise failure message and
- * a recovery card that opens the server-reviewed Business Max billing URL
+ * a recovery modal that opens the server-reviewed Business Max billing URL
  * without waiting for `remaining` to hit zero or for the proactive PostHog
  * upsell gate.
  */
@@ -191,7 +191,11 @@ describe("Hosted AI usage-limit Business Max recovery", function () {
     await banner.waitForDisplayed({ timeout: t(10_000) });
     expect(await banner.getText()).toContain("Hosted AI usage limit reached");
     expect(await banner.getText()).toContain("Resets");
-    const upgrade = await banner.$("button=Upgrade to Business Max");
+
+    const modal = await $('[data-testid="ai-usage-limit-modal"]');
+    await modal.waitForDisplayed({ timeout: t(10_000) });
+    expect(await modal.getText()).toContain("upgrade hosted AI");
+    const upgrade = await modal.$("button=Upgrade to Business Max");
     await upgrade.waitForDisplayed({
       timeout: t(10_000),
     });

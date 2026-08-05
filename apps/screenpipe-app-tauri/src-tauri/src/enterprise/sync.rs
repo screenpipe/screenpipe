@@ -195,12 +195,13 @@ impl EnterpriseSyncConfig {
     /// This is what makes the "install enterprise build → enter license key
     /// → uploads start" flow possible without any env-var setup on the
     /// customer's machine.
-    pub async fn resolve_upload_mode(&mut self) {
+    pub async fn resolve_upload_mode(&mut self) -> Result<(), EnterpriseSyncError> {
         if let Some(resolved) =
-            EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await
+            EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await?
         {
             self.upload_mode = resolved;
         }
+        Ok(())
     }
 }
 
@@ -232,6 +233,24 @@ pub struct Cursor {
     /// backfill its own bounded window.
     #[serde(default)]
     pub last_parsed_ts: Option<String>,
+    /// Rows already acknowledged at each stream's current timestamp. Local
+    /// APIs use inclusive timestamp filters, so this durable offset is the
+    /// second half of the pagination key and prevents a 500-row timestamp tie
+    /// from either repeating forever or being skipped after restart.
+    #[serde(default)]
+    boundary: CursorBoundary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct CursorBoundary {
+    frames: u32,
+    audio: u32,
+    ui: u32,
+    memories: u32,
+    parsed: u32,
+    /// Feedback supports a true `(updated_at, id)` keyset cursor because its
+    /// IDs are stable strings and its local route merges DB and legacy rows.
+    feedback_id: Option<String>,
 }
 
 impl Cursor {
@@ -281,24 +300,26 @@ impl Cursor {
 /// desktop crate against `LocalApiContext`.
 #[async_trait::async_trait]
 pub trait LocalApiClient: Send + Sync {
-    /// Fetch frames + their text since `since_ts` (exclusive), ordered by
-    /// timestamp ascending, capped at `limit`.
+    /// Fetch frames + their text at or after `since_ts`, ordered by timestamp
+    /// ascending, skipping `boundary_offset` rows at the boundary timestamp.
     async fn fetch_frames_since(
         &self,
         since_ts: Option<&str>,
+        boundary_offset: u32,
         limit: u32,
     ) -> Result<Vec<FrameRow>, EnterpriseSyncError>;
 
-    /// Fetch audio transcriptions since `since_ts` (exclusive), ordered ASC,
-    /// capped at `limit`.
+    /// Fetch audio transcriptions at or after `since_ts`, ordered ascending,
+    /// skipping `boundary_offset` rows at the boundary timestamp.
     async fn fetch_audio_since(
         &self,
         since_ts: Option<&str>,
+        boundary_offset: u32,
         limit: u32,
     ) -> Result<Vec<AudioRow>, EnterpriseSyncError>;
 
-    /// Fetch UI events (clicks, keystrokes, clipboard) since `since_ts`
-    /// (exclusive), ordered ASC, capped at `limit`. UI events give the
+    /// Fetch UI events (clicks, keystrokes, clipboard) at or after `since_ts`,
+    /// ordered ascending and skipping `boundary_offset` boundary rows. UI events give the
     /// extracted workflows their *verbs* — without them an SOP can only
     /// say "the user opened Slack", not "the user clicked Send on the
     /// upgrade-confirmed message". Default empty implementation lets
@@ -306,6 +327,7 @@ pub trait LocalApiClient: Send + Sync {
     async fn fetch_ui_events_since(
         &self,
         _since_ts: Option<&str>,
+        _boundary_offset: u32,
         _limit: u32,
     ) -> Result<Vec<UiEventRow>, EnterpriseSyncError> {
         Ok(Vec::new())
@@ -329,6 +351,7 @@ pub trait LocalApiClient: Send + Sync {
     async fn fetch_memories_since(
         &self,
         _since_ts: Option<&str>,
+        _boundary_offset: u32,
         _limit: u32,
     ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
         Ok(Vec::new())
@@ -340,6 +363,7 @@ pub trait LocalApiClient: Send + Sync {
     async fn fetch_feedback_since(
         &self,
         _since_ts: Option<&str>,
+        _after_id: Option<&str>,
         _limit: u32,
     ) -> Result<Vec<FeedbackRow>, EnterpriseSyncError> {
         Ok(Vec::new())
@@ -350,6 +374,7 @@ pub trait LocalApiClient: Send + Sync {
     async fn fetch_parsed_since(
         &self,
         _since_ts: Option<&str>,
+        _boundary_offset: u32,
         _limit: u32,
     ) -> Result<Vec<ParsedRow>, EnterpriseSyncError> {
         Ok(Vec::new())
@@ -376,8 +401,7 @@ pub trait LocalApiClient: Send + Sync {
 // same types — so it lives in `screenpipe-telemetry-wire`. Re-exported here
 // so the desktop shim keeps importing everything from `ee_sync::`.
 pub use screenpipe_telemetry_wire::{
-    AudioRow, FeedbackRow, FrameRow, MemoryRow, SnapshotRow, TelemetryRecord, UiEventRow,
-    ParsedRow,
+    AudioRow, FeedbackRow, FrameRow, MemoryRow, ParsedRow, SnapshotRow, TelemetryRecord, UiEventRow,
 };
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
@@ -525,6 +549,16 @@ pub async fn run_one_sync(
     local: &dyn LocalApiClient,
     http: &reqwest::Client,
 ) -> Result<SyncTickReport, EnterpriseSyncError> {
+    run_one_sync_inner(cfg, cursor, local, http, true).await
+}
+
+async fn run_one_sync_inner(
+    cfg: &EnterpriseSyncConfig,
+    cursor: &mut Cursor,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+    include_snapshot: bool,
+) -> Result<SyncTickReport, EnterpriseSyncError> {
     if let EnterpriseUploadMode::Blocked(reason) = &cfg.upload_mode {
         return Err(EnterpriseSyncError::Configuration(reason.clone()));
     }
@@ -535,26 +569,32 @@ pub async fn run_one_sync(
     if cursor.last_frame_ts.is_none() {
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_frame_ts = Some(cutoff.to_rfc3339());
+        cursor.boundary.frames = 0;
     }
     if cursor.last_audio_ts.is_none() {
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_audio_ts = Some(cutoff.to_rfc3339());
+        cursor.boundary.audio = 0;
     }
     if cursor.last_ui_ts.is_none() {
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_ui_ts = Some(cutoff.to_rfc3339());
+        cursor.boundary.ui = 0;
     }
     if cursor.last_memory_ts.is_none() {
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_memory_ts = Some(cutoff.to_rfc3339());
+        cursor.boundary.memories = 0;
     }
     if cursor.last_feedback_ts.is_none() {
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_feedback_ts = Some(cutoff.to_rfc3339());
+        cursor.boundary.feedback_id = None;
     }
     if cursor.last_parsed_ts.is_none() {
         let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
         cursor.last_parsed_ts = Some(cutoff.to_rfc3339());
+        cursor.boundary.parsed = 0;
     }
 
     // Per-stream sync policy is fetched fresh on every tick — the admin can
@@ -567,14 +607,22 @@ pub async fn run_one_sync(
 
     let frames = if streams.frames {
         local
-            .fetch_frames_since(cursor.last_frame_ts.as_deref(), PAGE_LIMIT)
+            .fetch_frames_since(
+                cursor.last_frame_ts.as_deref(),
+                cursor.boundary.frames,
+                PAGE_LIMIT,
+            )
             .await?
     } else {
         Vec::new()
     };
     let audio = if streams.audio {
         local
-            .fetch_audio_since(cursor.last_audio_ts.as_deref(), PAGE_LIMIT)
+            .fetch_audio_since(
+                cursor.last_audio_ts.as_deref(),
+                cursor.boundary.audio,
+                PAGE_LIMIT,
+            )
             .await?
     } else {
         Vec::new()
@@ -584,7 +632,7 @@ pub async fn run_one_sync(
     // The frame + audio paths are the load-bearing ones.
     let ui = if streams.ui_events {
         match local
-            .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), PAGE_LIMIT)
+            .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), cursor.boundary.ui, PAGE_LIMIT)
             .await
         {
             Ok(rows) => rows,
@@ -598,7 +646,7 @@ pub async fn run_one_sync(
     };
     // One snapshot per tick. Best-effort — failure to encode/fetch
     // shouldn't block the rest of the batch.
-    let snapshots: Vec<SnapshotRow> = if streams.snapshots {
+    let snapshots: Vec<SnapshotRow> = if streams.snapshots && include_snapshot {
         match local.fetch_latest_snapshot().await {
             Ok(Some(s)) => vec![s],
             Ok(None) => Vec::new(),
@@ -615,7 +663,11 @@ pub async fn run_one_sync(
     // the frame+audio path. The default trait impl returns empty.
     let memories = if streams.memories {
         match local
-            .fetch_memories_since(cursor.last_memory_ts.as_deref(), PAGE_LIMIT)
+            .fetch_memories_since(
+                cursor.last_memory_ts.as_deref(),
+                cursor.boundary.memories,
+                PAGE_LIMIT,
+            )
             .await
         {
             Ok(rows) => rows,
@@ -629,7 +681,11 @@ pub async fn run_one_sync(
     };
     let mut feedback = if streams.feedback != crate::enterprise_policy::FeedbackSyncMode::Off {
         match local
-            .fetch_feedback_since(cursor.last_feedback_ts.as_deref(), PAGE_LIMIT)
+            .fetch_feedback_since(
+                cursor.last_feedback_ts.as_deref(),
+                cursor.boundary.feedback_id.as_deref(),
+                PAGE_LIMIT,
+            )
             .await
         {
             Ok(rows) => rows,
@@ -656,7 +712,11 @@ pub async fn run_one_sync(
     // not expose content_type=parsed.
     let parsed = if streams.parsed {
         match local
-            .fetch_parsed_since(cursor.last_parsed_ts.as_deref(), PAGE_LIMIT)
+            .fetch_parsed_since(
+                cursor.last_parsed_ts.as_deref(),
+                cursor.boundary.parsed,
+                PAGE_LIMIT,
+            )
             .await
         {
             Ok(rows) => rows,
@@ -699,24 +759,40 @@ pub async fn run_one_sync(
     let bytes = body.len();
 
     let mut next_cursor = cursor.clone();
-    if let Some(latest) = frames.last() {
-        next_cursor.last_frame_ts = Some(latest.timestamp.clone());
-    }
-    if let Some(latest) = audio.last() {
-        next_cursor.last_audio_ts = Some(latest.timestamp.clone());
-    }
-    if let Some(latest) = ui.last() {
-        next_cursor.last_ui_ts = Some(latest.timestamp.clone());
-    }
-    if let Some(latest) = memories.last() {
-        next_cursor.last_memory_ts = Some(latest.created_at.clone());
-    }
+    advance_timestamp_boundary(
+        &mut next_cursor.last_frame_ts,
+        &mut next_cursor.boundary.frames,
+        &frames,
+        |row| &row.timestamp,
+    );
+    advance_timestamp_boundary(
+        &mut next_cursor.last_audio_ts,
+        &mut next_cursor.boundary.audio,
+        &audio,
+        |row| &row.timestamp,
+    );
+    advance_timestamp_boundary(
+        &mut next_cursor.last_ui_ts,
+        &mut next_cursor.boundary.ui,
+        &ui,
+        |row| &row.timestamp,
+    );
+    advance_timestamp_boundary(
+        &mut next_cursor.last_memory_ts,
+        &mut next_cursor.boundary.memories,
+        &memories,
+        |row| &row.created_at,
+    );
     if let Some(latest) = feedback.last() {
         next_cursor.last_feedback_ts = Some(latest.updated_at.clone());
+        next_cursor.boundary.feedback_id = Some(latest.feedback_id.clone());
     }
-    if let Some(latest) = parsed.last() {
-        next_cursor.last_parsed_ts = Some(latest.timestamp.clone());
-    }
+    advance_timestamp_boundary(
+        &mut next_cursor.last_parsed_ts,
+        &mut next_cursor.boundary.parsed,
+        &parsed,
+        |row| &row.timestamp,
+    );
 
     match &cfg.upload_mode {
         EnterpriseUploadMode::HostedIngest => {
@@ -785,6 +861,30 @@ pub async fn run_one_sync(
     })
 }
 
+fn advance_timestamp_boundary<T>(
+    cursor_ts: &mut Option<String>,
+    boundary_offset: &mut u32,
+    rows: &[T],
+    timestamp: impl Fn(&T) -> &str,
+) {
+    let Some(last) = rows.last() else {
+        return;
+    };
+    let latest_ts = timestamp(last);
+    let rows_at_latest = rows
+        .iter()
+        .rev()
+        .take_while(|row| timestamp(row) == latest_ts)
+        .count() as u32;
+
+    if cursor_ts.as_deref() == Some(latest_ts) {
+        *boundary_offset = boundary_offset.saturating_add(rows_at_latest);
+    } else {
+        *cursor_ts = Some(latest_ts.to_string());
+        *boundary_offset = rows_at_latest;
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SyncTickReport {
     pub frames: usize,
@@ -795,6 +895,69 @@ pub struct SyncTickReport {
     pub memories: usize,
     pub feedback: usize,
     pub bytes: usize,
+}
+
+impl SyncTickReport {
+    /// A full cursor-backed stream page means the local API may have more rows
+    /// behind it. Point-in-time snapshots are deliberately excluded.
+    pub fn may_have_more(&self) -> bool {
+        let limit = PAGE_LIMIT as usize;
+        self.frames >= limit
+            || self.parsed >= limit
+            || self.audio >= limit
+            || self.ui >= limit
+            || self.memories >= limit
+            || self.feedback >= limit
+    }
+
+    fn add_assign(&mut self, other: &Self) {
+        self.frames += other.frames;
+        self.parsed += other.parsed;
+        self.audio += other.audio;
+        self.ui += other.ui;
+        self.snapshots += other.snapshots;
+        self.memories += other.memories;
+        self.feedback += other.feedback;
+        self.bytes += other.bytes;
+    }
+}
+
+/// Aggregate result of one scheduled sync plus any immediate catch-up pages.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SyncBurstReport {
+    pub total: SyncTickReport,
+    pub pages: usize,
+}
+
+/// Drain acknowledged pages until every cursor-backed stream returns a
+/// partial page.
+///
+/// `run_one_sync` is intentionally the only mechanism that fetches, uploads,
+/// and advances cursors. Consequently every page is durably checkpointed only
+/// after its own remote acknowledgement; a later-page failure or process exit
+/// resumes from the last successful page without skipping the rest.
+pub async fn run_sync_burst(
+    cfg: &EnterpriseSyncConfig,
+    cursor: &mut Cursor,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+) -> Result<SyncBurstReport, EnterpriseSyncError> {
+    let mut burst = SyncBurstReport::default();
+    let mut include_snapshot = true;
+
+    loop {
+        let page = run_one_sync_inner(cfg, cursor, local, http, include_snapshot).await?;
+        include_snapshot = false;
+        let more_pending = page.may_have_more();
+        burst.total.add_assign(&page);
+        burst.pages += 1;
+
+        if !more_pending {
+            break;
+        }
+    }
+
+    Ok(burst)
 }
 
 // ─── On-demand frame fulfillment (P3) ───────────────────────────────────────
@@ -1384,44 +1547,107 @@ fn apply_rotated_device_config(
     true
 }
 
-/// Exchange a signed-in enterprise member's Clerk session for the current
-/// device credential. This is deliberately attempted only after the server
-/// rejects the saved key; ordinary sync remains key-authenticated and no Clerk
-/// token is attached to telemetry requests.
-async fn recover_rotated_license_key(cfg: &mut EnterpriseSyncConfig) -> bool {
-    let Some(token) = crate::commands::get_cloud_token() else {
-        return false;
-    };
-    let url = super::device_config::device_config_url(Some(&cfg.ingest_url));
-    let remote = match super::device_config::fetch_remote_device_config(&url, &token).await {
-        Ok(remote) => remote,
-        Err(error) => {
-            debug!(
-                error = %error,
-                "enterprise sync: account device-config recovery not available"
-            );
+#[async_trait::async_trait]
+trait LicenseKeyRecovery: Send + Sync {
+    async fn recover(&self, cfg: &mut EnterpriseSyncConfig) -> bool;
+}
+
+struct SavedOrAccountLicenseKeyRecovery;
+
+#[async_trait::async_trait]
+impl LicenseKeyRecovery for SavedOrAccountLicenseKeyRecovery {
+    async fn recover(&self, cfg: &mut EnterpriseSyncConfig) -> bool {
+        // The enterprise gate validates replacement keys before saving them.
+        // Re-read it so key entry repairs the running worker without a restart.
+        if let Some(saved_key) = crate::commands::get_enterprise_license_key()
+            .filter(|saved_key| !saved_key.trim().is_empty() && saved_key != &cfg.license_key)
+        {
+            cfg.license_key = saved_key;
+            info!("enterprise sync: applied replacement credential from device config");
+            return true;
+        }
+
+        let Some(token) = crate::commands::get_cloud_token() else {
+            return false;
+        };
+        let url = super::device_config::device_config_url(Some(&cfg.ingest_url));
+        let remote = match super::device_config::fetch_remote_device_config(&url, &token).await {
+            Ok(remote) => remote,
+            Err(error) => {
+                debug!(
+                    error = %error,
+                    "enterprise sync: account device-config recovery not available"
+                );
+                return false;
+            }
+        };
+        let replaced_license_key = cfg.license_key.clone();
+        if !apply_rotated_device_config(cfg, &remote) {
             return false;
         }
-    };
-    if !apply_rotated_device_config(cfg, &remote) {
-        return false;
+
+        if let Err(error) = crate::commands::persist_recovered_enterprise_device_config(
+            &replaced_license_key,
+            &remote.license_key,
+            remote.ingest_url.as_deref(),
+        ) {
+            warn!(
+                error = %error,
+                "enterprise sync: rotated key works for this session but could not be persisted"
+            );
+        }
+        info!(
+            org = remote.org_name.as_deref().unwrap_or("?"),
+            "enterprise sync: recovered rotated device credential through account auth"
+        );
+        true
+    }
+}
+
+/// Replace a rejected credential from a newly saved key or a signed-in
+/// enterprise member's current device config. Ordinary sync remains
+/// key-authenticated; no account token is attached to telemetry requests.
+async fn recover_rotated_license_key<R: LicenseKeyRecovery + ?Sized>(
+    cfg: &mut EnterpriseSyncConfig,
+    recovery: &R,
+) -> bool {
+    recovery.recover(cfg).await
+}
+
+/// Resolve policy, recover a rejected credential at most once, then upload.
+/// A mode-endpoint auth rejection is handled before `run_sync_burst`, so no local
+/// telemetry is read with a rejected credential. Upload-plane rejections use
+/// the same path for explicit MDM modes and previously resolved modes.
+async fn run_sync_burst_with_recovery<R: LicenseKeyRecovery + ?Sized>(
+    cfg: &mut EnterpriseSyncConfig,
+    cursor: &mut Cursor,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+    recovery: &R,
+) -> Result<SyncBurstReport, EnterpriseSyncError> {
+    let mut recovered = false;
+    match cfg.resolve_upload_mode().await {
+        Ok(()) => {}
+        Err(EnterpriseSyncError::IngestAuthRejected) => {
+            if !recover_rotated_license_key(cfg, recovery).await {
+                return Err(EnterpriseSyncError::IngestAuthRejected);
+            }
+            recovered = true;
+            cfg.resolve_upload_mode().await?;
+        }
+        Err(error) => return Err(error),
     }
 
-    if let Err(error) = crate::commands::persist_enterprise_device_config(
-        Some(&remote.license_key),
-        remote.ingest_url.as_deref(),
-    ) {
-        warn!(
-            error = %error,
-            "enterprise sync: rotated key works for this session but could not be persisted"
-        );
+    match run_sync_burst(cfg, cursor, local, http).await {
+        Err(EnterpriseSyncError::IngestAuthRejected) if !recovered => {
+            if !recover_rotated_license_key(cfg, recovery).await {
+                return Err(EnterpriseSyncError::IngestAuthRejected);
+            }
+            cfg.resolve_upload_mode().await?;
+            run_sync_burst(cfg, cursor, local, http).await
+        }
+        result => result,
     }
-    cfg.resolve_upload_mode().await;
-    info!(
-        org = remote.org_name.as_deref().unwrap_or("?"),
-        "enterprise sync: recovered rotated device credential through account auth"
-    );
-    true
 }
 
 /// The single place that knows the redirect policy for license-authenticated
@@ -1443,6 +1669,7 @@ pub async fn run(
     mut cfg: EnterpriseSyncConfig,
     local: Arc<dyn LocalApiClient>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    on_auth_rejected: Option<Arc<dyn Fn() + Send + Sync>>,
 ) {
     info!(
         "enterprise sync: starting for device={} ingest_url={}",
@@ -1453,6 +1680,7 @@ pub async fn run(
 
     let mut cursor = Cursor::load(&cfg.cursor_path);
     let mut backoff = BACKOFF_INITIAL;
+    let recovery = SavedOrAccountLicenseKeyRecovery;
     let mut log_request_loop = tokio::spawn(run_log_request_loop(
         cfg.clone(),
         http.clone(),
@@ -1460,17 +1688,33 @@ pub async fn run(
     ));
 
     loop {
-        // Re-resolve before touching local telemetry. This picks up a live
-        // hosted-to-customer-storage policy change without requiring an app
-        // restart, and preserves the last safe mode on lookup failure.
-        cfg.resolve_upload_mode().await;
-        let result = run_one_sync(&cfg, &mut cursor, local.as_ref(), &http).await;
+        // Re-resolve before touching local telemetry. Auth rejection recovers
+        // and reruns resolution before any local read; other failures preserve
+        // the last safe mode.
+        let license_key_before_tick = cfg.license_key.clone();
+        let result =
+            run_sync_burst_with_recovery(&mut cfg, &mut cursor, local.as_ref(), &http, &recovery)
+                .await;
+
+        if cfg.license_key != license_key_before_tick {
+            // The log poller owns a cloned config, so restart it with the
+            // recovered key. Fulfillment state lives server-side.
+            log_request_loop.abort();
+            log_request_loop = tokio::spawn(run_log_request_loop(
+                cfg.clone(),
+                http.clone(),
+                shutdown.clone(),
+            ));
+        }
 
         match &result {
             Err(EnterpriseSyncError::IngestAuthRejected) => {
                 error!(
-                    "enterprise sync: license rejected by ingest endpoint (license invalid / revoked), attempting account recovery"
+                    "enterprise sync: device credential rejected and recovery is unavailable; enterprise access is required"
                 );
+                if let Some(notify) = &on_auth_rejected {
+                    notify();
+                }
             }
             Err(EnterpriseSyncError::CentralizedDataDisabled) => {
                 error!(
@@ -1490,22 +1734,25 @@ pub async fn run(
 
         match result {
             Ok(report) => {
-                if report.frames > 0
-                    || report.audio > 0
-                    || report.ui > 0
-                    || report.snapshots > 0
-                    || report.memories > 0
-                    || report.feedback > 0
+                let total = &report.total;
+                if total.frames > 0
+                    || total.audio > 0
+                    || total.ui > 0
+                    || total.snapshots > 0
+                    || total.memories > 0
+                    || total.feedback > 0
                 {
                     info!(
-                        "enterprise sync: pushed {} frames, {} audio, {} ui, {} snapshots, {} memories, {} feedback ({} bytes)",
-                        report.frames,
-                        report.audio,
-                        report.ui,
-                        report.snapshots,
-                        report.memories,
-                        report.feedback,
-                        report.bytes
+                        "enterprise sync: pushed {} frames, {} parsed, {} audio, {} ui, {} snapshots, {} memories, {} feedback across {} page(s) ({} bytes)",
+                        total.frames,
+                        total.parsed,
+                        total.audio,
+                        total.ui,
+                        total.snapshots,
+                        total.memories,
+                        total.feedback,
+                        report.pages,
+                        total.bytes
                     );
                 }
                 backoff = BACKOFF_INITIAL;
@@ -1522,19 +1769,6 @@ pub async fn run(
                 }
             }
             Err(EnterpriseSyncError::IngestAuthRejected) => {
-                if recover_rotated_license_key(&mut cfg).await {
-                    // The log poller owns a cloned config, so restart it with
-                    // the recovered key too. No diagnostic request is lost;
-                    // fulfillment state lives server-side.
-                    log_request_loop.abort();
-                    log_request_loop = tokio::spawn(run_log_request_loop(
-                        cfg.clone(),
-                        http.clone(),
-                        shutdown.clone(),
-                    ));
-                    backoff = BACKOFF_INITIAL;
-                    continue;
-                }
                 if sleep_or_shutdown(RETRY_WHILE_WAITING_FOR_ACCOUNT, &mut shutdown).await {
                     break;
                 }
@@ -1590,8 +1824,13 @@ mod tests {
     use super::*;
     use base64::Engine;
     use enterprise_upload::DirectUploadConfig;
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn enterprise_log_identifier_is_regex_safe() {
@@ -1817,6 +2056,23 @@ mod tests {
             browser_url: None,
             text: Some(text.to_string()),
         }
+    }
+
+    fn frame_page(first_id: i64, count: usize) -> Vec<FrameRow> {
+        let base = chrono::DateTime::parse_from_rfc3339("2026-07-27T23:26:23Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        (0..count)
+            .map(|offset| {
+                let id = first_id + offset as i64;
+                frame(
+                    id,
+                    &(base + chrono::Duration::seconds(id)).to_rfc3339(),
+                    "Arc",
+                    "recorded locally during upload outage",
+                )
+            })
+            .collect()
     }
 
     fn audio(id: i64, ts: &str, text: &str) -> AudioRow {
@@ -2149,12 +2405,37 @@ mod tests {
             last_memory_ts: Some("2026-05-07T09:15:00Z".to_string()),
             last_feedback_ts: None,
             last_parsed_ts: Some("2026-05-07T09:15:00Z".to_string()),
+            boundary: CursorBoundary {
+                frames: 500,
+                feedback_id: Some("feedback-0500".to_string()),
+                ..CursorBoundary::default()
+            },
         };
         c.save(&p).unwrap();
         let loaded = Cursor::load(&p);
         assert_eq!(loaded.last_frame_ts, c.last_frame_ts);
         assert_eq!(loaded.last_audio_ts, c.last_audio_ts);
         assert_eq!(loaded.last_ui_ts, c.last_ui_ts);
+        assert_eq!(loaded.boundary.frames, 500);
+        assert_eq!(
+            loaded.boundary.feedback_id.as_deref(),
+            Some("feedback-0500")
+        );
+    }
+
+    #[test]
+    fn cursor_from_older_app_defaults_boundary_progress() {
+        let cursor: Cursor = serde_json::from_str(
+            r#"{"last_frame_ts":"2026-05-07T10:00:00Z","last_audio_ts":null}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T10:00:00Z")
+        );
+        assert_eq!(cursor.boundary.frames, 0);
+        assert!(cursor.boundary.feedback_id.is_none());
     }
 
     #[test]
@@ -2168,6 +2449,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         }
         .save(&p)
         .unwrap();
@@ -2184,6 +2466,7 @@ mod tests {
     /// eliminating the race entirely without pulling in a serial-test crate.
     #[test]
     fn from_env_handles_all_cases() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
         // Snapshot prior env so we don't leak state into other tests.
         let prior_license = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY").ok();
         let prior_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL").ok();
@@ -2357,11 +2640,115 @@ mod tests {
         }
     }
 
+    /// Models the local `/search` and `/memories` pagination contract: the
+    /// timestamp boundary is inclusive and the durable boundary offset skips
+    /// rows already acknowledged at that exact timestamp.
+    struct InclusiveTimestampLocal {
+        frames: Vec<FrameRow>,
+    }
+
+    #[async_trait::async_trait]
+    impl LocalApiClient for InclusiveTimestampLocal {
+        async fn fetch_frames_since(
+            &self,
+            since_ts: Option<&str>,
+            boundary_offset: u32,
+            limit: u32,
+        ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+            Ok(self
+                .frames
+                .iter()
+                .filter(|row| since_ts.is_none_or(|since| row.timestamp.as_str() >= since))
+                .skip(boundary_offset as usize)
+                .take(limit as usize)
+                .cloned()
+                .collect())
+        }
+
+        async fn fetch_audio_since(
+            &self,
+            _since_ts: Option<&str>,
+            _boundary_offset: u32,
+            _limit: u32,
+        ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Models the corrected feedback keyset contract. The regression test
+    /// below proves why the old exclusive `updated_at > cursor` filter was
+    /// unsafe when a full page shared one timestamp.
+    struct ExclusiveTimestampLocal {
+        feedback: Vec<FeedbackRow>,
+    }
+
+    #[async_trait::async_trait]
+    impl LocalApiClient for ExclusiveTimestampLocal {
+        async fn fetch_frames_since(
+            &self,
+            _since_ts: Option<&str>,
+            _boundary_offset: u32,
+            _limit: u32,
+        ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch_audio_since(
+            &self,
+            _since_ts: Option<&str>,
+            _boundary_offset: u32,
+            _limit: u32,
+        ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch_feedback_since(
+            &self,
+            since_ts: Option<&str>,
+            after_id: Option<&str>,
+            limit: u32,
+        ) -> Result<Vec<FeedbackRow>, EnterpriseSyncError> {
+            Ok(self
+                .feedback
+                .iter()
+                .filter(|row| {
+                    since_ts.is_none_or(|since| {
+                        row.updated_at.as_str() > since
+                            || (row.updated_at.as_str() == since
+                                && after_id.is_none_or(|id| row.feedback_id.as_str() > id))
+                    })
+                })
+                .take(limit as usize)
+                .cloned()
+                .collect())
+        }
+    }
+
+    /// Restore the process-global stream policy even when an intentionally
+    /// red regression test panics on its assertion.
+    struct RestoreDefaultSyncStreams;
+
+    impl Drop for RestoreDefaultSyncStreams {
+        fn drop(&mut self) {
+            crate::enterprise_policy::set_sync_streams(
+                true,
+                false,
+                true,
+                true,
+                true,
+                true,
+                "off".to_string(),
+                "off".to_string(),
+            );
+        }
+    }
+
     #[async_trait::async_trait]
     impl LocalApiClient for MockLocal {
         async fn fetch_frames_since(
             &self,
             since_ts: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
             *self.last_frames_since.lock().unwrap() = since_ts.map(|s| s.to_string());
@@ -2376,6 +2763,7 @@ mod tests {
         async fn fetch_audio_since(
             &self,
             since_ts: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
             *self.last_audio_since.lock().unwrap() = since_ts.map(|s| s.to_string());
@@ -2390,6 +2778,7 @@ mod tests {
         async fn fetch_memories_since(
             &self,
             since_ts: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
             *self.last_memories_since.lock().unwrap() = since_ts.map(|s| s.to_string());
@@ -2404,6 +2793,7 @@ mod tests {
         async fn fetch_feedback_since(
             &self,
             since_ts: Option<&str>,
+            _after_id: Option<&str>,
             _limit: u32,
         ) -> Result<Vec<FeedbackRow>, EnterpriseSyncError> {
             *self.last_feedback_since.lock().unwrap() = since_ts.map(str::to_string);
@@ -2418,6 +2808,7 @@ mod tests {
         async fn fetch_parsed_since(
             &self,
             since_ts: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<ParsedRow>, EnterpriseSyncError> {
             *self.last_parsed_since.lock().unwrap() = since_ts.map(|s| s.to_string());
@@ -2461,6 +2852,351 @@ mod tests {
         assert_eq!(cfg.license_key, "sek_rotated");
         assert_eq!(cfg.ingest_url, "https://new.example/api/enterprise/ingest");
         assert!(!apply_rotated_device_config(&mut cfg, &remote));
+    }
+
+    struct UploadModeEnvGuard(Option<String>);
+
+    impl UploadModeEnvGuard {
+        fn clear() -> Self {
+            let prior = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
+            std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
+            Self(prior)
+        }
+    }
+
+    impl Drop for UploadModeEnvGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", value),
+                None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
+            }
+        }
+    }
+
+    struct TestLicenseKeyRecovery {
+        replacement_key: Option<String>,
+        calls: AtomicUsize,
+        local_reads: Arc<AtomicUsize>,
+        reads_seen_during_recovery: Mutex<Vec<usize>>,
+    }
+
+    impl TestLicenseKeyRecovery {
+        fn replacing(key: &str, local_reads: Arc<AtomicUsize>) -> Self {
+            Self {
+                replacement_key: Some(key.to_string()),
+                calls: AtomicUsize::new(0),
+                local_reads,
+                reads_seen_during_recovery: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn unavailable(local_reads: Arc<AtomicUsize>) -> Self {
+            Self {
+                replacement_key: None,
+                calls: AtomicUsize::new(0),
+                local_reads,
+                reads_seen_during_recovery: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LicenseKeyRecovery for TestLicenseKeyRecovery {
+        async fn recover(&self, cfg: &mut EnterpriseSyncConfig) -> bool {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.reads_seen_during_recovery
+                .lock()
+                .unwrap()
+                .push(self.local_reads.load(Ordering::SeqCst));
+            let Some(replacement_key) = &self.replacement_key else {
+                return false;
+            };
+            cfg.license_key = replacement_key.clone();
+            true
+        }
+    }
+
+    struct CountingLocal {
+        reads: Arc<AtomicUsize>,
+        frames_to_yield: Mutex<Vec<Vec<FrameRow>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LocalApiClient for CountingLocal {
+        async fn fetch_frames_since(
+            &self,
+            _since_ts: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .frames_to_yield
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap_or_default())
+        }
+
+        async fn fetch_audio_since(
+            &self,
+            _since_ts: Option<&str>,
+            _limit: u32,
+        ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+    }
+
+    fn initialized_cursor() -> Cursor {
+        Cursor {
+            last_frame_ts: Some("2026-08-04T00:00:00Z".to_string()),
+            last_audio_ts: Some("2026-08-04T00:00:00Z".to_string()),
+            last_ui_ts: Some("2026-08-04T00:00:00Z".to_string()),
+            last_memory_ts: Some("2026-08-04T00:00:00Z".to_string()),
+            last_feedback_ts: Some("2026-08-04T00:00:00Z".to_string()),
+            last_parsed_ts: Some("2026-08-04T00:00:00Z".to_string()),
+        }
+    }
+
+    fn counting_local(reads: Arc<AtomicUsize>, pages: Vec<Vec<FrameRow>>) -> CountingLocal {
+        CountingLocal {
+            reads,
+            frames_to_yield: Mutex::new(pages),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mode_auth_rejection_recovers_before_local_reads_and_uploads() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        let server = wiremock::MockServer::start().await;
+        let mode_path = "/api/enterprise/storage-binding/mode";
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(mode_path))
+            .and(wiremock::matchers::header("x-license-key", "stale-key"))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(mode_path))
+            .and(wiremock::matchers::header("x-license-key", "current-key"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "desired_mode": "hosted_ingest" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/ingest"))
+            .and(wiremock::matchers::header("x-license-key", "current-key"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        cfg.license_key = "stale-key".to_string();
+        cfg.upload_mode = EnterpriseUploadMode::Blocked("fresh start".to_string());
+        let reads = Arc::new(AtomicUsize::new(0));
+        let local = counting_local(
+            reads.clone(),
+            vec![vec![frame(1, "2026-08-04T00:01:00Z", "Arc", "recovered")]],
+        );
+        let recovery = TestLicenseKeyRecovery::replacing("current-key", reads.clone());
+
+        let report = run_sync_burst_with_recovery(
+            &mut cfg,
+            &mut initialized_cursor(),
+            &local,
+            &enterprise_http_client(),
+            &recovery,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.total.frames, 1);
+        assert_eq!(cfg.license_key, "current-key");
+        assert!(matches!(
+            cfg.upload_mode,
+            EnterpriseUploadMode::HostedIngest
+        ));
+        assert_eq!(recovery.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *recovery.reads_seen_during_recovery.lock().unwrap(),
+            vec![0]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolved_mode_upload_rejection_rotates_and_retries_same_tick() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        let server = wiremock::MockServer::start().await;
+        let mode_path = "/api/enterprise/storage-binding/mode";
+        for key in ["stale-key", "current-key"] {
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path(mode_path))
+                .and(wiremock::matchers::header("x-license-key", key))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "desired_mode": "hosted_ingest" })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/ingest"))
+            .and(wiremock::matchers::header("x-license-key", "stale-key"))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/ingest"))
+            .and(wiremock::matchers::header("x-license-key", "current-key"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        cfg.license_key = "stale-key".to_string();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let page = vec![frame(1, "2026-08-04T00:01:00Z", "Arc", "rotation")];
+        let local = counting_local(reads.clone(), vec![page.clone(), page]);
+        let recovery = TestLicenseKeyRecovery::replacing("current-key", reads.clone());
+
+        let report = run_sync_burst_with_recovery(
+            &mut cfg,
+            &mut initialized_cursor(),
+            &local,
+            &enterprise_http_client(),
+            &recovery,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.total.frames, 1);
+        assert_eq!(cfg.license_key, "current-key");
+        assert_eq!(recovery.calls.load(Ordering::SeqCst), 1);
+        assert!(recovery.reads_seen_during_recovery.lock().unwrap()[0] > 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn signed_out_stale_key_stays_blocked_and_reports_auth_rejection() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/api/enterprise/storage-binding/mode",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        cfg.license_key = "stale-key".to_string();
+        cfg.upload_mode = EnterpriseUploadMode::Blocked("fresh start".to_string());
+        let reads = Arc::new(AtomicUsize::new(0));
+        let local = counting_local(reads.clone(), Vec::new());
+        let recovery = TestLicenseKeyRecovery::unavailable(reads.clone());
+
+        let error = run_sync_burst_with_recovery(
+            &mut cfg,
+            &mut initialized_cursor(),
+            &local,
+            &enterprise_http_client(),
+            &recovery,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, EnterpriseSyncError::IngestAuthRejected));
+        assert!(matches!(cfg.upload_mode, EnterpriseUploadMode::Blocked(_)));
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert_eq!(recovery.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn server_mode_resolution_covers_hosted_and_both_direct_modes() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        for (desired_mode, expected_label) in [
+            ("hosted_ingest", "hosted_ingest"),
+            ("direct_upload_readable", "direct_readable"),
+            ("direct_upload_write_only", "direct_write_only"),
+        ] {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "desired_mode": desired_mode })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let dir = TempDir::new().unwrap();
+            let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+            cfg.upload_mode = EnterpriseUploadMode::Blocked("fresh start".to_string());
+
+            cfg.resolve_upload_mode().await.unwrap();
+
+            assert_eq!(cfg.upload_mode.label(), expected_label);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_mdm_mode_resolves_without_calling_the_control_plane() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard(std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok());
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_write_only",
+        );
+
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, "http://control-plane-must-not-run/ingest".to_string());
+        cfg.upload_mode = EnterpriseUploadMode::Blocked("fresh start".to_string());
+
+        cfg.resolve_upload_mode().await.unwrap();
+
+        assert!(matches!(
+            cfg.upload_mode,
+            EnterpriseUploadMode::DirectWriteOnly(_)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mode_failures_preserve_fresh_start_block() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        for response in [
+            wiremock::ResponseTemplate::new(503),
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "desired_mode": "unknown" })),
+        ] {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let dir = TempDir::new().unwrap();
+            let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+            cfg.upload_mode = EnterpriseUploadMode::Blocked("fresh start".to_string());
+
+            cfg.resolve_upload_mode().await.unwrap();
+
+            assert!(matches!(cfg.upload_mode, EnterpriseUploadMode::Blocked(_)));
+        }
     }
 
     #[tokio::test]
@@ -2519,6 +3255,7 @@ mod tests {
             last_memory_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_feedback_ts: None,
             last_parsed_ts: Some("2026-05-07T10:00:00Z".to_string()),
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(vec![vec![]], vec![vec![]]);
         let http = reqwest::Client::new();
@@ -2574,6 +3311,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(
             vec![vec![
@@ -2602,6 +3340,225 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn old_cursor_drains_every_page_without_waiting_for_normal_ticks() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ingest"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let first = frame_page(1, PAGE_LIMIT as usize);
+        let second = frame_page(501, PAGE_LIMIT as usize);
+        let final_page = frame_page(1001, 37);
+        let expected_last = final_page.last().unwrap().timestamp.clone();
+
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_audio_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_ui_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_memory_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_feedback_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_parsed_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            boundary: CursorBoundary::default(),
+        };
+        // MockLocal pops from the end: yield first → second → final.
+        let local = MockLocal::new(vec![final_page, second, first], vec![]);
+
+        let report = run_sync_burst(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+
+        assert_eq!(report.pages, 3);
+        assert_eq!(report.total.frames, 1_037);
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some(expected_last.as_str())
+        );
+        assert_eq!(
+            Cursor::load(&cfg.cursor_path).last_frame_ts.as_deref(),
+            Some(expected_last.as_str()),
+            "the final acknowledged page is durable"
+        );
+    }
+
+    #[tokio::test]
+    async fn timestamp_gte_cursor_must_progress_past_a_full_boundary_tie() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ingest"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let tied_at = "2026-08-01T00:00:00Z";
+        let local = InclusiveTimestampLocal {
+            frames: (1..=PAGE_LIMIT as i64 + 1)
+                .map(|id| frame(id, tied_at, "Arc", "same timestamp boundary"))
+                .collect(),
+        };
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_audio_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_ui_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_memory_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_feedback_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_parsed_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            boundary: CursorBoundary::default(),
+        };
+
+        let first = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+        cursor = Cursor::load(&cfg.cursor_path);
+        let second = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+
+        assert_eq!(first.frames, PAGE_LIMIT as usize);
+        assert_eq!(
+            second.frames, 1,
+            "an inclusive timestamp-only cursor repeats the first 500 tied rows instead of reaching row 501"
+        );
+    }
+
+    #[tokio::test]
+    async fn timestamp_gt_cursor_must_not_skip_the_rest_of_a_full_boundary_tie() {
+        let _policy_guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore_policy = RestoreDefaultSyncStreams;
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            "full".to_string(),
+            "off".to_string(),
+        );
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ingest"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let tied_at = "2026-08-01T00:00:00Z";
+        let local = ExclusiveTimestampLocal {
+            feedback: (1..=PAGE_LIMIT + 1)
+                .map(|id| feedback(&format!("feedback-{id:04}"), tied_at))
+                .collect(),
+        };
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_audio_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_ui_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_memory_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_feedback_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            last_parsed_ts: Some("2026-07-31T23:59:59Z".to_string()),
+            boundary: CursorBoundary::default(),
+        };
+
+        let first = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+        cursor = Cursor::load(&cfg.cursor_path);
+        let second = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+
+        assert_eq!(first.feedback, PAGE_LIMIT as usize);
+        assert_eq!(
+            second.feedback, 1,
+            "an exclusive timestamp-only cursor skips row 501 because it shares the acknowledged page's timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn catch_up_failure_keeps_last_acknowledged_page_for_restart() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_responder = calls.clone();
+        let failing_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ingest"))
+            .respond_with(move |_request: &wiremock::Request| {
+                if calls_for_responder.fetch_add(1, Ordering::SeqCst) == 0 {
+                    wiremock::ResponseTemplate::new(200)
+                } else {
+                    wiremock::ResponseTemplate::new(503)
+                }
+            })
+            .expect(2)
+            .mount(&failing_server)
+            .await;
+
+        let first = frame_page(1, PAGE_LIMIT as usize);
+        let second = frame_page(501, 20);
+        let first_last = first.last().unwrap().timestamp.clone();
+        let second_last = second.last().unwrap().timestamp.clone();
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", failing_server.uri()));
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_audio_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_ui_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_memory_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_feedback_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            last_parsed_ts: Some("2026-07-27T23:26:23Z".to_string()),
+            boundary: CursorBoundary::default(),
+        };
+        let local = MockLocal::new(vec![second.clone(), first], vec![]);
+
+        let error = run_sync_burst(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, EnterpriseSyncError::IngestServerError(503)));
+        assert_eq!(cursor.last_frame_ts.as_deref(), Some(first_last.as_str()));
+        assert_eq!(
+            Cursor::load(&cfg.cursor_path).last_frame_ts.as_deref(),
+            Some(first_last.as_str())
+        );
+
+        // Simulate an app restart: reload the durable cursor and refetch the
+        // unacknowledged page from the local database.
+        let healthy_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ingest"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&healthy_server)
+            .await;
+        let resumed_cfg = test_cfg(&dir, format!("{}/ingest", healthy_server.uri()));
+        let mut resumed_cursor = Cursor::load(&resumed_cfg.cursor_path);
+        let resumed_local = MockLocal::new(vec![second], vec![]);
+        let resumed = run_sync_burst(
+            &resumed_cfg,
+            &mut resumed_cursor,
+            &resumed_local,
+            &reqwest::Client::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resumed.pages, 1);
+        assert_eq!(resumed.total.frames, 20);
+        assert_eq!(
+            resumed_cursor.last_frame_ts.as_deref(),
+            Some(second_last.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn hosted_ingest_sends_large_payload_across_multiple_requests() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -2620,6 +3577,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let mut cursor = original_cursor.clone();
         let large_text = "x".repeat(2 * 1024 * 1024);
@@ -2682,6 +3640,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let before = cursor.clone();
         let large_text = "x".repeat(2 * 1024 * 1024);
@@ -2726,6 +3685,7 @@ mod tests {
             last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_feedback_ts: None,
             last_parsed_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(vec![vec![]], vec![vec![]]).with_memories(vec![vec![
             memory(1, "2026-05-07T10:00:00Z", "first"),
@@ -2780,6 +3740,7 @@ mod tests {
             last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_feedback_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(vec![], vec![])
             .with_feedback(vec![vec![feedback("feedback-1", "2026-05-07T10:00:00Z")]]);
@@ -2843,6 +3804,7 @@ mod tests {
             last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_feedback_ts: None,
             last_parsed_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(vec![], vec![]).with_parsed(vec![vec![parsed(
             42,
@@ -2944,6 +3906,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
@@ -3017,6 +3980,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(
             vec![vec![frame(
@@ -3081,6 +4045,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
@@ -3116,6 +4081,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -3150,6 +4116,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -3190,6 +4157,7 @@ mod tests {
             last_memory_ts: None,
             last_feedback_ts: None,
             last_parsed_ts: None,
+            boundary: CursorBoundary::default(),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -3238,6 +4206,7 @@ mod tests {
         async fn fetch_frames_since(
             &self,
             _since: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
             *self.frames_calls.lock().unwrap() += 1;
@@ -3247,6 +4216,7 @@ mod tests {
         async fn fetch_audio_since(
             &self,
             _since: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
             *self.audio_calls.lock().unwrap() += 1;
@@ -3256,6 +4226,7 @@ mod tests {
         async fn fetch_ui_events_since(
             &self,
             _since: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<UiEventRow>, EnterpriseSyncError> {
             *self.ui_calls.lock().unwrap() += 1;
@@ -3270,6 +4241,7 @@ mod tests {
         async fn fetch_memories_since(
             &self,
             _since: Option<&str>,
+            _boundary_offset: u32,
             _limit: u32,
         ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
             *self.memories_calls.lock().unwrap() += 1;
@@ -3334,6 +4306,7 @@ mod tests {
             last_memory_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_feedback_ts: None,
             last_parsed_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            boundary: CursorBoundary::default(),
         };
         let local = CallCountingLocal::new();
         let http = reqwest::Client::new();
@@ -3432,12 +4405,14 @@ mod tests {
             &self,
             _: Option<&str>,
             _: u32,
+            _: u32,
         ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
             Ok(Vec::new())
         }
         async fn fetch_audio_since(
             &self,
             _: Option<&str>,
+            _: u32,
             _: u32,
         ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
             Ok(Vec::new())

@@ -213,6 +213,59 @@ next to the released app without taking over its identity or updater settings.
 
 ## how can i contribute?
 
+### ai-assisted contributions
+
+ai assistance is welcome, but every outside contribution needs an accountable
+human driver. these rules apply to issues, pull requests, review comments, and
+replies to maintainers:
+
+- disclose the AI tool used, its autonomy level (`autocomplete`, `chat`, or
+  `agent`), and exactly what you personally verified. write `none` when no AI
+  tool was used.
+- do not use an autonomous agent to submit an outside issue, pull request, or
+  comment. the accountable contributor must personally make the submission.
+- write the problem statement, rationale, and replies to maintainers in your
+  own words. AI may help construct tests and reproductions, but it must not
+  impersonate you.
+- understand and be able to explain every material change. do not ask a model
+  to answer maintainers on your behalf.
+- never claim manual testing you did not perform. include the exact commands
+  and results, plus real end-to-end evidence where applicable.
+- provide evidence appropriate to the change:
+  - UI or behavior changes: a before/after recording.
+  - backend changes: regression tests and relevant logs or results.
+  - performance changes: reproducible before/after benchmarks.
+  - docs, CI, and pure refactors: the relevant checks and an explanation; do
+    not fabricate a video.
+- do not submit unsolicited LLM-generated reviews of another contributor's
+  pull request.
+
+use `autocomplete` when AI only supplied inline completions, `chat` when you
+asked for suggestions or code and chose what to apply, and `agent` when AI
+planned or executed multi-step work or edited files.
+
+maintainers use process labels to identify the concrete next step:
+
+- `needs-reproduction`: provide a reproducible case and exact steps.
+- `needs-tests`: add the missing regression or coverage tests.
+- `needs-evidence`: provide the required recording, logs, results, or benchmark.
+- `needs-human-explanation`: explain the rationale or material changes yourself.
+- `needs-scope-approval`: get maintainer agreement before continuing the work.
+
+you are welcome to reopen the contribution, or submit a corrected replacement
+that links the original, after addressing that request.
+
+reopening or resubmitting without addressing the stated request results in a
+seven-calendar-day contribution cooldown, beginning when a maintainer posts the
+cooldown notice. during the cooldown, you may not open or reopen issues or pull
+requests, or submit review comments in this repository. the next submission
+after that cooldown that again reopens or resubmits without addressing a
+concrete remediation request results in a repository contribution
+ban.
+
+enforcement is based on accountable ownership, accepted scope, evidence, and
+the contributor's ability to explain the work.
+
 ### reporting bugs
 
 this section guides you through submitting a bug report for screen pipe. following these guidelines helps maintainers and the community understand your report, reproduce the behavior, and find related reports.

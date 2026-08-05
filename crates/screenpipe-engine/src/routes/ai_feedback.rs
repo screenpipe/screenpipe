@@ -163,6 +163,12 @@ pub(crate) struct ListFeedbackQuery {
     pub q: Option<String>,
     #[serde(default)]
     pub since: Option<String>,
+    /// Enterprise pagination opts into an inclusive timestamp boundary and
+    /// supplies the last acknowledged id to continue safely through ties.
+    #[serde(default)]
+    pub since_inclusive: bool,
+    #[serde(default)]
+    pub after_id: Option<String>,
     #[serde(default)]
     pub order: Option<String>,
     #[serde(default = "default_limit")]
@@ -361,6 +367,7 @@ pub(crate) async fn list_ai_feedback_handler(
     }
     let q = clean_optional(query.q);
     let since = clean_optional(query.since);
+    let after_id = clean_optional(query.after_id);
     let ascending = query.order.as_deref() == Some("asc");
     let mut records = state
         .db
@@ -371,6 +378,8 @@ pub(crate) async fn list_ai_feedback_handler(
             rating.as_deref(),
             q.as_deref(),
             since.as_deref(),
+            query.since_inclusive,
+            after_id.as_deref(),
             ascending,
             query.limit.clamp(1, 500) as i64,
         )
@@ -428,11 +437,19 @@ pub(crate) async fn list_ai_feedback_handler(
         {
             return false;
         }
-        if since
-            .as_deref()
-            .is_some_and(|since| record.updated_at.as_str() <= since)
-        {
-            return false;
+        if let Some(since) = since.as_deref() {
+            if query.since_inclusive {
+                if record.updated_at.as_str() < since
+                    || (record.updated_at.as_str() == since
+                        && after_id
+                            .as_deref()
+                            .is_some_and(|id| record.id.as_str() <= id))
+                {
+                    return false;
+                }
+            } else if record.updated_at.as_str() <= since {
+                return false;
+            }
         }
         if let Some(q) = q.as_deref() {
             let haystack = serde_json::to_string(record)
@@ -446,9 +463,18 @@ pub(crate) async fn list_ai_feedback_handler(
     });
     records.extend(legacy);
     if ascending {
-        records.sort_by(|left, right| left.updated_at.cmp(&right.updated_at));
+        records.sort_by(|left, right| {
+            left.updated_at
+                .cmp(&right.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
     } else {
-        records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        records.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
     }
     records.truncate(query.limit.clamp(1, 500));
 

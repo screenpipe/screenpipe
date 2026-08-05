@@ -10,6 +10,51 @@ export type QuotaUpgradeAction = {
   resetsAt: string | null;
 };
 
+export function validateQuotaUpgradeAction({
+  requiredPlan: rawRequiredPlan,
+  upgradeUrl: rawUpgradeUrl,
+  resetsAt: rawResetsAt = null,
+}: {
+  requiredPlan: unknown;
+  upgradeUrl: unknown;
+  resetsAt?: unknown;
+}): QuotaUpgradeAction | null {
+  const requiredPlan =
+    typeof rawRequiredPlan === "string"
+      ? rawRequiredPlan.toLowerCase()
+      : null;
+  if (
+    requiredPlan !== "basic" &&
+    requiredPlan !== "business" &&
+    requiredPlan !== "business_max" &&
+    requiredPlan !== "business_ultra"
+  ) {
+    return null;
+  }
+
+  if (typeof rawUpgradeUrl !== "string" || rawUpgradeUrl.length === 0) {
+    return null;
+  }
+  try {
+    const url = new URL(rawUpgradeUrl);
+    if (
+      url.protocol !== "https:" ||
+      !["screenpi.pe", "screenpipe.com"].includes(url.hostname) ||
+      url.pathname !== "/account/billing"
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  return {
+    requiredPlan,
+    upgradeUrl: rawUpgradeUrl,
+    resetsAt: typeof rawResetsAt === "string" ? rawResetsAt : null,
+  };
+}
+
 const COST_LIMIT_CODES = [
   "daily_cost_limit_exceeded",
   "monthly_cost_limit_exceeded",
@@ -18,6 +63,7 @@ const COST_LIMIT_CODES = [
 
 const UPGRADE_LIMIT_CODES = [
   ...COST_LIMIT_CODES,
+  "hosted_ai_allowance_exceeded",
   "daily_limit_exceeded",
   "credits_exhausted",
 ] as const;
@@ -52,40 +98,11 @@ export function parseQuotaUpgradeAction(
   errorStr: string,
 ): QuotaUpgradeAction | null {
   if (!isUpgradeLimitError(errorStr)) return null;
-
-  const requiredPlan = structuredString(
-    errorStr,
-    "required_plan",
-  )?.toLowerCase();
-  if (
-    requiredPlan !== "basic" &&
-    requiredPlan !== "business" &&
-    requiredPlan !== "business_max" &&
-    requiredPlan !== "business_ultra"
-  ) {
-    return null;
-  }
-
-  const upgradeUrl = structuredString(errorStr, "upgrade_url");
-  if (!upgradeUrl) return null;
-  try {
-    const url = new URL(upgradeUrl);
-    if (
-      url.protocol !== "https:" ||
-      !["screenpi.pe", "screenpipe.com"].includes(url.hostname) ||
-      url.pathname !== "/account/billing"
-    ) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-
-  return {
-    requiredPlan,
-    upgradeUrl,
+  return validateQuotaUpgradeAction({
+    requiredPlan: structuredString(errorStr, "required_plan"),
+    upgradeUrl: structuredString(errorStr, "upgrade_url"),
     resetsAt: structuredString(errorStr, "resets_at"),
-  };
+  });
 }
 
 export function buildDailyLimitMessage(errorStr: string): string {
@@ -95,12 +112,12 @@ export function buildDailyLimitMessage(errorStr: string): string {
       const lane = structuredString(errorStr, "lane")?.toLowerCase();
       const plan = structuredString(errorStr, "plan")?.toLowerCase();
       if (lane === "explicit") {
-        return "Your 30-day hosted AI allowance for explicit models is used up. Switch to Auto, or use Ollama, Claude, Codex, or your own provider key.";
+        return "Your current hosted AI allowance for explicit models is used up. Switch to Auto, or use Ollama, Claude, Codex, or your own provider key.";
       }
       if (plan === "free") {
-        return "Your 30-day hosted AI allowance for Auto is used up. Upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
+        return "Your current hosted AI allowance for Auto is used up. Upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
       }
-      return "Your 30-day hosted AI allowance for Auto is used up. Choose an explicit hosted model, or use Ollama, Claude, Codex, or your own provider key.";
+      return "Your current hosted AI allowance for Auto is used up. Choose an explicit hosted model, or use Ollama, Claude, Codex, or your own provider key.";
     }
     if (normalized.includes("free_chat_limit_exceeded")) {
       return "You've used today's 2 free hosted AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";

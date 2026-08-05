@@ -16,6 +16,7 @@ import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   Loader2,
   RefreshCw,
@@ -33,6 +34,8 @@ import {
 } from "@/components/ui/select";
 import {
   LiveViewAiComposer,
+  LiveViewAiFeedbackStatus,
+  type LiveViewAiFeedback,
   type LiveViewGenerationIntent,
 } from "@/components/settings/live-view-ai-composer";
 import {
@@ -82,12 +85,14 @@ import {
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
 import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
-import type { LiveViewGenerationScope } from "@/lib/live-views/generate-live-view-with-pi";
-import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
 import {
-  buildLiveViewBuilderAgentPrompt,
-  type LiveViewBuilderTarget,
-} from "@/lib/live-views/pipe-agent-prompt";
+  generateLiveViewWithPi,
+  type GeneratedLiveView,
+  type GeneratedLiveViewBlock,
+  type LiveViewGenerationScope,
+} from "@/lib/live-views/generate-live-view-with-pi";
+import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
+import type { LiveViewBuilderTarget } from "@/lib/live-views/pipe-agent-prompt";
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,
@@ -167,11 +172,17 @@ type PreviewSource = { kind: "template"; kit: BrainViewTemplateKit };
 
 type PreviewDestination = "new" | "replace";
 
+type AiBlockProposal = {
+  id: string;
+  kind: "add" | "update" | "remove";
+  before: ViewSlot | null;
+  after: ViewSlot | null;
+  status: "pending" | "accepted" | "rejected";
+};
+
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
-const LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS = 60_000;
-
 const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
@@ -179,23 +190,15 @@ const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
-function liveViewDataStatus(slots: BrainViewSlot[]): string {
+function liveViewLatestUpdate(slots: BrainViewSlot[]): string | null {
   const timestamps = slots.flatMap((slot) => {
     const timestamp = slot.value?.updatedAt
       ? Date.parse(slot.value.updatedAt)
       : Number.NaN;
     return Number.isFinite(timestamp) ? [timestamp] : [];
   });
-  if (timestamps.length === 0) return "No data yet";
-
-  const blockLabel = slots.length === 1 ? "block" : "blocks";
-  const readiness = `${timestamps.length} of ${slots.length} ${blockLabel} ready`;
-  const oldest = Math.min(...timestamps);
-  const latest = Math.max(...timestamps);
-  if (latest - oldest <= LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS) {
-    return `${readiness} · updated ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
-  }
-  return `${readiness} · oldest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(oldest)} · latest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
+  if (timestamps.length === 0) return null;
+  return `Latest update: ${LIVE_VIEW_FRESHNESS_FORMATTER.format(Math.max(...timestamps))}`;
 }
 
 function analyticsErrorType(error: unknown): string {
@@ -351,6 +354,121 @@ function copyViewDefinition(view: ViewDefinition): ViewDefinition {
   };
 }
 
+function slotIdStem(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48) || "block"
+  );
+}
+
+function slotFromGenerated(
+  block: GeneratedLiveViewBlock,
+  id: string,
+  order: number,
+  previous: ViewSlot | null,
+): ViewSlot {
+  const unchanged = Boolean(
+    previous &&
+    previous.title === block.title &&
+    previous.intent === block.intent &&
+    previous.component === block.component &&
+    previous.width === block.width &&
+    previous.binding?.pipeName === block.pipeName,
+  );
+  return {
+    id,
+    title: block.title,
+    intent: block.intent,
+    component: block.component,
+    width: block.width,
+    order,
+    binding: block.pipeName ? { pipeName: block.pipeName } : null,
+    value: unchanged ? (previous?.value ?? null) : null,
+    feedback: unchanged
+      ? (previous?.feedback ?? { upCount: 0, downCount: 0, current: null })
+      : { upCount: 0, downCount: 0, current: null },
+    itemActions: unchanged
+      ? (previous?.itemActions ?? { items: [] })
+      : { items: [] },
+  };
+}
+
+function sameSlotDefinition(left: ViewSlot, right: ViewSlot): boolean {
+  return (
+    left.title === right.title &&
+    left.intent === right.intent &&
+    left.component === right.component &&
+    left.width === right.width &&
+    left.binding?.pipeName === right.binding?.pipeName
+  );
+}
+
+function buildAiBlockProposals(
+  current: ViewDefinition,
+  generated: GeneratedLiveView,
+  targetSlotId: string | null,
+): AiBlockProposal[] {
+  const currentById = new Map(current.slots.map((slot) => [slot.id, slot]));
+  const used = new Set(current.slots.map((slot) => slot.id));
+  const candidateSlots = generated.blocks.map((block, order) => {
+    let id = targetSlotId ?? block.id ?? "";
+    if (!id || (!currentById.has(id) && used.has(id))) {
+      const stem = slotIdStem(block.title);
+      id = stem;
+      let suffix = 2;
+      while (used.has(id)) id = `${stem}-${suffix++}`;
+    }
+    used.add(id);
+    return slotFromGenerated(block, id, order, currentById.get(id) ?? null);
+  });
+
+  if (targetSlotId) {
+    const before = currentById.get(targetSlotId);
+    const after = candidateSlots[0];
+    return before && after && !sameSlotDefinition(before, after)
+      ? [{ id: targetSlotId, kind: "update", before, after, status: "pending" }]
+      : [];
+  }
+
+  const proposals: AiBlockProposal[] = [];
+  const candidateIds = new Set(candidateSlots.map((slot) => slot.id));
+  for (const after of candidateSlots) {
+    const before = currentById.get(after.id) ?? null;
+    if (!before) {
+      proposals.push({
+        id: after.id,
+        kind: "add",
+        before: null,
+        after,
+        status: "pending",
+      });
+    } else if (!sameSlotDefinition(before, after)) {
+      proposals.push({
+        id: after.id,
+        kind: "update",
+        before,
+        after,
+        status: "pending",
+      });
+    }
+  }
+  for (const before of current.slots) {
+    if (!candidateIds.has(before.id)) {
+      proposals.push({
+        id: before.id,
+        kind: "remove",
+        before,
+        after: null,
+        status: "pending",
+      });
+    }
+  }
+  return proposals;
+}
+
 function kitSlots(kit: BrainViewTemplateKit): ViewSlot[] {
   return kit.slots.map((slot) => ({
     ...slot,
@@ -406,6 +524,7 @@ export function BrainOverview({
   const [draft, setDraft] = useState<ViewDefinition | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [applyingAiProposals, setApplyingAiProposals] = useState(false);
   const [editing, setEditing] = useState(false);
   const [aiPreview, setAiPreview] = useState(false);
   const [previewSource, setPreviewSource] = useState<PreviewSource | null>(
@@ -434,6 +553,22 @@ export function BrainOverview({
   const [selectedAiPresetId, setSelectedAiPresetId] = useState<string | null>(
     readActiveAiPresetId,
   );
+  const [builderFeedback, setBuilderFeedback] =
+    useState<LiveViewAiFeedback | null>(null);
+  const [aiBlockProposals, setAiBlockProposals] = useState<AiBlockProposal[]>(
+    [],
+  );
+  const [proposalFocusSlotId, setProposalFocusSlotId] = useState<string | null>(
+    null,
+  );
+  const [proposalTitle, setProposalTitle] = useState<string | null>(null);
+  const [proposalTimeRange, setProposalTimeRange] =
+    useState<BrainViewTimeRange | null>(null);
+  const [proposalPeriodPolicy, setProposalPeriodPolicy] = useState<
+    ViewDefinition["periodPolicy"] | null
+  >(null);
+  const builderAbortRef = useRef<AbortController | null>(null);
+  const builderFeedbackTimerRef = useRef<number | null>(null);
   const activationViewedRef = useRef(new Set<string>());
   const lastViewedDashboardRef = useRef<string | null>(null);
   const lastViewedResultRef = useRef<{
@@ -444,6 +579,7 @@ export function BrainOverview({
   const canvasLoadTokenRef = useRef(0);
   const canvasLatestRef = useRef<BrainViewCanvasDocument | null>(null);
   const canvasServerRevisionsRef = useRef(new Map<string, number>());
+  const canvasSaveErrorsRef = useRef(new Map<string, string>());
   const pendingCanvasSavesRef = useRef(
     new Map<string, BrainViewCanvasDocument>(),
   );
@@ -454,6 +590,16 @@ export function BrainOverview({
   const canvasSavePumpRef = useRef<Promise<void> | null>(null);
   const refreshOnboardingActivation = useCallback(
     () => setActivationVersion((version) => version + 1),
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      builderAbortRef.current?.abort();
+      if (builderFeedbackTimerRef.current) {
+        clearTimeout(builderFeedbackTimerRef.current);
+      }
+    },
     [],
   );
 
@@ -481,6 +627,65 @@ export function BrainOverview({
     writeActiveAiPresetId(presetId);
   }, []);
   const activeViewId = view?.id;
+  const slots = useMemo(
+    () => normalizedSlots(view?.slots ?? []),
+    [view?.slots],
+  );
+  const proposalById = useMemo(
+    () => new Map(aiBlockProposals.map((proposal) => [proposal.id, proposal])),
+    [aiBlockProposals],
+  );
+  const proposalSlots = useMemo(
+    () =>
+      normalizedSlots([
+        ...slots.map((slot) => {
+          const proposal = proposalById.get(slot.id);
+          if (!proposal || proposal.status === "rejected" || !proposal.after) {
+            return slot;
+          }
+          return proposal.kind === "remove" ? slot : proposal.after;
+        }),
+        ...aiBlockProposals.flatMap((proposal) =>
+          proposal.kind === "add" && proposal.after ? [proposal.after] : [],
+        ),
+      ]),
+    [aiBlockProposals, proposalById, slots],
+  );
+  const proposalView = useMemo(
+    () =>
+      view && aiBlockProposals.length > 0
+        ? { ...view, slots: proposalSlots }
+        : view,
+    [aiBlockProposals.length, proposalSlots, view],
+  );
+  const visibleCanvasDocument = useMemo(
+    () =>
+      proposalView && aiBlockProposals.length > 0
+        ? reconcileCanvasDocument(proposalView, canvasDocument)
+        : canvasDocument,
+    [aiBlockProposals.length, canvasDocument, proposalView],
+  );
+  const canvasProposals = useMemo(
+    () =>
+      new Map(
+        aiBlockProposals.map((proposal) => [
+          proposal.id,
+          { kind: proposal.kind, status: proposal.status },
+        ]),
+      ),
+    [aiBlockProposals],
+  );
+  const refreshingSlotIds = useMemo(
+    () =>
+      new Set(
+        dataRefresh?.viewId === view?.id &&
+          (dataRefresh?.status === "starting" ||
+            dataRefresh?.status === "running")
+          ? (dataRefresh?.slotIds ?? [])
+          : [],
+      ),
+    [dataRefresh, view?.id],
+  );
   const onboardingActivation = useMemo(() => {
     // The activation record lives in localStorage. This counter invalidates
     // the memo after background setup updates that external store.
@@ -530,14 +735,17 @@ export function BrainOverview({
           canvasServerRevisionsRef.current.get(viewId) ?? null;
         const result = await commands.saveBrainViewCanvas(request);
         if (result.status === "error") {
-          setCanvasError(result.error);
-          toast({
-            title: "canvas changes were not saved",
-            description: result.error,
-            variant: "destructive",
-          });
+          if (canvasSaveErrorsRef.current.get(viewId) !== result.error) {
+            canvasSaveErrorsRef.current.set(viewId, result.error);
+            toast({
+              title: "canvas changes were not saved",
+              description: result.error,
+              variant: "destructive",
+            });
+          }
           continue;
         }
+        canvasSaveErrorsRef.current.delete(viewId);
         canvasServerRevisionsRef.current.set(viewId, result.data.revision);
         setCanvasError(null);
         if (canvasLatestRef.current?.viewId === viewId) {
@@ -578,6 +786,23 @@ export function BrainOverview({
       void pumpCanvasSaves();
     },
     [pumpCanvasSaves],
+  );
+
+  const changeVisibleCanvasDocument = useCallback(
+    (next: BrainViewCanvasDocument, options: { persist: boolean }) => {
+      if (!view || aiBlockProposals.length === 0) {
+        changeCanvasDocument(next, options);
+        return;
+      }
+
+      // AI review renders a preview that can contain Blocks which do not exist
+      // in the persisted Live View yet. Canvas interactions must never enqueue
+      // those preview-only positions for the backend. Keep safe viewport and
+      // annotation edits, but reconcile Block positions and arrows against the
+      // currently saved definition until the proposals are applied.
+      changeCanvasDocument(reconcileCanvasDocument(view, next), options);
+    },
+    [aiBlockProposals.length, changeCanvasDocument, view],
   );
 
   useEffect(() => {
@@ -1147,6 +1372,11 @@ export function BrainOverview({
     setUndoRevision(null);
     setReplaceConfirmationOpen(false);
     setCreateDashboardOpen(false);
+    setAiBlockProposals([]);
+    setProposalFocusSlotId(null);
+    setProposalTitle(null);
+    setProposalTimeRange(null);
+    setProposalPeriodPolicy(null);
   };
 
   const selectDashboard = (id: string) => {
@@ -1247,12 +1477,11 @@ export function BrainOverview({
     setAiPreview(true);
   };
 
-  const openLiveViewBuilderAgent = async ({
+  const runLiveViewBuilderAgentInline = async ({
     request,
     target,
     reference,
     template = null,
-    displayLabel = request,
   }: {
     request: string;
     target: LiveViewBuilderTarget;
@@ -1260,6 +1489,7 @@ export function BrainOverview({
     template?: BrainViewTemplateKit | null;
     displayLabel?: string;
   }): Promise<boolean> => {
+    if (!selectedAiPreset || builderAbortRef.current) return false;
     const analyticsProperties = {
       analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
       scope: target.scope,
@@ -1268,54 +1498,168 @@ export function BrainOverview({
       current_block_count: reference?.slots.length ?? 0,
       has_template_guide: Boolean(template),
       prompt_length: request.length,
+      execution_surface: "live_view",
+      opened_chat: false,
     };
     posthog.capture(
       "live_view_builder_agent_handoff_started",
       analyticsProperties,
     );
 
-    const agentPrompt = buildLiveViewBuilderAgentPrompt({
-      request,
-      view: reference,
-      target,
-      template,
-    });
-    const context =
-      target.scope === "block"
-        ? `Edit Block “${target.block.title}” in Live View “${reference?.title ?? "unknown"}”`
-        : target.operation === "create"
-          ? template
-            ? `Create a Live View guided by “${template.title}”`
-            : "Create a new Live View"
-          : `${target.operation === "replace" ? "Replace" : "Edit"} Live View “${reference?.title ?? "unknown"}”`;
+    const controller = new AbortController();
+    builderAbortRef.current = controller;
+    if (builderFeedbackTimerRef.current) {
+      clearTimeout(builderFeedbackTimerRef.current);
+      builderFeedbackTimerRef.current = null;
+    }
 
     try {
-      await showChatWithPrefill({
-        context,
-        prompt: agentPrompt,
-        displayLabel,
-        autoSend: true,
-        source: "live-view-builder-agent",
-        useHomeChat: true,
+      const generated = await generateLiveViewWithPi({
+        prompt: request,
+        scope: target.scope === "block" ? "block" : "dashboard",
+        preset: selectedAiPreset,
+        userToken:
+          selectedAiPreset.provider === "screenpipe-cloud"
+            ? (settings.user?.token ?? null)
+            : null,
+        pipes: installedPipes.map((pipe) => ({
+          name: pipe.config.name,
+          description:
+            typeof pipe.config.config?.description === "string"
+              ? pipe.config.config.description
+              : "",
+        })),
+        currentView: reference
+          ? {
+              title: reference.title,
+              timeRange: reference.timeRange,
+              periodPolicy: reference.periodPolicy,
+              blocks: reference.slots.map((slot) => ({
+                id: slot.id,
+                title: slot.title,
+                intent: slot.intent ?? slot.title,
+                component: slot.component,
+                width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
+                pipeName: slot.binding?.pipeName ?? null,
+              })),
+            }
+          : null,
+        currentViewRef: reference
+          ? { id: reference.id, revision: reference.revision }
+          : null,
+        targetBlockId: target.scope === "block" ? target.block.id : null,
+        signal: controller.signal,
+        onPhase: (phase) =>
+          setBuilderFeedback({
+            tone: "working",
+            label:
+              phase === "starting"
+                ? "starting"
+                : phase === "working"
+                  ? "drafting changes"
+                  : "preparing review",
+          }),
       });
+      if (!reference) {
+        const now = new Date().toISOString();
+        const empty: ViewDefinition = {
+          id: uniqueDashboardId(generated.title, views),
+          title: generated.title,
+          revision: 0,
+          timeRange: generated.timeRange,
+          periodPolicy:
+            generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+          slots: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        setDraft({
+          ...empty,
+          slots: generated.blocks.map((block, order) =>
+            slotFromGenerated(
+              block,
+              block.id ?? `${slotIdStem(block.title)}-${order + 1}`,
+              order,
+              null,
+            ),
+          ),
+        });
+        setAiNote(generated.note);
+        setPreviewSource(null);
+        setPreviewDestination("new");
+        setAiPreview(true);
+      } else {
+        const targetSlotId = target.scope === "block" ? target.block.id : null;
+        const proposals = buildAiBlockProposals(
+          reference,
+          generated,
+          targetSlotId,
+        );
+        if (proposals.length === 0) {
+          throw new Error("The agent did not propose a visible change");
+        }
+        setAiBlockProposals(proposals);
+        setProposalTitle(target.scope === "dashboard" ? generated.title : null);
+        setProposalTimeRange(
+          target.scope === "dashboard" ? generated.timeRange : null,
+        );
+        setProposalPeriodPolicy(
+          target.scope === "dashboard"
+            ? (generated.periodPolicy ?? reference.periodPolicy)
+            : null,
+        );
+        setProposalFocusSlotId(proposals[0].id);
+      }
       posthog.capture("live_view_builder_agent_handoff_completed", {
         ...analyticsProperties,
+        proposed_block_count: reference
+          ? buildAiBlockProposals(
+              reference,
+              generated,
+              target.scope === "block" ? target.block.id : null,
+            ).length
+          : generated.blocks.length,
       });
+      setBuilderFeedback({ tone: "success", label: "changes ready to review" });
+      builderFeedbackTimerRef.current = window.setTimeout(
+        () => setBuilderFeedback(null),
+        2_500,
+      );
       return true;
     } catch (handoffError) {
+      if (handoffError instanceof Error && handoffError.name === "AbortError") {
+        setBuilderFeedback(null);
+        return false;
+      }
       posthog.capture("live_view_builder_agent_handoff_failed", {
         ...analyticsProperties,
         failure_type: analyticsErrorType(handoffError),
       });
+      setBuilderFeedback({
+        tone: "error",
+        label: "could not update · try again",
+        detail:
+          handoffError instanceof Error
+            ? handoffError.message
+            : "The AI editor stopped before creating a review.",
+      });
       toast({
-        title: "could not open the Live View agent",
+        title: "could not update the Live View",
         description:
           handoffError instanceof Error
             ? handoffError.message
             : String(handoffError),
         variant: "destructive",
       });
+      builderFeedbackTimerRef.current = window.setTimeout(
+        () => setBuilderFeedback(null),
+        4_000,
+      );
       return false;
+    } finally {
+      if (builderAbortRef.current === controller) {
+        builderAbortRef.current = null;
+      }
     }
   };
 
@@ -1328,7 +1672,7 @@ export function BrainOverview({
     const creating = intent === "new-dashboard";
     setCreateDashboardOpen(false);
     setTemplateGalleryOpen(false);
-    return await openLiveViewBuilderAgent({
+    return await runLiveViewBuilderAgentInline({
       request: prompt,
       target: {
         scope: "dashboard",
@@ -1548,7 +1892,7 @@ export function BrainOverview({
 
     setAiEditingSlotId(slot.id);
     try {
-      return await openLiveViewBuilderAgent({
+      return await runLiveViewBuilderAgentInline({
         request: prompt,
         target: {
           scope: "block",
@@ -1561,6 +1905,115 @@ export function BrainOverview({
     } finally {
       setAiEditingSlotId(null);
     }
+  };
+
+  const decideAiProposal = (
+    slotId: string,
+    decision: "accepted" | "rejected",
+  ) => {
+    setAiBlockProposals((current) =>
+      current.map((proposal) =>
+        proposal.id === slotId ? { ...proposal, status: decision } : proposal,
+      ),
+    );
+    // A local accept/reject action must not pan the whole canvas to another
+    // Block. The initial proposal is focused once; review then stays spatially
+    // stable under the user's pointer.
+    setProposalFocusSlotId(null);
+  };
+
+  const discardAiProposals = () => {
+    setAiBlockProposals([]);
+    setProposalFocusSlotId(null);
+    setProposalTitle(null);
+    setProposalTimeRange(null);
+    setProposalPeriodPolicy(null);
+    setBuilderFeedback(null);
+  };
+
+  const applyAcceptedAiProposals = async (
+    reviewedProposals: AiBlockProposal[] = aiBlockProposals,
+  ) => {
+    if (!view) return;
+    const accepted = reviewedProposals.filter(
+      (proposal) => proposal.status === "accepted",
+    );
+    if (accepted.length === 0) {
+      discardAiProposals();
+      return;
+    }
+    const acceptedById = new Map(
+      accepted.map((proposal) => [proposal.id, proposal]),
+    );
+    const nextSlots = view.slots
+      .filter((slot) => acceptedById.get(slot.id)?.kind !== "remove")
+      .map((slot) => acceptedById.get(slot.id)?.after ?? slot);
+    for (const proposal of accepted) {
+      if (proposal.kind === "add" && proposal.after)
+        nextSlots.push(proposal.after);
+    }
+    const normalized = normalizedSlots(nextSlots);
+    const previous = copyViewDefinition(view);
+    // React Flow cannot safely reconcile the proposal graph with the newly
+    // persisted graph inside the same controlled store. Unmount it for the
+    // duration of the transaction, then mount a fresh store at the new
+    // revision after the save completes.
+    setApplyingAiProposals(true);
+    setSaving(true);
+    try {
+      const result = await commands.saveBrainView({
+        id: view.id,
+        title: proposalTitle?.trim() || view.title,
+        expectedRevision: view.revision,
+        timeRange: proposalTimeRange ?? view.timeRange,
+        periodPolicy: proposalPeriodPolicy ?? view.periodPolicy,
+        slots: serializedSlots(normalized),
+      });
+      if (result.status === "error") throw new Error(result.error);
+      setView(result.data);
+      setViews((current) =>
+        current.map((candidate) =>
+          candidate.id === result.data.id ? result.data : candidate,
+        ),
+      );
+      setUndoView(previous);
+      setUndoRevision(result.data.revision);
+      posthog.capture("live_view_ai_proposal_applied", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        accepted_block_count: accepted.length,
+        rejected_block_count: reviewedProposals.filter(
+          (proposal) => proposal.status === "rejected",
+        ).length,
+      });
+      discardAiProposals();
+      const changedSlots = result.data.slots.filter(
+        (slot) => acceptedById.has(slot.id) && Boolean(slot.binding),
+      );
+      if (changedSlots.length > 0) {
+        void refreshConnectedPipes(result.data, changedSlots, "card_ai_edit");
+      }
+      toast({ title: "accepted changes applied" });
+    } catch (applyError) {
+      toast({
+        title: "could not apply accepted changes",
+        description:
+          applyError instanceof Error ? applyError.message : String(applyError),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+      setApplyingAiProposals(false);
+    }
+  };
+
+  const acceptAllAiProposals = async () => {
+    const reviewed = aiBlockProposals.map((proposal) => ({
+      ...proposal,
+      status: "accepted" as const,
+    }));
+    setAiBlockProposals(reviewed);
+    setProposalFocusSlotId(null);
+    await applyAcceptedAiProposals(reviewed);
   };
 
   const save = async (
@@ -1673,7 +2126,7 @@ export function BrainOverview({
     const creatingNew = destination === "new" || !view;
     setSaving(true);
     try {
-      const opened = await openLiveViewBuilderAgent({
+      const opened = await runLiveViewBuilderAgentInline({
         request: `Build a useful Live View for the “${kit.title}” outcome. Use the template as guidance, then personalize the Blocks and Pipe strategy from a small relevant sample of my local data.`,
         target: {
           scope: "dashboard",
@@ -1887,6 +2340,11 @@ export function BrainOverview({
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
+      setViews((current) =>
+        current.map((candidate) =>
+          candidate.id === result.data.id ? result.data : candidate,
+        ),
+      );
       setUndoView(null);
       setUndoRevision(null);
       posthog.capture("live_view_dashboard_saved", {
@@ -1916,6 +2374,31 @@ export function BrainOverview({
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    const handleUndoShortcut = (event: KeyboardEvent) => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== "z" ||
+        !undoView ||
+        saving
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, [contenteditable='true']")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void restorePreviousView();
+    };
+    window.addEventListener("keydown", handleUndoShortcut);
+    return () => window.removeEventListener("keydown", handleUndoShortcut);
+  }, [saving, undoView]);
 
   const changeTimeRange = async (timeRange: BrainViewTimeRange) => {
     if (!view || timeRange === view.timeRange) return;
@@ -2008,7 +2491,9 @@ export function BrainOverview({
         className="mx-auto flex min-h-80 w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
       >
         <LiveViewAiComposer
-          busy={false}
+          busy={builderFeedback?.tone === "working"}
+          feedback={builderFeedback}
+          onCancel={() => builderAbortRef.current?.abort()}
           selectedPresetId={selectedAiPreset?.id ?? null}
           onSelectedPresetIdChange={selectAiPreset}
           onGenerate={generateFromComposer}
@@ -2138,6 +2623,13 @@ export function BrainOverview({
               </Button>
             </div>
           </div>
+
+          {builderFeedback && (
+            <LiveViewAiFeedbackStatus
+              feedback={builderFeedback}
+              className="mb-5 border border-border bg-background"
+            />
+          )}
 
           {wholeDashboardPreview && (
             <div className="mb-5 grid gap-4 border border-border p-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
@@ -2314,19 +2806,15 @@ export function BrainOverview({
   }
 
   if (!view) return null;
-  const slots = normalizedSlots(view.slots);
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
-  const dataStatus = liveViewDataStatus(slots);
+  const latestUpdate = liveViewLatestUpdate(slots);
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
   const dashboardBusy = saving || refreshIsActive;
   const canvasReady =
-    !canvasLoading && canvasDocument?.viewId === view.id && !canvasError;
-  const refreshingSlotIds = new Set(
-    refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
-  );
+    !canvasLoading && visibleCanvasDocument?.viewId === view.id && !canvasError;
   const dashboardSelectionDisabled = saving;
   const showOnboardingActivation = Boolean(
     onboardingActivation && !onboardingActivation.completedAt,
@@ -2345,242 +2833,318 @@ export function BrainOverview({
       >
         <div
           data-onboarding-guide-target="dashboard"
-          className="mb-3 flex shrink-0 flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
+          className="mb-3 grid shrink-0 grid-cols-1 gap-2 border-b border-border pb-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center"
         >
           <div
             data-testid="overview-dashboard-row"
-            className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1"
+            className="flex min-w-0 items-center gap-x-3"
           >
-          {navigation}
-          <LiveViewDashboardSwitcher
-            views={views}
-            current={view}
-            busy={dashboardBusy}
-            selectionDisabled={dashboardSelectionDisabled}
-            onSelect={selectDashboard}
-            onCreate={beginCreate}
-            onCustomize={onboardingColdStart ? undefined : beginEdit}
-            onOpenTemplates={
-              !onboardingColdStart && templateKits.length > 0
-                ? () => setTemplateGalleryOpen(true)
-                : undefined
-            }
-            onRename={renameDashboard}
-            onDuplicate={duplicateDashboard}
-            onDelete={deleteDashboard}
-          />
-          <LiveViewCreateDashboardDialog
-            open={createDashboardOpen}
-            busy={false}
-            selectedPresetId={selectedAiPreset?.id ?? null}
-            onOpenChange={setCreateDashboardOpen}
-            onSelectedPresetIdChange={selectAiPreset}
-            onGenerate={(prompt, preset) =>
-              generateFromComposer(
-                prompt,
-                "dashboard",
-                preset,
-                "new-dashboard",
-              )
-            }
-            onCreateBlank={beginManualCreate}
-          />
-          <p
-            data-testid="overview-data-status"
-            className="basis-full pl-12 font-mono text-[9px] text-muted-foreground sm:basis-auto sm:pl-0"
-          >
-            {onboardingColdStart
-              ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : dataStatus}
-          </p>
+            {navigation}
+            <LiveViewDashboardSwitcher
+              views={views}
+              current={view}
+              busy={dashboardBusy}
+              selectionDisabled={dashboardSelectionDisabled}
+              onSelect={selectDashboard}
+              onCreate={beginCreate}
+              onCustomize={onboardingColdStart ? undefined : beginEdit}
+              onOpenTemplates={
+                !onboardingColdStart && templateKits.length > 0
+                  ? () => setTemplateGalleryOpen(true)
+                  : undefined
+              }
+              onRename={renameDashboard}
+              onDuplicate={duplicateDashboard}
+              onDelete={deleteDashboard}
+            />
+            <LiveViewCreateDashboardDialog
+              open={createDashboardOpen}
+              busy={false}
+              selectedPresetId={selectedAiPreset?.id ?? null}
+              onOpenChange={setCreateDashboardOpen}
+              onSelectedPresetIdChange={selectAiPreset}
+              onGenerate={(prompt, preset) =>
+                generateFromComposer(
+                  prompt,
+                  "dashboard",
+                  preset,
+                  "new-dashboard",
+                )
+              }
+              onCreateBlank={beginManualCreate}
+            />
           </div>
           <div
             data-testid="overview-header-controls"
             className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end"
           >
-          {view.periodPolicy.type !== "fixed.v1" && (
-            <Select
-              value={view.timeRange}
-              disabled={dashboardBusy}
-              onValueChange={(value) =>
-                void changeTimeRange(value as BrainViewTimeRange)
-              }
-            >
-              <SelectTrigger
-                data-testid="overview-time-range"
-                aria-label="Live View time range"
-                className="h-9 min-w-36 w-auto flex-1 text-xs sm:flex-none"
+            {undoView && (
+              <Button
+                data-testid="overview-undo"
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 shrink-0 rounded-none"
+                aria-label="undo last Live View change"
+                title="Undo last Live View change (⌘Z)"
+                disabled={saving}
+                onClick={() => void restorePreviousView()}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {periodRanges.map((range) => (
-                  <SelectItem key={range.value} value={range.value}>
-                    {range.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {boundSlotCount > 0 && !onboardingColdStart && (
-            <Button
-              data-testid="overview-refresh-data"
-              variant="outline"
-              size="icon"
-              className="h-9 w-9 shrink-0 rounded-none"
-              aria-label={refreshIsActive ? "loading data" : "refresh data"}
-              title={refreshIsActive ? "loading data" : "refresh data"}
-              disabled={dashboardBusy}
-              onClick={() => void refreshConnectedPipes(view)}
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${
-                  refreshIsActive ? "animate-spin" : ""
-                }`}
-              />
-            </Button>
-          )}
-          {!onboardingColdStart && slots.some((slot) => slot.value) && (
-            <Button
-              data-testid="overview-send"
-              variant="outline"
-              size="sm"
-              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
-              disabled={dashboardBusy}
-              onClick={() => setShareOpen(true)}
-            >
-              <Send className="mr-1.5 h-3.5 w-3.5" /> send
-            </Button>
-          )}
+                <Undo2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {view.periodPolicy.type !== "fixed.v1" && (
+              <Select
+                value={view.timeRange}
+                disabled={dashboardBusy}
+                onValueChange={(value) =>
+                  void changeTimeRange(value as BrainViewTimeRange)
+                }
+              >
+                <SelectTrigger
+                  data-testid="overview-time-range"
+                  aria-label={
+                    latestUpdate
+                      ? `Live View time range. ${latestUpdate}`
+                      : "Live View time range"
+                  }
+                  title={latestUpdate ?? undefined}
+                  className="h-9 min-w-36 w-auto flex-1 text-xs sm:flex-none"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {periodRanges.map((range) => (
+                    <SelectItem key={range.value} value={range.value}>
+                      {range.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {boundSlotCount > 0 && !onboardingColdStart && (
+              <Button
+                data-testid="overview-refresh-data"
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 shrink-0 rounded-none"
+                aria-label={refreshIsActive ? "loading data" : "refresh data"}
+                title={refreshIsActive ? "loading data" : "refresh data"}
+                disabled={dashboardBusy}
+                onClick={() => void refreshConnectedPipes(view)}
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${
+                    refreshIsActive ? "animate-spin" : ""
+                  }`}
+                />
+              </Button>
+            )}
+            {!onboardingColdStart && slots.some((slot) => slot.value) && (
+              <Button
+                data-testid="overview-send"
+                variant="outline"
+                size="sm"
+                className="h-9 flex-1 rounded-none px-3 sm:flex-none"
+                disabled={dashboardBusy}
+                onClick={() => setShareOpen(true)}
+              >
+                <Send className="mr-1.5 h-3.5 w-3.5" /> send
+              </Button>
+            )}
           </div>
         </div>
-      {canvasError && (
-        <div
-          data-testid="live-view-canvas-error"
-          className="mb-4 flex items-center gap-2 border border-border px-3 py-2 text-xs"
-        >
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          <span>
-            Canvas could not be loaded. Reopen Live Views to try again.
-          </span>
-        </div>
-      )}
-      {canvasSaving && (
-        <p className="sr-only" role="status">
-          saving canvas
-        </p>
-      )}
-      {templateGalleryOpen && !onboardingColdStart && (
-        <div className="relative mb-5 max-h-[min(50vh,32rem)] shrink-0 overflow-y-auto border border-border p-4 pr-12">
-          <Button
-            aria-label="close templates"
-            variant="ghost"
-            size="icon"
-            className="absolute right-2 top-2 h-8 w-8 rounded-none"
-            onClick={() => setTemplateGalleryOpen(false)}
+        {canvasError && (
+          <div
+            data-testid="live-view-canvas-error"
+            className="mb-4 flex items-center gap-2 border border-border px-3 py-2 text-xs"
           >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-          <LiveViewTemplateGallery
-            kits={templateKits}
-            installedPipeNames={installedPipeNames}
-            onPreview={previewTemplate}
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Canvas could not be loaded. Reopen Live Views to try again.
+            </span>
+          </div>
+        )}
+        {canvasSaving && (
+          <p className="sr-only" role="status">
+            saving canvas
+          </p>
+        )}
+        {templateGalleryOpen && !onboardingColdStart && (
+          <div className="relative mb-5 max-h-[min(50vh,32rem)] shrink-0 overflow-y-auto border border-border p-4 pr-12">
+            <Button
+              aria-label="close templates"
+              variant="ghost"
+              size="icon"
+              className="absolute right-2 top-2 h-8 w-8 rounded-none"
+              onClick={() => setTemplateGalleryOpen(false)}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+            <LiveViewTemplateGallery
+              kits={templateKits}
+              installedPipeNames={installedPipeNames}
+              onPreview={previewTemplate}
+            />
+          </div>
+        )}
+        {aiBlockProposals.length > 0 && (
+          <div
+            data-testid="live-view-ai-review"
+            className="mb-3 flex flex-wrap items-center gap-2 border border-amber-500/60 bg-amber-500/5 px-3 py-2 text-xs"
+          >
+            <span className="font-medium">
+              Review {aiBlockProposals.length} proposed Block
+              {aiBlockProposals.length === 1 ? "" : "s"}
+            </span>
+            <span className="text-muted-foreground">
+              {
+                aiBlockProposals.filter(
+                  (proposal) => proposal.status === "accepted",
+                ).length
+              }{" "}
+              accepted ·{" "}
+              {
+                aiBlockProposals.filter(
+                  (proposal) => proposal.status === "rejected",
+                ).length
+              }{" "}
+              rejected
+            </span>
+            <div className="ml-auto flex flex-wrap items-center gap-1">
+              <Button
+                data-testid="live-view-ai-accept-all"
+                size="sm"
+                variant="ghost"
+                className="h-7 rounded-none px-2"
+                disabled={saving}
+                title="Accept and save every proposed change"
+                onClick={() => void acceptAllAiProposals()}
+              >
+                <Check className="mr-1 h-3 w-3" /> accept all
+              </Button>
+              <Button
+                data-testid="live-view-ai-reject-all"
+                size="sm"
+                variant="ghost"
+                className="h-7 rounded-none px-2"
+                disabled={saving}
+                title="Reject and discard every proposed change"
+                onClick={discardAiProposals}
+              >
+                <X className="mr-1 h-3 w-3" /> reject all
+              </Button>
+              <Button
+                data-testid="live-view-ai-apply-accepted"
+                size="sm"
+                className="h-7 rounded-none px-2"
+                disabled={
+                  saving ||
+                  aiBlockProposals.some(
+                    (proposal) => proposal.status === "pending",
+                  )
+                }
+                onClick={() => void applyAcceptedAiProposals()}
+              >
+                apply accepted
+              </Button>
+              <Button
+                data-testid="live-view-ai-discard"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 rounded-none"
+                aria-label="discard all AI changes"
+                onClick={discardAiProposals}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        )}
+        {dataRefresh?.viewId === view.id && (
+          <DataRefreshBanner state={dataRefresh} />
+        )}
+        {showOnboardingActivation && onboardingActivation && (
+          <LiveViewOnboardingActivation
+            goalCategory={onboardingActivation.goalCategory}
+            captureReadiness={captureReadiness}
+            pipesReady={onboardingPipesReady}
+            setupStatus={onboardingActivation.setupStatus}
+            setupError={onboardingActivation.setupError}
+            hasResult={onboardingHasResult}
+            refreshing={refreshIsActive}
+            retrying={onboardingRetrying}
+            onRetry={() => void retryOnboardingSetup()}
+            onFixCapture={() =>
+              window.dispatchEvent(
+                new CustomEvent("open-settings", {
+                  detail: { section: "recording" },
+                }),
+              )
+            }
+            onRefresh={() => {
+              posthog.capture("onboarding_live_view_refresh_requested", {
+                goal_category: onboardingActivation.goalCategory,
+                pipe_count: onboardingPipeNames.length,
+              });
+              void refreshConnectedPipes(view, undefined, "onboarding");
+            }}
+            onComplete={() => finishOnboardingActivation("confirmed")}
           />
-        </div>
-      )}
-      {undoView && (
-        <div
-          data-testid="overview-undo-banner"
-          className="mb-4 flex items-center gap-3 border border-border bg-muted/30 px-3 py-2 text-xs"
-        >
-          <Undo2 className="h-3.5 w-3.5 shrink-0" />
-          <span>Your previous dashboard layout is available.</span>
-          <Button
-            data-testid="overview-undo"
-            variant="ghost"
-            size="sm"
-            className="ml-auto h-7 rounded-none px-2"
-            disabled={saving}
-            onClick={() => void restorePreviousView()}
+        )}
+        {showOnboardingActivation && onboardingActivation && (
+          <LiveViewOnboardingGuide
+            activation={onboardingActivation}
+            hasResult={onboardingHasResult}
+            retrying={onboardingRetrying}
+            onRetry={() => void retryOnboardingSetup()}
+            onComplete={() => finishOnboardingActivation("confirmed")}
+            onActivationChange={refreshOnboardingActivation}
+          />
+        )}
+        {showOnboardingActivation &&
+        !onboardingHasResult ? null : slots.length === 0 ? (
+          <button
+            type="button"
+            className="flex min-h-0 w-full flex-1 items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
+            onClick={beginEdit}
           >
-            undo
-          </Button>
-        </div>
-      )}
-      {dataRefresh?.viewId === view.id && (
-        <DataRefreshBanner state={dataRefresh} />
-      )}
-      {showOnboardingActivation && onboardingActivation && (
-        <LiveViewOnboardingActivation
-          goalCategory={onboardingActivation.goalCategory}
-          captureReadiness={captureReadiness}
-          pipesReady={onboardingPipesReady}
-          setupStatus={onboardingActivation.setupStatus}
-          setupError={onboardingActivation.setupError}
-          hasResult={onboardingHasResult}
-          refreshing={refreshIsActive}
-          retrying={onboardingRetrying}
-          onRetry={() => void retryOnboardingSetup()}
-          onFixCapture={() =>
-            window.dispatchEvent(
-              new CustomEvent("open-settings", {
-                detail: { section: "recording" },
-              }),
-            )
-          }
-          onRefresh={() => {
-            posthog.capture("onboarding_live_view_refresh_requested", {
-              goal_category: onboardingActivation.goalCategory,
-              pipe_count: onboardingPipeNames.length,
-            });
-            void refreshConnectedPipes(view, undefined, "onboarding");
-          }}
-          onComplete={() => finishOnboardingActivation("confirmed")}
-        />
-      )}
-      {showOnboardingActivation && onboardingActivation && (
-        <LiveViewOnboardingGuide
-          activation={onboardingActivation}
-          hasResult={onboardingHasResult}
-          retrying={onboardingRetrying}
-          onRetry={() => void retryOnboardingSetup()}
-          onComplete={() => finishOnboardingActivation("confirmed")}
-          onActivationChange={refreshOnboardingActivation}
-        />
-      )}
-      {showOnboardingActivation &&
-      !onboardingHasResult ? null : slots.length === 0 ? (
-        <button
-          type="button"
-          className="flex min-h-0 w-full flex-1 items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
-          onClick={beginEdit}
-        >
-          add your first Block
-        </button>
-      ) : canvasReady && canvasDocument ? (
-        <LiveViewCanvas
-          document={canvasDocument}
-          slots={slots}
-          timeRange={view.timeRange}
-          refreshingSlotIds={refreshingSlotIds}
-          aiEditingSlotId={aiEditingSlotId}
-          onChange={changeCanvasDocument}
-          onFeedback={recordCardFeedback}
-          onRegenerate={(slot) =>
-            void refreshConnectedPipes(view, [slot], "card_regenerated")
-          }
-          onAiEdit={editSlotWithAi}
-          onItemAction={recordItemAction}
-          onItemHandoff={handoffItem}
-        />
-      ) : canvasLoading ? (
-        <div
-          data-testid="live-view-canvas-loading"
-          className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
-        >
-          loading process map
-        </div>
-      ) : null}
+            add your first Block
+          </button>
+        ) : applyingAiProposals ? (
+          <div
+            data-testid="live-view-canvas-applying"
+            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+          >
+            applying changes
+          </div>
+        ) : canvasReady && canvasDocument ? (
+          <LiveViewCanvas
+            key={`${view.id}:${view.revision}`}
+            document={visibleCanvasDocument!}
+            slots={proposalSlots}
+            timeRange={view.timeRange}
+            refreshingSlotIds={refreshingSlotIds}
+            aiEditingSlotId={aiEditingSlotId}
+            onChange={changeVisibleCanvasDocument}
+            onFeedback={recordCardFeedback}
+            onRegenerate={(slot) =>
+              void refreshConnectedPipes(view, [slot], "card_regenerated")
+            }
+            onAiEdit={editSlotWithAi}
+            onItemAction={recordItemAction}
+            onItemHandoff={handoffItem}
+            proposals={canvasProposals}
+            focusSlotId={proposalFocusSlotId}
+            onProposalDecision={decideAiProposal}
+          />
+        ) : canvasLoading ? (
+          <div
+            data-testid="live-view-canvas-loading"
+            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+          >
+            loading process map
+          </div>
+        ) : null}
       </div>
       {!onboardingColdStart && (
         <div
@@ -2589,7 +3153,9 @@ export function BrainOverview({
         >
           <div className="pointer-events-auto w-full max-w-2xl shadow-lg shadow-black/5">
             <LiveViewAiComposer
-              busy={false}
+              busy={builderFeedback?.tone === "working"}
+              feedback={builderFeedback}
+              onCancel={() => builderAbortRef.current?.abort()}
               compact
               currentViewTitle={view.title}
               selectedPresetId={selectedAiPreset?.id ?? null}

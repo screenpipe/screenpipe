@@ -378,8 +378,8 @@ impl DatabaseManager {
             _ => "DESC",
         };
         sql.push_str(&format!(
-            " ORDER BY {} {} LIMIT ?7 OFFSET ?8",
-            order_col, order_direction
+            " ORDER BY {} {}, id {} LIMIT ?7 OFFSET ?8",
+            order_col, order_direction, order_direction
         ));
 
         let fts_query = query.map(crate::text_normalizer::sanitize_fts5_query);

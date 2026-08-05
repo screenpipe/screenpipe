@@ -57,6 +57,30 @@ export const aiPresetSchema = z.object({
   maxContextChars: z.number().int().min(1000, "Must be at least 1,000 characters").max(2000000, "Cannot exceed 2,000,000 characters"),
 });
 
+const aecModeSchema = z.enum(["off", "screenpipe", "macos", "windows"]);
+const booleanRemotePolicySchema = z.object({
+  defaultEnabled: z.boolean(),
+  forceDisabled: z.boolean(),
+}).strict();
+const remoteControlPreferencesSchema = z.object({
+  semanticContext: z.boolean().nullable(),
+  coreAudioSystemAudio: z.boolean().nullable(),
+  smartRecording: z.boolean().nullable(),
+  aecMode: aecModeSchema.nullable(),
+}).strict();
+const remoteControlPolicySchema = z.object({
+  schemaVersion: z.literal(1),
+  boolean: z.object({
+    semanticContext: booleanRemotePolicySchema,
+    coreAudioSystemAudio: booleanRemotePolicySchema,
+    smartRecording: booleanRemotePolicySchema,
+  }).strict(),
+  aecMode: z.object({
+    defaultValue: aecModeSchema,
+    forceDisabled: z.boolean(),
+  }).strict(),
+}).strict();
+
 export const settingsStoreSchema = z.object({
   // AI Settings
   aiPresets: z.array(aiPresetSchema),
@@ -86,6 +110,8 @@ export const settingsStoreSchema = z.object({
   disableVision: z.boolean(),
   disableScreenshots: z.boolean().optional(),
   enableSemanticContext: z.boolean().optional(),
+  remoteControlPreferences: remoteControlPreferencesSchema.optional(),
+  remoteControlPolicy: remoteControlPolicySchema.optional(),
   semanticContextMode: z.enum(["memory", "computerUse", "both"]).optional(),
   useAllMonitors: z.boolean(),
   fps: z.number().min(0.1, "FPS must be at least 0.1").max(60, "FPS cannot exceed 60"),

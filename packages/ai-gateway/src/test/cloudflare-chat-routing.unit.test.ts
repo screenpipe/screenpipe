@@ -45,7 +45,7 @@ describe('Cloudflare hosted-chat routing', () => {
 		expect(attempts).toHaveBeenCalledTimes(1);
 		if ('error' in result) {
 			expect(result.error.code).toBe('hosted_ai_allowance_exceeded');
-			expect(result.error.allowance).toEqual({ lane: 'explicit', plan: 'basic', window: '30d' });
+			expect(result.error.allowance).toEqual({ lane: 'explicit', plan: 'basic', managed_by: 'cloudflare' });
 		}
 	});
 
@@ -116,21 +116,39 @@ describe('Cloudflare hosted-chat routing', () => {
 		]);
 	});
 
-	it('renders a stable terminal contract for JSON and streaming clients', async () => {
-		const autoContext = await buildHostedChatGatewayContext(basicAuth, 'auto', 'interactive');
-		const error = new HostedChatAllowanceExceededError(autoContext);
-		const jsonResponse = allowanceErrorResponse({ ...body, model: 'auto' }, error);
-		const json = await jsonResponse.json() as any;
-		expect(jsonResponse.status).toBe(429);
-		expect(json.error.code).toBe('hosted_ai_allowance_exceeded');
-		expect(json.allowance).toEqual({ lane: 'auto', plan: 'basic', window: '30d' });
+	it.each([
+		['free', 'basic', 'https://screenpi.pe/account/billing'],
+		['basic', 'business', 'https://screenpi.pe/account/billing'],
+		['business', 'business_max', 'https://screenpipe.com/account/billing?target_plan=pro_max&interval=month'],
+		['business_max', 'business_ultra', 'https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month'],
+		['business_ultra', null, null],
+	] as const)(
+		'renders the exact %s terminal contract for JSON and streaming clients',
+		async (accountPlan, requiredPlan, upgradeUrl) => {
+			const auth = {
+				...basicAuth,
+				tier: accountPlan === 'free' || accountPlan === 'basic' ? 'logged_in' : 'subscribed',
+				accountPlan,
+			} as AuthResult;
+			const autoContext = await buildHostedChatGatewayContext(auth, 'auto', 'interactive');
+			const error = new HostedChatAllowanceExceededError(autoContext);
+			const jsonResponse = allowanceErrorResponse({ ...body, model: 'auto' }, error);
+			const json = await jsonResponse.json() as any;
+			expect(jsonResponse.status).toBe(429);
+			expect(json.error.code).toBe('hosted_ai_allowance_exceeded');
+			expect(json.allowance).toEqual({ lane: 'auto', plan: accountPlan, managed_by: 'cloudflare' });
+			expect(json.required_plan).toBe(requiredPlan);
+			expect(json.upgrade_url).toBe(upgradeUrl);
+			expect(JSON.stringify(json)).not.toMatch(/usd|dollar|amount/i);
 
-		const streamResponse = allowanceErrorResponse({ ...body, model: 'auto', stream: true }, error);
-		const stream = await streamResponse.text();
-		expect(streamResponse.status).toBe(429);
-		expect(streamResponse.headers.get('content-type')).toContain('text/event-stream');
-		expect(stream).toContain('hosted_ai_allowance_exceeded');
-		expect(stream).toContain('"lane":"auto"');
-		expect(stream).toContain('data: [DONE]');
-	});
+			const streamResponse = allowanceErrorResponse({ ...body, model: 'auto', stream: true }, error);
+			const stream = await streamResponse.text();
+			expect(streamResponse.status).toBe(429);
+			expect(streamResponse.headers.get('content-type')).toContain('text/event-stream');
+			expect(stream).toContain('hosted_ai_allowance_exceeded');
+			expect(stream).toContain('"lane":"auto"');
+			expect(stream).toContain(`"required_plan":${requiredPlan === null ? 'null' : `"${requiredPlan}"`}`);
+			expect(stream).toContain('data: [DONE]');
+		},
+	);
 });

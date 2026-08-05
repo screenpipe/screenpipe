@@ -60,6 +60,12 @@ This will help maintainers review and ultimately resolve and merge contributions
 ## git usage
 - make sure to understand there is always bunch of other agents working on the same codebase in parallel, never delete local code or use git reset or such
 
+## app publication boundary
+- AI agents may bump versions, push source, build, sign, notarize, and upload immutable versioned app/enterprise artifacts.
+- AI agents must never update `latest.json`, `beta/latest.json`, or `enterprise/published.json`; create `app-v*` / `app-beta-v*` tags or GitHub releases; disable/bypass the `Human-only app publication tags` ruleset; approve the `app-publication` environment; or invoke the admin publication endpoint.
+- Public app publication is a human action performed from the authenticated admin releases UI after reviewing the exact version, commit, CI, and artifact set.
+- Release automation receives only `RELEASE_UPLOAD_TOKEN`, whose server-side capability is limited to `releases/<version>/<target>/<artifact>` and `enterprise/releases/<version>/<target>/<artifact>`.
+
 ## context
 
 - always use progressive disclosure when designing agentic systems
