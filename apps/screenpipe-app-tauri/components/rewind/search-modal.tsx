@@ -1737,20 +1737,28 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     // a dead frame.
     if (!readyThumbnailFrameIdsRef.current.has(result.frame_id)) return;
 
-    // Timeline receives every verified result, not just the ones whose
-    // thumbnails happen to have decoded. Thumbnails load lazily as cards enter
-    // the viewport, so scoping this set to loaded frames made Timeline's result
-    // count depend on how far the user had scrolled — 1/6 for a 20-result
-    // search. `searchResults` already excludes both hidden-only candidates and
-    // frames proven missing (see `removeSearchResult`/`unavailableFrameIds`).
+    // Timeline cycles exactly what the grid was showing.
+    //
+    // Two ways this used to diverge. Scoping the set to frames whose
+    // thumbnails had decoded made the count depend on how far the user had
+    // scrolled, because thumbnails load lazily as cards enter the viewport —
+    // a 20-result search reported 1/6. And sending the unfiltered store meant
+    // an active app or site chip left Timeline cycling results the grid had
+    // filtered out; those chips narrow client-side only, unlike the date chip,
+    // which re-runs the query with server-side bounds.
+    //
+    // `filteredResults` is the rendered set, and it already excludes
+    // hidden-only candidates and frames proven missing (see
+    // `removeSearchResult`/`unavailableFrameIds`).
+    const navigationResults = filteredResultsRef.current;
     trackSearchResultSelected("screen", selectionMethod, "timeline");
     if (queryTokens.length > 0) {
       setHighlight(queryTokens, result.frame_id);
     }
     // Track which result was selected so timeline arrow keys can cycle from here
-    const idx = searchResults.findIndex((r) => r.frame_id === result.frame_id);
+    const idx = navigationResults.findIndex((r) => r.frame_id === result.frame_id);
     if (idx >= 0) setCurrentResultIndex(idx);
-    const resultsJson = JSON.stringify(searchResults);
+    const resultsJson = JSON.stringify(navigationResults);
     await navigateToResult(
       result.timestamp,
       result.frame_id,
@@ -1758,7 +1766,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       resultsJson,
       query,
     );
-  }, [navigateToResult, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex, trackSearchResultSelected]);
+  }, [navigateToResult, queryTokens, setHighlight, query, setCurrentResultIndex, trackSearchResultSelected]);
 
   // Keyboard navigation — uses refs for data arrays to avoid re-mounting when results change
   useEffect(() => {
