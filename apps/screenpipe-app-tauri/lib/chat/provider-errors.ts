@@ -12,6 +12,52 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 
 const MIN_AGENT_CONTEXT_TOKENS = 32_768;
 const tokenFormatter = new Intl.NumberFormat("en-US");
+const SAFETY_REFUSAL_MESSAGE =
+  "The selected model declined this request because of its safety policy. This is not a screenpipe outage. Start a new chat and revise the request with clear authorized context, or ask for high-level guidance.";
+
+export type ProviderErrorPresentation = {
+  kind: "provider" | "safety_refusal";
+  message: string;
+  retryable: boolean;
+};
+
+/**
+ * Stable client-side representation of an upstream model safety refusal.
+ *
+ * Pi crosses the process boundary with provider errors as strings, so rebuild
+ * the typed error from the known OpenAI/Anthropic refusal signatures. Keeping
+ * retryability on the error prevents every UI event path from independently
+ * deciding whether an unchanged prompt should be sent again.
+ */
+export class SafetyRefusalError extends Error {
+  readonly code = "safety_refusal";
+  readonly retryable = false;
+  readonly rawMessage: string;
+
+  constructor(rawMessage: string) {
+    super(SAFETY_REFUSAL_MESSAGE);
+    this.name = "SafetyRefusalError";
+    this.rawMessage = rawMessage;
+  }
+
+  static matches(errorStr: string): boolean {
+    const normalized = errorStr.toLowerCase();
+    return (
+      normalized.includes("content_filter") ||
+      normalized.includes("content filter") ||
+      normalized.includes("safety_refusal") ||
+      normalized.includes("safety refusal") ||
+      normalized.includes("flagged for possible cybersecurity risk") ||
+      /(?:finish|stop)[_ ]reason[^\n]{0,80}\brefusal\b/i.test(errorStr)
+    );
+  }
+
+  static from(errorStr: string): SafetyRefusalError | null {
+    return SafetyRefusalError.matches(errorStr)
+      ? new SafetyRefusalError(errorStr)
+      : null;
+  }
+}
 
 export type ProviderPreflightResult =
   | { ok: true }
@@ -118,7 +164,7 @@ export function buildChatGptAccountIdMessage(): string {
   return "Your ChatGPT sign-in doesn't include chat access: the login token has no ChatGPT account id. This usually means an Enterprise/Business workspace where the admin hasn't enabled Codex local app access. Reconnect ChatGPT in Settings → AI with a personal account, or ask your workspace admin to enable access.";
 }
 
-export function buildProviderErrorMessage(
+function buildGenericProviderErrorMessage(
   errorStr: string,
   preset?: ProviderLike | null
 ): string | null {
@@ -196,6 +242,30 @@ export function buildProviderErrorMessage(
   }
 
   return null;
+}
+
+export function buildProviderErrorPresentation(
+  errorStr: string,
+  preset?: ProviderLike | null
+): ProviderErrorPresentation | null {
+  const safetyRefusal = SafetyRefusalError.from(errorStr);
+  if (safetyRefusal) {
+    return {
+      kind: safetyRefusal.code,
+      message: safetyRefusal.message,
+      retryable: safetyRefusal.retryable,
+    };
+  }
+
+  const message = buildGenericProviderErrorMessage(errorStr, preset);
+  return message ? { kind: "provider", message, retryable: true } : null;
+}
+
+export function buildProviderErrorMessage(
+  errorStr: string,
+  preset?: ProviderLike | null
+): string | null {
+  return buildProviderErrorPresentation(errorStr, preset)?.message ?? null;
 }
 
 export function buildNoResponseMessage(preset?: ProviderLike | null): string {

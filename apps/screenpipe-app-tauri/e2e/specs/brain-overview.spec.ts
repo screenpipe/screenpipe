@@ -528,26 +528,29 @@ describe("Brain Live Views", function () {
     piConversation.setResponseDelay(500);
     piConversation.setTextResponse(
       JSON.stringify({
-        title: "Process map",
-        timeRange: "7d",
-        timeRangeBehavior: "selectable",
-        blocks: [
+        operations: [
           {
-            id: "trigger-and-outcome",
-            title: "Trigger, owner, and outcome",
-            component: "table.v1",
-            width: 6,
-            intent:
-              "Show the workflow trigger, accountable owner, and verified outcome.",
-            pipeName: null,
+            op: "update",
+            blockId: "trigger-and-outcome",
+            block: {
+              title: "Trigger, owner, and outcome",
+              component: "table.v1",
+              width: 6,
+              intent:
+                "Show the workflow trigger, accountable owner, and verified outcome.",
+              pipeName: null,
+            },
           },
           {
-            id: "safe-improvement-path",
-            title: "Risky automation path",
-            component: "markdown.v1",
-            width: 6,
-            intent: "Describe a risky automation path.",
-            pipeName: null,
+            op: "update",
+            blockId: "safe-improvement-path",
+            block: {
+              title: "Risky automation path",
+              component: "markdown.v1",
+              width: 6,
+              intent: "Describe a risky automation path.",
+              pipeName: null,
+            },
           },
         ],
         note: "Two Block edits are ready for review.",
