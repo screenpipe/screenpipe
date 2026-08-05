@@ -55,7 +55,6 @@ sentry = { workspace = true }
 # Server
 axum = { workspace = true }
 http-body-util = "0.1"
-hyper = "1"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
 tower = { version = "0.4", default-features = false }
 tokio = { workspace = true }
