@@ -1320,6 +1320,9 @@ fn unicode_ltr_mark_stripped_from_whatsapp_identity() {
     );
 }
 
+// Cross-platform name-list matching is macOS/Windows-only; on Linux the
+// profile loop consults linux_process_names alone (fail closed for gated apps).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn whatsapp_resolves_to_native_with_profile_index() {
     // WhatsApp must fall through `known_native_bundle_platform` and match via
@@ -1405,6 +1408,9 @@ fn signal_call_passes_renderer_gate() {
     );
 }
 
+// Cross-platform name-list matching is macOS/Windows-only; on Linux the
+// profile loop consults linux_process_names alone (fail closed for gated apps).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn telegram_resolves_to_native_with_profile_index() {
     let profiles = load_detection_profiles();
@@ -1458,6 +1464,9 @@ fn teams_unaffected_by_call_signal_gate() {
     assert_eq!(platform, "Microsoft Teams");
 }
 
+// Cross-platform name-list matching is macOS/Windows-only; on Linux the
+// profile loop consults linux_process_names alone (fail closed for gated apps).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn whatsapp_without_call_signal_blocked_by_gate() {
     // Voice note scenario: WhatsApp holds the mic but no Calling_Window is
@@ -1505,6 +1514,9 @@ fn whatsapp_without_call_signal_blocked_by_gate() {
     );
 }
 
+// Cross-platform name-list matching is macOS/Windows-only; on Linux the
+// profile loop consults linux_process_names alone (fail closed for gated apps).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn whatsapp_with_call_signal_passes_gate() {
     // Real call scenario: WhatsApp holds the mic AND Calling_Window is present.
@@ -1635,6 +1647,9 @@ fn signal_process_windows() -> AudioInputProcess {
     }
 }
 
+// Cross-platform name-list matching is macOS/Windows-only; on Linux the
+// profile loop consults linux_process_names alone (fail closed for gated apps).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn whatsapp_resolves_to_native_on_windows_identity_shape() {
     // Windows never populates bundle_id/owner_bundle_id, so identity is
@@ -1658,6 +1673,9 @@ fn whatsapp_resolves_to_native_on_windows_identity_shape() {
     );
 }
 
+// Cross-platform name-list matching is macOS/Windows-only; on Linux the
+// profile loop consults linux_process_names alone (fail closed for gated apps).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn telegram_resolves_to_native_on_windows_identity_shape() {
     let profiles = load_detection_profiles();
@@ -2083,4 +2101,88 @@ fn resolved_platform_identity_heals_pid_from_matching_candidate() {
         None,
         "an unresolved browser alone must not be adopted (could be any WebRTC page)"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Linux identity-shape tests: the PipeWire/PulseAudio collector reports a
+// process binary and a human-readable app name, never bundle ids. Call-first
+// apps must resolve from linux_process_names; messaging-first apps (Signal,
+// Telegram, WhatsApp) must fail CLOSED because the Linux call-signal scanner
+// is a stub and their voice notes hold the mic exactly like a call.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+fn linux_process(binary: &str, app_name: &str) -> AudioInputProcess {
+    AudioInputProcess {
+        audio_session_id: None,
+        audio_object_id: Some(210),
+        pid: Some(31337),
+        bundle_id: None,
+        process_name: Some(binary.to_string()),
+        owner_app_name: Some(app_name.to_string()),
+        owner_bundle_id: None,
+        first_seen_at_ms: None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn teams_for_linux_resolves_via_linux_process_names() {
+    let profiles = load_detection_profiles();
+    let process = linux_process("teams-for-linux", "teams-for-linux");
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "teams-for-linux should resolve as native");
+    let (platform, _) = result.unwrap();
+    assert_eq!(platform, "Microsoft Teams");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn signal_binary_fails_closed_on_linux() {
+    // Both the binary and the PipeWire application.name shape must fall
+    // through unresolved: with no bundle ids the .helper.Renderer voice-note
+    // gate cannot discriminate, so resolving here would start a phantom
+    // meeting for every voice note.
+    let profiles = load_detection_profiles();
+    for process in [
+        linux_process("signal-desktop", "Signal"),
+        linux_process("signal-desktop", "signal"),
+    ] {
+        assert_eq!(
+            resolve_native_platform(&process, &profiles),
+            None,
+            "Signal must fail closed on Linux: {process:?}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn messaging_first_app_names_fail_closed_on_linux() {
+    // The macOS app-name lists ("whatsapp", "telegram") must NOT be consulted
+    // for Linux identity fields — PipeWire's application.name often equals the
+    // macOS app name, which would defeat the empty linux_process_names.
+    let profiles = load_detection_profiles();
+    for process in [
+        linux_process("telegram-desktop", "Telegram"),
+        linux_process("whatsapp-for-linux", "WhatsApp"),
+    ] {
+        assert_eq!(
+            resolve_native_platform(&process, &profiles),
+            None,
+            "messaging-first app must fail closed on Linux: {process:?}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn zoom_still_resolves_on_linux_via_known_native_arm() {
+    // Call-first apps keep the fail-open path: bare "zoom" stays in
+    // known_native_bundle_platform on every platform.
+    let profiles = load_detection_profiles();
+    let process = linux_process("zoom", "Zoom");
+    let result = resolve_native_platform(&process, &profiles);
+    assert!(result.is_some(), "zoom should resolve on Linux");
+    assert_eq!(result.unwrap().0, "Zoom");
 }

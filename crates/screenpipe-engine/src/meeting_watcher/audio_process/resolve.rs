@@ -449,23 +449,31 @@ pub(crate) fn resolve_native_platform(
     }
 
     for (idx, profile) in profiles.iter().enumerate() {
-        // Match against every platform's name list: identity fields are macOS
-        // bundle ids/app names on macOS, Windows exe names (e.g.
-        // "whatsapp.exe") on Windows, and PipeWire process binaries (e.g.
-        // "teams-for-linux") on Linux, so a profile with only one platform's
-        // list populated would otherwise never resolve elsewhere once it's not
-        // also in `known_native_bundle_platform` (#4998 review).
-        let matches = profile
+        // macOS/Windows: match against both platforms' name lists — identity
+        // fields are macOS bundle ids/app names on macOS and Windows exe names
+        // (e.g. "whatsapp.exe") on Windows, so a profile with only
+        // `macos_app_names` populated (WhatsApp, Telegram, ...) would
+        // otherwise never resolve on Windows once it's not also in
+        // `known_native_bundle_platform` (#4998 review).
+        #[cfg(not(target_os = "linux"))]
+        let mut platform_names = profile
             .app_identifiers
             .macos_app_names
             .iter()
-            .chain(profile.app_identifiers.windows_process_names.iter())
-            .chain(profile.app_identifiers.linux_process_names.iter())
-            .any(|name| {
-                fields
-                    .iter()
-                    .any(|field| field.eq_ignore_ascii_case(name) || field == &name.to_lowercase())
-            });
+            .chain(profile.app_identifiers.windows_process_names.iter());
+        // Linux: match ONLY linux_process_names. The collector also reports a
+        // human-readable app name (PipeWire `application.name`) that often
+        // equals the macOS app name (e.g. "Signal", "Telegram"), so chaining
+        // the other platforms' lists here would defeat a deliberately empty
+        // Linux list — Signal and Telegram must fail closed on Linux because
+        // the call-signal scanner that gates their voice notes is a stub.
+        #[cfg(target_os = "linux")]
+        let mut platform_names = profile.app_identifiers.linux_process_names.iter();
+        let matches = platform_names.any(|name| {
+            fields
+                .iter()
+                .any(|field| field.eq_ignore_ascii_case(name) || field == &name.to_lowercase())
+        });
         if matches {
             return Some((platform_name_for_profile(profile, false), Some(idx)));
         }
@@ -536,16 +544,18 @@ pub(crate) fn known_native_bundle_platform(field_lower: &str) -> Option<&'static
     // Signal is kept here (not gated) because its Electron AX tree is opaque
     // — we can't distinguish calls from voice notes, so requires_call_signal
     // is false and it doesn't need a profile index for the gate (#4776).
-    // Matched by explicit bundle/app/exe forms rather than a bare `contains`:
-    // the Linux collector reports the process binary `signal-desktop` with no
-    // bundle ids, so a substring match would resolve it here and the
-    // voice-note bundle gate would fail open — every Linux voice note would
-    // start a phantom meeting. Until Linux has a discriminating signal, that
-    // binary must fall through unresolved (fail closed).
-    if field_lower.starts_with("org.whispersystems")
-        || field_lower == "signal"
-        || field_lower == "signal.exe"
-    {
+    // Matched by explicit bundle/app/exe forms rather than a bare `contains`,
+    // and the bare app-name form is compiled out on Linux: the Linux collector
+    // reports the binary `signal-desktop` and often the app name `Signal`,
+    // with no bundle ids, so either would resolve here and the voice-note
+    // bundle gate would fail open — every Linux voice note would start a
+    // phantom meeting. Until Linux has a discriminating signal, Signal must
+    // fall through unresolved there (fail closed).
+    if field_lower.starts_with("org.whispersystems") || field_lower == "signal.exe" {
+        return Some("Signal");
+    }
+    #[cfg(not(target_os = "linux"))]
+    if field_lower == "signal" {
         return Some("Signal");
     }
     // WhatsApp and Telegram are intentionally NOT matched here. They must
