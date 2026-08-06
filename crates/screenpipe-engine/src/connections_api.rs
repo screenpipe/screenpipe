@@ -4,7 +4,7 @@
 
 //! HTTP API for connection credential management.
 
-use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::extract::{ConnectInfo, Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Html;
 use axum::routing::{get, post};
@@ -24,6 +24,7 @@ use tokio::sync::Mutex;
 
 use crate::oauth_result_page::render_oauth_result_page;
 use crate::routes::browser::BrowserBridge;
+use crate::routes::websocket::WebSocketLifecycle;
 use screenpipe_connect::connections::browser::{BrowserRegistry, BrowserSummary, EvalError};
 
 pub type SharedConnectionManager = Arc<Mutex<ConnectionManager>>;
@@ -2855,8 +2856,9 @@ async fn browser_pair_approve(
 async fn browser_ws(
     ws: axum::extract::ws::WebSocketUpgrade,
     State(state): State<ConnectionsState>,
+    lifecycle: Option<Extension<WebSocketLifecycle>>,
 ) -> axum::response::Response {
-    crate::routes::browser::browser_ws_handler(ws, State(state.browser_bridge)).await
+    crate::routes::browser::browser_ws_handler(ws, State(state.browser_bridge), lifecycle).await
 }
 
 async fn browser_eval(

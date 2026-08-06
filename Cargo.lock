@@ -8619,7 +8619,6 @@ dependencies = [
  "futures",
  "hostname",
  "http-body-util",
- "hyper",
  "hyper-util",
  "image",
  "libc",
@@ -10729,6 +10728,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

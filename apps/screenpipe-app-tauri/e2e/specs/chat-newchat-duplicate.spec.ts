@@ -30,7 +30,7 @@
  *      - Fixed:        1 row (selector dedup)         → PASS
  *
  * Drives fake turns deterministically via __e2eSeedUserMessage (user bubble) +
- * e2e_emit_agent_stream (assistant stream → agent_end). No live Pi required.
+ * plugin:e2e|emit_agent_stream (assistant stream → agent_end). No live Pi required.
  *
  * Run with:
  *   cd apps/screenpipe-app-tauri && ./e2e/run.sh
@@ -165,8 +165,8 @@ async function emitAgentStream(sessionId: string, deltaCount: number): Promise<v
       };
       const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
       if (!inv) { done(); return; }
-      void inv("e2e_emit_agent_stream", { sessionId: sid, deltaCount: count })
-        .catch(() => inv("e2e_emit_agent_stream", { session_id: sid, delta_count: count }))
+      void inv("plugin:e2e|emit_agent_stream", { sessionId: sid, deltaCount: count })
+        .catch(() => inv("plugin:e2e|emit_agent_stream", { session_id: sid, delta_count: count }))
         .then(() => done())
         .catch(() => done());
     },

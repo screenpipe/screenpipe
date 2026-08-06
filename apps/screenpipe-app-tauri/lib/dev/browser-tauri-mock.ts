@@ -361,7 +361,6 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       case "get_enterprise_team_api_token":
       case "get_pending_update":
         return null;
-      case "get_e2e_seed_flags":
       case "get_installed_browsers":
       case "get_missing_permissions":
       case "pi_pending":

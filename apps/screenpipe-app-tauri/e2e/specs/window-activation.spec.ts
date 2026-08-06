@@ -58,8 +58,8 @@ async function waitForAnyMainHandle(timeoutMs = t(12_000)): Promise<MainLabel> {
  * cleanup) before destroy. `plugin:window|destroy` must never be used here —
  * Chat is a class-swizzled NSPanel and destroying it that way raises an
  * Objective-C exception that aborts the process with "Rust cannot catch
- * foreign exceptions", killing the entire suite. e2e_destroy_window undoes the
- * class swap first.
+ * foreign exceptions", killing the entire suite. plugin:e2e|destroy_window
+ * undoes the class swap first.
  */
 async function destroyChatWindow(): Promise<void> {
   if (!(await browser.getWindowHandles()).includes("chat")) {
@@ -68,7 +68,7 @@ async function destroyChatWindow(): Promise<void> {
   }
 
   await invokeOrThrow("close_window", { window: "Chat" });
-  await invokeOrThrow("e2e_destroy_window", { label: "chat" });
+  await invokeOrThrow("plugin:e2e|destroy_window", { label: "chat" });
   await browser.waitUntil(
     async () => !(await browser.getWindowHandles()).includes("chat"),
     {
