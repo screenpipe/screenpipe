@@ -76,7 +76,7 @@ function ensureSigning(): void {
   if (!existsSync(PRIVATE_KEY)) {
     console.info('[updater-local] generating dev minisign keypair…');
     const gen = Bun.spawnSync(
-      ['bunx', 'tauri', 'signer', 'generate', '-w', PRIVATE_KEY, '--ci', '--password', SIGNING_PASSWORD],
+      ['bun', 'x', 'tauri', 'signer', 'generate', '-w', PRIVATE_KEY, '--ci', '--password', SIGNING_PASSWORD],
       { cwd: APP_ROOT, stdin: 'ignore', stderr: 'inherit', stdout: 'inherit' },
     );
     if (gen.exitCode !== 0) throw new Error('tauri signer generate failed (exit ' + gen.exitCode + ')');
@@ -110,7 +110,7 @@ function cmdBuild(): void {
     Boolean(process.env.TAURI_SIGNING_PRIVATE_KEY_PATH?.trim());
 
   let env: Record<string, string | undefined> = { ...process.env };
-  let tauriArgs = ['bunx', 'tauri', 'build', '--features', 'official-build', '--config', cfgE2e];
+  let tauriArgs = ['bun', 'x', 'tauri', 'build', '--features', 'official-build', '--config', cfgE2e];
 
   if (!customSigning) {
     ensureSigning();
