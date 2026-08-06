@@ -10,8 +10,13 @@ on:
     branches: [main]
     paths:
       - ".github/scripts/linux/bundle-appimage-runtime-deps.sh"
-      - ".github/scripts/linux/pipewire-loop-smoke.c"
+      - ".github/scripts/linux/pipewire-context-smoke.c"
+      - ".github/scripts/linux/test-bundle-appimage-runtime-deps.sh"
+      - ".github/scripts/linux/test-verify-pipewire-runtime-packages.sh"
+      - ".github/scripts/linux/verify-pipewire-runtime-packages.sh"
       - ".github/workflows/linux-appimage-smoke.yml"
+      - ".github/workflows/release-app.yml"
+      - ".github/workflows/release-enterprise.yml"
       - "apps/screenpipe-app-tauri/scripts/pre_build.js"
       - "apps/screenpipe-app-tauri/src-tauri/**"
       - "apps/screenpipe-app-tauri/package.json"
@@ -104,6 +109,9 @@ jobs:
             libsamplerate-dev \
             libwebrtc-audio-processing-dev \
             libpipewire-0.3-dev \
+            libpipewire-0.3-modules \
+            libspa-0.2-modules \
+            pipewire-bin \
             libgtk-3-dev \
             librsvg2-dev \
             patchelf \
@@ -116,6 +124,16 @@ jobs:
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
           echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> "$GITHUB_ENV"
+
+          bash .github/scripts/linux/verify-pipewire-runtime-packages.sh
+
+      - name: Test release PipeWire runtime prerequisites
+        shell: bash
+        run: bash .github/scripts/linux/test-verify-pipewire-runtime-packages.sh
+
+      - name: Test AppImage runtime dependency bundler
+        shell: bash
+        run: bash .github/scripts/linux/test-bundle-appimage-runtime-deps.sh
 
       - name: Install frontend dependencies
         working-directory: apps/screenpipe-app-tauri
@@ -373,7 +391,7 @@ jobs:
           # must launch here.
           mkdir -p /tmp/screenpipe-appimage-arch
           cp "apps/screenpipe-app-tauri/${APPIMAGE}" /tmp/screenpipe-appimage-arch/screenpipe.AppImage
-          cp .github/scripts/linux/pipewire-loop-smoke.c /tmp/screenpipe-appimage-arch/
+          cp .github/scripts/linux/pipewire-context-smoke.c /tmp/screenpipe-appimage-arch/
 
           docker run --rm \
             -v /tmp/screenpipe-appimage-arch:/smoke \
@@ -410,23 +428,64 @@ jobs:
               chmod +x screenpipe.AppImage
               ./screenpipe.AppImage --appimage-extract >/dev/null
 
-              # The Ubuntu-built libpipewire uses a Debian multiarch SPA plugin
-              # path that does not exist on Arch. The AppImage must carry the
-              # matching support.system implementation and configure AppRun to
-              # use it before the Rust PipeWire main loop is created.
+              # The Ubuntu-built PipeWire client must use its matching config,
+              # context modules, and SPA support plugins instead of Arch ones.
               spa_dir=/smoke/squashfs-root/usr/lib/spa-0.2
-              spa_support="${spa_dir}/support/libspa-support.so"
-              test -f "${spa_support}"
-              grep -q "screenpipe bundled SPA runtime" squashfs-root/AppRun
+              module_dir=/smoke/squashfs-root/usr/lib/pipewire-0.3
+              config=/smoke/squashfs-root/usr/share/pipewire/client.conf
+              client=/smoke/squashfs-root/usr/lib/libpipewire-0.3.so.0
+              test -f "${client}"
+              test -f "${config}"
+              test -d "${module_dir}"
+              test -f "${spa_dir}/support/libspa-support.so"
+              for module in \
+                protocol-native client-node client-device adapter metadata session-manager; do
+                test -f "${module_dir}/libpipewire-module-${module}.so"
+              done
+              grep -q "screenpipe coherent bundled PipeWire runtime" squashfs-root/AppRun
               grep -q "SPA_PLUGIN_DIR" squashfs-root/AppRun
+              grep -q "PIPEWIRE_MODULE_DIR" squashfs-root/AppRun
+              grep -q "PIPEWIRE_CONFIG_NAME" squashfs-root/AppRun
 
               cc $(pkg-config --cflags libpipewire-0.3) \
-                /smoke/pipewire-loop-smoke.c \
-                -o /tmp/pipewire-loop-smoke \
+                /smoke/pipewire-context-smoke.c \
+                -o /tmp/pipewire-context-smoke \
                 $(pkg-config --libs libpipewire-0.3)
-              LD_LIBRARY_PATH=/smoke/squashfs-root/usr/lib \
+              LD_LIBRARY_PATH="${module_dir}:/smoke/squashfs-root/usr/lib" \
                 SPA_PLUGIN_DIR="${spa_dir}" \
-                /tmp/pipewire-loop-smoke
+                PIPEWIRE_MODULE_DIR="${module_dir}" \
+                PIPEWIRE_CONFIG_NAME="${config}" \
+                PIPEWIRE_DEBUG=4 \
+                /tmp/pipewire-context-smoke 2>&1 | tee /tmp/pipewire-context.log
+              grep -Fxq "PASS pw_main_loop_new" /tmp/pipewire-context.log
+              grep -Fxq "PASS pw_context_new" /tmp/pipewire-context.log
+              if grep -E "[( :](/usr/lib|/lib)/[^[:space:]]*/pipewire-0\\.3/libpipewire-module-" \
+                /tmp/pipewire-context.log; then
+                echo "PipeWire context loaded a host module"
+                exit 1
+              fi
+              if grep -E "undefined symbol|could not load mandatory module" /tmp/pipewire-context.log; then
+                echo "PipeWire context reported a loader failure"
+                exit 1
+              fi
+
+              for member in "${module_dir}"/*.so "${spa_dir}"/support/*.so; do
+                deps="$(LD_LIBRARY_PATH="${module_dir}:/smoke/squashfs-root/usr/lib" ldd "${member}")"
+                printf "%s\n" "${deps}"
+                if grep -q "not found" <<<"${deps}"; then
+                  exit 1
+                fi
+                if grep -E "libpipewire-0\\.3\\.so\\.0 => /usr/lib|libpipewire-module-.* => /usr/lib" <<<"${deps}"; then
+                  echo "PipeWire runtime member resolved from the Arch host"
+                  exit 1
+                fi
+              done
+              client_node="${module_dir}/libpipewire-module-client-node.so"
+              if readelf -d "${client_node}" | grep -q "libpipewire-module-protocol-native.so"; then
+                LD_LIBRARY_PATH="${module_dir}:/smoke/squashfs-root/usr/lib" \
+                  ldd "${client_node}" | \
+                  grep -F "libpipewire-module-protocol-native.so => ${module_dir}/libpipewire-module-protocol-native.so"
+              fi
 
               # The fix strips these from the bundle; they must NOT be back.
               if ls squashfs-root/usr/lib/libsharpyuv.so* squashfs-root/usr/lib/libavif.so* 2>/dev/null; then

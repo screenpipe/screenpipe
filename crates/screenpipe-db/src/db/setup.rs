@@ -446,6 +446,15 @@ impl DatabaseManager {
         // upgraded across that migration boundary may have skipped it.
         Self::ensure_memories_sync_columns(pool).await?;
 
+        // Self-heal the speakers + speaker_embeddings tables. The migration
+        // (20241108202826) depends on sqlite-vec being loaded for the vec_length
+        // CHECK constraint. If an older engine ran that migration without
+        // sqlite-vec, sqlx recorded it as applied but the CREATE TABLE failed —
+        // subsequent launches skip the "already applied" migration, so the table
+        // stays missing and every transcription errors with "no such table:
+        // speaker_embeddings".
+        Self::ensure_speaker_tables(pool).await?;
+
         Ok(())
     }
 
@@ -621,6 +630,78 @@ impl DatabaseManager {
         )
         .execute(pool)
         .await?;
+        Ok(())
+    }
+
+    /// Self-heal the `speakers` and `speaker_embeddings` tables. The original
+    /// migration (20241108202826) uses `vec_length()` in a CHECK constraint,
+    /// which requires the sqlite-vec extension. If the migration was applied by
+    /// an engine build where sqlite-vec wasn't loaded (or failed to load), sqlx
+    /// recorded the migration version but the DDL silently failed — the tables
+    /// don't exist despite the migration being "applied". Re-issuing the
+    /// `CREATE TABLE IF NOT EXISTS` statements fixes this for all subsequent
+    /// launches now that sqlite-vec is always registered as an auto-extension.
+    async fn ensure_speaker_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        let speakers_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'speakers'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if speakers_exists.0 == 0 {
+            tracing::info!("Self-healing missing speakers table");
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS speakers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    metadata JSON,
+                    hallucination BOOLEAN DEFAULT FALSE,
+                    centroid FLOAT[512],
+                    embedding_count INTEGER DEFAULT 0
+                )",
+            )
+            .execute(pool)
+            .await?;
+            // This index was added after the original table migration and would
+            // already be recorded as applied on a database missing the table.
+            sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_speakers_hallucination_name \
+                 ON speakers(hallucination, name COLLATE NOCASE)",
+            )
+            .execute(pool)
+            .await?;
+        }
+
+        let embeddings_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'speaker_embeddings'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if embeddings_exists.0 == 0 {
+            tracing::info!("Self-healing missing speaker_embeddings table");
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS speaker_embeddings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    embedding FLOAT[512] NOT NULL
+                    check(
+                      typeof(embedding) == 'blob'
+                      and vec_length(embedding) == 512
+                    ),
+                    speaker_id INTEGER REFERENCES speakers(id)
+                )",
+            )
+            .execute(pool)
+            .await?;
+            // This index was also added by a later migration.
+            sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_speaker_embeddings_speaker_id \
+                 ON speaker_embeddings(speaker_id)",
+            )
+            .execute(pool)
+            .await?;
+        }
+
         Ok(())
     }
 
@@ -818,7 +899,79 @@ impl DatabaseManager {
 #[cfg(test)]
 mod shutdown_tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn startup_rebuilds_missing_speaker_tables_with_current_schema() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("missing-speakers.sqlite");
+        let database = DatabaseManager::new(
+            db_path.to_str().expect("utf-8 temp path"),
+            DbConfig::for_tier(screenpipe_config::DeviceTier::Low),
+        )
+        .await
+        .expect("database init");
+
+        sqlx::query("DROP TABLE speaker_embeddings")
+            .execute(&database.write_pool)
+            .await
+            .expect("drop embeddings table");
+        sqlx::query("DROP TABLE speakers")
+            .execute(&database.write_pool)
+            .await
+            .expect("drop speakers table");
+
+        DatabaseManager::run_migrations(&database.write_pool)
+            .await
+            .expect("startup self-heal");
+
+        let columns =
+            sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('speakers')")
+                .fetch_all(&database.pool)
+                .await
+                .expect("inspect rebuilt speakers schema")
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+        assert_eq!(
+            columns,
+            [
+                "centroid",
+                "embedding_count",
+                "hallucination",
+                "id",
+                "metadata",
+                "name"
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            "self-heal must restore every column added by later migrations"
+        );
+
+        let indexes = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN \
+             ('idx_speaker_embeddings_speaker_id', 'idx_speakers_hallucination_name')",
+        )
+        .fetch_all(&database.pool)
+        .await
+        .expect("inspect rebuilt speaker indexes")
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(
+            indexes,
+            [
+                "idx_speaker_embeddings_speaker_id",
+                "idx_speakers_hallucination_name",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            "self-heal must restore indexes from later migrations"
+        );
+
+        database.close().await;
+    }
 
     #[tokio::test]
     async fn file_query_pool_enforces_its_platform_write_barrier() {

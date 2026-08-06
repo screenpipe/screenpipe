@@ -13,12 +13,12 @@
  * boundary that replaces that mess.
  *
  * Envelope shape:
- *   { source: "pi" | "pipe", sessionId: string, event: <inner NDJSON> }
+ *   { source: "pi" | "pipe", sessionId: string, executionId?: number, event: <inner NDJSON> }
  *
  * `sessionId` is always populated:
  *   - Pi sessions:   the chat-session UUID assigned by `commands.piStart`
- *   - Pipe sessions: a deterministic id derived from pipe name +
- *                    execution id via `pipeSessionId(name, execId)`
+ *   - Pipe sessions: either a per-execution id or one stable id for a
+ *                    pipe configured to continue in the same chat
  *
  * Lifecycle topics — `agent_terminated`, `agent_session_evicted` — share
  * the same `sessionId` keying so consumers can route lifecycle and
@@ -74,6 +74,8 @@ export interface AgentInnerEvent {
 export interface AgentEventEnvelope {
   source: AgentSource;
   sessionId: string;
+  /** Present for pipe events because a continued session id is intentionally stable. */
+  executionId?: number;
   event: AgentInnerEvent;
 }
 
@@ -128,16 +130,26 @@ export function pipeSessionId(pipeName: string, executionId: number | string): s
   return `pipe:${pipeName}:${executionId}`;
 }
 
+/** Stable session id used when a pipe continues the same agent chat. */
+export function continuedPipeSessionId(pipeName: string): string {
+  return `pipe:${pipeName}:continuous`;
+}
+
 /** Inverse of `pipeSessionId` — returns null when the id isn't a pipe id. */
 export function parsePipeSessionId(
   sessionId: string,
-): { pipeName: string; executionId: number } | null {
+): { pipeName: string; executionId: number | null; continuous: boolean } | null {
   if (!sessionId.startsWith("pipe:")) return null;
   const rest = sessionId.slice("pipe:".length);
   const lastColon = rest.lastIndexOf(":");
   if (lastColon < 0) return null;
   const pipeName = rest.slice(0, lastColon);
-  const execId = Number(rest.slice(lastColon + 1));
-  if (!pipeName || !Number.isFinite(execId)) return null;
-  return { pipeName, executionId: execId };
+  const suffix = rest.slice(lastColon + 1);
+  if (!pipeName) return null;
+  if (suffix === "continuous") {
+    return { pipeName, executionId: null, continuous: true };
+  }
+  const execId = Number(suffix);
+  if (!Number.isFinite(execId)) return null;
+  return { pipeName, executionId: execId, continuous: false };
 }

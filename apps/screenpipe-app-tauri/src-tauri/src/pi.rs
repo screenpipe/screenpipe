@@ -407,6 +407,9 @@ pub struct PiState(pub Arc<Mutex<PiPool>>);
 #[serde(rename_all = "camelCase")]
 pub struct PiInfo {
     pub running: bool,
+    /// True while this session has a prompt, queued follow-up, or pending RPC
+    /// response. Destructive settings use it to avoid clearing live context.
+    pub busy: bool,
     pub project_dir: Option<String>,
     pub pid: Option<u32>,
     pub session_id: Option<String>,
@@ -416,6 +419,7 @@ impl Default for PiInfo {
     fn default() -> Self {
         Self {
             running: false,
+            busy: false,
             project_dir: None,
             pid: None,
             session_id: None,
@@ -758,10 +762,12 @@ impl PiManager {
 
     pub fn snapshot(&mut self, session_id: &str) -> PiInfo {
         let running = self.check_alive();
+        let busy = running && self.has_in_flight_work();
         let pid = self.child.as_ref().map(|c| c.id());
 
         PiInfo {
             running,
+            busy,
             project_dir: self.project_dir.clone(),
             pid,
             session_id: Some(session_id.to_string()),
