@@ -4,7 +4,11 @@
 
 import type { Env } from '../types';
 
-export const CLERK_STANDING_RECORD_VERSION = 3 as const;
+// v4: `locked` no longer denies (it is Clerk's temporary sign-in throttle, not a
+// revocation) and denied records carry a `reason`. Bumping the version discards
+// every cached v3 denial, so users wrongly denied for a lockout recover on the
+// next request instead of after the cache TTL.
+export const CLERK_STANDING_RECORD_VERSION = 4 as const;
 export const CLERK_STANDING_STORAGE_KEY = 'clerk-user-standing';
 export const CLERK_STANDING_LOOKUP_TIMEOUT_MS = 3_000;
 
@@ -15,10 +19,16 @@ const CLERK_USER_ID = /^user_[A-Za-z0-9_-]+$/;
 
 export type ClerkStanding = 'good' | 'denied';
 
+// 'banned' is an explicit operator decision and is enforced unconditionally.
+// 'deleted' (Clerk 404) is only authoritative when the checked user id came
+// from a verified Clerk JWT; a DB-sourced id may simply be stale.
+export type ClerkStandingDenialReason = 'banned' | 'deleted';
+
 export interface ClerkStandingRecord {
 	version: typeof CLERK_STANDING_RECORD_VERSION;
 	userId: string;
 	standing: ClerkStanding;
+	reason?: ClerkStandingDenialReason;
 	checkedAt: number;
 	revalidateAfter: number;
 }
@@ -64,6 +74,11 @@ export function isClerkStandingRecord(
 		!Number.isSafeInteger(record.checkedAt) ||
 		(record.checkedAt ?? -1) < 0
 	) {
+		return false;
+	}
+	if (record.standing === 'denied') {
+		if (record.reason !== 'banned' && record.reason !== 'deleted') return false;
+	} else if (record.reason !== undefined) {
 		return false;
 	}
 	return Number.isSafeInteger(record.revalidateAfter) &&
@@ -136,6 +151,7 @@ export async function lookupClerkStanding(
 				version: CLERK_STANDING_RECORD_VERSION,
 				userId,
 				standing: 'denied',
+				reason: 'deleted',
 				checkedAt,
 				revalidateAfter: standingRevalidateAfter(userId, checkedAt),
 			};
@@ -182,11 +198,15 @@ export async function lookupClerkStanding(
 			throw new ClerkStandingLookupError('Clerk standing lookup returned an invalid user');
 		}
 
-		const standing: ClerkStanding = !user.banned && !user.locked ? 'good' : 'denied';
+		// `locked` is Clerk's automatic throttle after failed sign-in attempts and
+		// clears on its own; a locked user still holds a valid token and keeps
+		// hosted access. Only an explicit ban revokes standing.
+		const standing: ClerkStanding = user.banned ? 'denied' : 'good';
 		return {
 			version: CLERK_STANDING_RECORD_VERSION,
 			userId,
 			standing,
+			...(standing === 'denied' ? { reason: 'banned' as const } : {}),
 			checkedAt,
 			revalidateAfter: standingRevalidateAfter(userId, checkedAt),
 		};
