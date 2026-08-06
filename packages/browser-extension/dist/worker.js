@@ -226,7 +226,9 @@ function isRestrictedUrl(url) {
   return url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url.startsWith("edge://") || url.startsWith("about:") || url.includes("chromewebstore.google.com");
 }
 var SESSION_KEY_WORK_TAB = "screenpipe_work_tab_id";
+var SESSION_KEY_WORK_TAB_CLOSED = "screenpipe_work_tab_closed";
 var workTabId = null;
+var workTabClosed = false;
 async function getWorkTabId() {
   if (workTabId != null)
     return workTabId;
@@ -248,6 +250,31 @@ async function setWorkTabId(id) {
     }
   } catch {}
 }
+async function wasWorkTabClosed() {
+  if (workTabClosed)
+    return true;
+  try {
+    const s = await chrome.storage.session.get(SESSION_KEY_WORK_TAB_CLOSED);
+    workTabClosed = s[SESSION_KEY_WORK_TAB_CLOSED] === true;
+  } catch {}
+  return workTabClosed;
+}
+async function setWorkTabClosed(closed) {
+  workTabClosed = closed;
+  try {
+    if (closed) {
+      await chrome.storage.session.set({ [SESSION_KEY_WORK_TAB_CLOSED]: true });
+    } else {
+      await chrome.storage.session.remove(SESSION_KEY_WORK_TAB_CLOSED);
+    }
+  } catch {}
+}
+async function handleRemovedTab(tabId) {
+  if (tabId !== await getWorkTabId())
+    return;
+  await setWorkTabId(null);
+  await setWorkTabClosed(true);
+}
 async function getLiveWorkTab() {
   const id = await getWorkTabId();
   if (id == null)
@@ -256,6 +283,7 @@ async function getLiveWorkTab() {
     return await chrome.tabs.get(id);
   } catch {
     await setWorkTabId(null);
+    await setWorkTabClosed(true);
     return null;
   }
 }
@@ -265,11 +293,14 @@ async function openInWorkTab(url) {
   }
   const existing = await getLiveWorkTab();
   if (existing?.id != null) {
-    return await chrome.tabs.update(existing.id, { url, active: false });
+    const tab2 = await chrome.tabs.update(existing.id, { url, active: false });
+    await setWorkTabClosed(false);
+    return tab2;
   }
   const tab = await chrome.tabs.create({ url, active: false });
   if (tab.id != null)
     await setWorkTabId(tab.id);
+  await setWorkTabClosed(false);
   return tab;
 }
 async function findTab(urlPattern) {
@@ -285,6 +316,9 @@ async function findTab(urlPattern) {
   }
   if (work?.id != null && !isRestrictedUrl(work.url)) {
     return work.id;
+  }
+  if (await wasWorkTabClosed()) {
+    throw new Error("screenpipe work tab was closed — automation is stopped until the next navigate opens a new one");
   }
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (active?.id != null && !isRestrictedUrl(active.url)) {
@@ -429,9 +463,6 @@ chrome.tabs.onUpdated.addListener((_tabId, info) => {
     connect();
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
-  void (async () => {
-    if (tabId === await getWorkTabId())
-      await setWorkTabId(null);
-  })();
+  void handleRemovedTab(tabId);
 });
 connect();

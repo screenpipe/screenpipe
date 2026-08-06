@@ -22,6 +22,7 @@ import {
   STORAGE_KEY_BASE_URL,
   buildWsUrl,
 } from "./config";
+import { findTab, handleRemovedTab, isRestrictedUrl, openInWorkTab } from "./tabs";
 
 // ---------------------------------------------------------------------------
 // Reconnect policy
@@ -305,148 +306,6 @@ function stopHeartbeat(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Work tab — where automation runs so it never takes over the user's browser
-//
-// Historically, server-driven navigation evaluated `location.href = …` in the
-// active tab of the last-focused window. That hijacked whatever page the user
-// was reading, and when they switched to another Chrome window the automation
-// followed them there (issue #5510). Instead, the server's `navigate` action
-// opens URLs in one dedicated tab that is created unfocused and is never
-// activated by us, and subsequent evals stay pinned to it — the user can keep
-// using every window, including the one the work tab lives in.
-// ---------------------------------------------------------------------------
-
-/** chrome.storage.session key holding the work tab id. Session storage
- *  survives MV3 service-worker restarts (which happen every ~30s of idle)
- *  but resets when the browser itself restarts — exactly the lifetime of
- *  the tab it points at. */
-const SESSION_KEY_WORK_TAB = "screenpipe_work_tab_id";
-
-/** In-memory mirror of the stored id, so the hot path (every eval) doesn't
- *  pay a storage read once the worker instance has seen the id. */
-let workTabId: number | null = null;
-
-async function getWorkTabId(): Promise<number | null> {
-  if (workTabId != null) return workTabId;
-  try {
-    const s = await chrome.storage.session.get(SESSION_KEY_WORK_TAB);
-    const id = s[SESSION_KEY_WORK_TAB];
-    if (typeof id === "number") workTabId = id;
-  } catch {
-    // storage.session may be unavailable on very old Chromium forks.
-  }
-  return workTabId;
-}
-
-async function setWorkTabId(id: number | null): Promise<void> {
-  workTabId = id;
-  try {
-    if (id == null) {
-      await chrome.storage.session.remove(SESSION_KEY_WORK_TAB);
-    } else {
-      await chrome.storage.session.set({ [SESSION_KEY_WORK_TAB]: id });
-    }
-  } catch {}
-}
-
-/** The work tab, or null if none was ever created / the user closed it.
- *  Closing the work tab is the user's way of saying "stop" — we don't
- *  resurrect it until the next navigate request. */
-async function getLiveWorkTab(): Promise<chrome.tabs.Tab | null> {
-  const id = await getWorkTabId();
-  if (id == null) return null;
-  try {
-    return await chrome.tabs.get(id);
-  } catch {
-    await setWorkTabId(null);
-    return null;
-  }
-}
-
-/** Open `url` in the work tab, creating it (unfocused) if needed. Never
- *  activates the tab or focuses its window. */
-async function openInWorkTab(url: string): Promise<chrome.tabs.Tab> {
-  // The debugger-based eval could otherwise be pointed at privileged pages
-  // via a javascript:/chrome:// navigate from the local server.
-  if (!/^https?:\/\//i.test(url)) {
-    throw new Error("navigate only accepts http(s) urls");
-  }
-
-  const existing = await getLiveWorkTab();
-  if (existing?.id != null) {
-    return await chrome.tabs.update(existing.id, { url, active: false });
-  }
-
-  const tab = await chrome.tabs.create({ url, active: false });
-  if (tab.id != null) await setWorkTabId(tab.id);
-  return tab;
-}
-
-// ---------------------------------------------------------------------------
-// Tab finding
-// ---------------------------------------------------------------------------
-
-/**
- * Tabs we cannot drive: Chrome's privileged scheme pages and the extension's
- * own pages. `chrome.debugger.attach` is rejected on these by the browser, so
- * picking one would surface as an opaque "cannot execute scripts on …" error.
- */
-function isRestrictedUrl(url: string | undefined): boolean {
-  if (!url) return true;
-  return (
-    url.startsWith("chrome://") ||
-    url.startsWith("chrome-extension://") ||
-    url.startsWith("edge://") ||
-    url.startsWith("about:") ||
-    url.includes("chromewebstore.google.com")
-  );
-}
-
-async function findTab(urlPattern?: string): Promise<number> {
-  const work = await getLiveWorkTab();
-
-  if (urlPattern) {
-    // The work tab wins ties: if the automation just navigated it to a page
-    // matching the pattern, that's the tab the server means — not another
-    // window where the user happens to have the same site open.
-    if (work?.id != null && work.url?.includes(urlPattern) && !isRestrictedUrl(work.url)) {
-      return work.id;
-    }
-    const tabs = await chrome.tabs.query({});
-    const match = tabs.find(
-      (t) => t.url?.includes(urlPattern) && !isRestrictedUrl(t.url),
-    );
-    if (match?.id != null) return match.id;
-  }
-
-  // An automation session is in flight — stay pinned to the work tab no
-  // matter which window the user focuses. This is what keeps screenpipe in
-  // the background while the user keeps browsing (issue #5510).
-  if (work?.id != null && !isRestrictedUrl(work.url)) {
-    return work.id;
-  }
-
-  // No work tab: prefer the focused active tab when it's eligible — with no
-  // prior server-driven navigation, "the page the user is looking at" is
-  // almost always what an eval means. Otherwise scan every window for the
-  // first regular web tab we can drive. This avoids the "test connection
-  // failed because your active tab happened to be the extension's options
-  // page" trap.
-  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (active?.id != null && !isRestrictedUrl(active.url)) {
-    return active.id;
-  }
-
-  const all = await chrome.tabs.query({});
-  const eligible = all.find((t) => t.id != null && !isRestrictedUrl(t.url));
-  if (eligible?.id != null) return eligible.id;
-
-  throw new Error(
-    "no eligible tab found — open a regular web page (not chrome://, chrome-extension://, or the chrome web store)",
-  );
-}
-
-// ---------------------------------------------------------------------------
 // JS execution (unchanged from v0.1)
 // ---------------------------------------------------------------------------
 
@@ -618,12 +477,11 @@ chrome.tabs.onUpdated.addListener((_tabId, info) => {
   if (info.status === "complete") void connect();
 });
 
-/** User closed the work tab — forget it so evals fall back to the active tab
- *  instead of erroring on a dead id. */
+/** User closed the work tab — that stops the automation session. Evals are
+ *  rejected (never rerouted to the user's active tab) until the next
+ *  navigate opens a fresh work tab. See `tabs.ts` for the stop boundary. */
 chrome.tabs.onRemoved.addListener((tabId) => {
-  void (async () => {
-    if (tabId === (await getWorkTabId())) await setWorkTabId(null);
-  })();
+  void handleRemovedTab(tabId);
 });
 
 void connect();

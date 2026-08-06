@@ -3,6 +3,7 @@
   "version": "0.4.0",
   "private": true,
   "scripts": {
+    "test": "bun test",
     "build": "bun build src/worker.ts src/options.ts src/popup.ts --outdir dist --target browser --format esm",
     "dev": "bun build src/worker.ts src/options.ts src/popup.ts --outdir dist --target browser --format esm --watch",
     "zip": "bun run build && cd dist && zip -r \"../screenpipe-browser-extension-v$(node -p 'require(\\\"../package.json\\\").version').zip\" . && cd ..",
