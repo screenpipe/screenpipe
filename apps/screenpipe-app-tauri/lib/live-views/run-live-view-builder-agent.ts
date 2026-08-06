@@ -5,6 +5,7 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 
 import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
+import { agentEventErrorText } from "@/lib/events/error-text";
 import type { AgentEventEnvelope } from "@/lib/events/types";
 import {
   commands,
@@ -148,9 +149,7 @@ export async function runLiveViewBuilderAgent(
     ) {
       fail(
         new Error(
-          event.errorMessage ||
-            event.message?.errorMessage ||
-            "AI could not update the Live View",
+          agentEventErrorText(event, "AI could not update the Live View"),
         ),
       );
     }
