@@ -1,0 +1,103 @@
+{
+  "runId": "a0e38b87",
+  "agent": "worker",
+  "task": "Implement the requested Screenpipe contribution end-to-end in this repository. Requirements: add Google Antigravity to the AI Tools section; refactor/extend the current installed-AI-tool scanning utility so one extensible source of truth detects all currently supported mainstream AI tools whose conventions are already represented/verified in this repo (at minimum every existing supported installer plus Antigravity; avoid speculative unverified formats); add one-click installation buttons/actions for every detected/supported AI tool, installing Screenpipe MCP plus API and CLI skills where that tool supports skills, with correct cross-platform config paths and bundled Bun fallback; use existing install methods as reference; preserve user configs safely and idempotently; tests for detection/install/uninstall and UI. Read VISION.md and DESIGN.md. Follow AGENTS.md including file headers. Create a feature branch, inspect current architecture, implement, run focused tests/typecheck/bindings checks as appropriate. Do not push or open PR. Return summary, changed files, tests, residual risks. Acceptance: verified.",
+  "exitCode": 1,
+  "usage": {
+    "input": 1007178,
+    "output": 4849,
+    "cacheRead": 25916,
+    "cacheWrite": 0,
+    "cost": 0,
+    "turns": 24
+  },
+  "model": "screenpipe/gpt-5.6-sol:high",
+  "attemptedModels": [
+    "screenpipe/gpt-5.6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "screenpipe/gpt-5.6-sol:high",
+      "success": false,
+      "exitCode": -2,
+      "usage": {
+        "input": 128235,
+        "output": 647,
+        "cacheRead": 5890,
+        "cacheWrite": 0,
+        "cost": 0,
+        "turns": 6
+      }
+    }
+  ],
+  "durationMs": 695557,
+  "toolCount": 32,
+  "error": "429 data: {\"error\":{\"message\":\"Your current hosted AI allowance for explicit models is used up. Switch to Auto, or use a local model or your own provider key.\",\"type\":\"insufficient_quota\",\"code\":\"hosted_ai_allowance_exceeded\"},\"allowance\":{\"lane\":\"explicit\",\"plan\":\"business\",\"managed_by\":\"cloudflare\"},\"required_plan\":\"business_max\",\"upgrade_url\":\"https://screenpipe.com/account/billing?target_plan=pro_max&interval=month\"}\n\ndata: [DONE]\n\n",
+  "launchContractDigest": "53345fc1cad693cf027cea2cc4bd7072478bc153effad884eff3b0546c04e969",
+  "acceptance": {
+    "status": "rejected",
+    "evidenceStatus": "rejected",
+    "explicit": true,
+    "effectiveAcceptance": {
+      "level": "verified",
+      "explicit": true,
+      "inferredReason": [
+        "write-capable worker/task"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "write-capable worker/task"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "attestation",
+        "status": "failed",
+        "message": "Structured acceptance report not found."
+      }
+    ],
+    "verifyRuns": [],
+    "childReportParseError": "Structured acceptance report not found."
+  },
+  "transcriptPath": "/Users/jasontarnold/Documents/GitHub/screenpipe/.pi-subagents/artifacts/a0e38b87_worker_0_transcript.jsonl",
+  "timestamp": 1785979373145
+}
