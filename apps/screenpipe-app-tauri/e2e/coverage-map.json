@@ -649,6 +649,16 @@
       "notes": "Seeds a meeting with notes and summary, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, then captures a review screenshot."
     },
     {
+      "spec": "meeting-summary-recovery.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api"],
+      "features": ["meeting-notes", "meeting-summary-recovery"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds an ended meeting through the isolated API and verifies persistent saved-audio retranscription, its replacement warning, and completed-summary rerun without launching hosted AI."
+    },
+    {
       "spec": "meetings-only-audio-lifecycle.spec.ts",
       "platforms": ["windows", "macos"],
       "layers": ["audio-device", "local-api", "real-ui-e2e"],

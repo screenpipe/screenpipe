@@ -141,12 +141,12 @@ async function emitAgentStream(
         done();
         return;
       }
-      void inv("e2e_emit_agent_stream", {
+      void inv("plugin:e2e|emit_agent_stream", {
         sessionId: sid,
         deltaCount: count,
       })
         .catch(() =>
-          inv("e2e_emit_agent_stream", {
+          inv("plugin:e2e|emit_agent_stream", {
             session_id: sid,
             delta_count: count,
           }),

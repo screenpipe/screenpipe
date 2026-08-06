@@ -36,6 +36,7 @@ import {
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
 import { ListeningSticks } from "./listening-sticks";
 import { splitForHighlight } from "./transcript-highlight";
+import { recorderTranscriptionBacklogMessage } from "./transcript-recovery-copy";
 
 interface TranscriptPanelProps {
   meeting: MeetingRecord;
@@ -827,10 +828,8 @@ export function TranscriptPanel({
     isLive &&
     Boolean(liveError || (pendingTranscriptSegments > 0 && liveStatus?.active));
   const recoveryMessage = liveError
-    ? `${liveErrorSummary(liveError)}. Still recording; background transcription will recover missing audio.`
-    : `Still recording; ${pendingTranscriptSegments} audio segment${
-        pendingTranscriptSegments === 1 ? "" : "s"
-      } waiting for background transcription.`;
+    ? `${liveErrorSummary(liveError)}. Still recording; saved audio remains available for background transcription.`
+    : recorderTranscriptionBacklogMessage(pendingTranscriptSegments);
   const transcriptState = showRecoveryBanner
     ? "recovering"
     : !isLive

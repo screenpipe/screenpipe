@@ -147,10 +147,14 @@ pub(crate) async fn emit_ended_and_status(
     db: &DatabaseManager,
     manual_meeting: &tokio::sync::RwLock<Option<i64>>,
     meeting_id: i64,
+    persisted_end: &str,
 ) {
     if let Err(e) = screenpipe_events::send_event(
         "meeting_ended",
-        serde_json::json!({ "meeting_id": meeting_id }),
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "meeting_end": persisted_end,
+        }),
     ) {
         warn!(
             "audio-process meeting detector: failed to emit meeting_ended event: {}",
@@ -305,10 +309,10 @@ pub(crate) async fn apply_state_action(
                 .end_meeting_with_typed_text(meeting_id, &now_ts, true, None)
                 .await
             {
-                Ok(()) => {
+                Ok(persisted_end) => {
                     capture_meeting_outcome(db, meeting_id, *flap_count).await;
                     *flap_count = 0;
-                    emit_ended_and_status(db, manual_meeting, meeting_id).await;
+                    emit_ended_and_status(db, manual_meeting, meeting_id, &persisted_end).await;
                 }
                 Err(e) => {
                     error!(

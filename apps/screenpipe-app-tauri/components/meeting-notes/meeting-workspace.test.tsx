@@ -36,6 +36,7 @@ describe("meeting workspace tabs", () => {
 
 describe("meeting summary surface", () => {
   it("uses the latest appended summary without including the user's notes", () => {
+    const onGenerate = vi.fn();
     const note = [
       "## My notes",
       "Keep this private draft in the notes tab.",
@@ -53,7 +54,7 @@ describe("meeting summary surface", () => {
         note={note}
         state="ready"
         detail="saved locally"
-        onGenerate={vi.fn()}
+        onGenerate={onGenerate}
         canGenerate
       />,
     );
@@ -65,6 +66,8 @@ describe("meeting summary surface", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText(/private draft/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "summarize again" }));
+    expect(onGenerate).toHaveBeenCalledOnce();
   });
 
   it("offers a truthful empty state before a summary exists", () => {

@@ -73,7 +73,7 @@ pub(crate) async fn handle_auto_end_request(
             )
             .await
         {
-            Ok(()) => {
+            Ok(persisted_end) => {
                 info!(
                     "meeting v2: auto-ended inactive live meeting (id={}, reason={})",
                     request.meeting_id,
@@ -95,7 +95,10 @@ pub(crate) async fn handle_auto_end_request(
                 }
                 if let Err(e) = screenpipe_events::send_event(
                     "meeting_ended",
-                    serde_json::json!({ "meeting_id": request.meeting_id }),
+                    serde_json::json!({
+                        "meeting_id": request.meeting_id,
+                        "meeting_end": persisted_end,
+                    }),
                 ) {
                     warn!("meeting v2: failed to emit meeting_ended event: {}", e);
                 }

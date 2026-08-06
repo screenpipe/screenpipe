@@ -11,7 +11,7 @@
  *
  * which sets `SCREENPIPE_E2E_SEED=onboarding,no-recording,search-fixture` and
  * `SCREENPIPE_PORT` so the harness app boots its own server without colliding
- * with an existing instance on :3030. The fixture (src-tauri/src/e2e_seed.rs)
+ * with an existing instance on :3030. The fixture (src-tauri/src/e2e/seeds.rs)
  * seeds known searchable frames; see specs/search/README.md.
  *
  * The test asserts the *correct* behaviour, so it is RED while the bug exists

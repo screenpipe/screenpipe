@@ -51,7 +51,8 @@ mod db_relaunch;
 mod diagnostic_logs;
 mod disk_usage;
 mod disk_pressure_notifications;
-mod e2e_seed;
+#[cfg(feature = "e2e")]
+mod e2e;
 mod embedded_server;
 mod enterprise;
 mod enterprise_host_identity;
@@ -211,23 +212,6 @@ use window::RewindWindowId;
 #[specta::specta]
 fn get_env(name: &str) -> String {
     std::env::var(String::from(name)).unwrap_or(String::from(""))
-}
-
-/// Returns which E2E seeds are requested (env SCREENPIPE_E2E_SEED, comma-separated).
-/// Rust uses "onboarding" in setup to complete onboarding at startup.
-#[tauri::command]
-#[specta::specta]
-fn get_e2e_seed_flags() -> Vec<String> {
-    std::env::var("SCREENPIPE_E2E_SEED")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            s.split(',')
-                .map(|part| part.trim().to_lowercase())
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
 }
 
 /// Returns true when SCREENPIPE_SKIP_ONBOARDING is set to a truthy value
@@ -973,7 +957,9 @@ async fn main() {
     let app = app.plugin(tauri_plugin_global_shortcut::Builder::new().build());
 
     #[cfg(feature = "e2e")]
-    let app = app.plugin(tauri_plugin_webdriver::init());
+    let app = app
+        .plugin(tauri_plugin_webdriver::init())
+        .plugin(e2e::plugin());
 
     // Only add Sentry plugin if telemetry is enabled
     let app = if let Some(ref _guard) = sentry_guard {
@@ -1196,105 +1182,14 @@ async fn main() {
             // Note: StoreBuilder handles file creation internally — pre-creating
             // store.bin here caused TOCTOU race conditions ("File exists" os error 17).
             // Use unwrap_or_default to prevent crashes from corrupted stores
+            #[allow(unused_mut)] // E2E seeds mutate the store in feature builds.
             let mut store = store::init_store(&app.handle()).unwrap_or_else(|e| {
                 error!("Failed to init settings store, using defaults: {}", e);
                 store::SettingsStore::default()
             });
 
-            // E2E seed: when SCREENPIPE_E2E_SEED contains "no-recording", flip
-            // disable_vision + disable_audio so the e2e harness can drive the
-            // app without granting Screen Recording / Microphone TCC. The
-            // server (DB + HTTP) still boots; only SCK + audio capture skip.
-            // "no-audio" keeps vision enabled while disabling only audio, which
-            // lets Windows hosted runners exercise OCR without booting Whisper.
-            // See get_e2e_seed_flags above for parsing.
-            let e2e_flags = get_e2e_seed_flags();
-            if e2e_flags.iter().any(|f| f == "no-recording") {
-                store.recording.disable_audio = true;
-                store.recording.disable_vision = true;
-                info!("E2E seed: recording disabled (vision + audio)");
-            }
-            if e2e_flags.iter().any(|f| f == "no-audio") {
-                store.recording.disable_audio = true;
-                info!("E2E seed: audio disabled");
-            }
-            if e2e_flags.iter().any(|f| f == "sck-capture-hang-once") {
-                // The CoreGraphics recovery path cannot enforce SCK window-id
-                // exclusions. This isolated lane deliberately removes filters
-                // so it can prove the availability fallback without weakening
-                // the production fail-closed privacy rule.
-                store.recording.ignored_windows.clear();
-                store.recording.included_windows.clear();
-                info!("E2E seed: window filters cleared for unfiltered CoreGraphics recovery probe");
-            }
-            if e2e_flags
-                .iter()
-                .any(|f| {
-                    matches!(
-                        f.as_str(),
-                        "recording-health-return-race"
-                            | "capture-loop-silent-once"
-                            | "focus-cold-heartbeat"
-                    )
-                })
-            {
-                store.show_restart_notifications = true;
-                store.extra.insert(
-                    "restartNotificationsDefaultedOff".to_string(),
-                    serde_json::Value::Bool(true),
-                );
-                info!("E2E seed: recording health alerts enabled for liveness regression");
-            }
-            if e2e_flags.iter().any(|f| f == "event-trigger-capture") {
-                store.recording.capture_on_keystroke = Some(true);
-                store.recording.capture_on_clipboard = Some(true);
-                store.recording.min_capture_interval_ms = Some(50);
-                store.recording.disable_keyboard_capture = true;
-                store.recording.disable_clipboard_capture = true;
-                info!("E2E seed: event-trigger capture enabled with keyboard/clipboard DB rows disabled");
-            }
-            if e2e_flags.iter().any(|f| f == "keyboard-db-capture") {
-                store.recording.disable_keyboard_capture = false;
-                info!("E2E seed: keyboard DB capture enabled");
-            }
-            if e2e_flags.iter().any(|f| f == "cloud-audio-fallback") {
-                store.recording.disable_audio = false;
-                store.recording.disable_vision = true;
-                store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
-                store.user = store::User::default();
-                store
-                    .extra
-                    .insert("_parakeetDefaultMigrationDone".to_string(), json!(true));
-                store
-                    .extra
-                    .insert("_proCloudMigrationDone".to_string(), json!(true));
-                info!("E2E seed: screenpipe cloud audio fallback");
-            }
-            if e2e_flags.iter().any(|f| f == "meetings-only-audio") {
-                // Real audio lifecycle lane for meetings-only capture. Keep
-                // vision and transcription disabled so the spec isolates OS
-                // device ownership without loading OCR/STT models.
-                store.recording.disable_audio = false;
-                store.recording.disable_vision = true;
-                store.recording.audio_capture_mode = "meetings-only".to_string();
-                store.recording.audio_transcription_engine = "disabled".to_string();
-                // Emit a real segment quickly enough for the lifecycle spec to
-                // verify the first capture callback without a 30-second wait.
-                store.recording.audio_chunk_duration = 5;
-                store.recording.experimental_meeting_piggyback = false;
-                info!("E2E seed: meetings-only audio device lifecycle");
-            }
-
-            // The frontend reads settings from the Tauri store rather than the
-            // managed Rust copy below. Persist E2E mutations so both sides see
-            // the same seeded recording state (for example, `no-recording`
-            // must disable recent-recording actions in the Help UI too).
             #[cfg(feature = "e2e")]
-            if !e2e_flags.is_empty() {
-                if let Err(e) = store.save(&app.handle()) {
-                    warn!("Failed to persist E2E settings seed: {}", e);
-                }
-            }
+            e2e::seeds::apply_settings(app.handle(), &mut store);
 
             app.manage(store.clone());
 
@@ -1421,15 +1316,8 @@ async fn main() {
             });
             app.manage(onboarding_store.clone());
 
-            // E2E seed: when SCREENPIPE_E2E_SEED contains "onboarding", mark onboarding complete
-            let e2e_flags = get_e2e_seed_flags();
-            if e2e_flags.iter().any(|f| f == "onboarding") {
-                if let Err(e) = store::OnboardingStore::update(&app.handle(), |o| o.complete()) {
-                    error!("E2E seed: failed to complete onboarding: {}", e);
-                } else {
-                    info!("E2E seed: onboarding marked complete");
-                }
-            }
+            #[cfg(feature = "e2e")]
+            e2e::seeds::apply_onboarding(app.handle());
 
             // Escape hatch: SCREENPIPE_SKIP_ONBOARDING=1 marks onboarding complete
             // at startup so corp/VDI/headless environments (where the interactive
@@ -1946,12 +1834,8 @@ async fn main() {
                                 ),
                             );
 
-                            // E2E: seed deterministic searchable frames so the
-                            // search-UI repro tests run against real data with
-                            // no recording required (SCREENPIPE_E2E_SEED=...,search-fixture).
-                            if get_e2e_seed_flags().iter().any(|f| f == "search-fixture") {
-                                crate::e2e_seed::seed_search_fixture(&server.db).await;
-                            }
+                            #[cfg(feature = "e2e")]
+                            e2e::seeds::seed_database(&server.db).await;
 
                             // Phase 2: use the latest capture intent, not the
                             // value from app launch. Hold the slot across

@@ -33,8 +33,8 @@ async function startSettledFollowUp(): Promise<void> {
   await browser.executeAsync((id: string, done: () => void) => {
     const invoke = (globalThis as any).__TAURI_INTERNALS__?.invoke;
     if (!invoke) { done(); return; }
-    void invoke("e2e_emit_settled_agent_follow_up", { sessionId: id })
-      .catch(() => invoke("e2e_emit_settled_agent_follow_up", { session_id: id }));
+    void invoke("plugin:e2e|emit_settled_agent_follow_up", { sessionId: id })
+      .catch(() => invoke("plugin:e2e|emit_settled_agent_follow_up", { session_id: id }));
     done();
   }, SESSION);
 }

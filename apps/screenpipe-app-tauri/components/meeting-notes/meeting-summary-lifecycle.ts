@@ -7,6 +7,7 @@ export const SUMMARY_DISCOVERY_WINDOW_MS = 90_000;
 export interface MeetingSummaryExecution {
   id: number;
   status: string;
+  started_at?: string | null;
   trigger_event?: string | null;
   trigger_key?: string | null;
   error_type?: string | null;
@@ -24,14 +25,33 @@ export type MeetingSummaryLifecycle =
 export function findMeetingSummaryExecution(
   executions: MeetingSummaryExecution[],
   meetingId: number,
+  options: { notBefore?: string | null } = {},
 ): MeetingSummaryExecution | null {
   const meetingKey = String(meetingId);
+  const notBefore = Date.parse(options.notBefore ?? "");
   return (
     executions.find(
       (execution) =>
         execution.trigger_event === "meeting_ended" &&
-        execution.trigger_key === meetingKey,
+        execution.trigger_key === meetingKey &&
+        (!Number.isFinite(notBefore) ||
+          Date.parse(execution.started_at ?? "") >= notBefore),
     ) ?? null
+  );
+}
+
+export function latestSummaryInputAt(
+  meetingEnd: string | null,
+  transcriptUpdatedAt: string | null,
+): string | null {
+  return (
+    [meetingEnd, transcriptUpdatedAt]
+      .map((value) => ({ value, time: Date.parse(value ?? "") }))
+      .filter(
+        (entry): entry is { value: string; time: number } =>
+          Boolean(entry.value) && Number.isFinite(entry.time),
+      )
+      .sort((a, b) => b.time - a.time)[0]?.value ?? null
   );
 }
 
@@ -39,6 +59,8 @@ export function meetingSummaryLifecycle(
   execution: MeetingSummaryExecution | null,
   options: {
     meetingEnd: string | null;
+    contentUpdatedAt?: string | null;
+    contentRefreshRequested?: boolean | null;
     autoSummaryEnabled: boolean | null;
     now?: number;
   },
@@ -51,11 +73,20 @@ export function meetingSummaryLifecycle(
     return { kind: "failed", execution };
   }
 
-  if (options.autoSummaryEnabled === false || !options.meetingEnd) {
+  if (
+    options.autoSummaryEnabled === false ||
+    options.contentRefreshRequested === false ||
+    !options.meetingEnd
+  ) {
     return { kind: "idle" };
   }
 
-  const endedAt = Date.parse(options.meetingEnd);
+  const endedAt = Date.parse(
+    latestSummaryInputAt(
+      options.meetingEnd,
+      options.contentUpdatedAt ?? null,
+    ) ?? "",
+  );
   const now = options.now ?? Date.now();
   if (
     Number.isFinite(endedAt) &&

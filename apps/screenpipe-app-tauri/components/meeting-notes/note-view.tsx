@@ -122,6 +122,7 @@ import {
 } from "./transcript-open-state";
 import {
   findMeetingSummaryExecution,
+  latestSummaryInputAt,
   meetingSummaryFailureCopy,
   meetingSummaryLifecycle,
   type MeetingSummaryExecution,
@@ -133,6 +134,7 @@ import {
   MeetingWorkspaceTabs,
   type MeetingWorkspaceTab,
 } from "./meeting-workspace";
+import { meetingRetranscribeSuccessCopy } from "./transcript-recovery-copy";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -227,6 +229,23 @@ export function NoteView({
       : "notes",
   );
   const [transcriptRefreshKey, setTranscriptRefreshKey] = useState(0);
+  const [transcriptFreshness, setTranscriptFreshness] = useState<{
+    meetingId: number;
+    updatedAt: string | null;
+    summaryRefreshRequested: boolean | null;
+  }>({
+    meetingId: meeting.id,
+    updatedAt: null,
+    summaryRefreshRequested: null,
+  });
+  const transcriptUpdatedAt =
+    transcriptFreshness.meetingId === meeting.id
+      ? transcriptFreshness.updatedAt
+      : null;
+  const transcriptRefreshRequested =
+    transcriptFreshness.meetingId === meeting.id
+      ? transcriptFreshness.summaryRefreshRequested
+      : null;
   const [audioStatusDevices, setAudioStatusDevices] = useState<
     AudioStatusDevice[]
   >([]);
@@ -244,6 +263,10 @@ export function NoteView({
     summaryLifecycle.kind === "finalizing" ||
     summaryLifecycle.kind === "queued" ||
     summaryLifecycle.kind === "running";
+  const summaryInputUpdatedAt = latestSummaryInputAt(
+    meeting.meeting_end,
+    transcriptUpdatedAt,
+  );
   const summaryRevealPendingRef = useRef(false);
 
   useEffect(() => {
@@ -280,6 +303,45 @@ export function NoteView({
   }, [summaryPipeSlug]);
 
   const refreshedSummaryExecutionRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isLive || !meeting.meeting_end) return;
+
+    let cancelled = false;
+    const loadTranscriptFreshness = async () => {
+      try {
+        const response = await localFetch(`/meetings/${meeting.id}/transcript`);
+        if (!response.ok) return;
+        const segments = (await response.json()) as Array<{
+          createdAt?: string | null;
+        }>;
+        const newest = segments
+          .map((segment) => segment.createdAt ?? null)
+          .filter(
+            (value): value is string =>
+              typeof value === "string" && Number.isFinite(Date.parse(value)),
+          )
+          .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+        if (!cancelled) {
+          setTranscriptFreshness((current) => ({
+            meetingId: meeting.id,
+            updatedAt: newest ?? null,
+            summaryRefreshRequested:
+              current.meetingId === meeting.id && current.updatedAt
+                ? current.summaryRefreshRequested
+                : null,
+          }));
+        }
+      } catch (error) {
+        console.warn("failed to read meeting transcript freshness", error);
+      }
+    };
+    void loadTranscriptFreshness();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLive, meeting.id, meeting.meeting_end, transcriptRefreshKey]);
+
   useEffect(() => {
     if (isLive || !meeting.meeting_end) {
       return;
@@ -297,9 +359,13 @@ export function NoteView({
         const executions = Array.isArray(payload?.data)
           ? (payload.data as MeetingSummaryExecution[])
           : [];
-        const execution = findMeetingSummaryExecution(executions, meeting.id);
+        const execution = findMeetingSummaryExecution(executions, meeting.id, {
+          notBefore: summaryInputUpdatedAt,
+        });
         const next = meetingSummaryLifecycle(execution, {
           meetingEnd: meeting.meeting_end,
+          contentUpdatedAt: transcriptUpdatedAt,
+          contentRefreshRequested: transcriptRefreshRequested,
           autoSummaryEnabled,
         });
         if (cancelled) return;
@@ -339,6 +405,8 @@ export function NoteView({
         if (cancelled) return;
         const fallback = meetingSummaryLifecycle(null, {
           meetingEnd: meeting.meeting_end,
+          contentUpdatedAt: transcriptUpdatedAt,
+          contentRefreshRequested: transcriptRefreshRequested,
           autoSummaryEnabled,
         });
         setSummaryLifecycle(fallback);
@@ -360,6 +428,9 @@ export function NoteView({
     meeting.meeting_end,
     meeting.note,
     summaryPipeSlug,
+    summaryInputUpdatedAt,
+    transcriptRefreshRequested,
+    transcriptUpdatedAt,
   ]);
 
   // Drag-and-drop images straight into the note. Tauri delivers OS file drops
@@ -825,7 +896,7 @@ export function NoteView({
   };
 
   const handleRetranscribe = async () => {
-    if (retranscribing) return;
+    if (retranscribing || summaryWorking) return;
     if (!meeting.meeting_end) {
       toast({
         title: "stop the meeting first",
@@ -848,13 +919,23 @@ export function NoteView({
       }
 
       setTranscriptOpen(true);
+      if (typeof body?.transcript_updated_at === "string") {
+        setTranscriptFreshness({
+          meetingId: meeting.id,
+          updatedAt: body.transcript_updated_at,
+          summaryRefreshRequested:
+            body?.summary_refresh_event_emitted === true,
+        });
+      }
       setTranscriptRefreshKey((key) => key + 1);
       toast({
         title: "transcript refreshed",
-        description:
-          body?.batches_processed > 0
-            ? `${body.batches_processed} batch${body.batches_processed === 1 ? "" : "es"} from saved audio`
-            : "no speech was found in the saved audio",
+        description: meetingRetranscribeSuccessCopy({
+          batchesProcessed: body?.batches_processed,
+          autoSummaryEnabled,
+          summaryRefreshEventEmitted:
+            body?.summary_refresh_event_emitted === true,
+        }),
       });
     } catch (err) {
       console.error("failed to retranscribe meeting", err);
@@ -1213,11 +1294,7 @@ export function NoteView({
   };
 
   const handleSummaryAction = () => {
-    if (summaryLifecycle.kind !== "completed") {
-      void handleSummarize();
-      return;
-    }
-    setActiveTab("summary");
+    void handleSummarize();
   };
 
   const summaryStatus = (() => {
@@ -1269,8 +1346,11 @@ export function NoteView({
     ? "summarizing meeting"
     : !canSummarizeMeeting
       ? "summary unavailable"
-      : summaryLifecycle.kind === "completed"
-        ? "view summary"
+      : summaryLifecycle.kind === "completed" ||
+          (transcriptRefreshRequested !== null &&
+            (transcriptRefreshRequested === false ||
+              autoSummaryEnabled !== true))
+        ? "summarize again"
         : summaryLifecycle.kind === "failed"
           ? "retry summary"
           : "summarize meeting";
@@ -1351,38 +1431,21 @@ export function NoteView({
                 )}
               </Button>
               {!isLive && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handleRetranscribe()}
-                    disabled={retranscribing}
-                    title="retranscribe from saved audio"
-                    aria-label="retranscribe from saved audio"
-                    className="hidden h-8 w-8 rounded-none p-0 sm:inline-flex"
-                  >
-                    {retranscribing ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handleExport()}
-                    disabled={exporting}
-                    title="export meeting to mp4 (video + audio)"
-                    aria-label="export meeting to mp4"
-                    className="hidden h-8 w-8 rounded-none p-0 sm:inline-flex"
-                  >
-                    {exporting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Download className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                </>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleExport()}
+                  disabled={exporting}
+                  title="export meeting to mp4 (video + audio)"
+                  aria-label="export meeting to mp4"
+                  className="hidden h-8 w-8 rounded-none p-0 sm:inline-flex"
+                >
+                  {exporting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
+                </Button>
               )}
             </div>
           </div>
@@ -1502,7 +1565,9 @@ export function NoteView({
             state={summarySurfaceState}
             detail={summaryStatus.detail}
             onGenerate={handleSummaryAction}
-            canGenerate={canSummarizeMeeting && !summaryWorking}
+            canGenerate={
+              canSummarizeMeeting && !summaryWorking && !retranscribing
+            }
           />
         )}
       </main>
@@ -1612,6 +1677,47 @@ export function NoteView({
                   </Button>
                 </MeetingControlTooltip>
                 {!isLive && (
+                  <AlertDialog>
+                    <MeetingControlTooltip label="retranscribe saved audio">
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={retranscribing || summaryWorking}
+                          aria-label="retranscribe saved audio"
+                          className="h-9 w-9 rounded-none p-0"
+                        >
+                          {retranscribing ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <AudioLines className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </AlertDialogTrigger>
+                    </MeetingControlTooltip>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>
+                          retranscribe meeting
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                          rebuild the transcript from saved audio. this replaces
+                          the current transcript and refreshes the summary when
+                          automatic summary is on.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => void handleRetranscribe()}
+                        >
+                          retranscribe
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+                {!isLive && (
                   <MeetingControlTooltip label={summaryActionLabel}>
                     <Button
                       variant={
@@ -1622,14 +1728,16 @@ export function NoteView({
                       }
                       size="sm"
                       onClick={handleSummaryAction}
-                      disabled={summaryWorking || !canSummarizeMeeting}
+                      disabled={
+                        summaryWorking || retranscribing || !canSummarizeMeeting
+                      }
                       aria-label={summaryActionLabel}
                       className="h-9 w-9 rounded-none p-0"
                     >
                       {summaryWorking ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : summaryLifecycle.kind === "completed" ? (
-                        <Check className="h-3.5 w-3.5" />
+                        <RefreshCw className="h-3.5 w-3.5" />
                       ) : summaryLifecycle.kind === "failed" ? (
                         <RefreshCw className="h-3.5 w-3.5" />
                       ) : (

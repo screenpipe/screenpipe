@@ -142,14 +142,18 @@ export function MeetingSummarySurface({
               {detail}
             </p>
           </div>
-          {(state === "idle" || state === "attention") && (
+          {(state === "idle" || state === "attention" || state === "ready") && (
             <button
               type="button"
               onClick={onGenerate}
               disabled={!canGenerate}
               className="h-9 shrink-0 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
             >
-              {state === "attention" ? "retry" : "generate"}
+              {state === "attention"
+                ? "retry"
+                : state === "ready"
+                  ? "summarize again"
+                  : "generate"}
             </button>
           )}
         </div>
