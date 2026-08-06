@@ -652,7 +652,7 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
   if (toolName.includes("web") && toolName.includes("search")) {
     return activity("Searching the web", "Searched the web");
   }
-  if (toolName === "ask_user") {
+  if (toolName === "ask_user" || toolName === "sp_ask_user") {
     return activity("Waiting for your input", "Asked for your input");
   }
 

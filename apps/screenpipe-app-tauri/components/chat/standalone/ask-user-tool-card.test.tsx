@@ -28,6 +28,7 @@ describe("AskUserToolCard", () => {
     expect(isAskUserToolCall({ toolName: "ask_user" })).toBe(true);
     expect(isAskUserToolCall({ toolName: "askUser" })).toBe(true);
     expect(isAskUserToolCall({ toolName: "ask-user" })).toBe(true);
+    expect(isAskUserToolCall({ toolName: "sp_ask_user" })).toBe(true);
     expect(isAskUserToolCall({ toolName: "bash" })).toBe(false);
   });
 

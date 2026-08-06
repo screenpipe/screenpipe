@@ -28,6 +28,13 @@ interface UseChatMessageActionsOptions {
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onDeclineConnectionAction?: (block: Extract<ContentBlock, { type: "connection_action" }>) => void | Promise<void>;
+  /**
+   * Answer a pending sp_ask_user extension UI request. Returns true when the
+   * reply resumed the waiting Pi tool; false means there is no pending request
+   * for that tool call (legacy ask_user) and the reply should be sent as a
+   * regular chat message instead.
+   */
+  answerAskUserRequest?: (toolCallId: string, reply: string) => Promise<boolean>;
 }
 
 export function useChatMessageActions({
@@ -46,6 +53,7 @@ export function useChatMessageActions({
   onOpenConnectionSetup,
   onConnectConnectionAction,
   onDeclineConnectionAction,
+  answerAskUserRequest,
 }: UseChatMessageActionsOptions) {
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -237,7 +245,14 @@ export function useChatMessageActions({
     onConnectConnectionAction,
     onContinueConnectionAction: (prompt, label) => sendMessage(prompt, label),
     onDismissConnectionAction: dismissConnectionAction,
-    onAskUserReply: (reply, label) => sendMessage(reply, label),
+    onAskUserReply: async (reply, label, toolCallId) => {
+      // sp_ask_user keeps the Pi tool call pending until this reply resumes
+      // it; only legacy ask_user results fall back to a plain chat message.
+      if (toolCallId && answerAskUserRequest && (await answerAskUserRequest(toolCallId, reply))) {
+        return;
+      }
+      await sendMessage(reply, label);
+    },
     suppressSourceFooters: true,
   };
 

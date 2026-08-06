@@ -159,12 +159,13 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 5] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 6] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
+    "ask-user.ts",
 ];
 
 fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
@@ -1543,6 +1544,18 @@ fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_ask_user_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+    let ext_path = ext_dir.join("ask-user.ts");
+    let ext_content = include_str!("../assets/extensions/ask-user.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write ask-user extension: {}", e))?;
+    debug!("ask-user extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 /// Which transport backend Pi uses. Absent means the native Pi RPC agent;
 /// `acp` runs an external Agent Client Protocol adapter through the hidden
 /// runtime (see acp_runtime.rs).
@@ -2239,6 +2252,7 @@ pub async fn pi_start_inner(
         ensure_save_artifact_extension(&project_dir)?;
         ensure_live_views_extension(&project_dir)?;
         ensure_connection_gate_extension(&project_dir)?;
+        ensure_ask_user_extension(&project_dir)?;
         ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
         if !extension_safe_mode {
             ensure_required_pi_extension_package().await?;

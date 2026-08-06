@@ -92,7 +92,7 @@ export interface ChatMessageListProps {
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
-  onAskUserReply?: (reply: string, displayLabel: string) => Promise<void> | void;
+  onAskUserReply?: (reply: string, displayLabel: string, toolCallId?: string) => Promise<void> | void;
   suppressSourceFooters?: boolean;
 }
 

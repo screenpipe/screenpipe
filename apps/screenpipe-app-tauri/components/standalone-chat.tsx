@@ -1001,6 +1001,26 @@ export function StandaloneChat({
   }
 
 
+  // Pending sp_ask_user UI requests: Pi toolCallId -> extension request id.
+  // Entries resolve when the user replies on the ask card; a failed answer
+  // (e.g. the turn was already aborted) falls back to a plain chat message.
+  const askUiRequestsRef = useRef<Map<string, string>>(new Map());
+
+  const answerAskUserRequest = useCallback(async (
+    toolCallId: string,
+    reply: string,
+  ): Promise<boolean> => {
+    const requestId = askUiRequestsRef.current.get(toolCallId);
+    if (!requestId) return false;
+    askUiRequestsRef.current.delete(toolCallId);
+    const result = await commands.piExtensionUiResponse(
+      piSessionIdRef.current,
+      requestId,
+      { value: reply },
+    );
+    return result.status === "ok";
+  }, [piSessionIdRef]);
+
   const answerPiExtensionUiRequest = useCallback(async (
     requestId: string | undefined,
     response: JsonValue,
@@ -1101,8 +1121,20 @@ export function StandaloneChat({
       if (payload.sessionId !== piSessionIdRef.current) return;
       const inner = payload.event;
       if (inner.type !== "extension_ui_request") return;
+      const requestTitle = typeof inner.title === "string" ? inner.title : "";
+      // sp_ask_user blocks on ctx.ui.input with a "screenpipe:ask:<toolCallId>"
+      // title; remember the request id so the ask card's Reply resumes the
+      // pending tool instead of sending a new chat message.
+      if (inner.method === "input" && requestTitle.startsWith("screenpipe:ask:")) {
+        const toolCallId = requestTitle.slice("screenpipe:ask:".length);
+        const askRequestId = typeof inner.id === "string" ? inner.id : "";
+        if (toolCallId && askRequestId) {
+          askUiRequestsRef.current.set(toolCallId, askRequestId);
+        }
+        return;
+      }
       if (inner.method !== "confirm") return;
-      const title = typeof inner.title === "string" ? inner.title : "";
+      const title = requestTitle;
       if (!title.startsWith("screenpipe:connect:")) return;
 
       const [, , connectionId, ...nameParts] = title.split(":");
@@ -1290,6 +1322,7 @@ export function StandaloneChat({
     onOpenConnectionSetup: openConnectionSetup,
     onConnectConnectionAction: connectFromInlineCard,
     onDeclineConnectionAction: declineConnectionAction,
+    answerAskUserRequest,
     scheduleMessage: (message, displayLabel) => {
       piMessageIdRef.current = null;
       sendMessage(message, displayLabel);

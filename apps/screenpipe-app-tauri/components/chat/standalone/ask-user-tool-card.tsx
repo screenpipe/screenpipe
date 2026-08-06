@@ -95,7 +95,10 @@ function normalizeQuestion(value: unknown, index: number): AskUserQuestion | nul
 }
 
 export function isAskUserToolCall(toolCall: Pick<ToolCall, "toolName">): boolean {
-  return toolCall.toolName.replace(/[^a-z0-9]/gi, "").toLowerCase() === "askuser";
+  const normalized = toolCall.toolName.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  // "askuser" = legacy @eko24ive/pi-ask tool; "spaskuser" = the bundled
+  // blocking sp_ask_user extension.
+  return normalized === "askuser" || normalized === "spaskuser";
 }
 
 export function parseAskUserToolCall(toolCall: Pick<ToolCall, "args">): ParsedAskUserToolCall | null {

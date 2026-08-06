@@ -430,7 +430,7 @@ function ToolCallRailItem({
 }: {
   toolCall: ToolCall;
   isLast: boolean;
-  onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
+  onAskUserReply?: (reply: string, displayLabel: string, toolCallId?: string) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const presentation = presentToolActivity(toolCall);
@@ -478,7 +478,14 @@ function ToolCallRailItem({
       {/* Content */}
       <div className="flex-1 min-w-0 pb-2">
         {isAskUser ? (
-          <AskUserToolCard toolCall={toolCall} onSubmit={onAskUserReply} />
+          <AskUserToolCard
+            toolCall={toolCall}
+            onSubmit={
+              onAskUserReply
+                ? (reply, displayLabel) => onAskUserReply(reply, displayLabel, toolCall.id)
+                : undefined
+            }
+          />
         ) : (
           <button
             onClick={() => setExpanded(!expanded)}
@@ -1098,7 +1105,7 @@ function ToolCallGroup({
   workStartedAtMs?: number;
   hideSummary?: boolean;
   forceCollapsed?: boolean;
-  onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
+  onAskUserReply?: (reply: string, displayLabel: string, toolCallId?: string) => void | Promise<void>;
 }) {
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
   const [runningSummary, setRunningSummary] = useState("Working");
@@ -1256,7 +1263,7 @@ export function MessageContent({
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
-  onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
+  onAskUserReply?: (reply: string, displayLabel: string, toolCallId?: string) => void | Promise<void>;
 }) {
   const isUser = message.role === "user";
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
