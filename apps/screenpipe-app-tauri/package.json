@@ -37,6 +37,7 @@
     "test:e2e:onboarding-redirect": "SCREENPIPE_E2E_SEED=no-recording bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-redirect.spec.ts",
     "test:e2e:onboarding-h1-follow-up": "SCREENPIPE_E2E_SEED=onboarding,no-recording SCREENPIPE_PORT=3046 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-h1-follow-up.spec.ts",
     "test:e2e:onboarding-background-ai-tools": "SCREENPIPE_E2E_SEED=no-recording,background-ai-tools SCREENPIPE_PORT=3045 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-background-ai-tools.spec.ts",
+    "test:e2e:screen-recording-restart:macos": "SCREENPIPE_E2E_SEED=onboarding,no-recording bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/screen-recording-restart.spec.ts",
     "test:e2e:hd:macos": "SCREENPIPE_E2E_SEED=onboarding bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/hd-recording-pipeline.spec.ts",
     "test:e2e:hd-duration-recovery:macos": "SCREENPIPE_E2E_SEED=onboarding,no-audio,hd-writer-stall-once bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/hd-recording-pipeline.spec.ts",
     "test:e2e:capture-frequency:macos": "SCREENPIPE_E2E_SEED=onboarding,no-audio bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/capture-frequency-floor.spec.ts",

@@ -8,14 +8,6 @@ import { X, Zap } from "lucide-react";
 import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   formatAllowanceReset,
   formatAllowanceWindow,
   formatResetTime,
@@ -52,9 +44,6 @@ export function UpgradeQuotaBanner() {
   const upsellEnabled = useModelUpsellGating(usage?.upgrade_eligible);
   const blockedUpgrade = useQuotaUpgrade();
   const [dismissed, setDismissed] = useState(false);
-  const [dismissedModalKey, setDismissedModalKey] = useState<string | null>(
-    null,
-  );
   const [busy, setBusy] = useState(false);
   const cloudflareAllowance = usage?.hosted_ai?.allowances
     ?.filter((allowance) => allowance.remaining_percent <= 0)
@@ -111,19 +100,9 @@ export function UpgradeQuotaBanner() {
   const activeUpgrade = blockedUpgrade ?? polledUpgrade;
   const showUpgradeAction =
     activeUpgrade !== null || (!blockedUpgrade && !serverBlocked);
-  const modalKey = [
-    source,
-    activeUpgrade?.requiredPlan ?? "no-upgrade",
-    activeUpgrade?.upgradeUrl ?? "",
-    cloudflareAllowance?.lane ?? "",
-    cloudflareAllowance?.resets_at ?? blockedUpgrade?.resetsAt ?? "",
-  ].join(":");
-  const modalOpen = dismissedModalKey !== modalKey;
-  const dismissModal = () => setDismissedModalKey(modalKey);
 
   const onUpgrade = async () => {
     if (busy) return;
-    dismissModal();
     setBusy(true);
     try {
       posthog.capture("desktop_upgrade_entry_clicked", {
@@ -148,46 +127,9 @@ export function UpgradeQuotaBanner() {
   const blockedTitle = cloudflareBlocked
     ? `${cloudflareAllowance.lane === "auto" ? "Auto" : "Explicit model"} hosted AI limit reached`
     : "Hosted AI usage limit reached";
-  const modalDescription = cloudflareBlocked
-    ? `Your ${cloudflareAllowance.lane === "auto" ? "Auto" : "explicit model"} hosted AI allowance is fully used${resets ? ` until ${resets}` : ""}. ${
-        cloudflareAllowance.lane === "auto"
-          ? "Choose an explicit hosted model, or use a local or own-key preset."
-          : "Switch to Auto, or use a local or own-key preset."
-      }`
-    : legacyCostBlocked || blockedUpgrade
-      ? `Your plan's hosted AI allowance is used up${resets ? ` until ${resets}` : ""}. Switch to a local or own-key AI preset to keep working.`
-      : `You've used today's premium hosted AI allowance${resets ? `; it resets ${resets}` : ""}. Free models still work.`;
 
   return (
     <>
-      <Dialog
-        open={modalOpen}
-        onOpenChange={(open) => {
-          if (!open) dismissModal();
-        }}
-      >
-        <DialogContent data-testid="ai-usage-limit-modal">
-          <DialogHeader>
-            <DialogTitle>
-              {showUpgradeAction ? "upgrade hosted AI" : "hosted AI usage limit"}
-            </DialogTitle>
-            <DialogDescription>{modalDescription}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={dismissModal}>
-              not now
-            </Button>
-            {showUpgradeAction && (
-              <Button type="button" onClick={onUpgrade} disabled={busy}>
-                {activeUpgrade
-                  ? `Upgrade to ${requiredPlanLabel}`
-                  : "View Business"}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <div
         className="mb-2 border border-border bg-background px-3 py-2.5 shadow-lg shadow-black/5"
         data-testid={
@@ -241,7 +183,7 @@ export function UpgradeQuotaBanner() {
             </div>
           </div>
           <span className="flex shrink-0 items-center gap-1.5">
-            {showUpgradeAction && !modalOpen && (
+            {showUpgradeAction && (
               <Button
                 type="button"
                 size="sm"

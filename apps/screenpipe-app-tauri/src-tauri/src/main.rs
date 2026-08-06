@@ -975,6 +975,7 @@ async fn main() {
     let sync_scheduler = screenpipe_connect::sync_scheduler::SyncScheduler::new();
 
     let app = app.manage(recording_state)
+        .manage(disk_pressure_notifications::DiskPressureNotificationState::default())
         .manage(pi_state)
         .manage(suggestions_state)
         .manage(sync_scheduler)

@@ -4,8 +4,12 @@
 
 import React, { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { LiveViewCanvas } from "../live-view-canvas";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  interpolateCanvasFocusViewport,
+  isTrustedCanvasMove,
+  LiveViewCanvas,
+} from "../live-view-canvas";
 import { createCanvasDocument } from "@/lib/live-views/canvas-layout";
 import type {
   BrainViewCanvasDocument,
@@ -137,6 +141,183 @@ afterEach(() => {
 });
 
 describe("LiveViewCanvas", () => {
+  it("eases AI proposal focus instead of jumping and respects reduced motion", () => {
+    const from = { x: 0, y: 0, zoom: 1 };
+    const to = { x: -1_720, y: -790, zoom: 0.75 };
+
+    const animationFrames = Array.from({ length: 11 }, (_, index) =>
+      interpolateCanvasFocusViewport(from, to, index / 10),
+    );
+    for (let index = 1; index < animationFrames.length; index += 1) {
+      expect(animationFrames[index].x).toBeLessThan(
+        animationFrames[index - 1].x,
+      );
+      expect(animationFrames[index].y).toBeLessThan(
+        animationFrames[index - 1].y,
+      );
+      expect(animationFrames[index].zoom).toBeLessThan(
+        animationFrames[index - 1].zoom,
+      );
+    }
+    const halfway = interpolateCanvasFocusViewport(from, to, 0.5);
+    expect(halfway.x).toBeLessThan(from.x);
+    expect(halfway.x).toBeGreaterThan(to.x);
+    expect(halfway.y).toBeLessThan(from.y);
+    expect(halfway.y).toBeGreaterThan(to.y);
+    expect(halfway.zoom).toBeLessThan(from.zoom);
+    expect(halfway.zoom).toBeGreaterThan(to.zoom);
+    expect(interpolateCanvasFocusViewport(from, to, -1)).toEqual(from);
+    expect(interpolateCanvasFocusViewport(from, to, 1)).toEqual(to);
+    expect(interpolateCanvasFocusViewport(from, to, 2)).toEqual(to);
+    expect(interpolateCanvasFocusViewport(from, to, 0.01, true)).toEqual(to);
+  });
+
+  it("cancels focus only for real user-driven Canvas movement", () => {
+    expect(isTrustedCanvasMove(null)).toBe(false);
+    expect(isTrustedCanvasMove({ isTrusted: false } as MouseEvent)).toBe(false);
+    expect(isTrustedCanvasMove({ isTrusted: true } as MouseEvent)).toBe(true);
+  });
+
+  it("focuses a proposal that is added after its focus request", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const onChange = vi.fn();
+    const initialDocument = createCanvasDocument(view);
+    const proposedSlot = {
+      ...view.slots[0],
+      id: "late-proposal",
+      title: "Late proposal",
+      order: view.slots.length,
+    };
+    const props = {
+      timeRange: "today" as const,
+      refreshingSlotIds: new Set<string>(),
+      aiEditingSlotId: null,
+      onChange,
+      onFeedback: vi.fn().mockResolvedValue(true),
+      onRegenerate: vi.fn(),
+      onAiEdit: vi.fn().mockResolvedValue(true),
+      focusSlotId: proposedSlot.id,
+    };
+    const result = render(
+      <LiveViewCanvas
+        {...props}
+        document={initialDocument}
+        slots={view.slots}
+      />,
+    );
+    onChange.mockClear();
+
+    result.rerender(
+      <LiveViewCanvas
+        {...props}
+        document={{
+          ...initialDocument,
+          blocks: [
+            ...initialDocument.blocks,
+            {
+              slotId: proposedSlot.id,
+              x: 1_200,
+              y: 800,
+              width: 660,
+              height: 320,
+            },
+          ],
+        }}
+        slots={[...view.slots, proposedSlot]}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewport: { x: -1_030, y: -610, zoom: 1 },
+        }),
+        { persist: false },
+      ),
+    );
+  });
+
+  it("does not restart proposal focus when the parent callback changes", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const firstOnChange = vi.fn();
+    const nextOnChange = vi.fn();
+    const document = createCanvasDocument(view);
+    const props = {
+      document,
+      slots: view.slots,
+      timeRange: "today" as const,
+      refreshingSlotIds: new Set<string>(),
+      aiEditingSlotId: null,
+      onFeedback: vi.fn().mockResolvedValue(true),
+      onRegenerate: vi.fn(),
+      onAiEdit: vi.fn().mockResolvedValue(true),
+      focusSlotId: "focus-time",
+    };
+    const result = render(
+      <LiveViewCanvas {...props} onChange={firstOnChange} />,
+    );
+    await waitFor(() => expect(firstOnChange).toHaveBeenCalledTimes(1));
+
+    result.rerender(<LiveViewCanvas {...props} onChange={nextOnChange} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(nextOnChange).not.toHaveBeenCalled();
+  });
+
+  it("settles proposal focus when animation frames are throttled", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false })),
+    );
+    const onChange = vi.fn();
+    const props = {
+      document: createCanvasDocument(view),
+      slots: view.slots,
+      timeRange: "today" as const,
+      refreshingSlotIds: new Set<string>(),
+      aiEditingSlotId: null,
+      onChange,
+      onFeedback: vi.fn().mockResolvedValue(true),
+      onRegenerate: vi.fn(),
+      onAiEdit: vi.fn().mockResolvedValue(true),
+    };
+    const result = render(
+      <LiveViewCanvas {...props} focusSlotId={null} />,
+    );
+    onChange.mockClear();
+
+    vi.useFakeTimers();
+    try {
+      const requestAnimationFrame = vi.fn(() => 41);
+      const cancelAnimationFrame = vi.fn();
+      vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
+      vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+
+      result.rerender(
+        <LiveViewCanvas {...props} focusSlotId="focus-time" />,
+      );
+
+      expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+      expect(onChange).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(360));
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewport: { x: 216, y: 146, zoom: 1 },
+        }),
+        { persist: false },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the source-backed Live View cards interactive inside the canvas", () => {
     render(<CanvasHarness />);
 
@@ -191,7 +372,7 @@ describe("LiveViewCanvas", () => {
     expect(onPersist).not.toHaveBeenCalled();
   });
 
-  it("ignores React Flow's delayed move-end callback after unmount", async () => {
+  it("ignores React Flow's untrusted move callbacks", async () => {
     const onChange = vi.fn();
     const result = render(
       <React.StrictMode>
@@ -213,13 +394,13 @@ describe("LiveViewCanvas", () => {
       deltaX: 24,
       deltaY: 24,
     });
-    await waitFor(() => expect(onChange).toHaveBeenCalled());
-    const callsBeforeUnmount = onChange.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onChange).not.toHaveBeenCalled();
 
     result.unmount();
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    expect(onChange).toHaveBeenCalledTimes(callsBeforeUnmount);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("resizes a Block from its current size on the first drag", async () => {

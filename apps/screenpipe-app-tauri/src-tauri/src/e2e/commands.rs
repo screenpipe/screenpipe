@@ -56,6 +56,32 @@ fn emit_disk_space_low(available_bytes: u64) -> Result<(), String> {
     screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
 }
 
+/// E2E helper: publish the production recovery signal that re-arms the
+/// incident-level notification latch after disk-space hysteresis is met.
+#[command]
+fn emit_disk_space_recovered(available_bytes: u64) -> Result<(), String> {
+    let event =
+        screenpipe_events::DiskSpaceRecoveredEvent::new(available_bytes, ".e2e".to_string());
+    screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
+}
+
+/// E2E helper: make an isolated run deterministic without deleting the whole
+/// notification history.
+#[command]
+async fn reset_disk_pressure_notification_latch(
+    state: State<'_, crate::disk_pressure_notifications::DiskPressureNotificationState>,
+) -> Result<(), String> {
+    state.reset().await
+}
+
+/// E2E helper: read whether the production latch is re-armed.
+#[command]
+async fn disk_pressure_notification_armed(
+    state: State<'_, crate::disk_pressure_notifications::DiskPressureNotificationState>,
+) -> Result<bool, String> {
+    Ok(state.notification_armed().await)
+}
+
 /// E2E helper: execute the production policy handler directly and return its
 /// explicit outcome. This avoids sleep-based assertions; the settings E2E also
 /// publishes through the typed event bus to cover the production subscription.
@@ -401,6 +427,20 @@ async fn screen_is_locked() -> Result<bool, String> {
     Ok(screenpipe_engine::sleep_monitor::screen_is_locked())
 }
 
+/// Force the post-grant Screen Recording state without changing the runner's
+/// real macOS TCC database.
+#[command]
+fn set_screen_recording_restart_required(required: bool) -> Result<(), String> {
+    crate::permissions::e2e_set_screen_recording_restart_required(required);
+    Ok(())
+}
+
+/// Read back whether the explicit restart button reached the native command.
+#[command]
+fn screen_recording_restart_requested() -> bool {
+    crate::permissions::e2e_screen_recording_restart_requested()
+}
+
 /// E2E-only accelerated reproduction of an idle capture heartbeat pause that
 /// recovers as the user returns. The real incident accumulated 114 idle stale
 /// checks, then the first input both woke capture and crossed the attended
@@ -490,6 +530,9 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             main_overlay_visible,
             mark_capture_intended,
             emit_disk_space_low,
+            emit_disk_space_recovered,
+            reset_disk_pressure_notification_latch,
+            disk_pressure_notification_armed,
             handle_disk_space_low,
             capture_session_running,
             set_low_disk_guard_enabled,
@@ -504,6 +547,8 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             arm_capture_loop_silent_fault,
             arm_sck_lookup_hang_fault,
             screen_is_locked,
+            set_screen_recording_restart_required,
+            screen_recording_restart_requested,
             recording_health_return_race,
             owned_browser_visible,
             owned_browser_detach,

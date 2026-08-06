@@ -58,6 +58,8 @@ export function removeSpotlightExclusion(directory: string): void {
   if (process.platform !== "darwin") return;
 
   const canonicalDirectory = realpathSync(directory);
+  if (!spotlightExclusions().includes(canonicalDirectory)) return;
+
   execFileSync("/usr/bin/swift", ["-e", REMOVE_EXCLUSION_SWIFT], {
     env: {
       ...process.env,
