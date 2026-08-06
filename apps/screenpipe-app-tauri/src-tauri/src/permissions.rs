@@ -140,6 +140,7 @@ fn request_av_permission(app: tauri::AppHandle, media_type: nokhwa_bindings_maco
 
         let callback = move |granted: BOOL| {
             if is_audio && granted != NO {
+                use tauri::Manager;
                 let capture_intended = app_for_callback
                     .try_state::<crate::recording::RecordingState>()
                     .map(|s| s.capture_intended())
