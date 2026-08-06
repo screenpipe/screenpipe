@@ -15,12 +15,11 @@ Server-driven navigation happens in a single dedicated **work tab** that the
 extension creates in the background (`active: false`) and never focuses.
 Follow-up evals stay pinned to that tab, so automation keeps running quietly
 while you use any Chrome window — it never takes over the tab you're looking
-at. **Closing the work tab stops the session**: evals are rejected (never
-rerouted to whatever tab you're using) until the next navigation explicitly
-opens a fresh work tab. Evals that arrive when no work tab was ever created
-(e.g. "summarize this page") still target your active tab, matching the old
-behavior, and evals with a URL pattern keep resolving against tabs that match
-the pattern.
+at. **Closing the work tab stops the session**: every eval — with or without
+a URL pattern — is rejected (never rerouted to any of your tabs) until the
+next navigation explicitly opens a fresh work tab. Evals that arrive when no
+work tab was ever created (e.g. "summarize this page") still target your
+active tab, matching the old behavior.
 
 ## Development
 
