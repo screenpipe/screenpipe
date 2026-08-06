@@ -13,12 +13,13 @@
  * handler upserted a SECOND row. Fix: the send saves under the dispatched
  * session id (idOverride), so one card click = one conversation file.
  *
- * This spec clicks EVERY home automation card and asserts its unique display
- * label is persisted in exactly ONE conversation file, never two. Matching the
- * saved turn instead of a global file-count delta is important because "+ new
- * chat" may intentionally reuse an existing blank conversation. Deterministic:
- * the user turn is persisted immediately on send, so no live-model reply is
- * required.
+ * This spec clicks the original "Missed To-Dos" reproduction card and asserts
+ * its display label is persisted in exactly ONE conversation file, never two.
+ * The component test covers the dispatch contract for every built-in card;
+ * keeping one live integration turn here avoids later Pi saves from one card
+ * contaminating another card (and WDIO retries) in the shared app process.
+ * Matching the saved turn instead of a global file-count delta is important
+ * because "+ new chat" may intentionally reuse an existing blank conversation.
  *
  * Run with:
  *   cd apps/screenpipe-app-tauri && ./e2e/run.sh
@@ -33,14 +34,8 @@ import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 
 const CHATS_DIR = join(E2E_DATA_DIR, "chats");
-// The home grid slugs (summary-cards.tsx HOME_CARD_SLUGS).
-const CARD_SLUGS = ["automate-my-work", "day-recap", "time-breakdown", "missed-todos"];
-const CARD_DISPLAY_LABELS: Record<string, string> = {
-  "automate-my-work": "⚡ Automate My Work",
-  "day-recap": "📋 Day Recap",
-  "time-breakdown": "⏱ Time Breakdown",
-  "missed-todos": "✅ Missed To-Dos",
-};
+const CARD_SLUG = "missed-todos";
+const CARD_DISPLAY_LABEL = "✅ Missed To-Dos";
 
 interface MatchingChat {
   name: string;
@@ -58,11 +53,14 @@ function chatsForDisplayLabel(displayLabel: string): MatchingChat[] {
   return names.flatMap((name) => {
     if (!name.endsWith(".json")) return [];
     try {
-      const conversation = JSON.parse(readFileSync(join(CHATS_DIR, name), "utf8")) as {
+      const conversation = JSON.parse(
+        readFileSync(join(CHATS_DIR, name), "utf8"),
+      ) as {
         messages?: Array<{ role?: string; displayContent?: string }>;
       };
       const matchingUserMessages = (conversation.messages ?? []).filter(
-        (message) => message.role === "user" && message.displayContent === displayLabel,
+        (message) =>
+          message.role === "user" && message.displayContent === displayLabel,
       ).length;
       return matchingUserMessages > 0 ? [{ name, matchingUserMessages }] : [];
     } catch {
@@ -85,17 +83,55 @@ function cleanupCardChats(displayLabel: string): void {
   }
 }
 
+/**
+ * WDIO retries reuse the app and data directory. Switch away from the prior
+ * turn first, then remove matching files until the directory has stayed quiet;
+ * otherwise a late outgoing-session snapshot can recreate a deleted retry
+ * artifact and look like a duplicate from the current click.
+ */
+async function settleRetryArtifacts(displayLabel: string): Promise<void> {
+  const deadline = Date.now() + t(10_000);
+  let quietSince = Date.now();
+
+  while (Date.now() < deadline) {
+    const matches = chatFilesForDisplayLabel(displayLabel);
+    if (matches.length > 0) {
+      cleanupCardChats(displayLabel);
+      quietSince = Date.now();
+    } else if (Date.now() - quietSince >= t(1_500)) {
+      return;
+    }
+    await browser.pause(250);
+  }
+
+  const remaining = chatFilesForDisplayLabel(displayLabel);
+  if (remaining.length > 0) {
+    throw new Error(
+      `retry artifacts for '${displayLabel}' did not settle — files: ${remaining.join(", ")}`,
+    );
+  }
+}
+
 async function openIsolatedChat(): Promise<void> {
   const conversationId = randomUUID();
   const error = await browser.executeAsync(
     (id: string, done: (error: string | null) => void) => {
       const g = globalThis as unknown as {
-        __TAURI__?: { event?: { emit: (name: string, payload: unknown) => Promise<unknown> } };
-        __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> };
+        __TAURI__?: {
+          event?: {
+            emit: (name: string, payload: unknown) => Promise<unknown>;
+          };
+        };
+        __TAURI_INTERNALS__?: {
+          invoke: (cmd: string, args: object) => Promise<unknown>;
+        };
       };
       const emit = g.__TAURI__?.event?.emit;
       const request = emit
-        ? emit("chat-load-conversation", { conversationId: id, targetWindow: "home" })
+        ? emit("chat-load-conversation", {
+            conversationId: id,
+            targetWindow: "home",
+          })
         : g.__TAURI_INTERNALS__?.invoke("plugin:event|emit", {
             event: "chat-load-conversation",
             payload: { conversationId: id, targetWindow: "home" },
@@ -128,37 +164,57 @@ async function waitForCard(slug: string): Promise<void> {
   await browser.waitUntil(
     async () =>
       (await browser.execute(
-        (s: string) => !!document.querySelector(`[data-testid="summary-card-${s}"]`),
+        (s: string) =>
+          !!document.querySelector(`[data-testid="summary-card-${s}"]`),
         slug,
       )) as boolean,
-    { timeout: t(15_000), interval: 300, timeoutMsg: `summary card '${slug}' never rendered` },
+    {
+      timeout: t(15_000),
+      interval: 300,
+      timeoutMsg: `summary card '${slug}' never rendered`,
+    },
   );
 }
 
 async function clickCard(slug: string): Promise<void> {
-  await browser.execute((s: string) => {
-    (document.querySelector(`[data-testid="summary-card-${s}"]`) as HTMLElement | null)?.click();
-  }, slug);
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute((s: string) => {
+        const card = document.querySelector(
+          `[data-testid="summary-card-${s}"]`,
+        ) as HTMLElement | null;
+        if (!card) return false;
+        card.click();
+        return true;
+      }, slug)) as boolean,
+    {
+      timeout: t(10_000),
+      interval: 250,
+      timeoutMsg: `summary card '${slug}' disappeared before it could be clicked`,
+    },
+  );
 }
 
-/** Stop the current turn so the Pi subprocess is free for the next card —
- *  otherwise the next send is queued (not dispatched) and never persists. */
+/** Stop the current turn so a retry starts from an idle Pi subprocess. */
 async function stopCurrentTurn(): Promise<void> {
-  const stopError = await browser.executeAsync((done: (error: string | null) => void) => {
-    const stop = (window as any).__e2eStopChat;
-    if (typeof stop !== "function") {
-      done(null);
-      return;
-    }
+  const stopError = await browser.executeAsync(
+    (done: (error: string | null) => void) => {
+      const stop = (window as any).__e2eStopChat;
+      if (typeof stop !== "function") {
+        done(null);
+        return;
+      }
 
-    void Promise.resolve(stop())
-      .then(() => done(null))
-      .catch((error) => done(String(error)));
-  });
-  if (stopError) throw new Error(`failed to stop current chat turn: ${stopError}`);
+      void Promise.resolve(stop())
+        .then(() => done(null))
+        .catch((error) => done(String(error)));
+    },
+  );
+  if (stopError)
+    throw new Error(`failed to stop current chat turn: ${stopError}`);
 }
 
-describe("Automation cards create exactly one chat each (#4719)", function () {
+describe("Automation card creates exactly one chat (#4719)", function () {
   this.timeout(300_000);
 
   before(async () => {
@@ -166,49 +222,46 @@ describe("Automation cards create exactly one chat each (#4719)", function () {
     await openHomeWindow();
   });
 
-  for (const slug of CARD_SLUGS) {
-    it(`'${slug}' card creates ONE conversation, not a duplicate`, async () => {
-      const displayLabel = CARD_DISPLAY_LABELS[slug];
-      // Give every card a fresh, explicit conversation so this spec exercises
-      // card persistence only. Cmd/Ctrl+N reuse is covered independently by
-      // chat-newchat-fresh.spec.ts and can legitimately select an older blank
-      // draft while a failed model turn is settling.
-      await stopCurrentTurn();
-      // WDIO retries reuse the same app/data dir. Remove only this card's prior
-      // retry artifacts so a real duplicate still reproduces on every attempt.
-      cleanupCardChats(displayLabel);
-      await openIsolatedChat();
-      await waitForCard(slug);
+  it(`'${CARD_SLUG}' card creates ONE conversation, not a duplicate`, async () => {
+    // Give the card a fresh, explicit conversation so this spec exercises card
+    // persistence only. Switch before cleanup so late saves from a prior WDIO
+    // retry cannot recreate a deleted file after this attempt starts.
+    await stopCurrentTurn();
+    await openIsolatedChat();
+    await settleRetryArtifacts(CARD_DISPLAY_LABEL);
+    await waitForCard(CARD_SLUG);
 
-      await clickCard(slug);
+    await clickCard(CARD_SLUG);
 
-      // The user turn is saved immediately on send (no model reply needed).
-      await browser.waitUntil(async () => chatFilesForDisplayLabel(displayLabel).length > 0, {
+    // The user turn is saved immediately on send (no model reply needed).
+    await browser.waitUntil(
+      async () => chatFilesForDisplayLabel(CARD_DISPLAY_LABEL).length > 0,
+      {
         timeout: t(20_000),
         interval: 400,
-        timeoutMsg: `'${slug}': no conversation persisted after the card click`,
-      });
-      // Give a would-be twin (a divergent edge/streaming save) a fair chance to
-      // land before counting, then stop the turn to free Pi for the next card.
-      await browser.pause(t(5_000));
-      await stopCurrentTurn();
+        timeoutMsg: `'${CARD_SLUG}': no conversation persisted after the card click`,
+      },
+    );
+    // Give a would-be twin (a divergent edge/streaming save) a fair chance to
+    // land before counting.
+    await browser.pause(t(5_000));
+    await stopCurrentTurn();
 
-      const matches = chatFilesForDisplayLabel(displayLabel);
-      if (matches.length > 1) {
-        throw new Error(
-          `BUG REPRODUCED: '${slug}' card created ${matches.length} conversations ` +
-            `(duplicate), expected 1 — files: ${matches.join(", ")}`,
-        );
-      }
-      expect(matches).toHaveLength(1);
-      const [persisted] = chatsForDisplayLabel(displayLabel);
-      if (persisted?.matchingUserMessages !== 1) {
-        throw new Error(
-          `BUG REPRODUCED: '${slug}' persisted the same user turn ` +
-            `${persisted?.matchingUserMessages ?? 0} times in ${persisted?.name ?? "unknown file"}`,
-        );
-      }
-      expect(persisted.matchingUserMessages).toBe(1);
-    });
-  }
+    const matches = chatFilesForDisplayLabel(CARD_DISPLAY_LABEL);
+    if (matches.length > 1) {
+      throw new Error(
+        `BUG REPRODUCED: '${CARD_SLUG}' card created ${matches.length} conversations ` +
+          `(duplicate), expected 1 — files: ${matches.join(", ")}`,
+      );
+    }
+    expect(matches).toHaveLength(1);
+    const [persisted] = chatsForDisplayLabel(CARD_DISPLAY_LABEL);
+    if (persisted?.matchingUserMessages !== 1) {
+      throw new Error(
+        `BUG REPRODUCED: '${CARD_SLUG}' persisted the same user turn ` +
+          `${persisted?.matchingUserMessages ?? 0} times in ${persisted?.name ?? "unknown file"}`,
+      );
+    }
+    expect(persisted.matchingUserMessages).toBe(1);
+  });
 });
