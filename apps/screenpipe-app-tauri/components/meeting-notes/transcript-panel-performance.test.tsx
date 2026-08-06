@@ -128,7 +128,9 @@ describe("SpeakerParagraph render isolation", () => {
       "data-final",
       "false",
     );
-    expect(getByLabelText("transcribing partial text")).toBeInTheDocument();
+    const partialIndicator = getByLabelText("transcribing partial text");
+    expect(partialIndicator).toBeInTheDocument();
+    expect(partialIndicator.firstElementChild).toHaveClass("bg-foreground");
     expect(isSpeakerContinuation(block, partial)).toBe(true);
     expect(
       isSpeakerContinuation(block, {
@@ -137,5 +139,37 @@ describe("SpeakerParagraph render isolation", () => {
         endMs: block.endMs + 31_000,
       }),
     ).toBe(false);
+  });
+
+  it("uses monochrome theme tokens instead of blue or purple speaker colors", () => {
+    const onSpeakerAssigned = vi.fn();
+    const { getByTestId, rerender } = render(
+      <SpeakerParagraph
+        block={{ ...block, speakerName: "me" }}
+        query=""
+        onSpeakerAssigned={onSpeakerAssigned}
+      />,
+    );
+
+    expect(getByTestId("transcript-speaker").parentElement).toHaveClass(
+      "text-foreground",
+    );
+    expect(getByTestId("transcript-bubble")).toHaveClass(
+      "bg-foreground/[0.07]",
+    );
+
+    rerender(
+      <SpeakerParagraph
+        block={block}
+        query=""
+        onSpeakerAssigned={onSpeakerAssigned}
+      />,
+    );
+
+    expect(getByTestId("transcript-speaker").parentElement).toHaveClass(
+      "text-muted-foreground",
+    );
+    expect(getByTestId("transcript-bubble")).toHaveClass("bg-muted/80");
+    expect(document.body.innerHTML).not.toMatch(/(?:sky|violet)-/);
   });
 });

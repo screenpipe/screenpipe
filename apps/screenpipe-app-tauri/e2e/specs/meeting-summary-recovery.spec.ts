@@ -8,6 +8,8 @@
  * Exercises the user-visible half of the resume/retranscribe bug with a real
  * isolated desktop and local meeting API. The summary execution response is
  * intercepted so the test is deterministic and never spends hosted-AI quota.
+ * Manual reruns must remain in the meeting workspace and use the same tracked
+ * background execution contract as automatic summaries.
  */
 
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -301,19 +303,45 @@ describe("meeting summary recovery controls", function () {
         const ownedWindow = window as typeof window & {
           __meetingSummaryRecoveryFetch?: typeof window.fetch;
           __meetingSummaryRecoveryRetranscribeCalls?: number;
+          __meetingSummaryRecoveryRunBody?: unknown;
         };
         const original = window.fetch.bind(window);
         let transcriptReplacedAt: string | null = null;
+        let manualSummaryStartedAt: string | null = null;
+        let manualSummaryPolls = 0;
         ownedWindow.__meetingSummaryRecoveryFetch = original;
         ownedWindow.__meetingSummaryRecoveryRetranscribeCalls = 0;
         sessionStorage.setItem(transcriptCallsKey, "0");
         window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
+          if (
+            url.includes("/pipes/meeting-summary/run") &&
+            init?.method === "POST"
+          ) {
+            manualSummaryStartedAt = new Date().toISOString();
+            manualSummaryPolls = 0;
+            ownedWindow.__meetingSummaryRecoveryRunBody = JSON.parse(
+              String(init.body ?? "{}"),
+            );
+            return Promise.resolve(
+              Response.json({ success: true, execution_id: 987655 }),
+            );
+          }
           if (url.includes("/pipes/meeting-summary/executions?")) {
+            const manualExecution = manualSummaryStartedAt
+              ? {
+                  id: 987655,
+                  status: manualSummaryPolls++ === 0 ? "running" : "completed",
+                  started_at: manualSummaryStartedAt,
+                  trigger_event: "meeting_ended",
+                  trigger_key: String(targetMeetingId),
+                }
+              : null;
             return Promise.resolve(
               new Response(
                 JSON.stringify({
                   data: [
+                    ...(manualExecution ? [manualExecution] : []),
                     {
                       id: 987654,
                       status: "completed",
@@ -542,35 +570,40 @@ describe("meeting summary recovery controls", function () {
     );
     const refreshedRerun = await $('button[aria-label="summarize again"]');
     await refreshedRerun.waitForDisplayed({ timeout: t(15_000) });
+    const meetingUrl = await browser.getUrl();
     await refreshedRerun.click();
     await browser.waitUntil(
-      async () => (await browser.getUrl()).includes("/home?section=home"),
+      async () => {
+        const selectedTab = await $('[role="tab"][aria-selected="true"]');
+        return (await selectedTab.getText()).toLowerCase().includes("summary");
+      },
       {
-        timeout: t(20_000),
-        interval: 250,
-        timeoutMsg:
-          "completed summary control did not open a new summary chat request",
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "manual summary did not stay in the meeting Summary tab",
       },
     );
-    expect(await browser.getUrl()).toContain("/home?section=home");
+    expect(await browser.getUrl()).toBe(meetingUrl);
+    expect(await browser.getUrl()).toContain("section=meetings");
+    const runBody = await browser.execute(
+      () =>
+        (
+          window as typeof window & {
+            __meetingSummaryRecoveryRunBody?: unknown;
+          }
+        ).__meetingSummaryRecoveryRunBody,
+    );
+    expect(runBody).toEqual({
+      meeting_summary: {
+        meeting_id: meetingId,
+        meeting_end: FIXTURE_END,
+      },
+    });
     const transcriptCallsAfterSummary = await browser.execute(
       (key: string) => Number(sessionStorage.getItem(key) ?? 0),
       TRANSCRIPT_CALLS_KEY,
     );
-    expect(transcriptCallsAfterSummary).toBeGreaterThan(
-      transcriptCallsBeforeSummary,
-    );
-
-    await browser.waitUntil(async () => summaryMarkerChats().length === 1, {
-      timeout: t(20_000),
-      interval: 400,
-      timeoutMsg:
-        "fresh summary request did not persist both early and late transcript segments",
-    });
-    const [summaryChat] = summaryMarkerChats();
-    const earlyIndex = summaryChat.userContent.indexOf(EARLY_TRANSCRIPT_MARKER);
-    const lateIndex = summaryChat.userContent.indexOf(LATE_TRANSCRIPT_MARKER);
-    expect(earlyIndex).toBeGreaterThanOrEqual(0);
-    expect(lateIndex).toBeGreaterThan(earlyIndex);
+    expect(transcriptCallsAfterSummary).toBe(transcriptCallsBeforeSummary);
+    expect(summaryMarkerChats()).toHaveLength(0);
   });
 });

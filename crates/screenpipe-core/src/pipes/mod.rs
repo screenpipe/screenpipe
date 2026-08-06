@@ -3237,6 +3237,44 @@ impl PipeManager {
         trigger: &str,
         run_context: Option<&str>,
     ) -> Result<Option<i64>> {
+        self.start_pipe_background_inner(name, trigger, run_context, None)
+            .await
+    }
+
+    /// Start a background Pipe for one exact event instance.
+    ///
+    /// Unlike a generic manual run, this persists the event identity on the
+    /// execution and writes the matching pipe-facing trigger context before
+    /// the agent starts. Meeting-note reruns use this to follow the same
+    /// observable path as automatic meeting summaries.
+    pub async fn start_pipe_background_for_event(
+        &self,
+        name: &str,
+        event_name: &str,
+        event_key: &str,
+        event_data: serde_json::Value,
+        run_context: Option<&str>,
+    ) -> Result<Option<i64>> {
+        self.start_pipe_background_inner(
+            name,
+            "event",
+            run_context,
+            Some(BackgroundEventContext {
+                name: event_name.to_string(),
+                key: event_key.to_string(),
+                data: event_data,
+            }),
+        )
+        .await
+    }
+
+    async fn start_pipe_background_inner(
+        &self,
+        name: &str,
+        trigger: &str,
+        run_context: Option<&str>,
+        event_context: Option<BackgroundEventContext>,
+    ) -> Result<Option<i64>> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
             match pipes.get(name).cloned() {
@@ -3358,12 +3396,42 @@ impl PipeManager {
 
         let history_enabled = config.history;
 
+        let pipe_dir = self.pipes_dir.clone().join(name);
+        if let Some(ref event) = event_context {
+            write_event_trigger_context(
+                &pipe_dir,
+                &EventTrigger {
+                    name: event.name.clone(),
+                    key: Some(event.key.clone()),
+                    dedupe_key: None,
+                    target_pipe: Some(name.to_string()),
+                    data: event.data.clone(),
+                },
+            );
+        }
+
         // Create DB execution row
         let exec_id = if let Some(ref store) = self.store {
-            match store
-                .create_execution(name, trigger, &run_model, run_provider.as_deref())
-                .await
-            {
+            let created = match event_context.as_ref() {
+                Some(event) => {
+                    store
+                        .create_execution_with_trigger(
+                            name,
+                            trigger,
+                            &run_model,
+                            run_provider.as_deref(),
+                            Some(&event.name),
+                            Some(&event.key),
+                        )
+                        .await
+                }
+                None => {
+                    store
+                        .create_execution(name, trigger, &run_model, run_provider.as_deref())
+                        .await
+                }
+            };
+            match created {
                 Ok(id) => {
                     if history_enabled {
                         let conversation_id = pipe_conversation_id(name, id, true);
@@ -3384,8 +3452,6 @@ impl PipeManager {
         } else {
             None
         };
-
-        let pipe_dir = self.pipes_dir.clone().join(name);
 
         let pipe_system_prompt = render_pipe_system_prompt(
             &body,
@@ -5164,14 +5230,21 @@ impl PipeManager {
                                     recent_chain.insert(chain_key, Instant::now());
                                 }
 
+                                let incoming_trigger = EventTrigger {
+                                    name: event_name.clone(),
+                                    key: event_identity_key(data),
+                                    dedupe_key: event_dedupe_key(event_name, data),
+                                    target_pipe: pending.target_pipe.clone(),
+                                    data: data.clone(),
+                                };
                                 let already_running = {
                                     let r = running.lock().await;
                                     r.contains_key(name)
                                 };
-                                // Busy, or another event already claimed this pipe's
-                                // slot this tick. Either way the trigger waits for
-                                // the next tick instead of being lost.
-                                if already_running || event_triggered.contains_key(name) {
+                                // New input that arrives after a run started must
+                                // wait. It may contain content the active run did
+                                // not see yet.
+                                if already_running {
                                     debug!(
                                         "scheduler: event '{}' deferred for pipe '{}' (busy)",
                                         event_name, name
@@ -5179,21 +5252,44 @@ impl PipeManager {
                                     deferred.push(pending.clone());
                                     continue;
                                 }
+                                // Several updates for one meeting can land in the
+                                // same 30-second scheduler tick. This happens when
+                                // retranscription requests a private refresh just
+                                // before the meeting watcher delivers its final end.
+                                // One run sees the final database state, so keep the
+                                // newest generation instead of serializing duplicate
+                                // summaries back-to-back.
+                                if let Some(existing) = event_triggered.get(name) {
+                                    match resolve_same_tick_event(existing, &incoming_trigger) {
+                                        SameTickEventResolution::KeepExisting => {
+                                            info!(
+                                                "scheduler: coalesced older duplicate '{}' for pipe '{}'",
+                                                event_name, name
+                                            );
+                                        }
+                                        SameTickEventResolution::ReplaceExisting => {
+                                            info!(
+                                                "scheduler: coalesced '{}' for pipe '{}' to newer generation",
+                                                event_name, name
+                                            );
+                                            event_triggered.insert(name.clone(), incoming_trigger);
+                                        }
+                                        SameTickEventResolution::DeferIncoming => {
+                                            debug!(
+                                                "scheduler: event '{}' deferred for pipe '{}' (busy)",
+                                                event_name, name
+                                            );
+                                            deferred.push(pending.clone());
+                                        }
+                                    }
+                                    continue;
+                                }
                                 info!(
                                     "scheduler: event '{}' triggered pipe '{}'",
                                     event_name, name
                                 );
                                 last_run.remove(name);
-                                event_triggered.insert(
-                                    name.clone(),
-                                    EventTrigger {
-                                        name: event_name.clone(),
-                                        key: event_identity_key(data),
-                                        dedupe_key: event_dedupe_key(event_name, data),
-                                        target_pipe: pending.target_pipe.clone(),
-                                        data: data.clone(),
-                                    },
-                                );
+                                event_triggered.insert(name.clone(), incoming_trigger);
                             }
                         }
                     }
@@ -6804,6 +6900,68 @@ struct EventTrigger {
     data: serde_json::Value,
 }
 
+/// Event metadata attached to one directly-started background execution.
+/// This remains separate from [`EventTrigger`] because direct runs do not
+/// participate in the scheduler's claim/defer machinery.
+struct BackgroundEventContext {
+    name: String,
+    key: String,
+    data: serde_json::Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SameTickEventResolution {
+    KeepExisting,
+    ReplaceExisting,
+    DeferIncoming,
+}
+
+fn parse_event_generation(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .or_else(|| {
+            // Retranscription generations append a UUID to an RFC3339 value:
+            // `<timestamp>:<uuid>`. Split from the right because timestamps
+            // themselves contain colons.
+            value
+                .rsplit_once(':')
+                .and_then(|(timestamp, _)| DateTime::parse_from_rfc3339(timestamp).ok())
+        })
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+}
+
+fn event_generation_at(trigger: &EventTrigger) -> Option<DateTime<Utc>> {
+    if trigger.name != "meeting_ended" {
+        return None;
+    }
+
+    ["summary_generation", "meeting_end"]
+        .iter()
+        .find_map(|field| trigger.data.get(field).and_then(|value| value.as_str()))
+        .and_then(parse_event_generation)
+}
+
+fn resolve_same_tick_event(
+    existing: &EventTrigger,
+    incoming: &EventTrigger,
+) -> SameTickEventResolution {
+    if existing.name != incoming.name || existing.key.is_none() || existing.key != incoming.key {
+        return SameTickEventResolution::DeferIncoming;
+    }
+
+    if existing.dedupe_key.is_some() && existing.dedupe_key == incoming.dedupe_key {
+        return SameTickEventResolution::KeepExisting;
+    }
+
+    match (event_generation_at(existing), event_generation_at(incoming)) {
+        (Some(existing_at), Some(incoming_at)) if incoming_at > existing_at => {
+            SameTickEventResolution::ReplaceExisting
+        }
+        (Some(_), Some(_)) => SameTickEventResolution::KeepExisting,
+        _ => SameTickEventResolution::DeferIncoming,
+    }
+}
+
 /// One event waiting to be matched against pipe trigger configuration.
 ///
 /// Addressing is scheduler-owned metadata. Keeping it outside `data` prevents
@@ -7862,6 +8020,77 @@ mod tests {
         assert_eq!(
             event_dedupe_key("meeting_ended", &data).as_deref(),
             Some("42@2026-08-05T17:10:00.000Z")
+        );
+    }
+
+    #[test]
+    fn same_tick_meeting_updates_coalesce_to_newest_generation() {
+        let trigger = |data: serde_json::Value| EventTrigger {
+            name: "meeting_ended".to_string(),
+            key: event_identity_key(&data),
+            dedupe_key: event_dedupe_key("meeting_ended", &data),
+            target_pipe: Some("meeting-summary".to_string()),
+            data,
+        };
+        let retranscription_refresh = trigger(serde_json::json!({
+            "meeting_id": 84,
+            "meeting_end": "2026-08-06T16:06:57.992Z",
+            "summary_generation": "2026-08-06T16:08:14.882Z:a7338b45"
+        }));
+        let final_meeting_end = trigger(serde_json::json!({
+            "meeting_id": 84,
+            "meeting_end": "2026-08-06T16:08:32.688Z"
+        }));
+
+        assert_eq!(
+            resolve_same_tick_event(&retranscription_refresh, &final_meeting_end),
+            SameTickEventResolution::ReplaceExisting
+        );
+        assert_eq!(
+            resolve_same_tick_event(&final_meeting_end, &retranscription_refresh),
+            SameTickEventResolution::KeepExisting
+        );
+    }
+
+    #[test]
+    fn same_tick_exact_duplicate_is_coalesced() {
+        let data = serde_json::json!({
+            "meeting_id": 84,
+            "meeting_end": "2026-08-06T16:08:32.688Z"
+        });
+        let trigger = EventTrigger {
+            name: "meeting_ended".to_string(),
+            key: event_identity_key(&data),
+            dedupe_key: event_dedupe_key("meeting_ended", &data),
+            target_pipe: None,
+            data,
+        };
+
+        assert_eq!(
+            resolve_same_tick_event(&trigger, &trigger),
+            SameTickEventResolution::KeepExisting
+        );
+    }
+
+    #[test]
+    fn same_tick_different_meetings_are_deferred() {
+        let trigger = |meeting_id| {
+            let data = serde_json::json!({
+                "meeting_id": meeting_id,
+                "meeting_end": "2026-08-06T16:08:32.688Z"
+            });
+            EventTrigger {
+                name: "meeting_ended".to_string(),
+                key: event_identity_key(&data),
+                dedupe_key: event_dedupe_key("meeting_ended", &data),
+                target_pipe: None,
+                data,
+            }
+        };
+
+        assert_eq!(
+            resolve_same_tick_event(&trigger(84), &trigger(85)),
+            SameTickEventResolution::DeferIncoming
         );
     }
 
