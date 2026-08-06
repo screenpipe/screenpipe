@@ -145,7 +145,7 @@ export const config: TestrunnerConfig = {
   },
   onComplete: async () => {
     console.log('Stopping app...');
-    stopApp();
+    await stopApp();
     await stopLocalGateway();
   },
   beforeSession: async () => {
