@@ -56,6 +56,32 @@ fn emit_disk_space_low(available_bytes: u64) -> Result<(), String> {
     screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
 }
 
+/// E2E helper: publish the production recovery signal that re-arms the
+/// incident-level notification latch after disk-space hysteresis is met.
+#[command]
+fn emit_disk_space_recovered(available_bytes: u64) -> Result<(), String> {
+    let event =
+        screenpipe_events::DiskSpaceRecoveredEvent::new(available_bytes, ".e2e".to_string());
+    screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
+}
+
+/// E2E helper: make an isolated run deterministic without deleting the whole
+/// notification history.
+#[command]
+async fn reset_disk_pressure_notification_latch(
+    state: State<'_, crate::disk_pressure_notifications::DiskPressureNotificationState>,
+) -> Result<(), String> {
+    state.reset().await
+}
+
+/// E2E helper: read whether the production latch is re-armed.
+#[command]
+async fn disk_pressure_notification_armed(
+    state: State<'_, crate::disk_pressure_notifications::DiskPressureNotificationState>,
+) -> Result<bool, String> {
+    Ok(state.notification_armed().await)
+}
+
 /// E2E helper: execute the production policy handler directly and return its
 /// explicit outcome. This avoids sleep-based assertions; the settings E2E also
 /// publishes through the typed event bus to cover the production subscription.
@@ -504,6 +530,9 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             main_overlay_visible,
             mark_capture_intended,
             emit_disk_space_low,
+            emit_disk_space_recovered,
+            reset_disk_pressure_notification_latch,
+            disk_pressure_notification_armed,
             handle_disk_space_low,
             capture_session_running,
             set_low_disk_guard_enabled,
