@@ -818,6 +818,13 @@ async fn main() {
             tauri::WindowEvent::Focused(true) => {
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    let capture_intended = app
+                        .try_state::<RecordingState>()
+                        .map(|s| s.capture_intended())
+                        .unwrap_or(false);
+                    if !capture_intended {
+                        return;
+                    }
                     let permission_granted =
                         permissions::check_microphone_permission().permitted();
                     let audio_devices_empty = health::get_audio_device_status().is_empty();
