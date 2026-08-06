@@ -1445,18 +1445,19 @@ impl PiExecutor {
         }
 
         // Pi resolves apiKey values in models.json as env var names.
-        // Set the actual key so the subprocess can find it.
+        // Set the actual key so the subprocess can find it. OpenAI/Anthropic
+        // hard-require one — run()/run_streaming() already failed fast, this
+        // keeps the contract for any future direct caller.
+        if let Some((env_name, key)) =
+            enforce_byok_api_key(resolved_provider, provider_api_key).map_err(|e| anyhow!(e))?
+        {
+            cmd.env(env_name, key);
+        }
         if let Some(key) = provider_api_key {
             if !key.is_empty() {
                 match resolved_provider {
-                    "openai" | "openai-byok" => {
-                        cmd.env("OPENAI_API_KEY", key);
-                    }
                     "openai-chatgpt" => {
                         cmd.env("OPENAI_CHATGPT_TOKEN", key);
-                    }
-                    "anthropic" | "anthropic-byok" => {
-                        cmd.env("ANTHROPIC_API_KEY", key);
                     }
                     "custom" => {
                         cmd.env("CUSTOM_API_KEY", key);
@@ -1599,17 +1600,17 @@ impl PiExecutor {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
 
+        // See spawn_pi above: OpenAI/Anthropic BYOK hard-require a key.
+        if let Some((env_name, key)) =
+            enforce_byok_api_key(resolved_provider, provider_api_key).map_err(|e| anyhow!(e))?
+        {
+            cmd.env(env_name, key);
+        }
         if let Some(key) = provider_api_key {
             if !key.is_empty() {
                 match resolved_provider {
-                    "openai" | "openai-byok" => {
-                        cmd.env("OPENAI_API_KEY", key);
-                    }
                     "openai-chatgpt" => {
                         cmd.env("OPENAI_CHATGPT_TOKEN", key);
-                    }
-                    "anthropic" | "anthropic-byok" => {
-                        cmd.env("ANTHROPIC_API_KEY", key);
                     }
                     "custom" => {
                         cmd.env("CUSTOM_API_KEY", key);
@@ -1814,6 +1815,11 @@ impl AgentExecutor for PiExecutor {
         // 2. No provider specified → screenpipe cloud (default)
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
 
+        // Fail fast when a BYOK preset was saved without its required API
+        // key — otherwise pi boots fine and every message fails with its raw
+        // CLI error. Same contract the chat spawn path enforces.
+        enforce_byok_api_key(&resolved_provider, provider_api_key).map_err(|e| anyhow!(e))?;
+
         let (resolved_model, fell_back_from) = self
             .resolve_screenpipe_model(model, &resolved_provider)
             .await;
@@ -1928,6 +1934,10 @@ impl AgentExecutor for PiExecutor {
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
+
+        // See run() above: fail fast on a BYOK preset saved without its key.
+        enforce_byok_api_key(&resolved_provider, provider_api_key).map_err(|e| anyhow!(e))?;
+
         let (resolved_model, fell_back_from) = self
             .resolve_screenpipe_model(model, &resolved_provider)
             .await;
@@ -2462,6 +2472,52 @@ fn seed_from_global(global: &Path, dest: &Path, data_dir: &Path) -> bool {
 /// A pi credential in the tagged form pi >=0.83 requires.
 pub fn api_key_credential(key: &str) -> serde_json::Value {
     json!({ "type": "api_key", "key": key })
+}
+
+/// BYOK required-key contract, shared by every pi spawn surface (the chat
+/// window through the Tauri layer, scheduled/background pipes through this
+/// executor).
+///
+/// pi resolves the provider's `apiKey` ("$OPENAI_API_KEY" /
+/// "$ANTHROPIC_API_KEY" in models.json) from the child process env. OpenAI
+/// and Anthropic hard-require a key: spawning without one boots pi fine but
+/// fails every message with pi's raw CLI error ("No API key found for
+/// anthropic-byok. Use /login …" — advice that doesn't apply inside the app).
+///
+/// Returns `Some((env_name, key))` when the preset carries the key to export,
+/// `None` when no assignment is needed — either the provider doesn't require
+/// a key, or a non-empty key is already exported in this process env (pi
+/// resolves `$NAME` from the inherited env, so a globally-exported key worked
+/// before this guard existed — preserve that). Errors with an actionable
+/// message when a key is required and absent.
+pub fn enforce_byok_api_key(
+    provider: &str,
+    preset_api_key: Option<&str>,
+) -> Result<Option<(&'static str, String)>, String> {
+    enforce_byok_api_key_with_env(provider, preset_api_key, |name| std::env::var(name).ok())
+}
+
+fn enforce_byok_api_key_with_env(
+    provider: &str,
+    preset_api_key: Option<&str>,
+    process_env: impl Fn(&str) -> Option<String>,
+) -> Result<Option<(&'static str, String)>, String> {
+    let env_name = match provider {
+        "openai" | "openai-byok" => "OPENAI_API_KEY",
+        "anthropic" | "anthropic-byok" => "ANTHROPIC_API_KEY",
+        _ => return Ok(None),
+    };
+    let key = preset_api_key.unwrap_or("");
+    if !key.trim().is_empty() {
+        return Ok(Some((env_name, key.to_string())));
+    }
+    if process_env(env_name).is_some_and(|v| !v.trim().is_empty()) {
+        return Ok(None);
+    }
+    Err(format!(
+        "Your {} preset has no API key. Add one in Settings → AI presets, or switch to a different preset.",
+        provider.trim_end_matches("-byok"),
+    ))
 }
 
 /// Upgrade one legacy `auth.json` entry to pi >=0.83's tagged form.
@@ -3721,6 +3777,57 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- BYOK required-key contract (enforce_byok_api_key) -------------------
+
+    #[test]
+    fn byok_guard_fails_blank_key_with_actionable_error() {
+        for provider in ["anthropic", "anthropic-byok", "openai", "openai-byok"] {
+            for key in [None, Some(""), Some("   ")] {
+                let err = enforce_byok_api_key_with_env(provider, key, |_| None)
+                    .expect_err("blank key must fail the spawn");
+                assert!(err.contains("has no API key"), "{provider}: {err}");
+                // The message names the preset's provider, not pi's -byok alias.
+                assert!(!err.contains("-byok"), "{err}");
+            }
+        }
+    }
+
+    #[test]
+    fn byok_guard_exports_the_preset_key() {
+        assert_eq!(
+            enforce_byok_api_key_with_env("anthropic", Some("sk-ant-1"), |_| None),
+            Ok(Some(("ANTHROPIC_API_KEY", "sk-ant-1".to_string())))
+        );
+        assert_eq!(
+            enforce_byok_api_key_with_env("openai-byok", Some("sk-1"), |_| None),
+            Ok(Some(("OPENAI_API_KEY", "sk-1".to_string())))
+        );
+    }
+
+    #[test]
+    fn byok_guard_accepts_key_inherited_from_process_env() {
+        // A globally-exported key worked before the guard existed — pi
+        // resolves `$NAME` from the inherited child env — so it satisfies it.
+        let result = enforce_byok_api_key_with_env("anthropic", None, |name| {
+            (name == "ANTHROPIC_API_KEY").then(|| "env-key".to_string())
+        });
+        assert_eq!(result, Ok(None));
+        // Whitespace-only env values don't count.
+        enforce_byok_api_key_with_env("anthropic", None, |_| Some("  ".into()))
+            .expect_err("blank env key must not satisfy the guard");
+    }
+
+    #[test]
+    fn byok_guard_ignores_keyless_providers() {
+        for provider in ["custom", "screenpipe", "ollama", "openai-chatgpt", "google"] {
+            assert_eq!(
+                enforce_byok_api_key_with_env(provider, None, |_| None),
+                Ok(None),
+                "{provider} must stay keyless-optional"
+            );
+        }
+    }
 
     #[test]
     fn tool_use_without_an_executable_call_is_a_protocol_error() {

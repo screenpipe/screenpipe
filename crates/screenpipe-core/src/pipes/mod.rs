@@ -7536,6 +7536,69 @@ mod tests {
         PipeManager::new(dir, HashMap::new(), None, 0)
     }
 
+    // -- BYOK required-key contract through a pipe run -----------------------
+
+    /// Regression: a preset saved with a blank API key (possible before the
+    /// preset editors validated it) resolves to `api_key: None`, and a pipe
+    /// run used to spawn pi anyway — pi boots fine, then every message fails
+    /// with its raw CLI error ("No API key found for anthropic-byok. Use
+    /// /login …"). The core executor must fail fast with the actionable
+    /// error, same as the chat spawn path.
+    #[tokio::test]
+    async fn pipe_run_with_saved_blank_key_preset_fails_with_actionable_error() {
+        let root = std::env::temp_dir().join(format!(
+            "screenpipe-test-blank-key-preset-{}",
+            std::process::id()
+        ));
+        let pipes_dir = root.join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+        std::fs::write(
+            root.join("store.bin"),
+            serde_json::json!({
+                "settings": {
+                    "aiPresets": [{
+                        "id": "claude byok",
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-5",
+                        "apiKey": "",
+                        "defaultPreset": true,
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let resolved = resolve_preset(&pipes_dir, "claude byok").expect("preset resolves");
+        assert_eq!(resolved.provider.as_deref(), Some("anthropic"));
+        assert_eq!(resolved.api_key, None, "blank key must resolve to None");
+
+        // The guard accepts a key inherited from the process env — make sure
+        // a key exported on the dev machine doesn't satisfy it here.
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+
+        let executor = crate::agents::pi::PiExecutor::new(None);
+        let err = crate::agents::AgentExecutor::run(
+            &executor,
+            "hello",
+            &resolved.model,
+            &pipes_dir,
+            resolved.provider.as_deref(),
+            resolved.url.as_deref(),
+            resolved.api_key.as_deref(),
+            None,
+            false,
+        )
+        .await
+        .expect_err("blank-key preset must fail the pipe run");
+        assert!(
+            err.to_string().contains("has no API key"),
+            "unexpected error: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     // -- event trigger identity (#5481) -------------------------------------
 
     /// Both deliveries of a rejoined meeting's end must produce the same key,
