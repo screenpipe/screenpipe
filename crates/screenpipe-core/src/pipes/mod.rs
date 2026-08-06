@@ -7540,6 +7540,7 @@ mod tests {
 
     /// Regression: a preset saved with a blank key used to spawn pi anyway,
     /// failing every message with pi's raw CLI error — fail fast instead.
+    /// A valid credential in pi's own auth.json must still satisfy the guard.
     #[tokio::test]
     async fn pipe_run_with_saved_blank_key_preset_fails_with_actionable_error() {
         let root = std::env::temp_dir().join(format!(
@@ -7547,7 +7548,9 @@ mod tests {
             std::process::id()
         ));
         let pipes_dir = root.join("pipes");
+        let agent_dir = root.join("pi-agent");
         std::fs::create_dir_all(&pipes_dir).unwrap();
+        std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(
             root.join("store.bin"),
             serde_json::json!({
@@ -7569,8 +7572,11 @@ mod tests {
         assert_eq!(resolved.provider.as_deref(), Some("anthropic"));
         assert_eq!(resolved.api_key, None, "blank key must resolve to None");
 
-        // A key exported on the dev machine must not satisfy the guard here.
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+        // Hermetic: keys/credentials on the dev machine must not leak in.
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+            std::env::set_var("SCREENPIPE_PI_AGENT_DIR", &agent_dir);
+        }
 
         let executor = crate::agents::pi::PiExecutor::new(None);
         let err = crate::agents::AgentExecutor::run(
@@ -7591,6 +7597,21 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        // Same blank preset, but pi's auth.json holds a valid credential
+        // (e.g. seeded from ~/.pi/agent/auth.json) — the guard must pass.
+        std::fs::write(
+            agent_dir.join("auth.json"),
+            serde_json::json!({ "anthropic-byok": { "type": "api_key", "key": "sk-ant" } })
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::agents::pi::enforce_byok_api_key("anthropic", None),
+            Ok(None),
+            "valid auth.json credential must satisfy the guard"
+        );
+
+        unsafe { std::env::remove_var("SCREENPIPE_PI_AGENT_DIR") };
         let _ = std::fs::remove_dir_all(&root);
     }
 

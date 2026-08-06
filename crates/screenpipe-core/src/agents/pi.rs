@@ -2472,23 +2472,80 @@ pub fn api_key_credential(key: &str) -> serde_json::Value {
 
 /// Shared BYOK contract for every pi spawn surface (chat + pipes): openai/
 /// anthropic require a key (else pi boots but fails every message with its
-/// raw CLI error); a non-empty key already in the process env satisfies it.
+/// raw CLI error). Satisfied by the preset key, a non-empty key in the
+/// process env, or a pi credential already on disk (auth.json entry or a
+/// user-pinned literal apiKey in models.json — both still-supported sources).
 /// Returns the env export to apply, or an actionable error.
 pub fn enforce_byok_api_key(
     provider: &str,
     preset_api_key: Option<&str>,
 ) -> Result<Option<(&'static str, String)>, String> {
-    enforce_byok_api_key_with_env(provider, preset_api_key, |name| std::env::var(name).ok())
+    enforce_byok_api_key_with_sources(
+        provider,
+        preset_api_key,
+        |name| std::env::var(name).ok(),
+        &PiCredentialStore::load(),
+    )
 }
 
-fn enforce_byok_api_key_with_env(
+/// pi's on-disk credentials in the isolated agent dir, read best-effort.
+#[derive(Default)]
+struct PiCredentialStore {
+    auth: Option<serde_json::Value>,
+    models: Option<serde_json::Value>,
+}
+
+impl PiCredentialStore {
+    fn load() -> Self {
+        let Ok(dir) = pi_config_dir() else {
+            return Self::default();
+        };
+        let read = |name: &str| {
+            std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+        };
+        Self {
+            auth: read("auth.json"),
+            models: read("models.json"),
+        }
+    }
+
+    /// Whether any of pi's provider ids has a usable credential: an auth.json
+    /// entry (tagged, legacy — upgraded before every spawn — or bare string)
+    /// or a non-empty literal (non-`$env`) apiKey in models.json.
+    fn has_credential_for(&self, pi_ids: &[&str]) -> bool {
+        let auth_hit = self.auth.as_ref().is_some_and(|auth| {
+            pi_ids.iter().any(|id| match auth.get(id) {
+                Some(serde_json::Value::Object(obj)) => match obj.get("type") {
+                    Some(t) => matches!(t.as_str(), Some("api_key") | Some("oauth")),
+                    None => obj.contains_key("apiKey") || obj.contains_key("key"),
+                },
+                Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+                _ => false,
+            })
+        });
+        let models_hit = self.models.as_ref().is_some_and(|models| {
+            pi_ids.iter().any(|id| {
+                models
+                    .pointer(&format!("/providers/{id}/apiKey"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|k| !k.trim().is_empty() && !k.starts_with('$'))
+            })
+        });
+        auth_hit || models_hit
+    }
+}
+
+fn enforce_byok_api_key_with_sources(
     provider: &str,
     preset_api_key: Option<&str>,
     process_env: impl Fn(&str) -> Option<String>,
+    pi_credentials: &PiCredentialStore,
 ) -> Result<Option<(&'static str, String)>, String> {
-    let env_name = match provider {
-        "openai" | "openai-byok" => "OPENAI_API_KEY",
-        "anthropic" | "anthropic-byok" => "ANTHROPIC_API_KEY",
+    let (env_name, pi_ids): (_, &[&str]) = match provider {
+        "openai" | "openai-byok" => ("OPENAI_API_KEY", &["openai-byok", "openai"]),
+        "anthropic" | "anthropic-byok" => ("ANTHROPIC_API_KEY", &["anthropic-byok", "anthropic"]),
         _ => return Ok(None),
     };
     let key = preset_api_key.unwrap_or("");
@@ -2496,6 +2553,9 @@ fn enforce_byok_api_key_with_env(
         return Ok(Some((env_name, key.to_string())));
     }
     if process_env(env_name).is_some_and(|v| !v.trim().is_empty()) {
+        return Ok(None);
+    }
+    if pi_credentials.has_credential_for(pi_ids) {
         return Ok(None);
     }
     Err(format!(
@@ -3764,11 +3824,15 @@ mod tests {
 
     // -- BYOK required-key contract (enforce_byok_api_key) -------------------
 
+    fn no_creds() -> PiCredentialStore {
+        PiCredentialStore::default()
+    }
+
     #[test]
     fn byok_guard_fails_blank_key_with_actionable_error() {
         for provider in ["anthropic", "anthropic-byok", "openai", "openai-byok"] {
             for key in [None, Some(""), Some("   ")] {
-                let err = enforce_byok_api_key_with_env(provider, key, |_| None)
+                let err = enforce_byok_api_key_with_sources(provider, key, |_| None, &no_creds())
                     .expect_err("blank key must fail the spawn");
                 assert!(err.contains("has no API key"), "{provider}: {err}");
                 // The message names the preset's provider, not pi's -byok alias.
@@ -3780,11 +3844,11 @@ mod tests {
     #[test]
     fn byok_guard_exports_the_preset_key() {
         assert_eq!(
-            enforce_byok_api_key_with_env("anthropic", Some("sk-ant-1"), |_| None),
+            enforce_byok_api_key_with_sources("anthropic", Some("sk-ant-1"), |_| None, &no_creds()),
             Ok(Some(("ANTHROPIC_API_KEY", "sk-ant-1".to_string())))
         );
         assert_eq!(
-            enforce_byok_api_key_with_env("openai-byok", Some("sk-1"), |_| None),
+            enforce_byok_api_key_with_sources("openai-byok", Some("sk-1"), |_| None, &no_creds()),
             Ok(Some(("OPENAI_API_KEY", "sk-1".to_string())))
         );
     }
@@ -3792,20 +3856,75 @@ mod tests {
     #[test]
     fn byok_guard_accepts_key_inherited_from_process_env() {
         // A globally-exported key worked before the guard — keep it working.
-        let result = enforce_byok_api_key_with_env("anthropic", None, |name| {
-            (name == "ANTHROPIC_API_KEY").then(|| "env-key".to_string())
-        });
+        let result = enforce_byok_api_key_with_sources(
+            "anthropic",
+            None,
+            |name| (name == "ANTHROPIC_API_KEY").then(|| "env-key".to_string()),
+            &no_creds(),
+        );
         assert_eq!(result, Ok(None));
         // Whitespace-only env values don't count.
-        enforce_byok_api_key_with_env("anthropic", None, |_| Some("  ".into()))
+        enforce_byok_api_key_with_sources("anthropic", None, |_| Some("  ".into()), &no_creds())
             .expect_err("blank env key must not satisfy the guard");
+    }
+
+    #[test]
+    fn byok_guard_accepts_pi_auth_json_credential() {
+        // Tagged credential under pi's byok id — the shape pi >=0.83 uses.
+        let tagged = PiCredentialStore {
+            auth: Some(json!({ "anthropic-byok": { "type": "api_key", "key": "sk" } })),
+            models: None,
+        };
+        assert_eq!(
+            enforce_byok_api_key_with_sources("anthropic", None, |_| None, &tagged),
+            Ok(None)
+        );
+        // Legacy shapes seeded from ~/.pi/agent/auth.json (upgraded pre-spawn)
+        // and bare-name provider ids count too.
+        let legacy = PiCredentialStore {
+            auth: Some(json!({ "openai": { "apiKey": "sk" } })),
+            models: None,
+        };
+        assert_eq!(
+            enforce_byok_api_key_with_sources("openai", None, |_| None, &legacy),
+            Ok(None)
+        );
+        // A credential for an unrelated provider does not satisfy the guard.
+        let other = PiCredentialStore {
+            auth: Some(json!({ "screenpipe": { "type": "api_key", "key": "jwt" } })),
+            models: None,
+        };
+        enforce_byok_api_key_with_sources("anthropic", None, |_| None, &other)
+            .expect_err("unrelated auth.json entry must not satisfy the guard");
+    }
+
+    #[test]
+    fn byok_guard_accepts_user_pinned_models_json_key() {
+        // A literal apiKey pinned in models.json (preserved by the merge) counts…
+        let pinned = PiCredentialStore {
+            auth: None,
+            models: Some(json!({ "providers": { "openai-byok": { "apiKey": "sk-real" } } })),
+        };
+        assert_eq!(
+            enforce_byok_api_key_with_sources("openai", None, |_| None, &pinned),
+            Ok(None)
+        );
+        // …but our own `$ENV_NAME` reference does not (the env check owns that).
+        let env_ref = PiCredentialStore {
+            auth: None,
+            models: Some(
+                json!({ "providers": { "anthropic-byok": { "apiKey": "$ANTHROPIC_API_KEY" } } }),
+            ),
+        };
+        enforce_byok_api_key_with_sources("anthropic", None, |_| None, &env_ref)
+            .expect_err("$env reference in models.json must not satisfy the guard");
     }
 
     #[test]
     fn byok_guard_ignores_keyless_providers() {
         for provider in ["custom", "screenpipe", "ollama", "openai-chatgpt", "google"] {
             assert_eq!(
-                enforce_byok_api_key_with_env(provider, None, |_| None),
+                enforce_byok_api_key_with_sources(provider, None, |_| None, &no_creds()),
                 Ok(None),
                 "{provider} must stay keyless-optional"
             );
