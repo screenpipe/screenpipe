@@ -34,6 +34,19 @@ const FIXING_CONFIRM_TICKS: u32 = 2;
 /// so this must exceed that freshness window; otherwise one transient frame
 /// can falsely announce "recording again" while capture is still wedged.
 const PASSIVE_RECOVERY_CONFIRM_TICKS: u32 = 90;
+/// A user-triggered recovery must never remain in `fixing` forever while a
+/// checked-out SQLite connection prevents graceful pool close. Past this
+/// bound, a process relaunch is the only safe way to prove every connection is
+/// gone before recording resumes.
+const USER_RESTART_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn passive_recovery_confirm_ticks() -> u32 {
+    if crate::stale_tier::capture_loop_silent_e2e_started() {
+        3
+    } else {
+        PASSIVE_RECOVERY_CONFIRM_TICKS
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OverlayHealthState {
@@ -72,7 +85,8 @@ struct Inner {
     /// healthy engine (deliberate stop, scheduled/DRM pause) — used to stand
     /// down quietly instead of wedging on the failure state.
     not_broken_ticks: u32,
-    /// Detail suffix last pushed with the fixing state (boot-phase label).
+    /// Detail suffix last pushed with the current state: a privacy-safe reason
+    /// during failure, or a boot-phase label while fixing.
     last_detail: String,
 }
 
@@ -189,12 +203,13 @@ fn transition_tick_with_stand_down(
                 // looked healthy, then wedged again; one tick is not proof.
                 inner.healthy_ticks = inner.healthy_ticks.saturating_add(1);
                 inner.not_broken_ticks = 0;
-                if inner.healthy_ticks >= PASSIVE_RECOVERY_CONFIRM_TICKS {
+                let confirm_ticks = passive_recovery_confirm_ticks();
+                if inner.healthy_ticks >= confirm_ticks {
                     inner.state = OverlayHealthState::Recovered;
                     inner.recovered_at = Some(now);
                     info!(
                         "overlay health: recording recovery remained healthy for {} checks",
-                        PASSIVE_RECOVERY_CONFIRM_TICKS
+                        confirm_ticks
                     );
                     TickEffect::Push(OverlayHealthState::Recovered, None)
                 } else {
@@ -311,6 +326,52 @@ fn transition_tick_with_stand_down(
     }
 }
 
+/// Attach the health loop's concise failure reason after the state transition.
+/// Keeping this outside the temporal reducer means the reason can improve or
+/// change during an incident without changing the recovery semantics.
+fn apply_failure_detail(
+    inner: &mut Inner,
+    previous_state: OverlayHealthState,
+    broken: bool,
+    failure_detail: &str,
+    effect: TickEffect,
+) -> TickEffect {
+    match inner.state {
+        OverlayHealthState::Failure => {
+            let next_detail = if broken && !failure_detail.is_empty() {
+                failure_detail
+            } else if previous_state == OverlayHealthState::Fixing {
+                "recording did not restart"
+            } else if inner.last_detail.is_empty() {
+                "recording stopped unexpectedly"
+            } else {
+                return effect;
+            };
+
+            if inner.last_detail == next_detail {
+                return effect;
+            }
+            inner.last_detail = next_detail.to_string();
+
+            // PushAndReveal reads last_detail after the lock is released; all
+            // other failure updates need their own wire push.
+            if matches!(effect, TickEffect::PushAndReveal(_)) {
+                effect
+            } else {
+                TickEffect::Push(
+                    OverlayHealthState::Failure,
+                    Some(next_detail.to_string()),
+                )
+            }
+        }
+        OverlayHealthState::Normal | OverlayHealthState::Recovered => {
+            inner.last_detail.clear();
+            effect
+        }
+        OverlayHealthState::Fixing => effect,
+    }
+}
+
 /// Test-friendly reducer preserving the historical neutral-tick meaning.
 /// Production passes the explicit intentional-pause signal through
 /// [`transition_tick_with_stand_down`] so an unconfirmed recovery cannot make
@@ -333,8 +394,9 @@ fn transition_tick(
     )
 }
 
-/// Current state as the wire payload: "state" or "state|detail" (detail is
-/// the boot-phase label while fixing). Both surfaces split on the first '|'.
+/// Current state as the wire payload: "state" or "state|detail" (a concise
+/// failure reason or the boot-phase label while fixing). Both surfaces split
+/// on the first '|'.
 pub fn current_state_payload() -> String {
     INNER
         .lock()
@@ -347,6 +409,32 @@ pub fn current_state_payload() -> String {
         })
         .unwrap_or_else(|_| "normal".to_string())
 }
+
+/// Persist a debug-only transition receipt so the full-stack E2E can prove the
+/// three-second Recovered state happened even if a slower WebDriver health poll
+/// spans the entire visible hold. The isolated E2E data directory is recreated
+/// for every launch, so the receipt cannot leak between runs.
+#[cfg(all(debug_assertions, feature = "e2e"))]
+fn mark_capture_recovery_e2e() {
+    let enabled = std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .is_some_and(|flags| {
+            flags
+                .split(',')
+                .any(|flag| flag.trim() == "capture-loop-silent-once")
+        });
+    if enabled {
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-recording-health-recovered-fired"),
+                b"1",
+            );
+        }
+    }
+}
+
+#[cfg(not(all(debug_assertions, feature = "e2e")))]
+fn mark_capture_recovery_e2e() {}
 
 /// Push a state to both overlay surfaces. The Swift panel keeps the state
 /// even while hidden; the webview additionally pulls it on mount via the
@@ -396,12 +484,14 @@ fn track(app: &tauri::AppHandle, event: &'static str) {
 /// `healthy` — engine responding and recording with no active stall; the only
 ///             signal that confirms a recovery.
 /// `stand_down` — recording was deliberately stopped or intentionally paused.
+/// `failure_detail` — privacy-safe explanation already classified by health.rs.
 /// These signals are not complements: during a restart all three are false.
 pub async fn on_tick(
     app: &tauri::AppHandle,
     broken: bool,
     healthy: bool,
     stand_down: bool,
+    failure_detail: &str,
 ) {
     // This detector still produces false positives, so all visible effects are
     // opt-in through Settings > Notifications > Recording health alerts.
@@ -413,13 +503,14 @@ pub async fn on_tick(
         .map(|s| s.show_restart_notifications)
         .unwrap_or(false);
 
-    let effect = {
+    let (effect, state_detail) = {
         let mut inner = match INNER.lock() {
             Ok(i) => i,
             Err(_) => return,
         };
 
-        if !alerts_enabled {
+        let previous_state = inner.state;
+        let effect = if !alerts_enabled {
             disable_alert_state(&mut inner)
         } else {
             let boot_detail = if inner.state == OverlayHealthState::Fixing && !healthy {
@@ -435,20 +526,29 @@ pub async fn on_tick(
                 Instant::now(),
                 boot_detail,
             )
-        }
+        };
+        let effect = apply_failure_detail(
+            &mut inner,
+            previous_state,
+            broken,
+            failure_detail,
+            effect,
+        );
+        (effect, inner.last_detail.clone())
     };
 
     match effect {
         TickEffect::None => {}
         TickEffect::Push(s, detail) => {
             if s == OverlayHealthState::Recovered {
+                mark_capture_recovery_e2e();
                 track(app, "recording_incident_recovered");
             }
             push_state(app, s, detail.as_deref());
         }
         TickEffect::PushAndReveal(s) => {
             track(app, "recording_incident_shown");
-            push_state(app, s, None);
+            push_state(app, s, (!state_detail.is_empty()).then_some(state_detail.as_str()));
             reveal_overlay_if_hidden(app).await;
         }
         TickEffect::PushAndUnreveal(s) => {
@@ -516,16 +616,59 @@ pub async fn restart_recording(app: tauri::AppHandle) {
     clear_simulated_break();
 
     info!("overlay health: user requested recording restart");
-    if let Err(e) = crate::recording::stop_screenpipe(app.state(), app.clone()).await {
-        warn!("overlay health: stop before restart failed: {}", e);
+    let teardown = crate::recording::bounded_teardown(
+        USER_RESTART_TEARDOWN_TIMEOUT,
+        crate::recording::stop_screenpipe(app.state(), app.clone()),
+    )
+    .await;
+    if recording_restart_action(&teardown) == RecordingRestartAction::RelaunchApp {
+        match teardown {
+            crate::recording::TeardownOutcome::Failed(error) => warn!(
+                "overlay health: stop before restart failed ({error}); relaunching app"
+            ),
+            crate::recording::TeardownOutcome::TimedOut => warn!(
+                "overlay health: stop before restart exceeded {:?}; relaunching app",
+                USER_RESTART_TEARDOWN_TIMEOUT
+            ),
+            crate::recording::TeardownOutcome::Completed => unreachable!(),
+        }
+        crate::process_exit::request_app_relaunch(
+            app,
+            "recording recovery teardown did not complete",
+            Duration::from_millis(250),
+        );
+        return;
     }
     tokio::time::sleep(Duration::from_secs(2)).await;
     if let Err(e) = crate::recording::spawn_screenpipe(app.state(), app.clone(), None).await {
         warn!("overlay health: spawn during restart failed: {}", e);
         if let Ok(mut inner) = INNER.lock() {
             fixing_failed(&mut inner);
+            inner.last_detail = "recording did not restart".to_string();
         }
-        push_state(&app, OverlayHealthState::Failure, None);
+        push_state(
+            &app,
+            OverlayHealthState::Failure,
+            Some("recording did not restart"),
+        );
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RecordingRestartAction {
+    SpawnInProcess,
+    RelaunchApp,
+}
+
+fn recording_restart_action(
+    outcome: &crate::recording::TeardownOutcome,
+) -> RecordingRestartAction {
+    match outcome {
+        crate::recording::TeardownOutcome::Completed => {
+            RecordingRestartAction::SpawnInProcess
+        }
+        crate::recording::TeardownOutcome::Failed(_)
+        | crate::recording::TeardownOutcome::TimedOut => RecordingRestartAction::RelaunchApp,
     }
 }
 
@@ -576,6 +719,7 @@ fn clear_simulated_break() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recording::TeardownOutcome;
 
     fn test_inner(state: OverlayHealthState) -> Inner {
         Inner {
@@ -589,6 +733,22 @@ mod tests {
             not_broken_ticks: 0,
             last_detail: String::new(),
         }
+    }
+
+    #[test]
+    fn user_restart_relaunches_when_teardown_cannot_prove_pools_closed() {
+        assert_eq!(
+            recording_restart_action(&TeardownOutcome::Completed),
+            RecordingRestartAction::SpawnInProcess
+        );
+        assert_eq!(
+            recording_restart_action(&TeardownOutcome::TimedOut),
+            RecordingRestartAction::RelaunchApp
+        );
+        assert_eq!(
+            recording_restart_action(&TeardownOutcome::Failed("pool closed".to_string())),
+            RecordingRestartAction::RelaunchApp
+        );
     }
 
     #[test]
@@ -685,6 +845,70 @@ mod tests {
             TickEffect::Push(OverlayHealthState::Normal, None)
         );
         assert_eq!(inner.state, OverlayHealthState::Normal);
+    }
+
+    #[test]
+    fn failure_detail_is_persisted_updated_and_replaced_after_failed_restart() {
+        let start = Instant::now();
+        let mut inner = test_inner(OverlayHealthState::Normal);
+
+        let effect = transition_tick(&mut inner, true, false, start, "");
+        let effect = apply_failure_detail(
+            &mut inner,
+            OverlayHealthState::Normal,
+            true,
+            "audio capture is not updating",
+            effect,
+        );
+        assert_eq!(
+            effect,
+            TickEffect::PushAndReveal(OverlayHealthState::Failure)
+        );
+        assert_eq!(inner.last_detail, "audio capture is not updating");
+
+        let effect = transition_tick(&mut inner, true, false, start, "");
+        let effect = apply_failure_detail(
+            &mut inner,
+            OverlayHealthState::Failure,
+            true,
+            "audio and screen capture are not updating",
+            effect,
+        );
+        assert_eq!(
+            effect,
+            TickEffect::Push(
+                OverlayHealthState::Failure,
+                Some("audio and screen capture are not updating".to_string())
+            )
+        );
+        assert_eq!(
+            inner.last_detail,
+            "audio and screen capture are not updating"
+        );
+
+        assert!(begin_fixing(&mut inner, start));
+        let effect = transition_tick(
+            &mut inner,
+            false,
+            false,
+            start + FIXING_TIMEOUT + Duration::from_millis(1),
+            "",
+        );
+        let effect = apply_failure_detail(
+            &mut inner,
+            OverlayHealthState::Fixing,
+            false,
+            "",
+            effect,
+        );
+        assert_eq!(
+            effect,
+            TickEffect::Push(
+                OverlayHealthState::Failure,
+                Some("recording did not restart".to_string())
+            )
+        );
+        assert_eq!(inner.last_detail, "recording did not restart");
     }
 
     #[test]

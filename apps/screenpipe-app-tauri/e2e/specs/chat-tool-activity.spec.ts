@@ -20,6 +20,7 @@ const RAW_JAVASCRIPT_MARKER = "RAW_JAVASCRIPT_SHOULD_NOT_BE_VISIBLE";
 type SeedAssistantPayload = {
   content?: string;
   contentBlocks?: unknown[];
+  storeOnlyActive?: boolean;
 };
 
 async function waitForChatSeedHooks(): Promise<void> {
@@ -227,6 +228,48 @@ describe("Chat tool activity progressive disclosure", function () {
 
     await browser.pause(500);
     const filepath = await saveScreenshot("chat-tool-activity-running-expanded");
+    expect(existsSync(filepath)).toBe(true);
+  });
+
+  it("keeps store-routed tool work active until the outer Pi turn ends", async () => {
+    const startedAtMs = Date.now() - 5_000;
+    await seedConversation(randomUUID(), "Run the requested check.", {
+      content: "",
+      storeOnlyActive: true,
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            id: "completed-before-final-answer",
+            toolName: "read",
+            args: { path: "/private/workspace/AGENTS.md" },
+            result: "instructions loaded",
+            isRunning: false,
+            startedAtMs,
+            endedAtMs: startedAtMs + 1_000,
+          },
+        },
+      ],
+    });
+
+    const summary = await lastSummary();
+    await browser.waitUntil(
+      async () => !(await summary.getText()).toLowerCase().includes("done"),
+      {
+        timeout: t(8_000),
+        interval: 100,
+        timeoutMsg: "completed tool was presented as done while its Pi turn was active",
+      },
+    );
+    const runningIndicator = await summary.$(
+      '[data-testid="tool-activity-running-indicator"]',
+    );
+    await runningIndicator.waitForDisplayed({
+      timeout: t(2_000),
+      timeoutMsg: "store-routed active turn has no visible running indicator",
+    });
+
+    const filepath = await saveScreenshot("chat-tool-activity-store-routed-active");
     expect(existsSync(filepath)).toBe(true);
   });
 

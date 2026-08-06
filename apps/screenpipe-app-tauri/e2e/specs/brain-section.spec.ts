@@ -7,7 +7,7 @@
  *
  * Covers:
  *   - Section loads with seeded items
- *   - Memories / Artifacts tab switching
+ *   - Memories / Artifacts view switching
  *   - Search filtering
  *   - Individual artifact delete with toast
  *   - Individual memory delete with toast
@@ -128,6 +128,14 @@ async function reloadBrainSection() {
   const brainNav = await $('[data-testid="nav-brain"]');
   await brainNav.click();
   await waitForTestId("section-brain", 10_000);
+}
+
+async function selectBrainView(view: "overview" | "memories" | "artifacts") {
+  const switcher = await $('[data-testid="brain-view-switcher"]');
+  await switcher.click();
+  const option = await $(`[data-testid="brain-filter-${view}"]`);
+  await option.waitForDisplayed({ timeout: t(5_000) });
+  await option.click();
 }
 
 // KNOWN-BROKEN (quarantined): the #4436 Brain redesign broke this spec —
@@ -300,9 +308,10 @@ describe.skip("Brain section", function () {
     await saveScreenshot("brain-section-loaded");
   });
 
-  it("switches between memories and artifacts tabs", async () => {
-    // Memories is the default tab.
-    const memFilter = await $('[data-testid="brain-filter-memories"]');
+  it("switches between memories and artifacts with one dropdown", async () => {
+    // Memories is the default view.
+    const switcher = await $('[data-testid="brain-view-switcher"]');
+    expect(await switcher.getText()).toContain("Memories");
 
     // Seeded memory should be visible
     const memItem = await $(
@@ -317,9 +326,9 @@ describe.skip("Brain section", function () {
     expect(await artItem.isExisting()).toBe(false);
 
     // Switch to artifacts.
-    const artFilter = await $('[data-testid="brain-filter-artifacts"]');
-    await artFilter.click();
+    await selectBrainView("artifacts");
     await browser.pause(500);
+    expect(await switcher.getText()).toContain("Artifacts");
 
     // Now artifact should be visible, memory should not
     const artItem2 = await $(
@@ -332,8 +341,9 @@ describe.skip("Brain section", function () {
     expect(await memItem2.isExisting()).toBe(false);
 
     // Switch back to memories.
-    await memFilter.click();
+    await selectBrainView("memories");
     await browser.pause(500);
+    expect(await switcher.getText()).toContain("Memories");
   });
 
   it("search filters items", async () => {
@@ -354,8 +364,7 @@ describe.skip("Brain section", function () {
   });
 
   it("artifact search finds content beyond the preview", async () => {
-    const artFilter = await $('[data-testid="brain-filter-artifacts"]');
-    await artFilter.click();
+    await selectBrainView("artifacts");
     await browser.pause(500);
 
     const searchInput = await $('[data-testid="brain-search-input"]');
@@ -738,8 +747,7 @@ describe.skip("Brain section", function () {
 
   it("artifact markdown preview opens full content in the viewer window", async () => {
     // Filter to artifacts so the seeded artifact is visible
-    const artFilter = await $('[data-testid="brain-filter-artifacts"]');
-    await artFilter.click();
+    await selectBrainView("artifacts");
     await browser.pause(500);
 
     // Wait for seeded artifact

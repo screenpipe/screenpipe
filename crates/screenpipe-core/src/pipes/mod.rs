@@ -20,7 +20,7 @@ pub mod sync;
 pub(crate) mod trajectory;
 
 use crate::agents::{
-    pi::{pi_package_enabled, PiExecutor, SCREENPIPE_API_URL},
+    pi::{pi_event_protocol_error, pi_package_enabled, PiExecutor},
     AgentExecutor, ExecutionHandle, SharedPid, STOP_REQUESTED_PID,
 };
 use crate::pipes::connections::parse_mcp_connection_id;
@@ -1347,15 +1347,15 @@ pub trait PipeStore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Resolved model + provider from an AI preset.
-struct ResolvedPreset {
-    model: String,
-    provider: Option<String>,
+pub struct ResolvedPreset {
+    pub model: String,
+    pub provider: Option<String>,
     /// Provider base URL (e.g. `http://localhost:11434/v1` for Ollama).
-    url: Option<String>,
+    pub url: Option<String>,
     /// API key for the provider (custom / openai BYOK).
-    api_key: Option<String>,
+    pub api_key: Option<String>,
     /// System prompt from the preset (injected before the pipe body).
-    prompt: Option<String>,
+    pub prompt: Option<String>,
 }
 
 /// Read the ChatGPT OAuth access token, with auto-refresh if expired.
@@ -1406,30 +1406,20 @@ fn read_chatgpt_token_from_legacy_file() -> Option<String> {
 /// Read and refresh ChatGPT token from the encrypted secrets store.
 #[cfg(feature = "secrets")]
 fn read_chatgpt_token_from_secrets() -> Option<String> {
-    use screenpipe_secrets::keychain::{get_key, KeyResult};
-
     let data_dir = crate::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    if !db_path.exists() {
+    if !db_path.exists() && !screenpipe_secrets::secrets_database_path(&data_dir).exists() {
         return None;
     }
-
-    let secret_key = match get_key() {
-        KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-
-    let db_path_str = db_path.to_string_lossy().into_owned();
 
     // We're in a sync context but need async for sqlx. Use block_in_place
     // since the caller is always on a tokio runtime.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            // Shared, engine-matched pool — not an ad-hoc per-call connection,
-            // which churns the WAL-index and corrupts db.sqlite (#4263).
-            let store = screenpipe_secrets::SecretStore::open(&db_path_str, secret_key)
-                .await
-                .ok()?;
+            let store =
+                screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
+                    .await
+                    .ok()?;
             let bytes = store.get("oauth:chatgpt").await.ok()??;
             let mut token_data: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
 
@@ -1754,6 +1744,21 @@ fn classify_pipe_process_result(
         };
     }
 
+    if let Some(protocol_error) = pipe_stdout_protocol_error(filtered_stdout) {
+        let classified_stderr = if stderr.trim().is_empty() {
+            protocol_error.to_string()
+        } else {
+            format!("{}\n{}", stderr.trim_end(), protocol_error)
+        };
+        return ClassifiedPipeProcessResult {
+            status: "failed",
+            success: false,
+            stderr: classified_stderr,
+            error_type: Some("provider_protocol".to_string()),
+            error_message: Some("provider returned an unusable tool-call response".to_string()),
+        };
+    }
+
     if process_success {
         return ClassifiedPipeProcessResult {
             status: "completed",
@@ -1782,6 +1787,13 @@ fn classify_pipe_process_result(
         error_type,
         error_message,
     }
+}
+
+fn pipe_stdout_protocol_error(stdout: &str) -> Option<&'static str> {
+    stdout.lines().find_map(|line| {
+        let event = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+        pi_event_protocol_error(&event)
+    })
 }
 
 fn is_post_completion_continue_error(stderr: &str, stdout: &str) -> bool {
@@ -1891,6 +1903,18 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     let lower = stderr.to_lowercase();
     if let Some(parsed) = parse_structured_llm_error(stderr) {
         return parsed;
+    }
+    if has_safety_refusal_token(&lower) {
+        return (
+            Some("safety_refusal".to_string()),
+            Some("AI provider declined this Pipe under its safety policy".to_string()),
+        );
+    }
+    if lower.contains("provider_protocol_error") {
+        return (
+            Some("provider_protocol".to_string()),
+            Some("provider returned an unusable tool-call response".to_string()),
+        );
     }
     if lower.contains("daily_cost_limit_exceeded") || lower.contains("daily_limit_exceeded") {
         return (
@@ -2014,6 +2038,14 @@ fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>
     .join(" ")
     .to_lowercase();
 
+    if has_safety_refusal_token(&combined) {
+        return Some((
+            Some("safety_refusal".to_string()),
+            Some(message.unwrap_or_else(|| {
+                "AI provider declined this Pipe under its safety policy".to_string()
+            })),
+        ));
+    }
     if combined.contains("daily_cost_limit_exceeded") || combined.contains("daily_limit_exceeded") {
         return Some((
             Some("daily_limit".to_string()),
@@ -2054,6 +2086,16 @@ fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
     value.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
+fn has_safety_refusal_token(text: &str) -> bool {
+    text.contains("content_filter")
+        || text.contains("content filter")
+        || text.contains("safety_refusal")
+        || text.contains("safety refusal")
+        || ((text.contains("finish_reason") || text.contains("stop_reason"))
+            && text.contains("refusal"))
+        || text.contains("flagged for possible cybersecurity risk")
+}
+
 fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
     !matches!(
         error_type,
@@ -2063,6 +2105,7 @@ fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
                 | "daily_limit"
                 | "model_not_allowed"
                 | "quota_exhausted"
+                | "safety_refusal"
         )
     )
 }
@@ -2408,6 +2451,14 @@ impl PipeManager {
     }
 
     /// Set a callback to be invoked for each stdout line from a running pipe.
+    /// Resolves a named AI preset (provider, model, base url, key) from the
+    /// user's own store. Exposed so the local HTTP surface can serve plain chat
+    /// with the same credentials the desktop app uses, without going through a
+    /// pipe or the hosted gateway.
+    pub fn resolve_ai_preset(&self, preset_id: &str) -> Option<ResolvedPreset> {
+        resolve_preset(&self.pipes_dir, preset_id)
+    }
+
     pub fn set_on_output_line(&mut self, cb: OnPipeOutputLine) {
         self.on_output_line = Some(cb);
     }
@@ -2938,6 +2989,26 @@ impl PipeManager {
             .unwrap_or_default()
     }
 
+    /// Whether runs can be correlated with persisted execution rows.
+    pub fn has_execution_store(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// Get one exact execution row for a pipe.
+    pub async fn get_execution(
+        &self,
+        name: &str,
+        execution_id: i64,
+    ) -> Result<Option<PipeExecution>> {
+        let before_id = execution_id
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("execution id is out of range"))?;
+        let mut executions = self.get_executions(name, 1, Some(before_id)).await?;
+        Ok(executions
+            .pop()
+            .filter(|execution| execution.id == execution_id))
+    }
+
     /// Get execution history from the DB store.
     pub async fn get_executions(
         &self,
@@ -3069,6 +3140,7 @@ impl PipeManager {
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, "manual", None)
             .await
+            .map(|_| ())
     }
 
     /// Start one manual run with request-scoped context. Unlike the manager's
@@ -3081,6 +3153,7 @@ impl PipeManager {
     ) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, "manual", run_context)
             .await
+            .map(|_| ())
     }
 
     /// Start a pipe in the background with an explicit, low-cardinality trigger type.
@@ -3091,6 +3164,7 @@ impl PipeManager {
     ) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, trigger, None)
             .await
+            .map(|_| ())
     }
 
     /// Start a Pipe with both low-cardinality telemetry and execution-scoped
@@ -3101,7 +3175,7 @@ impl PipeManager {
         name: &str,
         trigger: &str,
         run_context: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<i64>> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
             match pipes.get(name).cloned() {
@@ -3233,8 +3307,9 @@ impl PipeManager {
                     Some(id)
                 }
                 Err(e) => {
-                    warn!("failed to create execution row: {}", e);
-                    None
+                    remove_pid_file(&self.pipes_dir, name);
+                    self.running.lock().await.remove(name);
+                    return Err(anyhow!("failed to create execution row: {}", e));
                 }
             }
         } else {
@@ -3295,7 +3370,7 @@ impl PipeManager {
             let cloud_token = executor.user_token();
             if let Err(e) = PiExecutor::ensure_pi_config(
                 cloud_token.as_deref(),
-                SCREENPIPE_API_URL,
+                executor.screenpipe_api_url(),
                 run_provider.as_deref(),
                 Some(&run_model),
                 run_provider_url.as_deref(),
@@ -3603,7 +3678,7 @@ impl PipeManager {
             }
         });
 
-        Ok(())
+        Ok(exec_id)
     }
 
     /// Run a pipe once with an explicit trigger type.
@@ -3844,7 +3919,7 @@ impl PipeManager {
             if config.agent == "pi" {
                 if let Err(e) = PiExecutor::ensure_pi_config(
                     None,
-                    SCREENPIPE_API_URL,
+                    executor.screenpipe_api_url(),
                     run_provider.as_deref(),
                     Some(&run_model),
                     run_provider_url.as_deref(),
@@ -5397,7 +5472,7 @@ impl PipeManager {
                         let cloud_token = executor.user_token();
                         if let Err(e) = PiExecutor::ensure_pi_config(
                             cloud_token.as_deref(),
-                            SCREENPIPE_API_URL,
+                            executor.screenpipe_api_url(),
                             provider.as_deref(),
                             Some(&model),
                             provider_url.as_deref(),
@@ -8400,6 +8475,32 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_error_type_safety_refusal_is_terminal() {
+        let (etype, msg) = parse_error_type("Error: Provider finish_reason: content_filter");
+        assert_eq!(etype.as_deref(), Some("safety_refusal"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("AI provider declined this Pipe under its safety policy")
+        );
+        assert!(!should_try_fallback_preset(etype.as_deref()));
+
+        let (json_type, _) = parse_error_type(r#"{"choices":[{"finish_reason":"refusal"}]}"#);
+        assert_eq!(json_type.as_deref(), Some("safety_refusal"));
+    }
+
+    #[test]
+    fn test_parse_error_type_structured_safety_refusal() {
+        let (etype, msg) = parse_error_type(
+            r#"{"error":{"code":"content_filter","message":"Request blocked by provider safety policy"}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("safety_refusal"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("Request blocked by provider safety policy")
+        );
+    }
+
+    #[test]
     fn test_parse_error_type_daily_cost_limit_json() {
         let (etype, msg) = parse_error_type(
             r#"429 "{\"error\":\"daily_cost_limit_exceeded\",\"message\":\"You've hit today's AI usage limit.\",\"tier\":\"subscribed\"}""#,
@@ -8521,6 +8622,29 @@ mod tests {
         let (etype, msg) = parse_error_type("completed successfully, output saved");
         assert_eq!(etype, None);
         assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn test_parse_error_type_provider_protocol_failure() {
+        let (error_type, message) = parse_error_type(
+            "provider_protocol_error: assistant ended with toolUse but emitted no executable tool call",
+        );
+        assert_eq!(error_type.as_deref(), Some("provider_protocol"));
+        assert_eq!(
+            message.as_deref(),
+            Some("provider returned an unusable tool-call response")
+        );
+    }
+
+    #[test]
+    fn malformed_tool_use_cannot_be_classified_as_completed() {
+        let stdout = r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"toolUse"}}"#;
+        let classified = classify_pipe_process_result(true, false, "", stdout);
+
+        assert_eq!(classified.status, "failed");
+        assert!(!classified.success);
+        assert_eq!(classified.error_type.as_deref(), Some("provider_protocol"));
+        assert!(classified.stderr.contains("provider_protocol_error"));
     }
 
     fn successful_agent_then_compaction_retry_stdout() -> String {

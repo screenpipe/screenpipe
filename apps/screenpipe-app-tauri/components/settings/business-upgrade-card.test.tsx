@@ -157,7 +157,7 @@ describe("BusinessUpgradeCard", () => {
     );
 
     expect(
-      await screen.findByText("400 hosted AI credits / month"),
+      await screen.findByText("400 AI credits / month"),
     ).toBeInTheDocument();
     expect(
       screen.getByText(

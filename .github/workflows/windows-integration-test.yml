@@ -154,7 +154,7 @@ jobs:
 
     - name: Build CLI
       env:
-        RUSTFLAGS: "-C link-arg=/LTCG"
+        RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
         # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
         # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
         # static-linking, which needs onnxruntime_common.lib + the static _deps tree
@@ -170,7 +170,7 @@ jobs:
       shell: pwsh
       timeout-minutes: 10
       env:
-        RUSTFLAGS: "-C link-arg=/LTCG"
+        RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
         # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
         # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
         # static-linking, which needs onnxruntime_common.lib + the static _deps tree

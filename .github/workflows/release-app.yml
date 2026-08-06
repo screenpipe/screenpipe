@@ -77,65 +77,15 @@ jobs:
             echo "should_test=${{ github.event.inputs.needs_testing }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Check self-hosted runner availability
+      - name: Select release runners
         id: check-runner
-        env:
-          GH_TOKEN: ${{ secrets.RUNNER_CHECK_TOKEN }}
         run: |
-          # Check runner: returns "available" (online+idle), "busy" (online+busy), or "offline"
-          check_runner() {
-            local label="$1"
-            local info
-            info=$(gh api repos/${{ github.repository }}/actions/runners \
-              --jq ".runners[] | select(.labels[].name == \"$label\") | {status: .status, busy: .busy}" 2>/dev/null || echo '{"status":"offline","busy":true}')
-            local status=$(echo "$info" | jq -r '.status // "offline"')
-            local busy=$(echo "$info" | jq -r 'if .busy then "true" else "false" end')
-            if [ "$status" = "online" ] && [ "$busy" = "false" ]; then
-              echo "available"
-            elif [ "$status" = "online" ]; then
-              echo "busy"
-            else
-              echo "offline"
-            fi
-          }
-
-          # Wait up to TIMEOUT seconds for a runner to become available
-          # Returns "available" or "timeout"
-          wait_for_runner() {
-            local label="$1"
-            local timeout="$2"
-            local elapsed=0
-            local interval=10
-            echo "⏳ Waiting up to ${timeout}s for $label to become available..." >&2
-            while [ $elapsed -lt $timeout ]; do
-              local state=$(check_runner "$label")
-              if [ "$state" = "available" ]; then
-                echo "available"
-                return
-              elif [ "$state" = "offline" ]; then
-                echo "offline"
-                return
-              fi
-              echo "  $label is busy, waiting... (${elapsed}s/${timeout}s)" >&2
-              sleep $interval
-              elapsed=$((elapsed + interval))
-            done
-            echo "timeout"
-          }
-
-          # Force GitHub-hosted runners if requested
           if [ "${{ github.event.inputs.force_github_runners }}" = "true" ]; then
             echo "macos_arm_runner=macos-latest" >> $GITHUB_OUTPUT
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
-            echo "⚠️ Forcing GitHub-hosted runners (manual override)"
           else
-            # macOS aarch64: GitHub-hosted macos-26 runner
             echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
-            echo "✅ Using GitHub-hosted macos-26 runner"
-
-            # Always use GH-hosted Windows - self-hosted is unreliable for builds
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
-            echo "ℹ️ Using GH-hosted Windows runner (windows-2022)"
           fi
 
   draft:
@@ -167,7 +117,7 @@ jobs:
     needs: [check_commit, draft]
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -308,8 +258,12 @@ jobs:
             ~/.cargo/git/db/
             target/${{ matrix.target }}
             apps/screenpipe-app-tauri/src-tauri/target
-          # Shared cache across branches
-          shared-key: "rust-cache-${{ matrix.target }}"
+          # Shared cache across branches. v2 epoch: flushes objects compiled
+          # under the old global CFLAGS/CXXFLAGS=/arch:AVX2 (and any stale
+          # pre-April AVX-512 LTCG objects) — cc/cmake outputs are NOT keyed
+          # on those env vars, so without the bump the first post-fix build
+          # could silently reuse AVX2-poisoned objects.
+          shared-key: "rust-cache-v2-${{ matrix.target }}"
           # Save cache even on failed builds
           save-if: true
 
@@ -331,9 +285,10 @@ jobs:
           path: |
             target/${{ matrix.target }}/release
             apps/screenpipe-app-tauri/src-tauri/target/release
-          key: ${{ runner.os }}-artifacts-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          # v2 epoch: see rust-cache shared-key above (AVX2 flag change).
+          key: ${{ runner.os }}-artifacts-v2-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-artifacts-${{ matrix.target }}-
+            ${{ runner.os }}-artifacts-v2-${{ matrix.target }}-
 
       - name: Verify Cargo toolchain
         shell: bash
@@ -380,9 +335,11 @@ jobs:
             apps/screenpipe-app-tauri/node_modules
             apps/screenpipe-app-tauri/.tauri
             apps/screenpipe-app-tauri/src-tauri/target
-          key: ${{ matrix.platform }}-${{ matrix.target }}-node-${{ hashFiles('**/bun.lockb') }}
+          # node-v2 epoch: this cache also holds src-tauri/target (compiled
+          # objects) — flush alongside the rust caches for the AVX2 flag change.
+          key: ${{ matrix.platform }}-${{ matrix.target }}-node-v2-${{ hashFiles('**/bun.lockb') }}
           restore-keys: |
-            ${{ matrix.platform }}-${{ matrix.target }}-node-
+            ${{ matrix.platform }}-${{ matrix.target }}-node-v2-
 
       - name: Install dependencies
         if: matrix.os_type == 'macos'
@@ -456,8 +413,8 @@ jobs:
         if: matrix.os_type == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # `tauri.windows.conf.json` bundles `onnxruntime*\lib\onnxruntime.dll`
-      # as a Tauri resource. Without this file in place at build time,
+      # `tauri.windows.conf.json` bundles `onnxruntime*\lib\*.dll`
+      # as a Tauri resource. Without a matching file in place at build time,
       # tauri_build::build() inside the screenpipe-app build script panics
       # with `glob pattern ... didn't match any files`, killing the cargo
       # build before it can even compile our crate. The ORT setup that used
@@ -480,26 +437,56 @@ jobs:
           # runtime (ONNX init fails: VAD/diarization/PII broken). Match ci.yml's
           # 1.24.2. See #4173/#4176.
           $version = '1.24.2'
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$version/onnxruntime-win-$arch-$version.zip"
-          $zipFile = "onnxruntime-win-$arch-$version.zip"
           $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-$arch-$version"
-          Invoke-WebRequest -Uri $url -OutFile $zipFile
           if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-          7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
-          Write-Host "ONNX Runtime extracted to $extractDir"
-          Get-ChildItem "$extractDir/lib" | ForEach-Object { Write-Host $_.Name }
-          # ARM64 has no pyke prebuilt and load-dynamic hangs with ort rc.12
-          # (#4173/#4176), so link the MS DLL at build time. ort-sys's `system`
-          # strategy wants the dir that DIRECTLY contains onnxruntime.lib — the
-          # `lib` subdir, not the extract root. Set these ONLY for ARM64; x64
-          # must stay on download-binaries (no ORT_STRATEGY/ORT_LIB_LOCATION).
-          if ($arch -eq 'arm64') {
-            $libDir = (Resolve-Path "$extractDir/lib").Path
-            "ORT_STRATEGY=system"      | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            "ORT_LIB_LOCATION=$libDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            "$libDir"                  | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-            Write-Host "ARM64: ORT_STRATEGY=system, ORT_LIB_LOCATION=$libDir"
+          if ($arch -eq 'x64') {
+            # DirectML flavor of the OFFICIAL MS build: baseline SSE2 + MLAS runtime
+            # CPUID dispatch (full AVX2 speed on modern CPUs, no crash on old ones),
+            # DML EP for parakeet/PII. pyke's download-binaries static libs are
+            # compiled /arch:AVX2 since Oct 2025 and caused 0xc000001d at launch on
+            # pre-Haswell CPUs (ort sessions are created on the audio boot path at
+            # every app launch).
+            $dmlOrtVersion = $version
+            $dmlVersion = '1.15.4'
+            Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/$dmlOrtVersion" -OutFile ort-dml.zip
+            Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/$dmlVersion" -OutFile directml.zip
+            7z x ort-dml.zip -oort-dml -y
+            7z x directml.zip -odirectml -y
+            New-Item -ItemType Directory -Force -Path "$extractDir/lib" | Out-Null
+            Copy-Item "ort-dml/runtimes/win-x64/native/onnxruntime.dll" "$extractDir/lib/"
+            Copy-Item "ort-dml/runtimes/win-x64/native/onnxruntime.lib" "$extractDir/lib/"
+            Copy-Item "directml/bin/x64-win/DirectML.dll" "$extractDir/lib/"
+          } else {
+            # ARM64: MS official CPU build (pyke ships no arm64 prebuilt). Extract
+            # the zip to a scratch dir, then stage a CONTROLLED lib/ containing
+            # exactly onnxruntime.dll + onnxruntime.lib. The tauri resource glob
+            # (onnxruntime*\lib\*.dll) must bundle exactly the same DLL set the
+            # old per-file glob shipped — the MS zip's lib/ has extra DLLs
+            # (providers_shared etc.) that were never bundled and must stay out.
+            $url = "https://github.com/microsoft/onnxruntime/releases/download/v$version/onnxruntime-win-$arch-$version.zip"
+            $zipFile = "onnxruntime-win-$arch-$version.zip"
+            Invoke-WebRequest -Uri $url -OutFile $zipFile
+            7z x $zipFile -oort-mszip -y
+            New-Item -ItemType Directory -Force -Path "$extractDir/lib" | Out-Null
+            Copy-Item "ort-mszip/onnxruntime-win-$arch-$version/lib/onnxruntime.dll" "$extractDir/lib/"
+            Copy-Item "ort-mszip/onnxruntime-win-$arch-$version/lib/onnxruntime.lib" "$extractDir/lib/"
           }
+          # Import-table (load-time) link against the MS DLL for BOTH arches:
+          # pyke's static prebuilt is AVX2-only on x64, and pyke has no arm64
+          # build. Load-time linking ≠ ort's `load-dynamic` feature (runtime
+          # LoadLibrary, which deadlocks with ort rc.12 — #4171/#4173); this is
+          # the exact mechanism ARM64 already shipped with. ort-sys's build
+          # script wants the dir that DIRECTLY contains onnxruntime.lib.
+          # ORT_PREFER_DYNAMIC_LINK=1 makes ort-sys emit `rustc-link-lib=
+          # onnxruntime` (dynamic import) instead of attempting a static link
+          # (see ort-sys build/main.rs:45-51 + build/dynamic_link.rs:6-11).
+          $libDir = (Resolve-Path "$extractDir/lib").Path
+          "ORT_STRATEGY=system"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ORT_LIB_LOCATION=$libDir"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ORT_PREFER_DYNAMIC_LINK=1"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$libDir"                    | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "${arch}: ORT_LIB_LOCATION=$libDir (dynamic import link)"
+          Get-ChildItem "$extractDir/lib"
 
       - name: Install Ninja (ARM64)
         if: matrix.os_type == 'windows' && matrix.target == 'aarch64-pc-windows-msvc'
@@ -913,32 +900,84 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          # LTCG removed: MSVC has known bugs where LTCG ignores /arch:AVX2 and
+          # LTCG removed: MSVC has known bugs where LTCG ignores /arch flags and
           # emits AVX-512 instructions on Xeon CI runners, causing STATUS_ILLEGAL_INSTRUCTION
           # (0xc000001d) on consumer CPUs without AVX-512 (Arrow Lake, Panther Lake, Lunar Lake).
           # See: https://developercommunity.visualstudio.com/content/problem/848627
           RUSTFLAGS: ""
-          CFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
-          CXXFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
-          # Fix whisper.cpp/GGML AVX-512 crash on Lunar Lake, Arrow Lake, etc.
+          # Do NOT set global CFLAGS/CXXFLAGS=/arch:AVX2. That flag made EVERY
+          # cc/cmake-compiled C dep (bundled SQLite, sqlite-vec, lame, webrtc-vad,
+          # knf, samplerate, antirez qwen3 kernels...) require AVX2, so the app
+          # died with 0xc000001d AT LAUNCH on pre-Haswell/Atom CPUs (no AVX2).
+          # MSVC's default for x64 is baseline SSE2 — safe everywhere. AVX2 is
+          # opted into ONLY where there's a runtime guard: ggml below (whisper is
+          # gated on is_x86_feature_detected in screenpipe-audio), and ONNX
+          # Runtime does its own runtime CPUID dispatch (MS official DLL).
+          CFLAGS: ""
+          CXXFLAGS: ""
           # whisper-rs build.rs passes env vars starting with GGML_ as cmake defines.
           # CMAKE_ARGS as a single string gets passed as -DCMAKE_ARGS="..." which cmake ignores.
           # Individual GGML_* env vars are the ONLY way to control the whisper-rs cmake build.
-          # Without GGML_NATIVE=OFF, FindSIMD.cmake detects AVX-512 on CI Xeon runners
-          # and overrides GGML_AVX512 to ON, producing 512-bit ZMM instructions that crash
-          # on CPUs without full AVX-512 support (STATUS_ILLEGAL_INSTRUCTION 0xc000001d).
+          # GGML_NATIVE=OFF prevents FindSIMD.cmake from detecting AVX-512 on CI Xeons.
+          # AVX2/BMI2 are pinned ON explicitly (don't rely on ggml defaults): whisper
+          # keeps full speed, and screenpipe-audio refuses to init whisper on CPUs
+          # without AVX2 (runtime gate) instead of crashing. The x86 ISA pins are
+          # no-ops on the aarch64 target (ggml only applies them on x86 builds).
           GGML_NATIVE: "OFF"
+          GGML_SSE42: "ON"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
+          GGML_BMI2: "ON"
           GGML_AVX512: "OFF"
           GGML_AVX512_VBMI: "OFF"
           GGML_AVX512_VNNI: "OFF"
           GGML_AVX512_BF16: "OFF"
-          CMAKE_ARGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2' || '-DGGML_NATIVE=OFF' }}
+          CMAKE_ARGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF' || '-DGGML_NATIVE=OFF' }}
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
-          # ORT link strategy is set per-arch in the "Download ONNX Runtime" step
-          # via $GITHUB_ENV (ARM64 → system + ORT_LIB_LOCATION; x64 → unset, uses
-          # download-binaries). Setting them inline here broke x64 because empty
-          # env values are still "set" and ort-sys chokes on them.
+          # ORT link strategy is set in the "Download ONNX Runtime" step via
+          # $GITHUB_ENV for BOTH Windows arches: ORT_STRATEGY=system +
+          # ORT_LIB_LOCATION + ORT_PREFER_DYNAMIC_LINK=1 → import-table link
+          # against the MS onnxruntime.dll (runtime CPUID dispatch; x64 was
+          # previously pyke's AVX2-only static lib → 0xc000001d on old CPUs).
+          # Don't set them inline here: empty env values are still "set" and
+          # ort-sys chokes on them.
         run: bunx tauri build --verbose ${{ matrix.tauri-args }}
+
+      # The app exe now import-table-links the MS onnxruntime.dll — a
+      # missing/incompatible DLL or an AVX2-poisoned static initializer kills
+      # the process before main() with no UI and nothing in Sentry (#3125).
+      # --cpu-smoke (hidden flag in main.rs) exits 0 right after static init
+      # + CPU detection, so this catches that whole class natively. The
+      # staged ORT lib dir is already on PATH (Download ONNX Runtime step).
+      # Non-AVX2 (Intel SDE) coverage lives in release-cli.yml's
+      # smoke-windows job — same workspace crates, same flags; SDE's Pin
+      # injector is broken on windows-2022 anyway (pincrt4.dll, run
+      # 30653241813). x64 only: the arm64 exe is cross-compiled and cannot
+      # run on this x64 runner.
+      - name: App launch sanity probe (static init + import table)
+        if: matrix.os_type == 'windows' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $targetDir = "apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release"
+          # tauri v2 renames the built binary to the bundle's mainBinaryName;
+          # accept either name so config drift can't silently skip the probe.
+          $exe = Get-ChildItem $targetDir -Filter "screenpipe*.exe" |
+            Where-Object { $_.Name -in @('screenpipe-app.exe', 'screenpipe.exe', 'screenpipe - Development.exe') } |
+            Select-Object -First 1
+          if (-not $exe) { throw "app exe not found in $targetDir" }
+          Write-Host "=== native — $($exe.Name) --cpu-smoke ==="
+          # GUI-subsystem binary: `&` would return immediately without the
+          # exit code — Start-Process + .ExitCode is the reliable path. The
+          # 4-min wait is belt-and-braces; healthy runs exit in <1s.
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '--cpu-smoke' `
+            -NoNewWindow -PassThru -RedirectStandardError cpu-smoke-err.txt
+          if (-not $p.WaitForExit(240000)) {
+            taskkill /PID $($p.Id) /T /F | Out-Null
+            throw "app exe hung on --cpu-smoke (should exit in <1s) — static init or early main is wedged"
+          }
+          Get-Content cpu-smoke-err.txt -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "app exe failed --cpu-smoke (exit $($p.ExitCode)) — static init or a load-time DLL import is broken; customers would see a silent launch failure" }
 
       - name: Sign NSIS installer with SSL.com EV (Windows)
         # Tauri's signCommand handles inner binaries, but the final NSIS
@@ -1402,206 +1441,47 @@ jobs:
         if: matrix.os_type == 'macos'
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
-          # Upload helper: tries aws s3 cp first, falls back to curl.
-          # The self-hosted macOS ARM runner has broken LibreSSL 3.3.6 that causes
-          # SSLV3_ALERT_BAD_RECORD_MAC on large uploads to R2. Both aws cli (Python SSL)
-          # and system curl (LibreSSL) are affected. Use homebrew curl (OpenSSL 3.6.1)
-          # as the reliable fallback.
-          CURL_BIN="/opt/homebrew/opt/curl/bin/curl"
-          if [ ! -x "$CURL_BIN" ]; then
-            CURL_BIN="curl"  # fallback to system curl on non-macOS
-          fi
-          upload_with_retry() {
-            local src="$1" dst="$2"
-            local bucket_path="${dst#s3://}"
-            local r2_key="${bucket_path#*/}"
-            local bucket="${bucket_path%%/*}"
-
-            # Try aws cli first
-            for attempt in 1 2 3; do
-              if AWS_MAX_ATTEMPTS=3 aws s3 cp "$src" "$dst" \
-                  --endpoint-url "$R2_ENDPOINT" \
-                  --no-verify-ssl \
-                  --no-progress \
-                  --expected-size "$(stat -f%z "$src" 2>/dev/null || stat -c%s "$src" 2>/dev/null)" \
-                  --cli-read-timeout 300 --cli-connect-timeout 30 \
-                  --region auto 2>&1; then
-                echo "  ✅ $(basename "$src") (aws)"
-                return 0
-              fi
-              echo "  ⚠️ aws attempt $attempt failed for $(basename "$src")"
-              sleep $((attempt * 5))
-            done
-
-            # Fallback: curl with S3 v4 signing (uses macOS SecureTransport, bypasses Python SSL)
-            echo "  🔄 falling back to curl for $(basename "$src")..."
-            local content_type="application/octet-stream"
-            local date_stamp=$(date -u +%Y%m%d)
-            local amz_date=$(date -u +%Y%m%dT%H%M%SZ)
-            local region="auto"
-            local service="s3"
-            local host="${R2_ENDPOINT#https://}"
-
-            sign_and_upload() {
-              local method="PUT"
-              local canonical_uri="/${r2_key}"
-              local content_sha256=$(shasum -a 256 "$src" | awk '{print $1}')
-              local canonical_headers="content-type:${content_type}\nhost:${host}\nx-amz-content-sha256:${content_sha256}\nx-amz-date:${amz_date}\n"
-              local signed_headers="content-type;host;x-amz-content-sha256;x-amz-date"
-              local canonical_request="${method}\n${canonical_uri}\n\n${canonical_headers}\n${signed_headers}\n${content_sha256}"
-              local cr_hash=$(printf "${canonical_request}" | shasum -a 256 | awk '{print $1}')
-              local scope="${date_stamp}/${region}/${service}/aws4_request"
-              local string_to_sign="AWS4-HMAC-SHA256\n${amz_date}\n${scope}\n${cr_hash}"
-
-              local k_date=$(printf "${date_stamp}" | openssl dgst -sha256 -hex -mac HMAC -macopt "key:AWS4${AWS_SECRET_ACCESS_KEY}" | awk '{print $NF}')
-              local k_region=$(printf "${region}" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_date}" | awk '{print $NF}')
-              local k_service=$(printf "${service}" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_region}" | awk '{print $NF}')
-              local k_signing=$(printf "aws4_request" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_service}" | awk '{print $NF}')
-              local signature=$(printf "${string_to_sign}" | openssl dgst -sha256 -hex -mac HMAC -macopt "hexkey:${k_signing}" | awk '{print $NF}')
-
-              local auth="AWS4-HMAC-SHA256 Credential=${AWS_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signed_headers}, Signature=${signature}"
-
-              $CURL_BIN -fSs --retry 3 --retry-delay 5 \
-                -X PUT \
-                -H "Content-Type: ${content_type}" \
-                -H "x-amz-date: ${amz_date}" \
-                -H "x-amz-content-sha256: ${content_sha256}" \
-                -H "Authorization: ${auth}" \
-                --data-binary "@${src}" \
-                "${R2_ENDPOINT}/${r2_key}"
-            }
-
-            for attempt in 1 2 3; do
-              if sign_and_upload 2>&1; then
-                echo "  ✅ $(basename "$src") (curl)"
-                return 0
-              fi
-              echo "  ⚠️ curl attempt $attempt failed for $(basename "$src")"
-              sleep $((attempt * 10))
-            done
-            echo "  ❌ failed to upload $(basename "$src") after all attempts"
-            return 1
-          }
-
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          R2_PREFIX="s3://screenpipe-releases/releases/${VERSION}/${TARGET}"
-
-          echo "uploading ${TARGET} bundles for v${VERSION} to R2..."
-          echo "aws cli: $(aws --version)"
-
-          # Clean any stale artifacts from previous (failed) runs for this version+target
-          echo "cleaning stale R2 artifacts at ${R2_PREFIX}/ ..."
-          aws s3 rm "${R2_PREFIX}/" --recursive --endpoint-url "$R2_ENDPOINT" --no-verify-ssl 2>/dev/null || true
-
-          UPLOAD_FAILED=0
-
-          # Upload DMG
-          for f in "${BUNDLE_DIR}"/dmg/*.dmg; do
-            [ -f "$f" ] && { upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")" || UPLOAD_FAILED=1; }
-          done
-
-          # Upload updater artifacts (.tar.gz + .sig)
-          for f in "${BUNDLE_DIR}"/macos/*.tar.gz "${BUNDLE_DIR}"/macos/*.sig; do
-            [ -f "$f" ] && { upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")" || UPLOAD_FAILED=1; }
-          done
-
-          if [ "$UPLOAD_FAILED" -eq 1 ]; then
-            echo "❌ Some uploads failed - marking step as failed"
-            exit 1
-          fi
-          echo "R2 upload complete for ${TARGET}"
+          .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/dmg/*.dmg \
+            "${BUNDLE_DIR}"/macos/*.tar.gz \
+            "${BUNDLE_DIR}"/macos/*.sig
 
       - name: Upload to Cloudflare R2 (Windows)
         if: matrix.os_type == 'windows'
-        shell: pwsh
+        shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
-          # Install AWS CLI if not present
-          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing AWS CLI..."
-            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\awscli.msi"
-            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\awscli.msi /quiet"
-            $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
-          }
-          $version = (Select-String -Path apps/screenpipe-app-tauri/src-tauri/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $bundleDir = "apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
-          $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          $r2Prefix = "s3://screenpipe-releases/releases/$version/${{ matrix.target }}"
-
-          Write-Host "uploading Windows bundles for v$version to R2..."
-
-          # Clean any stale artifacts from previous (failed) runs for this version+target
-          Write-Host "cleaning stale R2 artifacts at $r2Prefix/ ..."
-          aws s3 rm "$r2Prefix/" --recursive --endpoint-url $r2Endpoint 2>$null
-
-          # Upload ALL bundle artifacts (.exe, .nsis.zip, .sig files)
-          Write-Host "Files in nsis bundle dir:"
-          Get-ChildItem "$bundleDir/nsis" -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Host "  found: $($_.Name) ($($_.Length) bytes)"
-          }
-          Get-ChildItem "$bundleDir/nsis" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  ✅ $($_.Name)"
-          }
-
-          Write-Host "R2 upload complete for Windows"
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          TARGET="${{ matrix.target }}"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/nsis/*.exe \
+            "${BUNDLE_DIR}"/nsis/*.nsis.zip \
+            "${BUNDLE_DIR}"/nsis/*.sig
 
       - name: Upload to Cloudflare R2 (Linux)
         if: matrix.os_type == 'linux'
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          R2_PREFIX="s3://screenpipe-releases/releases/${VERSION}/${TARGET}"
-
-          echo "uploading Linux bundles for v${VERSION} to R2..."
-
-          # Clean any stale artifacts from previous (failed) runs for this version+target
-          echo "cleaning stale R2 artifacts at ${R2_PREFIX}/ ..."
-          aws s3 rm "${R2_PREFIX}/" --recursive --endpoint-url "$R2_ENDPOINT" --no-verify-ssl 2>/dev/null || true
-
-          echo "bundle dir contents:"
-          find "${BUNDLE_DIR}" -type f 2>/dev/null || echo "  (bundle dir not found)"
-
-          UPLOADED=0
-
-          # Upload AppImage
-          for f in "${BUNDLE_DIR}"/appimage/*.AppImage; do
-            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
-          done
-
-          # Upload deb
-          for f in "${BUNDLE_DIR}"/deb/*.deb; do
-            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
-          done
-
-          # Upload updater artifacts (.tar.gz + .sig) if present
-          for f in "${BUNDLE_DIR}"/appimage/*.tar.gz "${BUNDLE_DIR}"/appimage/*.sig; do
-            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
-          done
-
-          if [ "$UPLOADED" -eq 0 ]; then
-            echo "❌ No Linux artifacts found to upload!"
-            exit 1
-          fi
-
-          echo "R2 upload complete for Linux ($UPLOADED files)"
+          .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/appimage/*.AppImage \
+            "${BUNDLE_DIR}"/appimage/*.tar.gz \
+            "${BUNDLE_DIR}"/appimage/*.sig \
+            "${BUNDLE_DIR}"/deb/*.deb
 
       # Sentry uploads run AFTER R2 so they don't delay release artifacts
       - name: Upload debug symbols to Sentry (Windows)
@@ -1630,34 +1510,3 @@ jobs:
           fi
           echo "Uploading debug symbols to Sentry..."
           sentry-cli debug-files upload --org $SENTRY_ORG --project screenpipe-app apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
-
-  generate-changelog:
-    needs: [check_commit, publish-tauri]
-    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 100
-
-      - name: Get version and previous bump
-        id: params
-        run: |
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
-
-          # Find the previous "Bump" or "release-app" commit to diff from
-          PREV=$(git log --oneline --skip=1 --grep="release-app\|Bump app" -1 --format="%H" 2>/dev/null || echo "")
-          if [ -z "$PREV" ]; then
-            PREV="HEAD~50"
-          fi
-          echo "since=${PREV}" >> $GITHUB_OUTPUT
-          echo "Changelog: v${VERSION} since ${PREV}"
-
-      - name: Trigger changelog generation on website repo
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.WEBSITE_REPO_TOKEN }}
-          repository: screenpipe/website
-          event-type: generate-changelog
-          client-payload: '{"version": "${{ steps.params.outputs.version }}", "since": "${{ steps.params.outputs.since }}"}'

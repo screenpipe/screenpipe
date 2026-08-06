@@ -1,6 +1,6 @@
 {
   "name": "screenpipe-mcp",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "mcpName": "io.github.screenpipe/screenpipe-mcp",
   "description": "MCP server for screenpipe - search your screen recordings and audio transcriptions",
   "main": "dist/index.js",

@@ -8,6 +8,10 @@ license-file.workspace = true
 edition.workspace = true
 
 [dependencies]
+# Runtime CPU-feature detection (has_avx2) for the engine safety checks in
+# defaults.rs — whisper/qwen3 are AVX2-compiled on x64. NOT screenpipe-core:
+# that would be a package cycle (core → screenpipe-secrets → config).
+screenpipe-cpu-features = { path = "../screenpipe-cpu-features" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use screenpipe_resource::ResourceGovernor;
+use screenpipe_sqlite_coordinator::SqliteWritePool;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
@@ -93,6 +94,7 @@ pub struct ImageWorkerStatus {
 #[derive(Clone)]
 pub struct ImageWorker {
     pool: SqlitePool,
+    writer: SqliteWritePool,
     redactor: Arc<dyn ImageRedactor>,
     cfg: ImageWorkerConfig,
     status: Arc<Mutex<ImageWorkerStatus>>,
@@ -102,8 +104,19 @@ pub struct ImageWorker {
 
 impl ImageWorker {
     pub fn new(pool: SqlitePool, redactor: Arc<dyn ImageRedactor>, cfg: ImageWorkerConfig) -> Self {
+        let writer = SqliteWritePool::standalone(pool.clone());
+        Self::new_with_writer(pool, writer, redactor, cfg)
+    }
+
+    pub fn new_with_writer(
+        pool: SqlitePool,
+        writer: SqliteWritePool,
+        redactor: Arc<dyn ImageRedactor>,
+        cfg: ImageWorkerConfig,
+    ) -> Self {
         Self {
             pool,
+            writer,
             redactor,
             cfg,
             status: Arc::new(Mutex::new(ImageWorkerStatus::default())),
@@ -365,6 +378,7 @@ impl ImageWorker {
     }
 
     async fn mark_redacted(&self, frame_id: i64) -> Result<(), sqlx::Error> {
+        let writer = self.writer.lock().await?;
         sqlx::query(
             r#"
             UPDATE frames
@@ -373,7 +387,7 @@ impl ImageWorker {
             "#,
         )
         .bind(frame_id)
-        .execute(&self.pool)
+        .execute(writer.pool())
         .await
         .map(|_| ())
     }

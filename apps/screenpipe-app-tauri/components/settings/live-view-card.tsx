@@ -26,6 +26,7 @@ import {
   InteractiveLiveViewListItem,
 } from "@/components/settings/live-view-interactive-list";
 import { LiveViewListItemText } from "@/components/settings/live-view-list-item-text";
+import { LiveViewLineChart } from "@/components/settings/live-view-line-chart";
 import type {
   LiveViewItemActionRequest,
   LiveViewListItem,
@@ -106,7 +107,7 @@ function LiveViewCardBody({
         ) : slot.binding ? (
           `${slot.binding.pipeName} has not published this data yet`
         ) : (
-          "connect a Pipe to fill this Block"
+          "connect a scheduled task to fill this Block"
         )}
       </div>
     );
@@ -268,62 +269,7 @@ function LiveViewCardBody({
       label: stringValue(item.label),
       value: typeof item.value === "number" ? item.value : 0,
     }));
-    const values = points.map((point) => point.value);
-    const minimum = values.length > 0 ? Math.min(...values) : 0;
-    const maximum = values.length > 0 ? Math.max(...values) : 0;
-    const spread = maximum > minimum ? maximum - minimum : 1;
-    const polyline = points
-      .map((point, index) => {
-        const x = points.length <= 1 ? 50 : (index / (points.length - 1)) * 100;
-        const y = 92 - ((point.value - minimum) / spread) * 84;
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
-      })
-      .join(" ");
-    return (
-      <div className="space-y-3">
-        <div className="flex items-baseline justify-between gap-3 text-xs">
-          <span className="text-muted-foreground">
-            {points[0]?.label || points[0]?.timestamp}
-          </span>
-          <span className="tabular-nums">
-            {minimum.toLocaleString()} to {maximum.toLocaleString()}
-          </span>
-        </div>
-        <svg
-          role="img"
-          aria-label={`${slot.title} time series`}
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          className="h-44 w-full overflow-visible"
-        >
-          {[8, 36, 64, 92].map((y) => (
-            <line
-              key={y}
-              x1="0"
-              x2="100"
-              y1={y}
-              y2={y}
-              className="stroke-border"
-              strokeWidth="0.5"
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-          <polyline
-            points={polyline}
-            fill="none"
-            className="stroke-foreground"
-            strokeWidth="2"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
-        <div className="flex justify-between gap-3 text-[10px] text-muted-foreground">
-          <span>{points[0]?.timestamp}</span>
-          <span>{points.at(-1)?.timestamp}</span>
-        </div>
-      </div>
-    );
+    return <LiveViewLineChart title={slot.title} points={points} />;
   }
 
   if (slot.component === "table.v1") {
@@ -495,15 +441,10 @@ export function LiveViewCard({
         <div className={`min-w-0 ${hasActions ? "pr-32" : ""}`}>
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
           <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-            {COMPONENT_LABELS[slot.component]} ·{" "}
+            {COMPONENT_LABELS[slot.component]} · requested:{" "}
             {getLiveViewTimeRangeOption(timeRange).label}
           </p>
         </div>
-        {slot.value && !hasActions && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">
-            {timeAgo(slot.value.updatedAt)}
-          </span>
-        )}
       </div>
       {hasActions && (
         <div
@@ -569,7 +510,7 @@ export function LiveViewCard({
                 <div>
                   <p className="text-xs font-medium">What should improve?</p>
                   <p className="mt-0.5 text-[10px] text-muted-foreground">
-                    Optional. The connected Pipe will use this next time.
+                    Optional. The connected scheduled task will use this next time.
                   </p>
                 </div>
                 <Input
@@ -696,15 +637,19 @@ export function LiveViewCard({
           onItemHandoff={onItemHandoff}
         />
       </div>
-      <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-2 text-[10px] text-muted-foreground">
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
           {slot.binding
-            ? `Pipe: ${slot.binding.pipeName}`
-            : "No Pipe connected"}
+            ? `Scheduled task: ${slot.binding.pipeName}`
+            : "No scheduled task connected"}
         </span>
         {slot.value && (
-          <span className="shrink-0">
-            artifact #{slot.value.artifactOutputId} · v
+          <span
+            data-testid={`overview-card-updated-${slot.id}`}
+            className="ml-auto shrink-0"
+          >
+            updated {timeAgo(slot.value.updatedAt)} · artifact #
+            {slot.value.artifactOutputId} · v
             {slot.value.artifactVersion}
           </span>
         )}

@@ -63,6 +63,12 @@
       "layers": ["settings"]
     },
     {
+      "id": "settings-permissions",
+      "label": "Permissions settings recovery UX",
+      "platforms": ["macos"],
+      "layers": ["settings"]
+    },
+    {
       "id": "notifications",
       "label": "Notification history and viewer paths",
       "platforms": ["windows", "macos", "linux"],
@@ -142,6 +148,16 @@
     }
   ],
   "specs": [
+    {
+      "spec": "acp-text-streaming.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "tauri-command"],
+      "features": ["chat", "acp-runtime", "acp-text-streaming"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "A deterministic ACP adapter runs through the packaged Rust desktop runtime and proves ordered assistant text streaming from pi_start through agent_end."
+    },
     {
       "spec": "api.spec.ts",
       "platforms": ["windows", "macos", "linux"],
@@ -250,7 +266,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
-      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, and capture screenshots."
+      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, keep completed tools active while the shared Pi turn is still streaming, and capture screenshots."
     },
     {
       "spec": "chat-automation-card-duplicate.spec.ts",
@@ -480,7 +496,17 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "A local provider returns the gateway's structured daily-cost rejection for a Basic account; the request crosses the real Pi and foreground-event path, then the UI shows account-budget copy and a Business action without depending on the separate query counter."
+      "notes": "A local provider returns the gateway's structured daily-limit rejection for a Business account; the request crosses the real Pi and foreground-event path, then the UI shows usage-limit copy and a targeted Business Max billing action."
+    },
+    {
+      "spec": "chat-local-ai-gateway.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai", "real-ui-e2e", "tauri-command"],
+      "features": ["chat", "chat-streaming"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opt-in full-stack hosted-AI path: the E2E app and real Pi route through the Rust-validated loopback URL into the production Worker bundle under Miniflare, with migrated local D1 and network-closed fake provider egress, then the streamed answer reaches the real chat UI."
     },
     {
       "spec": "chat-source-file-preview.spec.ts",
@@ -613,6 +639,16 @@
       "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
     },
     {
+      "spec": "meeting-workspace-tabs.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api"],
+      "features": ["meeting-notes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds a meeting with notes and summary, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, then captures a review screenshot."
+    },
+    {
       "spec": "meetings-only-audio-lifecycle.spec.ts",
       "platforms": ["windows", "macos"],
       "layers": ["audio-device", "local-api", "real-ui-e2e"],
@@ -631,6 +667,26 @@
       "confidence": "partial",
       "ux": "mixed",
       "notes": "Notification local file links rewrite into in-app viewer links."
+    },
+    {
+      "spec": "onboarding-background-ai-tools.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["onboarding", "real-ui-e2e", "storage-privacy"],
+      "features": ["onboarding", "settings-ai"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide."
+    },
+    {
+      "spec": "onboarding-h1-follow-up.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["onboarding", "notifications", "pipes", "real-ui-e2e"],
+      "features": ["onboarding", "notifications", "pipes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks."
     },
     {
       "spec": "onboarding-redirect.spec.ts",
@@ -681,6 +737,26 @@
       "confidence": "conditional",
       "ux": "api",
       "notes": "Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident)."
+    },
+    {
+      "spec": "capture-stall-recovery.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["capture-ocr", "local-api", "os-integration", "real-ui-e2e"],
+      "features": ["app-launch", "capture-ocr", "health", "recording-health-alerts"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in macOS full-stack lane proves all selected user-paused monitors remain an intentional disabled/normal state and resume cleanly, bounds a wedged SCK frame worker, proves the privacy-gated CoreGraphics fallback, reproduces a status-Running capture loop going silent, verifies stale and the failure pill, independent per-monitor stall detection with a VisionManager restart and resumed terminal capture progress, same-process UI recovery, and bounded id-based SCK lookup retry."
+    },
+    {
+      "spec": "recording-health-focus-cold.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["capture-ocr", "local-api", "os-integration", "real-ui-e2e"],
+      "features": ["app-launch", "capture-ocr", "health", "recording-health-alerts"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in macOS focus-aware Cold-state reproduction proves capture attempts can remain intentionally flat while the independent loop heartbeat advances, /health stays ok, and the recording-health overlay remains normal in the original process."
     },
     {
       "spec": "recording-health-return-race.spec.ts",
@@ -736,11 +812,11 @@
       "spec": "settings-sections.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "real-ui-e2e", "storage-privacy"],
-      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
+      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "settings-permissions", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard."
+      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
     },
     {
       "spec": "spotlight-exclusion.spec.ts",
@@ -936,7 +1012,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Creates the first-open starter dashboard, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
+      "notes": "Creates the first-open starter dashboard, verifies template handoff to the Live View builder agent without a legacy fixed Canvas install, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
     },
     {
       "spec": "live-view-item-actions.spec.ts",

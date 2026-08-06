@@ -22,6 +22,7 @@ import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
+import { DesktopRemoteControl } from "@/components/desktop-remote-control";
 
 /// Global mount point for the updater event listener. Lives here (not in
 /// per-page hooks) so the listener is registered for the lifetime of the
@@ -52,6 +53,7 @@ export const Providers = forwardRef<
   // succeeds; the post-mount effect flips mounted=true and the real tree
   // renders client-only without a hydration step.
   const [mounted, setMounted] = useState(false);
+  const [posthogReady, setPosthogReady] = useState(false);
   // The deep-link handler (which turns the screenpipe:// login callback into a
   // loadUser call) MUST stay mounted outside the entitlement gate. Otherwise the
   // "sign in required" screen unmounts it and the login token is dropped, so
@@ -71,7 +73,8 @@ export const Providers = forwardRef<
       // over every spec (clean localStorage each run = empty dismissed-set) —
       // plus pollute prod analytics with test traffic.
       const isE2E = process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true";
-      if (isDebug || isE2E) return;
+      const isBrowserDev = Boolean(process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV);
+      if (isDebug || isE2E || isBrowserDev) return;
       // Read the cached analytics preference to sync PostHog opt-in/out
       // after init. undefined = first boot → allow capturing (default true).
       const cachedEnabled = readCachedAnalyticsEnabled();
@@ -98,6 +101,7 @@ export const Providers = forwardRef<
       } else {
         posthog.opt_in_capturing();
       }
+      setPosthogReady(true);
     }
   }, []);
 
@@ -118,6 +122,7 @@ export const Providers = forwardRef<
                       <PostHogProvider client={posthog}>
                         {mounted ? (
                           <>
+                            <DesktopRemoteControl enabled={posthogReady} />
                             {!isOverlay && <DeeplinkHandler />}
                             {!isOverlay && <LiveViewOnboardingFollowUp />}
                             <AppEntitlementGate>{children}</AppEntitlementGate>

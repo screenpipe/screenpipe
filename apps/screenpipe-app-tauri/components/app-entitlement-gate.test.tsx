@@ -833,6 +833,37 @@ describe("AppEntitlementGate", () => {
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
   });
 
+  it.each(["pro_max", "pro_ultra"] as const)(
+    "does not route an enterprise workspace admin with a %s consumer plan away",
+    (plan) => {
+      mocks.state.user = baseUser({
+        app_entitled: true,
+        cloud_subscribed: true,
+        subscription_plan: plan,
+        enterprise_account: {
+          org_name: "Screenpipe",
+          role: "admin",
+          requires_enterprise_app: true,
+        },
+        entitlement: {
+          active: true,
+          plan,
+          source: "manual",
+          checked_at: minsAgo(1),
+          features: { app: true, cloud: true, enterprise: false },
+        },
+      });
+
+      render(<AppEntitlementGate>{protectedApp}</AppEntitlementGate>);
+
+      expect(
+        screen.queryByText(/enterprise app required/i),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("protected-app")).toBeInTheDocument();
+      expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not show the consumer-app warning inside the enterprise build", () => {
     mocks.enterprise.isManagedDeployment = true;
     mocks.state.user = baseUser({

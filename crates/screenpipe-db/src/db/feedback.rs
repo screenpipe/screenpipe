@@ -151,6 +151,8 @@ impl DatabaseManager {
         rating: Option<&str>,
         query: Option<&str>,
         since: Option<&str>,
+        since_inclusive: bool,
+        after_id: Option<&str>,
         ascending: bool,
         limit: i64,
     ) -> Result<Vec<FeedbackRecord>, SqlxError> {
@@ -165,14 +167,16 @@ impl DatabaseManager {
                  AND (?2 IS NULL OR target_id = ?2)
                  AND (?3 IS NULL OR producer_ref = ?3)
                  AND (?4 IS NULL OR rating = ?4)
-                 AND (?5 IS NULL OR updated_at > ?5)
-                 AND (?6 IS NULL OR target_id LIKE '%' || ?6 || '%'
-                     OR COALESCE(producer_ref, '') LIKE '%' || ?6 || '%'
-                     OR COALESCE(comment, '') LIKE '%' || ?6 || '%'
-                     OR COALESCE(snapshot, '') LIKE '%' || ?6 || '%'
-                     OR context LIKE '%' || ?6 || '%')
-               ORDER BY updated_at {order}
-               LIMIT ?7"#,
+                 AND (?5 IS NULL OR updated_at > ?5
+                      OR (?6 = 1 AND updated_at = ?5
+                          AND (?7 IS NULL OR id > ?7)))
+                 AND (?8 IS NULL OR target_id LIKE '%' || ?8 || '%'
+                     OR COALESCE(producer_ref, '') LIKE '%' || ?8 || '%'
+                     OR COALESCE(comment, '') LIKE '%' || ?8 || '%'
+                     OR COALESCE(snapshot, '') LIKE '%' || ?8 || '%'
+                     OR context LIKE '%' || ?8 || '%')
+               ORDER BY updated_at {order}, id {order}
+               LIMIT ?9"#,
         );
         sqlx::query_as::<_, FeedbackRecord>(sqlx::AssertSqlSafe(sql))
             .bind(target_kind)
@@ -180,6 +184,8 @@ impl DatabaseManager {
             .bind(producer_ref)
             .bind(rating)
             .bind(since)
+            .bind(since_inclusive)
+            .bind(after_id)
             .bind(query)
             .bind(limit.clamp(1, 500))
             .fetch_all(&self.pool)
@@ -239,14 +245,57 @@ mod tests {
         assert_eq!(second.rating, "up");
 
         let all = db
-            .list_feedback(None, None, None, None, None, None, false, 50)
+            .list_feedback(None, None, None, None, None, None, false, None, false, 50)
             .await
             .unwrap();
         assert_eq!(all.len(), 1);
         let by_snapshot = db
-            .list_feedback(None, None, None, None, Some("today"), None, false, 50)
+            .list_feedback(
+                None,
+                None,
+                None,
+                None,
+                Some("today"),
+                None,
+                false,
+                None,
+                false,
+                50,
+            )
             .await
             .unwrap();
         assert_eq!(by_snapshot.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn inclusive_feedback_cursor_uses_id_to_cross_timestamp_ties() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = test_db(&dir).await;
+        let tied_at = "2026-07-30T10:00:00Z";
+        for id in 1..=3 {
+            let mut item = record("down", None, tied_at);
+            item.id = format!("feedback-{id:04}");
+            item.target_id = format!("daily-recap-{id:04}");
+            db.upsert_feedback(&item).await.unwrap();
+        }
+
+        let page = db
+            .list_feedback(
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(tied_at),
+                true,
+                Some("feedback-0002"),
+                true,
+                50,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "feedback-0003");
     }
 }

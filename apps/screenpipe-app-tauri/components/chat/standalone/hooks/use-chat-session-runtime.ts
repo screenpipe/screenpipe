@@ -132,8 +132,17 @@ export function useChatSessionRuntime({
     return state.sessions[conversationId]?.streamingMessageId ?? null;
   });
   useEffect(() => {
-    if (storeChatIsStreaming === false) setIsStreaming(false);
-    if (storeChatIsLoading === false) setIsLoading(false);
+    // Foreground ownership can move between WebViews while Pi is already
+    // running. In that handoff the background router updates the session
+    // store before this panel receives another foreground event. Mirror both
+    // edges so completed tool calls remain visibly active until agent_end;
+    // mirroring only `false` left the panel idle while tokens kept arriving.
+    if (storeChatIsStreaming !== undefined) {
+      setIsStreaming(storeChatIsStreaming);
+    }
+    if (storeChatIsLoading !== undefined) {
+      setIsLoading(storeChatIsLoading);
+    }
   }, [storeChatIsStreaming, storeChatIsLoading, setIsLoading, setIsStreaming]);
 
   // Mirror the latest render values into their refs. These refs are read only

@@ -80,15 +80,21 @@ async fn repeated_restart_cycles_reopen_cleanly() {
         let db = DatabaseManager::new(&db_path, config.clone())
             .await
             .unwrap_or_else(|e| panic!("cycle {cycle}: init failed: {e}"));
+        let writer = db
+            .coordinated_writer()
+            .lock()
+            .await
+            .unwrap_or_else(|e| panic!("cycle {cycle}: writer unavailable: {e}"));
         sqlx::query("CREATE TABLE IF NOT EXISTS restart_probe (n INTEGER)")
-            .execute(&db.pool)
+            .execute(writer.pool())
             .await
             .unwrap_or_else(|e| panic!("cycle {cycle}: ddl failed: {e}"));
         sqlx::query("INSERT INTO restart_probe (n) VALUES (?)")
             .bind(cycle)
-            .execute(&db.pool)
+            .execute(writer.pool())
             .await
             .unwrap_or_else(|e| panic!("cycle {cycle}: write failed: {e}"));
+        drop(writer);
         db.close().await;
     }
 

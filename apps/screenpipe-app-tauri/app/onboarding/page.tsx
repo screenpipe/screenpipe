@@ -10,7 +10,6 @@ import OnboardingLogin from "@/components/onboarding/login-gate";
 import PermissionsStep from "@/components/onboarding/permissions-step";
 import TimelineChoice from "@/components/onboarding/timeline-choice";
 import EngineStartup from "@/components/onboarding/engine-startup";
-import ConnectApps from "@/components/onboarding/connect-apps";
 import FirstDashboard from "@/components/onboarding/first-dashboard";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
@@ -25,7 +24,6 @@ type SlideKey =
   | "permissions"
   | "timeline"
   | "engine"
-  | "connect-apps"
   | "first-dashboard";
 
 const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
@@ -34,7 +32,6 @@ const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
     permissions: { width: 500, height: 560 },
     timeline: { width: 500, height: 680 },
     engine: { width: 500, height: 620 },
-    "connect-apps": { width: 500, height: 680 },
     "first-dashboard": { width: 500, height: 720 },
   };
 
@@ -45,7 +42,6 @@ const SLIDE_ORDER: SlideKey[] = [
   "permissions",
   "timeline",
   "engine",
-  "connect-apps",
   "first-dashboard",
 ];
 
@@ -189,9 +185,12 @@ export default function OnboardingPage() {
           permissions: "permissions",
           timeline: "timeline",
           engine: "engine",
-          "connect-apps": "connect-apps",
-          integrations: "connect-apps",
-          connections: "connect-apps",
+          // Native Rust now connects detected AI tools in the background.
+          // Saved installs resume at the goal step instead of getting stuck
+          // on the removed connection slide.
+          "connect-apps": "first-dashboard",
+          integrations: "first-dashboard",
+          connections: "first-dashboard",
           "first-dashboard": "first-dashboard",
           pipe: "first-dashboard",
           // backwards compat with old onboarding
@@ -466,9 +465,6 @@ export default function OnboardingPage() {
           )}
           {currentSlide === "engine" && (
             <EngineStartup handleNextSlide={handleNextSlide} />
-          )}
-          {currentSlide === "connect-apps" && (
-            <ConnectApps handleNextSlide={handleNextSlide} />
           )}
           {currentSlide === "first-dashboard" && <FirstDashboard />}
         </div>

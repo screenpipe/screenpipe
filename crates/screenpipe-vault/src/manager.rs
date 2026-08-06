@@ -14,6 +14,20 @@ use tokio::sync::{watch, RwLock};
 use tracing::info;
 use zeroize::Zeroizing;
 
+const VAULT_DATABASE_FILES: &[&str] = &[
+    "db.sqlite",
+    "db.sqlite-wal",
+    "db.sqlite-shm",
+    "secrets.sqlite",
+    "secrets.sqlite-journal",
+];
+
+fn database_files(screenpipe_dir: &std::path::Path) -> impl Iterator<Item = PathBuf> + '_ {
+    VAULT_DATABASE_FILES
+        .iter()
+        .map(|name| screenpipe_dir.join(name))
+}
+
 /// Vault state visible to the rest of the system.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,10 +66,11 @@ impl VaultManager {
             // Sentinel file present → vault is locked
             VaultState::Locked
         } else {
-            // Vault set up but no lock sentinel — check if DB is actually encrypted
-            let db_path = screenpipe_dir.join("db.sqlite");
-            if db_path.exists() && crypto::is_encrypted_file(&db_path).unwrap_or(false) {
-                // DB encrypted but sentinel missing (crash during lock) → locked
+            // A crash can happen after either database was encrypted but before
+            // the sentinel was written.
+            if database_files(&screenpipe_dir)
+                .any(|path| path.exists() && crypto::is_encrypted_file(&path).unwrap_or(false))
+            {
                 VaultState::Locked
             } else {
                 // Vault set up, data not encrypted → unlocked (key not in memory,
@@ -169,7 +184,7 @@ impl VaultManager {
 
         let screenpipe_dir = self.screenpipe_dir.clone();
         let data_dir = self.screenpipe_dir.join("data");
-        let db_path = self.screenpipe_dir.join("db.sqlite");
+        let database_paths: Vec<_> = database_files(&self.screenpipe_dir).collect();
         let sentinel = self.screenpipe_dir.join(".vault_locked");
         let vault_state = self.state.clone();
 
@@ -180,17 +195,12 @@ impl VaultManager {
             // still knows the vault is locked and won't try to open the DB.
             let _ = std::fs::write(&sentinel, "locked");
 
-            // Encrypt DB file (must be closed by caller already)
-            if db_path.exists() {
-                info!("encrypting db.sqlite...");
-                if let Err(e) = crypto::encrypt_file(&db_path, &key_bytes) {
-                    tracing::error!("failed to encrypt db: {}", e);
-                }
-                // WAL and SHM
-                for ext in &["sqlite-wal", "sqlite-shm"] {
-                    let p = db_path.with_extension(ext);
-                    if p.exists() {
-                        let _ = crypto::encrypt_file(&p, &key_bytes);
+            // Every SQLite owner must already be closed by the caller.
+            for path in database_paths {
+                if path.exists() {
+                    info!("encrypting {}...", path.display());
+                    if let Err(e) = crypto::encrypt_file(&path, &key_bytes) {
+                        tracing::error!("failed to encrypt {}: {}", path.display(), e);
                     }
                 }
             }
@@ -263,23 +273,18 @@ impl VaultManager {
 
         let screenpipe_dir = self.screenpipe_dir.clone();
         let data_dir = self.screenpipe_dir.join("data");
-        let db_path = self.screenpipe_dir.join("db.sqlite");
+        let database_paths: Vec<_> = database_files(&self.screenpipe_dir).collect();
         let sentinel = self.screenpipe_dir.join(".vault_locked");
         let vault_state = self.state.clone();
 
         *self.state.write().await = VaultState::Migrating { progress: 0.0 };
 
         tokio::spawn(async move {
-            // Decrypt DB
-            if db_path.exists() {
-                info!("decrypting db.sqlite...");
-                if let Err(e) = crypto::decrypt_file(&db_path, &key_bytes) {
-                    tracing::error!("failed to decrypt db: {}", e);
-                }
-                for ext in &["sqlite-wal", "sqlite-shm"] {
-                    let p = db_path.with_extension(ext);
-                    if p.exists() {
-                        let _ = crypto::decrypt_file(&p, &key_bytes);
+            for path in database_paths {
+                if path.exists() {
+                    info!("decrypting {}...", path.display());
+                    if let Err(e) = crypto::decrypt_file(&path, &key_bytes) {
+                        tracing::error!("failed to decrypt {}: {}", path.display(), e);
                     }
                 }
             }
@@ -324,6 +329,7 @@ mod tests {
         std::fs::write(data_dir.join("test.jpg"), b"fake jpeg data").unwrap();
         std::fs::write(data_dir.join("test2.mp4"), b"fake video data").unwrap();
         std::fs::write(dir.path().join("db.sqlite"), b"fake sqlite data").unwrap();
+        std::fs::write(dir.path().join("secrets.sqlite"), b"fake secret data").unwrap();
 
         let vault = VaultManager::new(dir.path().to_path_buf());
         assert_eq!(vault.state().await, VaultState::None);
@@ -347,6 +353,7 @@ mod tests {
 
         // Verify files are encrypted
         assert!(crypto::is_encrypted_file(&dir.path().join("db.sqlite")).unwrap());
+        assert!(crypto::is_encrypted_file(&dir.path().join("secrets.sqlite")).unwrap());
         assert!(crypto::is_encrypted_file(&data_dir.join("test.jpg")).unwrap());
         assert!(crypto::is_encrypted_file(&data_dir.join("test2.mp4")).unwrap());
 
@@ -369,6 +376,10 @@ mod tests {
         assert_eq!(
             std::fs::read(dir.path().join("db.sqlite")).unwrap(),
             b"fake sqlite data"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("secrets.sqlite")).unwrap(),
+            b"fake secret data"
         );
         assert_eq!(
             std::fs::read(data_dir.join("test.jpg")).unwrap(),

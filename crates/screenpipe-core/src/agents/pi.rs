@@ -21,6 +21,7 @@ pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.83.0";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 const CUSTOM_PROVIDER_USER_AGENT: &str = "screenpipe";
+const DEFAULT_CLOUD_MAX_OUTPUT_TOKENS: u64 = 32_000;
 
 /// Apply compatibility settings required by OpenAI-compatible custom endpoints.
 ///
@@ -241,7 +242,10 @@ async fn fetch_models_from_gateway(
     let body: serde_json::Value = resp.json().await.ok()?;
     let data = body.get("data")?.as_array()?;
 
-    let models = gateway_models_to_pi_models(data);
+    let Some(models) = selectable_gateway_models(data) else {
+        warn!("gateway /v1/models returned no selectable models");
+        return None;
+    };
 
     info!("fetched {} models from gateway", models.len());
     Some(json!(models))
@@ -260,7 +264,14 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
             let ctx = m
                 .get("context_window")
                 .and_then(|v| v.as_u64())
+                .filter(|value| *value > 0)
                 .unwrap_or(128000);
+            let max_tokens = m
+                .get("max_output_tokens")
+                .and_then(|v| v.as_u64())
+                .filter(|value| *value > 0)
+                .unwrap_or(DEFAULT_CLOUD_MAX_OUTPUT_TOKENS)
+                .min(ctx);
             let intelligence = m
                 .get("intelligence")
                 .and_then(|v| v.as_str())
@@ -274,7 +285,7 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
                 "input": ["text", "image"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
-                "maxTokens": 32000,
+                "maxTokens": max_tokens,
                 // Pi sends its stable agent session ID as x-session-affinity.
                 // The hosted gateway uses that plus the user-message ordinal to
                 // count one visible turn once across a multi-call tool loop.
@@ -284,12 +295,55 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
         .collect()
 }
 
+/// An HTTP-successful catalog can still be unusable after locked entries are
+/// removed. Treat that like an unavailable catalog so callers use the safe
+/// `auto` fallback instead of writing an empty Pi provider.
+fn selectable_gateway_models(data: &[serde_json::Value]) -> Option<Vec<serde_json::Value>> {
+    let models = gateway_models_to_pi_models(data);
+    (!models.is_empty()).then_some(models)
+}
+
 /// Minimal fallback when the gateway is unreachable.
 /// Only auto — if the gateway is down, nothing works anyway.
 fn fallback_cloud_models() -> serde_json::Value {
     json!([
-        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000, "compat": {"sendSessionAffinityHeaders": true}},
+        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": DEFAULT_CLOUD_MAX_OUTPUT_TOKENS, "compat": {"sendSessionAffinityHeaders": true}},
     ])
+}
+
+pub(crate) const MALFORMED_TOOL_USE_ERROR: &str =
+    "provider_protocol_error: assistant ended with toolUse but emitted no executable tool call";
+
+pub(crate) fn pi_event_protocol_error(event: &serde_json::Value) -> Option<&'static str> {
+    if event.get("type").and_then(|value| value.as_str()) != Some("message_end") {
+        return None;
+    }
+    let message = event.get("message")?;
+    if message.get("role").and_then(|value| value.as_str()) != Some("assistant")
+        || message.get("stopReason").and_then(|value| value.as_str()) != Some("toolUse")
+    {
+        return None;
+    }
+
+    let has_executable_call = message
+        .get("content")
+        .and_then(|value| value.as_array())
+        .map(|content| {
+            content.iter().any(|block| {
+                block.get("type").and_then(|value| value.as_str()) == Some("toolCall")
+                    && block
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|id| !id.trim().is_empty())
+                    && block
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|name| !name.trim().is_empty())
+            })
+        })
+        .unwrap_or(false);
+
+    (!has_executable_call).then_some(MALFORMED_TOOL_USE_ERROR)
 }
 
 /// Pi agent executor.
@@ -364,6 +418,13 @@ impl PiExecutor {
         self
     }
 
+    /// Override the hosted-AI base URL supplied by the app. Production callers
+    /// use the default; the desktop app exposes a loopback-only E2E resolver.
+    pub fn with_api_url(mut self, api_url: String) -> Self {
+        self.api_url = api_url;
+        self
+    }
+
     /// User policy: when the marker file
     /// `~/.screenpipe/cloud_media_analysis.disabled` exists, the
     /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
@@ -405,43 +466,45 @@ impl PiExecutor {
         s
     }
 
-    /// Install or wipe the `screenpipe-team` enterprise-admin skill in
-    /// `project_dir/.pi/skills/screenpipe-team/`.
+    /// Install or wipe the `screenpipe-team` enterprise-admin skill under an
+    /// app-owned, non-discovered root and return its exact skill file.
     ///
     /// This skill teaches pi how to query org-wide telemetry (devices,
     /// search, records) via `https://screenpi.pe/api/enterprise/v1/*`. It
-    /// MUST only be present when the user is an enterprise admin with an
-    /// active license, because exposing the prompts to non-admins is
-    /// misleading (every call would 403) and dropping it onto a personal
-    /// build leaks our enterprise affordances.
+    /// MUST only be present inside the separately distributed Enterprise app
+    /// when the user is an admin with an active license, because exposing the
+    /// prompts to non-admins is misleading (every call would 403) and dropping
+    /// it onto the consumer app leaks our enterprise affordances.
     ///
     /// Source of truth: `~/.screenpipe/enterprise.json`. The Tauri host
     /// keeps that file populated with `{is_admin, license_active,
     /// team_api_token, ...}` based on the user's current license + role.
-    /// We re-check on every pi-agent boot, so role downgrades + license
-    /// expirations wipe the skill automatically.
-    pub fn ensure_screenpipe_team_skill(project_dir: &Path) -> Result<()> {
-        let skill_dir = project_dir
-            .join(".pi")
-            .join("skills")
-            .join("screenpipe-team");
+    /// The caller must pass the returned path to Pi with `--skill`. Keeping
+    /// this outside `.pi/skills` prevents the consumer and Enterprise apps,
+    /// which intentionally share chat history, from discovering or deleting
+    /// each other's Enterprise capability during concurrent starts.
+    ///
+    /// Consumer builds return before touching the directory. Enterprise builds
+    /// re-check on every Pi boot, so role downgrades and license expirations
+    /// remove the app-owned copy automatically.
+    pub fn ensure_screenpipe_team_skill(skill_root: &Path) -> Result<Option<PathBuf>> {
+        if !cfg!(feature = "enterprise-build") {
+            return Ok(None);
+        }
+
+        let skill_dir = skill_root.join("screenpipe-team");
         let skill_path = skill_dir.join("SKILL.md");
 
         let should_install = Self::is_enterprise_admin();
 
         if should_install {
             std::fs::create_dir_all(&skill_dir)?;
-            // Gateway orgs (write-only archive tier) query their own gateway
-            // inside the customer network — the hosted base has no read path
-            // to their data. Substitute the org's base URL at install time;
-            // hosted orgs get the asset verbatim.
-            let mut skill =
-                include_str!("../../assets/skills/screenpipe-team/SKILL.md").to_string();
-            if let Some(base) = Self::team_api_base_override() {
-                skill = skill.replace("https://screenpi.pe/api/enterprise/v1", &base);
-            }
-            std::fs::write(&skill_path, skill)?;
+            std::fs::write(
+                &skill_path,
+                include_str!("../../assets/skills/screenpipe-team/SKILL.md"),
+            )?;
             debug!("screenpipe-team skill installed at {:?}", skill_path);
+            return Ok(Some(skill_path));
         } else if skill_dir.exists() {
             // Wipe the whole dir — defense against partial state if a user
             // hand-edited or we ever ship sub-files in the future.
@@ -451,29 +514,13 @@ impl PiExecutor {
             );
         }
 
-        Ok(())
+        Ok(None)
     }
 
-    /// The org's team-API base URL from `~/.screenpipe/enterprise.json`
-    /// (`gateway_url`, written by the desktop app from the storage
-    /// binding's gateway URL). `None` = hosted org, keep the baked base.
-    fn team_api_base_override() -> Option<String> {
-        let home = dirs::home_dir()?;
-        let raw = std::fs::read_to_string(home.join(".screenpipe").join("enterprise.json")).ok()?;
-        let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        let base = parsed.get("gateway_url")?.as_str()?.trim();
-        let base = base.trim_end_matches('/');
-        if base.starts_with("http://") || base.starts_with("https://") {
-            Some(base.to_string())
-        } else {
-            None
-        }
-    }
-
-    /// True when `~/.screenpipe/enterprise.json` declares this user as an
-    /// active admin AND the user is signed into screenpipe cloud (the
-    /// Clerk JWT at `~/.screenpipe/auth.json` is what authenticates the
-    /// skill's HTTP calls to `screenpi.pe/api/enterprise/v1`).
+    /// True only in the Enterprise app when `~/.screenpipe/enterprise.json`
+    /// declares this user as an active admin with a license key and dedicated
+    /// team API token. The app-build check matters when the consumer and
+    /// Enterprise apps share `~/.screenpipe` on one machine.
     ///
     /// Conservative: any I/O or parse error means "no" so we fail closed —
     /// we'd rather under-install the skill than show team affordances to
@@ -482,6 +529,10 @@ impl PiExecutor {
     /// admin status on every call and returns 403, so this client-side
     /// check is defense-in-depth, not the security boundary.
     fn is_enterprise_admin() -> bool {
+        if !cfg!(feature = "enterprise-build") {
+            return false;
+        }
+
         let home = match dirs::home_dir() {
             Some(h) => h,
             None => return false,
@@ -577,9 +628,15 @@ impl PiExecutor {
             debug!("{} skill installed at {:?}", name, skill_path);
         }
 
-        // Conditional: enterprise admins get the team skill, others get it
-        // wiped if a stale copy exists (e.g. after a role downgrade).
-        Self::ensure_screenpipe_team_skill(project_dir)?;
+        // Migration cleanup only. Enterprise capabilities are injected by the
+        // Enterprise app with Pi's explicit `--skill` flag from a path outside
+        // `.pi/skills`; they must never be auto-discovered by shared chat or
+        // background-Pipe projects.
+        let legacy_team_skill = skills_root.join("screenpipe-team");
+        if legacy_team_skill.exists() {
+            std::fs::remove_dir_all(&legacy_team_skill)?;
+            debug!("removed legacy auto-discovered team skill");
+        }
 
         // Mirror user-imported skills (Settings → Connections → Skills) into
         // this session. Best-effort; never blocks a run.
@@ -597,7 +654,7 @@ impl PiExecutor {
     const USER_SKILL_MARKER: &'static str = ".screenpipe-managed";
 
     /// Baseline skills screenpipe writes into every session itself
-    /// ([`Self::ensure_screenpipe_skill`] / [`Self::ensure_screenpipe_team_skill`]).
+    /// ([`Self::ensure_screenpipe_skill`]).
     /// A store entry under one of these names must never be mirrored: it would
     /// clobber the real baseline and, once stamped with
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
@@ -767,11 +824,16 @@ impl PiExecutor {
             }
         }
 
-        // Enterprise-admin team skill is orthogonal to pipe permissions —
-        // it gates on the user's license role, not on what the pipe is
-        // allowed to do. Run it after the permission-filtered baseline so
-        // it correctly mirrors the user's current admin/license state.
-        Self::ensure_screenpipe_team_skill(project_dir)?;
+        // Migration cleanup only. A background Pipe must never inherit the
+        // Enterprise app's team-administration capability.
+        let legacy_team_skill = project_dir
+            .join(".pi")
+            .join("skills")
+            .join("screenpipe-team");
+        if legacy_team_skill.exists() {
+            std::fs::remove_dir_all(&legacy_team_skill)?;
+            debug!("removed legacy auto-discovered team skill");
+        }
 
         // Mirror user-imported skills into this session too (best-effort).
         if let Err(e) = Self::sync_user_skills(project_dir) {
@@ -885,6 +947,14 @@ impl PiExecutor {
     /// for screenpipe-cloud to avoid sending data to our backend when the
     /// user chose a local/custom provider.
     pub fn ensure_web_search_extension(project_dir: &Path, provider: Option<&str>) -> Result<()> {
+        Self::ensure_web_search_extension_with_api_url(project_dir, provider, SCREENPIPE_API_URL)
+    }
+
+    fn ensure_web_search_extension_with_api_url(
+        project_dir: &Path,
+        provider: Option<&str>,
+        api_url: &str,
+    ) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         let ext_path = ext_dir.join("web-search.ts");
 
@@ -895,7 +965,8 @@ impl PiExecutor {
 
         if is_screenpipe_cloud {
             std::fs::create_dir_all(&ext_dir)?;
-            let ext_content = include_str!("../../assets/extensions/web-search.ts");
+            let ext_content = include_str!("../../assets/extensions/web-search.ts")
+                .replace(SCREENPIPE_API_URL, api_url);
             std::fs::write(&ext_path, ext_content)?;
             debug!("web-search extension installed at {:?}", ext_path);
         } else if ext_path.exists() {
@@ -979,7 +1050,9 @@ impl PiExecutor {
             // PiExecutor only runs pipes (PipeManager: scheduled / run-now),
             // which are latency-tolerant, so tag every cloud LLM call as
             // background. The gateway then serves it on the cheaper, best-effort
-            // Vertex flex tier (resolveLatencyClass). Pi merges provider
+            // Vertex flex tier (resolveLatencyClass). The workload marker keeps
+            // safety-refusal rescue scoped to unattended Pipes rather than
+            // interactive chat or other background helpers. Pi merges provider
             // `headers` into each request (see pi-coding-agent model-registry),
             // and an old gateway simply ignores the unknown header (→ standard),
             // so there's no deploy-order coupling.
@@ -988,7 +1061,10 @@ impl PiExecutor {
                 "api": "openai-completions",
                 "apiKey": api_key_value,
                 "authHeader": true,
-                "headers": { "x-screenpipe-latency": "background" },
+                "headers": {
+                    "x-screenpipe-latency": "background",
+                    "x-screenpipe-workload": "pipe"
+                },
                 "models": models
             });
 
@@ -1651,11 +1727,15 @@ impl PiExecutor {
             let line = String::from_utf8_lossy(&line_bytes).into_owned();
             let _ = line_tx.send(line.clone());
 
-            // Detect LLM-level errors (e.g. credits_exhausted) even when
+            // Detect LLM/protocol errors even when
             // the process exits 0.  We look for assistant message events
-            // with stopReason "error".
+            // with stopReason "error", and fail closed when a provider says
+            // toolUse without producing an executable structured call.
             if llm_error.is_none() {
                 if let Ok(evt) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if let Some(error) = pi_event_protocol_error(&evt) {
+                        llm_error = Some(error.to_string());
+                    }
                     let is_assistant = evt
                         .get("message")
                         .and_then(|m| m.get("role"))
@@ -1665,7 +1745,7 @@ impl PiExecutor {
                         .get("message")
                         .and_then(|m| m.get("stopReason"))
                         .and_then(|r| r.as_str());
-                    if is_assistant && stop_reason == Some("error") {
+                    if llm_error.is_none() && is_assistant && stop_reason == Some("error") {
                         llm_error = evt
                             .get("message")
                             .and_then(|m| m.get("errorMessage"))
@@ -1756,7 +1836,11 @@ impl AgentExecutor for PiExecutor {
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
 
-        Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
+        Self::ensure_web_search_extension_with_api_url(
+            working_dir,
+            Some(&resolved_provider),
+            &self.api_url,
+        )?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -1871,7 +1955,11 @@ impl AgentExecutor for PiExecutor {
         .await?;
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
-        Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
+        Self::ensure_web_search_extension_with_api_url(
+            working_dir,
+            Some(&resolved_provider),
+            &self.api_url,
+        )?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -2090,6 +2178,10 @@ impl AgentExecutor for PiExecutor {
 
     fn user_token(&self) -> Option<String> {
         self.current_user_token()
+    }
+
+    fn screenpipe_api_url(&self) -> &str {
+        &self.api_url
     }
 }
 
@@ -2368,7 +2460,7 @@ fn seed_from_global(global: &Path, dest: &Path, data_dir: &Path) -> bool {
 }
 
 /// A pi credential in the tagged form pi >=0.83 requires.
-fn api_key_credential(key: &str) -> serde_json::Value {
+pub fn api_key_credential(key: &str) -> serde_json::Value {
     json!({ "type": "api_key", "key": key })
 }
 
@@ -2406,7 +2498,11 @@ fn upgrade_legacy_pi_credential(value: &serde_json::Value) -> Option<serde_json:
 
 /// Upgrade every legacy entry in an `auth.json` value. Returns whether
 /// anything changed.
-fn upgrade_legacy_pi_credentials(auth: &mut serde_json::Value) -> bool {
+///
+/// Public because the Tauri app has its own `auth.json` writer for the chat
+/// sidecar — both must emit the tagged shape or pi 0.83 rejects the whole
+/// provider.
+pub fn upgrade_legacy_pi_credentials(auth: &mut serde_json::Value) -> bool {
     let Some(obj) = auth.as_object_mut() else {
         return false;
     };
@@ -2484,7 +2580,19 @@ fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<()> {
     write_auth_json(auth_path, &auth)
 }
 
+fn stock_bun_is_safe(is_windows: bool, has_avx2: bool) -> bool {
+    !is_windows || has_avx2
+}
+
 pub fn find_bun_executable() -> Option<String> {
+    // Stock bun.exe requires AVX2. On older Windows CPUs, wait for the
+    // verified baseline build instead of returning a binary that will die
+    // immediately with STATUS_ILLEGAL_INSTRUCTION.
+    if !stock_bun_is_safe(cfg!(windows), crate::cpu_features::has_avx2()) {
+        #[cfg(windows)]
+        return ensure_baseline_bun_available();
+    }
+
     // Check next to our own executable (bundled bun)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_folder) = exe_path.parent() {
@@ -2524,7 +2632,7 @@ pub fn find_bun_executable() -> Option<String> {
 /// the OOM killer) — exactly the case that used to log as an empty error.
 pub fn describe_exit_status(status: &std::process::ExitStatus) -> String {
     if let Some(code) = status.code() {
-        return format!("exit code {}", code);
+        return describe_exit_status_code(code);
     }
     #[cfg(unix)]
     {
@@ -2542,6 +2650,26 @@ pub fn describe_exit_status(status: &std::process::ExitStatus) -> String {
         }
     }
     "terminated without exit code".to_string()
+}
+
+/// Code→string mapping, factored out of [`describe_exit_status`] so it can
+/// be unit-tested (`ExitStatus` isn't constructible portably in tests) —
+/// mirrors the unix signal mapping above.
+pub fn describe_exit_status_code(code: i32) -> String {
+    #[cfg(windows)]
+    {
+        // 0xC000001D == STATUS_ILLEGAL_INSTRUCTION == exit code -1073741795.
+        // The stock bun.exe requires AVX2; on pre-AVX2 CPUs it dies with this
+        // code before writing a single byte to stderr — exactly the case that
+        // used to surface as an empty error. Current installs fail closed onto
+        // bun's official baseline build before any subprocess is launched.
+        if code == -1073741795i32 {
+            return format!(
+                "exit code {code} (0xC000001D, illegal instruction; this CPU may lack AVX2 — the stock bun build requires it; use the baseline bun variant)"
+            );
+        }
+    }
+    format!("exit code {code}")
 }
 
 /// Last `max` bytes of a captured process stream, lossy-decoded and
@@ -3226,42 +3354,9 @@ fn download_portable_git() -> std::result::Result<String, String> {
         }
     }
 
-    // Verify SHA256 using certutil (built into Windows)
-    let digest = {
-        let mut cmd = std::process::Command::new("certutil");
-        cmd.args(["-hashfile", &temp_file.to_string_lossy(), "SHA256"]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // certutil output: line 0 = header, line 1 = hex hash, line 2 = status
-                stdout
-                    .lines()
-                    .nth(1)
-                    .map(|l| l.trim().replace(' ', "").to_lowercase())
-                    .unwrap_or_default()
-            }
-            _ => {
-                warn!("Could not verify SHA256 (certutil failed), proceeding with caution");
-                String::new()
-            }
-        }
-    };
-
-    if !digest.is_empty() && digest != PORTABLE_GIT_SHA256 {
-        let _ = std::fs::remove_file(&temp_file);
-        return Err(format!(
-            "SHA256 mismatch: expected {}, got {}. Download may be corrupted.",
-            PORTABLE_GIT_SHA256, digest
-        ));
-    }
-    if !digest.is_empty() {
-        info!("SHA256 verified: {}", digest);
-    }
+    // Mandatory in-process SHA256 verification; deletes the archive on any
+    // failure. We're about to execute this file — never run it unverified.
+    verify_sha256_or_delete(&temp_file, PORTABLE_GIT_SHA256)?;
 
     // Extract: PortableGit .7z.exe is a self-extracting archive.
     // Run it with -o<dir> -y to extract silently.
@@ -3356,6 +3451,230 @@ fn download_portable_git() -> std::result::Result<String, String> {
     Ok(final_bash.to_string_lossy().to_string())
 }
 
+/// Hash `temp_file` with in-process SHA-256 and require it to equal
+/// `expected` (hex, case-insensitive). On ANY failure — unreadable file or
+/// mismatch — the file is deleted before returning Err, so a bad archive can
+/// never be extracted by this run or silently picked up by a later one.
+///
+/// Deliberately NOT certutil: parsing its localized output line-by-line was
+/// fragile, and treating "certutil failed" as "proceed" made the whole check
+/// fail-open. These downloads are executables we run — verification is
+/// mandatory.
+#[cfg(windows)]
+fn verify_sha256_or_delete(temp_file: &Path, expected: &str) -> std::result::Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let compute = || -> std::io::Result<String> {
+        let mut file = std::fs::File::open(temp_file)?;
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        Ok(hasher
+            .finalize()
+            .iter()
+            .fold(String::with_capacity(64), |mut hex, byte| {
+                use std::fmt::Write;
+                let _ = write!(hex, "{:02x}", byte);
+                hex
+            }))
+    };
+    let digest = match compute() {
+        Ok(digest) => digest,
+        Err(e) => {
+            let _ = std::fs::remove_file(temp_file);
+            return Err(format!(
+                "SHA256 verification failed (couldn't hash {}): {}. Deleted the download.",
+                temp_file.display(),
+                e
+            ));
+        }
+    };
+    if !digest.eq_ignore_ascii_case(expected) {
+        let _ = std::fs::remove_file(temp_file);
+        return Err(format!(
+            "SHA256 mismatch: expected {}, got {}. Deleted the download.",
+            expected, digest
+        ));
+    }
+    info!("SHA256 verified: {}", digest);
+    Ok(())
+}
+
+/// Location of the runtime-downloaded baseline (non-AVX2) bun.exe. Preferred
+/// by [`find_bun_executable`] on CPUs without AVX2, where the stock/bundled
+/// bun dies with 0xC000001D. Cleaned up by the NSIS uninstall hook.
+#[cfg(windows)]
+pub fn baseline_bun_path() -> Option<PathBuf> {
+    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+    Some(
+        PathBuf::from(local_app_data)
+            .join("screenpipe")
+            .join("bun-baseline")
+            .join("bun.exe"),
+    )
+}
+
+/// One-shot guard for baseline-bun setup. Concurrent callers wait for the
+/// same verified result instead of launching stock bun while setup is active.
+#[cfg(windows)]
+static BASELINE_BUN_PATH_ONCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Ensure bun's official baseline Windows build is ready. This blocks only on
+/// non-AVX2 Windows CPUs and is normally called by the existing Pi install
+/// worker. Returning `None` prevents an unsafe stock-bun fallback.
+#[cfg(windows)]
+fn ensure_baseline_bun_available() -> Option<String> {
+    if let Some(path) = baseline_bun_path().filter(|path| path.exists()) {
+        return Some(path.to_string_lossy().to_string());
+    }
+
+    BASELINE_BUN_PATH_ONCE
+        .get_or_init(|| match download_baseline_bun() {
+            Ok(path) => {
+                info!("baseline bun installed at: {}", path);
+                Some(path)
+            }
+            Err(e) => {
+                warn!(
+                    "baseline bun setup failed (pipes/AI chat cannot run on this pre-AVX2 CPU): {}",
+                    e
+                );
+                None
+            }
+        })
+        .clone()
+}
+
+/// Download bun's official `windows-x64-baseline` build (runs on any x86-64,
+/// no AVX2 required) to `%LOCALAPPDATA%\screenpipe\bun-baseline\bun.exe`.
+/// Same structure as [`download_portable_git`], with one crucial difference:
+/// download via curl.exe ONLY — the bun-based download path is useless here
+/// because the whole point is that the stock bun cannot execute on this CPU.
+#[cfg(windows)]
+fn download_baseline_bun() -> std::result::Result<String, String> {
+    // Keep the version in lockstep with the Linux baseline sidecar pinned in
+    // apps/screenpipe-app-tauri/scripts/pre_build.js (bunVersion) — bump both
+    // together and refresh the SHA256 from the release's SHASUMS256.txt.
+    const BASELINE_BUN_VERSION: &str = "1.3.10";
+    const BASELINE_BUN_URL: &str =
+        "https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-windows-x64-baseline.zip";
+    const BASELINE_BUN_SHA256: &str =
+        "715709c69b176e20994533d3292bd0b7c32de9c0c5575b916746ec6b2aa38346";
+
+    let local_app_data =
+        std::env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA env var not set".to_string())?;
+    let screenpipe_dir = PathBuf::from(&local_app_data).join("screenpipe");
+    let bun_dir = screenpipe_dir.join("bun-baseline");
+    let bun_path = bun_dir.join("bun.exe");
+
+    // Already downloaded
+    if bun_path.exists() {
+        info!("baseline bun already present at {}", bun_dir.display());
+        return Ok(bun_path.to_string_lossy().to_string());
+    }
+
+    info!(
+        "Downloading baseline bun {} for non-AVX2 CPU support...",
+        BASELINE_BUN_VERSION
+    );
+
+    std::fs::create_dir_all(&screenpipe_dir)
+        .map_err(|e| format!("Failed to create screenpipe data dir: {}", e))?;
+
+    let temp_file = std::env::temp_dir().join(format!(
+        "bun-windows-x64-baseline-v{}.zip",
+        BASELINE_BUN_VERSION
+    ));
+
+    // curl.exe ships with Windows 10 1803+.
+    let download_result = {
+        let mut cmd = std::process::Command::new("curl.exe");
+        cmd.args(["-fSL", "-o", &temp_file.to_string_lossy(), BASELINE_BUN_URL]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.output()
+    };
+
+    match download_result {
+        Ok(output) if output.status.success() => {
+            info!("baseline bun downloaded to {}", temp_file.display());
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let _ = std::fs::remove_file(&temp_file);
+            return Err(format!("baseline bun download failed: {}", stderr));
+        }
+        Err(e) => {
+            return Err(format!("Failed to run curl.exe: {}", e));
+        }
+    }
+
+    // Mandatory in-process SHA256 verification; deletes the archive on any
+    // failure. We're about to execute this file — never run it unverified.
+    verify_sha256_or_delete(&temp_file, BASELINE_BUN_SHA256)?;
+
+    // Extract with tar.exe (bsdtar ships with Windows 10 1803+; handles zip),
+    // into a temp dir first (atomic: rename on success).
+    let extract_temp = screenpipe_dir.join("bun-baseline-extracting");
+    let _ = std::fs::remove_dir_all(&extract_temp);
+    std::fs::create_dir_all(&extract_temp)
+        .map_err(|e| format!("Failed to create extraction dir: {}", e))?;
+
+    {
+        let mut cmd = std::process::Command::new("tar.exe");
+        cmd.args([
+            "-xf",
+            &temp_file.to_string_lossy(),
+            "-C",
+            &extract_temp.to_string_lossy(),
+        ]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                info!("baseline bun extracted successfully");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let _ = std::fs::remove_dir_all(&extract_temp);
+                let _ = std::fs::remove_file(&temp_file);
+                return Err(format!("baseline bun extraction failed: {}", stderr));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&extract_temp);
+                let _ = std::fs::remove_file(&temp_file);
+                return Err(format!("Failed to run tar.exe: {}", e));
+            }
+        }
+    }
+
+    // The zip contains a bun-windows-x64-baseline/ folder holding bun.exe.
+    let extracted_dir = extract_temp.join("bun-windows-x64-baseline");
+    if !extracted_dir.join("bun.exe").exists() {
+        let _ = std::fs::remove_dir_all(&extract_temp);
+        let _ = std::fs::remove_file(&temp_file);
+        return Err("Extraction completed but bun.exe not found in expected location".to_string());
+    }
+
+    // Atomic rename: move extracted dir to final location
+    let _ = std::fs::remove_dir_all(&bun_dir);
+    std::fs::rename(&extracted_dir, &bun_dir).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&extract_temp);
+        format!("Failed to move baseline bun to final location: {}", e)
+    })?;
+
+    // Clean up temp artifacts
+    let _ = std::fs::remove_dir_all(&extract_temp);
+    let _ = std::fs::remove_file(&temp_file);
+
+    info!("baseline bun setup complete: {}", bun_path.display());
+    Ok(bun_path.to_string_lossy().to_string())
+}
+
 /// Global guard: ensures only one download runs at a time and caches the result.
 /// `None` inside means download was attempted but failed.
 #[cfg(windows)]
@@ -3402,6 +3721,158 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_use_without_an_executable_call_is_a_protocol_error() {
+        let malformed = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": []
+            }
+        });
+        assert_eq!(
+            pi_event_protocol_error(&malformed),
+            Some(MALFORMED_TOOL_USE_ERROR)
+        );
+
+        let valid = json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "toolUse",
+                "content": [{
+                    "type": "toolCall",
+                    "id": "call-1",
+                    "name": "bash",
+                    "arguments": {"command": "pwd"}
+                }]
+            }
+        });
+        assert_eq!(pi_event_protocol_error(&valid), None);
+    }
+
+    #[test]
+    fn managed_pipe_guidance_only_ships_in_enterprise_team_skill() {
+        let consumer_skill = include_str!("../../assets/skills/screenpipe-cli/SKILL.md");
+        let enterprise_skill = include_str!("../../assets/skills/screenpipe-team/SKILL.md");
+
+        assert!(!consumer_skill.contains("Enterprise Team Pipes"));
+        assert!(!consumer_skill.contains("screenpipe team pipes"));
+        assert!(enterprise_skill.contains("screenpipe team pipes list"));
+        assert!(enterprise_skill.contains("screenpipe team pipes schedule"));
+        assert!(enterprise_skill.contains("Injected only by the Enterprise app"));
+        assert!(!enterprise_skill.contains("curl "));
+        assert!(
+            enterprise_skill.lines().count() <= 60,
+            "Enterprise skill should stay compact; use the native CLI instead of duplicating its contract"
+        );
+    }
+
+    #[cfg(not(feature = "enterprise-build"))]
+    #[test]
+    fn consumer_build_never_enables_enterprise_team_skill() {
+        assert!(!PiExecutor::is_enterprise_admin());
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let sentinel = root.path().join("screenpipe-team").join("KEEP");
+        std::fs::create_dir_all(sentinel.parent().expect("sentinel parent")).unwrap();
+        std::fs::write(&sentinel, b"owned by a concurrently running Enterprise app").unwrap();
+
+        let installed = PiExecutor::ensure_screenpipe_team_skill(root.path()).unwrap();
+        assert!(installed.is_none());
+        assert!(
+            sentinel.exists(),
+            "consumer builds must not race Enterprise by deleting its app-scoped skill"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn describe_exit_status_flags_illegal_instruction() {
+        // 0xC000001D == STATUS_ILLEGAL_INSTRUCTION == exit code -1073741795
+        let s = describe_exit_status_code(-1073741795);
+        assert!(s.contains("illegal instruction"));
+        assert!(s.to_lowercase().contains("avx2"));
+    }
+
+    #[test]
+    fn stock_bun_is_never_selected_on_windows_without_avx2() {
+        assert!(!stock_bun_is_safe(true, false));
+        assert!(stock_bun_is_safe(true, true));
+        assert!(stock_bun_is_safe(false, false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_accepts_matching_digest_case_insensitively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.bin");
+        std::fs::write(&file, b"abc").unwrap();
+        // NIST test vector: SHA-256("abc")
+        const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        verify_sha256_or_delete(&file, ABC).expect("exact-case match");
+        assert!(file.exists(), "matching digest must not delete the file");
+        verify_sha256_or_delete(&file, &ABC.to_uppercase()).expect("uppercase pin matches too");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_rejects_mismatch_and_deletes_the_download() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.bin");
+        std::fs::write(&file, b"tampered").unwrap();
+        let err = verify_sha256_or_delete(
+            &file,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .expect_err("mismatch must fail");
+        assert!(err.contains("SHA256 mismatch"));
+        assert!(!file.exists(), "mismatched download must be deleted");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_fails_closed_when_the_file_is_unreadable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("never-downloaded.bin");
+        let err = verify_sha256_or_delete(
+            &missing,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .expect_err("unreadable file must fail, not proceed");
+        assert!(err.contains("couldn't hash"));
+    }
+
+    #[test]
+    fn describe_exit_status_code_plain_codes_unchanged() {
+        assert_eq!(describe_exit_status_code(0), "exit code 0");
+        assert_eq!(describe_exit_status_code(1), "exit code 1");
+    }
+
+    #[test]
+    fn web_search_extension_uses_executor_gateway_url() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let api_url = "http://127.0.0.1:8787/v1";
+
+        PiExecutor::ensure_web_search_extension_with_api_url(
+            dir.path(),
+            Some("screenpipe"),
+            api_url,
+        )
+        .expect("install web-search extension");
+
+        let content = std::fs::read_to_string(
+            dir.path()
+                .join(".pi")
+                .join("extensions")
+                .join("web-search.ts"),
+        )
+        .expect("read web-search extension");
+        assert!(content.contains("http://127.0.0.1:8787/v1/web-search"));
+        assert!(!content.contains(SCREENPIPE_API_URL));
+    }
 
     #[test]
     fn structured_output_extension_keeps_screen_text_out_of_system_state() {
@@ -4096,6 +4567,101 @@ mod tests {
             fallback.pointer("/0/compat/sendSessionAffinityHeaders"),
             Some(&json!(true))
         );
+
+        assert!(selectable_gateway_models(&[json!({
+            "id": "gpt-5.6-terra",
+            "locked": true,
+        })])
+        .is_none());
+    }
+
+    #[test]
+    fn gateway_catalog_uses_advertised_output_budget_with_safe_fallback() {
+        let models = gateway_models_to_pi_models(&[
+            json!({
+                "id": "claude-sonnet-5",
+                "context_window": 1_000_000,
+                "max_output_tokens": 128_000,
+            }),
+            json!({
+                "id": "legacy-model-without-output-metadata",
+                "context_window": 128_000,
+            }),
+            json!({
+                "id": "invalid-model-budget",
+                "context_window": 64_000,
+                "max_output_tokens": 0,
+            }),
+            json!({
+                "id": "oversized-model-budget",
+                "context_window": 64_000,
+                "max_output_tokens": 128_000,
+            }),
+        ]);
+
+        assert_eq!(models[0].get("maxTokens"), Some(&json!(128_000)));
+        assert_eq!(models[1].get("maxTokens"), Some(&json!(32_000)));
+        assert_eq!(models[2].get("maxTokens"), Some(&json!(32_000)));
+        assert_eq!(models[3].get("maxTokens"), Some(&json!(64_000)));
+    }
+
+    #[tokio::test]
+    async fn gateway_output_budget_flows_from_http_to_pi_catalog() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {
+                        "id": "claude-sonnet-5",
+                        "name": "Claude Sonnet 5",
+                        "context_window": 1_000_000,
+                        "max_output_tokens": 128_000,
+                        "intelligence": "highest",
+                    },
+                    {
+                        "id": "legacy-model",
+                        "name": "Legacy model",
+                        "context_window": 128_000,
+                    },
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let models = screenpipe_cloud_models(&server.uri(), None).await;
+        assert_eq!(models.pointer("/0/maxTokens"), Some(&json!(128_000)));
+        assert_eq!(models.pointer("/1/maxTokens"), Some(&json!(32_000)));
+    }
+
+    #[tokio::test]
+    async fn all_locked_gateway_catalog_uses_auto_fallback() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{
+                    "id": "gpt-5.6-terra",
+                    "name": "GPT-5.6 Terra",
+                    "locked": true,
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let models = screenpipe_cloud_models(&server.uri(), None).await;
+        assert_eq!(models.as_array().map(Vec::len), Some(1));
+        assert_eq!(models.pointer("/0/id"), Some(&json!("auto")));
     }
 
     #[test]

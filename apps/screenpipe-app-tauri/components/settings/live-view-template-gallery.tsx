@@ -34,8 +34,9 @@ export function getTemplatePipeReadiness(
       installed,
       required,
       missingPipes,
-      label: "Ready now",
-      explanation: "Everything needed is already set up on this device.",
+      label: `${required} local starting point${required === 1 ? "" : "s"} available`,
+      explanation:
+        "The agent can reuse these helpers when they fit, or choose a better approach.",
     };
   }
 
@@ -45,8 +46,8 @@ export function getTemplatePipeReadiness(
       installed,
       required,
       missingPipes,
-      label: `Sets up ${required} built-in ${helperLabel}`,
-      explanation: `${required} built-in ${helperLabel} will be set up locally when you apply this template.`,
+      label: "Agent chooses the data helpers",
+      explanation: `This template suggests ${required} built-in ${helperLabel}, but the agent decides what to reuse or create after checking your data.`,
     };
   }
 
@@ -55,8 +56,9 @@ export function getTemplatePipeReadiness(
     installed,
     required,
     missingPipes,
-    label: `${installed} of ${required} helpers ready`,
-    explanation: `${missingPipes.length} missing built-in ${missingPipes.length === 1 ? "helper" : "helpers"} will be set up locally when you apply this template.`,
+    label: `${installed} local starting point${installed === 1 ? "" : "s"} available`,
+    explanation:
+      "The agent will inspect what is useful, then reuse, improve, or create only the helpers this dashboard needs.",
   };
 }
 
@@ -76,8 +78,8 @@ export function LiveViewTemplateGallery({
         <div>
           <h3 className="text-sm font-medium">Starter templates</h3>
           <p className="text-[11px] text-muted-foreground">
-            Pick an outcome. Screenpipe sets up the dashboard and any built-in
-            helpers it needs.
+            Pick an outcome. The agent checks your data, then chooses the Blocks
+            and local helpers that fit.
           </p>
         </div>
       </div>
@@ -115,7 +117,7 @@ export function LiveViewTemplateGallery({
               </div>
               <details className="mt-2 text-[10px] text-muted-foreground">
                 <summary className="cursor-pointer select-none hover:text-foreground">
-                  what powers this
+                  possible starting points
                 </summary>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {kit.pipes.map((pipe) => {
@@ -138,7 +140,7 @@ export function LiveViewTemplateGallery({
               </details>
               <div className="mt-auto flex items-end justify-between gap-3 pt-4">
                 <span className="text-[10px] text-muted-foreground">
-                  Preview first, then apply.
+                  Preview the goal; the agent decides the build.
                 </span>
                 <Button
                   data-testid={`preview-live-view-template-${kit.id}`}

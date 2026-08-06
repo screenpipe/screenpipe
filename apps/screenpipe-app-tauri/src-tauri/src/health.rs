@@ -70,6 +70,11 @@ pub struct BootPhaseSnapshot {
     /// Unix epoch seconds when the current phase was entered. Lets the UI
     /// show "X minutes" on slow migrations.
     pub since_epoch_secs: u64,
+    /// True when this CPU lacks AVX2 (pre-2013 x86-64 / Atom-line): local
+    /// whisper/qwen3 STT is disabled at runtime (their kernels are
+    /// AVX2-compiled); parakeet + cloud engines still work. Drives the
+    /// "compatibility mode" notice in onboarding/settings.
+    pub cpu_compat_mode: bool,
 }
 
 impl BootPhaseSnapshot {
@@ -79,12 +84,22 @@ impl BootPhaseSnapshot {
             message: None,
             error: None,
             since_epoch_secs: 0,
+            cpu_compat_mode: false,
         }
     }
 }
 
 static BOOT_PHASE: Lazy<RwLock<BootPhaseSnapshot>> =
     Lazy::new(|| RwLock::new(BootPhaseSnapshot::idle()));
+
+/// Set once at startup (main.rs) when the CPU lacks AVX2; folded into every
+/// boot-phase snapshot so the frontend's existing getBootPhase polling
+/// carries the flag without a new command.
+static CPU_COMPAT_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_cpu_compat_mode(on: bool) {
+    CPU_COMPAT_MODE.store(on, Ordering::SeqCst);
+}
 
 fn now_epoch() -> u64 {
     std::time::SystemTime::now()
@@ -118,7 +133,9 @@ pub fn set_boot_error(err: &str) {
 }
 
 pub fn get_boot_phase_snapshot() -> BootPhaseSnapshot {
-    BOOT_PHASE.read().unwrap_or_else(|e| e.into_inner()).clone()
+    let mut snap = BOOT_PHASE.read().unwrap_or_else(|e| e.into_inner()).clone();
+    snap.cpu_compat_mode = CPU_COMPAT_MODE.load(Ordering::SeqCst);
+    snap
 }
 
 /// Snapshot of where the boot lifecycle currently is.
@@ -592,8 +609,22 @@ fn should_track_capture_stalls(
     elapsed_since_start: Duration,
     in_restart_grace: bool,
 ) -> bool {
+    should_track_capture_stalls_after(
+        status,
+        elapsed_since_start,
+        in_restart_grace,
+        NOTIFICATION_COOLDOWN,
+    )
+}
+
+fn should_track_capture_stalls_after(
+    status: RecordingStatus,
+    elapsed_since_start: Duration,
+    in_restart_grace: bool,
+    tracking_delay: Duration,
+) -> bool {
     status == RecordingStatus::Recording
-        && elapsed_since_start > NOTIFICATION_COOLDOWN
+        && elapsed_since_start > tracking_delay
         && !in_restart_grace
 }
 
@@ -611,6 +642,35 @@ fn notification_cooldown_ok(last_notification: Option<Instant>, now: Instant) ->
 struct OverlayTickDecision {
     broken: bool,
     healthy: bool,
+    failure_detail: &'static str,
+}
+
+/// Short, privacy-safe explanation for the recording-health overlay. Keep
+/// these labels actionable without forwarding raw engine/DB errors, which can
+/// contain paths, device names, or other local details.
+fn overlay_failure_detail(
+    status: RecordingStatus,
+    failures: CaptureFailureSignals,
+    simulated_break: bool,
+) -> &'static str {
+    if simulated_break {
+        return "simulated recording failure";
+    }
+
+    match (failures.audio, failures.vision, failures.persistence) {
+        (true, true, false) => "audio and screen capture are not updating",
+        (false, false, true) => "recording data cannot be saved",
+        (true, false, false) => "audio capture is not updating",
+        (false, true, false) => "screen capture is not updating",
+        (true, _, true) | (_, true, true) => "multiple recording errors detected",
+        (false, false, false) if status == RecordingStatus::Error => {
+            "recording engine could not start"
+        }
+        (false, false, false) if status == RecordingStatus::Stopped => {
+            "recording engine stopped"
+        }
+        _ => "recording stopped unexpectedly",
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -641,8 +701,17 @@ fn overlay_tick_decision(
         && status == RecordingStatus::Recording
         && !confirmed_failure
         && !simulated_break;
+    let failure_detail = if broken {
+        overlay_failure_detail(status, failures, simulated_break)
+    } else {
+        ""
+    };
 
-    OverlayTickDecision { broken, healthy }
+    OverlayTickDecision {
+        broken,
+        healthy,
+        failure_detail,
+    }
 }
 
 /// Decide recording status based on health check result and time since startup.
@@ -1588,7 +1657,17 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 Ok(health) => health_confirms_recording(health),
                 Err(_) => false,
             };
-            if should_track_capture_stalls(status, start_time.elapsed(), in_restart_grace) {
+            let tracking_delay = if crate::stale_tier::capture_loop_silent_e2e_started() {
+                Duration::ZERO
+            } else {
+                NOTIFICATION_COOLDOWN
+            };
+            if should_track_capture_stalls_after(
+                status,
+                start_time.elapsed(),
+                in_restart_grace,
+                tracking_delay,
+            ) {
                 if let Ok(ref health) = health_result {
                     // Only raw capture health drives the recording overlay.
                     // `audio_db_write_stalled` is a transcription-reconciliation
@@ -1781,6 +1860,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 decision.broken,
                 decision.healthy,
                 intentionally_paused && !sim_break,
+                decision.failure_detail,
             )
             .await;
         }
@@ -1888,6 +1968,28 @@ async fn check_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_compat_mode_round_trips_through_snapshot() {
+        // Serialize with every other test that mutates the process-wide
+        // BOOT_PHASE singleton (see the boot-readiness section for the
+        // convention) — an unguarded set_boot_phase here would race the
+        // wait_for_boot_ready tests and flap them.
+        let _guard = BOOT_PHASE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Default off.
+        assert!(!get_boot_phase_snapshot().cpu_compat_mode);
+        set_cpu_compat_mode(true);
+        assert!(get_boot_phase_snapshot().cpu_compat_mode);
+        // Setting a boot phase must not clear the flag (separate storage).
+        set_boot_phase("building_audio", None);
+        assert!(get_boot_phase_snapshot().cpu_compat_mode);
+        set_cpu_compat_mode(false);
+        assert!(!get_boot_phase_snapshot().cpu_compat_mode);
+        // Reset so other tests see a known-pending baseline.
+        set_boot_phase("idle", None);
+    }
 
     fn make_healthy_response() -> Result<HealthCheckResponse> {
         Ok(HealthCheckResponse {
@@ -2145,6 +2247,7 @@ mod tests {
             OverlayTickDecision {
                 broken: false,
                 healthy: false,
+                failure_detail: "",
             },
             "a stale raw status blocks green recovery but stays quiet before debounce"
         );
@@ -2189,6 +2292,7 @@ mod tests {
             OverlayTickDecision {
                 broken: false,
                 healthy: true,
+                failure_detail: "",
             }
         );
     }
@@ -2578,6 +2682,86 @@ mod tests {
     }
 
     #[test]
+    fn overlay_failure_details_are_brief_specific_and_privacy_safe() {
+        let cases = [
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    audio: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "audio capture is not updating",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    vision: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "screen capture is not updating",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    persistence: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "recording data cannot be saved",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    audio: true,
+                    vision: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "audio and screen capture are not updating",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    audio: true,
+                    persistence: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "multiple recording errors detected",
+            ),
+            (
+                RecordingStatus::Error,
+                CaptureFailureSignals::default(),
+                false,
+                "recording engine could not start",
+            ),
+            (
+                RecordingStatus::Stopped,
+                CaptureFailureSignals::default(),
+                false,
+                "recording engine stopped",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals::default(),
+                true,
+                "simulated recording failure",
+            ),
+        ];
+
+        for (status, failures, simulated, expected) in cases {
+            assert_eq!(
+                overlay_failure_detail(status, failures, simulated),
+                expected
+            );
+            assert!(expected.len() <= 49, "tooltip detail must stay brief");
+            assert!(!expected.contains('/'), "tooltip must never expose a path");
+        }
+    }
+
+    #[test]
     fn overlay_decision_exhaustively_checks_12288_state_combinations() {
         let statuses = [
             RecordingStatus::Starting,
@@ -2629,9 +2813,10 @@ mod tests {
                     && !recently_woke
                     && (status == RecordingStatus::Error
                         || (status == RecordingStatus::Stopped && ever_connected));
+                let expected_broken = simulated_break
+                    || (!failure_suppressed && (engine_down || confirmed_failure));
                 let expected = OverlayTickDecision {
-                    broken: simulated_break
-                        || (!failure_suppressed && (engine_down || confirmed_failure)),
+                    broken: expected_broken,
                     healthy: !intentionally_paused
                         && !recently_woke
                         && health_response_received
@@ -2639,6 +2824,11 @@ mod tests {
                         && status == RecordingStatus::Recording
                         && !confirmed_failure
                         && !simulated_break,
+                    failure_detail: if expected_broken {
+                        overlay_failure_detail(status, failures, simulated_break)
+                    } else {
+                        ""
+                    },
                 };
 
                 assert_eq!(decision, expected, "status={status:?}, bits={bits:011b}");

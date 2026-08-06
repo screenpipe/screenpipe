@@ -20,7 +20,7 @@
             "ffmpeg\\bin\\ffprobe.exe": "./",
             "ffmpeg\\bin\\*.dll": "./",
             "ffmpeg\\lib\\*": "./",
-            "onnxruntime*\\lib\\onnxruntime.dll": "./",
+            "onnxruntime*\\lib\\*.dll": "./",
             "wer\\*.dll": "./",
             "openblas\\bin\\*.dll": "./",
             "vcredist\\*.dll": "./",

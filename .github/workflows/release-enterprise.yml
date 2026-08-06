@@ -90,7 +90,10 @@ jobs:
             ~/.cargo/git/db/
             target/x86_64-pc-windows-msvc
             apps/screenpipe-app-tauri/src-tauri/target
-          shared-key: "rust-cache-x86_64-pc-windows-msvc"
+          # v2 epoch, shared with release-app.yml's Windows x64 job: flushes
+          # objects compiled under LTCG / the old global /arch:AVX2 flags
+          # (cc/cmake outputs aren't keyed on those env vars).
+          shared-key: "rust-cache-v2-x86_64-pc-windows-msvc"
           save-if: true
 
       - name: Cache Pre Build
@@ -146,16 +149,26 @@ jobs:
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
 
-      - name: Download ONNX Runtime (CPU) for Windows
+      - name: Download ONNX Runtime
         shell: pwsh
         run: |
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-1.24.2.zip"
-          $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2"
-          $ortDir = "ort-system-lib"
-          # retry: the GitHub release CDN intermittently returns 504, which would otherwise fail the whole job
+          # DirectML flavor of the OFFICIAL MS build: baseline SSE2 + MLAS
+          # runtime CPUID dispatch, DML EP for parakeet/PII. pyke's
+          # download-binaries static libs are compiled /arch:AVX2 since Oct
+          # 2025 and die with 0xc000001d AT LAUNCH on pre-Haswell CPUs — old
+          # Xeons/thin clients are MORE likely on enterprise fleets. Staged as
+          # a controlled lib/ so the tauri glob (onnxruntime*\lib\*.dll)
+          # bundles exactly onnxruntime.dll + DirectML.dll. Keep in sync with
+          # release-app.yml's x64 branch.
+          $version = '1.24.2'
+          $dmlVersion = '1.15.4'
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-$version"
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          # retry: nuget/CDN can intermittently fail, which would otherwise kill the job
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
-              Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.24.2.zip"
+              Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/$version" -OutFile ort-dml.zip
+              Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/$dmlVersion" -OutFile directml.zip
               break
             } catch {
               if ($attempt -eq 5) { throw }
@@ -163,21 +176,28 @@ jobs:
               Start-Sleep -Seconds (10 * $attempt)
             }
           }
-          if (Test-Path $tauriDir) { Remove-Item $tauriDir -Recurse -Force }
-          7z x onnxruntime-win-x64-1.24.2.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
-          if (Test-Path $ortDir) { Remove-Item $ortDir -Recurse -Force }
-          Copy-Item -Path $tauriDir -Destination $ortDir -Recurse -Force
+          7z x ort-dml.zip -oort-dml -y
+          7z x directml.zip -odirectml -y
+          New-Item -ItemType Directory -Force -Path "$extractDir/lib" | Out-Null
+          Copy-Item "ort-dml/runtimes/win-x64/native/onnxruntime.dll" "$extractDir/lib/"
+          Copy-Item "ort-dml/runtimes/win-x64/native/onnxruntime.lib" "$extractDir/lib/"
+          Copy-Item "directml/bin/x64-win/DirectML.dll" "$extractDir/lib/"
+          # Import-table (load-time) link against the MS DLL — same mechanism
+          # as release-app.yml. NOT ort's `load-dynamic` feature (deadlocks
+          # with rc.12, #4171/#4173). ORT_PREFER_DYNAMIC_LINK=1 makes ort-sys
+          # emit a dynamic import instead of attempting a static link (which
+          # needs the static _deps tree the MS prebuilt doesn't ship).
+          $libDir = (Resolve-Path "$extractDir/lib").Path
+          "ORT_STRATEGY=system"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ORT_LIB_LOCATION=$libDir"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ORT_PREFER_DYNAMIC_LINK=1"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$libDir"                    | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "x64: ORT_LIB_LOCATION=$libDir (dynamic import link)"
+          Get-ChildItem "$extractDir/lib"
 
-      - name: Set ORT env vars
+      - name: Set OpenBLAS env vars
         shell: bash
         run: |
-          # Windows x64 must link ONNX Runtime via ort's download-binaries (its
-          # default) — NOT system linking. ort-sys rc.12's system path needs
-          # static libs the Microsoft dynamic zip doesn't ship, so setting
-          # ORT_STRATEGY=system + ORT_LIB_LOCATION makes the build fail with
-          # "ort-sys could not link to the ONNX Runtime build in .../ort-system-lib".
-          # The runtime onnxruntime.dll is still bundled via the download step
-          # above. Mirrors the consumer release-app.yml x64 fix (11566613b).
           echo "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" >> $GITHUB_ENV
 
       - name: Use enterprise config
@@ -212,8 +232,21 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: "-C link-arg=/LTCG"
+          # LTCG removed (was the last workflow still shipping it): MSVC has
+          # known bugs where LTCG ignores /arch flags and emits AVX-512 on
+          # Xeon CI runners, causing STATUS_ILLEGAL_INSTRUCTION (0xc000001d)
+          # on CPUs without AVX-512. Consumer builds dropped it long ago.
+          # See: https://developercommunity.visualstudio.com/content/problem/848627
+          RUSTFLAGS: ""
+          # No CFLAGS/CXXFLAGS on purpose: MSVC's x64 default is baseline SSE2.
+          # AVX2 is opted into only inside ggml (whisper), which is gated on
+          # is_x86_feature_detected in screenpipe-audio. Aligned with
+          # release-app.yml's Windows x64 env.
           GGML_NATIVE: "OFF"
+          GGML_SSE42: "ON"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
+          GGML_BMI2: "ON"
           GGML_AVX512: "OFF"
           GGML_AVX512_VBMI: "OFF"
           GGML_AVX512_VNNI: "OFF"
@@ -266,44 +299,26 @@ jobs:
             Write-Host "Tauri signature regenerated"
           }
 
-      - name: Create .intunewin and upload to R2
+      - name: Create .intunewin
         shell: pwsh
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
         run: |
           cd apps/screenpipe-app-tauri
-          $intunewinPath = $null
           try { .\scripts\exe-to-intunewin.ps1 } catch { Write-Host ".intunewin creation failed: $_" }
-          $intunewin = Get-ChildItem "scripts\intunewin\out\*.intunewin" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($intunewin) { $intunewinPath = $intunewin.FullName }
 
-          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing AWS CLI..."
-            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\awscli.msi"
-            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\awscli.msi /quiet"
-            $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
-          }
-          $version = (Get-Content src-tauri/Cargo.toml | Select-String -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          $r2Prefix = "s3://screenpipe-releases/enterprise/releases/$version/x86_64-pc-windows-msvc"
-          $nsisDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
-
-          Write-Host "Uploading enterprise Windows bundles for v$version to R2..."
-          Get-ChildItem "$nsisDir/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  $($_.Name)"
-          }
-          Get-ChildItem "$nsisDir/*.nsis.zip","$nsisDir/*.sig" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  $($_.Name)"
-          }
-          if ($intunewinPath) {
-            aws s3 cp $intunewinPath "$r2Prefix/$(Split-Path -Leaf $intunewinPath)" --endpoint-url $r2Endpoint
-            Write-Host "  $(Split-Path -Leaf $intunewinPath)"
-          }
-          Write-Host "R2 enterprise upload complete for Windows"
+      - name: Upload enterprise Windows artifacts
+        shell: bash
+        env:
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
+        run: |
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          TARGET="x86_64-pc-windows-msvc"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/nsis/*.exe \
+            "${BUNDLE_DIR}"/nsis/*.nsis.zip \
+            "${BUNDLE_DIR}"/nsis/*.sig \
+            apps/screenpipe-app-tauri/scripts/intunewin/out/*.intunewin
 
       - name: Upload enterprise NSIS installer (artifact)
         uses: actions/upload-artifact@v4
@@ -514,39 +529,18 @@ jobs:
       - name: Upload to R2
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
           TARGET="x86_64-unknown-linux-gnu"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          R2_PREFIX="s3://screenpipe-releases/enterprise/releases/${VERSION}/${TARGET}"
-
-          echo "Uploading enterprise Linux bundles for v${VERSION} to R2..."
-          echo "Bundle dir contents:"
-          find "${BUNDLE_DIR}" -type f 2>/dev/null || echo "  (bundle dir not found)"
-
-          UPLOADED=0
-          for artifact in \
+          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/appimage/*.AppImage \
             "${BUNDLE_DIR}"/appimage/*.AppImage.sig \
             "${BUNDLE_DIR}"/appimage/*.tar.gz \
             "${BUNDLE_DIR}"/appimage/*.tar.gz.sig \
-            "${BUNDLE_DIR}"/deb/*.deb; do
-            if [ -f "$artifact" ]; then
-              aws s3 cp "$artifact" "${R2_PREFIX}/$(basename "$artifact")" --endpoint-url "$R2_ENDPOINT"
-              echo "  $(basename "$artifact")"
-              UPLOADED=$((UPLOADED + 1))
-            fi
-          done
-
-          if [ "$UPLOADED" -eq 0 ]; then
-            echo "::error::No enterprise Linux artifacts found to upload"
-            exit 1
-          fi
-          echo "R2 enterprise upload complete for Linux (${UPLOADED} files)"
+            "${BUNDLE_DIR}"/deb/*.deb
 
       - name: Upload enterprise Linux artifacts
         uses: actions/upload-artifact@v4
@@ -556,9 +550,22 @@ jobs:
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
 
-  # ─── macOS Apple Silicon ──────────────────────────────────────────────────
+  # ─── macOS (Apple Silicon + Intel) ────────────────────────────────────────
   release-enterprise-macos:
-    runs-on: macos-latest
+    name: release-enterprise-macos (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            features: metal,parakeet-mlx,enterprise-build
+            package_arch: arm64
+          - platform: macos-26
+            target: x86_64-apple-darwin
+            features: metal,redact-onnx-coreml,enterprise-build
+            package_arch: x64
+    runs-on: ${{ matrix.platform }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -573,16 +580,22 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: macos-enterprise-rust-aarch64-apple-darwin-${{ hashFiles('**/Cargo.lock') }}
+          key: macos-enterprise-rust-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           cache-directories: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             apps/screenpipe-app-tauri/src-tauri/target
-          shared-key: "rust-cache-aarch64-apple-darwin-enterprise"
+          shared-key: "rust-cache-${{ matrix.target }}-enterprise"
           save-if: true
 
       - name: Cache Pre Build
@@ -592,9 +605,9 @@ jobs:
             apps/screenpipe-app-tauri/node_modules
             apps/screenpipe-app-tauri/src-tauri/target
             apps/screenpipe-app-tauri/.tauri
-          key: macos-enterprise-aarch64-pre-build-${{ hashFiles('**/Cargo.lock', '**/bun.lockb') }}
+          key: macos-enterprise-${{ matrix.target }}-pre-build-${{ hashFiles('**/Cargo.lock', '**/bun.lockb') }}
           restore-keys: |
-            macos-enterprise-aarch64-pre-build-
+            macos-enterprise-${{ matrix.target }}-pre-build-
 
       - name: Install frontend dependencies
         working-directory: apps/screenpipe-app-tauri
@@ -611,7 +624,7 @@ jobs:
       - name: Run pre_build.js
         env:
           SKIP_SCREENPIPE_SETUP: true
-          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
+          SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
 
@@ -621,7 +634,7 @@ jobs:
       - name: Configure macOS sidecar bundle entries
         shell: bash
         env:
-          TARGET: aarch64-apple-darwin
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -704,7 +717,7 @@ jobs:
           echo "Build keychain ready"
           security find-identity -v -p codesigning "$BUILD_KC" 2>&1 | tail -3
 
-      - name: Build (enterprise, macOS ARM64)
+      - name: Build (enterprise, macOS ${{ matrix.target }})
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -718,13 +731,13 @@ jobs:
           # background image and icon layout.
           # See: https://github.com/tauri-apps/tauri-action/issues/740
           TAURI_BUNDLER_DMG_IGNORE_CI: true
-          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
-          MACOSX_DEPLOYMENT_TARGET: "14.0"
-          CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
-          CFLAGS: "-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
-          CXXFLAGS: "-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
-          CMAKE_C_FLAGS: "-mmacosx-version-min=14.0"
-          CMAKE_CXX_FLAGS: "-mmacosx-version-min=14.0"
+          SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
+          CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CMAKE_C_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0' || '-mmacosx-version-min=10.15' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0' || '-mmacosx-version-min=10.15' }}
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "3"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
@@ -733,18 +746,20 @@ jobs:
           CARGO_PROFILE_RELEASE_PANIC: unwind
           CARGO_PROFILE_RELEASE_INCREMENTAL: "true"
         run: |
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
 
-          # Compiler wrapper to force macOS 14.0 for MLX Metal kernels
-          WRAPPER_DIR="$(pwd)/.compiler-wrapper"
-          mkdir -p "$WRAPPER_DIR"
-          for tool in cc c++ xcrun; do
-            REAL_PATH=$(which $tool)
-            printf '#!/bin/bash\nnew=(); for x in "$@"; do [[ "$x" == -mmacosx-version-min=* ]] && x="-mmacosx-version-min=14.0"; new+=("$x"); done; exec '"$REAL_PATH"' "${new[@]}"\n' > "$WRAPPER_DIR/$tool"
-            chmod +x "$WRAPPER_DIR/$tool"
-          done
-          export PATH="$WRAPPER_DIR:$PATH"
+          # Compiler wrapper is only needed for ARM64 MLX Metal kernels.
+          if [[ "$TARGET" == "aarch64-apple-darwin" ]]; then
+            WRAPPER_DIR="$(pwd)/.compiler-wrapper"
+            mkdir -p "$WRAPPER_DIR"
+            for tool in cc c++ xcrun; do
+              REAL_PATH=$(which $tool)
+              printf '#!/bin/bash\nnew=(); for x in "$@"; do [[ "$x" == -mmacosx-version-min=* ]] && x="-mmacosx-version-min=14.0"; new+=("$x"); done; exec '"$REAL_PATH"' "${new[@]}"\n' > "$WRAPPER_DIR/$tool"
+              chmod +x "$WRAPPER_DIR/$tool"
+            done
+            export PATH="$WRAPPER_DIR:$PATH"
+          fi
 
           # Clean stale bundle artifacts
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
@@ -767,7 +782,7 @@ jobs:
             fi
 
             cd apps/screenpipe-app-tauri
-            if bunx tauri build -v --target aarch64-apple-darwin --features metal,parakeet-mlx,enterprise-build 2>&1 | tee /tmp/tauri-build-$attempt.log; then
+            if bunx tauri build -v --target "$TARGET" --features "${{ matrix.features }}" 2>&1 | tee /tmp/tauri-build-$attempt.log; then
               echo "Build succeeded on attempt $attempt"
               cd ../..
               break
@@ -795,7 +810,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           APP_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle/macos"
           shopt -s nullglob
           apps=( "${APP_DIR}"/*.app )
@@ -815,7 +830,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
 
           for dmg in "${BUNDLE_DIR}"/dmg/*.dmg; do
@@ -856,7 +871,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           MACOS_DIR="${BUNDLE_DIR}/macos"
           notary_auth=(
@@ -982,9 +997,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          PACKAGE_ARCH="${{ matrix.package_arch }}"
 
           APP_PATH="${BUNDLE_DIR}/macos/screenpipe.app"
           if [ ! -d "$APP_PATH" ]; then
@@ -1015,8 +1031,8 @@ jobs:
           # Create an unsigned component package first so the package receipt
           # keeps a stable identifier, then sign the final product archive with
           # Developer ID Installer.
-          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
-          COMPONENT_PKG="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64-component.pkg"
+          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-${PACKAGE_ARCH}.pkg"
+          COMPONENT_PKG="${PKG_DIR}/screenpipe-enterprise-${VERSION}-${PACKAGE_ARCH}-component.pkg"
 
           echo "Building component .pkg..."
           pkgbuild \
@@ -1082,37 +1098,27 @@ jobs:
       - name: Upload to R2
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
         run: |
-          TARGET="aarch64-apple-darwin"
+          TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          R2_PREFIX="s3://screenpipe-releases/enterprise/releases/${VERSION}/${TARGET}"
-
-          echo "Uploading enterprise macOS bundles for v${VERSION} to R2..."
-          for dmg in "${BUNDLE_DIR}"/dmg/*.dmg; do
-            [ -f "$dmg" ] && aws s3 cp "$dmg" "${R2_PREFIX}/$(basename "$dmg")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$dmg")"
-          done
-          for pkg in "${BUNDLE_DIR}"/pkg/*.pkg; do
-            [ -f "$pkg" ] && aws s3 cp "$pkg" "${R2_PREFIX}/$(basename "$pkg")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$pkg")"
-          done
-          for updater in "${BUNDLE_DIR}"/macos/*.app.tar.gz "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig; do
-            [ -f "$updater" ] && aws s3 cp "$updater" "${R2_PREFIX}/$(basename "$updater")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$updater")"
-          done
-          echo "R2 enterprise upload complete for macOS"
+          .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
+            "${BUNDLE_DIR}"/dmg/*.dmg \
+            "${BUNDLE_DIR}"/pkg/*.pkg \
+            "${BUNDLE_DIR}"/macos/*.app.tar.gz \
+            "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig
 
       - name: Upload enterprise macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: enterprise-macos-arm64
+          name: enterprise-macos-${{ matrix.package_arch }}
           path: |
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/pkg/*.pkg
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
-            apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/pkg/*.pkg
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
 
       - name: Clean up build keychain
         if: always()
@@ -1121,34 +1127,3 @@ jobs:
           BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
           security delete-keychain "$BUILD_KC" 2>/dev/null || true
           security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
-
-  # ─── Notify subscribers after all builds complete ─────────────────────────
-  notify:
-    needs: [release-enterprise-windows, release-enterprise-linux, release-enterprise-macos]
-    runs-on: ubuntu-latest
-    if: always() && (needs.release-enterprise-windows.result == 'success' || needs.release-enterprise-linux.result == 'success' || needs.release-enterprise-macos.result == 'success')
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Notify enterprise build subscribers
-        shell: bash
-        env:
-          ENTERPRISE_NOTIFY_SECRET: ${{ secrets.ENTERPRISE_NOTIFY_SECRET }}
-        run: |
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          if [ -z "$ENTERPRISE_NOTIFY_SECRET" ]; then
-            echo "::error::ENTERPRISE_NOTIFY_SECRET is not set in GitHub secrets"
-            exit 1
-          fi
-          HTTP_CODE=$(curl -s -o /tmp/notify_response.txt -w "%{http_code}" -X POST "https://screenpi.pe/api/enterprise/builds/notify" \
-            -H "Authorization: Bearer $ENTERPRISE_NOTIFY_SECRET" \
-            -H "Content-Type: application/json" \
-            -d "{\"version\": \"$VERSION\"}")
-          BODY=$(cat /tmp/notify_response.txt)
-          echo "Response: HTTP $HTTP_CODE — $BODY"
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Notified subscribers for v$VERSION"
-          else
-            echo "::error::Notification failed (HTTP $HTTP_CODE)"
-            exit 1
-          fi

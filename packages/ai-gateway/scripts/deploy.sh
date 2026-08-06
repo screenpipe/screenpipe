@@ -25,6 +25,12 @@ cd "$(dirname "$0")/.."
 
 SENTRY_ORG="${SENTRY_ORG:-mediar}"
 SENTRY_PROJECT="${SENTRY_PROJECT:-screenpipe-ai-proxy}"
+DEPLOY_MODE="${SCREENPIPE_AI_GATEWAY_DEPLOY_MODE:-deploy}"
+
+if [[ "$DEPLOY_MODE" != "deploy" && "$DEPLOY_MODE" != "upload" ]]; then
+  echo "✗ SCREENPIPE_AI_GATEWAY_DEPLOY_MODE must be deploy or upload."
+  exit 2
+fi
 
 # Release identifier — short git SHA. Worker reads this at runtime via
 # env.SENTRY_RELEASE (see src/index.ts) and Sentry matches uploaded maps
@@ -43,6 +49,17 @@ if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
   echo "  Set it or run: bun run deploy:no-sourcemaps"
   exit 1
 fi
+
+# The hosted-AI gates fail closed when private controls are incomplete. Verify
+# every required secret binding exists before changing D1 or uploading code.
+# This reads binding names only; Wrangler never returns secret values.
+bun run bindings:required
+
+# Settlement writes require the additive idempotency ledger. Apply and verify
+# it after local prerequisites pass but before creating a Sentry release or
+# changing Worker traffic. Re-running this migration is safe, and an old Worker
+# remains compatible with the table.
+bun run db:migrate:required
 
 # 1. Build into dist/ (wrangler.toml has upload_source_maps=true so .map
 # files are emitted alongside index.js). Same flags wrangler deploy uses.
@@ -73,9 +90,18 @@ bunx @sentry/cli releases finalize "${RELEASE}" \
 bunx @sentry/cli releases set-commits "${RELEASE}" --auto \
   --org "${SENTRY_ORG}" --project "${SENTRY_PROJECT}" || true
 
-# 4. Real deploy. Pass SENTRY_RELEASE through so the running worker's
-# Sentry SDK tags events with the same release we just uploaded maps for.
-echo "→ deploying worker…"
-bunx wrangler deploy --var SENTRY_RELEASE:"${RELEASE}"
-
-echo "✓ deployed ${RELEASE}"
+# 4. Upload a zero-traffic candidate for a gradual rollout, or perform the
+# legacy immediate deployment when an operator explicitly chooses it. Both
+# paths pass SENTRY_RELEASE so runtime errors resolve against the maps above.
+if [[ "$DEPLOY_MODE" == "upload" ]]; then
+  echo "→ uploading zero-traffic worker version…"
+  bunx wrangler versions upload \
+    --var SENTRY_RELEASE:"${RELEASE}" \
+    --tag "${RELEASE}" \
+    --message "candidate ${RELEASE}; no traffic assigned"
+  echo "✓ uploaded ${RELEASE}; production traffic unchanged"
+else
+  echo "→ deploying worker to production…"
+  bunx wrangler deploy --var SENTRY_RELEASE:"${RELEASE}"
+  echo "✓ deployed ${RELEASE}"
+fi

@@ -43,11 +43,29 @@ async fn run_wal_restart_checkpoint(
 }
 
 impl DatabaseManager {
-    pub async fn execute_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
-        // This API intentionally executes caller-supplied maintenance SQL.
-        // Keep that trust boundary explicit for SQLx 0.9's dynamic-SQL audit.
+    /// Execute trusted, row-returning dynamic SQL on the query pool.
+    pub async fn query_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
+        Self::raw_sql_on_pool(&self.pool, query).await
+    }
+
+    /// Execute trusted dynamic SQL that may mutate the database through the
+    /// dedicated, process-coordinated writer lane.
+    pub async fn execute_raw_sql_write(
+        &self,
+        query: &str,
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        let writer = self.coordinated_writer().lock().await?;
+        Self::raw_sql_on_pool(writer.pool(), query).await
+    }
+
+    async fn raw_sql_on_pool(
+        pool: &SqlitePool,
+        query: &str,
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        // These APIs intentionally execute caller-supplied trusted SQL. Keep
+        // that trust boundary explicit for SQLx 0.9's dynamic-SQL audit.
         let rows = sqlx::query(sqlx::AssertSqlSafe(query))
-            .fetch_all(&self.pool)
+            .fetch_all(pool)
             .await?;
 
         let result: Vec<serde_json::Map<String, serde_json::Value>> = rows
@@ -1292,11 +1310,13 @@ impl DatabaseManager {
         chunk_id: i64,
         blob_id: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE video_chunks SET cloud_blob_id = ?1 WHERE id = ?2")
             .bind(blob_id)
             .bind(chunk_id)
-            .execute(&self.pool)
+            .execute(&mut **tx.conn())
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1306,106 +1326,20 @@ impl DatabaseManager {
         frame_id: i64,
         blob_id: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE frames SET cloud_blob_id = ?1 WHERE id = ?2")
             .bind(blob_id)
             .bind(frame_id)
-            .execute(&self.pool)
+            .execute(&mut **tx.conn())
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn repair_database(&self) -> Result<(), anyhow::Error> {
-        let _write_guard = Arc::clone(&self.write_semaphore)
-            .acquire_owned()
-            .await
-            .map_err(|_| anyhow::anyhow!("SQLite write coordinator closed"))?;
-        debug!("starting aggressive database repair process");
-
-        // Force close any pending transactions
-        let emergency_steps = [
-            "PRAGMA locking_mode = EXCLUSIVE;",
-            "ROLLBACK;",                    // Force rollback any stuck transactions
-            "PRAGMA busy_timeout = 60000;", // Increase timeout to 60s
-        ];
-
-        for step in emergency_steps {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
-                warn!("emergency step failed (continuing anyway): {}", e);
-            }
-        }
-
-        // Force checkpoint and cleanup WAL files
-        let wal_cleanup = [
-            "PRAGMA wal_checkpoint(TRUNCATE);",
-            "PRAGMA journal_mode = DELETE;", // Temporarily disable WAL
-            "PRAGMA journal_size_limit = 0;", // Clear journal
-        ];
-
-        for step in wal_cleanup {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
-                warn!("wal cleanup failed (continuing anyway): {}", e);
-            }
-        }
-
-        // Aggressive recovery steps
-        let recovery_steps = [
-            ("PRAGMA synchronous = OFF;", "disable synchronous"),
-            ("PRAGMA cache_size = -2000000;", "increase cache"), // 2GB cache
-            ("VACUUM;", "vacuum database"),
-            ("PRAGMA integrity_check;", "check integrity"),
-            ("PRAGMA foreign_key_check;", "check foreign keys"),
-            ("REINDEX;", "rebuild indexes"),
-            ("ANALYZE;", "update statistics"),
-            ("VACUUM;", "final vacuum"), // Second vacuum after reindex
-        ];
-
-        for (query, step) in recovery_steps {
-            debug!("running aggressive recovery step: {}", step);
-            match sqlx::query(query).execute(&self.pool).await {
-                Ok(_) => debug!("recovery step '{}' succeeded", step),
-                Err(e) => warn!("recovery step '{}' failed: {}", step, e),
-            }
-        }
-
-        // Restore safe settings
-        let restore_steps = [
-            "PRAGMA synchronous = NORMAL;",
-            "PRAGMA journal_mode = WAL;",
-            // 0 = no inline auto-checkpoint (matches WAL_SAFETY_PRAGMAS); the
-            // maintenance task owns checkpointing. Must NOT re-enable inline
-            // auto-checkpoint here or a repaired DB re-opens the corruption path.
-            "PRAGMA wal_autocheckpoint = 0;",
-            "PRAGMA cache_size = -2000;", // Back to 2MB cache
-            "PRAGMA locking_mode = NORMAL;",
-            "PRAGMA busy_timeout = 5000;", // Back to 5s timeout
-        ];
-
-        for step in restore_steps {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
-                warn!("restore step failed: {}", e);
-            }
-        }
-
-        // Final verification
-        match sqlx::query_scalar::<_, String>("PRAGMA quick_check;")
-            .fetch_one(&self.pool)
-            .await
-        {
-            Ok(result) if result == "ok" => {
-                debug!("database successfully repaired");
-                Ok(())
-            }
-            Ok(result) => {
-                let msg = format!("database still corrupted after repair: {}", result);
-                error!("{}", msg);
-                Err(anyhow::anyhow!(msg))
-            }
-            Err(e) => {
-                let msg = format!("database repair failed catastrophically: {}", e);
-                error!("{}", msg);
-                Err(anyhow::anyhow!(msg))
-            }
-        }
+        anyhow::bail!(
+            "online SQLite repair is disabled; stop every screenpipe process and run `screenpipe db recover` so recovery operates on a preserved offline generation"
+        )
     }
 
     /// Spawn the background task that owns ALL WAL checkpointing.
@@ -1414,11 +1348,10 @@ impl DatabaseManager {
     /// connections do not checkpoint inline. This task therefore owns routine
     /// checkpointing: it runs a non-truncating `PASSIVE` checkpoint often enough
     /// to copy safe frames into the main database without shortening the WAL
-    /// underneath long-lived readers. Explicit startup, backup, and compaction
-    /// paths still use serialized `TRUNCATE` checkpoints when a physical reset
-    /// is required.
+    /// underneath long-lived readers. No live path truncates the WAL; physical
+    /// cleanup belongs exclusively to offline recovery after all owners close.
     pub fn start_wal_maintenance(&self) {
-        let pool = self.pool.clone();
+        let pool = self.write_pool.clone();
         let shutdown = self.close_token.clone();
         let write_queue_health = self.write_queue_health.clone();
         let write_semaphore = std::sync::Arc::clone(&self.write_semaphore);
@@ -1447,7 +1380,7 @@ impl DatabaseManager {
                 // The upstream WAL-reset race requires a checkpoint and write
                 // to overlap on independent connections. Every routine pass,
                 // including the common below-cap path, shares the same
-                // process-wide coordinator as the write queue and SecretStore.
+                // process-wide coordinator as every capture writer.
                 let _write_guard = tokio::select! {
                     permit = Arc::clone(&write_semaphore).acquire_owned() => {
                         match permit {
@@ -1618,8 +1551,8 @@ impl DatabaseManager {
         });
     }
 
-    /// Run `PRAGMA wal_checkpoint(TRUNCATE)` on demand, flushing WAL into the
-    /// main database file so it can be safely copied.
+    /// Run a serialized non-truncating checkpoint on demand, flushing safe WAL
+    /// frames into the main database file without shortening the live WAL.
     /// Returns (busy, log_pages, checkpointed_pages).
     pub async fn wal_checkpoint(&self) -> Result<(i32, i32, i32), sqlx::Error> {
         let _write_guard = Arc::clone(&self.write_semaphore)
@@ -1629,8 +1562,9 @@ impl DatabaseManager {
         if self.write_queue_health.is_hard_faulted() {
             return Err(SqlxError::PoolClosed);
         }
-        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .fetch_one(&self.pool)
+        let mut conn = self.write_pool.acquire().await?;
+        let row = sqlx::query("PRAGMA wal_checkpoint(RESTART)")
+            .fetch_one(&mut *conn)
             .await?;
         Ok((row.get(0), row.get(1), row.get(2)))
     }
@@ -1638,9 +1572,14 @@ impl DatabaseManager {
     /// Create an atomic backup of the database using `VACUUM INTO`.
     /// The destination path must not already exist.
     pub async fn backup_to(&self, dest: &str) -> Result<(), sqlx::Error> {
+        let _write_guard = Arc::clone(&self.write_semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| SqlxError::PoolClosed)?;
+        let mut conn = self.write_pool.acquire().await?;
         sqlx::query("VACUUM INTO ?1")
             .bind(dest)
-            .execute(&self.pool)
+            .execute(&mut *conn)
             .await?;
         Ok(())
     }
@@ -1654,8 +1593,7 @@ impl DatabaseManager {
     ///
     /// Concurrency: VACUUM needs an exclusive lock and would otherwise fail
     /// with SQLITE_BUSY against the live capture pipeline (the pool's default
-    /// busy_timeout is only 5s). We make it reliable the way `repair_database`
-    /// does: hold the single-permit `write_semaphore` so writers queue instead
+    /// busy_timeout is only 5s). Hold the single-permit `write_semaphore` so writers queue instead
     /// of contending (the "recording briefly pauses" the UI warns about —
     /// writes resume the moment VACUUM commits), and run checkpoint + VACUUM on
     /// one connection with busy_timeout bumped to 60s so VACUUM waits out active
@@ -1664,13 +1602,16 @@ impl DatabaseManager {
     /// insufficient disk VACUUM errors (surfaced as 500) without corrupting
     /// anything.
     pub async fn compact(&self) -> Result<(), sqlx::Error> {
-        let _write_guard = self.write_semaphore.acquire().await.ok();
+        let _write_guard = Arc::clone(&self.write_semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| SqlxError::PoolClosed)?;
 
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.write_pool.acquire().await?;
         let _ = sqlx::query("PRAGMA busy_timeout = 60000")
             .execute(&mut *conn)
             .await;
-        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        let _ = sqlx::query("PRAGMA wal_checkpoint(RESTART)")
             .execute(&mut *conn)
             .await;
         let result = sqlx::query("VACUUM").execute(&mut *conn).await.map(|_| ());
@@ -1692,6 +1633,47 @@ mod wal_maintenance_tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::Row;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn raw_sql_writes_wait_for_coordinator_and_reads_return_rows() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("db.sqlite");
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let db = DatabaseManager::new(&db_path_string, DbConfig::for_tier(DeviceTier::Low))
+            .await
+            .expect("database manager");
+
+        db.execute_raw_sql_write("CREATE TABLE raw_boundary (value INTEGER NOT NULL)")
+            .await
+            .expect("create through writer API");
+
+        let held_writer = db
+            .coordinated_writer()
+            .lock()
+            .await
+            .expect("hold writer lane");
+        let mut queued_write =
+            Box::pin(db.execute_raw_sql_write("INSERT INTO raw_boundary (value) VALUES (42)"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut queued_write)
+                .await
+                .is_err(),
+            "raw write bypassed the coordinator"
+        );
+        drop(held_writer);
+        tokio::time::timeout(Duration::from_secs(1), queued_write)
+            .await
+            .expect("queued write timed out")
+            .expect("queued write failed");
+
+        let rows = db
+            .query_raw_sql("SELECT value FROM raw_boundary LIMIT 1")
+            .await
+            .expect("query through reader API");
+        assert_eq!(rows, serde_json::json!([{ "value": 42 }]));
+
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn routine_checkpoint_never_truncates_the_live_wal() {

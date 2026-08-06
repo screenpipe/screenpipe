@@ -91,6 +91,12 @@ vi.mock("@/components/markdown", () => ({
 }));
 
 describe("daily summary helpers", () => {
+	it("versions cached summaries with the parsed-first prompt", () => {
+		expect(dailySummaryCacheKey(new Date(2026, 6, 25))).toBe(
+			"screenpipe:timeline-daily-summary:pi-v2:2026-07-25",
+		);
+	});
+
 	it("bounds today at now and a historical day at local day end", () => {
 		const now = new Date(2026, 6, 25, 12, 30);
 		const today = dailySummaryTimeRange(new Date(2026, 6, 25, 8), now);

@@ -7,6 +7,7 @@ import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import { Loader2 } from "lucide-react";
 import { localFetch } from "@/lib/api";
+import { fetchAiGateway } from "@/lib/ai-gateway-url";
 
 interface RegionOcrOverlayProps {
   /** Frame ID used to fetch a clean (non-tainted) copy for canvas cropping */
@@ -143,8 +144,8 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
         const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, "");
 
         // Call screenpipe cloud API
-        const response = await fetch(
-          "https://api.screenpipe.com/v1/chat/completions",
+        const response = await fetchAiGateway(
+          "/chat/completions",
           {
             method: "POST",
             headers: {

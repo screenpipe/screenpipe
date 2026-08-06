@@ -48,7 +48,7 @@ async fn sdk_database_uses_safe_sqlite_and_shared_checkpoint_coordinator() {
     assert_eq!(busy, 0, "checkpoint reported busy");
 
     let integrity = db
-        .execute_raw_sql("PRAGMA integrity_check")
+        .query_raw_sql("PRAGMA integrity_check")
         .await
         .expect("integrity_check");
     let status = integrity

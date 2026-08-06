@@ -67,7 +67,7 @@ export function FeedbackSection() {
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              the complete screenpipe tutorial, setup to pipes
+              the complete screenpipe tutorial, setup to scheduled tasks
             </p>
           </div>
           <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">

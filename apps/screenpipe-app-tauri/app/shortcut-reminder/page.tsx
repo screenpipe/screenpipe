@@ -177,7 +177,8 @@ export default function ShortcutReminderPage() {
   // current via the event.
   useEffect(() => {
     let mounted = true;
-    // Payload is "state" or "state|detail" (detail = boot-phase label while fixing).
+    // Payload is "state" or "state|detail" (a failure reason, or the boot
+    // phase label while fixing).
     const apply = (payload: string) => {
       const [state, detail = ""] = payload.split("|", 2);
       setHealthState(state as RecordingHealthState);
@@ -267,6 +268,7 @@ export default function ShortcutReminderPage() {
   const gap = 2 * overlayScale;
   const smIconPx = 10 * overlayScale;
   const dotPx = Math.max(5 * overlayScale, 5);
+  const failureReason = healthDetail || "recording stopped unexpectedly";
 
   // Recording-health states replace the shortcut grid inside the same fixed
   // window (160x40 x scale) — no resize needed: message row on top, actions
@@ -289,7 +291,8 @@ export default function ShortcutReminderPage() {
             onMouseDown={(e) => e.stopPropagation()}
             className="flex items-center justify-center flex-1 min-h-0 hover:bg-white/10 transition-colors cursor-pointer"
             style={{ gap: `${gap * 2}px`, padding: `${padY}px ${padX}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            title="Restart recording"
+            title={failureReason}
+            aria-label={`Recording needs help: ${failureReason}. Restart recording`}
           >
             <div
               className="rounded-full bg-red-500 animate-pulse shrink-0"
@@ -309,7 +312,7 @@ export default function ShortcutReminderPage() {
               onMouseDown={(e) => e.stopPropagation()}
               className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer text-white/90 flex-1"
               style={{ gap: `${gap}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-              title="Restart recording"
+              title={`Restart recording — ${failureReason}`}
             >
               <RotateCw style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} className="shrink-0" />
               <span className="font-mono font-bold" style={{ fontSize: `${fontPx}px` }}>

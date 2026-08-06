@@ -12,6 +12,13 @@ import React, {
   useState,
 } from "react";
 import posthog from "posthog-js";
+import {
+  Bot,
+  MessageSquareText,
+  Sun,
+  Workflow,
+  type LucideIcon,
+} from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useSettings } from "@/lib/hooks/use-settings";
 import {
@@ -26,7 +33,8 @@ import {
   selectExistingLiveViewForOnboarding,
 } from "@/lib/live-views/onboarding-activation";
 import {
-  ONBOARDING_GOALS,
+  ONBOARDING_GOAL_CHOICES,
+  type OnboardingChoiceCategory,
   type OnboardingGoalCategory,
 } from "@/lib/live-views/onboarding-goals";
 import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
@@ -43,6 +51,19 @@ import {
 
 const STALLED_BUILD_ESCAPE_DELAY_MS = 12_000;
 const SHELL_PREPARE_TIMEOUT_MS = 8_000;
+
+const AI_CONTEXT_CHOICE = {
+  category: "ai_context" as const,
+  title: "use with my AI",
+  description: "give Claude, Codex, or agents work context",
+};
+
+const GOAL_ICONS: Partial<Record<OnboardingChoiceCategory, LucideIcon>> = {
+  work_memory: MessageSquareText,
+  work_patterns: Sun,
+  process_automation: Workflow,
+  ai_context: Bot,
+};
 
 async function withTimeout<T>(
   operation: Promise<T>,
@@ -178,7 +199,8 @@ export default function FirstDashboard() {
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
   const [goal, setGoal] = useState("");
   const [goalCategory, setGoalCategory] =
-    useState<OnboardingGoalCategory>("custom");
+    useState<OnboardingChoiceCategory | null>(null);
+  const [showCustomGoal, setShowCustomGoal] = useState(false);
   const [stage, setStage] = useState<OnboardingLiveViewStage | null>(null);
   const [selectedPipes, setSelectedPipes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -263,7 +285,10 @@ export default function FirstDashboard() {
   }, [dashboardPrepared, isBuilding]);
 
   const reportProgress = useCallback(
-    (progress: OnboardingLiveViewProgress) => {
+    (
+      progress: OnboardingLiveViewProgress,
+      selectedGoalCategory: OnboardingGoalCategory,
+    ) => {
       latestStageRef.current = progress.stage;
       if (progress.dashboardReady) setDashboardPrepared(true);
       setStage(progress.stage);
@@ -271,7 +296,7 @@ export default function FirstDashboard() {
       if (progress.stage === "plan_ready") {
         posthog.capture("onboarding_first_dashboard_plan_generated", {
           ...flowProperties,
-          goal_category: goalCategory,
+          goal_category: selectedGoalCategory,
           pipe_count: progress.pipeCount,
           pipe_slugs: progress.pipeSlugs,
           block_count: progress.blockCount,
@@ -281,7 +306,7 @@ export default function FirstDashboard() {
       if (progress.stage === "pipe_ready") {
         posthog.capture("onboarding_first_dashboard_pipe_ready", {
           ...flowProperties,
-          goal_category: goalCategory,
+          goal_category: selectedGoalCategory,
           pipe_slug: progress.pipeSlug,
           pipe_index: progress.pipeIndex,
           pipe_count: progress.pipeCount,
@@ -289,19 +314,44 @@ export default function FirstDashboard() {
         });
       }
     },
-    [flowProperties, goalCategory],
+    [flowProperties],
+  );
+
+  const selectGoalOption = useCallback(
+    (category: OnboardingChoiceCategory, prompt = "") => {
+      setGoalCategory(category);
+      setGoal(prompt);
+      setShowCustomGoal(category === "custom");
+      setError(null);
+      posthog.capture("onboarding_goal_option_selected", {
+        ...(flowProperties ?? {}),
+        goal_category: category,
+        selection_source: category === "custom" ? "custom" : "preset_card",
+        time_spent_ms: Date.now() - mountedAtRef.current,
+      });
+    },
+    [flowProperties],
   );
 
   const handleCreate = useCallback(async () => {
     const normalizedGoal = goal.trim();
-    if (!normalizedGoal || completingRef.current || !flowProperties) return;
+    if (
+      !normalizedGoal ||
+      !goalCategory ||
+      goalCategory === "ai_context" ||
+      completingRef.current ||
+      !flowProperties
+    ) {
+      return;
+    }
+    const selectedGoalCategory = goalCategory;
     if (!defaultPreset) {
       setError("AI is not ready yet. Try again in a moment, or skip for now.");
       posthog.capture("onboarding_first_dashboard_failed", {
         ...flowProperties,
         failure_reason: "ai_preset_unavailable",
         stage: "planning",
-        goal_category: goalCategory,
+        goal_category: selectedGoalCategory,
       });
       return;
     }
@@ -321,22 +371,29 @@ export default function FirstDashboard() {
     setStage("planning");
     posthog.capture("onboarding_first_dashboard_goal_submitted", {
       ...flowProperties,
-      goal_category: goalCategory,
-      custom_goal: goalCategory === "custom",
+      goal_category: selectedGoalCategory,
+      custom_goal: selectedGoalCategory === "custom",
       goal_length: lengthBucket(normalizedGoal),
+      ...(selectedGoalCategory === "custom"
+        ? {
+            custom_goal_text: normalizedGoal,
+            custom_goal_text_schema_version: 1,
+          }
+        : {}),
       time_spent_ms: Date.now() - mountedAtRef.current,
     });
-    onboardingFunnel.goalSubmitted(goalCategory, flowProperties);
+    onboardingFunnel.goalSubmitted(selectedGoalCategory, flowProperties);
 
     try {
       await updateSettings({
-        userGoalCategory: goalCategory === "custom" ? "default" : goalCategory,
+        userGoalCategory:
+          selectedGoalCategory === "custom" ? "default" : selectedGoalCategory,
       });
       const preparedView = await withTimeout(
         prepareOnboardingLiveViewShell({
           dashboardId,
           goal: normalizedGoal,
-          goalCategory,
+          goalCategory: selectedGoalCategory,
           resetProgress: true,
         }),
         SHELL_PREPARE_TIMEOUT_MS,
@@ -346,33 +403,33 @@ export default function FirstDashboard() {
       setDashboardPrepared(true);
       const result = await createOnboardingLiveView({
         goal: normalizedGoal,
-        goalCategory,
+        goalCategory: selectedGoalCategory,
         dashboardId,
         preparedView,
         preset: defaultPreset,
         userToken: settings.user?.token ?? null,
         onProgress: (progress) => {
           if (createAttemptRef.current !== attemptId) return;
-          reportProgress(progress);
+          reportProgress(progress, selectedGoalCategory);
         },
       });
       if (createAttemptRef.current !== attemptId) return;
       posthog.capture("onboarding_first_dashboard_created", {
         ...flowProperties,
-        goal_category: goalCategory,
+        goal_category: selectedGoalCategory,
         pipe_count: result.pipeSlugs.length,
         pipe_slugs: result.pipeSlugs,
         block_count: result.blockCount,
         refresh_started_count: result.refreshStartedCount,
         time_spent_ms: Date.now() - mountedAtRef.current,
       });
-      onboardingFunnel.liveViewCreated(goalCategory, flowProperties);
+      onboardingFunnel.liveViewCreated(selectedGoalCategory, flowProperties);
       posthog.capture("onboarding_path_selected", {
         ...flowProperties,
         path: "ai_live_view",
         pipes: result.pipeSlugs,
         pipe_count: result.pipeSlugs.length,
-        goal_category: goalCategory,
+        goal_category: selectedGoalCategory,
         block_count: result.blockCount,
         customized: true,
         time_spent_ms: Date.now() - mountedAtRef.current,
@@ -381,7 +438,7 @@ export default function FirstDashboard() {
         method: "live_view_created",
         pipeCount: result.pipeSlugs.length,
         dashboardBlockCount: result.blockCount,
-        goalCategory,
+        goalCategory: selectedGoalCategory,
         ...flowProperties,
       });
     } catch (setupError) {
@@ -393,7 +450,7 @@ export default function FirstDashboard() {
         failure_reason: knownError?.code ?? "unknown",
         stage: knownError?.stage ?? latestStageRef.current ?? "planning",
         pipe_slug: knownError?.pipeSlug,
-        goal_category: goalCategory,
+        goal_category: selectedGoalCategory,
         time_spent_ms: Date.now() - mountedAtRef.current,
       });
       setError(
@@ -415,8 +472,52 @@ export default function FirstDashboard() {
     updateSettings,
   ]);
 
+  const handleUseWithAi = useCallback(async () => {
+    if (
+      goalCategory !== "ai_context" ||
+      completingRef.current ||
+      !flowProperties
+    ) {
+      return;
+    }
+
+    completingRef.current = true;
+    setError(null);
+    posthog.capture("onboarding_first_dashboard_goal_submitted", {
+      ...flowProperties,
+      goal_category: "ai_context",
+      custom_goal: false,
+      time_spent_ms: Date.now() - mountedAtRef.current,
+    });
+    onboardingFunnel.goalSubmitted("ai_context", flowProperties);
+    posthog.capture("onboarding_path_selected", {
+      ...flowProperties,
+      path: "ai_connections",
+      goal_category: "ai_context",
+      customized: false,
+      time_spent_ms: Date.now() - mountedAtRef.current,
+    });
+
+    try {
+      await completeOnboarding({
+        method: "ai_connections_selected",
+        goalCategory: "ai_context",
+        ...flowProperties,
+      });
+    } catch {
+      completingRef.current = false;
+      setError("Could not open Connections. Try again.");
+    }
+  }, [completeOnboarding, flowProperties, goalCategory]);
+
   const handleContinueWithoutWaiting = useCallback(async () => {
-    if (!canContinueWithoutWaiting || escapeCompletingRef.current || !stage) {
+    if (
+      !canContinueWithoutWaiting ||
+      escapeCompletingRef.current ||
+      !stage ||
+      !goalCategory ||
+      goalCategory === "ai_context"
+    ) {
       return;
     }
 
@@ -502,7 +603,7 @@ export default function FirstDashboard() {
     completingRef.current = true;
     posthog.capture("onboarding_first_dashboard_skipped", {
       ...(flowProperties ?? {}),
-      goal_category: goal ? goalCategory : "none",
+      goal_category: goalCategory ?? "none",
       time_spent_ms: Date.now() - mountedAtRef.current,
     });
     posthog.capture("onboarding_pipe_skipped", {
@@ -518,7 +619,7 @@ export default function FirstDashboard() {
       completingRef.current = false;
       setError("Could not finish setup. Try again.");
     }
-  }, [completeOnboarding, flowProperties, goal, goalCategory]);
+  }, [completeOnboarding, flowProperties, goalCategory]);
 
   if (existingViewsStatus === "loading") {
     return (
@@ -748,48 +849,36 @@ export default function FirstDashboard() {
   return (
     <div className="flex flex-col items-center py-2">
       <div className="w-full max-w-sm">
-        {isAdditionalViewFlow && (
-          <button
-            type="button"
-            onClick={() => {
-              setCreatingAnotherView(false);
-              setError(null);
-            }}
-            className="mb-4 font-mono text-[10px] lowercase text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
-          >
-            back to my Live Views
-          </button>
-        )}
         <h2 className="text-center font-mono text-lg font-semibold lowercase">
-          what should screenpipe help you do
-          {isAdditionalViewFlow ? " next" : " first"}?
+          what do you want{isAdditionalViewFlow ? " next" : " first"}?
         </h2>
         <p className="mx-auto mt-2 max-w-xs text-center font-mono text-[11px] leading-relaxed text-muted-foreground">
-          choose one useful outcome. screenpipe will set up
-          {isAdditionalViewFlow ? " another" : " a"} Live View that starts with
-          real activity, never sample data.
+          pick one. you can change this later.
         </p>
 
-        <div className="mt-5 space-y-2">
-          {ONBOARDING_GOALS.map((suggestion) => {
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          {[...ONBOARDING_GOAL_CHOICES, AI_CONTEXT_CHOICE].map((suggestion) => {
             const selected = goalCategory === suggestion.category;
+            const Icon = GOAL_ICONS[suggestion.category] ?? MessageSquareText;
             return (
               <button
                 key={suggestion.category}
                 type="button"
                 aria-pressed={selected}
                 onClick={() => {
-                  setGoal(suggestion.prompt);
-                  setGoalCategory(suggestion.category);
-                  setError(null);
+                  selectGoalOption(
+                    suggestion.category,
+                    "prompt" in suggestion ? suggestion.prompt : "",
+                  );
                 }}
-                className={`w-full border p-3 text-left transition-colors duration-150 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 ${
+                className={`min-h-28 border p-3 text-left transition-colors duration-150 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 ${
                   selected
                     ? "border-foreground bg-foreground text-background"
                     : "border-border hover:border-foreground"
                 }`}
               >
-                <span className="block font-mono text-xs font-semibold">
+                <Icon className="h-4 w-4" aria-hidden="true" />
+                <span className="mt-3 block font-mono text-xs font-semibold">
                   {suggestion.title}
                 </span>
                 <span
@@ -804,21 +893,51 @@ export default function FirstDashboard() {
           })}
         </div>
 
-        <label className="mt-4 block font-mono text-[10px] lowercase text-muted-foreground">
-          or describe your own
-          <textarea
-            value={goalCategory === "custom" ? goal : ""}
-            maxLength={240}
-            rows={2}
-            placeholder="e.g. show how I spend time across projects"
-            onChange={(event) => {
-              setGoal(event.target.value);
-              setGoalCategory("custom");
-              setError(null);
-            }}
-            className="mt-1.5 w-full resize-none border border-border bg-background p-3 font-mono text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-foreground"
-          />
-        </label>
+        <button
+          type="button"
+          aria-expanded={showCustomGoal}
+          onClick={() => {
+            if (showCustomGoal) {
+              setShowCustomGoal(false);
+              if (goalCategory === "custom") {
+                setGoalCategory(null);
+                setGoal("");
+              }
+              return;
+            }
+            selectGoalOption("custom");
+          }}
+          className={`mt-3 w-full border px-3 py-2 text-left font-mono text-[10px] lowercase transition-colors duration-150 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 ${
+            goalCategory === "custom"
+              ? "border-foreground bg-foreground text-background"
+              : "border-border text-muted-foreground hover:border-foreground hover:text-foreground"
+          }`}
+        >
+          something else
+        </button>
+
+        {showCustomGoal && (
+          <label className="mt-3 block font-mono text-[10px] lowercase text-muted-foreground">
+            describe what you want
+            <textarea
+              autoFocus
+              value={goalCategory === "custom" ? goal : ""}
+              maxLength={240}
+              rows={2}
+              placeholder="e.g. show how I spend time across projects"
+              onChange={(event) => {
+                setGoal(event.target.value);
+                setGoalCategory("custom");
+                setError(null);
+              }}
+              className="mt-1.5 w-full resize-none border border-border bg-background p-3 font-mono text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-foreground"
+            />
+            <span className="mt-1.5 block leading-relaxed">
+              when analytics are enabled, this text is sent to screenpipe to
+              improve these choices.
+            </span>
+          </label>
+        )}
 
         {error && (
           <p
@@ -831,12 +950,20 @@ export default function FirstDashboard() {
 
         <button
           type="button"
-          onClick={handleCreate}
-          disabled={!goal.trim() || !isSettingsLoaded}
+          onClick={
+            goalCategory === "ai_context" ? handleUseWithAi : handleCreate
+          }
+          disabled={
+            !isSettingsLoaded ||
+            !goalCategory ||
+            (goalCategory !== "ai_context" && !goal.trim())
+          }
           className="mt-4 w-full border border-foreground bg-foreground px-3 py-3 font-mono text-xs font-semibold uppercase tracking-wide text-background transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
         >
           {isSettingsLoaded
-            ? `build ${isAdditionalViewFlow ? "another" : "my first"} Live View`
+            ? goalCategory === "ai_context"
+              ? "connect my AI"
+              : `build ${isAdditionalViewFlow ? "another" : "my first"} Live View`
             : "loading AI"}
         </button>
         <button
