@@ -1466,8 +1466,13 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				)}
 
 				{/* Search result navigation indicator — must be outside z-10 image container
-				    so it sits above the z-40 timeline slider and receives clicks */}
-				{inSearchReviewMode && (
+				    so it sits above the z-40 timeline slider and receives clicks.
+				    Gated on `visualFrame` for the same reason the empty state below is:
+				    the keyword-search and highlight stores are global and survive the
+				    timeline unmounting (leaving the Rewind section and coming back), so
+				    the pill would otherwise float over an empty canvas advertising a
+				    match no rendered frame backs. */}
+				{inSearchReviewMode && visualFrame && (
 					<div
 						data-search-result-navigation
 						data-results-length={searchResults.length}
