@@ -2100,7 +2100,7 @@ pub type ConnectionCheck = Arc<
 >;
 
 /// Default execution timeout: 10 minutes.
-const DEFAULT_TIMEOUT_SECS: u64 = 600;
+pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
 /// Cooldown held after a scheduled run finishes *when other scheduled pipes
 /// are still queued behind the execution semaphore*. Spaces consecutive runs

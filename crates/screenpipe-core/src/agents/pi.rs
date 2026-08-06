@@ -153,12 +153,19 @@ const MAX_RATE_LIMIT_RETRIES: usize = 3;
 const RATE_LIMIT_DEFAULT_WAIT_SECS: u64 = 10;
 /// Cap so an oversized `reset_in` can't stall a pipe run indefinitely.
 const RATE_LIMIT_MAX_WAIT_SECS: u64 = 60;
-/// Total time budget for retrying `hosted_ai_capacity_reserved` contention,
-/// matching the gateway's reservation TTL. Unlike a provider rate limit this
-/// error means a sibling chat/pipe is briefly holding the shared hosted-AI
-/// slot, not that anything is wrong, so it gets a time budget instead of
-/// `MAX_RATE_LIMIT_RETRIES`.
-const CAPACITY_RESERVED_MAX_WAIT_SECS: u64 = 600;
+/// Total time budget for retrying `hosted_ai_capacity_reserved` contention.
+/// Unlike a provider rate limit this error means a sibling chat/pipe is briefly
+/// holding the shared hosted-AI slot, not that anything is wrong, so it gets a
+/// time budget instead of `MAX_RATE_LIMIT_RETRIES`.
+///
+/// This must stay well below the run's enclosing timeout
+/// (`pipes::DEFAULT_TIMEOUT_SECS`, 600s). Waiting for the gateway's full
+/// reservation TTL would let contention alone consume the entire budget, so the
+/// outer `tokio::time::timeout` would kill the run at the same moment the slot
+/// freed up: the user waits the full timeout and still gets nothing done. A
+/// fraction of the timeout keeps contention survivable while leaving the
+/// majority of the run for actual work.
+const CAPACITY_RESERVED_MAX_WAIT_SECS: u64 = 180;
 
 /// Parse a `"field": <digits>` JSON number out of a pi error payload.
 fn parse_json_number_field(text: &str, field: &str) -> Option<u64> {
@@ -2102,10 +2109,12 @@ impl AgentExecutor for PiExecutor {
         //
         // Capacity contention isn't a real error — someone else is just using
         // the shared slot — so it gets a time budget
-        // (`CAPACITY_RESERVED_MAX_WAIT_SECS`, matching the gateway's
-        // reservation TTL) instead of `MAX_RATE_LIMIT_RETRIES`: contention
-        // outlasting three short waits would otherwise kill the run even
-        // though the slot frees up shortly after. See `retry_rate_limited_output`.
+        // (`CAPACITY_RESERVED_MAX_WAIT_SECS`) instead of
+        // `MAX_RATE_LIMIT_RETRIES`: contention outlasting three short waits
+        // would otherwise kill the run even though the slot frees up shortly
+        // after. That budget is deliberately a fraction of the enclosing run
+        // timeout so waiting can never consume the whole run.
+        // See `retry_rate_limited_output`.
         output = retry_rate_limited_output(output, &line_tx, || {
             self.spawn_pi_streaming(
                 &pi_path,
@@ -4603,6 +4612,21 @@ mod tests {
     }
 
     #[test]
+    fn capacity_retry_budget_leaves_room_under_the_run_timeout() {
+        // The retry budget and the enclosing pipe timeout were both 600s, so
+        // contention alone could burn the entire run: the outer
+        // `tokio::time::timeout` would fire at the exact moment the slot freed
+        // up and the pipe would do no work at all. Keep the budget a minority
+        // of the timeout so a contended run still has time to finish.
+        let run_timeout = crate::pipes::DEFAULT_TIMEOUT_SECS;
+        assert!(
+            CAPACITY_RESERVED_MAX_WAIT_SECS * 2 < run_timeout,
+            "capacity retry budget ({CAPACITY_RESERVED_MAX_WAIT_SECS}s) must stay well under the \
+             run timeout ({run_timeout}s), or waiting consumes the whole run"
+        );
+    }
+
+    #[test]
     fn test_next_rate_limit_retry_capacity_reserved_stops_at_reservation_ttl() {
         let stderr = r#"429 {"error":"hosted_ai_capacity_reserved","retry_after_seconds":5}"#;
         assert!(next_rate_limit_retry(stderr, 100, CAPACITY_RESERVED_MAX_WAIT_SECS).is_none());
@@ -4760,12 +4784,15 @@ mod tests {
     async fn test_retry_rate_limited_output_capacity_reserved_stops_at_reservation_ttl_live() {
         // The gateway's hint (100s here) is clamped to RATE_LIMIT_MAX_WAIT_SECS
         // (60s) — same safety clamp a generic rate limit gets, so an oversized
-        // hint can't stall a run — leaving 60s waits: a 600s budget allows
-        // exactly 10 retries before the 11th is refused. This is exactly the
-        // kind of interaction between two independently-reasonable pieces of
-        // logic that only a live run of the loop (not the isolated policy
-        // function) catches: this assertion's first draft assumed 100s waits
-        // and 6 retries, and the live test caught the clamp.
+        // hint can't stall a run — leaving 60s waits until the budget is spent.
+        // This is exactly the kind of interaction between two
+        // independently-reasonable pieces of logic that only a live run of the
+        // loop (not the isolated policy function) catches: this assertion's
+        // first draft assumed 100s waits, and the live test caught the clamp.
+        // Derived from the constants so retuning the budget updates the
+        // expectation instead of silently failing here.
+        let expected_retries = CAPACITY_RESERVED_MAX_WAIT_SECS / RATE_LIMIT_MAX_WAIT_SECS;
+        let expected_elapsed = expected_retries * RATE_LIMIT_MAX_WAIT_SECS;
         let capacity_stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"still busy","retry_after_seconds":100}"#;
         let calls = std::cell::RefCell::new(0u32);
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -4780,8 +4807,11 @@ mod tests {
             .expect("retry loop must not error");
 
         assert!(!result.success);
-        assert_eq!(*calls.borrow(), 10);
-        assert_eq!(start.elapsed(), std::time::Duration::from_secs(600));
+        assert_eq!(*calls.borrow(), expected_retries as u32);
+        assert_eq!(
+            start.elapsed(),
+            std::time::Duration::from_secs(expected_elapsed)
+        );
     }
 
     #[test]
