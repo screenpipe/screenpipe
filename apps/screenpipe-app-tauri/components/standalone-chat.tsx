@@ -87,6 +87,7 @@ import {
   usePipeGenerationCompletion,
 } from "@/components/chat/standalone/hooks/use-chat-window-events";
 import type { ChatSendOptions, ContentBlock, Message } from "@/lib/chat/types";
+import { answerPendingAskUserRequest, type AskUserAnswerStatus } from "@/lib/chat/ask-user-requests";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { AGENT_TOPICS, type AgentEventEnvelope } from "@/lib/events/types";
 
@@ -1002,23 +1003,32 @@ export function StandaloneChat({
 
 
   // Pending sp_ask_user UI requests: Pi toolCallId -> extension request id.
-  // Entries resolve when the user replies on the ask card; a failed answer
-  // (e.g. the turn was already aborted) falls back to a plain chat message.
+  // A pending entry is the only handle that can unblock the waiting Pi tool,
+  // so it is consumed inside answerPendingAskUserRequest only after the
+  // backend accepts the answer — failed deliveries keep it for retry.
   const askUiRequestsRef = useRef<Map<string, string>>(new Map());
 
   const answerAskUserRequest = useCallback(async (
     toolCallId: string,
     reply: string,
-  ): Promise<boolean> => {
-    const requestId = askUiRequestsRef.current.get(toolCallId);
-    if (!requestId) return false;
-    askUiRequestsRef.current.delete(toolCallId);
-    const result = await commands.piExtensionUiResponse(
-      piSessionIdRef.current,
-      requestId,
-      { value: reply },
+  ): Promise<AskUserAnswerStatus> => {
+    const status = await answerPendingAskUserRequest(
+      askUiRequestsRef.current,
+      toolCallId,
+      (requestId) => commands.piExtensionUiResponse(
+        piSessionIdRef.current,
+        requestId,
+        { value: reply },
+      ),
     );
-    return result.status === "ok";
+    if (status === "failed") {
+      toast({
+        title: "failed to send your answer",
+        description: "pi is still waiting — use reply to try again",
+        variant: "destructive",
+      });
+    }
+    return status;
   }, [piSessionIdRef]);
 
   const answerPiExtensionUiRequest = useCallback(async (
