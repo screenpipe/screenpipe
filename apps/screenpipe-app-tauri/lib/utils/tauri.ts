@@ -2806,7 +2806,12 @@ export type PiExtensionPackage = { source: string; scope: string; filtered: bool
  * Image content for Pi RPC protocol (pi-ai ImageContent format)
  */
 export type PiImageContent = { type: string; mimeType: string; data: string }
-export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
+export type PiInfo = { running: boolean;
+/**
+ * True while this session has a prompt, queued follow-up, or pending RPC
+ * response. Destructive settings use it to avoid clearing live context.
+ */
+busy: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
 /**
  * Configuration for which AI provider Pi should use.
  * Not `Hash`: the ACP agent config carries an `env` map, so the launch

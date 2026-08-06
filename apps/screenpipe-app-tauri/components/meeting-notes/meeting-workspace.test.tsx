@@ -65,6 +65,13 @@ describe("meeting summary surface", () => {
         { selector: "p" },
       ),
     ).toBeVisible();
+    expect(screen.getByTestId("meeting-summary-surface")).toHaveClass(
+      "select-none",
+    );
+    expect(screen.getByTestId("meeting-summary-reading-column")).toHaveClass(
+      "max-w-[68ch]",
+      "select-text",
+    );
     expect(screen.queryByText(/private draft/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "summarize again" }));
     expect(onGenerate).toHaveBeenCalledOnce();
@@ -98,5 +105,29 @@ describe("meeting summary surface", () => {
 
     expect(screen.getByText("Existing decision.")).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("refreshing summary");
+  });
+
+  it("replaces the skeleton with the real summary as it streams", () => {
+    render(
+      <MeetingSummarySurface
+        note={"## Summary\nEarlier summary."}
+        state="working"
+        detail="it appears here live and saves when finished"
+        streamedSummary="The team **approved** the launch."
+        onGenerate={vi.fn()}
+        canGenerate
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "The team approved the launch.",
+        { selector: "p" },
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Earlier summary.")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("writing summary");
+    expect(screen.getByTestId("meeting-summary-stream-cursor")).toBeVisible();
   });
 });

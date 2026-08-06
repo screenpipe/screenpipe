@@ -109,6 +109,21 @@ impl PipeStore for SqlitePipeStore {
         Ok(())
     }
 
+    async fn set_execution_conversation_id(&self, id: i64, conversation_id: &str) -> Result<()> {
+        use screenpipe_db::write_queue::PipeBindValue;
+        self.db
+            .pipe_execute_write_queued(
+                id,
+                "UPDATE pipe_executions SET conversation_id = ? WHERE id = ?",
+                vec![
+                    PipeBindValue::Text(conversation_id.to_string()),
+                    PipeBindValue::Int(id),
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn finish_execution(
         &self,
         id: i64,
@@ -167,7 +182,7 @@ impl PipeStore for SqlitePipeStore {
             sqlx::query_as::<_, PipeExecutionRow>(
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at, stdout, stderr, exit_code,
-                          error_type, error_message, duration_ms, session_path,
+                          error_type, error_message, duration_ms, session_path, conversation_id,
                           trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ? AND id < ?
@@ -183,7 +198,7 @@ impl PipeStore for SqlitePipeStore {
             sqlx::query_as::<_, PipeExecutionRow>(
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at, stdout, stderr, exit_code,
-                          error_type, error_message, duration_ms, session_path,
+                          error_type, error_message, duration_ms, session_path, conversation_id,
                           trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ?
@@ -210,7 +225,7 @@ impl PipeStore for SqlitePipeStore {
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at,
                           '' AS stdout, '' AS stderr,
-                          exit_code, error_type, error_message, duration_ms, session_path,
+                          exit_code, error_type, error_message, duration_ms, session_path, conversation_id,
                           trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ? AND id < ?
@@ -227,7 +242,7 @@ impl PipeStore for SqlitePipeStore {
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at,
                           '' AS stdout, '' AS stderr,
-                          exit_code, error_type, error_message, duration_ms, session_path,
+                          exit_code, error_type, error_message, duration_ms, session_path, conversation_id,
                           trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ?
@@ -393,7 +408,7 @@ impl PipeStore for SqlitePipeStore {
                 r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                           started_at, finished_at,
                           '' AS stdout, '' AS stderr,
-                          exit_code, error_type, error_message, duration_ms, session_path,
+                          exit_code, error_type, error_message, duration_ms, session_path, conversation_id,
                           trigger_event, trigger_key
                    FROM pipe_executions
                    WHERE pipe_name = ?
@@ -503,6 +518,7 @@ struct PipeExecutionRow {
     error_message: Option<String>,
     duration_ms: Option<i64>,
     session_path: Option<String>,
+    conversation_id: Option<String>,
     trigger_event: Option<String>,
     trigger_key: Option<String>,
 }
@@ -526,6 +542,7 @@ impl From<PipeExecutionRow> for PipeExecution {
             error_message: r.error_message,
             duration_ms: r.duration_ms,
             session_path: r.session_path,
+            conversation_id: r.conversation_id,
             trigger_event: r.trigger_event,
             trigger_key: r.trigger_key,
         }
@@ -817,6 +834,28 @@ mod tests {
         assert_eq!(execs[0].trigger_type, "scheduled");
         assert_eq!(execs[0].model.as_deref(), Some("opus"));
         assert_eq!(execs[0].provider, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persists_continued_conversation_id() {
+        let (store, _tmp) = setup_test_store().await;
+        let id = store
+            .create_execution("daily-brief", "scheduled", "opus", None)
+            .await
+            .unwrap();
+        store
+            .set_execution_conversation_id(id, "pipe:daily-brief:continuous")
+            .await
+            .unwrap();
+
+        let execs = store
+            .get_execution_metadata("daily-brief", 10, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            execs[0].conversation_id.as_deref(),
+            Some("pipe:daily-brief:continuous")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

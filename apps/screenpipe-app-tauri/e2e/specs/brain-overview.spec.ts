@@ -894,6 +894,198 @@ describe("Brain Live Views", function () {
     }
   });
 
+  it("shows AI-proposed Blocks on an empty Canvas before acceptance", async () => {
+    await waitForAppReady();
+    await seedEntitledAccount();
+    await openHomeWithDiagnostics();
+    const emptyViewId = "empty-canvas-ai-review";
+    const proposedBlocks = [
+      {
+        id: "current-priorities",
+        title: "Current priorities",
+        component: "list.v1",
+        width: 6,
+        intent: "Show the current source-backed priorities.",
+        pipeName: null,
+      },
+      {
+        id: "focus-time",
+        title: "Focus time",
+        component: "metric.v1",
+        width: 6,
+        intent: "Calculate source-backed focus time for the selected period.",
+        pipeName: null,
+      },
+      {
+        id: "open-follow-ups",
+        title: "Open follow-ups",
+        component: "table.v1",
+        width: 6,
+        intent: "List source-backed follow-ups that still appear open.",
+        pipeName: null,
+      },
+      {
+        id: "activity-summary",
+        title: "Activity summary",
+        component: "markdown.v1",
+        width: 6,
+        intent: "Summarize source-backed activity for the selected period.",
+        pipeName: null,
+      },
+    ];
+    const piConversation = new PiConversationHarness(
+      "e2e-live-view-empty-canvas-builder",
+    );
+    await piConversation.initialize();
+    await piConversation.configureAppPreset();
+    await restartPiAfterInstallSettles(piConversation, "Empty Canvas model");
+    await piConversation.prompt(
+      "reply with ready",
+      "Empty Canvas model preflight",
+    );
+    await piConversation.waitForRequestCount(1, "Empty Canvas model preflight");
+    await piConversation.clearCaptures();
+    piConversation.setResponseDelay(350);
+    piConversation.setTextResponse(
+      JSON.stringify({
+        operations: proposedBlocks.map((block) => ({ op: "add", block })),
+        note: "Four Blocks are ready for review.",
+      }),
+    );
+
+    try {
+      const existingViews =
+        await invokeOrThrow<BrainView[]>("list_brain_views");
+      if (existingViews.some((candidate) => candidate.id === emptyViewId)) {
+        await invokeOrThrow("delete_brain_view", { id: emptyViewId });
+      }
+      await invokeOrThrow("save_brain_view", {
+        request: {
+          id: emptyViewId,
+          title: "Empty Canvas",
+          expectedRevision: null,
+          timeRange: "7d",
+          periodPolicy: {
+            type: "selectable.v1",
+            values: ["7d", "30d"],
+          },
+          slots: [],
+        },
+      });
+
+      const pipesNav = await waitForTestId("nav-pipes", 10_000);
+      await pipesNav.click();
+      await waitForTestId("section-pipes", 15_000);
+      const brainNav = await waitForTestId("nav-brain", 10_000);
+      await brainNav.click();
+      await waitForTestId("section-brain", 15_000);
+      await selectDashboard(emptyViewId);
+      await $("button=add your first Block").waitForDisplayed({
+        timeout: t(10_000),
+      });
+
+      const prompt = await waitForTestId("live-view-ai-prompt", 10_000);
+      await prompt.setValue("add four useful Blocks to this Canvas");
+      await waitForTestId("live-view-ai-generate", 10_000).then((element) =>
+        element.click(),
+      );
+      await piConversation.waitForRequestCount(
+        1,
+        "Empty Canvas builder request",
+      );
+      const review = await waitForTestId("live-view-ai-review", 45_000);
+      expect(await review.getText()).toContain("Review 4 proposed Blocks");
+
+      const persistedBeforeAcceptance = (
+        await invokeOrThrow<BrainView[]>("list_brain_views")
+      ).find((candidate) => candidate.id === emptyViewId);
+      expect(persistedBeforeAcceptance?.slots).toHaveLength(0);
+
+      const readPreviewAudit = async () =>
+        (await browser.execute(() => {
+          const isVisible = (element: Element | null) => {
+            if (!(element instanceof HTMLElement)) return false;
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden"
+            );
+          };
+          return {
+            canvasVisible: isVisible(
+              document.querySelector("[data-testid='live-view-canvas']"),
+            ),
+            emptyStateVisible: Array.from(
+              document.querySelectorAll("button"),
+            ).some(
+              (button) =>
+                button.textContent?.trim() === "add your first Block" &&
+                isVisible(button),
+            ),
+            visibleBlockIds: Array.from(
+              document.querySelectorAll<HTMLElement>(
+                "[data-testid^='canvas-block-']",
+              ),
+            )
+              .filter(isVisible)
+              .map((element) =>
+                (element.dataset.testid ?? "").replace("canvas-block-", ""),
+              )
+              .sort(),
+          };
+        })) as {
+          canvasVisible: boolean;
+          emptyStateVisible: boolean;
+          visibleBlockIds: string[];
+        };
+      const expectedBlockIds = proposedBlocks.map((block) => block.id).sort();
+      await browser.waitUntil(
+        async () => {
+          const audit = await readPreviewAudit();
+          return (
+            audit.canvasVisible &&
+            !audit.emptyStateVisible &&
+            JSON.stringify(audit.visibleBlockIds) ===
+              JSON.stringify(expectedBlockIds)
+          );
+        },
+        {
+          timeout: t(10_000),
+          interval: 100,
+          timeoutMsg: "proposed Blocks did not render on the empty Canvas",
+        },
+      );
+      const previewAudit = await readPreviewAudit();
+      expect(previewAudit).toEqual({
+        canvasVisible: true,
+        emptyStateVisible: false,
+        visibleBlockIds: expectedBlockIds,
+      });
+      await browser.pause(100);
+      const reviewScreenshot = await saveScreenshot(
+        "brain-empty-canvas-ai-block-review",
+      );
+      expect(existsSync(reviewScreenshot)).toBe(true);
+    } finally {
+      await browser
+        .execute(() => {
+          document
+            .querySelector<HTMLButtonElement>(
+              "[data-testid='live-view-ai-reject-all']",
+            )
+            ?.click();
+        })
+        .catch(() => undefined);
+      await piConversation.dispose();
+      await invokeOrThrow("delete_brain_view", { id: emptyViewId }).catch(
+        () => undefined,
+      );
+    }
+  });
+
   it("reviews Canvas edits per Block without opening Chat", async () => {
     await waitForAppReady();
     // Seed the isolated account before Home navigation so the current

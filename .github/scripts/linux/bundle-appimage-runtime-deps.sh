@@ -7,6 +7,8 @@ set -euo pipefail
 
 APPDIR="${1:-squashfs-root}"
 LIBDIR="${APPDIR}/usr/lib"
+PIPEWIRE_MODULE_DIR="${LIBDIR}/pipewire-0.3"
+PIPEWIRE_CONFIG="${APPDIR}/usr/share/pipewire/client.conf"
 
 mkdir -p "${LIBDIR}"
 
@@ -68,6 +70,13 @@ copy_deps_for() {
 
   while IFS= read -r dep; do
     [ -n "${dep}" ] || continue
+    case "${dep}" in
+      */pipewire-0.3/libpipewire-module-*.so)
+        # PipeWire modules are copied as a validated set beside each other,
+        # rather than flattened into usr/lib by the generic dependency copier.
+        continue
+        ;;
+    esac
     copy_lib "${dep}"
   done < <(ldd_deps "${target}")
 }
@@ -117,7 +126,7 @@ install_screenpipe_launcher() {
   # "screenpipe.desktop". Select by executable contract instead of branding.
   for candidate in "${applications_dir}"/*.desktop; do
     [ -f "${candidate}" ] || continue
-    if grep -Eq '^Exec=screenpipe-app([[:space:]]|$)' "${candidate}"; then
+    if grep -Eq '^Exec=screenpipe-app(-launcher)?([[:space:]]|$)' "${candidate}"; then
       desktop="${candidate}"
       break
     fi
@@ -154,29 +163,81 @@ LAUNCHER
   fi
 }
 
-bundle_spa_support_plugin() {
-  local src
-  local dest="${LIBDIR}/spa-0.2/support/libspa-support.so"
+find_required_file() {
+  local description="$1"
+  local pattern="$2"
+  local found
 
-  src="$(find /usr/lib /lib -path '*/spa-0.2/support/libspa-support.so' -print -quit 2>/dev/null || true)"
-  if [ -z "${src}" ]; then
-    echo "::error::libspa-support.so not found on build host; bundled PipeWire cannot create its main loop" >&2
+  found="$(find /usr/share /usr/lib /lib -path "${pattern}" -type f -print -quit 2>/dev/null || true)"
+  if [ -z "${found}" ]; then
+    echo "::error::${description} not found on build host" >&2
+    return 1
+  fi
+  printf '%s\n' "${found}"
+}
+
+pipewire_config_modules() {
+  local config="$1"
+  awk '
+    /^[[:space:]]*#/ { next }
+    /name[[:space:]]*=[[:space:]]*libpipewire-module-/ {
+      line = $0
+      sub(/^.*name[[:space:]]*=[[:space:]]*/, "", line)
+      sub(/[[:space:]}].*$/, "", line)
+      print line
+    }
+  ' "${config}"
+}
+
+bundle_pipewire_runtime() {
+  local config_src support_src support_dir module module_src plugin dest
+  local module_count=0
+
+  bundle_named_lib "libpipewire-0.3.so.0"
+  if [ ! -f "${LIBDIR}/libpipewire-0.3.so.0" ]; then
+    echo "::error::libpipewire-0.3.so.0 is required for the AppImage PipeWire runtime" >&2
     return 1
   fi
 
-  mkdir -p "$(dirname "${dest}")"
-  cp -L "${src}" "${dest}"
-  chmod 0644 "${dest}" || true
-  copy_deps_for "${src}"
-  echo "bundled SPA support plugin: ${src} -> ${dest}"
+  config_src="$(find_required_file "PipeWire client.conf" '*/pipewire/client.conf')"
+  mkdir -p "$(dirname "${PIPEWIRE_CONFIG}")" "${PIPEWIRE_MODULE_DIR}"
+  cp -L "${config_src}" "${PIPEWIRE_CONFIG}"
+  chmod 0644 "${PIPEWIRE_CONFIG}" || true
+
+  while IFS= read -r module; do
+    [ -n "${module}" ] || continue
+    module_src="$(find_required_file "PipeWire context module ${module}" "*/pipewire-0.3/${module}.so")"
+    dest="${PIPEWIRE_MODULE_DIR}/${module}.so"
+    cp -L "${module_src}" "${dest}"
+    chmod 0644 "${dest}" || true
+    copy_deps_for "${module_src}"
+    module_count=$((module_count + 1))
+    echo "bundled PipeWire context module: ${module_src} -> ${dest}"
+  done < <(pipewire_config_modules "${PIPEWIRE_CONFIG}")
+  if [ "${module_count}" -eq 0 ]; then
+    echo "::error::PipeWire client.conf declares no context modules" >&2
+    return 1
+  fi
+
+  support_src="$(find_required_file "PipeWire SPA support plugin" '*/spa-0.2/support/libspa-support.so')"
+  support_dir="$(dirname "${support_src}")"
+  mkdir -p "${LIBDIR}/spa-0.2/support"
+  for plugin in "${support_dir}"/*.so; do
+    [ -f "${plugin}" ] || continue
+    dest="${LIBDIR}/spa-0.2/support/$(basename "${plugin}")"
+    cp -L "${plugin}" "${dest}"
+    chmod 0644 "${dest}" || true
+    copy_deps_for "${plugin}"
+    echo "bundled SPA support plugin: ${plugin} -> ${dest}"
+  done
 }
 
-wrap_apprun_for_bundled_spa() {
+wrap_apprun_for_bundled_pipewire() {
   local launcher="${APPDIR}/AppRun"
   local original="${APPDIR}/AppRun.screenpipe-original"
 
   [ -e "${launcher}" ] || [ -L "${launcher}" ] || return 0
-  if grep -q "screenpipe bundled SPA runtime" "${launcher}" 2>/dev/null; then
+  if grep -q "screenpipe coherent bundled PipeWire runtime" "${launcher}" 2>/dev/null; then
     return 0
   fi
   if [ -e "${original}" ] || [ -L "${original}" ]; then
@@ -188,8 +249,8 @@ wrap_apprun_for_bundled_spa() {
   cat > "${launcher}" <<'APPRUN'
 #!/bin/sh
 # screenpipe — AI that knows everything you've seen, said, or heard
-# https://screenpi.pe
-# screenpipe bundled SPA runtime
+# https://screenpipe.com
+# screenpipe coherent bundled PipeWire runtime
 
 set -eu
 
@@ -198,12 +259,11 @@ if [ -z "${appdir}" ]; then
   appdir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 fi
 
-bundled_spa_dir="${appdir}/usr/lib/spa-0.2"
-if [ -n "${SPA_PLUGIN_DIR:-}" ]; then
-  export SPA_PLUGIN_DIR="${bundled_spa_dir}:${SPA_PLUGIN_DIR}"
-else
-  export SPA_PLUGIN_DIR="${bundled_spa_dir}"
-fi
+export SPA_PLUGIN_DIR="${appdir}/usr/lib/spa-0.2"
+export PIPEWIRE_MODULE_DIR="${appdir}/usr/lib/pipewire-0.3"
+export PIPEWIRE_CONFIG_NAME="${appdir}/usr/share/pipewire/client.conf"
+unset PIPEWIRE_CONFIG_DIR
+export LD_LIBRARY_PATH="${appdir}/usr/lib/pipewire-0.3:${appdir}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 exec "${appdir}/AppRun.screenpipe-original" "$@"
 APPRUN
@@ -222,12 +282,11 @@ bundle_named_lib "libopenblas.so.0"
 # Generic Wayland capture connects to the desktop portal's PipeWire remote.
 # linuxdeploy can miss this dependency because the capture path is lazy, but
 # the ELF loader still requires the client library before the app can start.
-# libpipewire loads its support.system implementation at runtime from a SPA
-# plugin directory compiled into the build-host library. Bundle the matching
-# plugin and point AppRun at it so Debian's multiarch path is not used on Arch.
-bundle_named_lib "libpipewire-0.3.so.0"
-bundle_spa_support_plugin
-wrap_apprun_for_bundled_spa
+# PipeWire loads client configuration, context modules, and SPA support plugins
+# at runtime. Keep that whole closure from the same build-host package set so
+# the bundled client never loads ABI-incompatible modules from a newer host.
+bundle_pipewire_runtime
+wrap_apprun_for_bundled_pipewire
 install_screenpipe_launcher
 
 # Copy transitive deps for libs we just staged (for example libgfortran for
@@ -256,18 +315,30 @@ if [ -e "${LIBDIR}/libopenblas.so.0" ] \
   exit 1
 fi
 
-SPA_SUPPORT_PLUGIN="${LIBDIR}/spa-0.2/support/libspa-support.so"
-if [ ! -e "${SPA_SUPPORT_PLUGIN}" ]; then
-  echo "::error::bundled SPA support plugin is missing"
+if [ ! -r "${PIPEWIRE_CONFIG}" ]; then
+  echo "::error::bundled PipeWire client.conf is missing"
   exit 1
 fi
-if LD_LIBRARY_PATH="${LIBDIR}:${LD_LIBRARY_PATH:-}" ldd "${SPA_SUPPORT_PLUGIN}" 2>/dev/null | grep -q "not found"; then
-  echo "::error::libspa-support.so still has unresolved AppImage runtime deps"
-  LD_LIBRARY_PATH="${LIBDIR}:${LD_LIBRARY_PATH:-}" ldd "${SPA_SUPPORT_PLUGIN}" || true
-  exit 1
-fi
-if ! grep -q "screenpipe bundled SPA runtime" "${APPDIR}/AppRun" 2>/dev/null; then
-  echo "::error::AppRun does not configure the bundled SPA plugin directory"
+while IFS= read -r module; do
+  target="${PIPEWIRE_MODULE_DIR}/${module}.so"
+  if [ ! -f "${target}" ]; then
+    echo "::error::bundled PipeWire context module is missing: ${module}"
+    exit 1
+  fi
+done < <(pipewire_config_modules "${PIPEWIRE_CONFIG}")
+for target in "${PIPEWIRE_MODULE_DIR}"/*.so "${LIBDIR}"/spa-0.2/support/*.so; do
+  [ -f "${target}" ] || continue
+  if LD_LIBRARY_PATH="${PIPEWIRE_MODULE_DIR}:${LIBDIR}" ldd "${target}" 2>/dev/null | grep -q "not found"; then
+    echo "::error::PipeWire runtime member has unresolved AppImage dependencies: ${target}"
+    LD_LIBRARY_PATH="${PIPEWIRE_MODULE_DIR}:${LIBDIR}" ldd "${target}" || true
+    exit 1
+  fi
+done
+if ! grep -q "screenpipe coherent bundled PipeWire runtime" "${APPDIR}/AppRun" 2>/dev/null \
+  || ! grep -q "PIPEWIRE_MODULE_DIR" "${APPDIR}/AppRun" \
+  || ! grep -q "PIPEWIRE_CONFIG_NAME" "${APPDIR}/AppRun" \
+  || ! grep -q "SPA_PLUGIN_DIR" "${APPDIR}/AppRun"; then
+  echo "::error::AppRun does not select the coherent bundled PipeWire runtime"
   exit 1
 fi
 if [ ! -x "${APPDIR}/usr/bin/screenpipe-app-launcher" ]; then

@@ -1166,11 +1166,11 @@ function HomeContent() {
                         }
                       }}
                       className={cn(
-                        "relative w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
+                        "relative w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg border border-transparent transition-all duration-150 text-left group",
                         isActive
                           ? isTranslucent
                             ? "vibrant-nav-active"
-                            : "bg-card shadow-sm border border-border text-foreground"
+                            : "bg-card shadow-sm border-border text-foreground"
                           : isTranslucent
                             ? "vibrant-nav-item vibrant-nav-hover"
                             : "hover:bg-card/50 text-muted-foreground hover:text-foreground",

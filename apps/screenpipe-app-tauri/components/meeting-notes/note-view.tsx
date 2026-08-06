@@ -68,7 +68,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
-import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
   formatClock,
   formatDuration,
@@ -81,11 +80,6 @@ import type {
 } from "@/lib/utils/live-capture-state";
 import { isLiveCaptureDegraded } from "@/lib/utils/live-capture-state";
 import {
-  buildEnrichedSummarizePrompt,
-  extractImageDataUrlsFromMarkdown,
-  extractPipePromptBody,
-  buildMeetingSummarizeDisplayLabel,
-  fetchMeetingAudio,
   fetchMeetingContext,
   type MeetingContext,
 } from "@/lib/utils/meeting-context";
@@ -115,6 +109,8 @@ import {
   type MeetingNoteDraft,
 } from "./note-save-queue";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
+import { mountAgentEventBus, registerObserver } from "@/lib/events/bus";
+import { parsePipeSessionId } from "@/lib/events/types";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import { copyMeetingToClipboard } from "./copy-meeting";
 import { ConnectedShareDialog } from "@/components/connected-share-dialog";
@@ -136,11 +132,18 @@ import { QUOTA_PLAN_LABELS } from "@/lib/chat/quota-errors";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { MeetingSummaryTransition } from "./meeting-summary-transition";
 import {
+  advanceMeetingSummaryStream,
+  emptyMeetingSummaryStream,
+  type MeetingSummaryStreamState,
+} from "./meeting-summary-stream";
+import {
+  MEETING_READING_COLUMN_CLASS,
   MeetingSummarySurface,
   MeetingWorkspaceTabs,
   type MeetingWorkspaceTab,
 } from "./meeting-workspace";
 import { meetingRetranscribeSuccessCopy } from "./transcript-recovery-copy";
+import { startMeetingSummaryRun } from "./meeting-summary-run";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -225,6 +228,7 @@ export function NoteView({
   );
   const [summaryLifecycle, setSummaryLifecycle] =
     useState<MeetingSummaryLifecycle>({ kind: "idle" });
+  const [summaryStatusRefreshKey, setSummaryStatusRefreshKey] = useState(0);
   const [summaryRevealKey, setSummaryRevealKey] = useState(0);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
   const [activeTab, setActiveTab] = useState<MeetingWorkspaceTab>(() =>
@@ -280,6 +284,32 @@ export function NoteView({
     summaryLifecycle.kind === "finalizing" ||
     summaryLifecycle.kind === "queued" ||
     summaryLifecycle.kind === "running";
+  const retranscriptionSummaryRefreshWorking =
+    transcriptRefreshRequested === true &&
+    !summarizing &&
+    (summaryLifecycle.kind === "finalizing" ||
+      summaryLifecycle.kind === "queued" ||
+      summaryLifecycle.kind === "running");
+  const summaryExecutionId =
+    summaryLifecycle.kind === "queued" || summaryLifecycle.kind === "running"
+      ? summaryLifecycle.execution.id
+      : null;
+  const summaryExecutionIdRef = useRef<number | null>(summaryExecutionId);
+  summaryExecutionIdRef.current = summaryExecutionId;
+  const summaryStreamsRef = useRef(
+    new Map<number, MeetingSummaryStreamState>(),
+  );
+  const [renderedSummaryStream, setRenderedSummaryStream] = useState<{
+    pipeSlug: string;
+    executionId: number;
+    markdown: string;
+  } | null>(null);
+  const streamedSummary =
+    summaryExecutionId != null &&
+    renderedSummaryStream?.pipeSlug === summaryPipeSlug &&
+    renderedSummaryStream.executionId === summaryExecutionId
+      ? renderedSummaryStream.markdown
+      : "";
   const summaryInputUpdatedAt = latestSummaryInputAt(
     meeting.meeting_end,
     transcriptUpdatedAt,
@@ -289,6 +319,43 @@ export function NoteView({
   useEffect(() => {
     if (summaryWorking) summaryRevealPendingRef.current = true;
   }, [summaryWorking]);
+
+  useEffect(() => {
+    const streams = summaryStreamsRef.current;
+    streams.clear();
+    const unregister = registerObserver((envelope) => {
+      if (envelope.source !== "pipe") return;
+      const pipe = parsePipeSessionId(envelope.sessionId);
+      if (!pipe || pipe.pipeName !== summaryPipeSlug) return;
+      const executionId = envelope.executionId ?? pipe.executionId;
+      if (executionId == null) return;
+
+      const next = advanceMeetingSummaryStream(
+        streams.get(executionId) ?? emptyMeetingSummaryStream(),
+        envelope.event,
+      );
+      streams.set(executionId, next);
+      if (streams.size > 8) {
+        const oldestExecutionId = streams.keys().next().value;
+        if (oldestExecutionId !== undefined) {
+          streams.delete(oldestExecutionId);
+        }
+      }
+      if (summaryExecutionIdRef.current === executionId) {
+        setRenderedSummaryStream({
+          pipeSlug: summaryPipeSlug,
+          executionId,
+          markdown: next.markdown,
+        });
+      }
+    });
+    void mountAgentEventBus();
+
+    return () => {
+      unregister();
+      streams.clear();
+    };
+  }, [summaryPipeSlug]);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,6 +453,16 @@ export function NoteView({
           autoSummaryEnabled,
         });
         if (cancelled) return;
+        if (next.kind === "queued" || next.kind === "running") {
+          const buffered = summaryStreamsRef.current.get(next.execution.id);
+          if (buffered?.markdown) {
+            setRenderedSummaryStream({
+              pipeSlug: summaryPipeSlug,
+              executionId: next.execution.id,
+              markdown: buffered.markdown,
+            });
+          }
+        }
         setSummaryLifecycle(next);
 
         if (
@@ -445,6 +522,7 @@ export function NoteView({
     meeting.meeting_end,
     meeting.note,
     summaryPipeSlug,
+    summaryStatusRefreshKey,
     summaryInputUpdatedAt,
     transcriptRefreshRequested,
     transcriptUpdatedAt,
@@ -838,72 +916,31 @@ export function NoteView({
         attendees !== last.attendees ||
         note !== last.note
       ) {
-        await save({ title, attendees, note });
+        await save({ title, attendees, note }, { throwOnError: true });
       }
-      const fresh: MeetingRecord = {
-        ...meeting,
-        title: title || null,
-        attendees: attendees || null,
-        note: note || null,
-      };
-      const noteImages = extractImageDataUrlsFromMarkdown(note);
-      // Re-fetch context just before summarize so the bundle reflects
-      // anything that happened in the last 30s (especially for ongoing
-      // meetings where the cached snapshot can be stale).
-      const ctx = await fetchMeetingContext(fresh);
-      setMeetingCtx(ctx);
-      const transcriptStart = new Date(fresh.meeting_start).toISOString();
-      const transcriptEnd = (
-        fresh.meeting_end ? new Date(fresh.meeting_end) : new Date()
-      ).toISOString();
-      const transcript = await fetchMeetingAudio(
-        transcriptStart,
-        transcriptEnd,
-        5000,
-        fresh.id,
-      );
-
-      // Use the user-picked summary pipe's body as the directive when one is
-      // set. The chat path knows the meeting id so we prepend that and let
-      // the pipe body skip any "find the meeting that just ended" lookup.
-      // Falls back to the built-in instructions if the pipe can't be loaded.
-      let directiveOverride: string | undefined;
-      try {
-        const res = await localFetch(`/pipes/${summaryPipeSlug}`);
-        if (res.ok) {
-          const json: unknown = await res.json();
-          const body = extractPipePromptBody(json);
-          if (body && body.trim().length > 0) {
-            directiveOverride = body;
-          } else {
-            console.warn(
-              `summary pipe ${summaryPipeSlug} response did not include prompt_body; falling back`,
-            );
-          }
-        }
-      } catch (err) {
-        console.warn("failed to fetch summary pipe body, falling back", err);
-      }
-
-      await showChatWithPrefill({
-        context: "",
-        prompt: buildEnrichedSummarizePrompt({
-          meeting: fresh,
-          context: ctx,
-          transcript,
-          noteImages,
-          directiveOverride,
-        }),
-        displayLabel: buildMeetingSummarizeDisplayLabel(fresh),
-        images: noteImages,
-        autoSend: true,
-        source: "meeting-summarize",
-        useHomeChat: true,
+      const meetingEnd = meeting.meeting_end;
+      if (!meetingEnd) throw new Error("meeting has not ended");
+      setActiveTab("summary");
+      const { executionId } = await startMeetingSummaryRun({
+        pipeSlug: summaryPipeSlug,
+        meetingId: meeting.id,
+        meetingEnd,
       });
+      setSummaryLifecycle({
+        kind: "queued",
+        execution: {
+          id: executionId,
+          status: "queued",
+          started_at: new Date().toISOString(),
+          trigger_event: "meeting_ended",
+          trigger_key: String(meeting.id),
+        },
+      });
+      setSummaryStatusRefreshKey((key) => key + 1);
     } catch (err) {
       console.error("failed to summarize meeting", err);
       toast({
-        title: "couldn't open chat",
+        title: "couldn't start summary",
         description: "try again in a moment.",
         variant: "destructive",
       });
@@ -940,8 +977,7 @@ export function NoteView({
         setTranscriptFreshness({
           meetingId: meeting.id,
           updatedAt: body.transcript_updated_at,
-          summaryRefreshRequested:
-            body?.summary_refresh_event_emitted === true,
+          summaryRefreshRequested: body?.summary_refresh_event_emitted === true,
         });
       }
       setTranscriptRefreshKey((key) => key + 1);
@@ -1332,8 +1368,12 @@ export function NoteView({
       summaryLifecycle.kind === "running"
     ) {
       return {
-        title: "summarizing meeting",
-        detail: "you can leave · the summary will appear in this note",
+        title: retranscriptionSummaryRefreshWorking
+          ? "refreshing summary"
+          : "summarizing meeting",
+        detail: retranscriptionSummaryRefreshWorking
+          ? "using the refreshed transcript · it appears here live"
+          : "you can leave · it appears here live and saves when finished",
       };
     }
     if (summaryLifecycle.kind === "completed") {
@@ -1364,7 +1404,9 @@ export function NoteView({
     ? "hide transcript"
     : "show transcript";
   const summaryActionLabel = summaryWorking
-    ? "summarizing meeting"
+    ? retranscriptionSummaryRefreshWorking
+      ? "refreshing summary after retranscription"
+      : "summarizing meeting"
     : !canSummarizeMeeting
       ? "summary unavailable"
       : summaryLifecycle.kind === "completed" ||
@@ -1542,7 +1584,7 @@ export function NoteView({
           aria-labelledby="meeting-tab-notes"
           aria-hidden={activeTab !== "notes"}
           className={cn(
-            "h-full overflow-y-auto [scrollbar-gutter:stable]",
+            "h-full select-none overflow-y-auto [scrollbar-gutter:stable]",
             activeTab !== "notes" && "hidden",
           )}
         >
@@ -1555,7 +1597,13 @@ export function NoteView({
               placeholder={'write notes, or type "/" for blocks'}
               readOnly={summaryWorking}
               summaryRevealKey={summaryRevealKey}
-              className="[&_.ProseMirror]:min-h-[45vh] [&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-7"
+              className={cn(
+                MEETING_READING_COLUMN_CLASS,
+                "select-text [&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-7",
+                summaryWorking
+                  ? "[&_.ProseMirror]:!min-h-0"
+                  : "[&_.ProseMirror]:min-h-[45vh]",
+              )}
             />
             <MeetingSummaryTransition
               phase={summaryTransitionPhase}
@@ -1564,7 +1612,7 @@ export function NoteView({
             />
 
             {meetingCtx?.activity && (
-              <div className="mt-10 space-y-6">
+              <div className="mt-10 select-text space-y-6">
                 <ReplayStrip
                   meetingId={meeting.id}
                   segments={
@@ -1602,6 +1650,7 @@ export function NoteView({
             note={note}
             state={summarySurfaceState}
             detail={summaryStatus.detail}
+            streamedSummary={streamedSummary}
             onGenerate={handleSummaryAction}
             canGenerate={
               canSummarizeMeeting && !summaryWorking && !retranscribing

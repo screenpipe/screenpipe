@@ -1900,6 +1900,53 @@ describe("BrainOverview", () => {
     );
   });
 
+  it("shows proposed Blocks on an empty Canvas before acceptance", async () => {
+    const emptyView: ViewDefinition = {
+      ...populatedView,
+      id: "empty-canvas",
+      title: "Empty Canvas",
+      slots: [],
+    };
+    const proposedBlocks = [
+      ["current-priorities", "Current priorities", "list.v1"],
+      ["focus-time", "Focus time", "metric.v1"],
+      ["open-follow-ups", "Open follow-ups", "table.v1"],
+      ["activity-summary", "Activity summary", "markdown.v1"],
+    ] as const;
+    mocks.listBrainViews.mockResolvedValue({ status: "ok", data: [emptyView] });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: emptyView.title,
+      timeRange: emptyView.timeRange,
+      periodPolicy: emptyView.periodPolicy,
+      note: "Four Blocks are ready for review.",
+      blocks: proposedBlocks.map(([id, title, component]) => ({
+        id,
+        title,
+        component,
+        width: 6,
+        intent: `Show source-backed ${title.toLowerCase()}.`,
+        pipeName: null,
+      })),
+    });
+    render(<BrainOverview />);
+
+    expect(await screen.findByText("add your first Block")).toBeTruthy();
+    fireEvent.change(screen.getByTestId("live-view-ai-prompt"), {
+      target: { value: "add four useful Blocks" },
+    });
+    fireEvent.click(screen.getByTestId("live-view-ai-generate"));
+
+    expect(await screen.findByTestId("live-view-ai-review")).toHaveTextContent(
+      "Review 4 proposed Blocks",
+    );
+    expect(screen.queryByText("add your first Block")).toBeNull();
+    expect(screen.getByTestId("live-view-canvas")).toBeTruthy();
+    for (const [id] of proposedBlocks) {
+      expect(screen.getByTestId(`canvas-block-${id}`)).toBeTruthy();
+    }
+    expect(mocks.saveBrainView).not.toHaveBeenCalled();
+  });
+
   it("accept all applies every proposal in one action", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
