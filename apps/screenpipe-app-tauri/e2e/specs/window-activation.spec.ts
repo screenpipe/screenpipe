@@ -119,7 +119,7 @@ async function destroyChatWindow(): Promise<void> {
       // Internal activation can emit a Space-change notification. Once its
       // suppression window has elapsed, Main must still be logically visible.
       await browser.pause(750);
-      expect(await invokeOrThrow<boolean>("e2e_main_overlay_visible")).toBe(true);
+      expect(await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible")).toBe(true);
 
       // Focus regression guard: the keydown wait below fails fast if the webview
       // never became key. document.hasFocus() was unreliable on hosted macOS
