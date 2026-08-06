@@ -1124,6 +1124,7 @@ describe("Windows core recording pipeline", function () {
     expect(
       await invokeOrThrow<boolean>("plugin:e2e|capture_session_running"),
     ).toBe(true);
+    await invokeOrThrow("plugin:e2e|reset_disk_pressure_notification_latch");
     const initialLowDiskNotifications = (await readNotificationHistory()).filter(
       (entry) => entry.title === "recording stopped — disk almost full",
     ).length;
@@ -1157,6 +1158,20 @@ describe("Windows core recording pipeline", function () {
         },
       );
 
+      // A user restart attempt while the same disk incident is active still
+      // stops capture intent, but must not append or display another alert.
+      await invokeOrThrow("plugin:e2e|mark_capture_intended");
+      expect(
+        await invokeOrThrow<string>("plugin:e2e|handle_disk_space_low", {
+          availableBytes: 1024 * 1024 * 1024,
+        }),
+      ).toBe("capture_stopped_notification_suppressed");
+      expect(
+        (await readNotificationHistory()).filter(
+          (entry) => entry.title === "recording stopped — disk almost full",
+        ),
+      ).toHaveLength(initialLowDiskNotifications + 1);
+
       const health = await requireHealthyLocalApi(activeCfg);
       expect(typeof health.status).toBe("string");
       await browser.waitUntil(
@@ -1180,6 +1195,7 @@ describe("Windows core recording pipeline", function () {
       await invokeOrThrow("plugin:e2e|set_notification_master_enabled", {
         enabled: true,
       });
+      await invokeOrThrow("plugin:e2e|reset_disk_pressure_notification_latch");
     }
   });
 });
