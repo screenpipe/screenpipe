@@ -239,11 +239,12 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
     );
   }
 
+  // Windows can keep the prior app's Pi sidecar files briefly locked after a
+  // preceding E2E phase exits. Let Node retry after killing the full process
+  // tree instead of starting WebDriver with a half-cleaned data directory.
   rmSync(E2E_DATA_DIR, {
     recursive: true,
     force: true,
-    // Windows antivirus/indexing can briefly retain handles after the app
-    // process tree exits. Node retries EBUSY/EPERM/ENOTEMPTY for recursive rm.
     maxRetries: 20,
     retryDelay: 250,
   });
