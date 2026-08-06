@@ -899,6 +899,21 @@ async isServerRunning() : Promise<Result<boolean, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Whether an automated environment has force-disabled telemetry
+ * (`SCREENPIPE_DISABLE_TELEMETRY` / `GITHUB_ACTIONS` / `CI`).
+ *
+ * The Rust senders already consult
+ * [`screenpipe_engine::analytics::telemetry_disabled_by_env`] directly, but the
+ * webview cannot: its PostHog gate in `app/providers.tsx` only sees build-time
+ * `process.env`, so a runtime env var never reaches it. Without this command a
+ * CI run of the shipped bundle still fires `$identify` and mints a real
+ * PostHog person — which is exactly how the Docker AppImage smoke test came to
+ * account for a quarter of weekly "app users".
+ */
+async isTelemetryDisabledByEnv() : Promise<boolean> {
+    return await TAURI_INVOKE("is_telemetry_disabled_by_env");
+},
 async listBrainViewTemplateKits() : Promise<Result<BrainViewTemplateKit[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_brain_view_template_kits") };
