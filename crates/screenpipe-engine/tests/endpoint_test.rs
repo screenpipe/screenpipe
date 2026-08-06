@@ -162,6 +162,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn frame_thumbnail_endpoint_can_disable_nearby_fallback() {
+        let (app, db) = setup_test_app().await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing_path = temp_dir.path().join("missing.jpg");
+        let nearby_path = temp_dir.path().join("nearby.jpg");
+        RgbImage::from_pixel(640, 360, Rgb([20, 180, 80]))
+            .save(&nearby_path)
+            .unwrap();
+
+        db.insert_video_chunk("thumbnail-placeholder.mp4", "exact-thumbnail-device")
+            .await
+            .unwrap();
+        let missing_frame_id = db
+            .insert_frame(
+                "exact-thumbnail-device",
+                Some(Utc::now()),
+                None,
+                Some("MissingThumbnailFixture"),
+                Some("Missing Thumbnail Fixture"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+        let nearby_frame_id = db
+            .insert_frame(
+                "exact-thumbnail-device",
+                Some(Utc::now() + Duration::seconds(1)),
+                None,
+                Some("NearbyThumbnailFixture"),
+                Some("Nearby Thumbnail Fixture"),
+                true,
+                Some(1),
+            )
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE frames SET snapshot_path = ?1 WHERE id = ?2")
+            .bind(missing_path.to_string_lossy().to_string())
+            .bind(missing_frame_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE frames SET snapshot_path = ?1 WHERE id = ?2")
+            .bind(nearby_path.to_string_lossy().to_string())
+            .bind(nearby_frame_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let fallback_uri = format!("/frames/{missing_frame_id}/thumbnail?width=384&quality=75");
+        let fallback = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&fallback_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fallback.status(), StatusCode::OK);
+        let fallback_body = to_bytes(fallback.into_body(), usize::MAX).await.unwrap();
+        let fallback_image = image::load_from_memory(&fallback_body).unwrap();
+        assert_eq!(fallback_image.dimensions(), (384, 216));
+
+        let exact_uri =
+            format!("/frames/{missing_frame_id}/thumbnail?width=384&quality=75&fallback=false");
+        let exact = app
+            .oneshot(
+                Request::builder()
+                    .uri(&exact_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exact.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn frame_thumbnail_endpoint_caches_legacy_video_frame() {
         let (app, db) = setup_test_app().await;
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1216,5 +1297,103 @@ mod tests {
                 println!("old: {} ({})", ocr.ocr_text, ocr.timestamp);
             }
         }
+    }
+
+    /// On-demand OCR must wait on the *shared* capture permit, not run freely.
+    ///
+    /// Search verifies candidates by POSTing to this route, up to three at a
+    /// time, while capture is OCR'ing too. The test holds the one global permit
+    /// and asserts the route cannot proceed, which only passes if the handler
+    /// acquires the same semaphore capture uses.
+    #[tokio::test]
+    async fn on_demand_ocr_waits_for_the_shared_capture_permit() {
+        let (app, db) = setup_test_app().await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let snapshot_path = temp_dir.path().join("permit-fixture.jpg");
+        RgbImage::from_pixel(320, 240, Rgb([12, 12, 12]))
+            .save(&snapshot_path)
+            .unwrap();
+
+        // No stored OCR text, so the handler cannot short-circuit and must take
+        // the real extraction + OCR path the permit guards. The frame carries
+        // accessibility text as its canonical `full_text`, mirroring the search
+        // candidates this route actually verifies.
+        db.insert_video_chunk("permit-placeholder.mp4", "permit-device")
+            .await
+            .unwrap();
+        let canonical_text = "permitcanonicaltoken from the accessibility tree";
+        let frame_id = db
+            .insert_frame(
+                "permit-device",
+                Some(Utc::now()),
+                None,
+                Some("PermitFixture"),
+                Some("Permit Fixture"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE frames SET snapshot_path = ?1, full_text = ?2, text_source = 'accessibility' \
+             WHERE id = ?3",
+        )
+        .bind(snapshot_path.to_string_lossy().to_string())
+        .bind(canonical_text)
+        .bind(frame_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let permit = screenpipe_capture::ocr_semaphore().acquire().await.unwrap();
+
+        let uri = format!("/frames/{frame_id}/text?persist=false");
+        let mut pending = tokio::spawn(async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        });
+
+        assert!(
+            tokio::time::timeout(StdDuration::from_millis(500), &mut pending)
+                .await
+                .is_err(),
+            "on-demand OCR ran while the shared capture permit was held"
+        );
+
+        drop(permit);
+
+        let response = tokio::time::timeout(StdDuration::from_secs(60), pending)
+            .await
+            .expect("request should complete once the permit is released")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // `persist=false` must leave the row alone. Search runs this route over
+        // accessibility-only candidates, so a write here would replace the very
+        // text that made the frame findable.
+        //
+        // The fixture is a flat image, so OCR legitimately returns nothing on
+        // every platform and `persist_on_demand_ocr` also short-circuits on
+        // empty text — the sharper proof that the flag itself gates the write is
+        // the `ocr_tests` pair in `routes/frames.rs`. This assertion guards the
+        // wiring end to end.
+        let (full_text, text_json): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT full_text, text_json FROM frames WHERE id = ?1")
+                .bind(frame_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(full_text.as_deref(), Some(canonical_text));
+        assert!(
+            text_json.is_none(),
+            "read-only verification must not store OCR boxes"
+        );
     }
 }
