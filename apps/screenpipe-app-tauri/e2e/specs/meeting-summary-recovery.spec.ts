@@ -224,6 +224,13 @@ describe("meeting summary recovery controls", function () {
       "/meetings/status",
     );
     expect(status.active).toBe(false);
+    const seededMeetings = await apiRequest<Array<{ id: number }>>(
+      cfg,
+      "/meetings?limit=10",
+    );
+    expect(seededMeetings.some((meeting) => meeting.id === meetingId)).toBe(
+      true,
+    );
     await openHomeWindow();
   });
 
@@ -250,6 +257,21 @@ describe("meeting summary recovery controls", function () {
 
   it("keeps retranscribe in the footer and lets a completed summary run again", async () => {
     const meetingsNav = await waitForTestId("nav-meetings", 25_000);
+    if ((await meetingsNav.getAttribute("aria-current")) === "page") {
+      // The preceding meeting-note spec can leave this shared app process on
+      // a selected meeting. Leave the section first so reopening Meetings
+      // remounts its list and fetches the fixture created in this spec.
+      const homeNav = await waitForTestId("nav-home", 10_000);
+      await homeNav.click();
+      await browser.waitUntil(
+        async () => (await meetingsNav.getAttribute("aria-current")) !== "page",
+        {
+          timeout: t(10_000),
+          interval: 100,
+          timeoutMsg: "meetings navigation did not reset to the list entry",
+        },
+      );
+    }
     await meetingsNav.click();
     await browser.waitUntil(
       async () =>
