@@ -105,13 +105,23 @@ import { toast } from "@/components/ui/use-toast";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { localFetch } from "@/lib/api";
-import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
+import {
+  materializePipeExecutionConversation,
+  pipeConversationNeedsRefresh,
+  pipeExecutionErrorMessage,
+  pipeExecutionFinishedAtMs,
+} from "@/lib/pipe-conversation";
 import {
   buildPipeExecutionHistoryPage,
+  isPipeExecutionDeleted,
   isTerminalPipeExecutionStatus,
+  pipeConversationDeletionKey,
+  pipeExecutionConversationId,
+  pipeExecutionDeletionKey,
   shouldReloadPipeExecutionHistory,
+  uniquePipeExecutionConversations,
 } from "@/lib/pipe-execution-status";
-import { parsePipeSessionId, pipeSessionId } from "@/lib/events/types";
+import { parsePipeSessionId } from "@/lib/events/types";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
   PIPES_SIDEBAR_COLLAPSED_EVENT,
@@ -152,45 +162,7 @@ interface SidebarPipeExecution {
   stdout: string;
   stderr: string;
   error_message: string | null;
-}
-
-function pipeExecutionConversation(execution: SidebarPipeExecution): ChatConversation {
-  const conversation = pipeExecutionToConversation(
-    execution.pipe_name,
-    execution.id,
-    execution.stdout || execution.stderr || "",
-    execution.started_at,
-  );
-  const startedAt = execution.started_at ?? execution.finished_at ?? new Date().toISOString();
-  const finishedAtMs = execution.finished_at
-    ? new Date(execution.finished_at).getTime()
-    : conversation.updatedAt;
-
-  conversation.id = pipeSessionId(execution.pipe_name, execution.id);
-  conversation.kind = "pipe-run";
-  conversation.titleSource = "user";
-  conversation.pipeContext = {
-    pipeName: execution.pipe_name,
-    executionId: execution.id,
-    startedAt,
-  };
-  conversation.updatedAt = Number.isFinite(finishedAtMs)
-    ? finishedAtMs
-    : conversation.updatedAt;
-
-  if (conversation.messages.length === 0) {
-    const detail =
-      execution.error_message?.trim() ||
-      execution.stderr?.trim() ||
-      `scheduled task execution ${execution.status}`;
-    conversation.messages = [{
-      id: `pipe-execution-status-${execution.id}`,
-      role: "assistant",
-      content: detail,
-      timestamp: conversation.updatedAt,
-    }];
-  }
-  return conversation;
+  conversation_id: string | null;
 }
 
 function mergePipeRunRecords(
@@ -434,11 +406,11 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       );
       unlistenFns.push(unlistenSaved);
 
-      const unlistenDeleted = await listen<{ id: string }>("chat-deleted", (event) => {
-        const id = event.payload?.id;
+      const unlistenDeleted = await listen<{ id: string; deletionKey?: string }>("chat-deleted", (event) => {
+        const { id, deletionKey } = event.payload ?? {};
         if (!id) return;
         if (parsePipeSessionId(id)) {
-          deletedPipeExecutionIdsRef.current.add(id);
+          deletedPipeExecutionIdsRef.current.add(deletionKey ?? id);
           persistDeletedPipeExecutionIds(deletedPipeExecutionIdsRef.current);
         }
         useChatStore.getState().actions.drop(id);
@@ -670,23 +642,47 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
         hasMore,
         nextCursor,
       } = buildPipeExecutionHistoryPage(executions, PIPE_RUNS_PER_GROUP);
-      const visibleExecutions = terminalExecutions.filter(
-        (execution) =>
-          !deletedPipeExecutionIdsRef.current.has(
-            pipeSessionId(execution.pipe_name, execution.id),
-          ),
+      const alreadyLoadedIds = append
+        ? new Set((loadedPipeRuns[pipeName] ?? []).map((run) => run.id))
+        : undefined;
+      const visibleExecutions = uniquePipeExecutionConversations(
+        terminalExecutions,
+        alreadyLoadedIds,
+      ).filter(
+        (execution) => !isPipeExecutionDeleted(
+          execution,
+          deletedPipeExecutionIdsRef.current,
+        ),
       );
       const candidates = await Promise.all(visibleExecutions.map(async (execution) => {
-        const sessionId = pipeSessionId(execution.pipe_name, execution.id);
+        const sessionId = pipeExecutionConversationId(execution);
         executionMetadataRef.current.set(sessionId, execution);
         const savedConversation = await loadConversationFile(sessionId);
-        const conversation = savedConversation ?? pipeExecutionConversation(execution);
+        const conversation = savedConversation ??
+          materializePipeExecutionConversation(execution);
         if (!savedConversation) syntheticExecutionIdsRef.current.add(sessionId);
         const meta = conversationMetaFromJson(conversation);
         if (!meta) return null;
         executionConversationsRef.current.set(conversation.id, conversation);
+        const record = sessionRecordFromMeta(meta);
+        const executionUpdatedAt = pipeExecutionFinishedAtMs(execution);
+        const needsRefresh = pipeConversationNeedsRefresh(
+          savedConversation,
+          execution,
+        );
+        record.updatedAt = Math.max(record.updatedAt, executionUpdatedAt);
+        record.pipeContext = {
+          pipeName: execution.pipe_name,
+          executionId: execution.id,
+          startedAt:
+            execution.started_at ?? execution.finished_at ?? undefined,
+        };
+        if (needsRefresh) record.lastContentAt = executionUpdatedAt;
+        const executionError = pipeExecutionErrorMessage(execution);
+        record.status = executionError ? "error" : "idle";
+        record.lastError = executionError;
         return {
-          record: sessionRecordFromMeta(meta),
+          record,
           belongsInPipeGroup: !meta.hidden && !meta.pinned,
         };
       }));
@@ -983,23 +979,16 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     metadata: SidebarPipeExecution,
   ): Promise<boolean> => {
     const existing = await loadConversationFile(id);
-    if (existing) return true;
+    if (!pipeConversationNeedsRefresh(existing, metadata)) return true;
 
     let fullExecution: SidebarPipeExecution | undefined;
     try {
-      const params = new URLSearchParams({
-        limit: "1",
-        before_id: String(metadata.id + 1),
-      });
       const response = await localFetch(
-        `/pipes/${encodeURIComponent(metadata.pipe_name)}/executions?${params.toString()}`,
+        `/pipes/${encodeURIComponent(metadata.pipe_name)}/executions/${metadata.id}`,
       );
       if (response.ok) {
         const payload = await response.json();
-        fullExecution = Array.isArray(payload.data)
-          ? (payload.data as SidebarPipeExecution[])
-              .find((execution) => execution.id === metadata.id)
-          : undefined;
+        fullExecution = payload?.data as SidebarPipeExecution | undefined;
       }
     } catch {
       // Report the same bounded failure below. Do not persist the metadata-only
@@ -1017,7 +1006,10 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       return false;
     }
 
-    const conversation = pipeExecutionConversation(fullExecution);
+    const conversation = materializePipeExecutionConversation(
+      fullExecution,
+      existing,
+    );
     executionConversationsRef.current.set(id, conversation);
     await saveConversationFile(conversation);
     syntheticExecutionIdsRef.current.delete(id);
@@ -1112,8 +1104,15 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const handleDeleteConfirmed = async (id: string) => {
-    if (parsePipeSessionId(id)) {
-      deletedPipeExecutionIdsRef.current.add(id);
+    const parsedPipeSession = parsePipeSessionId(id);
+    let pipeDeletionKey: string | undefined;
+    if (parsedPipeSession) {
+      const executionMetadata = executionMetadataRef.current.get(id);
+      const session = useChatStore.getState().sessions[id];
+      pipeDeletionKey = executionMetadata
+        ? pipeExecutionDeletionKey(executionMetadata)
+        : pipeConversationDeletionKey(id, session?.pipeContext?.executionId) ?? id;
+      deletedPipeExecutionIdsRef.current.add(pipeDeletionKey);
       persistDeletedPipeExecutionIds(deletedPipeExecutionIdsRef.current);
       executionConversationsRef.current.delete(id);
       executionMetadataRef.current.delete(id);
@@ -1126,7 +1125,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       // ignore
     }
     try {
-      await emit("chat-deleted", { id });
+      await emit("chat-deleted", { id, deletionKey: pipeDeletionKey });
     } catch {
       // ignore
     }
@@ -1810,6 +1809,7 @@ function Section({
     <div className="flex flex-col min-h-0">
       <button
         type="button"
+        data-testid={`sidebar-section-${title}`}
         onClick={() => onCollapsedChange(!collapsed)}
         className={cn(
           // Light header row — avoid the "boxed section" look.

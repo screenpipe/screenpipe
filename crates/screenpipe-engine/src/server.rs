@@ -1146,11 +1146,9 @@ impl SCServer {
             let pipe_stream_hub = Arc::new(crate::pipe_stream::PipeStreamHub::new());
             {
                 let hub = pipe_stream_hub.clone();
-                pm.lock()
-                    .await
-                    .set_on_output_line(Arc::new(move |pipe, exec_id, line| {
-                        hub.publish(pipe, exec_id, line)
-                    }));
+                pm.lock().await.add_on_output_line(Arc::new(
+                    move |pipe, exec_id, _continues_chat, line| hub.publish(pipe, exec_id, line),
+                ));
             }
             let pipe_routes = Router::new()
                 .route("/", axum::routing::get(crate::pipes_api::list_pipes))

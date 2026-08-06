@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, Loader2, Settings } from "lucide-react";
+import { ChevronDown, Loader2, Settings, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
@@ -14,6 +14,7 @@ import { ChatMessageList, type ChatMessageListProps } from "@/components/chat/st
 import type { ConversationMeta } from "@/lib/chat-storage";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
+import type { ContinuousPipeChatPolicy } from "@/lib/pipe-chat-policy";
 
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 
@@ -40,6 +41,7 @@ interface ChatMainPaneProps {
   messages: Message[];
   isPreparingPrefill: boolean;
   activePipeExecution: ActivePipeExecution;
+  continuousPipeChat: ContinuousPipeChatPolicy | null;
   isLoading: boolean;
   isStreaming: boolean;
   disabledReason: string | null;
@@ -48,6 +50,7 @@ interface ChatMainPaneProps {
   needsLogin: boolean;
   onOpenLogin: () => void | Promise<void>;
   onOpenSettings: () => void | Promise<void>;
+  onOpenPipeSettings: () => void | Promise<void>;
   summaryCardsProps: React.ComponentProps<typeof SummaryCards>;
   messageListProps: ChatMessageListProps;
   isUserScrolledUp: boolean;
@@ -72,6 +75,7 @@ export function ChatMainPane({
   messages,
   isPreparingPrefill,
   activePipeExecution,
+  continuousPipeChat,
   isLoading,
   isStreaming,
   disabledReason,
@@ -80,6 +84,7 @@ export function ChatMainPane({
   needsLogin,
   onOpenLogin,
   onOpenSettings,
+  onOpenPipeSettings,
   summaryCardsProps,
   messageListProps,
   isUserScrolledUp,
@@ -114,6 +119,45 @@ export function ChatMainPane({
             messages.length === 0 && !isPreparingPrefill && !activePipeExecution
               && "min-h-full flex flex-col items-center justify-center"
           )}>
+            {continuousPipeChat && (
+              <div
+                data-testid="pipe-continuous-chat-state"
+                role="status"
+                aria-live="polite"
+                className="flex items-start gap-3 border border-border/60 bg-muted/30 px-3 py-2.5"
+              >
+                <Workflow className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium">
+                    {continuousPipeChat.state === "on"
+                      ? "one chat"
+                      : continuousPipeChat.state === "off"
+                        ? "memory paused"
+                        : continuousPipeChat.state === "missing"
+                          ? "scheduled task unavailable"
+                          : "checking one-chat memory"}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {continuousPipeChat.state === "on"
+                      ? "Future runs and your replies share context here."
+                      : continuousPipeChat.state === "off"
+                        ? "Future runs start separate chats. Saved context stays here until you clear it."
+                        : continuousPipeChat.state === "missing"
+                          ? "This transcript is kept, but replies are disabled until you reinstall the task."
+                          : "The saved transcript is available while screenpipe checks the current task setting."}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 px-2 text-[11px]"
+                  onClick={onOpenPipeSettings}
+                >
+                  manage
+                </Button>
+              </div>
+            )}
             {activePipeExecution && (
               <PipeContextBanner
                 pipeName={activePipeExecution.name}
