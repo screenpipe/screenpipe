@@ -35,4 +35,13 @@ describe("getFrameThumbnailSources", () => {
     expect(sources.src).toContain("token=secret%20key");
     expect(sources.srcSet.match(/token=secret%20key/g)).toHaveLength(2);
   });
+
+  it("disables nearby-frame fallback for truth-sensitive thumbnails", () => {
+    const sources = getFrameThumbnailSources(42, undefined, {
+      fallback: false,
+    });
+
+    expect(sources.src).toContain("fallback=false");
+    expect(sources.srcSet.match(/fallback=false/g)).toHaveLength(2);
+  });
 });

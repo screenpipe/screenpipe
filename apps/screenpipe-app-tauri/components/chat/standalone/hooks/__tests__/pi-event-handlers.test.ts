@@ -4,8 +4,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  connectionActionFromToolResult,
   firstAgentEndAssistantError,
   isPiPromptStartTimeout,
+  isTerminalQuotaError,
   piPromptStartTimeoutMessage,
   textFromAssistantMessages,
   textFromToolResult,
@@ -43,6 +45,40 @@ describe("pi foreground event helpers", () => {
   });
 });
 
+describe("connectionActionFromToolResult", () => {
+  it("builds a connect card from a needs_connection sentinel", () => {
+    const block = connectionActionFromToolResult(
+      JSON.stringify({
+        status: "needs_connection",
+        connectionId: "notion",
+        name: "Notion",
+        message: "Connect Notion to continue.",
+      }),
+    );
+    expect(block).toEqual({
+      type: "connection_action",
+      connectionId: "notion",
+      connectionName: "Notion",
+      icon: "notion",
+      extensionReason: "Connect Notion to continue.",
+    });
+  });
+
+  it("falls back to the id when no name is given", () => {
+    const block = connectionActionFromToolResult(
+      JSON.stringify({ status: "needs_connection", connectionId: "gmail" }),
+    );
+    expect(block?.connectionName).toBe("gmail");
+  });
+
+  it("ignores non-sentinel tool output", () => {
+    expect(connectionActionFromToolResult("just some text")).toBeNull();
+    expect(connectionActionFromToolResult(JSON.stringify({ status: "connected", connectionId: "notion" }))).toBeNull();
+    expect(connectionActionFromToolResult(JSON.stringify({ status: "needs_connection" }))).toBeNull();
+    expect(connectionActionFromToolResult('{"status":"needs_connection", broken')).toBeNull();
+  });
+});
+
 describe("pi steering helpers", () => {
   it("builds a prompt that preserves original request and ordered steering messages", () => {
     const prompt = buildSteerPrompt([
@@ -69,5 +105,31 @@ describe("pi steering helpers", () => {
     expect(prompt).toContain("Original user request:\nwrite a summary");
     expect(prompt).toContain("1. make it shorter\n2. focus on risks");
     expect(prompt).toContain("Final steering message:\nfocus on risks");
+  });
+});
+
+describe("isTerminalQuotaError", () => {
+  it("treats usage-limit and plan-gate rejections as terminal", () => {
+    for (const error of [
+      'HTTP 429 {"error":"daily_cost_limit_exceeded","required_plan":"business"}',
+      'HTTP 429 {"error":"hosted_ai_allowance_exceeded","lane":"auto"}',
+      '{"error":"credits_exhausted"}',
+      "free_chat_limit_exceeded",
+      '{"error":"model_not_allowed","required_plan":"business"}',
+    ]) {
+      expect(isTerminalQuotaError(error)).toBe(true);
+    }
+  });
+
+  it("keeps transient failures retryable", () => {
+    for (const error of [
+      "HTTP 429 Too Many Requests",
+      "rate limit exceeded. Please wait 9 seconds.",
+      '{"error":"priced_request_in_flight"}',
+      "HTTP 503 service unavailable",
+      "socket hang up",
+    ]) {
+      expect(isTerminalQuotaError(error)).toBe(false);
+    }
   });
 });

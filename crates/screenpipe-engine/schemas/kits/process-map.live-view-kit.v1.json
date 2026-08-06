@@ -1,0 +1,100 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "process-map",
+  "title": "Process map",
+  "description": "Map one repeated workflow from trigger to handoffs, friction, controls, and a safe improvement.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "automate-my-work",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "process-map",
+    "title": "Process map",
+    "revision": 1,
+    "timeRange": "7d",
+    "periodPolicy": {
+      "type": "selectable.v1",
+      "values": ["7d", "30d"]
+    },
+    "blocks": [
+      {
+        "id": "trigger-and-outcome",
+        "title": "Trigger and outcome",
+        "kind": "markdown.v1",
+        "width": 6,
+        "order": 0,
+        "intent": "Identify one repeated workflow observed in the selected period. State its source-backed trigger, intended outcome, and the evidence boundary without merging unrelated workflows.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "observed-steps",
+        "title": "Observed steps",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 1,
+        "intent": "Map the selected workflow as an ordered sequence of observed steps. Include the application or system and supporting timestamp for each step when available; mark unobserved transitions as unknown.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "handoffs",
+        "title": "People and handoffs",
+        "kind": "table.v1",
+        "width": 6,
+        "order": 2,
+        "intent": "Show source-backed people, roles, systems, or queues involved in the selected workflow and where work changes hands. Do not infer an owner that was not observed.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "bottlenecks",
+        "title": "Friction and bottlenecks",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 3,
+        "intent": "List repeated waits, rework, manual copying, context switching, or error risk observed in the selected workflow. Separate direct evidence from interpretation.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "controls-and-exceptions",
+        "title": "Controls and exceptions",
+        "kind": "table.v1",
+        "width": 6,
+        "order": 4,
+        "intent": "Map observed review steps, approvals, exception paths, and safety checks in the selected workflow. Keep risky decisions and external writes explicitly human-controlled.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "improvement-path",
+        "title": "Safe improvement path",
+        "kind": "markdown.v1",
+        "width": 6,
+        "order": 5,
+        "intent": "Recommend the smallest source-backed process improvement or automation trial, including what remains human-approved and how to measure success before expanding it.",
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      }
+    ],
+    "createdAt": "2026-08-02T00:00:00Z",
+    "updatedAt": "2026-08-02T00:00:00Z"
+  }
+}

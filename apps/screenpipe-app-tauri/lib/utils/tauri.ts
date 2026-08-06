@@ -249,9 +249,9 @@ async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
  * Check only screen recording permission without triggering a dialog.
  *
  * This command is polled as soon as onboarding renders, before the user has
- * clicked anything. It must use preflight directly: the broader core Tauri
- * check may perform a real capture probe in debug builds, which macOS treats
- * as a permission request.
+ * clicked anything. Both checks used by `screen_recording_permission_state`
+ * are silent preflights: this must not perform a real capture probe or call
+ * the request API, either of which can surface the system prompt out of order.
  *
  * It honors the engine's enumeration verdict for the same reason
  * `do_permissions_check` does — otherwise onboarding renders screen recording
@@ -389,237 +389,6 @@ async disableOverlayClickThrough() : Promise<Result<null, string>> {
 async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check", { initialCheck });
 },
-/**
- * E2E helper: distinguish a real CaptureSession from capture intent alone.
- */
-async e2eCaptureSessionRunning() : Promise<Result<boolean, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_capture_session_running") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Read-only lifecycle snapshot for the packaged desktop regression.
- */
-async e2eDbHardFaultState() : Promise<Result<JsonValue, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_db_hard_fault_state") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: emit a deterministic chat stream from the Rust side.
- *
- * This keeps chat performance tests close to production's Pi stdout path:
- * one backend command starts the stream, then the app emits `agent_event`
- * envelopes into the WebView. Tests avoid the extra WebView→Rust→WebView
- * bridge hop that would come from calling `plugin:event|emit` for every token.
- */
-async e2eEmitAgentStream(sessionId: string, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_agent_stream", { sessionId, deltaCount }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: publish the same typed core event as the real disk probe.
- */
-async e2eEmitDiskSpaceLow(availableBytes: number) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_disk_space_low", { availableBytes }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper for the scheduled-pipe path: feed synthetic pipe stdout
- * through the same Rust-side callback adapter production uses, then let the
- * frontend's default pipe handlers record it as a completed pipe run.
- */
-async e2eEmitPipeStream(pipeName: string, executionId: number, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_pipe_stream", { pipeName, executionId, deltaCount }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper for an extension-triggered turn that begins after the original
- * assistant response has settled. This matches pi-subagents async completion:
- * Pi persists a visible custom message, then `triggerTurn: true` starts a new
- * assistant turn without a new user `message_start` event.
- */
-async e2eEmitSettledAgentFollowUp(sessionId: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_settled_agent_follow_up", { sessionId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: execute the production policy handler directly and return its
- * explicit outcome. This avoids sleep-based assertions; the settings E2E also
- * publishes through the typed event bus to cover the production subscription.
- */
-async e2eHandleDiskSpaceLow(availableBytes: number) : Promise<Result<DiskPressureOutcome, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_handle_disk_space_low", { availableBytes }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Damage only an E2E-owned table in the disposable database, then route the
- * real SQLITE_CORRUPT result through the production manager and app hook.
- */
-async e2eInjectDbHardFault() : Promise<Result<JsonValue, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_inject_db_hard_fault") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: read the status text from the menu that was successfully
- * installed into the native tray, not merely the desired health state.
- */
-async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_installed_tray_recording_status") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: read back the persisted guard value before publishing an event.
- */
-async e2eLowDiskGuardEnabled() : Promise<Result<boolean, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_low_disk_guard_enabled") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: report whether the main overlay is logically visible.
- *
- * The main window uses platform-specific "hide" semantics (macOS NSPanel with
- * alpha=0, Windows/Linux hidden WebviewWindow). Tests need a stable signal that
- * the overlay has been dismissed when opening other surfaces (e.g. search).
- */
-async e2eMainOverlayVisible() : Promise<boolean> {
-    return await TAURI_INVOKE("e2e_main_overlay_visible");
-},
-/**
- * E2E helper: model an active capture intent without requiring physical
- * screen/audio devices on the CI runner.
- */
-async e2eMarkCaptureIntended() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_mark_capture_intended") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E-only: detach and close the owned-browser child webview, resetting the
- * singleton to its "no child attached" state. Lets
- * `zzz-owned-browser-headless.spec.ts` establish a deterministic baseline so it
- * can prove that a *fresh* background (headless) eval actually creates a
- * working webview — not merely reuse one a prior spec left attached. Mirrors
- * `e2e_owned_browser_visible`'s gating: a no-op in production binaries, only
- * active under the `e2e` feature.
- */
-async e2eOwnedBrowserDetach() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_owned_browser_detach") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E-only probe: whether the owned-browser native webview is currently shown.
- * Mirrors `e2e_main_overlay_visible` — internal visibility state stays hidden
- * in production binaries and is only exposed under the `e2e` feature. Used by
- * `zz-owned-browser-background-nav.spec.ts` to assert a background agent/pipe
- * navigation does not reveal the browser over a non-chat view.
- */
-async e2eOwnedBrowserVisible() : Promise<boolean> {
-    return await TAURI_INVOKE("e2e_owned_browser_visible");
-},
-/**
- * E2E-only accelerated reproduction of an idle capture heartbeat pause that
- * recovers as the user returns. The real incident accumulated 114 idle stale
- * checks, then the first input both woke capture and crossed the attended
- * alert threshold before the next healthy check arrived.
- */
-async e2eRecordingHealthReturnRace() : Promise<Result<JsonValue, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_recording_health_return_race") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: update the native store without depending on a mounted settings
- * webview. Used by the recording-enabled Windows lane.
- */
-async e2eSetLowDiskGuardEnabled(enabled: boolean) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_set_low_disk_guard_enabled", { enabled }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: prove critical recording-stopped alerts bypass the user's
- * ordinary notification master switch.
- */
-async e2eSetNotificationMasterEnabled(enabled: boolean) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_set_notification_master_enabled", { enabled }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: drive the health-to-native-tray status transition.
- */
-async e2eSetTrayRecordingStatus(status: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("e2e_set_tray_recording_status", { status }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * E2E helper: report whether the shortcut reminder overlay is visibly shown.
- *
- * The reminder window is hidden rather than destroyed, so WebDriver can keep a
- * stale handle after users disable it from Settings > Display.
- */
-async e2eShortcutReminderVisible() : Promise<boolean> {
-    return await TAURI_INVOKE("e2e_shortcut_reminder_visible");
-},
 async enableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("enable_keychain_encryption") };
@@ -717,6 +486,9 @@ async getActiveDataDir() : Promise<Result<string, string>> {
 async getAppIdentifier() : Promise<string> {
     return await TAURI_INVOKE("get_app_identifier");
 },
+async getAppScreenCaptureProtection() : Promise<ScreenCaptureProtectionStatus> {
+    return await TAURI_INVOKE("get_app_screen_capture_protection");
+},
 /**
  * Get the app-local focus/notification server port.
  */
@@ -808,13 +580,6 @@ async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promi
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
-},
-/**
- * Returns which E2E seeds are requested (env SCREENPIPE_E2E_SEED, comma-separated).
- * Rust uses "onboarding" in setup to complete onboarding at startup.
- */
-async getE2eSeedFlags() : Promise<string[]> {
-    return await TAURI_INVOKE("get_e2e_seed_flags");
 },
 async getEnterpriseHostIdentity() : Promise<EnterpriseHostIdentity> {
     return await TAURI_INVOKE("get_enterprise_host_identity");
@@ -933,12 +698,23 @@ async getPendingUpdate() : Promise<Result<PendingUpdateSnapshot | null, null>> {
 },
 /**
  * Current recording-health overlay state: "normal" | "failure" | "fixing" |
- * "recovered", optionally suffixed "|<detail>" (boot-phase label while
- * fixing). The shortcut-reminder webview pulls this on mount, then stays
- * current via the "recording-health-state" event.
+ * "recovered", optionally suffixed "|<detail>" (a concise failure reason or
+ * boot-phase label while fixing). The shortcut-reminder webview pulls this on
+ * mount, then stays current via the "recording-health-state" event.
  */
 async getRecordingHealthState() : Promise<string> {
     return await TAURI_INVOKE("get_recording_health_state");
+},
+/**
+ * Frontend access to the same validated URL used by Rust Pi clients.
+ */
+async getScreenpipeAiGatewayUrl() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_screenpipe_ai_gateway_url") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * Tauri command: absolute path of the screenpipe base dir (where store.bin
@@ -1074,8 +850,8 @@ async installBrainViewTemplateKit(request: InstallBrainViewTemplateKitRequest) :
 },
 /**
  * Install the two built-in screenpipe skills into a supported external agent.
- * MCP registration stays in the frontend because that path uses the app's
- * bundled bun binary and injects the current local API key.
+ * Explicit Settings actions still call this narrow command; first-run native
+ * background setup shares the same engine skill installer directly.
  */
 async installExternalAgentSkills(target: string) : Promise<Result<string[], string>> {
     try {
@@ -1122,6 +898,21 @@ async isServerRunning() : Promise<Result<boolean, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Whether an automated environment has force-disabled telemetry
+ * (`SCREENPIPE_DISABLE_TELEMETRY` / `GITHUB_ACTIONS` / `CI`).
+ *
+ * The Rust senders already consult
+ * [`screenpipe_engine::analytics::telemetry_disabled_by_env`] directly, but the
+ * webview cannot: its PostHog gate in `app/providers.tsx` only sees build-time
+ * `process.env`, so a runtime env var never reaches it. Without this command a
+ * CI run of the shipped bundle still fires `$identify` and mints a real
+ * PostHog person — which is exactly how the Docker AppImage smoke test came to
+ * account for a quarter of weekly "app users".
+ */
+async isTelemetryDisabledByEnv() : Promise<boolean> {
+    return await TAURI_INVOKE("is_telemetry_disabled_by_env");
 },
 async listBrainViewTemplateKits() : Promise<Result<BrainViewTemplateKit[], string>> {
     try {
@@ -1520,7 +1311,7 @@ async performOcrOnImage(imageBase64: string) : Promise<Result<string, string>> {
 },
 /**
  * Abort current Pi operation. Priority command — cancels all pending commands
- * in the queue and sends abort directly. Waits for the SDK's done event.
+ * in the queue and sends abort directly. Waits for its exact SDK response.
  */
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -1536,6 +1327,73 @@ async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
 async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_abort_active", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Whether launching this agent will trigger a first-run package install (a
+ * slow, silent-looking wait). The preset editor uses this to show an
+ * "Installing <agent>…" hint instead of a bare "loading…" label. Cheap cache
+ * stat; false for binary/cached agents.
+ */
+async piAcpAgentDownloadPending(agentId: string) : Promise<boolean> {
+    return await TAURI_INVOKE("pi_acp_agent_download_pending", { agentId });
+},
+async piAcpAgentInstallStatus(agentId: string) : Promise<AcpAgentInstallStatus> {
+    return await TAURI_INVOKE("pi_acp_agent_install_status", { agentId });
+},
+/**
+ * Probe an ACP adapter for its advertised model/mode selectors without a
+ * chat: spawn the hidden runtime, let it initialize and create a session,
+ * capture the acp_session_config event, and tear everything down. Returns
+ * the raw event JSON. Fails soft with the adapter's error message (e.g.
+ * sign-in required) so the preset editor can show it as a hint.
+ */
+async piAcpProbeAgent(agent: AcpAgentConfig) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_probe_agent", { agent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Re-show the agent's sign-in methods without signing out: the runtime re-runs
+ * its auth flow, which re-emits the sign-in card. Picking a method re-runs that
+ * method's login (Claude's `--cli auth login`, Codex's ACP ChatGPT flow), which
+ * overwrites the credential in place. We never force a logout, so a user never
+ * loses their existing login as a side effect of re-authenticating.
+ */
+async piAcpReauthenticate(sessionId: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_reauthenticate", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Change one ACP session configuration option (model, mode, or any other
+ * selector the adapter advertised through `acp_session_config`). Select
+ * options take the value id string; boolean options take "true"/"false".
+ */
+async piAcpSetConfigOption(sessionId: string | null, optionId: string, value: string, isBoolean: boolean | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_config_option", { sessionId, optionId, value, isBoolean }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Switch the ACP session mode (e.g. a permission mode) advertised through
+ * `acp_session_config`. Allowed while a prompt is streaming.
+ */
+async piAcpSetMode(sessionId: string | null, modeId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_mode", { sessionId, modeId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1626,7 +1484,7 @@ async piListExtensionPackages() : Promise<Result<PiExtensionPackage[], string>> 
 /**
  * Start a new Pi session (clears conversation history).
  * Serialized through the queue — waits for any in-flight work to complete,
- * then sends new_session and waits for the SDK's done event before returning.
+ * then sends new_session and waits for its exact SDK response before returning.
  */
 async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -1724,6 +1582,19 @@ async piSetThinkingLevel(sessionId: string | null, level: string) : Promise<Resu
 async piStart(sessionId: string | null, projectDir: string, userToken: string | null, providerConfig: PiProviderConfig | null) : Promise<Result<PiInfo, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_start", { sessionId, projectDir, userToken, providerConfig }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start a private Pi session and submit its first prompt as one operation.
+ * Foreground surfaces that only care about agent events should not have to
+ * round-trip through WebView between process readiness and prompt acceptance.
+ */
+async piStartAndPrompt(sessionId: string, projectDir: string, userToken: string | null, providerConfig: PiProviderConfig | null, message: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_start_and_prompt", { sessionId, projectDir, userToken, providerConfig, message }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2099,6 +1970,14 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
 }
 },
 /**
+ * Restart only after the user explicitly clicks the in-app action. macOS's
+ * native Screen Recording sheet includes a "Later" choice; closing that sheet
+ * must never be treated as consent to relaunch screenpipe.
+ */
+async restartAfterScreenRecordingPermission() : Promise<void> {
+    await TAURI_INVOKE("restart_after_screen_recording_permission");
+},
+/**
  * Banner-click restart. Mirror the auto-update path: gate, stop server, then
  * spawn the replacement app and `_exit` the old process so C/C++ atexit
  * handlers cannot abort during restart. See 2026-06-10 and 2026-07-02 reports.
@@ -2172,12 +2051,13 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 },
 /**
  * Persist the user's enterprise admin status, team API token, and the org's
- * team API base URL so the pi-agent's `screenpipe-team` skill knows whether
- * to install itself and where to point.
+ * team API base URL. The Enterprise app uses the role/license/token fields to
+ * decide whether to inject `screenpipe-team`; the native CLI resolves the API
+ * base and token from the same file when that skill invokes it.
  *
  * Called by the frontend right after a policy fetch confirms admin
  * role. Storing this alongside the license key in `enterprise.json`
- * keeps everything pi-agent needs in one file the skill can read
+ * keeps the Enterprise app and native CLI on one local configuration contract
  * without a Tauri round-trip.
  *
  * All fields are optional so callers can update one at a time —
@@ -2224,6 +2104,20 @@ async searchNavigateToTimeline(timestamp: string, frameId: number | null, search
 async setApiAuthKey(key: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_api_auth_key", { key }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Apply the user's preference immediately to every currently-live webview.
+ * Persistence remains owned by the settings store; accepting the value here
+ * avoids a read-after-write race between the frontend store and native window
+ * APIs when the switch is clicked.
+ */
+async setAppScreenCaptureProtection(hidden: boolean) : Promise<Result<ScreenCaptureProtectionStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_app_screen_capture_protection", { hidden }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2387,11 +2281,11 @@ async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
  * Called by the frontend after fetching the `syncStreams` block from
  * `/api/enterprise/policy`. Flat params rather than a struct so the
  * specta-generated TS binding stays trivial. `frame_images` is the mode
- * string ("off" | "cited" | "all"; legacy "true" accepted) — parsed
- * fail-closed by FrameImagesMode::parse.
+ * string ("off" | "cited" | "all"; legacy "true" accepted) and invalid
+ * values fail closed in FrameImagesMode::parse.
  */
-async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, feedback: string, frameImages: string) : Promise<void> {
-    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots, feedback, frameImages });
+async setSyncStreams(frames: boolean, parsed: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, feedback: string, frameImages: string) : Promise<void> {
+    await TAURI_INVOKE("set_sync_streams", { frames, parsed, audio, uiEvents, memories, snapshots, feedback, frameImages });
 },
 async setTrayHealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_health_icon");
@@ -2525,6 +2419,19 @@ async spawnScreenpipe(overrideArgs: string[] | null) : Promise<Result<null, stri
 async startCapture() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("start_capture") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start the protected database repair selected from the persistent `/notify`
+ * recovery card. The command returns immediately while recovery continues in
+ * the background and reports progress back through `/notify`.
+ */
+async startDatabaseRecovery() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_database_recovery") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2748,36 +2655,60 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number;
-/**
- * The external adapter to launch when `provider` is `acp`.
- */
-acpAgent?: AcpAgentConfig | null }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic" |
-/**
- * External Agent Client Protocol adapter, launched via the ACP runtime.
- */
-"acp"
-/**
- * The external ACP adapter to launch when `backend` is `acp`.
- */
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "acp" | "pi" | "anthropic"
 export type AcpAgentConfig = {
 /**
- * Catalog id (for example `claude-acp`) or `custom`.
+ * Registry id (for example `codex-acp`) or `custom`.
  */
 id: string;
 /**
- * Executable for a custom adapter; built-in ids resolve by id when absent.
+ * Optional executable. Built-in registry adapters resolve by id when absent.
  */
 command?: string | null;
 /**
- * Arguments passed to the adapter verbatim, without a shell.
+ * Arguments passed verbatim without a shell.
  */
 args?: string[];
 /**
  * Environment passed only to the supervised adapter process.
  */
-env?: { [key in string]: string } }
+env?: { [key in string]: string };
+/**
+ * Optional ACP authentication method id.
+ */
+authMethod?: string | null;
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
+/**
+ * Whether a built-in agent's CLI is installed on this computer. Binary agents
+ * (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run
+ * via the bundled bun and are always available. The preset editor uses this to
+ * gate saving and to show an install prompt instead of a cryptic spawn error.
+ */
+export type AcpAgentInstallStatus = { requiresInstall: boolean; installed: boolean; command: string | null; installUrl: string | null }
+export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
+/**
+ * Keys with empty values inherit from the desktop process environment.
+ */
+env?: { [key in string]: string };
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new. Options the adapter no longer advertises are
+ * ignored at apply time.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -2921,8 +2852,6 @@ export type DiscoveredHost = { host: string; port: number; user: string | null; 
  * Only set when `HostName` resolves to an IP different from the alias.
  */
 alias?: string | null }
-export type DiskPressureOutcome = "guard_disabled" | "capture_already_stopped" | "capture_stopped" | "stop_failed"
-export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type EngineEvent = { name: string; data: JsonValue }
 export type EnterpriseHostIdentity = { machine_id_hash: string | null; os_user_id_hash: string | null }
@@ -2966,7 +2895,7 @@ export type OAuthStatus = { connected: boolean; display_name: string | null;
  */
 needs_attention?: boolean }
 export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
-export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
+export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "restartRequired" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;
 /**
@@ -2988,11 +2917,6 @@ downloaded: boolean;
  * True when download failed with 401/403 — user must sign in.
  */
 auth_required: boolean }
-/**
- * Which transport backend Pi uses. Absent means the native Pi RPC agent;
- * `acp` runs an external Agent Client Protocol adapter through the hidden
- * runtime (see acp_runtime.rs).
- */
 export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
 export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
@@ -3000,20 +2924,30 @@ export type PiExtensionPackage = { source: string; scope: string; filtered: bool
  * Image content for Pi RPC protocol (pi-ai ImageContent format)
  */
 export type PiImageContent = { type: string; mimeType: string; data: string }
-export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
+export type PiInfo = { running: boolean;
+/**
+ * True while this session has a prompt, queued follow-up, or pending RPC
+ * response. Destructive settings use it to avoid clearing live context.
+ */
+busy: boolean; projectDir: string | null; pid: number | null; sessionId: string | null;
+/**
+ * A non-fatal startup outcome, such as the user declining an ACP login.
+ * Genuine process/configuration failures still use the command error.
+ */
+startupError: string | null }
 /**
  * Configuration for which AI provider Pi should use.
- * Not `Hash`: the ACP agent config carries an `env` map, so the launch
- * fingerprint hashes a canonical serialization instead.
+ * Not `Hash` (it carries an `env: HashMap` via the ACP agent config); the
+ * launch fingerprint hashes a canonical serialization instead.
  */
 export type PiProviderConfig = {
 /**
- * Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
- * external adapter through the hidden ACP runtime.
+ * Transport backend. Omitted keeps the native Pi RPC implementation;
+ * `acp` runs a registry-compatible adapter through the official Rust SDK.
  */
 backend?: PiBackend | null;
 /**
- * Adapter configuration, required when `backend` is `acp`.
+ * ACP adapter configuration when `backend` is `acp`.
  */
 acpAgent?: AcpAgentConfig | null;
 /**
@@ -3044,7 +2978,18 @@ maxContextChars?: number | null;
 /**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
-systemPrompt?: string | null }
+systemPrompt?: string | null;
+/**
+ * Optional exact Pi tool allowlist for bounded agent surfaces. `None`
+ * preserves the normal Chat tool surface; an empty list disables tools.
+ */
+allowedTools?: string[] | null;
+/**
+ * A prior ACP session id to reattach to instead of creating a fresh
+ * session, set only when reopening a conversation whose agent process
+ * is gone. Ignored by the native Pi backend.
+ */
+resumeSessionId?: string | null }
 /**
  * A user prompt that's been enqueued but not yet written to Pi's stdin.
  * Surfaced to the UI so the chat can render "queued" cards while a prior
@@ -3153,6 +3098,7 @@ endTime: string;
  */
 recordMode: string }
 export type SchedulerStatus = { running: boolean; last_sync: string | null; last_error: string | null }
+export type ScreenCaptureProtectionStatus = { requestedHidden: boolean; effectiveHidden: boolean; platformSupported: boolean; e2EBypass: boolean; windowLabels: string[] }
 /**
  * Which AI projection to build from the existing screen/accessibility stream.
  *
@@ -3208,20 +3154,13 @@ audioDevices: string[];
  */
 useSystemDefaultAudio: boolean;
 /**
- * Experimental: capture System Audio via the CoreAudio Process Tap API
- * (macOS 14.4+) instead of ScreenCaptureKit. The tap sidesteps SCK's
- * display-enumeration failures after sleep/wake and the GPU/compositor
- * wake overhead, but it cannot see audio rendered through a
- * VoiceProcessing AudioUnit (Zoom / Google Meet / Microsoft Teams all
- * use one for echo cancellation), so on meeting audio it silently
- * captures zeroed buffers even though tap creation succeeds.
- *
- * Default `false` (see `default_experimental_coreaudio_system_audio`).
- * SCK captures at the display compositor, which does see VoiceProcessing
- * output, so it is the right default for anyone on calls. Users who hit
- * SCK's sleep/wake display-enumeration bug can still opt in; when the tap
- * is on and creation fails (permission, macOS <14.4, OS quirk), stream.rs
- * falls back to the SCK path automatically. Ignored on non-macOS platforms.
+ * Capture System Audio via the CoreAudio Process Tap API on macOS 14.4+
+ * instead of ScreenCaptureKit. The Rust deserialization default remains
+ * `false` for headless/non-desktop callers, while desktop settings migration
+ * V3 enables it automatically. Initial tap creation failures fall back to
+ * SCK; runtime failures disconnect the stream so the device manager can
+ * reconstruct it through the same backend-selection path. Ignored on
+ * non-macOS platforms.
  */
 experimentalCoreaudioSystemAudio?: boolean;
 /**
@@ -3757,6 +3696,11 @@ overlayMode?: string;
  */
 showOverlayInScreenRecording?: boolean;
 /**
+ * Hide screenpipe windows from screenshots and screen-sharing viewers
+ * while keeping them visible and interactive on the user's own display.
+ */
+hideAppInScreenShare?: boolean;
+/**
  * When true, the chat window stays above all other windows (default: true).
  */
 chatAlwaysOnTop?: boolean;
@@ -3768,7 +3712,7 @@ chatAlwaysOnTop?: boolean;
 showRestartNotifications?: boolean;
 /**
  * Stop capture before the data volume is completely full. Search, pipes,
- * and the local API remain available. Explicitly opt-in for now.
+ * and the local API remain available. Safety-on unless explicitly disabled.
  */
 stopRecordingOnLowDisk?: boolean;
 /**

@@ -16,9 +16,11 @@ import { showChatWithPrefill } from "@/lib/chat-utils";
 import { localFetch, isLocalApiUrl } from "@/lib/api";
 import { routeNotificationDeeplink } from "@/lib/notifications/actions";
 import {
+  notificationActionAnalyticsProperties,
   notificationAnalyticsProperties,
   type NotificationAnalyticsContext,
 } from "@/lib/notification-analytics";
+import { appServerFetch } from "@/lib/notifications/app-server";
 
 // notify_rust on Linux calls block_on for D-Bus inside the tokio runtime,
 // which panics and kills the worker thread. Skip OS notifications on Linux.
@@ -97,8 +99,6 @@ const NotificationHandler: React.FC = () => {
         // PostHog analytics (same as webview panel)
         const posthog = (await import("posthog-js")).default;
         posthog.capture("notification_shown", {
-          type: data.type,
-          id: data.id,
           ...notificationAnalyticsProperties(data, "toast"),
         });
 
@@ -130,7 +130,6 @@ const NotificationHandler: React.FC = () => {
   useEffect(() => {
     const unlisten = listen<string>("native-notification-action", async (event) => {
       let actionType: string | null = null;
-      let actionName: string | null = null;
       let analytics = notificationAnalyticsProperties(
         nativeNotificationRef.current,
         "toast",
@@ -138,7 +137,6 @@ const NotificationHandler: React.FC = () => {
       try {
         const action = JSON.parse(event.payload);
         actionType = action.type ?? null;
-        actionName = action.action ?? null;
         console.log("native notification action:", action);
         const notification = nativeNotificationRef.current;
         analytics = notificationAnalyticsProperties(
@@ -159,9 +157,7 @@ const NotificationHandler: React.FC = () => {
           return;
         }
         posthog.capture("notification_action", {
-          action: action.action,
-          actionType: action.type,
-          action_type: action.type,
+          ...notificationActionAnalyticsProperties(action.type),
           ...analytics,
         });
         // Copy keeps the native panel open, so retain its source context for a
@@ -256,7 +252,7 @@ const NotificationHandler: React.FC = () => {
           // knows HD capture actually started. Gated on res.ok so a failed
           // start never shows a false "started" toast.
           if (action.action === "record-hd" && res.ok) {
-            await localFetch("/notify", {
+            await appServerFetch("/notify", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -338,11 +334,8 @@ const NotificationHandler: React.FC = () => {
         try {
           const posthog = (await import("posthog-js")).default;
           posthog.capture("notification_action_error", {
-            action: actionName,
-            actionType,
-            action_type: actionType,
+            ...notificationActionAnalyticsProperties(actionType),
             ...analytics,
-            error: String(e),
           });
         } catch {
           // Analytics must never hide the original action failure.

@@ -22,6 +22,7 @@ vi.mock("@/components/rewind/media", () => ({
 }));
 
 import {
+  isSpeakerContinuation,
   SpeakerParagraph,
   TranscriptRows,
   type SpeakerBlock,
@@ -32,9 +33,11 @@ const block: SpeakerBlock = {
   speakerId: 7,
   speakerName: "speaker",
   startMs: Date.parse("2026-07-29T19:00:00.000Z"),
+  endMs: Date.parse("2026-07-29T19:00:02.000Z"),
   text: "the transcript row should stay stable across unrelated health updates",
   segmentCount: 1,
   source: "background",
+  final: true,
   firstAudioChunkId: 42,
   firstAudioFilePath: "",
 };
@@ -98,5 +101,75 @@ describe("SpeakerParagraph render isolation", () => {
     );
 
     expect(mocks.speakerPopoverRenders).toHaveBeenCalledTimes(1);
+  });
+
+  it("groups nearby turns from the same speaker without hiding uncertainty", () => {
+    const partial = {
+      ...block,
+      key: "live-2",
+      startMs: block.endMs + 1_000,
+      endMs: block.endMs + 1_000,
+      text: "this phrase is still being transcribed",
+      source: "live" as const,
+      final: false,
+      firstAudioChunkId: 0,
+    };
+    const { getAllByTestId, getByLabelText } = render(
+      <TranscriptRows
+        blocks={[block, partial]}
+        query=""
+        onSpeakerAssigned={vi.fn()}
+      />,
+    );
+
+    expect(getAllByTestId("transcript-speaker")).toHaveLength(1);
+    expect(getAllByTestId("transcript-bubble")).toHaveLength(2);
+    expect(getAllByTestId("transcript-row")[1]).toHaveAttribute(
+      "data-final",
+      "false",
+    );
+    const partialIndicator = getByLabelText("transcribing partial text");
+    expect(partialIndicator).toBeInTheDocument();
+    expect(partialIndicator.firstElementChild).toHaveClass("bg-foreground");
+    expect(isSpeakerContinuation(block, partial)).toBe(true);
+    expect(
+      isSpeakerContinuation(block, {
+        ...partial,
+        startMs: block.endMs + 31_000,
+        endMs: block.endMs + 31_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("uses monochrome theme tokens instead of blue or purple speaker colors", () => {
+    const onSpeakerAssigned = vi.fn();
+    const { getByTestId, rerender } = render(
+      <SpeakerParagraph
+        block={{ ...block, speakerName: "me" }}
+        query=""
+        onSpeakerAssigned={onSpeakerAssigned}
+      />,
+    );
+
+    expect(getByTestId("transcript-speaker").parentElement).toHaveClass(
+      "text-foreground",
+    );
+    expect(getByTestId("transcript-bubble")).toHaveClass(
+      "bg-foreground/[0.07]",
+    );
+
+    rerender(
+      <SpeakerParagraph
+        block={block}
+        query=""
+        onSpeakerAssigned={onSpeakerAssigned}
+      />,
+    );
+
+    expect(getByTestId("transcript-speaker").parentElement).toHaveClass(
+      "text-muted-foreground",
+    );
+    expect(getByTestId("transcript-bubble")).toHaveClass("bg-muted/80");
+    expect(document.body.innerHTML).not.toMatch(/(?:sky|violet)-/);
   });
 });

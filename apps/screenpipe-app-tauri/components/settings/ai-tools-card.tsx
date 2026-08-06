@@ -8,8 +8,8 @@
 // Settings > Connections. One place to see every AI tool detected on this
 // machine, connect them all in one click, connect/remove a single tool, or
 // disconnect everything (two-step confirm). Connect always leads; disconnect
-// never headlines. All install/uninstall logic lives in lib/ai-tools-mcp so
-// this card and the onboarding connect-all can never drift.
+// never headlines. First-run setup runs in native Rust; this card remains the
+// visible repair, explicit connect, and explicit removal surface.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, Check, Loader2, Plus, RotateCw } from "lucide-react";

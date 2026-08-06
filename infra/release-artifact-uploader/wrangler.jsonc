@@ -1,0 +1,14 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "screenpipe-release-artifact-uploader",
+	"main": "src/index.js",
+	"compatibility_date": "2026-08-04",
+	"workers_dev": true,
+	"preview_urls": false,
+	"r2_buckets": [
+		{
+			"binding": "RELEASES_BUCKET",
+			"bucket_name": "screenpipe-releases"
+		}
+	]
+}

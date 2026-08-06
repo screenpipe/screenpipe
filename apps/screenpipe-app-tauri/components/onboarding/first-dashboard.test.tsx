@@ -135,7 +135,7 @@ describe("FirstDashboard", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: /follow through after meetings/i,
+        name: /review my day/i,
       }),
     );
     fireEvent.click(
@@ -146,12 +146,12 @@ describe("FirstDashboard", () => {
       expect(mocks.createOnboardingLiveView).toHaveBeenCalledTimes(1),
     );
     expect(mocks.updateSettings).toHaveBeenCalledWith({
-      userGoalCategory: "meeting_follow_through",
+      userGoalCategory: "work_patterns",
     });
     expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
       expect.objectContaining({
-        goal: expect.stringContaining("meeting follow-through"),
-        goalCategory: "meeting_follow_through",
+        goal: expect.stringContaining("daily review dashboard"),
+        goalCategory: "work_patterns",
         userToken: "user-token",
       }),
     );
@@ -160,7 +160,7 @@ describe("FirstDashboard", () => {
         method: "live_view_created",
         pipeCount: 1,
         dashboardBlockCount: 5,
-        goalCategory: "meeting_follow_through",
+        goalCategory: "work_patterns",
         live_view_flow_variant: "first_live_view",
         existing_live_view_count_bucket: "none",
       }),
@@ -171,7 +171,7 @@ describe("FirstDashboard", () => {
     );
     expect(submitted?.[1]).toEqual(
       expect.objectContaining({
-        goal_category: "meeting_follow_through",
+        goal_category: "work_patterns",
         custom_goal: false,
         live_view_flow_variant: "first_live_view",
         existing_live_view_count_bucket: "none",
@@ -179,6 +179,7 @@ describe("FirstDashboard", () => {
     );
     expect(submitted?.[1]).not.toHaveProperty("goal");
     expect(submitted?.[1]).not.toHaveProperty("prompt");
+    expect(submitted?.[1]).not.toHaveProperty("custom_goal_text");
   });
 
   it("shows the Screenpipe context-to-Live-View build sequence", async () => {
@@ -192,7 +193,7 @@ describe("FirstDashboard", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: /follow through after meetings/i,
+        name: /ask about my work/i,
       }),
     );
     fireEvent.click(
@@ -235,7 +236,7 @@ describe("FirstDashboard", () => {
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: /follow through after meetings/i,
+        name: /ask about my work/i,
       }),
     );
     fireEvent.click(
@@ -257,7 +258,7 @@ describe("FirstDashboard", () => {
     );
     expect(mocks.completeOnboarding).toHaveBeenCalledWith({
       method: "live_view_deferred",
-      goalCategory: "meeting_follow_through",
+      goalCategory: "work_memory",
       live_view_flow_variant: "first_live_view",
       existing_live_view_count_bucket: "none",
     });
@@ -268,19 +269,23 @@ describe("FirstDashboard", () => {
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_first_dashboard_build_bypassed",
       expect.objectContaining({
-        goal_category: "meeting_follow_through",
+        goal_category: "work_memory",
         stalled_stage: "planning",
       }),
     );
   });
 
-  it("accepts a custom outcome without sending its text to PostHog", async () => {
+  it("captures submitted custom text only after disclosing it", async () => {
     render(<FirstDashboard />);
 
+    fireEvent.click(
+      await screen.findByRole("button", { name: /something else/i }),
+    );
+    expect(
+      screen.getByText(/this text is sent to screenpipe/i),
+    ).toBeInTheDocument();
     fireEvent.change(
-      await screen.findByPlaceholderText(
-        /show how I spend time across projects/i,
-      ),
+      screen.getByPlaceholderText(/show how I spend time across projects/i),
       { target: { value: "show my private project work" } },
     );
     fireEvent.click(
@@ -302,9 +307,10 @@ describe("FirstDashboard", () => {
       expect.objectContaining({
         goal_category: "custom",
         custom_goal: true,
+        custom_goal_text: "show my private project work",
+        custom_goal_text_schema_version: 1,
       }),
     );
-    expect(JSON.stringify(submitted?.[1])).not.toContain("private project");
   });
 
   it("offers four job-first paths without asking users to self-segment", async () => {
@@ -312,18 +318,18 @@ describe("FirstDashboard", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: /remember and resume my work/i,
+        name: /ask about my work/i,
       }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /follow through after meetings/i }),
+      screen.getByRole("button", { name: /review my day/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /understand how I work/i }),
+      screen.getByRole("button", { name: /use with my AI/i }),
     ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
-        name: /turn repeated work into a process/i,
+        name: /automate repeated work/i,
       }),
     );
     fireEvent.click(
@@ -344,6 +350,39 @@ describe("FirstDashboard", () => {
     expect(submitted?.[1]).toEqual(
       expect.objectContaining({
         goal_category: "process_automation",
+      }),
+    );
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_goal_option_selected",
+      expect.objectContaining({
+        goal_category: "process_automation",
+        selection_source: "preset_card",
+      }),
+    );
+  });
+
+  it("routes the AI-context choice to Connections without creating a Live View", async () => {
+    render(<FirstDashboard />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /use with my AI/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /connect my AI/i }));
+
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "ai_connections_selected",
+        goalCategory: "ai_context",
+        live_view_flow_variant: "first_live_view",
+        existing_live_view_count_bucket: "none",
+      }),
+    );
+    expect(mocks.createOnboardingLiveView).not.toHaveBeenCalled();
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_first_dashboard_goal_submitted",
+      expect.objectContaining({
+        goal_category: "ai_context",
+        custom_goal: false,
       }),
     );
   });
@@ -466,9 +505,7 @@ describe("FirstDashboard", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /create another Live View/i }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: /follow through after meetings/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /review my day/i }));
     fireEvent.click(
       screen.getByRole("button", { name: /build another Live View/i }),
     );
@@ -477,7 +514,7 @@ describe("FirstDashboard", () => {
       expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
         expect.objectContaining({
           dashboardId: expect.stringMatching(/^first-dashboard-/),
-          goalCategory: "meeting_follow_through",
+          goalCategory: "work_patterns",
         }),
       ),
     );

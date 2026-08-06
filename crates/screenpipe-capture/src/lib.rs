@@ -20,5 +20,5 @@ pub mod paired_capture;
 
 pub use ocr_gate::{OcrDecision, OcrGate};
 pub use paired_capture::{
-    paired_capture, walk_accessibility_tree, CaptureContext, PairedCaptureResult,
+    ocr_semaphore, paired_capture, walk_accessibility_tree, CaptureContext, PairedCaptureResult,
 };

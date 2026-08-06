@@ -108,8 +108,12 @@ windows = { workspace = true, features = [
     "Win32_Media_Audio_Endpoints",
     "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_FunctionDiscovery",
+    "Win32_Storage_EnhancedStorage",
     "Win32_UI_Shell_PropertiesSystem",
     # meeting_processes.rs WASAPI input-audio sensor: process resolution
     # (OpenProcess/QueryFullProcessImageNameW + CloseHandle/HRESULT codes) and
@@ -190,6 +194,12 @@ parakeet-mlx = ["dep:audiopipe", "audiopipe?/parakeet-mlx", "dep:mlx-rs"]
 [[example]]
 name = "screenpipe-audio"
 path = "examples/screenpipe-audio.rs"
+
+# Live OS transport-metadata probe. An optional second argument asserts the
+# expected result: bluetooth, non-bluetooth, or unknown.
+[[example]]
+name = "transport_probe"
+path = "examples/transport_probe.rs"
 
 # Live probes for the experimental meeting capture (macOS-only; gated in source
 # so --all-targets still compiles a stub on other platforms). tap = far-end

@@ -1,7 +1,7 @@
 repo:   screenpipe/website (PRIVATE)
-branch: ezra/archive-admin-local-setup-25f21c   (PR #579)
-commit: a144d3c38bdd7b7a0cf1cf673a447057208c8859
-date:   2026-07-24T21:32:03-07:00
+branch: codex/cloud-pipes-control-plane-ux
+commit: a8af80284e3d334c3827e43442977c4872b8d53a
+date:   2026-08-03T22:31:14Z
 files:  openapi/enterprise-v1.yaml       -> enterprise-v1.yaml
         conformance/spec.ts              -> spec.ts
         conformance/cases.ts             -> cases.ts

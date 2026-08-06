@@ -788,8 +788,8 @@ describe("Windows core recording pipeline", function () {
     if (!canRun) return;
 
     await openHomeWindow();
-    await waitForLocalApi();
     cfg = await getLocalApiConfig();
+    await waitForLocalApi(cfg.port);
   });
 
   async function probeMarkerIndexing(): Promise<MarkerProbe> {
@@ -1122,25 +1122,26 @@ describe("Windows core recording pipeline", function () {
     // without capturable desktop pixels must have constructed the real
     // CaptureSession in this recording-enabled lane.
     expect(
-      await invokeOrThrow<boolean>("e2e_capture_session_running"),
+      await invokeOrThrow<boolean>("plugin:e2e|capture_session_running"),
     ).toBe(true);
+    await invokeOrThrow("plugin:e2e|reset_disk_pressure_notification_latch");
     const initialLowDiskNotifications = (await readNotificationHistory()).filter(
       (entry) => entry.title === "recording stopped — disk almost full",
     ).length;
 
     try {
-      await invokeOrThrow("e2e_set_low_disk_guard_enabled", { enabled: true });
-      await invokeOrThrow("e2e_set_notification_master_enabled", {
+      await invokeOrThrow("plugin:e2e|set_low_disk_guard_enabled", { enabled: true });
+      await invokeOrThrow("plugin:e2e|set_notification_master_enabled", {
         enabled: false,
       });
 
       expect(
-        await invokeOrThrow<string>("e2e_handle_disk_space_low", {
+        await invokeOrThrow<string>("plugin:e2e|handle_disk_space_low", {
           availableBytes: 1024 * 1024 * 1024,
         }),
       ).toBe("capture_stopped");
       expect(
-        await invokeOrThrow<boolean>("e2e_capture_session_running"),
+        await invokeOrThrow<boolean>("plugin:e2e|capture_session_running"),
       ).toBe(false);
       expect(await invokeOrThrow<boolean>("is_capture_paused")).toBe(true);
 
@@ -1156,6 +1157,20 @@ describe("Windows core recording pipeline", function () {
             "critical low-disk notification was not persisted with notifications disabled",
         },
       );
+
+      // A user restart attempt while the same disk incident is active still
+      // stops capture intent, but must not append or display another alert.
+      await invokeOrThrow("plugin:e2e|mark_capture_intended");
+      expect(
+        await invokeOrThrow<string>("plugin:e2e|handle_disk_space_low", {
+          availableBytes: 1024 * 1024 * 1024,
+        }),
+      ).toBe("capture_stopped_notification_suppressed");
+      expect(
+        (await readNotificationHistory()).filter(
+          (entry) => entry.title === "recording stopped — disk almost full",
+        ),
+      ).toHaveLength(initialLowDiskNotifications + 1);
 
       const health = await requireHealthyLocalApi(activeCfg);
       expect(typeof health.status).toBe("string");
@@ -1176,10 +1191,11 @@ describe("Windows core recording pipeline", function () {
         },
       );
     } finally {
-      await invokeOrThrow("e2e_set_low_disk_guard_enabled", { enabled: false });
-      await invokeOrThrow("e2e_set_notification_master_enabled", {
+      await invokeOrThrow("plugin:e2e|set_low_disk_guard_enabled", { enabled: false });
+      await invokeOrThrow("plugin:e2e|set_notification_master_enabled", {
         enabled: true,
       });
+      await invokeOrThrow("plugin:e2e|reset_disk_pressure_notification_latch");
     }
   });
 });

@@ -119,6 +119,13 @@ extern "C" {
     fn pthread_main_np() -> i32;
 }
 
+#[link(name = "proc")]
+extern "C" {
+    fn proc_name(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
+}
+
+const PROCESS_NAME_BUFFER_SIZE: usize = 1024;
+
 /// Permission status for UI capture
 #[derive(Debug, Clone)]
 pub struct PermissionStatus {
@@ -1630,16 +1637,51 @@ fn run_app_observer(
 }
 
 fn get_focused_app_info() -> Option<(i32, String)> {
-    cidre::objc::ar_pool(|| {
-        let sys = ax::UiElement::sys_wide();
-        let app = sys.focused_app().ok()?;
-        let pid = app.pid().ok()?;
-        let name = ns::RunningApp::with_pid(pid)
-            .and_then(|app| app.localized_name())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "?".to_string());
-        Some((pid, name))
-    })
+    let sys = ax::UiElement::sys_wide();
+    let app = sys.focused_app().ok()?;
+    let pid = app.pid().ok()?;
+
+    // Do not use `NSRunningApplication.localizedName` in this callback path.
+    // During an AX focus transition macOS can hand cidre a null/invalid
+    // NSString even though the Objective-C result was represented as `Some`.
+    // Formatting that value calls CFStringGetLength and crashes at address 0.
+    // `proc_name` reads the stable process identity without touching a
+    // Foundation/CoreFoundation string, so a disappearing app degrades to a
+    // pid label instead of taking down the recorder.
+    let name = process_name_for_pid(pid).unwrap_or_else(|| format!("pid-{pid}"));
+    Some((pid, name))
+}
+
+fn process_name_for_pid(pid: i32) -> Option<String> {
+    if pid <= 0 {
+        return None;
+    }
+
+    let mut buffer = [0_u8; PROCESS_NAME_BUFFER_SIZE];
+    let written = unsafe {
+        proc_name(
+            pid,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            buffer.len() as u32,
+        )
+    };
+    decode_process_name(&buffer, written)
+}
+
+fn decode_process_name(buffer: &[u8], written: i32) -> Option<String> {
+    if written <= 0 {
+        return None;
+    }
+
+    let end = (written as usize).min(buffer.len());
+    let bytes = &buffer[..end];
+    let nul = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    let without_nul = &bytes[..nul];
+    let name = String::from_utf8_lossy(without_nul).trim().to_owned();
+    (!name.is_empty()).then_some(name)
 }
 
 // ============================================================================
@@ -2698,6 +2740,35 @@ mod tests {
         assert!(!is_own_process(0));
         assert!(!is_own_process(-1));
         assert!(!is_own_process((std::process::id() as i32) + 1));
+    }
+
+    #[test]
+    fn test_decode_process_name_rejects_empty_results() {
+        assert_eq!(decode_process_name(b"screenpipe", 0), None);
+        assert_eq!(decode_process_name(b"\0ignored", 8), None);
+    }
+
+    #[test]
+    fn test_decode_process_name_bounds_and_sanitizes_results() {
+        assert_eq!(
+            decode_process_name(b"screenpipe\0ignored", 18),
+            Some("screenpipe".to_string())
+        );
+        assert_eq!(
+            decode_process_name(b" screenpipe ", 12),
+            Some("screenpipe".to_string())
+        );
+        assert_eq!(
+            decode_process_name(b"app-\xFF", 5),
+            Some("app-�".to_string())
+        );
+    }
+
+    #[test]
+    fn test_process_name_for_current_pid_avoids_cfstring_path() {
+        let name = process_name_for_pid(std::process::id() as i32)
+            .expect("libproc should resolve the current process name");
+        assert!(!name.is_empty());
     }
 
     // The real system pasteboard is a single shared resource. `cargo test`

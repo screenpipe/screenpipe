@@ -18,11 +18,11 @@ pub async fn vault_status(_app: AppHandle) -> Result<String, String> {
     if data_dir.join(".vault_locked").exists() {
         return Ok("locked".to_string());
     }
-    // Fallback: if vault.meta exists but no sentinel, check if DB is actually encrypted
-    // (handles crash during lock where sentinel wasn't written yet)
-    let db_path = data_dir.join("db.sqlite");
-    if db_path.exists() {
-        if let Ok(true) = screenpipe_vault::crypto::is_encrypted_file(&db_path) {
+    // Fallback handles a crash after either database was encrypted but before
+    // the sentinel was written.
+    for name in ["db.sqlite", "secrets.sqlite"] {
+        let path = data_dir.join(name);
+        if path.exists() && screenpipe_vault::crypto::is_encrypted_file(&path).unwrap_or(false) {
             return Ok("locked".to_string());
         }
     }
@@ -76,15 +76,18 @@ pub async fn vault_unlock(_app: AppHandle, password: String) -> Result<(), Strin
     let mut key = [0u8; 32];
     key.copy_from_slice(&master_key_bytes);
 
-    // Decrypt DB file (fast — typically <10s even for 7GB)
-    let db_path = screenpipe_dir.join("db.sqlite");
-    if db_path.exists() {
-        crypto::decrypt_file(&db_path, &key).map_err(|e| format!("decrypt db: {}", e))?;
-        for ext in &["sqlite-wal", "sqlite-shm"] {
-            let p = db_path.with_extension(ext);
-            if p.exists() {
-                let _ = crypto::decrypt_file(&p, &key);
-            }
+    // Decrypt every database generation before allowing the server to start.
+    for name in [
+        "db.sqlite",
+        "db.sqlite-wal",
+        "db.sqlite-shm",
+        "secrets.sqlite",
+        "secrets.sqlite-journal",
+    ] {
+        let path = screenpipe_dir.join(name);
+        if path.exists() {
+            crypto::decrypt_file(&path, &key)
+                .map_err(|e| format!("decrypt {}: {}", path.display(), e))?;
         }
     }
 

@@ -67,7 +67,10 @@ function timestampMs(iso: string): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-function isGenericMeetingTitle(title: string | null | undefined, meetingApp: string | null | undefined): boolean {
+function isGenericMeetingTitle(
+  title: string | null | undefined,
+  meetingApp: string | null | undefined,
+): boolean {
   const normalizedTitle = title?.trim().toLowerCase();
   if (!normalizedTitle) return true;
   if (["untitled", "untitled meeting", "meeting"].includes(normalizedTitle)) {
@@ -93,7 +96,9 @@ function formatMeetingLabelTime(iso: string): string {
     .replace(",", "");
 }
 
-export function buildMeetingSummarizeDisplayLabel(meeting: MeetingRecord): string {
+export function buildMeetingSummarizeDisplayLabel(
+  meeting: MeetingRecord,
+): string {
   const title = meeting.title?.trim();
   if (!isGenericMeetingTitle(title, meeting.meeting_app) && title) {
     return `Summarize meeting: ${title}`;
@@ -208,9 +213,8 @@ export interface MeetingContext {
 
 function rangeFor(meeting: MeetingRecord): { start: string; end: string } {
   const start = new Date(meeting.meeting_start).toISOString();
-  const end = (meeting.meeting_end
-    ? new Date(meeting.meeting_end)
-    : new Date()
+  const end = (
+    meeting.meeting_end ? new Date(meeting.meeting_end) : new Date()
   ).toISOString();
   return { start, end };
 }
@@ -433,7 +437,9 @@ export function buildEnrichedSummarizePrompt({
   if (meeting.title) meetingLines.push(`title: ${meeting.title}`);
   if (meeting.attendees) meetingLines.push(`attendees: ${meeting.attendees}`);
   if (meeting.note) {
-    meetingLines.push(`notes: ${replaceNoteImageDataUrlsWithPlaceholders(meeting.note)}`);
+    meetingLines.push(
+      `notes: ${replaceNoteImageDataUrlsWithPlaceholders(meeting.note)}`,
+    );
   }
 
   const sections: string[] = [`meeting:\n${meetingLines.join("\n")}`];
@@ -455,7 +461,8 @@ export function buildEnrichedSummarizePrompt({
       sections.push(
         `tabs/docs visited:\n${urls
           .map(
-            (u) => `- ${u.window_name || hostFromUrl(u.browser_url)} — ${u.browser_url} (${u.minutes}m)`,
+            (u) =>
+              `- ${u.window_name || hostFromUrl(u.browser_url)} — ${u.browser_url} (${u.minutes}m)`,
           )
           .join("\n")}`,
       );
@@ -465,7 +472,10 @@ export function buildEnrichedSummarizePrompt({
     if (apps.length > 0) {
       sections.push(
         `app windows touched:\n${apps
-          .map((w) => `- ${w.app_name.toLowerCase()} — ${w.window_name} (${w.minutes}m)`)
+          .map(
+            (w) =>
+              `- ${w.app_name.toLowerCase()} — ${w.window_name} (${w.minutes}m)`,
+          )
           .join("\n")}`,
       );
     }
@@ -478,17 +488,16 @@ export function buildEnrichedSummarizePrompt({
       );
     }
 
-    if (
-      !transcript?.length &&
-      a.audio_summary.top_transcriptions.length > 0
-    ) {
+    if (!transcript?.length && a.audio_summary.top_transcriptions.length > 0) {
       const chronological = [...a.audio_summary.top_transcriptions].sort(
-        (left, right) => timestampMs(left.timestamp) - timestampMs(right.timestamp),
+        (left, right) =>
+          timestampMs(left.timestamp) - timestampMs(right.timestamp),
       );
       const lines = evenlySpacedItems(chronological, 8).map((t) => {
         const ts = formatTimeShort(t.timestamp);
         const txt = t.transcription.replace(/\s+/g, " ").trim().slice(0, 240);
-        const sp = t.speaker && t.speaker !== "unknown" ? `[${t.speaker}] ` : "";
+        const sp =
+          t.speaker && t.speaker !== "unknown" ? `[${t.speaker}] ` : "";
         return `- ${ts} ${sp}${txt}`;
       });
       sections.push(`top transcript fragments:\n${lines.join("\n")}`);
@@ -504,7 +513,9 @@ export function buildEnrichedSummarizePrompt({
   }
 
   if (context.clipboardCount > 0) {
-    sections.push(`clipboard activity: ${context.clipboardCount} copy/paste events during meeting`);
+    sections.push(
+      `clipboard activity: ${context.clipboardCount} copy/paste events during meeting`,
+    );
   }
 
   // If the user picked a custom summary pipe, use its prompt body verbatim as
@@ -538,13 +549,16 @@ export function extractImageDataUrlsFromMarkdown(
 
 function replaceNoteImageDataUrlsWithPlaceholders(markdown: string): string {
   let index = 0;
-  return markdown.replace(markdownImageDataUrlRegex(), (_match, alt: string) => {
-    index += 1;
-    const label = alt.trim();
-    return label
-      ? `[attached image ${index}: ${label}]`
-      : `[attached image ${index}]`;
-  });
+  return markdown.replace(
+    markdownImageDataUrlRegex(),
+    (_match, alt: string) => {
+      index += 1;
+      const label = alt.trim();
+      return label
+        ? `[attached image ${index}: ${label}]`
+        : `[attached image ${index}]`;
+    },
+  );
 }
 
 function markdownImageDataUrlRegex(): RegExp {
@@ -576,6 +590,7 @@ export function buildMeetingSummarizeInstructions(
     `also read the screenpipe-api skill and query the screen for what was *shown* during the meeting: GET /search?content_type=ocr for the meeting window (this returns the frame's on-screen text — accessibility tree + OCR merged, not just OCR) — shared slides, docs, code, demos, and the on-screen name tags video-call apps render for participants. fold anything useful into the summary, and use on-screen names to fill in attendees who never spoke.`,
     `then name the speakers from the screen (do this every run, don't ask first): for every speaker still unnamed or generic ("speaker 1", "unknown", "") in the transcript above, line up when they were talking with the on-screen name tag showing at that moment, then GET /speakers/unnamed?limit=20 and POST /speakers/update {"id": <SPEAKER_ID>, "name": "<NAME_FROM_SCREEN>"} for each confident match. only rename when the on-screen evidence is unambiguous — never guess from voice alone. note which speakers you renamed (and which you left as-is) in your reply.`,
     `*if available*, use the cloud media (video/audio) model only for a concrete visual question that transcript and OCR cannot answer — diagrams, charts, whiteboards, slide figures, UI demos, or screen-shared video. choose up to 4 representative frame_id values already returned by the bounded OCR search, fetch those still images with GET /frames/<frame_id>, and send them as image_url[] to POST /v1/chat/completions with "model": "gemma4-e4b". NEVER call POST /export or run ffmpeg for a routine meeting summary; a full media export requires an explicit user request. if the cloud-media block is absent or returns 503 cloud_token_missing, skip visual analysis and summarize from transcript + OCR.`,
+    `before the PUT, write the proposed summary in your response starting on a line with exactly "## Summary". put only summary content after that heading and use that same markdown in <YOUR_SUMMARY>. the meeting UI streams this section while you write it, so do not put planning, tool narration, or save confirmations after the heading.`,
     `if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:`,
     `  curl -s -X PUT "http://localhost:3030/meetings/${meetingId}" \\`,
     `    -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \\`,
@@ -656,7 +671,8 @@ export function buildMeetingMarkdown({
   const activity = context?.activity ?? null;
   if (activity) {
     const apps = topAppSummary(activity.apps, 6);
-    if (apps) parts.push(`## Apps used\n\n${formatAppsLines(activity.apps, 6)}`);
+    if (apps)
+      parts.push(`## Apps used\n\n${formatAppsLines(activity.apps, 6)}`);
 
     const urls = pickReceiptUrls(activity.windows, 10);
     if (urls.length > 0) {
@@ -742,8 +758,7 @@ function renderTranscript(
   return top
     .map((t) => {
       const ts = formatTimeShort(t.timestamp);
-      const sp =
-        t.speaker && t.speaker !== "unknown" ? `[${t.speaker}] ` : "";
+      const sp = t.speaker && t.speaker !== "unknown" ? `[${t.speaker}] ` : "";
       const txt = t.transcription.replace(/\s+/g, " ").trim();
       return `- ${ts} ${sp}${txt}`;
     })
@@ -1015,6 +1030,8 @@ export async function fetchFrameSamples(
     seen.add(fid);
     out.push({ frameId: fid, timestamp: ts });
   }
-  out.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  out.sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
   return out;
 }

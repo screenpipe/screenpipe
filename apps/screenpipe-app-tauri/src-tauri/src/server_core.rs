@@ -73,9 +73,18 @@ pub struct ServerCore {
     external_memory_sync:
         Option<Arc<screenpipe_engine::external_memory_sync::ExternalMemorySyncScheduler>>,
     /// Tasks spawned by `start()` that would otherwise outlive the engine:
-    /// the HTTP serve task (whose `Server` owns a `db` clone + secret store)
-    /// and the HD meeting-event listeners. Aborted in `shutdown()`.
+    /// the HD meeting-event listeners and background monitors. Aborted in
+    /// `shutdown()`.
     owned_tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// Tells the HTTP serve loop to stop accepting and tear down every
+    /// connection task. Connection handlers hold clones of the router state
+    /// (db pool + secret store), so `shutdown()` must drain them *before*
+    /// closing the pools — otherwise surviving keep-alive/WebSocket
+    /// connections keep serving 500s from a dead generation.
+    http_shutdown: tokio::sync::watch::Sender<bool>,
+    /// The HTTP serve task. Resolves only once every connection task has
+    /// finished; `shutdown()` awaits it (bounded) after signaling above.
+    http_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Bind attempts before giving up on the HTTP port. Together with
@@ -297,6 +306,7 @@ impl ServerCore {
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
+        let ai_gateway_url = crate::config::screenpipe_ai_gateway_url()?;
 
         // --- Environment setup ---
         std::env::set_var("SCREENPIPE_FD_LIMIT", "8192");
@@ -586,27 +596,12 @@ impl ServerCore {
             ));
         }
 
-        // Secret store — read-only keychain access on startup.
-        // Never create a key automatically (that triggers a macOS modal).
-        // Users opt in via onboarding or Settings > Privacy.
+        // Secret-store readers always resolve an existing OS-vault key. The
+        // read path never creates a key, so optional encryption remains
+        // unchanged while every process can read encrypted credentials.
         {
-            let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-                crate::secrets::KeyResult::Found(k) => Some(k),
-                _ => {
-                    info!("keychain: no encryption key found — secrets stored unencrypted until user opts in");
-                    None
-                }
-            };
-            let database_error_hook: screenpipe_secrets::DatabaseErrorHook = {
-                let db = Arc::clone(&db);
-                Arc::new(move |error| {
-                    db.report_sqlite_error(error);
-                })
-            };
-            match screenpipe_secrets::SecretStore::new_with_database_error_hook(
-                db.pool.clone(),
-                secret_key,
-                Some(database_error_hook),
+            match screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(
+                &config.data_dir,
             )
             .await
             {
@@ -690,6 +685,7 @@ impl ServerCore {
             screenpipe_core::agents::pi::PiExecutor::with_shared_user_token(
                 cloud_token_handle.clone(),
             )
+            .with_api_url(ai_gateway_url)
             .with_api_auth_key(config.api_auth_key.clone()),
         );
         let mut agent_executors: std::collections::HashMap<
@@ -971,21 +967,36 @@ impl ServerCore {
 
         let vision_manager_handle = server.vision_manager.clone();
 
-        // Start serving in background. The handle is kept on Self and aborted
-        // in `shutdown()`: the Router state owns a `db` clone + the secret
-        // store, so a task that outlives the engine restart keeps old SQLite
-        // connections (and the shared -shm WAL-index) alive — the core of the
-        // 2026-07-02 unrecoverable-522 wedge. Aborting also frees the listener
-        // so the next spawn can rebind the port.
+        // Start serving in background. The Router state owns a `db` clone +
+        // the secret store, so the serve loop must not outlive the engine:
+        // `shutdown()` fires `http_shutdown` and awaits this task, which
+        // returns only after every connection task is gone. Draining (rather
+        // than aborting the accept loop) is what guarantees no keep-alive or
+        // WebSocket handler still reaches the pools once they close — the
+        // core of both the 2026-07-02 unrecoverable-522 wedge and the
+        // Windows closed-pool-while-serving zombie (2026-08-04 report).
+        // Returning also frees the listener so the next spawn can rebind.
         let server_addr = SocketAddr::new(IpAddr::V4(config.listen_address), config.port);
-        owned_tasks.push(tokio::spawn(async move {
-            let outcome = AssertUnwindSafe(SCServer::serve_router_with_listener(
+        let (http_shutdown, http_shutdown_rx) = tokio::sync::watch::channel(false);
+        let shutdown_requested = http_shutdown_rx.clone();
+        let http_task = tokio::spawn(async move {
+            let mut shutdown_rx = http_shutdown_rx;
+            let outcome = AssertUnwindSafe(SCServer::serve_router_with_listener_graceful(
                 server_addr,
                 listener,
                 router,
+                async move {
+                    // Err means the sender dropped, which only happens when
+                    // the whole ServerCore is gone — treat as shutdown.
+                    let _ = shutdown_rx.wait_for(|stop| *stop).await;
+                },
             ))
             .catch_unwind()
             .await;
+            if *shutdown_requested.borrow() {
+                info!("local API server drained after shutdown request");
+                return;
+            }
             let message = match outcome {
                 Ok(Ok(())) => "local API server stopped unexpectedly".to_string(),
                 Ok(Err(error)) => format!("local API server failed: {error}"),
@@ -994,7 +1005,7 @@ impl ServerCore {
             error!("{message}");
             crate::health::set_boot_error(&message);
             crate::health::set_recording_status(crate::health::RecordingStatus::Error);
-        }));
+        });
 
         info!("Server core started successfully");
         crate::health::set_boot_phase("ready", None);
@@ -1349,11 +1360,13 @@ impl ServerCore {
             oauth_refresher: oauth_refresher_handle,
             external_memory_sync: external_memory_sync_handle,
             owned_tasks,
+            http_shutdown,
+            http_task: Some(http_task),
         })
     }
 
     /// Shut down the server core. Called only on app quit.
-    pub async fn shutdown(self) {
+    pub async fn shutdown(mut self) {
         info!("Shutting down server core");
         screenpipe_connect::mdns::shutdown();
 
@@ -1387,8 +1400,27 @@ impl ServerCore {
             sync.stop();
         }
 
-        // Abort the HTTP serve task (its `Server` owns a db clone + secret
-        // store and the bound listener) and the HD meeting-event listeners.
+        // Drain the HTTP server before the pools close below: the serve loop
+        // stops accepting, then aborts + awaits every connection task, so no
+        // keep-alive or WebSocket handler still holds a clone of the db pool
+        // or secret store when `db.close()` runs. Without this, surviving
+        // connections keep answering on the port with closed pools — the
+        // Windows "Screenpipe isn't reachable" zombie (2026-08-04 report).
+        // Bounded so a wedged connection task can't hang app quit (the quit
+        // path budgets 5s total, the DB-wedge path 15s).
+        let _ = self.http_shutdown.send(true);
+        if let Some(http_task) = self.http_task.take() {
+            let abort_handle = http_task.abort_handle();
+            match tokio::time::timeout(Duration::from_secs(3), http_task).await {
+                Ok(_) => info!("HTTP server drained: no connection task outlives the pools"),
+                Err(_) => {
+                    warn!("HTTP server drain timed out after 3s; aborting serve task");
+                    abort_handle.abort();
+                }
+            }
+        }
+
+        // Abort the HD meeting-event listeners and background monitors.
         for task in &self.owned_tasks {
             task.abort();
         }

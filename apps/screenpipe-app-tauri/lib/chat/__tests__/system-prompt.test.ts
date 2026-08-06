@@ -22,6 +22,8 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("# Activity recaps");
     expect(prompt).toContain("# Connection write policy");
     expect(prompt).toContain("# Tool selection");
+    expect(prompt).toContain("shared across agent harnesses in .pi/skills");
+    expect(prompt).toContain("asynchronously delegate reusable learning to a subagent");
   });
 
   it("does not restate connection-gating guidance already carried by the tools", () => {

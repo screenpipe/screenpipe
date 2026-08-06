@@ -7,6 +7,8 @@ import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import { Loader2 } from "lucide-react";
 import { localFetch } from "@/lib/api";
+import { fetchAiGateway } from "@/lib/ai-gateway-url";
+import { presentQuotaError } from "@/lib/chat/quota-errors";
 
 interface RegionOcrOverlayProps {
   /** Frame ID used to fetch a clean (non-tainted) copy for canvas cropping */
@@ -143,8 +145,8 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
         const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, "");
 
         // Call screenpipe cloud API
-        const response = await fetch(
-          "https://api.screenpipe.com/v1/chat/completions",
+        const response = await fetchAiGateway(
+          "/chat/completions",
           {
             method: "POST",
             headers: {
@@ -203,10 +205,17 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
         }
       } catch (err) {
         console.error("Region OCR failed:", err);
+        // Classify quota/rate-limit failures into friendly copy; never show
+        // the raw gateway error body.
+        const quota = presentQuotaError(
+          err instanceof Error ? err.message : "",
+        );
         toast({
           title: "OCR failed",
           description:
-            err instanceof Error ? err.message : "could not extract text",
+            quota.kind !== "none"
+              ? quota.message
+              : "could not extract text from this region. try again.",
           variant: "destructive",
         });
       } finally {

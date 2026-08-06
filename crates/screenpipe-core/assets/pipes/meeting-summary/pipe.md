@@ -64,7 +64,9 @@ step 2d — name the speakers from the screen (do this every run, don't ask firs
 
 only rename when the on-screen evidence is unambiguous — never guess from voice alone. note which speakers you renamed (and which you left as-is) in your final message.
 
-step 3 — if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
+step 3 — before saving, write the proposed summary in your response starting on a line with exactly `## Summary`. put only summary content after that heading and use that same markdown in `<YOUR_SUMMARY>`. the meeting UI streams this section while you write it, so do not put planning, tool narration, or save confirmations after the heading.
+
+if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
 
   curl -s -X PUT "http://localhost:3030/meetings/<MEETING_ID>" \
     -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \

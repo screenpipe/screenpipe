@@ -14,7 +14,8 @@
 //! Each mode holds its objects until Enter is pressed, then drops them in
 //! reverse order. This is intentionally an experiment harness, not production
 //! capture: it lets a Zoom join be attempted with exactly one additional HAL
-//! boundary enabled at a time.
+//! boundary enabled at a time. The aggregate deliberately contains only the
+//! tap; it never adopts the physical output device.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
@@ -24,7 +25,7 @@ fn main() {
 #[cfg(target_os = "macos")]
 fn main() -> anyhow::Result<()> {
     use ca::aggregate_device_keys as agg_keys;
-    use ca::sub_device_keys as sub_keys;
+    use ca::hardware::sub_tap_keys;
     use cidre::{cat, cf, core_audio as ca, ns, os};
 
     let stage = std::env::args().nth(1).unwrap_or_else(|| "tap".to_string());
@@ -67,7 +68,11 @@ fn main() -> anyhow::Result<()> {
         Vec::new()
     };
     let excluded_array = ns::Array::from_slice_retained(&excluded_numbers);
-    let tap_desc = ca::TapDesc::with_stereo_global_tap_excluding_processes(&excluded_array);
+    let mut tap_desc = ca::TapDesc::with_stereo_global_tap_excluding_processes(&excluded_array);
+    let tap_name = ns::String::with_str("screenpipe CoreAudio stage probe");
+    tap_desc.set_name(Some(&tap_name));
+    tap_desc.set_private(true);
+    tap_desc.set_mute_behavior(ca::TapMuteBehavior::Unmuted);
 
     eprintln!("PROBE boundary=create_process_tap begin output_uid={output_uid}");
     let tap = tap_desc
@@ -76,7 +81,17 @@ fn main() -> anyhow::Result<()> {
     let tap_uid = tap
         .uid()
         .map_err(|status| anyhow::anyhow!("tap UID: {status:?}"))?;
+    let tap_asbd = tap
+        .asbd()
+        .map_err(|status| anyhow::anyhow!("tap format: {status:?}"))?;
     eprintln!("PROBE boundary=create_process_tap end tap_uid={tap_uid}");
+    eprintln!(
+        "PROBE tap_format sample_rate={:.0} channels={} bits={} bytes_per_frame={}",
+        tap_asbd.sample_rate,
+        tap_asbd.channels_per_frame,
+        tap_asbd.bits_per_channel,
+        tap_asbd.bytes_per_frame,
+    );
 
     if stage == "tap" {
         hold("tap created; aggregate absent")?;
@@ -86,40 +101,51 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let sub_device =
-        cf::DictionaryOf::with_keys_values(&[sub_keys::uid()], &[output_uid.as_type_ref()]);
-    let sub_tap = cf::DictionaryOf::with_keys_values(&[sub_keys::uid()], &[tap_uid.as_type_ref()]);
+    let sub_tap = cf::DictionaryOf::with_keys_values(
+        &[sub_tap_keys::uid(), sub_tap_keys::drift_compensation()],
+        &[
+            tap_uid.as_type_ref(),
+            cf::Boolean::value_true().as_type_ref(),
+        ],
+    );
     let name = cf::String::from_str("screenpipe CoreAudio stage probe");
     let aggregate_desc = cf::DictionaryOf::with_keys_values(
         &[
             agg_keys::is_private(),
-            agg_keys::is_stacked(),
             agg_keys::tap_auto_start(),
             agg_keys::name(),
-            agg_keys::main_sub_device(),
             agg_keys::uid(),
-            agg_keys::sub_device_list(),
             agg_keys::tap_list(),
         ],
         &[
             cf::Boolean::value_true().as_type_ref(),
             cf::Boolean::value_false(),
-            cf::Boolean::value_true(),
             &name,
-            &output_uid,
             &cf::Uuid::new().to_cf_string(),
-            &cf::ArrayOf::from_slice(&[sub_device.as_ref()]),
             &cf::ArrayOf::from_slice(&[sub_tap.as_ref()]),
         ],
     );
 
-    eprintln!("PROBE boundary=create_aggregate begin");
+    eprintln!(
+        "PROBE boundary=create_aggregate begin topology=tap-only physical_output_uid={output_uid} adopted=false"
+    );
     let aggregate = ca::AggregateDevice::with_desc(&aggregate_desc)
         .map_err(|status| anyhow::anyhow!("create aggregate: {status:?}"))?;
+    let composition = aggregate
+        .composition()
+        .map_err(|status| anyhow::anyhow!("read aggregate composition: {status:?}"))?;
+    let aggregate_rate = aggregate
+        .nominal_sample_rate()
+        .map_err(|status| anyhow::anyhow!("read aggregate sample rate: {status:?}"))?;
     eprintln!(
-        "PROBE boundary=create_aggregate end device_id={:?}",
-        *aggregate
+        "PROBE boundary=create_aggregate end device_id={:?} sample_rate={aggregate_rate:.0} tap_list={} main_sub_device={} sub_device_list={} stacked={}",
+        *aggregate,
+        composition.get(agg_keys::tap_list()).is_some(),
+        composition.get(agg_keys::main_sub_device()).is_some(),
+        composition.get(agg_keys::sub_device_list()).is_some(),
+        composition.get(agg_keys::is_stacked()).is_some(),
     );
+    eprintln!("PROBE aggregate_composition={composition:?}");
 
     if stage == "aggregate" {
         hold("tap and aggregate created; IOProc absent; aggregate not started")?;
@@ -130,19 +156,50 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    struct ProbeCtx {
+        callbacks: std::sync::atomic::AtomicU64,
+        samples: std::sync::atomic::AtomicU64,
+        max_amp_bits: std::sync::atomic::AtomicU32,
+    }
+
     extern "C" fn io_proc(
         _device: ca::Device,
         _now: &cat::AudioTimeStamp,
-        _input: &cat::AudioBufList<1>,
+        input: &cat::AudioBufList<1>,
         _input_time: &cat::AudioTimeStamp,
         _output: &mut cat::AudioBufList<1>,
         _output_time: &cat::AudioTimeStamp,
-        _ctx: Option<&mut ()>,
+        ctx: Option<&mut ProbeCtx>,
     ) -> os::Status {
+        let Some(ctx) = ctx else {
+            return os::Status::NO_ERR;
+        };
+        ctx.callbacks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if input.number_buffers > 0 {
+            let buf = &input.buffers[0];
+            if !buf.data.is_null() && buf.data_bytes_size > 0 {
+                let sample_count = buf.data_bytes_size as usize / std::mem::size_of::<f32>();
+                let samples =
+                    unsafe { std::slice::from_raw_parts(buf.data as *const f32, sample_count) };
+                ctx.samples
+                    .fetch_add(sample_count as u64, std::sync::atomic::Ordering::Relaxed);
+                let peak = samples
+                    .iter()
+                    .copied()
+                    .fold(0.0f32, |max, sample| max.max(sample.abs()));
+                ctx.max_amp_bits
+                    .fetch_max(peak.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         os::Status::NO_ERR
     }
 
-    let mut ctx = ();
+    let mut ctx = ProbeCtx {
+        callbacks: std::sync::atomic::AtomicU64::new(0),
+        samples: std::sync::atomic::AtomicU64::new(0),
+        max_amp_bits: std::sync::atomic::AtomicU32::new(0),
+    };
     eprintln!("PROBE boundary=create_io_proc begin");
     let proc_id = aggregate
         .create_io_proc_id(io_proc, Some(&mut ctx))
@@ -157,6 +214,12 @@ fn main() -> anyhow::Result<()> {
     eprintln!("PROBE boundary=stop_aggregate begin");
     drop(started);
     eprintln!("PROBE boundary=stop_aggregate end");
+    eprintln!(
+        "PROBE capture callbacks={} samples={} peak={:.6}",
+        ctx.callbacks.load(std::sync::atomic::Ordering::Relaxed),
+        ctx.samples.load(std::sync::atomic::Ordering::Relaxed),
+        f32::from_bits(ctx.max_amp_bits.load(std::sync::atomic::Ordering::Relaxed)),
+    );
     drop(tap);
     Ok(())
 }

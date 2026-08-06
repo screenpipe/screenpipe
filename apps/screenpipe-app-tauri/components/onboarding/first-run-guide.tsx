@@ -30,7 +30,9 @@ interface FirstRunGuideProps {
   onEnsureChatVisible?: () => void;
 }
 
-const PROMPT = "create a pipe that tracks what i do every hour";
+const PROMPT = "create a scheduled task that tracks what i do every hour";
+const LEGACY_PROMPT = "create a pipe that tracks what i do every hour";
+const GUIDE_PROMPTS = new Set([PROMPT, LEGACY_PROMPT]);
 const SKIP_BUTTON_CLASS =
   "mt-3 w-full border border-foreground/40 py-2 font-mono text-[11px] uppercase tracking-widest text-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2";
 
@@ -241,7 +243,7 @@ export default function FirstRunGuide({
       const ta = document.querySelector<HTMLTextAreaElement>(
         '[data-firstrun-target="composer"] textarea',
       );
-      if (ta && ta.value === PROMPT) {
+      if (ta && GUIDE_PROMPTS.has(ta.value)) {
         // Go through the native setter + input event so React's controlled
         // state stays in sync with the DOM.
         const setter = Object.getOwnPropertyDescriptor(
@@ -374,7 +376,7 @@ export default function FirstRunGuide({
     };
     const onPlayClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      const btn = target.closest('[title="run pipe"]');
+      const btn = target.closest('[title="run scheduled task"]');
       if (btn) finishGuide();
     };
     // small delay for the pipes tab to mount
@@ -595,7 +597,7 @@ export default function FirstRunGuide({
                     your automation is being set up
                   </p>
                   <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
-                    head over to the pipes tab to see it running and explore more automations
+                    head over to scheduled to see it running and explore more automations
                   </p>
                 </div>
                 <span className="ml-auto shrink-0 font-mono text-[10px] tracking-wider text-muted-foreground/70">
@@ -606,7 +608,7 @@ export default function FirstRunGuide({
                 onClick={goToPipes}
                 className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
               >
-                go to pipes <ArrowRight className="w-3 h-3" strokeWidth={2} />
+                go to scheduled <ArrowRight className="w-3 h-3" strokeWidth={2} />
               </button>
               <button
                 onClick={skip}
@@ -678,12 +680,12 @@ export default function FirstRunGuide({
           <div className="flex items-start gap-2.5 mb-3">
             <div>
               <p className="font-mono text-xs font-semibold lowercase text-foreground">
-                one last thing — run your pipe
+                one last thing — run your scheduled task
               </p>
               <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
                 hit the{" "}
                 <Play className="inline w-3 h-3 -mt-0.5" strokeWidth={2} />{" "}
-                button on your pipe to start it
+                button on your scheduled task to start it
               </p>
             </div>
             <span className="ml-auto shrink-0 font-mono text-[10px] tracking-wider text-muted-foreground/70">

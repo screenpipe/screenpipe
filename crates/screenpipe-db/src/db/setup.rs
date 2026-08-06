@@ -128,14 +128,29 @@ impl DatabaseManager {
         // write_queue's runtime recovery (see ensure_db_parent_dir).
         crate::write_queue::ensure_db_parent_dir(database_path, true);
 
-        // A hard fault is process-lifetime for a physical path. Rebuilding a
-        // DatabaseManager in-process must not reopen the same potentially
-        // damaged DB/WAL/SHM generation.
+        // Arm a preallocated fail-closed marker before SQLite touches the
+        // database. If the filesystem later reports SQLITE_FULL, the hard-fault
+        // path can durably quarantine this generation with a metadata-only
+        // rename even when allocating a new marker would fail.
+        let database_file = Path::new(database_path);
+        screenpipe_sqlite_coordinator::prepare_sqlite_quarantine_reserve(database_file).map_err(
+            |error| {
+                SqlxError::Protocol(format!(
+                    "failed to arm durable SQLite quarantine for {}: {error}",
+                    database_file.display()
+                ))
+            },
+        )?;
+
+        // A hard fault is durable for a physical path. Rebuilding a manager or
+        // relaunching the app must not reopen the same potentially damaged
+        // DB/WAL/SHM generation. A malformed marker also maps to the fail-closed
+        // IOERR class in the coordinator.
         if let Some(code) =
             screenpipe_sqlite_coordinator::registered_sqlite_hard_fault(database_path)
         {
             return Err(SqlxError::Protocol(format!(
-                "SQLite database remains quarantined for this process after hard fault (code: {code})"
+                "SQLite database remains durably quarantined after a hard fault (code: {code}); run `screenpipe db recover` while the app is closed"
             )));
         }
 
@@ -143,7 +158,6 @@ impl DatabaseManager {
         // checkpointing, migrations, or capture can mutate an existing file.
         // This catches the observed wrong-page/code-26 failure in 100 bytes;
         // it never scans a multi-gigabyte recording database at startup.
-        let database_file = Path::new(database_path);
         if database_file.is_file() {
             if let Err(error) = preflight_existing_database_header(database_file) {
                 if let Some(code) = crate::sqlite_error::sqlite_hard_fault_code(&error) {
@@ -161,11 +175,18 @@ impl DatabaseManager {
             sqlx::Sqlite::create_database(&connection_string)
                 .await
                 .map_err(|error| quarantine_startup_error(database_file, error))?;
+            // The pre-open reserve had no file identity because this was a new
+            // path. Refresh it now that SQLite created the physical generation.
+            screenpipe_sqlite_coordinator::prepare_sqlite_quarantine_reserve(database_file)
+                .map_err(|error| {
+                    SqlxError::Protocol(format!(
+                        "failed to identify fresh SQLite generation for durable quarantine: {error}"
+                    ))
+                })?;
         }
 
-        // This process-wide coordinator is also used by the standalone
-        // SecretStore pool. It keeps screenpipe-controlled writes and explicit
-        // checkpoints from overlapping on independent SQLite connections.
+        // Every screenpipe-controlled capture writer and checkpoint resolves
+        // this process-wide coordinator for the physical database path.
         let write_semaphore = screenpipe_sqlite_coordinator::sqlite_write_lock(database_path);
 
         // busy_timeout is per-connection; setting it here ensures ALL pooled
@@ -175,14 +196,26 @@ impl DatabaseManager {
         // handles retries with backoff.
         //
         // cache_size + mmap_size are tier-configurable and applied here; the
-        // WAL-safety pragmas that MUST be identical on every other pool over this
-        // file (the secret-store pool in screenpipe-secrets) come from the single
-        // source of truth `WAL_SAFETY_PRAGMAS` so the two pools cannot drift.
+        // WAL-safety pragmas that MUST be identical on every connection over this
+        // file come from the single source of truth `WAL_SAFETY_PRAGMAS`.
+        let is_in_memory =
+            database_path.contains(":memory:") || database_path.contains("mode=memory");
         let mut connect_options: SqliteConnectOptions = connection_string
             .parse::<SqliteConnectOptions>()?
             .busy_timeout(Duration::from_secs(5))
             .pragma("cache_size", format!("-{}", config.cache_size_kb))
             .pragma("mmap_size", config.mmap_size.to_string());
+        // macOS delivers an uncatchable SIGBUS when APFS invalidates a page in
+        // SQLite's file-backed WAL index after the `-shm` file was shortened.
+        // `unix-excl` keeps the WAL index in process memory and takes one OS
+        // lock for the recorder process, while SQLite still coordinates all
+        // SQLx connections internally. Screenpipe already requires exclusive
+        // ownership for live capture, recovery, and maintenance operations.
+        #[cfg(target_os = "macos")]
+        if !is_in_memory {
+            connect_options = connect_options.vfs("unix-excl");
+            info!("macOS capture database using unix-excl VFS with a process-local WAL index");
+        }
         for (pragma, value) in screenpipe_config::WAL_SAFETY_PRAGMAS {
             connect_options = connect_options.pragma(pragma, value);
         }
@@ -212,24 +245,27 @@ impl DatabaseManager {
                 .map_err(|error| quarantine_startup_error(database_file, error))?;
         }
 
-        // File-backed query connections have two independent write barriers:
-        // SQLite opens the file with mode=ro, and query_only rejects mutations
-        // at the connection level. In-memory databases cannot use mode=ro and
-        // remain writable for the many isolated test fixtures that seed them
-        // directly; production databases are always file-backed.
-        let is_in_memory =
-            database_path.contains(":memory:") || database_path.contains("mode=memory");
+        // Every file-backed query connection enables query_only. Non-macOS
+        // builds also open the file with mode=ro as an independent physical
+        // barrier. macOS keeps all unix-excl handles physically RW so they
+        // share one process-local WAL index instead of reopening `-shm`.
+        // In-memory test databases remain writable for fixtures that seed them
+        // directly.
         let read_connect_options = if is_in_memory {
             connect_options.clone()
         } else {
-            connect_options
-                .clone()
-                .read_only(true)
-                .pragma("query_only", "ON")
+            let options = connect_options.clone().pragma("query_only", "ON");
+            // A read-only unix-excl handle falls back to POSIX file locks and a
+            // file-backed WAL index. Keep macOS query handles physically RW so
+            // every connection shares the process-local WAL index; query_only
+            // remains the connection-level write barrier.
+            #[cfg(not(target_os = "macos"))]
+            let options = options.read_only(true);
+            options
         };
 
         // Read pool: handles all SELECT queries (search, timeline, API, pipes).
-        let read_pool = SqlitePoolOptions::new()
+        let read_pool = crate::write_queue::capture_pool_options()
             .max_connections(config.read_pool_max)
             .min_connections(config.read_pool_min)
             .acquire_timeout(Duration::from_secs(5))
@@ -240,7 +276,7 @@ impl DatabaseManager {
         // Write pool: dedicated to INSERT/UPDATE/DELETE via begin_immediate_with_retry().
         // Writes are serialized by write_semaphore so only 1 is active
         // at a time; extras absorb connection detach without killing the pool.
-        let write_pool = SqlitePoolOptions::new()
+        let write_pool = crate::write_queue::capture_pool_options()
             .max_connections(config.write_pool_max)
             .min_connections(1)
             .acquire_timeout(Duration::from_secs(10))
@@ -248,10 +284,9 @@ impl DatabaseManager {
             .await
             .map_err(|error| quarantine_startup_error(database_file, error))?;
 
-        // Recovery wiring: let the drain loop reopen its write pool in-process on a
-        // persistent disk-I/O wedge, surface degradation via `write_queue_health`,
-        // and (via the hook, set by the app) request an engine restart — the only
-        // cure for a shared WAL-index desync. See write_queue::WriteDrainOpts.
+        // Recovery wiring: transient contention may rebuild a pool, but a typed
+        // IOERR/CORRUPT/FULL/NOTADB fault permanently closes this generation's
+        // admission and requests offline recovery through the app hook.
         let write_queue_health =
             crate::write_queue::WriteQueueHealth::for_database_path(database_path);
         let write_pool_rebuilder = crate::write_queue::WritePoolRebuilder::new(
@@ -286,13 +321,14 @@ impl DatabaseManager {
         };
 
         // Checkpoint any stale WAL before running migrations or starting captures.
-        // A large WAL (500MB+) from a previous crash slows every read/write until
-        // checkpointed. TRUNCATE mode resets it to zero bytes.
+        // RESTART copies all safe frames and waits out readers without deleting or
+        // shortening the WAL underneath another connection. Physical WAL cleanup
+        // is deliberately left to offline recovery after every owner has closed.
         let _checkpoint_guard = Arc::clone(&db_manager.write_semaphore)
             .acquire_owned()
             .await
             .map_err(|_| SqlxError::PoolClosed)?;
-        match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        match sqlx::query("PRAGMA wal_checkpoint(RESTART)")
             .fetch_one(&db_manager.write_pool)
             .await
         {
@@ -409,6 +445,15 @@ impl DatabaseManager {
         // (added in 20260506120000_add_memories_sync_columns.sql). Older DBs
         // upgraded across that migration boundary may have skipped it.
         Self::ensure_memories_sync_columns(pool).await?;
+
+        // Self-heal the speakers + speaker_embeddings tables. The migration
+        // (20241108202826) depends on sqlite-vec being loaded for the vec_length
+        // CHECK constraint. If an older engine ran that migration without
+        // sqlite-vec, sqlx recorded it as applied but the CREATE TABLE failed —
+        // subsequent launches skip the "already applied" migration, so the table
+        // stays missing and every transcription errors with "no such table:
+        // speaker_embeddings".
+        Self::ensure_speaker_tables(pool).await?;
 
         Ok(())
     }
@@ -585,6 +630,78 @@ impl DatabaseManager {
         )
         .execute(pool)
         .await?;
+        Ok(())
+    }
+
+    /// Self-heal the `speakers` and `speaker_embeddings` tables. The original
+    /// migration (20241108202826) uses `vec_length()` in a CHECK constraint,
+    /// which requires the sqlite-vec extension. If the migration was applied by
+    /// an engine build where sqlite-vec wasn't loaded (or failed to load), sqlx
+    /// recorded the migration version but the DDL silently failed — the tables
+    /// don't exist despite the migration being "applied". Re-issuing the
+    /// `CREATE TABLE IF NOT EXISTS` statements fixes this for all subsequent
+    /// launches now that sqlite-vec is always registered as an auto-extension.
+    async fn ensure_speaker_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        let speakers_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'speakers'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if speakers_exists.0 == 0 {
+            tracing::info!("Self-healing missing speakers table");
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS speakers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    metadata JSON,
+                    hallucination BOOLEAN DEFAULT FALSE,
+                    centroid FLOAT[512],
+                    embedding_count INTEGER DEFAULT 0
+                )",
+            )
+            .execute(pool)
+            .await?;
+            // This index was added after the original table migration and would
+            // already be recorded as applied on a database missing the table.
+            sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_speakers_hallucination_name \
+                 ON speakers(hallucination, name COLLATE NOCASE)",
+            )
+            .execute(pool)
+            .await?;
+        }
+
+        let embeddings_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'speaker_embeddings'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if embeddings_exists.0 == 0 {
+            tracing::info!("Self-healing missing speaker_embeddings table");
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS speaker_embeddings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    embedding FLOAT[512] NOT NULL
+                    check(
+                      typeof(embedding) == 'blob'
+                      and vec_length(embedding) == 512
+                    ),
+                    speaker_id INTEGER REFERENCES speakers(id)
+                )",
+            )
+            .execute(pool)
+            .await?;
+            // This index was also added by a later migration.
+            sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_speaker_embeddings_speaker_id \
+                 ON speaker_embeddings(speaker_id)",
+            )
+            .execute(pool)
+            .await?;
+        }
+
         Ok(())
     }
 
@@ -782,10 +899,82 @@ impl DatabaseManager {
 #[cfg(test)]
 mod shutdown_tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
-    async fn file_query_pool_remains_read_only_when_query_only_is_disabled() {
+    async fn startup_rebuilds_missing_speaker_tables_with_current_schema() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("missing-speakers.sqlite");
+        let database = DatabaseManager::new(
+            db_path.to_str().expect("utf-8 temp path"),
+            DbConfig::for_tier(screenpipe_config::DeviceTier::Low),
+        )
+        .await
+        .expect("database init");
+
+        sqlx::query("DROP TABLE speaker_embeddings")
+            .execute(&database.write_pool)
+            .await
+            .expect("drop embeddings table");
+        sqlx::query("DROP TABLE speakers")
+            .execute(&database.write_pool)
+            .await
+            .expect("drop speakers table");
+
+        DatabaseManager::run_migrations(&database.write_pool)
+            .await
+            .expect("startup self-heal");
+
+        let columns =
+            sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('speakers')")
+                .fetch_all(&database.pool)
+                .await
+                .expect("inspect rebuilt speakers schema")
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+        assert_eq!(
+            columns,
+            [
+                "centroid",
+                "embedding_count",
+                "hallucination",
+                "id",
+                "metadata",
+                "name"
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            "self-heal must restore every column added by later migrations"
+        );
+
+        let indexes = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN \
+             ('idx_speaker_embeddings_speaker_id', 'idx_speakers_hallucination_name')",
+        )
+        .fetch_all(&database.pool)
+        .await
+        .expect("inspect rebuilt speaker indexes")
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(
+            indexes,
+            [
+                "idx_speaker_embeddings_speaker_id",
+                "idx_speakers_hallucination_name",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            "self-heal must restore indexes from later migrations"
+        );
+
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn file_query_pool_enforces_its_platform_write_barrier() {
         let dir = tempfile::tempdir().expect("temp dir");
         let db_path = dir.path().join("read-only-query-pool.sqlite");
         let database = DatabaseManager::new(
@@ -806,22 +995,41 @@ mod shutdown_tests {
             .await
             .expect("read query_only");
         assert_eq!(query_only, 1, "query connections must enable query_only");
+        let guarded_write = sqlx::query("INSERT INTO query_pool_probe (value) VALUES (0)")
+            .execute(&mut *reader)
+            .await
+            .expect_err("query_only connection unexpectedly accepted a write");
+        assert!(
+            guarded_write
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("readonly"),
+            "unexpected query_only write error: {guarded_write}"
+        );
 
         sqlx::query("PRAGMA query_only = OFF")
             .execute(&mut *reader)
             .await
             .expect("disable connection-level guard for physical-mode test");
-        let write_error = sqlx::query("INSERT INTO query_pool_probe (value) VALUES (1)")
+        #[cfg(not(target_os = "macos"))]
+        {
+            let write_error = sqlx::query("INSERT INTO query_pool_probe (value) VALUES (1)")
+                .execute(&mut *reader)
+                .await
+                .expect_err("mode=ro query connection unexpectedly accepted a write");
+            assert!(
+                write_error
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("readonly"),
+                "unexpected query-pool write error: {write_error}"
+            );
+        }
+        #[cfg(target_os = "macos")]
+        sqlx::query("INSERT INTO query_pool_probe (value) VALUES (1)")
             .execute(&mut *reader)
             .await
-            .expect_err("mode=ro query connection unexpectedly accepted a write");
-        assert!(
-            write_error
-                .to_string()
-                .to_ascii_lowercase()
-                .contains("readonly"),
-            "unexpected query-pool write error: {write_error}"
-        );
+            .expect("unix-excl query handles are physically RW behind query_only");
         sqlx::query("PRAGMA query_only = ON")
             .execute(&mut *reader)
             .await
@@ -836,7 +1044,18 @@ mod shutdown_tests {
             .fetch_one(&database.pool)
             .await
             .expect("query pool remains readable");
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(count, 1);
+        #[cfg(target_os = "macos")]
+        assert_eq!(count, 2);
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            !db_path
+                .with_file_name("read-only-query-pool.sqlite-shm")
+                .exists(),
+            "unix-excl must keep the live WAL index out of an APFS-backed -shm mapping"
+        );
 
         database.close().await;
     }
@@ -908,9 +1127,12 @@ mod shutdown_tests {
             }
             Err(error) => error,
         };
-        assert!(replacement_error
-            .to_string()
-            .contains("remains quarantined"));
+        assert!(
+            replacement_error
+                .to_string()
+                .contains("remains durably quarantined"),
+            "unexpected replacement error: {replacement_error}"
+        );
     }
 
     #[tokio::test]
@@ -957,9 +1179,12 @@ mod shutdown_tests {
             }
             Err(error) => error,
         };
-        assert!(replacement_error
-            .to_string()
-            .contains("remains quarantined"));
+        assert!(
+            replacement_error
+                .to_string()
+                .contains("remains durably quarantined"),
+            "unexpected replacement error: {replacement_error}"
+        );
     }
 
     #[tokio::test]

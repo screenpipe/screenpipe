@@ -15,8 +15,8 @@ describe('private hosted AI reservation controls', () => {
 		expect(controls.reservationTtlSeconds).toBeGreaterThan(controls.capacityActivitySeconds);
 		expect(controls.maxActiveInteractive).toBeGreaterThan(0);
 		expect(controls.maxActiveBackground).toBeGreaterThan(0);
-		expect(controls.maxBackgroundReservedFraction).toBeGreaterThan(0);
-		expect(controls.maxBackgroundReservedFraction).toBeLessThanOrEqual(1);
+		expect(controls.maxBackgroundBudgetFraction).toBeGreaterThan(0);
+		expect(controls.maxBackgroundBudgetFraction).toBeLessThanOrEqual(1);
 	});
 
 	it('fails closed when any private value is missing', () => {

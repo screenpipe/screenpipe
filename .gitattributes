@@ -8,6 +8,7 @@
 dist/* linguist-vendored
 target/* linguist-vendored
 node_modules/* linguist-vendored
+crates/screenpipe-sqlite-recovery/vendor/** linguist-vendored -whitespace
 # Ignore documentation
 *.md linguist-documentation
 *.txt linguist-documentation

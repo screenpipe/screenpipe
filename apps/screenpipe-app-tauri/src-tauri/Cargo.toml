@@ -3,7 +3,7 @@ members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.164"
+version = "2.5.188"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -117,7 +117,7 @@ raw-window-handle = "0.6"
 
 notify = "8.0.0"
 futures = "0.3.30"
-agent-client-protocol = "=1.2.0"
+agent-client-protocol = { version = "=1.2.0", features = ["unstable_auth_methods"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
@@ -177,6 +177,9 @@ screenpipe-telemetry-wire = { path = "../../../crates/screenpipe-telemetry-wire"
 # jemalloc — aggressively returns freed pages to OS, reducing RSS bloat
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-cli = "2.4.1"
@@ -286,7 +289,12 @@ official-build = []
 # Source for the sync lives under `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs` (EE-licensed).
 # Consumer builds never compile this code.
 # Do NOT add official-build here — enterprise has its own policy-gated updater.
-enterprise-build = ["dep:thiserror", "dep:screenpipe-sync", "dep:screenpipe-telemetry-wire"]
+enterprise-build = [
+    "dep:thiserror",
+    "dep:screenpipe-sync",
+    "dep:screenpipe-telemetry-wire",
+    "screenpipe-core/enterprise-build",
+]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]

@@ -15,6 +15,11 @@
       "sourceRoots": ["src"]
     },
     {
+      "crate": "screenpipe-sqlite-coordinator",
+      "testRoots": ["tests"],
+      "sourceRoots": ["src"]
+    },
+    {
       "crate": "screenpipe-audio",
       "testRoots": ["tests"],
       "sourceRoots": ["src"]
@@ -171,6 +176,7 @@
         "src/pipe_stream.rs",
         "src/routes/activity_summary.rs",
         "src/routes/artifacts.rs",
+        "src/routes/connect_broker.rs",
         "src/routes/content.rs",
         "src/routes/data.rs",
         "src/routes/elements.rs",
@@ -179,6 +185,7 @@
         "src/routes/live_views.rs",
         "src/routes/meetings.rs",
         "src/routes/memories.rs",
+        "src/routes/request_origin.rs",
         "src/routes/response_format.rs",
         "src/routes/retranscribe.rs",
         "src/routes/search.rs",
@@ -219,6 +226,21 @@
       "notes": "Active /search route test builds an audio-disabled router, seeds captured-screen-shaped OCR data into an in-memory DB, and asserts the HTTP response and pagination."
     },
     {
+      "id": "engine-db-recovery-cli",
+      "label": "Engine offline database recovery lifecycle",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/cli/db.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "engine-lifecycle"],
+      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Exact DB/WAL/SHM working-copy preservation, rollback on archive failure, and restart repair for crashes during the multi-file generation swap."
+    },
+    {
       "id": "engine-focus-os",
       "label": "Engine focus and OS integration helpers",
       "crate": "screenpipe-engine",
@@ -252,6 +274,7 @@
         "src/cli/service.rs",
         "src/cli/store_file.rs",
         "src/cli/team.rs",
+        "src/cli/team_pipes.rs",
         "src/cli/view.rs",
         "src/cloud_search.rs",
         "src/connections_api.rs",
@@ -341,6 +364,22 @@
       "notes": "PostHog capture gating, telemetry context shaping, piggyback telemetry forwarding, crash-log helpers, resource monitoring, and the recording-coverage reliability metric."
     },
     {
+      "id": "sqlite-coordinator-durable-quarantine",
+      "label": "SQLite coordination and durable quarantine",
+      "crate": "screenpipe-sqlite-coordinator",
+      "files": [
+        "src/lib.rs",
+        "src/quarantine.rs"
+      ],
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["database", "engine-lifecycle"],
+      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Process-wide single-writer gates, SQLite runtime pinning, atomic hard-fault markers, OS file identity, fail-closed malformed metadata, fresh-identity resolution, and a real cross-process restart test."
+    },
+    {
       "id": "db-search-indexing",
       "label": "Database OCR/accessibility search indexing",
       "crate": "screenpipe-db",
@@ -405,12 +444,14 @@
       "files": [
         "src/cancellable_query.rs",
         "src/failpoint_vfs.rs",
+        "src/recovery.rs",
         "src/sqlite_error.rs",
         "tests/cancellable_query_test.rs",
         "tests/cancellation_performance_bench.rs",
         "tests/close_severs_connections_test.rs",
         "tests/memory_pressure_test.rs",
         "tests/multi_pool_wal_parity_test.rs",
+        "tests/sqlite_architecture_invariants_test.rs",
         "tests/sqlite_runtime_version.rs",
         "tests/wal_chaos_e2e_test.rs"
       ],
@@ -420,7 +461,7 @@
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
-      "notes": "SQLite hard-fault classification, failpoint VFS injection, query cancellation surviving dropped futures, close-severs-connections wedge regression, multi-pool WAL parity/corruption coverage, runtime version pinning, and manual WAL chaos plus memory-pressure probes (several ignored by default)."
+      "notes": "SQLite hard-fault classification, failpoint VFS injection, fresh-identity recovery verification with integrity/FK/write canaries, query cancellation, close-severs-connections regressions, multi-pool WAL parity, runtime version pinning, and WAL chaos plus memory-pressure probes."
     },
     {
       "id": "db-audio-meetings-speakers",
@@ -431,6 +472,7 @@
         "tests/audio_search_speaker_join_test.rs",
         "tests/chunk_outcome_test.rs",
         "tests/meeting_context_test.rs",
+        "tests/meeting_end_generation_test.rs",
         "tests/meeting_end_reason_test.rs",
         "tests/meeting_transcript_dedup_test.rs",
         "tests/output_audio_liveness_test.rs",
@@ -448,7 +490,7 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "integration",
-      "notes": "Audio transcript dedupe, live meeting mirroring, open meeting invariants, liveness, and speaker reassignment coverage."
+      "notes": "Audio transcript dedupe, live meeting mirroring, end-generation and open-meeting invariants, liveness, and speaker reassignment coverage."
     },
     {
       "id": "db-accessibility-ui-events",
@@ -479,6 +521,7 @@
         "src/core/engine.rs",
         "src/core/run_record_and_transcribe.rs",
         "src/transcription/deepgram/batch.rs",
+        "src/transcription/deepgram/mod.rs",
         "src/transcription/engine.rs",
         "src/transcription/openai_compatible/batch.rs",
         "src/transcription/transcription_result.rs",

@@ -407,18 +407,26 @@ pub struct PiState(pub Arc<Mutex<PiPool>>);
 #[serde(rename_all = "camelCase")]
 pub struct PiInfo {
     pub running: bool,
+    /// True while this session has a prompt, queued follow-up, or pending RPC
+    /// response. Destructive settings use it to avoid clearing live context.
+    pub busy: bool,
     pub project_dir: Option<String>,
     pub pid: Option<u32>,
     pub session_id: Option<String>,
+    /// A non-fatal startup outcome, such as the user declining an ACP login.
+    /// Genuine process/configuration failures still use the command error.
+    pub startup_error: Option<String>,
 }
 
 impl Default for PiInfo {
     fn default() -> Self {
         Self {
             running: false,
+            busy: false,
             project_dir: None,
             pid: None,
             session_id: None,
+            startup_error: None,
         }
     }
 }
@@ -690,6 +698,9 @@ impl PiConversationLease {
 pub struct PiManager {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
+    /// ACP is a supervised process tree. Give its Rust runtime a brief chance to
+    /// close the adapter and terminal descendants before the hard kill.
+    is_acp: bool,
     project_dir: Option<String>,
     /// Hash of the spawn-time inputs. Multiple WebViews can request the same
     /// session concurrently; identical starts must reuse the live child.
@@ -710,11 +721,43 @@ pub struct PiManager {
     conversation_sync: PiConversationSync,
 }
 
+/// Terminate the process group rooted at the hidden ACP runtime. The runtime
+/// normally shuts its adapter and terminals down on stdin EOF; this is the
+/// final safety net for wedged or unexpectedly terminated harnesses.
+fn terminate_acp_process_tree(pid: u32) {
+    #[cfg(unix)]
+    {
+        let process_group = -(pid as i32);
+        // SAFETY: `pid` is the child we spawned with `process_group(0)`. A
+        // negative pid targets only that process group, never Screenpipe's.
+        unsafe {
+            let _ = libc::kill(process_group, libc::SIGTERM);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        unsafe {
+            let _ = libc::kill(process_group, libc::SIGKILL);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 impl PiManager {
     pub fn new(app_handle: AppHandle) -> Self {
         Self {
             child: None,
             stdin: None,
+            is_acp: false,
             project_dir: None,
             launch_fingerprint: None,
             app_handle,
@@ -758,17 +801,20 @@ impl PiManager {
 
     pub fn snapshot(&mut self, session_id: &str) -> PiInfo {
         let running = self.check_alive();
+        let busy = running && self.has_in_flight_work();
         let pid = self.child.as_ref().map(|c| c.id());
 
         PiInfo {
             running,
+            busy,
             project_dir: self.project_dir.clone(),
             pid,
             session_id: Some(session_id.to_string()),
+            startup_error: None,
         }
     }
 
-    pub fn stop(&mut self) {
+    pub async fn stop(&mut self) {
         // Signal queue to stop accepting commands
         if let Some(state) = self.queue_state.take() {
             state.signal_terminated();
@@ -776,22 +822,61 @@ impl PiManager {
         // Abort the queue drain task
         if let Some(task) = self.queue_task.take() {
             task.abort();
+            // Await cancellation so the queue-owned stdin Arc is definitely
+            // dropped before ACP's graceful-shutdown window begins.
+            let _ = task.await;
         }
         self.queue_handle = None;
 
         if let Some(mut child) = self.child.take() {
+            let mut acp_tree_owned = self.is_acp;
             // Send abort command before killing
             if let Some(ref mut stdin) = self.stdin {
                 let _ = writeln!(stdin, r#"{{"type":"abort"}}"#);
             }
 
-            // Kill the process
-            if let Err(e) = child.kill() {
-                error!("Failed to kill pi child process: {}", e);
+            if self.is_acp {
+                // The queue owns stdin. Aborting its task and yielding drops
+                // that pipe, which tells the ACP runtime to shut down its full
+                // process tree. Bound the grace period so Stop stays prompt
+                // even when a third-party harness is wedged.
+                tokio::task::yield_now().await;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while std::time::Instant::now() < deadline {
+                    match child.try_wait() {
+                        Ok(Some(_)) => {
+                            // `try_wait` reaped the runtime. Its internal Unix
+                            // group guards / Windows root Job own descendant
+                            // cleanup; a numeric PID is no longer ours to use.
+                            acp_tree_owned = false;
+                            break;
+                        }
+                        Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(25)).await,
+                        Err(error) => {
+                            warn!("Failed to check ACP runtime during shutdown: {}", error);
+                            acp_tree_owned = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if acp_tree_owned {
+                // No other task owns or waits on this Child. If it exits after
+                // the last `None`, it remains our unreaped zombie and pins the
+                // PID/PGID until this identity-safe group kill completes.
+                terminate_acp_process_tree(child.id());
+            }
+
+            if child.try_wait().ok().flatten().is_none() {
+                if let Err(e) = child.kill() {
+                    error!("Failed to kill pi child process: {}", e);
+                }
             }
             let _ = child.wait();
         }
         self.stdin = None;
+        self.is_acp = false;
         self.project_dir = None;
         self.conversation_sync = PiConversationSync::new();
         self.launch_fingerprint = None;
@@ -1421,6 +1506,18 @@ fn ensure_screenpipe_skill(project_dir: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to install screenpipe skills: {}", e))
 }
 
+/// Stage the Enterprise-only team skill outside Pi's auto-discovery tree.
+/// Consumer builds return `None` without touching this path; the Enterprise
+/// app passes the returned file explicitly with `--skill` for this process.
+fn ensure_enterprise_team_skill(project_dir: &str) -> Result<Option<std::path::PathBuf>, String> {
+    use screenpipe_core::agents::pi::PiExecutor;
+    let skill_root = std::path::Path::new(project_dir)
+        .join(".screenpipe")
+        .join("enterprise-skills");
+    PiExecutor::ensure_screenpipe_team_skill(&skill_root)
+        .map_err(|e| format!("Failed to install Enterprise team skill: {}", e))
+}
+
 /// Ensure the web-search extension exists in the project's .pi/extensions directory
 /// Install or remove the web-search extension based on provider.
 /// Web search uses the screenpipe cloud backend (Gemini + Google Search),
@@ -1444,7 +1541,9 @@ fn ensure_web_search_extension(
         std::fs::create_dir_all(&ext_dir)
             .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
 
-        let ext_content = include_str!("../assets/extensions/web-search.ts");
+        let api_url = crate::config::screenpipe_ai_gateway_url()?;
+        let ext_content = include_str!("../assets/extensions/web-search.ts")
+            .replace(SCREENPIPE_API_URL, &api_url);
         std::fs::write(&ext_path, ext_content)
             .map_err(|e| format!("Failed to write web-search extension: {}", e))?;
 
@@ -1459,6 +1558,24 @@ fn ensure_web_search_extension(
         );
     }
 
+    Ok(())
+}
+
+/// Install the local-proxy web-search extension for pi-acp. Writes the same
+/// `web-search.ts` slot as the cloud variant but with a body that hits the
+/// local engine's `/v1/web-search` proxy (which holds the cloud JWT) using only
+/// the local API key, so "Pi over ACP" keeps web search without the cloud JWT.
+fn ensure_web_search_local_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+    let ext_path = ext_dir.join("web-search.ts");
+    let ext_content = include_str!("../assets/extensions/web-search-local.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write local web-search extension: {}", e))?;
+    debug!("Local web search extension installed at {:?}", ext_path);
     Ok(())
 }
 
@@ -1517,6 +1634,40 @@ fn ensure_live_views_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Grant pi "project trust" for `project_dir` by adding it to pi's trust.json.
+/// pi 0.80 gates project `.pi/extensions` and `.pi/skills` behind a trust
+/// prompt that rpc mode can't answer; native pi passes `--approve`, but the
+/// pi-acp adapter spawns pi with fixed args and no `--approve`, so without this
+/// its project extensions/skills silently never load. The dir is created and
+/// populated exclusively by screenpipe, so it is trusted by definition. Keyed
+/// by the canonical absolute path, matching pi's own trust-store lookup.
+fn seed_pi_project_trust(project_dir: &str) -> Result<(), String> {
+    let trust_path = get_pi_config_dir()?.join("trust.json");
+    let key = std::fs::canonicalize(project_dir)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| project_dir.to_string());
+
+    let mut map: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&trust_path)
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default();
+    if map.get(&key).and_then(|value| value.as_bool()) == Some(true) {
+        return Ok(());
+    }
+    map.insert(key, serde_json::Value::Bool(true));
+
+    if let Some(parent) = trust_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
+    }
+    let body = serde_json::to_string_pretty(&map)
+        .map_err(|e| format!("Failed to serialize trust.json: {}", e))?;
+    std::fs::write(&trust_path, body)
+        .map_err(|e| format!("Failed to write trust.json: {}", e))?;
+    debug!("seeded pi project trust for {:?}", trust_path);
+    Ok(())
+}
+
 fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir)
@@ -1529,43 +1680,49 @@ fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Which transport backend Pi uses. Absent means the native Pi RPC agent;
-/// `acp` runs an external Agent Client Protocol adapter through the hidden
-/// runtime (see acp_runtime.rs).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentConfig {
+    /// Registry id (for example `codex-acp`) or `custom`.
+    pub id: String,
+    /// Optional executable. Built-in registry adapters resolve by id when absent.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Arguments passed verbatim without a shell.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment passed only to the supervised adapter process.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Optional ACP authentication method id.
+    #[serde(default)]
+    pub auth_method: Option<String>,
+    /// Default session config option values (option id -> value id), applied
+    /// after every session/new.
+    #[serde(default)]
+    pub config: HashMap<String, String>,
+    /// Default session mode id, applied after every session/new.
+    #[serde(default)]
+    pub mode_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PiBackend {
     Acp,
 }
 
-/// The external ACP adapter to launch when `backend` is `acp`.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpAgentConfig {
-    /// Catalog id (for example `claude-acp`) or `custom`.
-    pub id: String,
-    /// Executable for a custom adapter; built-in ids resolve by id when absent.
-    #[serde(default)]
-    pub command: Option<String>,
-    /// Arguments passed to the adapter verbatim, without a shell.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Environment passed only to the supervised adapter process.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-}
-
 /// Configuration for which AI provider Pi should use.
-/// Not `Hash`: the ACP agent config carries an `env` map, so the launch
-/// fingerprint hashes a canonical serialization instead.
+/// Not `Hash` (it carries an `env: HashMap` via the ACP agent config); the
+/// launch fingerprint hashes a canonical serialization instead.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PiProviderConfig {
-    /// Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
-    /// external adapter through the hidden ACP runtime.
+    /// Transport backend. Omitted keeps the native Pi RPC implementation;
+    /// `acp` runs a registry-compatible adapter through the official Rust SDK.
     #[serde(default)]
     pub backend: Option<PiBackend>,
-    /// Adapter configuration, required when `backend` is `acp`.
+    /// ACP adapter configuration when `backend` is `acp`.
     #[serde(default)]
     pub acp_agent: Option<AcpAgentConfig>,
     /// Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
@@ -1586,6 +1743,22 @@ pub struct PiProviderConfig {
     /// Optional system prompt from AI preset (appended to Pi's built-in system prompt)
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Optional exact Pi tool allowlist for bounded agent surfaces. `None`
+    /// preserves the normal Chat tool surface; an empty list disables tools.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    /// A prior ACP session id to reattach to instead of creating a fresh
+    /// session, set only when reopening a conversation whose agent process
+    /// is gone. Ignored by the native Pi backend.
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
+}
+
+fn uses_acp_backend(config: Option<&PiProviderConfig>) -> bool {
+    matches!(
+        config.and_then(|value| value.backend.as_ref()),
+        Some(PiBackend::Acp)
+    )
 }
 
 fn default_max_tokens() -> i32 {
@@ -1596,14 +1769,6 @@ fn context_window_tokens(max_context_chars: Option<i32>) -> Option<i32> {
     max_context_chars
         .filter(|value| *value > 0)
         .map(|value| value.saturating_add(3) / 4)
-}
-
-/// True when the preset selects the ACP transport backend.
-fn uses_acp_backend(config: Option<&PiProviderConfig>) -> bool {
-    matches!(
-        config.and_then(|value| value.backend.as_ref()),
-        Some(PiBackend::Acp)
-    )
 }
 
 fn pi_launch_fingerprint(
@@ -1627,13 +1792,14 @@ fn pi_launch_fingerprint(
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        // PiProviderConfig is not Hash (the ACP env map), so hash a canonical
-        // serialization. Cloned configs serialize identically, so concurrent
-        // identical launches still share a fingerprint.
         let normalized = PiProviderConfig {
             system_prompt: normalized_system_prompt,
             ..config.clone()
         };
+        // PiProviderConfig isn't `Hash` (its ACP agent config carries an
+        // `env: HashMap`). Hash a canonical serialization instead: two
+        // concurrent identical spawn requests clone the same config, which
+        // serializes identically, so they still share a fingerprint.
         serde_json::to_string(&normalized)
             .unwrap_or_default()
             .hash(&mut hasher);
@@ -1641,6 +1807,23 @@ fn pi_launch_fingerprint(
         Option::<u8>::None.hash(&mut hasher);
     }
     hasher.finish()
+}
+
+fn apply_pi_tool_allowlist(command: &mut Command, provider_config: Option<&PiProviderConfig>) {
+    let Some(allowed_tools) = provider_config.and_then(|config| config.allowed_tools.as_ref())
+    else {
+        return;
+    };
+    let allowed_tools = allowed_tools
+        .iter()
+        .map(|tool| tool.trim())
+        .filter(|tool| !tool.is_empty())
+        .collect::<Vec<_>>();
+    if allowed_tools.is_empty() {
+        command.arg("--no-tools");
+    } else {
+        command.arg("--tools").arg(allowed_tools.join(","));
+    }
 }
 
 fn model_supports_reasoning(provider: &str, model: &str) -> bool {
@@ -1700,9 +1883,18 @@ fn anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
 /// Returns a map of provider entries to merge into the existing models.json.
 /// We merge instead of rebuilding from scratch to avoid a race condition where
 /// concurrent pipes overwrite each other's providers.
+#[cfg(test)]
 async fn build_models_json(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
+) -> serde_json::Value {
+    build_models_json_with_api_url(user_token, provider_config, SCREENPIPE_API_URL).await
+}
+
+async fn build_models_json_with_api_url(
+    user_token: Option<&str>,
+    provider_config: Option<&PiProviderConfig>,
+    api_url: &str,
 ) -> serde_json::Value {
     let mut providers_map = serde_json::Map::new();
 
@@ -1710,9 +1902,9 @@ async fn build_models_json(
     // literal; the logged-out fallback must use `$` env-var syntax (pi >= 0.80
     // treats bare names as literal keys).
     let api_key_value = user_token.unwrap_or("$SCREENPIPE_API_KEY");
-    let models = screenpipe_cloud_models(SCREENPIPE_API_URL, user_token).await;
+    let models = screenpipe_cloud_models(api_url, user_token).await;
     let screenpipe_provider = json!({
-        "baseUrl": SCREENPIPE_API_URL,
+        "baseUrl": api_url,
         "api": "openai-completions",
         "apiKey": api_key_value,
         "authHeader": true,
@@ -1855,7 +2047,9 @@ async fn ensure_pi_config(
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
 
-    let new_providers = build_models_json(user_token, provider_config).await;
+    let api_url = crate::config::screenpipe_ai_gateway_url()?;
+    let new_providers =
+        build_models_json_with_api_url(user_token, provider_config, &api_url).await;
 
     // Merge into existing models.json to avoid race conditions with concurrent pipes
     let models_path = config_dir.join("models.json");
@@ -1959,7 +2153,7 @@ pub async fn pi_stop(
 
     let mut pool = state.0.lock().await;
     if let Some(m) = pool.sessions.get_mut(&sid) {
-        m.stop();
+        m.stop().await;
     }
 
     match pool.sessions.get_mut(&sid) {
@@ -1981,6 +2175,35 @@ pub async fn pi_start(
 ) -> Result<PiInfo, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
     pi_start_inner(app, &state, &sid, project_dir, user_token, provider_config).await
+}
+
+/// Start a private Pi session and submit its first prompt as one operation.
+/// Foreground surfaces that only care about agent events should not have to
+/// round-trip through WebView between process readiness and prompt acceptance.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_start_and_prompt(
+    app: AppHandle,
+    state: State<'_, PiState>,
+    session_id: String,
+    project_dir: String,
+    user_token: Option<String>,
+    provider_config: Option<PiProviderConfig>,
+    message: String,
+) -> Result<String, String> {
+    let started = pi_start_inner(
+        app.clone(),
+        state.inner(),
+        &session_id,
+        project_dir,
+        user_token,
+        provider_config,
+    )
+    .await?;
+    if !started.running {
+        return Err("Pi did not start".to_string());
+    }
+    pi_prompt_inner(&app, state.inner(), &session_id, message, None, None).await
 }
 
 /// Kill orphan Pi RPC processes left over from a previous app crash.
@@ -2128,7 +2351,6 @@ pub async fn pi_start_inner(
         provider_config.as_ref(),
     );
     let extension_safe_mode = pi_extension_safe_mode_enabled(&project_dir);
-    let use_acp = uses_acp_backend(provider_config.as_ref());
     let sid = session_id.to_string();
 
     // Fast path before provider discovery/config writes. Home and standalone
@@ -2151,18 +2373,111 @@ pub async fn pi_start_inner(
     std::fs::create_dir_all(&project_dir)
         .map_err(|e| format!("Failed to create project directory: {}", e))?;
 
+    let use_acp = uses_acp_backend(provider_config.as_ref());
+
+    if use_acp {
+        let acp = provider_config
+            .as_ref()
+            .and_then(|config| config.acp_agent.as_ref())
+            .ok_or("ACP backend requires an acpAgent configuration")?;
+        if acp.id.trim().is_empty() {
+            return Err("ACP agent id is required".to_string());
+        }
+        let has_custom_command = acp
+            .command
+            .as_deref()
+            .is_some_and(|command| !command.trim().is_empty());
+        if acp.id == "custom" && !has_custom_command {
+            return Err("Custom ACP agents require a command".to_string());
+        }
+        if acp.id != "custom"
+            && !crate::acp_runtime::is_known_agent(&acp.id)
+            && !has_custom_command
+        {
+            return Err(format!(
+                "Unknown ACP agent '{}'. Select a built-in agent or configure a custom command.",
+                acp.id
+            ));
+        }
+        if find_bun_executable().is_none() {
+            return Err("ACP requires the bundled Bun runtime, but it was not found".to_string());
+        }
+    }
+
     // Ensure screenpipe skills exist in project
     ensure_screenpipe_skill(&project_dir)?;
+    let enterprise_team_skill = ensure_enterprise_team_skill(&project_dir)?;
 
+    // The pi-acp ACP agent wraps the SAME @earendil-works/pi-coding-agent we run
+    // natively, in the same project dir and PI_CODING_AGENT_DIR — but it drops
+    // the ACP mcpServers we send and spawns pi with fixed args (no `--approve`).
+    // So it gets our tools the native way instead of over MCP: seed pi's
+    // extensions and grant project trust (below).
+    let is_pi_acp = use_acp
+        && provider_config
+            .as_ref()
+            .and_then(|config| config.acp_agent.as_ref())
+            .map(|agent| agent.id.as_str())
+            == Some("pi-acp");
+
+    // ACP agents receive Screenpipe via MCP during session/new. Pi-only
+    // extensions and packages must not be installed or required there — except
+    // pi-acp, which is pi and can't consume the MCP servers.
     if !use_acp {
-        // These extensions and package/config checks belong to the native Pi
-        // runtime. ACP adapters have their own tool surface and must not wait
-        // for an unrelated Pi install or gateway model discovery.
+        // Install web-search extension only for screenpipe-cloud presets
         ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
+
+        // MCP bridge: lets the agent reach user-registered MCP servers.
+        ensure_mcp_bridge_extension(&project_dir)?;
+
+        // Save artifact: lets the agent register deliverables in the Artifacts library.
+        ensure_save_artifact_extension(&project_dir)?;
+
+        // Live Views: lazy read/edit access for normal chat and focused composers.
+        ensure_live_views_extension(&project_dir)?;
+
+        // Connection gate: lets Pi block on inline app authorization before
+        // continuing app-dependent tasks.
+        ensure_connection_gate_extension(&project_dir)?;
+
+        // Ensure Pi is configured with the user's provider
+        ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
+        if !extension_safe_mode {
+            ensure_required_pi_extension_package().await?;
+        }
+    } else if is_pi_acp {
+        // Same pi as native — seed the project-local extensions so its tools
+        // reach the model. web-search uses the LOCAL-proxy variant: the cloud
+        // extension needs the screenpipe-cloud JWT (which ACP sessions never
+        // receive), but the local engine proxy at /v1/web-search injects the JWT
+        // server-side, so pi-acp keeps web search with only the local API key.
+        ensure_web_search_local_extension(&project_dir)?;
         ensure_mcp_bridge_extension(&project_dir)?;
         ensure_save_artifact_extension(&project_dir)?;
+        // Live Views: pi-acp is pi but can't consume the bundled MCP server, so
+        // it needs the extension (native pi seeds it above). Without this,
+        // pi-acp is the only ACP harness missing Live Views. Local file write,
+        // and its env (SCREENPIPE_LOCAL_API_*) is already set on this path.
         ensure_live_views_extension(&project_dir)?;
         ensure_connection_gate_extension(&project_dir)?;
+
+        // pi-acp can't pass pi's `--approve`, so rpc-mode pi would silently skip
+        // the project's .pi/extensions and .pi/skills (untrusted-by-default).
+        // Grant trust on disk — the on-disk equivalent of --approve.
+        if let Err(e) = seed_pi_project_trust(&project_dir) {
+            warn!("failed to seed pi project trust for pi-acp: {}", e);
+        }
+
+        // pi-acp uses the SAME isolated PI_CODING_AGENT_DIR as native pi, so it
+        // must get Screenpipe's provider setup and the required pi-subagents
+        // install exactly like native — a fresh profile would otherwise start
+        // without them.
+        // These are ACP-safe: ensure_pi_config only merges into models.json /
+        // auth.json (additive, never clobbering what the ACP session config
+        // supplies) and registers the subagents setting; the package call then
+        // repairs the physical install. Kept fatal (`?`) to match native pi's
+        // guarantee — a fresh pi-acp user gets the baseline or fails loudly,
+        // rather than silently degraded.
         ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
         if !extension_safe_mode {
             ensure_required_pi_extension_package().await?;
@@ -2215,7 +2530,7 @@ pub async fn pi_start_inner(
                 "Stopping existing pi instance (pid {:?}) for session '{}' to start new one",
                 old_pid, sid
             );
-            m.stop();
+            m.stop().await;
         }
     }
 
@@ -2260,7 +2575,7 @@ pub async fn pi_start_inner(
                 key, sid
             );
             if let Some(mut m) = pool.sessions.remove(&key) {
-                m.stop();
+                m.stop().await;
             }
             // Stage 5: legacy `pi_session_evicted` topic dropped.
             // Consumers read from `agent_session_evicted` via the bus.
@@ -2287,12 +2602,12 @@ pub async fn pi_start_inner(
     pool.sessions
         .insert(sid.clone(), PiManager::new(app.clone()));
 
-    // ACP re-enters this executable directly; only the native backend needs a
-    // Pi install and must wait for its background installer.
+    // ACP uses this executable's hidden Rust runtime; raw Pi keeps the existing
+    // self-healing package installation path.
     let pi_path = if use_acp {
-        None
+        String::new()
     } else {
-        Some(match find_pi_executable() {
+        match find_pi_executable() {
             Some(p) => p,
             None => {
                 if !PI_INSTALL_DONE.load(Ordering::SeqCst) {
@@ -2317,42 +2632,38 @@ pub async fn pi_start_inner(
                         }
                     })?
             }
-        })
+        }
     };
 
     let bun_path = find_bun_executable().unwrap_or_else(|| "NOT FOUND".to_string());
-    if use_acp {
-        info!("Starting ACP runtime in dir: {}", project_dir);
-    } else {
-        info!(
-            "Starting pi from {} in dir: {} with provider: {} model: {} bun: {}",
-            pi_path.as_deref().unwrap_or("NOT FOUND"), project_dir, pi_provider, pi_model, bun_path
-        );
-    }
+    info!(
+        "Starting {} from {} in dir: {} with provider: {} model: {} bun: {}",
+        if use_acp { "ACP agent" } else { "pi" },
+        if use_acp {
+            "Rust ACP runtime"
+        } else {
+            &pi_path
+        },
+        project_dir,
+        pi_provider,
+        pi_model,
+        bun_path
+    );
 
-    // Build command — use cmd.exe /C wrapper for .cmd files on Windows (Rust 1.77+ CVE fix)
-    // ACP re-enters this same executable in the hidden runtime mode, which
-    // supervises the selected external adapter and speaks the same stdin
-    // commands / stdout JSON events the native Pi RPC agent does, so the reader
-    // and command queue below drive both without change. Native Pi stays direct.
+    // Build command. ACP re-enters this executable in a hidden Rust SDK mode,
+    // which supervises the selected registry adapter. Raw Pi stays direct.
     let mut cmd = if use_acp {
         if bun_path == "NOT FOUND" {
             return Err("ACP requires the bundled Bun runtime, but it was not found".to_string());
         }
         let executable = std::env::current_exe()
-            .map_err(|error| format!("Failed to locate the screenpipe ACP runtime: {error}"))?;
-        // This is the native Screenpipe executable, not a Pi JavaScript shim.
-        // Running it through `build_command_for_path` on Unix would prepend Bun
-        // and make Bun try to parse the Mach-O/ELF binary as JavaScript.
+            .map_err(|error| format!("Failed to locate Screenpipe ACP runtime: {error}"))?;
         let mut command = Command::new(executable);
         command.arg(crate::acp_runtime::RUNTIME_ARG);
-        command.current_dir(&project_dir);
         command
     } else {
-        let mut command = build_command_for_path(
-            pi_path.as_deref().ok_or("Pi executable unavailable")?,
-        );
-        command.current_dir(&project_dir).args([
+        let mut command = build_command_for_path(&pi_path);
+        command.args([
             "--mode",
             "rpc",
             // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
@@ -2365,6 +2676,13 @@ pub async fn pi_start_inner(
             "--model",
             &pi_model,
         ]);
+        if let Some(skill_path) = enterprise_team_skill.as_ref() {
+            command.arg("--skill").arg(skill_path);
+            info!(
+                "Injected Enterprise team skill for native Pi session from {:?}",
+                skill_path
+            );
+        }
         if extension_safe_mode {
             warn!(
                 "Starting Pi in extension safe mode for '{}'; third-party extension packages are disabled",
@@ -2372,40 +2690,40 @@ pub async fn pi_start_inner(
             );
             apply_pi_extension_safe_mode(&mut command, &project_dir);
         }
+        apply_pi_tool_allowlist(&mut command, provider_config.as_ref());
         command
     };
+    cmd.current_dir(&project_dir);
+    if !use_acp && extension_safe_mode {
+        warn!(
+            "Starting Pi in extension safe mode for '{}'; third-party extension packages are disabled",
+            project_dir
+        );
+        apply_pi_extension_safe_mode(&mut cmd, &project_dir);
+    }
+    if let Some(skill_path) = enterprise_team_skill.as_ref() {
+        cmd.arg("--skill").arg(skill_path);
+        info!(
+            "Injected Enterprise team skill for native Pi session from {:?}",
+            skill_path
+        );
+    }
 
-    // Isolate the hidden runtime into its own process group so a crash cleans up
-    // the adapter it supervises without touching the desktop process group.
+    // Isolate the hidden runtime from the desktop process group. The runtime
+    // supervises its adapter and terminals in their own groups and reports
+    // those PIDs back to this reader as an additional crash-cleanup backstop.
     #[cfg(unix)]
     if use_acp {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
 
-    // Tell the runtime which adapter to launch and with what environment. Only
-    // the launch inputs are passed here; the runtime resolves the rest. Secret
-    // runtime-only vars are stripped from the adapter's environment by the
-    // runtime itself before it spawns the adapter.
     if use_acp {
-        // The built-in Claude adapter is API-key-only. Do not let a token from
-        // the desktop's inherited environment silently select subscription
-        // authentication inside the hidden runtime.
-        cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
-        for name in [
-            "SCREENPIPE_API_KEY",
-            "SCREENPIPE_LOCAL_API_KEY",
-            "SCREENPIPE_LOCAL_API_PORT",
-            "SCREENPIPE_LOCAL_API_URL",
-            "SCREENPIPE_API_AUTH_KEY",
-            "BASH_ENV",
-        ] {
-            cmd.env_remove(name);
-        }
         let acp = provider_config
             .as_ref()
             .and_then(|config| config.acp_agent.as_ref())
             .ok_or("ACP backend requires an acpAgent configuration")?;
+        let agent_id = acp.id.trim();
         let mut resolved_env = acp
             .env
             .iter()
@@ -2419,16 +2737,24 @@ pub async fn pi_start_inner(
                 Some((name.clone(), resolved))
             })
             .collect::<HashMap<_, _>>();
-        if acp.id.trim() == "claude-acp" {
-            let api_key = provider_config
-                .as_ref()
-                .and_then(|config| config.api_key.as_deref())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or("Claude Code ACP requires an Anthropic API key")?;
-            resolved_env.insert("ANTHROPIC_API_KEY".into(), api_key.to_owned());
+        // Codex drops client-supplied MCP servers whose name collides with an
+        // entry in the user's ~/.codex config unless this is set, which would
+        // silently strip screenpipe's tools for a user who has a `screenpipe`
+        // config entry. Default it on; a user's explicit value still wins.
+        if agent_id == "codex-acp" {
+            resolved_env
+                .entry("DISABLE_MCP_CONFIG_FILTERING".to_string())
+                .or_insert_with(|| "true".to_string());
         }
-        cmd.env("SCREENPIPE_ACP_ID", acp.id.trim())
+        // Claude: force ANTHROPIC_API_KEY empty so the Claude Agent SDK ignores
+        // any ambient API key and resolves the subscription/OAuth login it wrote
+        // itself. We never read or parse Claude Code's credential store — the
+        // agent owns its credentials (this is the Zed approach), so nothing here
+        // can break when that store's format changes.
+        if agent_id == "claude-acp" {
+            resolved_env.insert("ANTHROPIC_API_KEY".to_string(), String::new());
+        }
+        cmd.env("SCREENPIPE_ACP_ID", agent_id)
             .env("SCREENPIPE_ACP_CWD", &project_dir)
             .env("SCREENPIPE_BUN_PATH", &bun_path)
             .env(
@@ -2438,25 +2764,55 @@ pub async fn pi_start_inner(
             .env(
                 "SCREENPIPE_ACP_ENV_JSON",
                 serde_json::to_string(&resolved_env).map_err(|e| e.to_string())?,
-            );
-        if let Some(system_prompt) = provider_config
-            .as_ref()
-            .and_then(|config| config.system_prompt.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            cmd.env("SCREENPIPE_ACP_SYSTEM_PROMPT", system_prompt);
-        } else {
-            cmd.env_remove("SCREENPIPE_ACP_SYSTEM_PROMPT");
-        }
+            )
+            .env(
+                "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
+                serde_json::to_string(&serde_json::json!({
+                    "options": acp.config,
+                    "modeId": acp.mode_id,
+                }))
+                .map_err(|e| e.to_string())?,
+            )
+            .env_remove("SCREENPIPE_ACP_COMMAND")
+            .env_remove("SCREENPIPE_ACP_AUTH_METHOD")
+            .env_remove("SCREENPIPE_ACP_SYSTEM_PROMPT");
         if let Some(command) = acp
             .command
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         {
             cmd.env("SCREENPIPE_ACP_COMMAND", command);
-        } else {
-            cmd.env_remove("SCREENPIPE_ACP_COMMAND");
+        }
+        if let Some(auth_method) = acp
+            .auth_method
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            cmd.env("SCREENPIPE_ACP_AUTH_METHOD", auth_method);
+        }
+        if let Some(system_prompt) = provider_config
+            .as_ref()
+            .and_then(|config| config.system_prompt.as_deref())
+            .filter(|value| !value.is_empty())
+        {
+            cmd.env("SCREENPIPE_ACP_SYSTEM_PROMPT", system_prompt);
+        }
+        // Forward the user's own MCP servers so the harness gets the same
+        // tool surface raw Pi gets from the mcp-bridge extension.
+        cmd.env_remove("SCREENPIPE_ACP_USER_MCP_JSON");
+        if let Some(user_mcp) = resolve_user_mcp_servers_json().await {
+            cmd.env("SCREENPIPE_ACP_USER_MCP_JSON", user_mcp);
+        }
+        // Reopen after the process was gone: reattach to the prior ACP
+        // session instead of starting fresh with a glued transcript.
+        cmd.env_remove("SCREENPIPE_ACP_RESUME_SESSION_ID");
+        if let Some(resume_id) = provider_config
+            .as_ref()
+            .and_then(|config| config.resume_session_id.as_deref())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            cmd.env("SCREENPIPE_ACP_RESUME_SESSION_ID", resume_id);
         }
     }
 
@@ -2549,22 +2905,18 @@ pub async fn pi_start_inner(
         }
     }
 
-    // `--append-system-prompt` is a native Pi RPC flag; the ACP runtime takes
-    // its inputs via env, so these only apply to the native path.
-    if !use_acp {
-        // For local/small models (Ollama, custom), explicitly tell them to read
-        // the screenpipe-api skill file — they often skip reading skills on
-        // their own.
-        let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
-        if is_local_model {
-            let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
-            cmd.args(["--append-system-prompt", api_hint]);
-        }
+    // For local/small models (Ollama, custom), explicitly tell them to read the
+    // screenpipe-api skill file — they often skip reading skills on their own.
+    let is_local_model = !use_acp && matches!(pi_provider.as_str(), "ollama" | "custom");
+    if is_local_model {
+        let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
+        cmd.args(["--append-system-prompt", api_hint]);
+    }
 
-        // Append the user's AI preset system prompt (enables Anthropic prompt
-        // caching — Pi's built-in system prompt + this text form the cached
-        // prefix, reducing input costs on subsequent messages in the same
-        // conversation).
+    // Append the user's AI preset system prompt (enables Anthropic prompt caching —
+    // Pi's built-in system prompt + this text form the cached prefix, reducing
+    // input costs by 90% on subsequent messages in the same conversation)
+    if !use_acp {
         if let Some(ref config) = provider_config {
             if let Some(ref prompt) = config.system_prompt {
                 if !prompt.is_empty() {
@@ -2599,16 +2951,16 @@ pub async fn pi_start_inner(
         if let Some(ref token) = user_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
+    }
 
-        // Pass local API config so the native Pi agent can authenticate to the runtime local API.
-        {
-            use crate::recording::local_api_context_from_app;
-            let api = local_api_context_from_app(&app);
-            cmd.env("SCREENPIPE_LOCAL_API_PORT", api.port.to_string());
-            cmd.env("SCREENPIPE_LOCAL_API_URL", api.url(""));
-            if let Some(ref key) = api.api_key {
-                cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
-            }
+    // Pass local API config so the Pi agent can authenticate to the runtime local API.
+    {
+        use crate::recording::local_api_context_from_app;
+        let api = local_api_context_from_app(&app);
+        cmd.env("SCREENPIPE_LOCAL_API_PORT", api.port.to_string());
+        cmd.env("SCREENPIPE_LOCAL_API_URL", api.url(""));
+        if let Some(ref key) = api.api_key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
         }
     }
 
@@ -2626,10 +2978,8 @@ pub async fn pi_start_inner(
     // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
     // shim sourced from $BASH_ENV on every subshell. See bash_env.rs in
     // screenpipe-core.
-    if !use_acp {
-        if let Ok(p) = screenpipe_core::agents::bash_env::ensure_wrapper_in_default_dir() {
-            cmd.env("BASH_ENV", p);
-        }
+    if let Ok(p) = screenpipe_core::agents::bash_env::ensure_wrapper_in_default_dir() {
+        cmd.env("BASH_ENV", p);
     }
 
     // Pass the user's API key as env var for non-screenpipe providers
@@ -2673,11 +3023,16 @@ pub async fn pi_start_inner(
     // mcp-bridge.ts can authenticate its GET /mcp-servers calls. Sets the
     // canonical name + the deprecated alias for old pipe.md files on disk.
     // TODO(remove next release): drop SCREENPIPE_API_AUTH_KEY alias.
-    if !use_acp {
-        if let Some(key) = crate::store::resolved_api_auth_key() {
-            cmd.env("SCREENPIPE_LOCAL_API_KEY", &key);
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
-        }
+    if let Some(key) = crate::store::resolved_api_auth_key() {
+        cmd.env("SCREENPIPE_LOCAL_API_KEY", &key);
+        cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
+    }
+
+    // ACP adapters authenticate through their own configured provider env or
+    // login state. Never expose the signed-in user's Screenpipe cloud JWT to a
+    // third-party adapter (or to the hidden runtime it can ask to run tools).
+    if use_acp {
+        cmd.env_remove(crate::acp_runtime::CLOUD_API_KEY_ENV);
     }
 
     // Spawn process
@@ -2718,6 +3073,7 @@ pub async fn pi_start_inner(
 
         m.child = Some(child);
         m.stdin = None; // stdin is now owned by the queue
+        m.is_acp = use_acp;
         m.project_dir = Some(project_dir.clone());
         m.launch_fingerprint = Some(launch_fingerprint);
         m.last_activity = std::time::Instant::now();
@@ -2777,6 +3133,9 @@ pub async fn pi_start_inner(
     // so pi_start_inner can return without a blind 1500ms sleep.
     let ready_notify = Arc::new(tokio::sync::Notify::new());
     let ready_notify_reader = ready_notify.clone();
+    let startup_result: Arc<std::sync::Mutex<Option<Result<(), String>>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let startup_result_reader = startup_result.clone();
     let first_stderr_line = Arc::new(std::sync::Mutex::new(None::<String>));
 
     // Spawn stdout reader thread — this is the SOLE emitter of `pi_terminated`.
@@ -2810,10 +3169,33 @@ pub async fn pi_start_inner(
                 event_type.as_deref().unwrap_or("non-json")
             );
 
-            // Signal readiness on first successful JSON line
-            if !ready_signalled && parsed.is_some() {
-                ready_notify_reader.notify_one();
-                ready_signalled = true;
+            // Raw Pi is ready on its first JSON line. ACP has a real handshake,
+            // so wait for acp_ready (or fail immediately on acp_fatal) rather
+            // than letting a diagnostic line masquerade as a healthy startup.
+            if !ready_signalled {
+                let readiness = if use_acp {
+                    match event_type.as_deref() {
+                        Some("acp_ready") => Some(Ok(())),
+                        Some("acp_fatal") => Some(Err(parsed
+                            .as_ref()
+                            .and_then(|value| value.get("error"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("ACP agent failed during startup")
+                            .to_string())),
+                        _ => None,
+                    }
+                } else if parsed.is_some() {
+                    Some(Ok(()))
+                } else {
+                    None
+                };
+                if let Some(result) = readiness {
+                    if let Ok(mut startup) = startup_result_reader.lock() {
+                        *startup = Some(result);
+                    }
+                    ready_notify_reader.notify_one();
+                    ready_signalled = true;
+                }
             }
 
             // Signal the command queue when the SDK's agent loop finishes.
@@ -2826,11 +3208,11 @@ pub async fn pi_start_inner(
             //                  NOT when it finishes processing it.
             //
             // The "done" type was the original intent but pi-mono never emits it —
-            // it emits "agent_end" instead. Without "agent_end" handling, the queue
-            // was only ever unblocked by the "response" + 500ms path, which fires
-            // ~500ms after command ACK regardless of whether the agent is still
-            // streaming. This caused "Agent is already processing" when a second
-            // prompt was sent while the first was still running.
+            // it emits "agent_end" instead. Prompt completion therefore uses the
+            // durable turn/tool predicate; lifecycle responses are matched by id.
+            // Drive the command queue's turn/tool/lifecycle state machine from
+            // this event. Extracted into one helper so the production reader and
+            // the watchdog e2e test share a single, tested code path.
             if let (Some(qs), Some(event)) = (queue_state_for_reader.as_ref(), parsed.as_ref()) {
                 sync_queue_state_from_event(qs, event);
             }
@@ -2851,7 +3233,13 @@ pub async fn pi_start_inner(
                         }
                     }
 
-                    if let Some(delta) = assistant_text_delta(&event).map(str::to_owned) {
+                    if matches!(
+                        event_type.as_deref(),
+                        Some("acp_process_started" | "acp_process_stopped")
+                    ) {
+                        // Internal process-supervision events are consumed by
+                        // this reader and are not part of the webview contract.
+                    } else if let Some(delta) = assistant_text_delta(&event).map(str::to_owned) {
                         // Title sessions bypass batching — they produce ≤50 chars
                         // and must stream token-by-token for visible animation.
                         if sid_clone.starts_with(TITLE_SESSION_PREFIX) {
@@ -2900,7 +3288,12 @@ pub async fn pi_start_inner(
                     warn!("Pi stdout not JSON: (line: {})", &line[..end]);
                 }
             }
-            if !is_stdout_text_delta {
+            let is_internal_acp_process_event = use_acp
+                && matches!(
+                    event_type.as_deref(),
+                    Some("acp_process_started" | "acp_process_stopped")
+                );
+            if !is_stdout_text_delta && !is_internal_acp_process_event {
                 let event_name = format!("pi_output:{}", sid_clone);
                 if let Err(e) = app_handle.emit(&event_name, &line) {
                     error!("Failed to emit pi_output: {}", e);
@@ -2912,6 +3305,14 @@ pub async fn pi_start_inner(
             "Pi stdout reader ended (pid: {}, session: {}), processed {} lines",
             pid, sid_clone, line_count
         );
+        if !ready_signalled {
+            if let Ok(mut startup) = startup_result_reader.lock() {
+                *startup = Some(Err(
+                    "ACP runtime exited before initialization completed".into()
+                ));
+            }
+            ready_notify_reader.notify_one();
+        }
         // Signal the command queue that the process is dead
         if let Some(ref qs) = queue_state_for_reader {
             qs.signal_terminated();
@@ -2995,16 +3396,59 @@ pub async fn pi_start_inner(
 
     // Wait for Pi to signal readiness (first JSON line on stdout) instead of
     // a blind 1500ms sleep. Falls back to process-alive check on timeout.
+    let ready_timeout = if use_acp {
+        // First run can download a registry adapter and an agent-managed auth
+        // method may wait for the user to finish a browser sign-in. The inline
+        // card also offers an immediate cancel path, so keep the interactive
+        // startup alive without making an unattended wait unbounded.
+        std::time::Duration::from_secs(10 * 60)
+    } else {
+        PI_READY_TIMEOUT
+    };
     tokio::select! {
         _ = ready_notify.notified() => {
             info!("Pi readiness signal received (pid: {})", pid);
         }
-        _ = tokio::time::sleep(PI_READY_TIMEOUT) => {
-            debug!("Pi readiness timeout after {:?} (pid: {}), checking if alive", PI_READY_TIMEOUT, pid);
+        _ = tokio::time::sleep(ready_timeout) => {
+            debug!("Pi readiness timeout after {:?} (pid: {}), checking if alive", ready_timeout, pid);
         }
     }
-    {
-        let mut pool = state.0.lock().await;
+
+    if use_acp {
+        let result = startup_result
+            .lock()
+            .ok()
+            .and_then(|result| result.clone())
+            .unwrap_or_else(|| {
+                Err(format!(
+                    "ACP agent did not finish initialization within {:?}",
+                    ready_timeout
+                ))
+            });
+        if let Err(error) = result {
+            let mut pool = state.0.lock().await;
+            let stopped = if let Some(manager) = pool.sessions.get_mut(&sid) {
+                manager.stop().await;
+                manager.snapshot(&sid)
+            } else {
+                PiInfo::default()
+            };
+            if error
+                .to_ascii_lowercase()
+                .contains("authentication cancelled")
+            {
+                return Ok(PiInfo {
+                    startup_error: Some(error),
+                    ..stopped
+                });
+            }
+            return Err(error);
+        }
+    }
+    // This is a best-effort diagnostic only. The stdout reader can briefly own
+    // the session pool while the child becomes ready; never block the command
+    // response (and therefore the first prompt) waiting for that lock.
+    if let Ok(mut pool) = state.0.try_lock() {
         if let Some(m) = pool.sessions.get_mut(&sid) {
             if let Some(ref mut child) = m.child {
                 match child.try_wait() {
@@ -3038,6 +3482,11 @@ pub async fn pi_start_inner(
                 }
             }
         }
+    } else {
+        debug!(
+            "Pi post-start exit check skipped while the session pool is busy (pid: {}, session: {})",
+            pid, sid
+        );
     }
 
     // Pi agent bug (pi-mono#2461): first RPC prompt fails with "startsWith" error.
@@ -3061,10 +3510,15 @@ pub struct PiImageContent {
 fn build_prompt_command(
     message: String,
     images: Option<Vec<PiImageContent>>,
+    display_preview: &str,
 ) -> Result<Value, String> {
     let mut cmd = json!({
         "type": "prompt",
         "message": message,
+        // The user's display text (before system-context injection). The ACP
+        // runtime echoes it back as a user message_start so a backgrounded
+        // first turn still persists the user's bubble; raw Pi ignores it.
+        "displayPreview": display_preview,
     });
     if let Some(imgs) = images {
         if !imgs.is_empty() {
@@ -3091,7 +3545,7 @@ async fn await_prompt_start(
             );
             let mut pool = state.0.lock().await;
             if let Some(manager) = pool.sessions.get_mut(session_id) {
-                manager.stop();
+                manager.stop().await;
             }
         }
     }
@@ -3099,14 +3553,54 @@ async fn await_prompt_start(
     result
 }
 
+/// Resolve the user's enabled MCP servers into the JSON the ACP runtime
+/// forwards to the adapter in session/new. HTTP header secrets are resolved
+/// here (desktop-side) via the SecretStore; the "screenpipe" built-in server
+/// is skipped since the runtime always injects it. Returns None when there is
+/// nothing to forward.
+async fn resolve_user_mcp_servers_json() -> Option<String> {
+    use screenpipe_connect::mcp_servers::{McpServerStore, McpTransport};
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let secret_store = open_secret_store_for_connection_context()
+        .await
+        .map(std::sync::Arc::new);
+    let store = McpServerStore::new(data_dir, secret_store);
+    let servers = store.list().await.ok()?;
+    let mut out = Vec::new();
+    for cfg in servers {
+        if !cfg.enabled || cfg.name.eq_ignore_ascii_case("screenpipe") {
+            continue;
+        }
+        let is_stdio = matches!(cfg.transport, McpTransport::Stdio);
+        let headers: Vec<(String, String)> = if is_stdio {
+            Vec::new()
+        } else {
+            store
+                .get_headers(&cfg.id)
+                .await
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect()
+        };
+        out.push(serde_json::json!({
+            "name": cfg.name,
+            "transport": if is_stdio { "stdio" } else { "http" },
+            "url": cfg.url,
+            "headers": headers,
+            "command": cfg.command,
+            "args": cfg.args.unwrap_or_default(),
+            "env": cfg.env.unwrap_or_default(),
+        }));
+    }
+    if out.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&out).ok()
+}
+
 async fn open_secret_store_for_connection_context() -> Option<screenpipe_secrets::SecretStore> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let db_path = data_dir.join("db.sqlite");
-    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-        crate::secrets::KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-    screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), secret_key)
+    screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
         .await
         .ok()
 }
@@ -3223,14 +3717,33 @@ pub async fn pi_prompt(
     display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    let mut conversation = acquire_pi_conversation_lease(state.inner(), &sid).await?;
+    pi_prompt_inner(
+        &app,
+        state.inner(),
+        &sid,
+        message,
+        images,
+        display_preview,
+    )
+    .await
+}
+
+async fn pi_prompt_inner(
+    app: &AppHandle,
+    state: &PiState,
+    sid: &str,
+    message: String,
+    images: Option<Vec<PiImageContent>>,
+    display_preview: Option<String>,
+) -> Result<String, String> {
+    let mut conversation = acquire_pi_conversation_lease(state, sid).await?;
     let message = conversation.prepare_prompt(message);
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
-    let message = attach_foreground_connections_context(&app, &sid, message).await;
+    let message = attach_foreground_connections_context(app, sid, message).await;
     #[cfg(feature = "e2e")]
-    emit_e2e_pi_wire_prompt(&app, &sid, "prompt", &message);
-    let cmd = build_prompt_command(message, images)?;
+    emit_e2e_pi_wire_prompt(app, sid, "prompt", &message);
+    let cmd = build_prompt_command(message, images, &preview)?;
     let (queue_id, rx) = conversation
         .queue
         .send_prompt(
@@ -3240,7 +3753,7 @@ pub async fn pi_prompt(
             false,
         )
         .await?;
-    await_prompt_start(state.inner(), &sid, rx).await?;
+    await_prompt_start(state, sid, rx).await?;
     conversation.mark_synced();
     Ok(queue_id)
 }
@@ -3266,7 +3779,7 @@ pub async fn pi_queue_prompt(
     let message = attach_foreground_connections_context(&app, &sid, message).await;
     #[cfg(feature = "e2e")]
     emit_e2e_pi_wire_prompt(&app, &sid, "queue", &message);
-    let cmd = build_prompt_command(message, images)?;
+    let cmd = build_prompt_command(message, images, &preview)?;
     let (queue_id, rx) = conversation
         .queue
         .send_prompt(
@@ -3465,7 +3978,7 @@ pub async fn pi_extension_ui_response(
 }
 
 /// Abort current Pi operation. Priority command — cancels all pending commands
-/// in the queue and sends abort directly. Waits for the SDK's done event.
+/// in the queue and sends abort directly. Waits for its exact SDK response.
 #[tauri::command]
 #[specta::specta]
 pub async fn pi_abort(state: State<'_, PiState>, session_id: Option<String>) -> Result<(), String> {
@@ -3508,7 +4021,7 @@ pub async fn pi_abort_active(
 
 /// Start a new Pi session (clears conversation history).
 /// Serialized through the queue — waits for any in-flight work to complete,
-/// then sends new_session and waits for the SDK's done event before returning.
+/// then sends new_session and waits for its exact SDK response before returning.
 #[tauri::command]
 #[specta::specta]
 pub async fn pi_new_session(
@@ -3619,6 +4132,256 @@ pub async fn pi_set_model(
         .await?;
     rx.await
         .map_err(|_| "Pi command queue dropped".to_string())?
+}
+
+/// Change one ACP session configuration option (model, mode, or any other
+/// selector the adapter advertised through `acp_session_config`). Select
+/// options take the value id string; boolean options take "true"/"false".
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_set_config_option(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+    option_id: String,
+    value: String,
+    is_boolean: Option<bool>,
+) -> Result<(), String> {
+    let sid = session_id.unwrap_or_else(|| "chat".to_string());
+
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
+        if !m.is_running() {
+            return Err("agent is not running".to_string());
+        }
+        m.last_activity = std::time::Instant::now();
+        m.queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+
+    let value_json = if is_boolean.unwrap_or(false) {
+        json!(value == "true")
+    } else {
+        json!(value)
+    };
+    let cmd = json!({
+        "type": "set_config_option",
+        "optionId": option_id,
+        "value": value_json,
+    });
+
+    // Delivered immediately (not behind the drain loop) so a mid-stream model
+    // or mode change from the composer applies without waiting for the turn.
+    queue.send_immediate_awaited("set_config_option", cmd).await
+}
+
+/// Probe an ACP adapter for its advertised model/mode selectors without a
+/// chat: spawn the hidden runtime, let it initialize and create a session,
+/// capture the acp_session_config event, and tear everything down. Returns
+/// the raw event JSON. Fails soft with the adapter's error message (e.g.
+/// sign-in required) so the preset editor can show it as a hint.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_probe_agent(agent: AcpAgentConfig) -> Result<String, String> {
+    let bun_path = find_bun_executable().ok_or("bun executable not found")?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let project_dir = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+
+    let mut std_cmd = std::process::Command::new(exe);
+    // Own process group so cleanup group-kills can never target the app.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        std_cmd.process_group(0);
+    }
+    let mut cmd = tokio::process::Command::from(std_cmd);
+    cmd.arg(crate::acp_runtime::RUNTIME_ARG)
+        .env("SCREENPIPE_ACP_ID", &agent.id)
+        .env("SCREENPIPE_BUN_PATH", &bun_path)
+        .env("SCREENPIPE_ACP_CWD", &project_dir)
+        .env(
+            "SCREENPIPE_ACP_ARGS_JSON",
+            serde_json::to_string(&agent.args).map_err(|e| e.to_string())?,
+        )
+        .env(
+            "SCREENPIPE_ACP_ENV_JSON",
+            serde_json::to_string(&agent.env).map_err(|e| e.to_string())?,
+        )
+        .env_remove("SCREENPIPE_ACP_COMMAND")
+        .env_remove("SCREENPIPE_ACP_AUTH_METHOD")
+        .env_remove("SCREENPIPE_ACP_SYSTEM_PROMPT")
+        .env_remove("SCREENPIPE_ACP_SESSION_CONFIG_JSON")
+        .env_remove(crate::acp_runtime::CLOUD_API_KEY_ENV)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    if let Some(command) = agent
+        .command
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        cmd.env("SCREENPIPE_ACP_COMMAND", command);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("probe spawn failed: {e}"))?;
+    let stdout = child.stdout.take().ok_or("probe stdout unavailable")?;
+    use tokio::io::AsyncBufReadExt as _;
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            match event.get("type").and_then(|t| t.as_str()) {
+                Some("acp_session_config") => return Ok(line),
+                Some("acp_fatal") => {
+                    return Err(event
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("the agent failed to start")
+                        .to_string())
+                }
+                // External-CLI-login agents (Kimi, OpenCode): the runtime can't
+                // complete their sign-in over ACP and emits this with the CLI
+                // command. Surface it (with the command) so the editor shows a
+                // sign-in hint instead of spinning until the probe times out.
+                Some("acp_external_auth_required") => {
+                    let name = event
+                        .get("agentName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("this agent");
+                    return Err(match event.get("command").and_then(|v| v.as_str()) {
+                        Some(command) => format!(
+                            "{name} needs a one-time sign in — run `{command}` in a terminal, then retry."
+                        ),
+                        None => format!("{name} needs to sign in first, then retry."),
+                    });
+                }
+                // Agent-managed login would block forever without a UI;
+                // report it instead so the editor can hint at signing in.
+                Some("extension_ui_request") => {
+                    return Err("this agent asks to sign in first; start a chat with it once to log in".to_string())
+                }
+                _ => {}
+            }
+        }
+        Err("the agent exited before advertising its options".to_string())
+    })
+    .await
+    .unwrap_or_else(|_| Err("timed out waiting for the agent to start".to_string()));
+
+    // Dropping stdin asks the runtime to shut its process tree down; the
+    // group kill is the safety net for wedged adapters.
+    drop(child.stdin.take());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
+    if let Some(pid) = child.id() {
+        terminate_acp_process_tree(pid);
+    }
+    let _ = child.start_kill();
+
+    result
+}
+
+/// Whether a built-in agent's CLI is installed on this computer. Binary agents
+/// (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run
+/// via the bundled bun and are always available. The preset editor uses this to
+/// gate saving and to show an install prompt instead of a cryptic spawn error.
+#[derive(Debug, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentInstallStatus {
+    pub requires_install: bool,
+    pub installed: bool,
+    pub command: Option<String>,
+    pub install_url: Option<String>,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn pi_acp_agent_install_status(agent_id: String) -> AcpAgentInstallStatus {
+    let (requires_install, installed, command, install_url) =
+        crate::acp_runtime::agent_install_status(&agent_id);
+    AcpAgentInstallStatus {
+        requires_install,
+        installed,
+        command,
+        install_url,
+    }
+}
+
+/// Whether launching this agent will trigger a first-run package install (a
+/// slow, silent-looking wait). The preset editor uses this to show an
+/// "Installing <agent>…" hint instead of a bare "loading…" label. Cheap cache
+/// stat; false for binary/cached agents.
+#[tauri::command]
+#[specta::specta]
+pub fn pi_acp_agent_download_pending(agent_id: String) -> bool {
+    crate::acp_runtime::agent_download_pending(&agent_id)
+}
+
+/// Switch the ACP session mode (e.g. a permission mode) advertised through
+/// `acp_session_config`. Allowed while a prompt is streaming.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_set_mode(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+    mode_id: String,
+) -> Result<(), String> {
+    let sid = session_id.unwrap_or_else(|| "chat".to_string());
+
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
+        if !m.is_running() {
+            return Err("agent is not running".to_string());
+        }
+        m.last_activity = std::time::Instant::now();
+        m.queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+
+    let cmd = json!({
+        "type": "set_mode",
+        "modeId": mode_id,
+    });
+
+    // Permission-mode switches apply at any point in a session; deliver
+    // immediately so the composer selector works while a reply streams.
+    queue.send_immediate_awaited("set_mode", cmd).await
+}
+
+/// Re-show the agent's sign-in methods without signing out: the runtime re-runs
+/// its auth flow, which re-emits the sign-in card. Picking a method re-runs that
+/// method's login (Claude's `--cli auth login`, Codex's ACP ChatGPT flow), which
+/// overwrites the credential in place. We never force a logout, so a user never
+/// loses their existing login as a side effect of re-authenticating.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_reauthenticate(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    let sid = session_id.unwrap_or_else(|| "chat".to_string());
+
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
+        if !m.is_running() {
+            return Err("agent is not running".to_string());
+        }
+        m.last_activity = std::time::Instant::now();
+        m.queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+
+    queue
+        .send_immediate_awaited("reauthenticate", json!({ "type": "reauthenticate" }))
+        .await
 }
 
 fn write_pi_settings(settings: &serde_json::Value) -> Result<(), String> {
@@ -4049,7 +4812,7 @@ async fn stop_idle_pi_sessions_for_package_change(state: &PiState) -> Result<(),
 
     for manager in pool.sessions.values_mut() {
         if manager.is_running() {
-            manager.stop();
+            manager.stop().await;
         }
     }
 
@@ -4285,29 +5048,18 @@ pub async fn cleanup_pi(state: &PiState) {
     let mut pool = state.0.lock().await;
     for (sid, m) in pool.sessions.iter_mut() {
         info!("Stopping Pi session '{}' on cleanup", sid);
-        m.stop();
+        m.stop().await;
     }
 }
 
 /// Find bun executable (shared by pi_install and ensure_pi_installed_background)
-fn find_bun_executable() -> Option<String> {
+pub(crate) fn find_bun_executable() -> Option<String> {
     // Pre-AVX2 CPU: the bundled/stock bun.exe requires AVX2 and dies with
-    // 0xC000001D at spawn. Prefer the baseline build screenpipe-core
-    // downloads; if it isn't on disk yet, kick the background download and
-    // fall through to the stock bun for this run (the next spawn picks the
-    // baseline up). Mirrors screenpipe_core::agents::pi::find_bun_executable.
+    // 0xC000001D at spawn. Delegate to screenpipe-core, which waits for the
+    // verified baseline build and fails closed instead of returning stock bun.
     #[cfg(windows)]
     if !screenpipe_core::cpu_features::has_avx2() {
-        if let Some(baseline) = screenpipe_core::agents::pi::baseline_bun_path() {
-            if baseline.exists() {
-                info!(
-                    "Found baseline bun (non-AVX2 CPU) at: {}",
-                    baseline.display()
-                );
-                return Some(baseline.to_string_lossy().to_string());
-            }
-        }
-        screenpipe_core::agents::pi::spawn_baseline_bun_download();
+        return screenpipe_core::agents::pi::find_bun_executable();
     }
 
     // First check next to our own executable (bundled bun in AppData/Local/screenpipe/)
@@ -4359,7 +5111,53 @@ fn find_bun_executable() -> Option<String> {
 /// so we fully control the dependency tree and avoid version conflicts.
 /// Runs on a dedicated thread, never panics, never blocks the caller.
 /// Sets `PI_INSTALL_DONE` when finished so `pi_start` can wait for it.
+/// Warm bun's default package cache with the pinned screenpipe-mcp so the first
+/// ACP session finds the core tools (activity-summary, search-content,
+/// update-memory) ready instead of cold-fetching them. A slow or failed
+/// `bun x screenpipe-mcp` fetch is why those tools sometimes never registered
+/// and the agent fell back to raw SQL. Best-effort and idempotent: once cached,
+/// `bun x` reuses it. Runs with stdin closed so the stdio server sees EOF and
+/// exits right after the download completes.
+fn prewarm_screenpipe_mcp(bun: &str) {
+    use std::process::Stdio;
+    let mut cmd = bun_command(bun);
+    cmd.arg("x")
+        .arg(crate::acp_runtime::SCREENPIPE_MCP_PKG)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    match cmd.spawn() {
+        Ok(mut child) => {
+            // The cache is populated during `bun x` resolution, which precedes
+            // running the server; bound the wait and kill if it lingers.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() >= deadline => {
+                        let _ = child.kill();
+                        break;
+                    }
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+                    Err(_) => break,
+                }
+            }
+            info!("screenpipe-mcp prewarm complete ({})", crate::acp_runtime::SCREENPIPE_MCP_PKG);
+        }
+        Err(e) => warn!("screenpipe-mcp prewarm could not spawn bun: {}", e),
+    }
+}
+
 pub fn ensure_pi_installed_background() {
+    // Warm the screenpipe-mcp cache in the background so the first ACP session
+    // finds the core tools ready instead of cold-fetching them. Independent of
+    // the pi install below, which returns early on several paths.
+    if let Some(bun) = find_bun_executable() {
+        let _ = std::thread::Builder::new()
+            .name("screenpipe-mcp-prewarm".to_string())
+            .spawn(move || prewarm_screenpipe_mcp(&bun));
+    }
+
     // On Windows, ensure bash is available early (downloads PortableGit if needed).
     // This runs before Pi install so bash is ready by the time Pi starts,
     // even if pi_start_inner is interrupted (e.g., by an app update).
@@ -4613,6 +5411,8 @@ mod tests {
             max_tokens: 4096,
             max_context_chars: Some(512_000),
             system_prompt: Some("system context".to_string()),
+            allowed_tools: None,
+            resume_session_id: None,
         };
         let first = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
         let duplicate = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
@@ -5810,7 +6610,9 @@ error: InstallFailed extracting tarball"#;
 
     // -- build_models_json tests --
 
-    use super::{build_models_json, resolve_pi_model, PiProviderConfig};
+    use super::{
+        build_models_json, build_models_json_with_api_url, resolve_pi_model, PiProviderConfig,
+    };
 
     fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
         PiProviderConfig {
@@ -5823,6 +6625,8 @@ error: InstallFailed extracting tarball"#;
             max_tokens: 4096,
             max_context_chars: Some(512_000),
             system_prompt: None,
+            allowed_tools: None,
+            resume_session_id: None,
         }
     }
 
@@ -5857,6 +6661,16 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(sp["apiKey"], "$SCREENPIPE_API_KEY");
         assert_eq!(sp["authHeader"], true);
         assert!(sp["models"].as_array().unwrap().len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_uses_resolved_gateway_url() {
+        let config =
+            build_models_json_with_api_url(None, None, "http://127.0.0.1:8787/v1").await;
+        assert_eq!(
+            config["providers"]["screenpipe"]["baseUrl"],
+            "http://127.0.0.1:8787/v1"
+        );
     }
 
     #[tokio::test]
@@ -5944,6 +6758,34 @@ error: InstallFailed extracting tarball"#;
         assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
         assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
+    }
+
+    #[test]
+    fn test_tool_allowlist_restricts_bounded_pi_sessions() {
+        let mut config = make_provider_config("screenpipe-cloud", "auto");
+        config.allowed_tools = Some(vec!["screenpipe_live_view".to_string()]);
+        let mut command = Command::new("pi");
+        super::apply_pi_tool_allowlist(&mut command, Some(&config));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args, vec!["--tools", "screenpipe_live_view"]);
+    }
+
+    #[test]
+    fn test_empty_tool_allowlist_disables_all_pi_tools() {
+        let mut config = make_provider_config("screenpipe-cloud", "auto");
+        config.allowed_tools = Some(vec![]);
+        let mut command = Command::new("pi");
+        super::apply_pi_tool_allowlist(&mut command, Some(&config));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args, vec!["--no-tools"]);
     }
 
     #[tokio::test]
@@ -6215,5 +7057,59 @@ error: InstallFailed extracting tarball"#;
             assert!(m["cost"]["input"].is_number(), "model missing cost.input");
             assert!(m["cost"]["output"].is_number(), "model missing cost.output");
         }
+    }
+
+    /// Fresh-profile parity (review item F): from an EMPTY profile, the pi-acp
+    /// baseline seeds Screenpipe skills, the Live Views extension, and registers
+    /// the required pi-subagents package — the exact pieces the pi-acp path now
+    /// calls ensure_screenpipe_skill / ensure_live_views_extension /
+    /// ensure_pi_config (which registers the setting) + ensure_required_pi_-
+    /// extension_package for. So an existing raw-Pi install can't be what makes
+    /// these appear. The physical pi-subagents npm install and a real pinned
+    /// pi-acp@0.0.32 adapter launch (network + ACP handshake + select/confirm
+    /// UI) are proven by the separate clean-profile E2E, not by this unit test.
+    #[test]
+    fn fresh_profile_seeds_screenpipe_baseline() {
+        let project = tempfile::tempdir().expect("project dir");
+        let project_dir = project.path().to_str().expect("utf8 path");
+
+        // Screenpipe skills materialize under the fresh project's .pi/skills.
+        super::ensure_screenpipe_skill(project_dir).expect("seed skills");
+        let skills_dir = project.path().join(".pi").join("skills");
+        assert!(skills_dir.is_dir(), "skills dir must exist on a fresh profile");
+        assert!(
+            std::fs::read_dir(&skills_dir)
+                .expect("read skills")
+                .filter_map(Result::ok)
+                .any(|e| e.file_name().to_string_lossy().starts_with("screenpipe")),
+            "at least one screenpipe skill must be seeded on a fresh profile"
+        );
+
+        // The Live Views extension (the pi-acp parity fix) materializes too.
+        super::ensure_live_views_extension(project_dir).expect("seed live-views");
+        assert!(
+            project
+                .path()
+                .join(".pi")
+                .join("extensions")
+                .join("live-views.ts")
+                .is_file(),
+            "live-views extension must be seeded for pi-acp on a fresh profile"
+        );
+
+        // The required pi-subagents package is registered from empty settings —
+        // this is what ensure_pi_config → ensure_required_pi_extension_setting
+        // does before the physical install runs.
+        let mut settings = json!({});
+        let changed = super::normalize_required_pi_extension_setting(&mut settings)
+            .expect("normalize setting");
+        assert!(changed, "empty settings must gain the required package");
+        let packages = settings["packages"].as_array().expect("packages array");
+        assert!(
+            packages
+                .iter()
+                .any(|p| p.as_str() == Some(super::REQUIRED_PI_EXTENSION_PACKAGE)),
+            "pi-subagents must be registered as a required package"
+        );
     }
 }

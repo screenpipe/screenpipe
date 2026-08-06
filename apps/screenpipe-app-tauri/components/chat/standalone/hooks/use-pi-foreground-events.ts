@@ -4,14 +4,16 @@
 
 import { useEffect } from "react";
 import { emit, type UnlistenFn } from "@tauri-apps/api/event";
-import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
+import { piProjectDirForSession } from "@/lib/chat/pi-project-dir";
 import { mountAgentEventBus, onTerminated as onAgentTerminated } from "@/lib/events/bus";
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { extractInjectedUserText } from "@/lib/chat-utils";
 import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
+import { acpSpawnSignature } from "@/lib/chat/acp-spawn-signature";
 import {
   buildDailyLimitMessage,
   buildHostedBusyFinalMessage,
@@ -26,16 +28,21 @@ import {
   clearQuotaUpgrade,
   setQuotaUpgradeFromError,
 } from "@/lib/chat/quota-upgrade";
+import { clearFreeWall, setFreeWallFromError } from "@/lib/chat/free-wall";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
-import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
+import { buildNoResponseMessage, buildProviderErrorPresentation } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
 import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { toast } from "@/components/ui/use-toast";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
 import {
+  connectionActionFromToolResult,
   firstAgentEndAssistantError,
   isRecord,
+  isTerminalQuotaError,
   piEventDataFromUnknown,
   stringValue,
   textFromAssistantMessages,
@@ -46,6 +53,11 @@ import type { Message, ToolCall } from "@/lib/chat/types";
 import type { PiForegroundEventsOptions } from "@/components/chat/standalone/hooks/pi-types";
 
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
+
+/** Agents currently showing an "installing" toast, so the "connected" toast
+ *  fires only after a real install finishes, not on every cached/instant
+ *  connect (which would be noise). */
+const installingAgents = new Set<string>();
 
 export function usePiForegroundEvents({
   activePreset,
@@ -59,9 +71,13 @@ export function usePiForegroundEvents({
   flushStreamingMessageRender,
   forceQueueModeRef,
   handleAgentEventDataRef,
+  handleAgentActionEvent,
+  clearAgentActionsForSession,
   handleInvalidatedAuthToken,
   lastUserMessageRef,
   markTurnIntentConsumed,
+  onAcpExternalAuthRequired,
+  onAcpSessionReady,
   messages,
   messagesRef,
   mountedRef,
@@ -101,6 +117,8 @@ export function usePiForegroundEvents({
   const getActivePreset = () => activePresetRef?.current ?? activePreset;
   const dailyLimitMessage = (errorStr: string) => {
     setQuotaUpgradeFromError(errorStr);
+    // No-op unless this is the free-plan wall (free_chat_limit_exceeded).
+    setFreeWallFromError(errorStr);
     return buildDailyLimitMessage(errorStr);
   };
   // Listen for Pi / pipe events.
@@ -183,6 +201,99 @@ export function usePiForegroundEvents({
     const handlePiEventData = (payload: unknown) => {
       const data = piEventDataFromUnknown(payload);
       if (!data) return;
+
+      const actionSessionId = piSessionIdRef.current;
+      if (actionSessionId && handleAgentActionEvent(data, actionSessionId)) return;
+
+      if (data.type === "acp_auth_cancelled") {
+        // Dismissing an interactive ACP sign-in is a user stop, not a crash.
+        // Mark the imminent termination as intentional so the normal crash
+        // recovery loop does not immediately reopen the same login card.
+        // The install attempt ended without a "ready", so clear any pending
+        // install marker (else a later instant connect fires a spurious toast).
+        installingAgents.delete(stringValue(data.agentId));
+        piStoppedIntentionallyRef.current = true;
+        setPiInfo(null);
+        setIsLoading(false);
+        setIsStreaming(false);
+        window.setTimeout(() => {
+          piStoppedIntentionallyRef.current = false;
+        }, 15_000);
+        return;
+      }
+
+      if (data.type === "acp_external_auth_required") {
+        // The agent (Kimi, OpenCode) can't sign in over ACP — its login is a
+        // CLI step. Treat this like an intentional stop so the crash-recovery
+        // loop does NOT silently restart into the default provider (that was
+        // the "fell back to pi" bug); instead tell the user how to sign in.
+        piStoppedIntentionallyRef.current = true;
+        setPiInfo(null);
+        setIsLoading(false);
+        setIsStreaming(false);
+        window.setTimeout(() => {
+          piStoppedIntentionallyRef.current = false;
+        }, 15_000);
+        const agentName = stringValue(data.agentName, "This agent");
+        const agentId = stringValue(data.agentId);
+        // Install ended without a "ready"; clear the pending install marker so a
+        // later instant/cached connect doesn't fire a spurious "ready" toast.
+        installingAgents.delete(agentId);
+        const command = stringValue(data.command);
+        // A single unified sign-in dialog, deduped by the panel — not an
+        // inline message card (which could be appended twice on retries).
+        onAcpExternalAuthRequired?.({ agentId, agentName, command });
+        return;
+      }
+
+      if (data.type === "acp_status") {
+        // First-run npx download heads-up so a slow, silent startup doesn't
+        // look broken. ACP has no install-progress concept (the agent isn't up
+        // yet), so this is our own out-of-band status, like Zed's.
+        const agentId = stringValue(data.agentId);
+        const name = acpAdapterInfo(agentId).name;
+        if (stringValue(data.phase) === "downloading") {
+          installingAgents.add(agentId);
+          toast({
+            title: `installing ${name}`,
+            description: "downloading the agent. this can take a moment.",
+          });
+        } else if (stringValue(data.phase) === "ready") {
+          // Only follow up when we actually showed an install toast, so a
+          // cached/instant connect stays quiet.
+          if (installingAgents.delete(agentId)) {
+            toast({
+              title: `${name} ready`,
+              description: "the agent is connected. you can start chatting.",
+            });
+          }
+        }
+        return;
+      }
+
+      // ACP adapters advertise their model/mode/toggle selectors per session.
+      // The background router captures this, but the *foregrounded* chat gets
+      // events here exclusively — without this the composer's ACP selectors
+      // (e.g. OpenCode's models) never populate while you're in the chat.
+      if (data.type === "acp_session_config") {
+        useAcpSessionConfig.getState().setFromEvent(piSessionIdRef.current, data);
+        return;
+      }
+      if (data.type === "acp_update") {
+        const update = (data as { update?: { sessionUpdate?: string } }).update;
+        if (
+          update?.sessionUpdate === "current_mode_update" ||
+          update?.sessionUpdate === "config_option_update"
+        ) {
+          useAcpSessionConfig.getState().applyUpdate(piSessionIdRef.current, update);
+        }
+      }
+
+      if (data.type === "acp_ready") {
+        // The ACP session opened (auth passed or wasn't needed). If a sign-in
+        // dialog was waiting on a retry, this is the signal to close it.
+        onAcpSessionReady?.();
+      }
 
         const emitSessionActivity = (
           partial: {
@@ -336,15 +447,65 @@ export function usePiForegroundEvents({
           if (!ensureAssistantPlaceholder()) return;
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
+            const parentToolCallId = stringValue(data.parentToolCallId);
+            const toolKind = stringValue(data.kind);
             const toolCall: ToolCall = {
               id: stringValue(data.toolCallId, Date.now().toString()),
               toolName: stringValue(data.toolName, "unknown"),
               args: isRecord(data.args) ? data.args : {},
               isRunning: true,
               startedAtMs: Date.now(),
+              ...(toolKind ? { kind: toolKind } : {}),
+              ...(parentToolCallId ? { parentToolCallId } : {}),
             };
             // Add tool block (text before it is already its own block)
             piContentBlocksRef.current.push({ type: "tool", toolCall });
+            const contentBlocks = [...piContentBlocksRef.current];
+            setMessages((prev) =>
+              prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
+            );
+          }
+        } else if (data.type === "tool_execution_update") {
+          // Pi streams the tool's partial output while it runs. partialResult
+          // is cumulative, so store its tail as the running tool's progress.
+          if (piMessageIdRef.current) {
+            const msgId = piMessageIdRef.current;
+            const toolCallId = stringValue(data.toolCallId);
+            const partial = textFromToolResult(data.partialResult);
+            if (partial) {
+              for (const block of piContentBlocksRef.current) {
+                if (block.type !== "tool" || block.toolCall.id !== toolCallId) continue;
+                block.toolCall.progress =
+                  partial.length > 4000 ? partial.slice(-4000) : partial;
+              }
+              const contentBlocks = [...piContentBlocksRef.current];
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
+              );
+            }
+          }
+        } else if (data.type === "tool_execution_progress") {
+          // Subagent heartbeats and streamed output on a running tool.
+          if (piMessageIdRef.current) {
+            const msgId = piMessageIdRef.current;
+            const toolCallId = stringValue(data.toolCallId);
+            for (const block of piContentBlocksRef.current) {
+              if (block.type !== "tool" || block.toolCall.id !== toolCallId) continue;
+              if (typeof data.elapsedSeconds === "number") {
+                block.toolCall.elapsedSeconds = data.elapsedSeconds;
+              }
+              const subagentType = stringValue(data.subagentType);
+              if (subagentType) block.toolCall.subagentType = subagentType;
+              if (data.retry !== undefined) block.toolCall.retry = data.retry;
+              const title = stringValue(data.title);
+              if (title) block.toolCall.toolName = title;
+              const outputDelta = stringValue(data.outputDelta);
+              if (outputDelta) {
+                const combined = `${block.toolCall.progress ?? ""}${outputDelta}`;
+                block.toolCall.progress =
+                  combined.length > 4000 ? combined.slice(-4000) : combined;
+              }
+            }
             const contentBlocks = [...piContentBlocksRef.current];
             setMessages((prev) =>
               prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
@@ -367,10 +528,33 @@ export function usePiForegroundEvents({
                 block.toolCall.endedAtMs = Date.now();
               }
             }
-            const contentBlocks = [...piContentBlocksRef.current];
-            setMessages((prev) =>
-              prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
-            );
+            // If a connect tool asked for a connection (async fallback path),
+            // surface the connect card inline right after its tool block —
+            // unless a card for this app is already showing anywhere in the
+            // conversation (e.g. the blocking broker raised one in its own
+            // message). Dedup against all messages, not just this tool's blocks.
+            const connectCard = connectionActionFromToolResult(resultText);
+            setMessages((prev) => {
+              const cardAlreadyShown =
+                !connectCard ||
+                prev.some((m) =>
+                  m.contentBlocks?.some(
+                    (b) =>
+                      b.type === "connection_action" &&
+                      b.connectionId === connectCard.connectionId,
+                  ),
+                ) ||
+                piContentBlocksRef.current.some(
+                  (b) =>
+                    b.type === "connection_action" &&
+                    b.connectionId === connectCard.connectionId,
+                );
+              if (connectCard && !cardAlreadyShown) {
+                piContentBlocksRef.current.push(connectCard);
+              }
+              const contentBlocks = [...piContentBlocksRef.current];
+              return prev.map((m) => (m.id === msgId ? { ...m, contentBlocks } : m));
+            });
           }
         } else if (data.type === "auto_retry_start") {
           // Pi retries transient provider failures inside the same turn. Keep
@@ -427,12 +611,18 @@ export function usePiForegroundEvents({
               );
             }
           } else {
-            const providerError = buildProviderErrorMessage(errorStr, getActivePreset());
+            const providerError = buildProviderErrorPresentation(errorStr, getActivePreset());
             if (providerError && piMessageIdRef.current) {
               const msgId = piMessageIdRef.current;
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId
-                  ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                  ? {
+                      ...m,
+                      content: providerError.message,
+                      retryPrompt: providerError.retryable
+                        ? lastUserMessageRef.current || undefined
+                        : undefined,
+                    }
                   : m)
               );
             }
@@ -479,11 +669,17 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
-              const providerError = buildProviderErrorMessage(fullError, getActivePreset());
+              const providerError = buildProviderErrorPresentation(fullError, getActivePreset());
               if (providerError) {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId
-                    ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                    ? {
+                        ...m,
+                        content: providerError.message,
+                        retryPrompt: providerError.retryable
+                          ? lastUserMessageRef.current || undefined
+                          : undefined,
+                      }
                     : m)
                 );
               } else if (fullError.includes("already processing")) {
@@ -501,6 +697,7 @@ export function usePiForegroundEvents({
           // A new turn is a fresh admission attempt. Hide the previous blocked
           // action while it runs; a repeated structured rejection restores it.
           clearQuotaUpgrade();
+          clearFreeWall();
           // Pi fires `message_start` for each user turn. When a queued
           // follow-up starts, close the previous streaming target here so the
           // next text_delta creates a fresh assistant bubble instead of
@@ -683,7 +880,7 @@ export function usePiForegroundEvents({
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
 
-            const providerError = buildProviderErrorMessage(errMsg, getActivePreset());
+            const providerError = buildProviderErrorPresentation(errMsg, getActivePreset());
             if (authTokenInvalidated) {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildInvalidatedAuthTokenMessage() } : m)
@@ -704,7 +901,13 @@ export function usePiForegroundEvents({
             } else if (providerError) {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId
-                  ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                  ? {
+                      ...m,
+                      content: providerError.message,
+                      retryPrompt: providerError.retryable
+                        ? lastUserMessageRef.current || undefined
+                        : undefined,
+                    }
                   : m)
               );
             } else {
@@ -722,10 +925,23 @@ export function usePiForegroundEvents({
           const isPipeWatch = piMessageIdRef.current?.startsWith("pipe-");
 
           if (!isPipeWatch && data.willRetry === true) {
-            setIsLoading(true);
-            setIsStreaming(true);
-            emitSessionActivity({ status: "streaming" });
-            return;
+            // Pi retries anything that mentions 429 — including terminal
+            // usage-limit rejections it can't recognize (gateway codes like
+            // daily_cost_limit_exceeded). Retrying those can't succeed and
+            // burns more gateway calls while the UI shows "analyzing…" under
+            // the limit message. Stop the session and finalize the turn now.
+            if (isTerminalQuotaError(piLastErrorRef.current ?? "")) {
+              const sid = piSessionIdRef.current;
+              if (sid) {
+                piStoppedIntentionallyRef.current = true;
+                void commands.piStop(sid);
+              }
+            } else {
+              setIsLoading(true);
+              setIsStreaming(true);
+              emitSessionActivity({ status: "streaming" });
+              return;
+            }
           }
 
           // Always clear loading/streaming state on agent_end, even if piMessageIdRef is null
@@ -751,8 +967,16 @@ export function usePiForegroundEvents({
               }
             }
 
+            const agentEndProviderError = agentEndError
+              ? buildProviderErrorPresentation(agentEndError, getActivePreset())
+              : null;
+            if (agentEndProviderError?.kind === "safety_refusal") {
+              // A provider can emit partial text before its terminal refusal.
+              // Keep the refusal note visible instead of finalizing that partial
+              // text as though the turn completed successfully.
+              content = agentEndProviderError.message;
             // Surface credits_exhausted / rate limit / connection errors from agent_end
-            if (agentEndError && !content) {
+            } else if (agentEndError && !content) {
               const errStr = agentEndError;
               const quotaErrorType = classifyQuotaError(errStr);
               if (isInvalidatedAuthTokenError(errStr)) {
@@ -767,7 +991,7 @@ export function usePiForegroundEvents({
               } else if (errStr.includes("model_not_allowed")) {
                 content = "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going.";
               } else {
-                content = buildProviderErrorMessage(errStr, getActivePreset()) || errStr;
+                content = buildProviderErrorPresentation(errStr, getActivePreset())?.message || errStr;
               }
             }
 
@@ -797,6 +1021,7 @@ export function usePiForegroundEvents({
                 existing?.content?.includes("requires an upgrade") ||
                 existing?.content?.includes("Rate limited") ||
                 existing?.content?.includes("rate limit") ||
+                existing?.content?.includes("safety policy") ||
                 existing?.content?.includes("chat is too long") ||
                 existing?.content?.startsWith("Error:");
               if (isErrorMessage) {
@@ -807,7 +1032,12 @@ export function usePiForegroundEvents({
                 return prev;
               }
               const contentBlocks = [...blocksSnapshot];
-              if (wasStoppedByUser && !content && contentBlocks.length === 0) {
+              // The turn paused for a sign-in card, or the user stopped it, with
+              // nothing rendered yet: drop the empty placeholder bubble instead
+              // of showing "No response from model". The auth flow re-sends the
+              // prompt after login.
+              const authPending = (data as { authPending?: boolean }).authPending === true;
+              if ((wasStoppedByUser || authPending) && !content && contentBlocks.length === 0) {
                 return prev.filter((m) => m.id !== msgId);
               }
               // If no text content but we have tool/thinking blocks, don't show "no response"
@@ -828,8 +1058,11 @@ export function usePiForegroundEvents({
                 } else if (lastErr && lastErrKind === "rate") {
                   content = buildRateLimitMessage(lastErr);
                 } else if (lastErr) {
-                  content = buildProviderErrorMessage(lastErr, getActivePreset()) || `Error: ${lastErr}`;
-                  emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
+                  const providerError = buildProviderErrorPresentation(lastErr, getActivePreset());
+                  content = providerError?.message || `Error: ${lastErr}`;
+                  if (providerError?.retryable !== false) {
+                    emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
+                  }
                 } else {
                   content = buildNoResponseMessage(getActivePreset());
                   emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
@@ -900,8 +1133,10 @@ export function usePiForegroundEvents({
             console.warn("[Pi] first-call bug hit, auto-retrying prompt:", errorStr);
             if (piMessageIdRef.current && !piFirstCallRetried.current) {
               piFirstCallRetried.current = true;
-              // Re-send the last prompt
-              const lastUserMsg = messages.findLast(m => m.role === "user");
+              // Re-send the last prompt. Read the live ref, not the `messages`
+              // prop frozen by this effect's []-deps closure — on a fresh chat
+              // that snapshot is empty, so the retry would never fire.
+              const lastUserMsg = messagesRef.current.findLast((m) => m.role === "user");
               if (lastUserMsg?.content) {
                 commands.piPrompt(piSessionIdRef.current, lastUserMsg.content, null, null).catch(() => {});
               }
@@ -972,11 +1207,17 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
-              const providerError = buildProviderErrorMessage(errorStr, getActivePreset());
+              const providerError = buildProviderErrorPresentation(errorStr, getActivePreset());
               if (providerError) {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId
-                    ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                    ? {
+                        ...m,
+                        content: providerError.message,
+                        retryPrompt: providerError.retryable
+                          ? lastUserMessageRef.current || undefined
+                          : undefined,
+                      }
                     : m)
                 );
               } else if (errorStr.includes("already processing")) {
@@ -1032,7 +1273,7 @@ export function usePiForegroundEvents({
           // Pipe execution finished — clean up streaming state
           if (piMessageIdRef.current?.startsWith("pipe-")) {
             const msgId = piMessageIdRef.current;
-            const content = piStreamingTextRef.current || "Pipe completed with no output.";
+            const content = piStreamingTextRef.current || "Scheduled task completed with no output.";
             const blocksSnapshot = [...piContentBlocksRef.current];
             setMessages((prev) =>
               prev.map((m) => m.id === msgId ? { ...m, content, contentBlocks: blocksSnapshot } : m)
@@ -1058,6 +1299,9 @@ export function usePiForegroundEvents({
       // Ensure the bus's Tauri listener is up before any consumer
       // (router, panel, pipes hook) starts registering. Idempotent.
       await mountAgentEventBus();
+      // If the panel unmounted during the await, cleanup already ran (with
+      // nothing yet registered), so register nothing to leak.
+      if (!mounted) return;
 
       // Termination — broadcast event, filter by current session id.
       // Replaces the prior `listen("pi_terminated", ...)`. The bus
@@ -1066,14 +1310,24 @@ export function usePiForegroundEvents({
       busUnregistrations.push(onAgentTerminated(async (payload) => {
         if (!mounted) return;
         if (payload.sessionId !== piSessionIdRef.current) return;
+        clearAgentActionsForSession(payload.sessionId);
         const terminatedPid = payload.pid;
         const termKey = `${payload.sessionId}:${typeof terminatedPid === "number" ? terminatedPid : "unknown"}`;
         const nowMs = Date.now();
+        const TERMINATION_DEDUP_WINDOW_MS = 4000;
         const lastSeen = piTerminationDedupRef.current[termKey] ?? 0;
-        if (nowMs - lastSeen < 4000) {
+        if (nowMs - lastSeen < TERMINATION_DEDUP_WINDOW_MS) {
           return;
         }
         piTerminationDedupRef.current[termKey] = nowMs;
+        // termKey includes the pid, which changes on every restart, so prune
+        // entries older than the dedup window to keep the map from growing
+        // for the panel's lifetime.
+        for (const [key, seen] of Object.entries(piTerminationDedupRef.current)) {
+          if (nowMs - seen >= TERMINATION_DEDUP_WINDOW_MS) {
+            delete piTerminationDedupRef.current[key];
+          }
+        }
         if (typeof terminatedPid === "number" && piIntentionallyStoppedPidsRef.current.delete(terminatedPid)) {
           return;
         }
@@ -1145,10 +1399,12 @@ export function usePiForegroundEvents({
 
           if (!piStartInFlightRef.current) {
             console.log("[Pi] Auto-restarting after crash");
+            // Hold the in-flight guard while starting, like the user send path;
+            // without it a concurrent send could double-start the session.
+            piStartInFlightRef.current = true;
             try {
               const providerConfig = buildProviderConfig();
-              const home = await homeDir();
-              const dir = await join(home, ".screenpipe", "pi-chat");
+              const dir = await piProjectDirForSession(piSessionIdRef.current);
               const result = await commands.piStart(piSessionIdRef.current, dir, settings.user?.token ?? null, providerConfig);
               if (result.status === "ok") {
                 setPiInfo(result.data);
@@ -1156,6 +1412,8 @@ export function usePiForegroundEvents({
                 // Keep running-config ref in sync so preset watcher doesn't re-trigger
                 if (providerConfig) {
                   piRunningConfigRef.current = {
+                    backend: providerConfig.backend === "acp" ? "acp" : null,
+                    acpAgentSignature: acpSpawnSignature(providerConfig.acpAgent),
                     provider: providerConfig.provider,
                     model: providerConfig.model,
                     url: providerConfig.url,
@@ -1173,16 +1431,22 @@ export function usePiForegroundEvents({
             } catch (e) {
               console.error("[Pi] Auto-restart exception:", e);
               setPiInfo(null);
+            } finally {
+              piStartInFlightRef.current = false;
             }
           }
         }, delay);
       }));
-      unlistenLog = await registerPiLogListener({
+      const offLog = await registerPiLogListener({
         isMounted: () => mounted,
         cancelStreamingMessageRender,
         piMessageIdRef,
         setMessages,
       });
+      // Release immediately if the panel unmounted while this was resolving;
+      // otherwise hand it to cleanup.
+      if (!mounted) offLog?.();
+      else unlistenLog = offLog;
     };
 
     setup();
@@ -1194,7 +1458,10 @@ export function usePiForegroundEvents({
       piSessionSyncedRef,
       setPiInfo,
       syncThinkingLevelAfterStart,
-    }).then(fn => { unlistenReauth = fn; });
+    }).then((fn) => {
+      if (!mounted) fn?.();
+      else unlistenReauth = fn;
+    });
 
     return () => {
       mounted = false;

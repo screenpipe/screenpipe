@@ -16,3 +16,13 @@ export function isInvalidatedAuthTokenError(message: unknown): boolean {
 export function buildInvalidatedAuthTokenMessage() {
   return "Your screenpipe session expired. Sign in again to continue using AI.";
 }
+
+export function isAcpAuthenticationCancelledError(message: unknown): boolean {
+  return typeof message === "string" && /ACP authentication cancelled/i.test(message);
+}
+
+/** An ACP agent (Kimi, OpenCode) that needs a one-time CLI login. The chat
+ *  renders a sign-in card for this, so the transport must not also toast. */
+export function isAcpExternalAuthError(message: unknown): boolean {
+  return typeof message === "string" && /needs a one-time CLI login/i.test(message);
+}

@@ -143,6 +143,29 @@ describe("useOnboarding measurement", () => {
     });
   });
 
+  it("opens Connections for the explicit AI-context path", async () => {
+    mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
+
+    await useOnboarding.getState().completeOnboarding({
+      method: "ai_connections_selected",
+      goalCategory: "ai_context",
+      live_view_flow_variant: "first_live_view",
+      existing_live_view_count_bucket: "none",
+    });
+
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", {
+      url: "screenpipe://home?section=connections",
+    });
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_completed", {
+      completion_method: "ai_connections_selected",
+      pipe_count: undefined,
+      customized: undefined,
+      goal_category: "ai_context",
+      live_view_flow_variant: "first_live_view",
+      existing_live_view_count_bucket: "none",
+    });
+  });
+
   it("keeps setup reset separate from the optional app tour", async () => {
     mocks.resetOnboarding.mockResolvedValue({ status: "ok", data: null });
     mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });

@@ -1623,7 +1623,9 @@ private struct InboxListView: View {
                         .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
                         .foregroundColor(.primary)
                     Spacer()
-                    if viewMode == .all && !entries.isEmpty {
+                    // Clears both tabs, so it stays reachable from either one —
+                    // switching to All just to empty the inbox was busywork.
+                    if !entries.isEmpty {
                         BrandTextButton(label: "clear all", fontSize: 9, action: onClearAll)
                     }
                 }

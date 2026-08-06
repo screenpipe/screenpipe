@@ -128,7 +128,7 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs. AI/vibe-coded PRs welcome!
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
 
 Thanks to all contributors:
 
@@ -145,6 +145,7 @@ Thanks to all contributors:
 - [Português BR (Brazilian Portuguese)](docs/translations/README-pt_BR.md)
 - [Deutsch (German)](docs/translations/README-de.md)
 - [Українська (Ukrainian)](docs/translations/README-uk.md)
+- [한국어 (Korean)](docs/translations/README-ko.md)
 
 Want to translate screenpipe into another language? See [`docs/translations/`](docs/translations/README.md).
 

@@ -4689,6 +4689,360 @@
           "markdownDescription": "Denies the save command without any pre-configured scope."
         },
         {
+          "description": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-main-overlay-visible`\n- `allow-mark-capture-intended`\n- `allow-emit-disk-space-low`\n- `allow-emit-disk-space-recovered`\n- `allow-reset-disk-pressure-notification-latch`\n- `allow-disk-pressure-notification-armed`\n- `allow-handle-disk-space-low`\n- `allow-capture-session-running`\n- `allow-set-low-disk-guard-enabled`\n- `allow-set-notification-master-enabled`\n- `allow-low-disk-guard-enabled`\n- `allow-set-tray-recording-status`\n- `allow-installed-tray-recording-status`\n- `allow-shortcut-reminder-visible`\n- `allow-emit-meeting-overlay-transcript`\n- `allow-emit-agent-stream`\n- `allow-emit-settled-agent-follow-up`\n- `allow-emit-pipe-stream`\n- `allow-arm-capture-loop-silent-fault`\n- `allow-arm-sck-lookup-hang-fault`\n- `allow-screen-is-locked`\n- `allow-set-screen-recording-restart-required`\n- `allow-screen-recording-restart-requested`\n- `allow-recording-health-return-race`\n- `allow-owned-browser-visible`\n- `allow-owned-browser-detach`\n- `allow-inject-db-hard-fault`\n- `allow-db-hard-fault-state`\n- `allow-seed-flags`",
+          "type": "string",
+          "const": "e2e:default",
+          "markdownDescription": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-main-overlay-visible`\n- `allow-mark-capture-intended`\n- `allow-emit-disk-space-low`\n- `allow-emit-disk-space-recovered`\n- `allow-reset-disk-pressure-notification-latch`\n- `allow-disk-pressure-notification-armed`\n- `allow-handle-disk-space-low`\n- `allow-capture-session-running`\n- `allow-set-low-disk-guard-enabled`\n- `allow-set-notification-master-enabled`\n- `allow-low-disk-guard-enabled`\n- `allow-set-tray-recording-status`\n- `allow-installed-tray-recording-status`\n- `allow-shortcut-reminder-visible`\n- `allow-emit-meeting-overlay-transcript`\n- `allow-emit-agent-stream`\n- `allow-emit-settled-agent-follow-up`\n- `allow-emit-pipe-stream`\n- `allow-arm-capture-loop-silent-fault`\n- `allow-arm-sck-lookup-hang-fault`\n- `allow-screen-is-locked`\n- `allow-set-screen-recording-restart-required`\n- `allow-screen-recording-restart-requested`\n- `allow-recording-health-return-race`\n- `allow-owned-browser-visible`\n- `allow-owned-browser-detach`\n- `allow-inject-db-hard-fault`\n- `allow-db-hard-fault-state`\n- `allow-seed-flags`"
+        },
+        {
+          "description": "Enables the arm_capture_loop_silent_fault command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-arm-capture-loop-silent-fault",
+          "markdownDescription": "Enables the arm_capture_loop_silent_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the arm_sck_lookup_hang_fault command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-arm-sck-lookup-hang-fault",
+          "markdownDescription": "Enables the arm_sck_lookup_hang_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_session_running command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-capture-session-running",
+          "markdownDescription": "Enables the capture_session_running command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the db_hard_fault_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-db-hard-fault-state",
+          "markdownDescription": "Enables the db_hard_fault_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the disk_pressure_notification_armed command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-disk-pressure-notification-armed",
+          "markdownDescription": "Enables the disk_pressure_notification_armed command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the emit_agent_stream command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-emit-agent-stream",
+          "markdownDescription": "Enables the emit_agent_stream command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the emit_disk_space_low command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-emit-disk-space-low",
+          "markdownDescription": "Enables the emit_disk_space_low command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the emit_disk_space_recovered command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-emit-disk-space-recovered",
+          "markdownDescription": "Enables the emit_disk_space_recovered command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the emit_meeting_overlay_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-emit-meeting-overlay-transcript",
+          "markdownDescription": "Enables the emit_meeting_overlay_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the emit_pipe_stream command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-emit-pipe-stream",
+          "markdownDescription": "Enables the emit_pipe_stream command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the emit_settled_agent_follow_up command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-emit-settled-agent-follow-up",
+          "markdownDescription": "Enables the emit_settled_agent_follow_up command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the handle_disk_space_low command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-handle-disk-space-low",
+          "markdownDescription": "Enables the handle_disk_space_low command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the inject_db_hard_fault command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-inject-db-hard-fault",
+          "markdownDescription": "Enables the inject_db_hard_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the installed_tray_recording_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-installed-tray-recording-status",
+          "markdownDescription": "Enables the installed_tray_recording_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the low_disk_guard_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-low-disk-guard-enabled",
+          "markdownDescription": "Enables the low_disk_guard_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the main_overlay_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-main-overlay-visible",
+          "markdownDescription": "Enables the main_overlay_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mark_capture_intended command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-mark-capture-intended",
+          "markdownDescription": "Enables the mark_capture_intended command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the owned_browser_detach command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-owned-browser-detach",
+          "markdownDescription": "Enables the owned_browser_detach command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the owned_browser_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-owned-browser-visible",
+          "markdownDescription": "Enables the owned_browser_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the recording_health_return_race command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-recording-health-return-race",
+          "markdownDescription": "Enables the recording_health_return_race command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reset_disk_pressure_notification_latch command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-reset-disk-pressure-notification-latch",
+          "markdownDescription": "Enables the reset_disk_pressure_notification_latch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the screen_is_locked command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-screen-is-locked",
+          "markdownDescription": "Enables the screen_is_locked command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the screen_recording_restart_requested command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-screen-recording-restart-requested",
+          "markdownDescription": "Enables the screen_recording_restart_requested command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the seed_flags command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-seed-flags",
+          "markdownDescription": "Enables the seed_flags command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_low_disk_guard_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-set-low-disk-guard-enabled",
+          "markdownDescription": "Enables the set_low_disk_guard_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_notification_master_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-set-notification-master-enabled",
+          "markdownDescription": "Enables the set_notification_master_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_screen_recording_restart_required command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-set-screen-recording-restart-required",
+          "markdownDescription": "Enables the set_screen_recording_restart_required command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_tray_recording_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-set-tray-recording-status",
+          "markdownDescription": "Enables the set_tray_recording_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the shortcut_reminder_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:allow-shortcut-reminder-visible",
+          "markdownDescription": "Enables the shortcut_reminder_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the arm_capture_loop_silent_fault command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-arm-capture-loop-silent-fault",
+          "markdownDescription": "Denies the arm_capture_loop_silent_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the arm_sck_lookup_hang_fault command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-arm-sck-lookup-hang-fault",
+          "markdownDescription": "Denies the arm_sck_lookup_hang_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_session_running command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-capture-session-running",
+          "markdownDescription": "Denies the capture_session_running command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the db_hard_fault_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-db-hard-fault-state",
+          "markdownDescription": "Denies the db_hard_fault_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the disk_pressure_notification_armed command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-disk-pressure-notification-armed",
+          "markdownDescription": "Denies the disk_pressure_notification_armed command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the emit_agent_stream command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-emit-agent-stream",
+          "markdownDescription": "Denies the emit_agent_stream command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the emit_disk_space_low command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-emit-disk-space-low",
+          "markdownDescription": "Denies the emit_disk_space_low command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the emit_disk_space_recovered command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-emit-disk-space-recovered",
+          "markdownDescription": "Denies the emit_disk_space_recovered command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the emit_meeting_overlay_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-emit-meeting-overlay-transcript",
+          "markdownDescription": "Denies the emit_meeting_overlay_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the emit_pipe_stream command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-emit-pipe-stream",
+          "markdownDescription": "Denies the emit_pipe_stream command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the emit_settled_agent_follow_up command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-emit-settled-agent-follow-up",
+          "markdownDescription": "Denies the emit_settled_agent_follow_up command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the handle_disk_space_low command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-handle-disk-space-low",
+          "markdownDescription": "Denies the handle_disk_space_low command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the inject_db_hard_fault command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-inject-db-hard-fault",
+          "markdownDescription": "Denies the inject_db_hard_fault command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the installed_tray_recording_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-installed-tray-recording-status",
+          "markdownDescription": "Denies the installed_tray_recording_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the low_disk_guard_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-low-disk-guard-enabled",
+          "markdownDescription": "Denies the low_disk_guard_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the main_overlay_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-main-overlay-visible",
+          "markdownDescription": "Denies the main_overlay_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mark_capture_intended command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-mark-capture-intended",
+          "markdownDescription": "Denies the mark_capture_intended command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the owned_browser_detach command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-owned-browser-detach",
+          "markdownDescription": "Denies the owned_browser_detach command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the owned_browser_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-owned-browser-visible",
+          "markdownDescription": "Denies the owned_browser_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the recording_health_return_race command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-recording-health-return-race",
+          "markdownDescription": "Denies the recording_health_return_race command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reset_disk_pressure_notification_latch command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-reset-disk-pressure-notification-latch",
+          "markdownDescription": "Denies the reset_disk_pressure_notification_latch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the screen_is_locked command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-screen-is-locked",
+          "markdownDescription": "Denies the screen_is_locked command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the screen_recording_restart_requested command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-screen-recording-restart-requested",
+          "markdownDescription": "Denies the screen_recording_restart_requested command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the seed_flags command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-seed-flags",
+          "markdownDescription": "Denies the seed_flags command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_low_disk_guard_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-set-low-disk-guard-enabled",
+          "markdownDescription": "Denies the set_low_disk_guard_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_notification_master_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-set-notification-master-enabled",
+          "markdownDescription": "Denies the set_notification_master_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_screen_recording_restart_required command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-set-screen-recording-restart-required",
+          "markdownDescription": "Denies the set_screen_recording_restart_required command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_tray_recording_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-set-tray-recording-status",
+          "markdownDescription": "Denies the set_tray_recording_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the shortcut_reminder_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "e2e:deny-shortcut-reminder-visible",
+          "markdownDescription": "Denies the shortcut_reminder_visible command without any pre-configured scope."
+        },
+        {
           "description": "This set of permissions describes the what kind of\nfile system access the `fs` plugin has enabled or denied by default.\n\n#### Granted Permissions\n\nThis default permission set enables read access to the\napplication specific directories (AppConfig, AppData, AppLocalData, AppCache,\nAppLog) and all files and sub directories created in it.\nThe location of these directories depends on the operating system,\nwhere the application is run.\n\nIn general these directories need to be manually created\nby the application at runtime, before accessing files or folders\nin it is possible.\n\nTherefore, it is also allowed to create all of these folders via\nthe `mkdir` command.\n\n#### Denied Permissions\n\nThis default permission set prevents access to critical components\nof the Tauri application by default.\nOn Windows the webview data folder access is denied.\n\n#### This default permission set includes:\n\n- `create-app-specific-dirs`\n- `read-app-specific-dirs-recursive`\n- `deny-default`",
           "type": "string",
           "const": "fs:default",
@@ -7327,6 +7681,12 @@
           "type": "string",
           "const": "updater:deny-install",
           "markdownDescription": "Denies the install command without any pre-configured scope."
+        },
+        {
+          "description": "Default permissions for the plugin",
+          "type": "string",
+          "const": "webdriver:default",
+          "markdownDescription": "Default permissions for the plugin"
         }
       ]
     },

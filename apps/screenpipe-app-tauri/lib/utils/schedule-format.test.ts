@@ -96,4 +96,35 @@ describe("humanizeSchedule", () => {
     expect(humanizeSchedule("0 22 * * 0")).toBe("10 PM · Sun");
     expect(humanizeSchedule("0 9 * * *")).toBe("daily · 9 AM");
   });
+
+  // These four shapes used to fall through every branch and hit the raw-string
+  // fallback, so the task list literally rendered "0 * * * *" and
+  // "30 17 * * *" at people. A schedule label must never show raw cron.
+  test("hourly cron (fixed minute, wildcard hour)", () => {
+    expect(humanizeSchedule("0 * * * *")).toBe("hourly");
+    expect(humanizeSchedule("15 * * * *")).toBe("hourly · :15");
+    expect(humanizeSchedule("5 * * * *")).toBe("hourly · :05");
+    expect(humanizeSchedule("5 * * * 1-5")).toBe("hourly · :05 · weekdays");
+  });
+
+  test("cron with non-zero minutes", () => {
+    expect(humanizeSchedule("30 17 * * *")).toBe("daily · 5:30 PM");
+    expect(humanizeSchedule("45 9 * * 1-5")).toBe("9:45 AM · weekdays");
+    expect(humanizeSchedule("30 0 * * *")).toBe("daily · 12:30 AM");
+    expect(humanizeSchedule("30 12 * * *")).toBe("daily · 12:30 PM");
+  });
+
+  test("never leaks raw cron for common shapes", () => {
+    for (const cron of [
+      "0 * * * *",
+      "15 * * * *",
+      "30 17 * * *",
+      "45 9 * * 1-5",
+      "0 17 * * *",
+      "*/30 * * * *",
+      "0 */4 * * *",
+    ]) {
+      expect(humanizeSchedule(cron)).not.toContain("*");
+    }
+  });
 });

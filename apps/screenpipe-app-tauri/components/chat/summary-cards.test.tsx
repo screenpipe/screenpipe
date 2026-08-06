@@ -56,17 +56,11 @@ describe("SummaryCards", () => {
       onDeleteCustomTemplate: vi.fn(),
     };
     const { rerender } = render(
-      <SummaryCards
-        {...props}
-        userGoalCategory="work_memory"
-      />,
+      <SummaryCards {...props} userGoalCategory="work_memory" />,
     );
 
     rerender(
-      <SummaryCards
-        {...props}
-        userGoalCategory="meeting_follow_through"
-      />,
+      <SummaryCards {...props} userGoalCategory="meeting_follow_through" />,
     );
 
     const cards = screen.getAllByTestId(/^summary-card-/);
@@ -76,6 +70,40 @@ describe("SummaryCards", () => {
       "summary-card-automate-my-work",
       "summary-card-time-breakdown",
     ]);
+  });
+
+  it("dispatches every built-in home card once with its visible label", () => {
+    const onSendMessage = vi.fn();
+    render(
+      <SummaryCards
+        onSendMessage={onSendMessage}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+
+    const cards = [
+      ["automate-my-work", "⚡ Automate My Work"],
+      ["day-recap", "📋 Day Recap"],
+      ["time-breakdown", "⏱ Time Breakdown"],
+      ["missed-todos", "✅ Missed To-Dos"],
+    ] as const;
+    for (const [slug] of cards) {
+      fireEvent.click(screen.getByTestId(`summary-card-${slug}`));
+    }
+
+    expect(onSendMessage).toHaveBeenCalledTimes(cards.length);
+    for (const [index, [, displayLabel]] of cards.entries()) {
+      expect(onSendMessage).toHaveBeenNthCalledWith(
+        index + 1,
+        expect.any(String),
+        displayLabel,
+        "home_card",
+        expect.any(String),
+      );
+    }
   });
 
   it("gives Automate My Work the installed pipe inventory instead of the static fallback prompt", () => {
@@ -134,8 +162,11 @@ describe("SummaryCards", () => {
       position: 1,
       presentation: "hero",
     });
-    expect(screen.getByRole("button", { name: /automate my work/i }).closest(".ph-no-capture"))
-      .not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: /automate my work/i })
+        .closest(".ph-no-capture"),
+    ).not.toBeNull();
   });
 
   describe("saved template edit-before-run (#5239)", () => {
@@ -203,7 +234,8 @@ describe("SummaryCards", () => {
 
       const customRunEvent = captureMock.mock.calls.find(
         ([event, properties]) =>
-          event === "home_card_clicked" && properties.kind === "custom_template_run",
+          event === "home_card_clicked" &&
+          properties.kind === "custom_template_run",
       );
       expect(customRunEvent).toEqual([
         "home_card_clicked",
@@ -228,7 +260,9 @@ describe("SummaryCards", () => {
           id: "custom-123",
           title: "Daily Recap",
           instructions: "Summarize my day focusing on reviews",
-          prompt: expect.stringContaining("Summarize my day focusing on reviews"),
+          prompt: expect.stringContaining(
+            "Summarize my day focusing on reviews",
+          ),
         }),
       );
       expect(onSendMessage).not.toHaveBeenCalled();

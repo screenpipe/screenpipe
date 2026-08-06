@@ -330,6 +330,8 @@ interface UseChatE2EGlobalsOptions {
   piStreamingTextRef: React.MutableRefObject<string>;
   piMessageIdRef: React.MutableRefObject<string | null>;
   piContentBlocksRef: React.MutableRefObject<ContentBlock[]>;
+  forceQueueModeRef: React.MutableRefObject<boolean>;
+  sendDispatchInFlightRef: React.MutableRefObject<boolean>;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setIsStreaming: React.Dispatch<React.SetStateAction<boolean>>;
 }
@@ -342,6 +344,8 @@ export function useChatE2EGlobals({
   piStreamingTextRef,
   piMessageIdRef,
   piContentBlocksRef,
+  forceQueueModeRef,
+  sendDispatchInFlightRef,
   setIsLoading,
   setIsStreaming,
 }: UseChatE2EGlobalsOptions) {
@@ -480,20 +484,54 @@ export function useChatE2EGlobals({
         assistantMessageId: string | null;
         streamingText: string;
         contentBlockCount: number;
+        forceQueueMode: boolean;
+        sendDispatchInFlight: boolean;
       };
     }).__e2eReadActiveTurn = () => ({
       sessionId: piSessionIdRef.current,
       assistantMessageId: piMessageIdRef.current,
       streamingText: piStreamingTextRef.current,
       contentBlockCount: piContentBlocksRef.current.length,
+      // The composer's dispatch guards. `sendMessage` routes into the queue
+      // whenever either is set, so a spec that asserts "the next message
+      // starts a real turn" has to be able to see them.
+      forceQueueMode: forceQueueModeRef.current,
+      sendDispatchInFlight: sendDispatchInFlightRef.current,
     });
+
+    // Reproduce the panel bookkeeping `sendPiMessage` leaves behind at turn
+    // start: dispatch guards latched, an assistant placeholder owned locally,
+    // and the session marked busy in the store. Everything downstream of this
+    // point (who observes `agent_end`) is what the regression is about.
+    (window as unknown as {
+      __e2eLatchActiveSend?: (sid: string, assistantMessageId: string) => void;
+    }).__e2eLatchActiveSend = (sid: string, assistantMessageId: string) => {
+      forceQueueModeRef.current = true;
+      piMessageIdRef.current = assistantMessageId;
+      piStreamingTextRef.current = "";
+      piContentBlocksRef.current = [];
+      const store = useChatStore.getState();
+      store.actions.setStreaming(sid, {
+        streamingMessageId: assistantMessageId,
+        streamingText: "",
+        contentBlocks: [],
+        isStreaming: true,
+        isLoading: true,
+      });
+      store.actions.patch(sid, { status: "streaming", draft: false });
+      setIsLoading(true);
+      setIsStreaming(true);
+    };
 
     return () => {
       delete (window as unknown as { __e2eSeedUserMessage?: unknown }).__e2eSeedUserMessage;
       delete (window as unknown as { __e2eSeedAssistantMessage?: unknown }).__e2eSeedAssistantMessage;
       delete (window as unknown as { __e2eReadActiveTurn?: unknown }).__e2eReadActiveTurn;
+      delete (window as unknown as { __e2eLatchActiveSend?: unknown }).__e2eLatchActiveSend;
     };
   }, [
+    forceQueueModeRef,
+    sendDispatchInFlightRef,
     piContentBlocksRef,
     piMessageIdRef,
     piSessionIdRef,

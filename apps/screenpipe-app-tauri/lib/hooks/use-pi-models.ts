@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { fetchAiGateway } from "@/lib/ai-gateway-url";
 
 export interface PiModel {
   id: string;
@@ -38,7 +39,7 @@ export function usePiModels() {
     const fetchPiModels = async () => {
       setLoadingKey(token);
       try {
-        const resp = await fetch("https://api.screenpipe.com/v1/models", {
+        const resp = await fetchAiGateway("/models", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           signal: controller.signal,
         });

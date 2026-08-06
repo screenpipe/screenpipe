@@ -6,11 +6,63 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNoResponseMessage,
   buildProviderErrorMessage,
+  buildProviderErrorPresentation,
   normalizeOllamaBaseUrl,
   preflightChatProvider,
+  SafetyRefusalError,
 } from "../provider-errors";
 
 describe("provider error copy", () => {
+  it.each([
+    "Provider finish_reason: content_filter",
+    "safety_refusal: request declined",
+    'data: {"choices":[{"finish_reason":"content_filter"}]}',
+    'message_delta stop_reason: refusal',
+    "This content was flagged for possible cybersecurity risk.",
+  ])("classifies safety refusal signature %j as non-retryable", (raw) => {
+    const refusal = SafetyRefusalError.from(raw);
+    const presentation = buildProviderErrorPresentation(raw, {
+      provider: "screenpipe-cloud",
+      model: "claude-opus-5",
+    });
+
+    expect(refusal).toBeInstanceOf(SafetyRefusalError);
+    expect(refusal?.code).toBe("safety_refusal");
+    expect(refusal?.retryable).toBe(false);
+    expect(presentation).toEqual({
+      kind: "safety_refusal",
+      message: refusal?.message,
+      retryable: false,
+    });
+    expect(presentation?.message).toContain("selected model declined");
+    expect(presentation?.message).toContain("Start a new chat");
+    expect(presentation?.message).not.toContain("finish_reason");
+  });
+
+  it("maps an account-standing denial to friendly, non-retryable copy", () => {
+    const raw = 'Error: 403 "{\\"error\\":\\"account_not_in_good_standing\\",\\"message\\":\\"This screenpipe account is not in good standing.\\",\\"reason\\":\\"banned\\"}"';
+    const presentation = buildProviderErrorPresentation(raw, {
+      provider: "screenpipe-cloud",
+      model: "auto",
+    });
+
+    expect(presentation).toMatchObject({ kind: "provider", retryable: false });
+    expect(presentation?.message).toContain("not in good standing");
+    expect(presentation?.message).toContain("contact screenpipe support");
+    expect(presentation?.message).not.toContain("403");
+    expect(presentation?.message).not.toContain("account_not_in_good_standing");
+  });
+
+  it("does not classify an ordinary provider error as a safety refusal", () => {
+    expect(SafetyRefusalError.from("Connection error.")).toBeNull();
+    expect(
+      buildProviderErrorPresentation("Connection error.", {
+        provider: "screenpipe-cloud",
+        model: "auto",
+      })
+    ).toMatchObject({ kind: "provider", retryable: true });
+  });
+
   it("maps native Ollama connection errors to actionable copy", () => {
     const msg = buildProviderErrorMessage("Connection error.", {
       provider: "native-ollama",
@@ -82,7 +134,7 @@ describe("provider error copy", () => {
       '{"error":"free_plan_hosted_background_disabled"}',
       { provider: "screenpipe-cloud", model: "auto" },
     );
-    expect(msg).toContain("background pipes");
+    expect(msg).toContain("background scheduled tasks");
     expect(msg).toContain("Ollama");
   });
 

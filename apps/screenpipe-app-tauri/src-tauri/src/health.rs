@@ -609,8 +609,22 @@ fn should_track_capture_stalls(
     elapsed_since_start: Duration,
     in_restart_grace: bool,
 ) -> bool {
+    should_track_capture_stalls_after(
+        status,
+        elapsed_since_start,
+        in_restart_grace,
+        NOTIFICATION_COOLDOWN,
+    )
+}
+
+fn should_track_capture_stalls_after(
+    status: RecordingStatus,
+    elapsed_since_start: Duration,
+    in_restart_grace: bool,
+    tracking_delay: Duration,
+) -> bool {
     status == RecordingStatus::Recording
-        && elapsed_since_start > NOTIFICATION_COOLDOWN
+        && elapsed_since_start > tracking_delay
         && !in_restart_grace
 }
 
@@ -628,6 +642,35 @@ fn notification_cooldown_ok(last_notification: Option<Instant>, now: Instant) ->
 struct OverlayTickDecision {
     broken: bool,
     healthy: bool,
+    failure_detail: &'static str,
+}
+
+/// Short, privacy-safe explanation for the recording-health overlay. Keep
+/// these labels actionable without forwarding raw engine/DB errors, which can
+/// contain paths, device names, or other local details.
+fn overlay_failure_detail(
+    status: RecordingStatus,
+    failures: CaptureFailureSignals,
+    simulated_break: bool,
+) -> &'static str {
+    if simulated_break {
+        return "simulated recording failure";
+    }
+
+    match (failures.audio, failures.vision, failures.persistence) {
+        (true, true, false) => "audio and screen capture are not updating",
+        (false, false, true) => "recording data cannot be saved",
+        (true, false, false) => "audio capture is not updating",
+        (false, true, false) => "screen capture is not updating",
+        (true, _, true) | (_, true, true) => "multiple recording errors detected",
+        (false, false, false) if status == RecordingStatus::Error => {
+            "recording engine could not start"
+        }
+        (false, false, false) if status == RecordingStatus::Stopped => {
+            "recording engine stopped"
+        }
+        _ => "recording stopped unexpectedly",
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -658,8 +701,17 @@ fn overlay_tick_decision(
         && status == RecordingStatus::Recording
         && !confirmed_failure
         && !simulated_break;
+    let failure_detail = if broken {
+        overlay_failure_detail(status, failures, simulated_break)
+    } else {
+        ""
+    };
 
-    OverlayTickDecision { broken, healthy }
+    OverlayTickDecision {
+        broken,
+        healthy,
+        failure_detail,
+    }
 }
 
 /// Decide recording status based on health check result and time since startup.
@@ -1605,7 +1657,17 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 Ok(health) => health_confirms_recording(health),
                 Err(_) => false,
             };
-            if should_track_capture_stalls(status, start_time.elapsed(), in_restart_grace) {
+            let tracking_delay = if crate::stale_tier::capture_loop_silent_e2e_started() {
+                Duration::ZERO
+            } else {
+                NOTIFICATION_COOLDOWN
+            };
+            if should_track_capture_stalls_after(
+                status,
+                start_time.elapsed(),
+                in_restart_grace,
+                tracking_delay,
+            ) {
                 if let Ok(ref health) = health_result {
                     // Only raw capture health drives the recording overlay.
                     // `audio_db_write_stalled` is a transcription-reconciliation
@@ -1798,6 +1860,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 decision.broken,
                 decision.healthy,
                 intentionally_paused && !sim_break,
+                decision.failure_detail,
             )
             .await;
         }
@@ -2184,6 +2247,7 @@ mod tests {
             OverlayTickDecision {
                 broken: false,
                 healthy: false,
+                failure_detail: "",
             },
             "a stale raw status blocks green recovery but stays quiet before debounce"
         );
@@ -2228,6 +2292,7 @@ mod tests {
             OverlayTickDecision {
                 broken: false,
                 healthy: true,
+                failure_detail: "",
             }
         );
     }
@@ -2617,6 +2682,86 @@ mod tests {
     }
 
     #[test]
+    fn overlay_failure_details_are_brief_specific_and_privacy_safe() {
+        let cases = [
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    audio: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "audio capture is not updating",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    vision: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "screen capture is not updating",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    persistence: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "recording data cannot be saved",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    audio: true,
+                    vision: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "audio and screen capture are not updating",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals {
+                    audio: true,
+                    persistence: true,
+                    ..CaptureFailureSignals::default()
+                },
+                false,
+                "multiple recording errors detected",
+            ),
+            (
+                RecordingStatus::Error,
+                CaptureFailureSignals::default(),
+                false,
+                "recording engine could not start",
+            ),
+            (
+                RecordingStatus::Stopped,
+                CaptureFailureSignals::default(),
+                false,
+                "recording engine stopped",
+            ),
+            (
+                RecordingStatus::Recording,
+                CaptureFailureSignals::default(),
+                true,
+                "simulated recording failure",
+            ),
+        ];
+
+        for (status, failures, simulated, expected) in cases {
+            assert_eq!(
+                overlay_failure_detail(status, failures, simulated),
+                expected
+            );
+            assert!(expected.len() <= 49, "tooltip detail must stay brief");
+            assert!(!expected.contains('/'), "tooltip must never expose a path");
+        }
+    }
+
+    #[test]
     fn overlay_decision_exhaustively_checks_12288_state_combinations() {
         let statuses = [
             RecordingStatus::Starting,
@@ -2668,9 +2813,10 @@ mod tests {
                     && !recently_woke
                     && (status == RecordingStatus::Error
                         || (status == RecordingStatus::Stopped && ever_connected));
+                let expected_broken = simulated_break
+                    || (!failure_suppressed && (engine_down || confirmed_failure));
                 let expected = OverlayTickDecision {
-                    broken: simulated_break
-                        || (!failure_suppressed && (engine_down || confirmed_failure)),
+                    broken: expected_broken,
                     healthy: !intentionally_paused
                         && !recently_woke
                         && health_response_received
@@ -2678,6 +2824,11 @@ mod tests {
                         && status == RecordingStatus::Recording
                         && !confirmed_failure
                         && !simulated_break,
+                    failure_detail: if expected_broken {
+                        overlay_failure_detail(status, failures, simulated_break)
+                    } else {
+                        ""
+                    },
                 };
 
                 assert_eq!(decision, expected, "status={status:?}, bits={bits:011b}");

@@ -40,6 +40,8 @@ type SaveConversation = (
 ) => Promise<void>;
 
 type PiRunningConfig = {
+  backend?: "acp" | null;
+  acpAgentSignature?: string | null;
   provider: string;
   model: string;
   url: string;
@@ -250,9 +252,17 @@ export type PiForegroundEventsOptions = {
   flushStreamingMessageRender: NonNullable<StreamingActions["flushStreamingMessageRender"]>;
   forceQueueModeRef: PiTransportRefs["forceQueueModeRef"];
   handleAgentEventDataRef: React.MutableRefObject<((data: unknown) => void) | null>;
+  handleAgentActionEvent: (data: unknown, sessionId: string) => boolean;
+  clearAgentActionsForSession: (sessionId: string) => void;
   handleInvalidatedAuthToken: () => Promise<void> | void;
   lastUserMessageRef: PiTransportRefs["lastUserMessageRef"];
   markTurnIntentConsumed: TurnIntentActions["markTurnIntentConsumed"];
+  // Fired when an ACP agent (Kimi, OpenCode) can't sign in over the protocol
+  // and needs a one-time CLI login. The panel shows a single sign-in dialog.
+  onAcpExternalAuthRequired?: (info: { agentId: string; agentName: string; command: string }) => void;
+  // Fired on `acp_ready` — the ACP session opened successfully (auth passed or
+  // wasn't needed). Used to close a sign-in dialog once a retry connects.
+  onAcpSessionReady?: () => void;
   messages: Message[];
   messagesRef: React.MutableRefObject<Message[]>;
   mountedRef: React.MutableRefObject<boolean>;

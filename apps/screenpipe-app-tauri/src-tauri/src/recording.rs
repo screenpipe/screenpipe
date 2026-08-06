@@ -360,7 +360,7 @@ pub async fn get_available_audio_devices() -> Result<Vec<AudioDeviceInfo>, Strin
                 Some(&name) == default_input.as_ref() || Some(&name) == default_output.as_ref();
             let is_combo_bluetooth_mic = d.device_type
                 == screenpipe_audio::core::device::DeviceType::Input
-                && screenpipe_audio::core::device_detection::InputDeviceKind::detect(&d.name)
+                && screenpipe_audio::core::device_detection::InputDeviceKind::detect_input(&d.name)
                     == screenpipe_audio::core::device_detection::InputDeviceKind::Bluetooth
                 && screenpipe_audio::core::device::bluetooth_input_is_combo_headset(&d.name);
             AudioDeviceInfo {
@@ -1151,7 +1151,7 @@ async fn spawn_screenpipe_inner(
 
     // Pipe output callback. Stage 5: legacy `pipe_event` topic dropped.
     // Every pipe stdout line is emitted on the unified `agent_event`
-    // topic with sessionId `pipe:<name>:<execId>` (see the matching
+    // topic with either a per-run or stable continued session id (see the matching
     // helper in `apps/screenpipe-app-tauri/lib/events/types.ts`).
     let app_for_pipe = app.clone();
     let app_for_owned = app.clone();
@@ -1170,8 +1170,8 @@ async fn spawn_screenpipe_inner(
     );
     let pipe_agent_events = crate::agent_event_emitter::PipeAgentEventEmitter::new(app_for_pipe);
     let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
-        std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
-            pipe_agent_events.emit_line(pipe_name, exec_id, line);
+        std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, continues_chat: bool, line: &str| {
+            pipe_agent_events.emit_line(pipe_name, exec_id, continues_chat, line);
         }),
     );
 
