@@ -1,0 +1,7 @@
+{
+	"name": "@screenpipe/release-artifact-uploader",
+	"private": true,
+	"scripts": {
+		"test": "bun test"
+	}
+}

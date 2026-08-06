@@ -4,8 +4,9 @@
 
 //! Live probe for the experimental per-process ("piggyback") meeting tap.
 //!
-//! Verifies that we capture a meeting app's OWN output. On macOS this re-anchors
-//! as you switch output devices mid-call. On Windows build 20348+ it is
+//! Verifies that we capture a meeting app's OWN output. On macOS the unscoped
+//! process tap follows the app as you switch output devices mid-call. On
+//! Windows build 20348+ it is
 //! endpoint-agnostic process loopback; older Windows builds cannot isolate a
 //! process tree, so the tap refuses to start rather than silently widening to
 //! the whole system mix.
@@ -20,8 +21,7 @@
 //!   2. Run the command above. You'll see a live level meter.
 //!   3. Talk / have the other side talk — the meter should move with THEIR audio.
 //!   4. While it runs, switch your output device (Speakers <-> headset).
-//!      macOS should keep moving and log:
-//!      "Per-process tap: app output changed (... -> ...), rebuilding"
+//!      macOS should keep moving without a tap-generation rebuild.
 //!      Windows build 20348+ should keep moving without an endpoint rebuild.
 //!   5. Ctrl-C to stop.
 
@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     let pids = resolve_pids(&arg)?;
     println!(
         "\n\u{25b6} tapping pid(s) {pids:?} (matched '{arg}').\n  \
-         talk on your call and switch output devices \u{2014} watch the meter + the rebuild logs.\n  \
+         talk on your call and switch output devices \u{2014} the meter should keep moving.\n  \
          ctrl-c to stop.\n"
     );
 
@@ -56,12 +56,12 @@ async fn main() -> anyhow::Result<()> {
     let is_running = Arc::new(AtomicBool::new(true));
     let is_disconnected = Arc::new(AtomicBool::new(false));
 
-    let (config, _handle) =
+    let (config, handle) =
         match screenpipe_audio::core::process_tap::spawn_process_tap_capture_for_pids(
             pids.clone(),
             tx.clone(),
             is_running,
-            is_disconnected,
+            Arc::clone(&is_disconnected),
         ) {
             Ok(v) => v,
             Err(e) => {
@@ -78,12 +78,23 @@ async fn main() -> anyhow::Result<()> {
         config.sample_rate().0,
         config.channels()
     );
+    // The capture owns the sender needed by the callback. Dropping the probe's
+    // spare sender lets `recv()` close when the target process exits.
+    drop(tx);
 
     let mut window_peak = 0f32;
     let mut window_samples = 0usize;
     let mut last = std::time::Instant::now();
     loop {
-        match rx.recv().await {
+        let received = tokio::select! {
+            result = rx.recv() => result,
+            _ = tokio::signal::ctrl_c() => {
+                println!("stopping capture");
+                is_disconnected.store(true, std::sync::atomic::Ordering::Relaxed);
+                break;
+            }
+        };
+        match received {
             Ok(chunk) => {
                 for s in &chunk {
                     let a = s.abs();
@@ -114,6 +125,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    is_disconnected.store(true, std::sync::atomic::Ordering::Relaxed);
+    let _ = handle.await;
     Ok(())
 }
 

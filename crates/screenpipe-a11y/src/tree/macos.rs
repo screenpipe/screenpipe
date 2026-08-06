@@ -12,8 +12,8 @@ use crate::tree::macos_lines::{self, NormalizeRefs};
 use anyhow::Result;
 use chrono::Utc;
 use cidre::{arc, arc::Retained, ax, cf, ns};
-use objc2::AnyThread;
-use objc2_foundation::{NSAppleScript, NSString};
+use objc2::{msg_send, runtime::AnyObject, AnyThread};
+use objc2_foundation::{NSAppleEventDescriptor, NSAppleScript, NSDictionary, NSString};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -613,16 +613,35 @@ fn run_arc_url_applescript() -> Option<String> {
             *slot = Some(script);
         }
         let script = slot.as_ref()?;
-        let descriptor = unsafe { script.executeAndReturnError(None) };
-        let value = descriptor.stringValue()?;
-        let url = value.to_string();
-        if is_http_url(&url) {
-            Some(url)
-        } else {
-            debug!("get_arc_url: AppleScript URL not http(s): {}", url);
-            None
+        let mut error_info: Option<objc2::rc::Retained<NSDictionary<NSString, AnyObject>>> = None;
+        // Foundation declares this result as nonnull, but macOS can return nil
+        // when Arc exits or loses its front window during execution. The
+        // generated binding models that declaration as `Retained<_>` and
+        // panics on nil, which used to escape the accessibility worker. Send
+        // the message with an explicitly nullable return instead.
+        let descriptor: Option<objc2::rc::Retained<NSAppleEventDescriptor>> =
+            unsafe { msg_send![script, executeAndReturnError: &mut error_info] };
+        if descriptor.is_none() {
+            debug!(
+                has_error_info = error_info.is_some(),
+                "get_arc_url: AppleScript execution returned no descriptor"
+            );
         }
+        arc_url_from_descriptor(descriptor)
     })
+}
+
+fn arc_url_from_descriptor(
+    descriptor: Option<objc2::rc::Retained<NSAppleEventDescriptor>>,
+) -> Option<String> {
+    let value = descriptor?.stringValue()?;
+    let url = value.to_string();
+    if is_http_url(&url) {
+        Some(url)
+    } else {
+        debug!("get_arc_url: AppleScript URL not http(s): {}", url);
+        None
+    }
 }
 
 /// Shallow walk of AX children to find a text field containing a URL.
@@ -3444,6 +3463,11 @@ mod tests {
 
         let other_pid = (9999, "Arc — Inbox".to_string());
         assert_eq!(cache.get(&other_pid, t0), None, "different pid misses");
+    }
+
+    #[test]
+    fn test_arc_applescript_nil_descriptor_is_a_cacheable_miss() {
+        assert_eq!(arc_url_from_descriptor(None), None);
     }
 
     #[test]

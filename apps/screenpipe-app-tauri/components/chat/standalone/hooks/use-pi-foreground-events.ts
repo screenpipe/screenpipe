@@ -26,8 +26,9 @@ import {
   clearQuotaUpgrade,
   setQuotaUpgradeFromError,
 } from "@/lib/chat/quota-upgrade";
+import { clearFreeWall, setFreeWallFromError } from "@/lib/chat/free-wall";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
-import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
+import { buildNoResponseMessage, buildProviderErrorPresentation } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
 import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
@@ -36,6 +37,7 @@ import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-
 import {
   firstAgentEndAssistantError,
   isRecord,
+  isTerminalQuotaError,
   piEventDataFromUnknown,
   stringValue,
   textFromAssistantMessages,
@@ -101,6 +103,8 @@ export function usePiForegroundEvents({
   const getActivePreset = () => activePresetRef?.current ?? activePreset;
   const dailyLimitMessage = (errorStr: string) => {
     setQuotaUpgradeFromError(errorStr);
+    // No-op unless this is the free-plan wall (free_chat_limit_exceeded).
+    setFreeWallFromError(errorStr);
     return buildDailyLimitMessage(errorStr);
   };
   // Listen for Pi / pipe events.
@@ -350,6 +354,25 @@ export function usePiForegroundEvents({
               prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
             );
           }
+        } else if (data.type === "tool_execution_update") {
+          // Pi streams the tool's partial output while it runs. partialResult
+          // is cumulative, so store its tail as the running tool's progress.
+          if (piMessageIdRef.current) {
+            const msgId = piMessageIdRef.current;
+            const toolCallId = stringValue(data.toolCallId);
+            const partial = textFromToolResult(data.partialResult);
+            if (partial) {
+              for (const block of piContentBlocksRef.current) {
+                if (block.type !== "tool" || block.toolCall.id !== toolCallId) continue;
+                block.toolCall.progress =
+                  partial.length > 4000 ? partial.slice(-4000) : partial;
+              }
+              const contentBlocks = [...piContentBlocksRef.current];
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
+              );
+            }
+          }
         } else if (data.type === "tool_execution_end") {
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
@@ -427,12 +450,18 @@ export function usePiForegroundEvents({
               );
             }
           } else {
-            const providerError = buildProviderErrorMessage(errorStr, getActivePreset());
+            const providerError = buildProviderErrorPresentation(errorStr, getActivePreset());
             if (providerError && piMessageIdRef.current) {
               const msgId = piMessageIdRef.current;
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId
-                  ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                  ? {
+                      ...m,
+                      content: providerError.message,
+                      retryPrompt: providerError.retryable
+                        ? lastUserMessageRef.current || undefined
+                        : undefined,
+                    }
                   : m)
               );
             }
@@ -479,11 +508,17 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
-              const providerError = buildProviderErrorMessage(fullError, getActivePreset());
+              const providerError = buildProviderErrorPresentation(fullError, getActivePreset());
               if (providerError) {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId
-                    ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                    ? {
+                        ...m,
+                        content: providerError.message,
+                        retryPrompt: providerError.retryable
+                          ? lastUserMessageRef.current || undefined
+                          : undefined,
+                      }
                     : m)
                 );
               } else if (fullError.includes("already processing")) {
@@ -501,6 +536,7 @@ export function usePiForegroundEvents({
           // A new turn is a fresh admission attempt. Hide the previous blocked
           // action while it runs; a repeated structured rejection restores it.
           clearQuotaUpgrade();
+          clearFreeWall();
           // Pi fires `message_start` for each user turn. When a queued
           // follow-up starts, close the previous streaming target here so the
           // next text_delta creates a fresh assistant bubble instead of
@@ -683,7 +719,7 @@ export function usePiForegroundEvents({
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
 
-            const providerError = buildProviderErrorMessage(errMsg, getActivePreset());
+            const providerError = buildProviderErrorPresentation(errMsg, getActivePreset());
             if (authTokenInvalidated) {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildInvalidatedAuthTokenMessage() } : m)
@@ -704,7 +740,13 @@ export function usePiForegroundEvents({
             } else if (providerError) {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId
-                  ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                  ? {
+                      ...m,
+                      content: providerError.message,
+                      retryPrompt: providerError.retryable
+                        ? lastUserMessageRef.current || undefined
+                        : undefined,
+                    }
                   : m)
               );
             } else {
@@ -722,10 +764,23 @@ export function usePiForegroundEvents({
           const isPipeWatch = piMessageIdRef.current?.startsWith("pipe-");
 
           if (!isPipeWatch && data.willRetry === true) {
-            setIsLoading(true);
-            setIsStreaming(true);
-            emitSessionActivity({ status: "streaming" });
-            return;
+            // Pi retries anything that mentions 429 — including terminal
+            // usage-limit rejections it can't recognize (gateway codes like
+            // daily_cost_limit_exceeded). Retrying those can't succeed and
+            // burns more gateway calls while the UI shows "analyzing…" under
+            // the limit message. Stop the session and finalize the turn now.
+            if (isTerminalQuotaError(piLastErrorRef.current ?? "")) {
+              const sid = piSessionIdRef.current;
+              if (sid) {
+                piStoppedIntentionallyRef.current = true;
+                void commands.piStop(sid);
+              }
+            } else {
+              setIsLoading(true);
+              setIsStreaming(true);
+              emitSessionActivity({ status: "streaming" });
+              return;
+            }
           }
 
           // Always clear loading/streaming state on agent_end, even if piMessageIdRef is null
@@ -751,8 +806,16 @@ export function usePiForegroundEvents({
               }
             }
 
+            const agentEndProviderError = agentEndError
+              ? buildProviderErrorPresentation(agentEndError, getActivePreset())
+              : null;
+            if (agentEndProviderError?.kind === "safety_refusal") {
+              // A provider can emit partial text before its terminal refusal.
+              // Keep the refusal note visible instead of finalizing that partial
+              // text as though the turn completed successfully.
+              content = agentEndProviderError.message;
             // Surface credits_exhausted / rate limit / connection errors from agent_end
-            if (agentEndError && !content) {
+            } else if (agentEndError && !content) {
               const errStr = agentEndError;
               const quotaErrorType = classifyQuotaError(errStr);
               if (isInvalidatedAuthTokenError(errStr)) {
@@ -767,7 +830,7 @@ export function usePiForegroundEvents({
               } else if (errStr.includes("model_not_allowed")) {
                 content = "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going.";
               } else {
-                content = buildProviderErrorMessage(errStr, getActivePreset()) || errStr;
+                content = buildProviderErrorPresentation(errStr, getActivePreset())?.message || errStr;
               }
             }
 
@@ -797,6 +860,7 @@ export function usePiForegroundEvents({
                 existing?.content?.includes("requires an upgrade") ||
                 existing?.content?.includes("Rate limited") ||
                 existing?.content?.includes("rate limit") ||
+                existing?.content?.includes("safety policy") ||
                 existing?.content?.includes("chat is too long") ||
                 existing?.content?.startsWith("Error:");
               if (isErrorMessage) {
@@ -828,8 +892,11 @@ export function usePiForegroundEvents({
                 } else if (lastErr && lastErrKind === "rate") {
                   content = buildRateLimitMessage(lastErr);
                 } else if (lastErr) {
-                  content = buildProviderErrorMessage(lastErr, getActivePreset()) || `Error: ${lastErr}`;
-                  emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
+                  const providerError = buildProviderErrorPresentation(lastErr, getActivePreset());
+                  content = providerError?.message || `Error: ${lastErr}`;
+                  if (providerError?.retryable !== false) {
+                    emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
+                  }
                 } else {
                   content = buildNoResponseMessage(getActivePreset());
                   emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
@@ -972,11 +1039,17 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
-              const providerError = buildProviderErrorMessage(errorStr, getActivePreset());
+              const providerError = buildProviderErrorPresentation(errorStr, getActivePreset());
               if (providerError) {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId
-                    ? { ...m, content: providerError, retryPrompt: lastUserMessageRef.current || undefined }
+                    ? {
+                        ...m,
+                        content: providerError.message,
+                        retryPrompt: providerError.retryable
+                          ? lastUserMessageRef.current || undefined
+                          : undefined,
+                      }
                     : m)
                 );
               } else if (errorStr.includes("already processing")) {
@@ -1032,7 +1105,7 @@ export function usePiForegroundEvents({
           // Pipe execution finished — clean up streaming state
           if (piMessageIdRef.current?.startsWith("pipe-")) {
             const msgId = piMessageIdRef.current;
-            const content = piStreamingTextRef.current || "Pipe completed with no output.";
+            const content = piStreamingTextRef.current || "Scheduled task completed with no output.";
             const blocksSnapshot = [...piContentBlocksRef.current];
             setMessages((prev) =>
               prev.map((m) => m.id === msgId ? { ...m, content, contentBlocks: blocksSnapshot } : m)

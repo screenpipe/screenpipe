@@ -26,6 +26,7 @@
  *   bun run test:e2e -- --spec e2e/specs/chat-automation-card-duplicate.spec.ts
  */
 
+import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
@@ -84,12 +85,43 @@ function cleanupCardChats(displayLabel: string): void {
   }
 }
 
-async function pressNewChat(): Promise<void> {
-  await browser.execute(() => {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "n", metaKey: true, ctrlKey: true, bubbles: true }),
-    );
-  });
+async function openIsolatedChat(): Promise<void> {
+  const conversationId = randomUUID();
+  const error = await browser.executeAsync(
+    (id: string, done: (error: string | null) => void) => {
+      const g = globalThis as unknown as {
+        __TAURI__?: { event?: { emit: (name: string, payload: unknown) => Promise<unknown> } };
+        __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> };
+      };
+      const emit = g.__TAURI__?.event?.emit;
+      const request = emit
+        ? emit("chat-load-conversation", { conversationId: id, targetWindow: "home" })
+        : g.__TAURI_INTERNALS__?.invoke("plugin:event|emit", {
+            event: "chat-load-conversation",
+            payload: { conversationId: id, targetWindow: "home" },
+          });
+      if (!request) {
+        done("Tauri event bridge is unavailable");
+        return;
+      }
+      void request.then(() => done(null)).catch((error) => done(String(error)));
+    },
+    conversationId,
+  );
+  if (error) throw new Error(`failed to open isolated chat: ${error}`);
+
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(
+        (id: string) => (window as any).__e2eForegroundReady === id,
+        conversationId,
+      )) as boolean,
+    {
+      timeout: t(15_000),
+      interval: 200,
+      timeoutMsg: "isolated chat never became the foreground conversation",
+    },
+  );
 }
 
 async function waitForCard(slug: string): Promise<void> {
@@ -137,15 +169,15 @@ describe("Automation cards create exactly one chat each (#4719)", function () {
   for (const slug of CARD_SLUGS) {
     it(`'${slug}' card creates ONE conversation, not a duplicate`, async () => {
       const displayLabel = CARD_DISPLAY_LABELS[slug];
-      // Fresh empty chat so the summary grid renders and this card's turn is
-      // isolated from the previous one. Stop any lingering turn first so this
-      // send dispatches immediately instead of queuing behind a busy Pi.
+      // Give every card a fresh, explicit conversation so this spec exercises
+      // card persistence only. Cmd/Ctrl+N reuse is covered independently by
+      // chat-newchat-fresh.spec.ts and can legitimately select an older blank
+      // draft while a failed model turn is settling.
       await stopCurrentTurn();
       // WDIO retries reuse the same app/data dir. Remove only this card's prior
       // retry artifacts so a real duplicate still reproduces on every attempt.
       cleanupCardChats(displayLabel);
-      await pressNewChat();
-      await browser.pause(t(800));
+      await openIsolatedChat();
       await waitForCard(slug);
 
       await clickCard(slug);

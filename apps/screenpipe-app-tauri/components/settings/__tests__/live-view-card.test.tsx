@@ -47,6 +47,32 @@ const listSlot: BrainViewSlot = {
   },
 };
 
+const lineChartSlot: BrainViewSlot = {
+  id: "focus-trend",
+  title: "Focus trend",
+  component: "line-chart.v1",
+  width: 6,
+  order: 0,
+  intent: "Show focus over time",
+  binding: { pipeName: "time-tracker" },
+  feedback: { upCount: 0, downCount: 0, current: null },
+  itemActions: { items: [] },
+  value: {
+    payload: {
+      items: [
+        { timestamp: "Mon", label: "focus", value: 2.5 },
+        { timestamp: "Tue", label: "focus", value: 4 },
+        { timestamp: "Wed", label: "focus", value: 3.25 },
+      ],
+    },
+    evidence: [],
+    sourcePipe: "time-tracker",
+    artifactOutputId: 43,
+    artifactVersion: 1,
+    updatedAt: "2026-07-25T20:00:00Z",
+  },
+};
+
 class ResizeObserverMock {
   observe() {}
   unobserve() {}
@@ -132,5 +158,40 @@ describe("LiveViewCard list overflow", () => {
     await waitFor(() => {
       expect(screen.queryByRole("tooltip")).toBeNull();
     });
+  });
+});
+
+describe("LiveViewCard line chart", () => {
+  it("exposes every point to hover and keyboard focus with an exact value", () => {
+    render(<LiveViewCard slot={lineChartSlot} />);
+
+    const tuesday = screen.getByRole("button", { name: "Tue: 4" });
+    fireEvent.pointerEnter(tuesday, { pointerType: "mouse" });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Tue");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("4");
+
+    fireEvent.pointerLeave(screen.getByTestId("live-view-line-chart"));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.focus(screen.getByRole("button", { name: "Wed: 3.25" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Wed");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("3.25");
+  });
+});
+
+describe("LiveViewCard range and freshness", () => {
+  it("labels the selected period as requested and keeps block freshness visible with actions", () => {
+    render(
+      <LiveViewCard
+        slot={listSlot}
+        timeRange="7d"
+        onRegenerate={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("List · requested: Last 7 days")).toBeTruthy();
+    expect(
+      screen.getByTestId("overview-card-updated-process-steps"),
+    ).toHaveTextContent(/^updated .* · artifact #42 · v1$/);
   });
 });

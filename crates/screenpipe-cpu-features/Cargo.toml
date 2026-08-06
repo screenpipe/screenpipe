@@ -1,0 +1,17 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
+# Leaf crate on purpose: runtime CPU-feature detection is needed by both
+# screenpipe-core AND screenpipe-config, and config cannot depend on core
+# (cycle: core → screenpipe-secrets → config). Zero dependencies — keep it
+# that way so it can sit below everything.
+[package]
+name = "screenpipe-cpu-features"
+version.workspace = true
+authors.workspace = true
+description = "Runtime CPU feature detection (AVX2 gating) for screenpipe"
+repository.workspace = true
+license-file.workspace = true
+edition.workspace = true
+
+[dependencies]

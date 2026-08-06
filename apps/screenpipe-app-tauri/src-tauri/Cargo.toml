@@ -3,7 +3,7 @@ members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.5.161"
+version = "2.5.184"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -117,6 +117,7 @@ raw-window-handle = "0.6"
 
 notify = "8.0.0"
 futures = "0.3.30"
+agent-client-protocol = "=1.2.0"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
@@ -285,7 +286,12 @@ official-build = []
 # Source for the sync lives under `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs` (EE-licensed).
 # Consumer builds never compile this code.
 # Do NOT add official-build here — enterprise has its own policy-gated updater.
-enterprise-build = ["dep:thiserror", "dep:screenpipe-sync", "dep:screenpipe-telemetry-wire"]
+enterprise-build = [
+    "dep:thiserror",
+    "dep:screenpipe-sync",
+    "dep:screenpipe-telemetry-wire",
+    "screenpipe-core/enterprise-build",
+]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]

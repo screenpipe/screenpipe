@@ -41,7 +41,7 @@ export const userSchema = z.object({
   entitlement: z.any().nullable().optional(),
 });
 
-export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "screenpipe-cloud", "pi", "anthropic"]);
+export const aiProviderTypeSchema = z.enum(["openai", "openai-chatgpt", "native-ollama", "custom", "screenpipe-cloud", "pi", "anthropic", "acp"]);
 
 export const aiPresetSchema = z.object({
   id: z.string().min(1, "Preset name is required").regex(/^[a-zA-Z0-9\s\-_]+$/, "Only letters, numbers, spaces, hyphens, and underscores allowed").refine(
@@ -56,6 +56,30 @@ export const aiPresetSchema = z.object({
   apiKey: z.string().nullable(),
   maxContextChars: z.number().int().min(1000, "Must be at least 1,000 characters").max(2000000, "Cannot exceed 2,000,000 characters"),
 });
+
+const aecModeSchema = z.enum(["off", "screenpipe", "macos", "windows"]);
+const booleanRemotePolicySchema = z.object({
+  defaultEnabled: z.boolean(),
+  forceDisabled: z.boolean(),
+}).strict();
+const remoteControlPreferencesSchema = z.object({
+  semanticContext: z.boolean().nullable(),
+  coreAudioSystemAudio: z.boolean().nullable(),
+  smartRecording: z.boolean().nullable(),
+  aecMode: aecModeSchema.nullable(),
+}).strict();
+const remoteControlPolicySchema = z.object({
+  schemaVersion: z.literal(1),
+  boolean: z.object({
+    semanticContext: booleanRemotePolicySchema,
+    coreAudioSystemAudio: booleanRemotePolicySchema,
+    smartRecording: booleanRemotePolicySchema,
+  }).strict(),
+  aecMode: z.object({
+    defaultValue: aecModeSchema,
+    forceDisabled: z.boolean(),
+  }).strict(),
+}).strict();
 
 export const settingsStoreSchema = z.object({
   // AI Settings
@@ -86,6 +110,8 @@ export const settingsStoreSchema = z.object({
   disableVision: z.boolean(),
   disableScreenshots: z.boolean().optional(),
   enableSemanticContext: z.boolean().optional(),
+  remoteControlPreferences: remoteControlPreferencesSchema.optional(),
+  remoteControlPolicy: remoteControlPolicySchema.optional(),
   semanticContextMode: z.enum(["memory", "computerUse", "both"]).optional(),
   useAllMonitors: z.boolean(),
   fps: z.number().min(0.1, "FPS must be at least 0.1").max(60, "FPS cannot exceed 60"),
@@ -131,6 +157,180 @@ export interface FieldValidationResult {
   error?: string;
   warning?: string;
 }
+
+export type AiPresetConnectionInput = Partial<
+  Pick<AIPreset, "provider" | "url" | "model" | "apiKey">
+>;
+
+export const GEMINI_OPENAI_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta/openai";
+
+const GEMINI_API_HOST = "generativelanguage.googleapis.com";
+
+const parseUrl = (url?: string | null): URL | null => {
+  try {
+    return new URL(url || "");
+  } catch {
+    return null;
+  }
+};
+
+export const isGeminiApiUrl = (url?: string | null): boolean =>
+  parseUrl(url)?.hostname.toLowerCase() === GEMINI_API_HOST;
+
+export const validateAiProviderUrl = (
+  url: string,
+  provider?: AIProviderType,
+): FieldValidationResult => {
+  if (provider !== "custom") return validateUrl(url);
+
+  const baseValidation = validateUrl(url);
+  if (!baseValidation.isValid) return baseValidation;
+
+  const parsed = parseUrl(url)!;
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { isValid: false, error: "Custom URL must use http or https" };
+  }
+
+  if (parsed.hostname.toLowerCase() === GEMINI_API_HOST) {
+    const path = parsed.pathname.replace(/\/+$/, "");
+    if (
+      `${parsed.origin}${path}` !== GEMINI_OPENAI_BASE_URL ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return {
+        isValid: false,
+        error: `For Gemini, use exactly ${GEMINI_OPENAI_BASE_URL}`,
+      };
+    }
+  }
+
+  return { isValid: true };
+};
+
+export const validateAiModel = (
+  model: string,
+  provider?: AIProviderType,
+  url?: string | null,
+): FieldValidationResult => {
+  const normalized = model.trim();
+  if (provider === "acp") return { isValid: true };
+  if (!normalized) return { isValid: false, error: "Model is required" };
+
+  if (provider === "custom" && isGeminiApiUrl(url) && normalized.startsWith("models/")) {
+    return {
+      isValid: false,
+      error: `For Gemini, use "${normalized.slice("models/".length)}" without the models/ prefix`,
+    };
+  }
+
+  return { isValid: true };
+};
+
+export const isAiApiKeyRequired = (preset: AiPresetConnectionInput): boolean => {
+  switch (preset.provider) {
+    case "openai":
+    case "anthropic":
+    case "acp":
+      return true;
+    case "custom":
+      return isGeminiApiUrl(preset.url);
+    default:
+      return false;
+  }
+};
+
+export const validateAiPresetConnectionFields = (
+  preset: AiPresetConnectionInput,
+): Record<string, string> => {
+  const errors: Record<string, string> = {};
+  if (!preset.provider) return errors;
+
+  if (preset.provider === "custom" || preset.provider === "native-ollama") {
+    const urlValidation = validateAiProviderUrl(preset.url || "", preset.provider);
+    if (!urlValidation.isValid && urlValidation.error) errors.url = urlValidation.error;
+  }
+
+  const modelValidation = validateAiModel(
+    preset.model || "",
+    preset.provider,
+    preset.url,
+  );
+  if (!modelValidation.isValid && modelValidation.error) errors.model = modelValidation.error;
+
+  if (isAiApiKeyRequired(preset)) {
+    const keyValidation = validateApiKey(
+      preset.apiKey || "",
+      preset.provider!,
+      preset.url,
+    );
+    if (!keyValidation.isValid && keyValidation.error) errors.apiKey = keyValidation.error;
+  }
+
+  return errors;
+};
+
+export const aiPresetConnectionFingerprint = (
+  preset: AiPresetConnectionInput,
+): string =>
+  JSON.stringify([
+    preset.provider || "",
+    (preset.url || "").trim().replace(/\/+$/, ""),
+    (preset.model || "").trim(),
+    preset.apiKey || "",
+  ]);
+
+export const requiresAiPresetConnectionTest = (
+  provider?: AIProviderType,
+): boolean =>
+  provider === "openai" ||
+  provider === "anthropic" ||
+  provider === "custom" ||
+  provider === "native-ollama";
+
+export const shouldRequireAiPresetConnectionTest = (
+  current: AiPresetConnectionInput,
+  original?: AiPresetConnectionInput | null,
+  isDuplicating = false,
+): boolean =>
+  requiresAiPresetConnectionTest(current.provider) &&
+  (isDuplicating ||
+    !original ||
+    aiPresetConnectionFingerprint(current) !== aiPresetConnectionFingerprint(original));
+
+const findProviderErrorMessage = (value: unknown, depth = 0): string | null => {
+  if (depth > 4 || value == null) return null;
+  if (typeof value === "string") return value.trim() || null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const message = findProviderErrorMessage(item, depth + 1);
+      if (message) return message;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return null;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "detail", "error", "errors"]) {
+    const message = findProviderErrorMessage(record[key], depth + 1);
+    if (message) return message;
+  }
+  return null;
+};
+
+export const extractAiProviderErrorMessage = (
+  body: string,
+  fallback = "Request failed",
+): string => {
+  const trimmed = body.trim();
+  if (!trimmed) return fallback;
+  try {
+    return (findProviderErrorMessage(JSON.parse(trimmed)) || fallback).slice(0, 300);
+  } catch {
+    return trimmed.slice(0, 300);
+  }
+};
 
 // Field-specific validators
 export const validateField = (
@@ -289,7 +489,11 @@ export const validateUrl = (url: string): FieldValidationResult => {
 };
 
 // API key validation
-export const validateApiKey = (apiKey: string, provider: AIProviderType): FieldValidationResult => {
+export const validateApiKey = (
+  apiKey: string,
+  provider: AIProviderType,
+  url?: string | null,
+): FieldValidationResult => {
   if (!apiKey.trim()) {
     return { isValid: false, error: "API key is required" };
   }
@@ -301,12 +505,19 @@ export const validateApiKey = (apiKey: string, provider: AIProviderType): FieldV
       }
       break;
     case "anthropic":
+    case "acp":
       if (!apiKey.startsWith("sk-ant-")) {
         return { isValid: false, error: "Anthropic API keys should start with 'sk-ant-'" };
       }
       break;
     case "custom":
       // No length check — local providers (e.g. Ollama) use short keys
+      if (isGeminiApiUrl(url) && !apiKey.startsWith("AIza")) {
+        return {
+          isValid: true,
+          warning: "Gemini API keys usually start with 'AIza'; the connection test will verify it",
+        };
+      }
       break;
   }
   

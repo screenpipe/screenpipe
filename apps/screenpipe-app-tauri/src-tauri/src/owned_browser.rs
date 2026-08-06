@@ -1530,33 +1530,15 @@ pub async fn owned_browser_clear_browsing_data(app: AppHandle) -> Result<(), Str
     Ok(())
 }
 
-/// E2E-only probe: whether the owned-browser native webview is currently shown.
-/// Mirrors `e2e_main_overlay_visible` — internal visibility state stays hidden
-/// in production binaries and is only exposed under the `e2e` feature. Used by
-/// `zz-owned-browser-background-nav.spec.ts` to assert a background agent/pipe
-/// navigation does not reveal the browser over a non-chat view.
-#[specta::specta]
-#[tauri::command]
-pub async fn e2e_owned_browser_visible() -> bool {
-    if !cfg!(feature = "e2e") {
-        return false;
-    }
+/// Feature-gated visibility probe used by the native E2E harness.
+#[cfg(feature = "e2e")]
+pub(crate) async fn visibility_for_harness() -> bool {
     browser_state().is_visible().await
 }
 
-/// E2E-only: detach and close the owned-browser child webview, resetting the
-/// singleton to its "no child attached" state. Lets
-/// `zzz-owned-browser-headless.spec.ts` establish a deterministic baseline so it
-/// can prove that a *fresh* background (headless) eval actually creates a
-/// working webview — not merely reuse one a prior spec left attached. Mirrors
-/// `e2e_owned_browser_visible`'s gating: a no-op in production binaries, only
-/// active under the `e2e` feature.
-#[specta::specta]
-#[tauri::command]
-pub async fn e2e_owned_browser_detach() -> Result<(), String> {
-    if !cfg!(feature = "e2e") {
-        return Ok(());
-    }
+/// Feature-gated reset hook used by the native E2E harness.
+#[cfg(feature = "e2e")]
+pub(crate) async fn detach_for_harness() -> Result<(), String> {
     let state = browser_state();
     let child = {
         let mut inner = state.inner.lock().await;

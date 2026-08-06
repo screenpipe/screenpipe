@@ -9,6 +9,7 @@ import { commands } from "@/lib/utils/tauri";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import { MCP_OAUTH_PROVIDERS } from "@/components/settings/connections-section";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
 
 const DEFAULT_OAUTH_VARIANTS: Record<string, string | null> = {
   slack: "send",
@@ -81,13 +82,20 @@ async function connectMcpProvider(connectionId: string, signal?: AbortSignal): P
 
   const existingId = await findMcpServerIdByUrl(provider.url);
   const targetId = existingId ?? mcpRandomId();
+  const appScheme = await appDeepLinkScheme();
   const res = await localFetch(`/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(
       existingId
-        ? {}
-        : { name: provider.name, url: provider.url, headers: [], enabled: true },
+        ? { app_scheme: appScheme }
+        : {
+            name: provider.name,
+            url: provider.url,
+            headers: [],
+            enabled: true,
+            app_scheme: appScheme,
+          },
     ),
   });
   const body = await res.json();
@@ -105,7 +113,13 @@ async function connectMcpProvider(connectionId: string, signal?: AbortSignal): P
     }
     throw error;
   }
-  if (!connected) return { status: "error", reason: "sign-in was not completed" };
+  if (!connected) {
+    return {
+      status: "error",
+      reason:
+        "sign-in was not completed — if your browser blocks http://localhost (e.g. Safari HTTPS-Only mode), click \"Open screenpipe\" on the confirmation page",
+    };
+  }
   await foregroundAfterOAuth();
   notifyConnectionsUpdated();
   return { status: "connected" };

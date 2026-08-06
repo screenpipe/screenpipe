@@ -160,8 +160,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       : opts.selectedPreset;
   const componentUnmountedRef = useRef(false);
   const currentMessagesRef = useRef(messages);
+  // Keep cross-window listeners mounted while chats switch. Re-registering
+  // them on every conversationId change leaves a gap where sibling saves can
+  // be dropped, so handlers read the current id through this stable ref.
+  const currentConversationIdRef = useRef(conversationId);
   const latestSavedEventAtRef = useRef(new Map<string, number>());
   currentMessagesRef.current = messages;
+  currentConversationIdRef.current = conversationId;
 
   const [showHistory, setShowHistoryRaw] = useState(() => {
     try { return localStorage.getItem("screenpipe:chat-history-open") === "true"; } catch { return false; }
@@ -396,7 +401,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           if (!id) return;
           invalidateConversationListCache();
           setFileConversations((prev) => prev.filter((c) => c.id !== id));
-          if (conversationId === id) {
+          if (currentConversationIdRef.current === id) {
             setMessages([]);
             setConversationId(null);
           }
@@ -446,7 +451,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           // panel still renders a blank canvas. Hydrate only when disk is
           // strictly more complete so a stale save never rolls back a live
           // foreground stream.
-          if (id === conversationId || id === piSessionIdRef.current) {
+          if (
+            id === currentConversationIdRef.current ||
+            id === piSessionIdRef.current
+          ) {
             // Publish the stable assistant identity before any disk/title
             // awaits below. Pi can echo the user prompt within milliseconds;
             // without this synchronous handoff a sibling treats that echo as
@@ -585,7 +593,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       for (const unlisten of unlistenFns) unlisten();
     };
   }, [
-    conversationId,
     piContentBlocksRef,
     piMessageIdRef,
     piSessionIdRef,

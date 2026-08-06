@@ -31,7 +31,7 @@ function localDateId(): string {
 describe("Timeline daily summary", function () {
   this.timeout(120_000);
 
-  const cacheKey = `screenpipe:timeline-daily-summary:pi-v1:${localDateId()}`;
+  const cacheKey = `screenpipe:timeline-daily-summary:pi-v2:${localDateId()}`;
 
   before(async () => {
     await waitForAppReady();

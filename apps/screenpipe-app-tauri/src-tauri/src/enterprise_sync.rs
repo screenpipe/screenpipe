@@ -26,7 +26,7 @@ mod imp {
     use base64::Engine;
     use ee_sync::{
         AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FeedbackRow, FrameRow, LocalApiClient,
-        MemoryRow, SnapshotRow, UiEventRow,
+        MemoryRow, ParsedRow, SnapshotRow, UiEventRow,
     };
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
@@ -101,6 +101,7 @@ mod imp {
     #[serde(tag = "type", content = "content")]
     enum LocalSearchItem {
         OCR(LocalOcr),
+        Parsed(ParsedRow),
         Audio(LocalAudio),
         Input(LocalInput),
         // Memory/UI variants ignored — only the ones we sync are listed.
@@ -197,14 +198,14 @@ mod imp {
         async fn fetch_frames_since(
             &self,
             since_ts: Option<&str>,
+            boundary_offset: u32,
             limit: u32,
         ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
-            // /search takes start_time as ISO. We pass `since` (exclusive in
-            // spirit) — server returns >= start_time; one duplicate row per
-            // tick is acceptable since server-side dedups by (device_id, frame_id).
+            // /search returns rows whose timestamp is >= `since`. The durable
+            // boundary offset skips rows already acknowledged at that timestamp.
             let mut url = format!(
-                "{}/search?content_type=ocr&limit={}&order=ascending",
-                self.api_url_base, limit
+                "{}/search?content_type=ocr&limit={}&offset={}&order=ascending",
+                self.api_url_base, limit, boundary_offset
             );
             if let Some(ts) = since_ts {
                 url.push_str(&format!("&start_time={}", urlencoding::encode(ts)));
@@ -247,11 +248,12 @@ mod imp {
         async fn fetch_audio_since(
             &self,
             since_ts: Option<&str>,
+            boundary_offset: u32,
             limit: u32,
         ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
             let mut url = format!(
-                "{}/search?content_type=audio&limit={}&order=ascending",
-                self.api_url_base, limit
+                "{}/search?content_type=audio&limit={}&offset={}&order=ascending",
+                self.api_url_base, limit, boundary_offset
             );
             if let Some(ts) = since_ts {
                 url.push_str(&format!("&start_time={}", urlencoding::encode(ts)));
@@ -288,9 +290,51 @@ mod imp {
             Ok(out)
         }
 
+        async fn fetch_parsed_since(
+            &self,
+            since_ts: Option<&str>,
+            boundary_offset: u32,
+            limit: u32,
+        ) -> Result<Vec<ParsedRow>, EnterpriseSyncError> {
+            let mut url = format!(
+                "{}/search?content_type=parsed&limit={}&offset={}&order=ascending",
+                self.api_url_base, limit, boundary_offset
+            );
+            if let Some(ts) = since_ts {
+                url.push_str(&format!("&start_time={}", urlencoding::encode(ts)));
+            }
+            let resp = self
+                .auth(self.http.get(&url))
+                .send()
+                .await
+                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+            if !resp.status().is_success() {
+                return Err(EnterpriseSyncError::LocalApi(format!(
+                    "GET {} -> {}",
+                    url,
+                    resp.status()
+                )));
+            }
+            let body: LocalSearchResponse = resp
+                .json()
+                .await
+                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+            let mut out = body
+                .data
+                .into_iter()
+                .filter_map(|item| match item {
+                    LocalSearchItem::Parsed(parsed) => Some(parsed),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            out.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+            Ok(out)
+        }
+
         async fn fetch_ui_events_since(
             &self,
             since_ts: Option<&str>,
+            boundary_offset: u32,
             limit: u32,
         ) -> Result<Vec<UiEventRow>, EnterpriseSyncError> {
             // Local /search content_type=input returns rows from the
@@ -301,8 +345,8 @@ mod imp {
             // targets) — keystroke noise without element context isn't
             // useful for SOP synthesis and bloats the corpus.
             let mut url = format!(
-                "{}/search?content_type=input&limit={}&order=ascending&input_context_only=true",
-                self.api_url_base, limit
+                "{}/search?content_type=input&limit={}&offset={}&order=ascending&input_context_only=true",
+                self.api_url_base, limit, boundary_offset
             );
             if let Some(ts) = since_ts {
                 url.push_str(&format!("&start_time={}", urlencoding::encode(ts)));
@@ -517,15 +561,14 @@ mod imp {
         async fn fetch_memories_since(
             &self,
             since_ts: Option<&str>,
+            boundary_offset: u32,
             limit: u32,
         ) -> Result<Vec<MemoryRow>, EnterpriseSyncError> {
-            // /memories filters by created_at >= start_time; ascending order
-            // means the cursor advances monotonically. Server-side dedup is
-            // on (device_id, memory_id), so a single-row overlap per tick is
-            // acceptable (same convention as /search-backed fetches above).
+            // /memories returns created_at >= start_time. The durable boundary
+            // offset skips rows already acknowledged at that timestamp.
             let mut url = format!(
-                "{}/memories?limit={}&order_by=created_at&order_dir=asc",
-                self.api_url_base, limit
+                "{}/memories?limit={}&offset={}&order_by=created_at&order_dir=asc",
+                self.api_url_base, limit, boundary_offset
             );
             if let Some(ts) = since_ts {
                 url.push_str(&format!("&start_time={}", urlencoding::encode(ts)));
@@ -566,11 +609,18 @@ mod imp {
         async fn fetch_feedback_since(
             &self,
             since_ts: Option<&str>,
+            after_id: Option<&str>,
             limit: u32,
         ) -> Result<Vec<FeedbackRow>, EnterpriseSyncError> {
-            let mut url = format!("{}/feedback?limit={}&order=asc", self.api_url_base, limit);
+            let mut url = format!(
+                "{}/feedback?limit={}&order=asc&since_inclusive=true",
+                self.api_url_base, limit
+            );
             if let Some(ts) = since_ts {
                 url.push_str(&format!("&since={}", urlencoding::encode(ts)));
+            }
+            if let Some(id) = after_id {
+                url.push_str(&format!("&after_id={}", urlencoding::encode(id)));
             }
             let resp = self
                 .auth(self.http.get(&url))
@@ -850,6 +900,7 @@ mod imp {
 
         let (tx, rx) = tokio::sync::watch::channel(false);
         let mut shutdown_rx = rx.clone();
+        let auth_gate_app = app.clone();
         tauri::async_runtime::spawn(async move {
             // Wait until a device config exists. Config sources, checked
             // every tick until one lands (previously this was a boot-time
@@ -935,24 +986,23 @@ mod imp {
                 cfg.device_id, cfg.device_label, cfg.ingest_url
             );
 
-            // Ask the control plane what upload mode this license should run
-            // in. Replaces the old "set SCREENPIPE_ENTERPRISE_UPLOAD_MODE on
-            // every customer machine" UX — the dashboard binding is now the
-            // single source of truth, so a fresh enterprise install just
-            // needs the license key and uploads start automatically.
-            cfg.resolve_upload_mode().await;
-            info!(
-                "enterprise sync: resolved upload mode = {}",
-                cfg.upload_mode.label()
-            );
-
             // Small startup delay so the local screenpipe server is up before
-            // we hammer it. Mode resolution runs first so customer root keys
-            // are removed from the process environment before child agents
-            // can inherit them.
+            // we hammer it. The sync state machine resolves upload policy and
+            // recovers rejected credentials before its first local data read.
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
 
-            ee_sync::run(cfg, local, rx).await;
+            let on_auth_rejected: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                if let Err(error) =
+                    crate::window::ShowRewindWindow::PermissionRecovery.show(&auth_gate_app)
+                {
+                    warn!(
+                        error = %error,
+                        "enterprise sync: failed to show enterprise access gate"
+                    );
+                }
+            });
+
+            ee_sync::run(cfg, local, rx, Some(on_auth_rejected)).await;
         });
 
         Some(tx)

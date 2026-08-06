@@ -719,7 +719,7 @@ pub(crate) async fn execute_raw_sql(
         return Err((StatusCode::BAD_REQUEST, JsonResponse(json!({"error": msg}))));
     }
 
-    match state.db.execute_raw_sql(&payload.query).await {
+    match state.db.query_raw_sql(&payload.query).await {
         Ok(result) => Ok(JsonResponse(result)),
         // A database-level error means SQLite rejected the *query* itself —
         // unknown table/column, syntax error, etc. That's a caller mistake, not

@@ -4,8 +4,12 @@
 
 import { useState, useCallback, useRef } from "react";
 import { Settings } from "@/lib/hooks/use-settings";
+import { commands } from "@/lib/utils/tauri";
+import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
+// Probes gate UI feedback — fail fast rather than the wrapper's 30s default.
+const PROBE_TIMEOUT_MS = 15_000;
 
 export type TxDiagnosticStatus = "pass" | "fail" | "skip" | "pending" | "running";
 export type TxDiagnosticStep = { status: TxDiagnosticStatus; message: string; latencyMs?: number };
@@ -47,7 +51,11 @@ export function useTranscriptionDiagnostics(opts: {
     });
     setTxDiagnosticsOpen(true);
 
-    const endpoint = settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
+    // Normalize like the Rust path (batch.rs transcription_url) so both build
+    // identical URLs — no `//v1/models` from a trailing slash.
+    const endpoint = (settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT)
+      .trim()
+      .replace(/\/+$/, "");
     const apiKey = settings.openaiCompatibleApiKey;
 
     const headers: Record<string, string> = {};
@@ -58,6 +66,17 @@ export function useTranscriptionDiagnostics(opts: {
     if (settings.openaiCompatibleHeaders) {
       Object.assign(headers, settings.openaiCompatibleHeaders);
     }
+
+    // Native HTTP, never the webview's fetch: transcription servers are APIs
+    // and rarely send CORS headers, so a browser fetch from the tauri origin
+    // throws even when the server is up — the production path is reqwest and
+    // is not subject to CORS either. Same fix as ai-presets diagnostics.
+    const probe = (url: string, init?: RequestInit) =>
+      tauriFetchWithDeadline(
+        url,
+        { ...init, signal: abort.signal },
+        { timeoutMs: PROBE_TIMEOUT_MS }
+      );
 
     const skipRemaining = (failStep: string, message: string) => {
       const steps = ["endpoint", "auth", "models", "transcribe"] as const;
@@ -81,23 +100,26 @@ export function useTranscriptionDiagnostics(opts: {
     }));
 
     let endpointReachable = false;
+    let endpointError = "";
     try {
-      await fetch(endpoint, { signal: abort.signal, method: "GET" });
+      await probe(endpoint, { method: "GET" });
       endpointReachable = true;
-    } catch {
+    } catch (err: any) {
+      endpointError = err?.message || "";
       // root URL failed, try /v1/models as fallback
       try {
-        await fetch(`${endpoint}/v1/models`, { headers, signal: abort.signal });
+        await probe(`${endpoint}/v1/models`, { headers });
         endpointReachable = true;
       } catch {
-        // neither worked
+        // neither worked — keep the root probe's error, it names the host
       }
     }
 
     if (abort.signal.aborted) return;
 
     if (!endpointReachable) {
-      skipRemaining("endpoint", `Connection failed. Is the server running at ${endpoint}?`);
+      const detail = endpointError ? ` (${endpointError.slice(0, 120)})` : "";
+      skipRemaining("endpoint", `Connection failed${detail}. Is the server running at ${endpoint}?`);
       return;
     }
 
@@ -111,10 +133,7 @@ export function useTranscriptionDiagnostics(opts: {
     let modelCount = 0;
     // Try OpenAI-style /v1/models
     try {
-      const modelsResponse = await fetch(`${endpoint}/v1/models`, {
-        headers,
-        signal: abort.signal,
-      });
+      const modelsResponse = await probe(`${endpoint}/v1/models`, { headers });
       if (modelsResponse.status === 401 || modelsResponse.status === 403) {
         skipRemaining("auth", `${modelsResponse.status} Unauthorized. Check your API key.`);
         return;
@@ -130,10 +149,7 @@ export function useTranscriptionDiagnostics(opts: {
     // Fallback: try Ollama-style /api/tags
     if (modelCount === 0) {
       try {
-        const ollamaResponse = await fetch(`${endpoint}/api/tags`, {
-          headers,
-          signal: abort.signal,
-        });
+        const ollamaResponse = await probe(`${endpoint}/api/tags`, { headers });
         if (ollamaResponse.ok) {
           const ollamaData = await ollamaResponse.json();
           modelCount = (ollamaData.models || []).filter((m: any) => m.name).length;
@@ -157,98 +173,54 @@ export function useTranscriptionDiagnostics(opts: {
       transcribe: { status: "running", message: "Sending test audio..." },
     }));
 
-    // Step 4: Test transcription with a short silent WAV
-    const model = settings.openaiCompatibleModel || "";
+    // Step 4: the exact request "Test and enable" and production recording
+    // send (honors rawAudio mp3/wav, custom headers, retries) — the two
+    // buttons can't disagree on the transcription step.
     const txStart = performance.now();
-    try {
-      // Generate a minimal 1-second silent 16kHz mono WAV
-      const sampleRate = 16000;
-      const numSamples = sampleRate; // 1 second
-      const dataSize = numSamples * 2; // 16-bit = 2 bytes per sample
-      const buffer = new ArrayBuffer(44 + dataSize);
-      const view = new DataView(buffer);
-      // WAV header
-      const writeStr = (offset: number, str: string) => {
-        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-      };
-      writeStr(0, "RIFF");
-      view.setUint32(4, 36 + dataSize, true);
-      writeStr(8, "WAVE");
-      writeStr(12, "fmt ");
-      view.setUint32(16, 16, true); // subchunk size
-      view.setUint16(20, 1, true); // PCM
-      view.setUint16(22, 1, true); // mono
-      view.setUint32(24, sampleRate, true);
-      view.setUint32(28, sampleRate * 2, true); // byte rate
-      view.setUint16(32, 2, true); // block align
-      view.setUint16(34, 16, true); // bits per sample
-      writeStr(36, "data");
-      view.setUint32(40, dataSize, true);
-      // samples are zero (silence)
+    const result = await commands.testOpenaiCompatibleTranscription(
+      endpoint,
+      apiKey || null,
+      settings.openaiCompatibleModel || "",
+      settings.openaiCompatibleHeaders || null,
+      settings.openaiCompatibleRawAudio ?? false
+    );
+    const latencyMs = Math.round(performance.now() - txStart);
 
-      const blob = new Blob([buffer], { type: "audio/wav" });
-      const formData = new FormData();
-      formData.append("file", blob, "test.wav");
-      formData.append("model", model);
-      formData.append("response_format", "json");
+    if (abort.signal.aborted) return;
 
-      const txHeaders: Record<string, string> = {};
-      if (apiKey) txHeaders["Authorization"] = `Bearer ${apiKey}`;
-      if (settings.openaiCompatibleHeaders) Object.assign(txHeaders, settings.openaiCompatibleHeaders);
-
-      const txResponse = await fetch(`${endpoint}/v1/audio/transcriptions`, {
-        method: "POST",
-        headers: txHeaders,
-        body: formData,
-        signal: abort.signal,
-      });
-
-      const latencyMs = Math.round(performance.now() - txStart);
-
-      if (!txResponse.ok) {
-        const errText = await txResponse.text().catch(() => "");
-        setTxTestResults((prev) => ({
-          ...prev,
-          transcribe: {
-            status: "fail",
-            message: `${txResponse.status}: ${errText.slice(0, 120) || "Request failed"}`,
-            latencyMs,
-          },
-        }));
-        setTxTestStatus("done");
-        return;
-      }
-
-      const txData = await txResponse.json();
-      const text = txData.text ?? "";
-
-      if (abort.signal.aborted) return;
-
-      setTxTestResults((prev) => ({
-        ...prev,
-        transcribe: {
-          status: "pass",
-          message: text
-            ? `OK (${latencyMs}ms): "${text.slice(0, 80)}"`
-            : `OK (${latencyMs}ms): empty transcription (silent audio)`,
-          latencyMs,
-        },
-      }));
-    } catch (err: any) {
-      if (abort.signal.aborted) return;
-      const latencyMs = Math.round(performance.now() - txStart);
+    if (result.status === "error") {
       setTxTestResults((prev) => ({
         ...prev,
         transcribe: {
           status: "fail",
-          message: `Transcription failed: ${err.message || "Unknown error"}`,
+          message: result.error.slice(0, 160) || "Request failed",
           latencyMs,
         },
       }));
+      setTxTestStatus("done");
+      return;
     }
 
+    const text = result.data;
+    setTxTestResults((prev) => ({
+      ...prev,
+      transcribe: {
+        status: "pass",
+        message: text
+          ? `OK (${latencyMs}ms): "${text.slice(0, 80)}"`
+          : `OK (${latencyMs}ms): empty transcription (silent audio)`,
+        latencyMs,
+      },
+    }));
+
     setTxTestStatus("done");
-  }, [settings.openaiCompatibleEndpoint, settings.openaiCompatibleApiKey, settings.openaiCompatibleModel]);
+  }, [
+    settings.openaiCompatibleEndpoint,
+    settings.openaiCompatibleApiKey,
+    settings.openaiCompatibleModel,
+    settings.openaiCompatibleHeaders,
+    settings.openaiCompatibleRawAudio,
+  ]);
 
   return {
     txTestStatus,

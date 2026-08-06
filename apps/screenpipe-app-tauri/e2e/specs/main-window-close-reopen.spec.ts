@@ -60,7 +60,7 @@ describe("Main window: close + re-open", function () {
     });
 
     await browser.switchToWindow("home");
-    await browser.waitUntil(async () => await invokeOrThrow<boolean>("e2e_main_overlay_visible"), {
+    await browser.waitUntil(async () => await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible"), {
       timeout: t(20_000),
       interval: 250,
       timeoutMsg: "Main overlay never became visible after show_main_window",
@@ -74,7 +74,7 @@ describe("Main window: close + re-open", function () {
 
     await closeWindow("Main");
     await browser.waitUntil(
-      async () => !(await invokeOrThrow<boolean>("e2e_main_overlay_visible")),
+      async () => !(await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible")),
       {
         timeout: t(20_000),
         interval: 250,
@@ -88,7 +88,7 @@ describe("Main window: close + re-open", function () {
     expect(handlesAfter.filter((h) => h === firstLabel)).toHaveLength(1);
 
     await browser.switchToWindow("home");
-    await browser.waitUntil(async () => await invokeOrThrow<boolean>("e2e_main_overlay_visible"), {
+    await browser.waitUntil(async () => await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible"), {
       timeout: t(20_000),
       interval: 250,
       timeoutMsg: "Main overlay never became visible after show_main_window (post-close)",

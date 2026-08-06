@@ -39,7 +39,7 @@ import {
 } from "../helpers/test-utils.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 
-const PROMPT = "create a pipe that tracks what i do every hour";
+const PROMPT = "create a scheduled task that tracks what i do every hour";
 const COMPOSER_TA = '[data-firstrun-target="composer"] textarea';
 
 /** Request the guide through its internal handoff and wait for the invite. */

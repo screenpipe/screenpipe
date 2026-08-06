@@ -114,6 +114,7 @@ describe("safe config IO", () => {
     expect(config.theme).toBe("dark");
     expect(config.mcpServers.screenpipe.command).toBe("/app/bun");
     expect(config.mcpServers.screenpipe.env.SCREENPIPE_LOCAL_API_KEY).toBe("sp-test");
+    expect(config.mcpServers.screenpipe.env.SCREENPIPE_MCP_CLIENT).toBe("cursor");
     expect(backupsOf(CURSOR)).toHaveLength(1);
     expect(fsMock.files.get(backupsOf(CURSOR)[0])).toBe(seeded);
     expect(tmpsOf(CURSOR)).toHaveLength(0);

@@ -625,6 +625,32 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     return;
   }
 
+  // Pi streams the tool's partial output while it runs; store its tail as the
+  // running tool's progress so a long tool visibly advances.
+  if (t === "tool_execution_update") {
+    const cur = store.sessions[sid];
+    if (!cur?.streamingMessageId) return;
+    const msgId = cur.streamingMessageId;
+    const toolCallId = (payload as any).toolCallId;
+    const partial: string =
+      (payload as any).partialResult?.content
+        ?.map((c: any) => c.text || "")
+        .join("\n") || "";
+    if (!partial) return;
+    const progress = partial.length > 4000 ? partial.slice(-4000) : partial;
+    const blocks = ((cur.contentBlocks as any[]) ?? []).map((b: any) =>
+      b.type === "tool" && b.toolCall?.id === toolCallId
+        ? { ...b, toolCall: { ...b.toolCall, progress } }
+        : b
+    );
+    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    store.actions.patchMessage(sid, msgId, (m: any) => ({
+      ...m,
+      contentBlocks: blocks,
+    }));
+    return;
+  }
+
   if (t === "tool_execution_end") {
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;

@@ -127,26 +127,28 @@ async fn estimate_evictable_bytes_counts_files_despite_out_of_range_null_chunk_f
 
     let old_ts = (Utc::now() - Duration::days(30)).to_rfc3339();
     let recent_ts = Utc::now().to_rfc3339();
+    let writer = db.coordinated_writer().lock().await.unwrap();
 
     sqlx::query("INSERT INTO video_chunks (id, file_path) VALUES (1, ?1)")
         .bind(video_path.to_str().unwrap())
-        .execute(&db.pool)
+        .execute(writer.pool())
         .await
         .unwrap();
     sqlx::query(
         "INSERT INTO frames (id, video_chunk_id, offset_index, timestamp) VALUES (1, 1, 0, ?1)",
     )
     .bind(&old_ts)
-    .execute(&db.pool)
+    .execute(writer.pool())
     .await
     .unwrap();
     sqlx::query(
         "INSERT INTO frames (id, video_chunk_id, offset_index, timestamp) VALUES (2, NULL, 0, ?1)",
     )
     .bind(&recent_ts)
-    .execute(&db.pool)
+    .execute(writer.pool())
     .await
     .unwrap();
+    drop(writer);
 
     let start = Utc::now() - Duration::days(31);
     let end = Utc::now() - Duration::days(29);

@@ -83,6 +83,10 @@ pub struct MeetingRetranscribeResponse {
     pub batches_processed: usize,
     pub seconds_processed: f64,
     pub replaced_segments: u64,
+    /// When transcript content changed, this is the new summary freshness
+    /// boundary and an automatic-summary event is emitted for the meeting.
+    pub transcript_updated_at: Option<String>,
+    pub summary_refresh_event_emitted: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -532,6 +536,8 @@ pub async fn retranscribe_meeting_handler(
             batches_processed: 0,
             seconds_processed: 0.0,
             replaced_segments: 0,
+            transcript_updated_at: None,
+            summary_refresh_event_emitted: false,
         }));
     }
 
@@ -674,6 +680,8 @@ pub async fn retranscribe_meeting_handler(
             batches_processed: 0,
             seconds_processed,
             replaced_segments: 0,
+            transcript_updated_at: None,
+            summary_refresh_event_emitted: false,
         }));
     }
 
@@ -721,6 +729,29 @@ pub async fn retranscribe_meeting_handler(
         inserted
     );
 
+    let transcript_updated_at = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    // Keep UI freshness timestamp-shaped, but make the scheduler claim unique
+    // even if two successful replacements commit within the same millisecond.
+    let summary_generation = format!("{}:{}", transcript_updated_at, uuid::Uuid::new_v4());
+    let summary_refresh_event_emitted = match screenpipe_events::send_event(
+        "meeting_summary_refresh_requested",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "meeting_end": end_raw,
+            "summary_generation": summary_generation,
+            "reason": "transcript_replaced",
+        }),
+    ) {
+        Ok(()) => true,
+        Err(e) => {
+            error!(
+                "meeting retranscribe: failed to request summary refresh for meeting {}: {}",
+                meeting_id, e
+            );
+            false
+        }
+    };
+
     Ok(JsonResponse(MeetingRetranscribeResponse {
         meeting_id,
         engine: engine_name,
@@ -729,6 +760,8 @@ pub async fn retranscribe_meeting_handler(
         batches_processed: inserted,
         seconds_processed,
         replaced_segments,
+        transcript_updated_at: Some(transcript_updated_at),
+        summary_refresh_event_emitted,
     }))
 }
 

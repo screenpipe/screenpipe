@@ -21,6 +21,9 @@ import { timelineTimestampFromDeepLink } from "@/lib/timeline-deeplink";
 import { describeDeepLinkForLog } from "@/lib/utils/deep-link-log";
 import { rememberSelectedLiveViewDashboard } from "@/lib/live-views/onboarding-activation";
 import { isBusinessSubscriptionPurchaseDeepLink } from "@/lib/utils/purchase-deep-link";
+import { localFetch } from "@/lib/api";
+import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { settingsSectionFromDeepLink } from "@/lib/utils/settings-deep-link";
 import posthog from "posthog-js";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
@@ -77,6 +80,17 @@ export function DeeplinkHandler() {
     // and the custom Tauri event from single-instance handoff.
     const processDeepLinkUrl = async (url: string) => {
       const parsedUrl = new URL(url);
+
+      if (
+        parsedUrl.host === "database-recovery" ||
+        parsedUrl.pathname === "database-recovery"
+      ) {
+        const result = await commands.startDatabaseRecovery();
+        if (result.status === "error") {
+          throw new Error(result.error);
+        }
+        return;
+      }
 
       // Handle API key auth
       if (url.includes("api_key=")) {
@@ -187,8 +201,45 @@ export function DeeplinkHandler() {
         });
       }
 
+      // Handle OAuth callbacks relayed from the HTTPS page on screenpi.pe.
+      // Safari's HTTPS-Only mode blocks plain-http localhost navigations, so
+      // the relay finishes on https and hands the provider params back here:
+      //   screenpipe[-enterprise]://oauth/connections/callback?code=...&state=...
+      //   screenpipe[-enterprise]://oauth/mcp/<serverId>/callback?code=...&state=...
+      // This deep link is the relay's only delivery path. Forward it to the
+      // same engine endpoint the browser would have reached on localhost.
+      if (parsedUrl.host === "oauth") {
+        const oauthPath = parsedUrl.pathname?.replace(/^\/+/, "") ?? "";
+        const search = parsedUrl.searchParams.toString();
+        const query = search ? `?${search}` : "";
+        try {
+          if (oauthPath === "connections/callback") {
+            const response = await localFetch(`/connections/oauth/callback${query}`);
+            if (!response.ok) throw new Error(`callback failed (HTTP ${response.status})`);
+            await foregroundAfterOAuth();
+          } else {
+            const mcpMatch = oauthPath.match(/^mcp\/([^/]+)\/callback$/);
+            if (mcpMatch) {
+              // mcpMatch[1] is already a percent-encoded path segment.
+              const response = await localFetch(
+                `/mcp-servers/${mcpMatch[1]}/oauth/callback${query}`,
+              );
+              if (!response.ok) throw new Error(`callback failed (HTTP ${response.status})`);
+              await foregroundAfterOAuth();
+            }
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          toast({
+            title: "sign-in hand-off failed",
+            description: msg || "couldn't reach the local screenpipe engine",
+            variant: "destructive",
+          });
+        }
+      }
+
       if (url.includes("settings") || url.includes("home")) {
-        await openSettingsWindow();
+        await openSettingsWindow(settingsSectionFromDeepLink(parsedUrl));
       }
 
       // A Live View follow-up notification points directly at the dashboard
@@ -416,7 +467,7 @@ export function DeeplinkHandler() {
 
         toast({
           title: "recording paused",
-          description: "capture paused — pipes and search still available",
+          description: "capture paused — scheduled tasks and search still available",
         });
       }),
 

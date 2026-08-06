@@ -230,9 +230,7 @@ Now go find a small issue and do it properly.
 
 ### Other tips
 
-- Don't send SLOP: if doing UI work, try other great products (Notion, Granola, Wisprflow, ChatGPT, Claude) and see how they do things - take inspiration and make it fit in screenpipe brand style. Test your work, untested by human work has no value
+- AI assistance is welcome, but you own the contribution. follow the [AI-assisted contribution policy](CONTRIBUTING.md#ai-assisted-contributions), test the work personally, and report only evidence you actually produced
 - Be creative: go beyond what other product do, take inspiration on great artists, painters, surprise use with amazing UIs
 - Can a 80 years old grand pa use the feature you shipped? If not, try harder
 - Measure performance, create evals, chaos engineer your code and cover all edge cases
-- Don't be afraid of sending slop, do it, send a PR and we'll see
-

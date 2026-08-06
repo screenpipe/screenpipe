@@ -107,7 +107,7 @@ pub(crate) async fn handle_auto_end_request(
         )
         .await
     {
-        Ok(()) => {
+        Ok(persisted_end) => {
             debug!(
                 "audio-process meeting detector: auto-ended inactive live meeting (id={}, reason={})",
                 request.meeting_id,
@@ -128,7 +128,7 @@ pub(crate) async fn handle_auto_end_request(
                 *state = AudioProcessMeetingState::Idle;
             }
             sync_meeting_flag(false, None, in_meeting_flag, detector);
-            emit_ended_and_status(db, manual_meeting, request.meeting_id).await;
+            emit_ended_and_status(db, manual_meeting, request.meeting_id, &persisted_end).await;
         }
         Err(e) => warn!(
             "audio-process meeting detector: failed to auto-end inactive live meeting {}: {}",

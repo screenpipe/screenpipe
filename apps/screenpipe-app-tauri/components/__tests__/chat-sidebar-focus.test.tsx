@@ -68,7 +68,10 @@ describe("SidebarChatRow current conversation", () => {
     const button = screen.getByRole("button", { name: /focused conversation/i });
 
     expect(row).not.toHaveAttribute("data-current");
-    expect(row).toHaveClass("border-transparent");
+    expect(row).toHaveClass("border-transparent", "sidebar-text-secondary");
+    expect(screen.getByText("focused conversation")).toHaveClass(
+      "sidebar-text-secondary",
+    );
     expect(button).not.toHaveAttribute("aria-current");
     expect(screen.queryByText("current")).toBeNull();
   });
