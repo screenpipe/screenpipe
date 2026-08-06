@@ -371,16 +371,8 @@ describe("timeline.tsx wiring", () => {
 		).toBeGreaterThanOrEqual(2);
 	});
 
-	/**
-	 * The model proves the derived frame is the right thing to read; this proves
-	 * the component still reads it. Reverting either gate to `currentFrame`
-	 * would otherwise leave every behavioural test green while the blank canvas
-	 * came back.
-	 */
-	it("gates the empty-state overlay and the url pill on the derived frame", () => {
-		expect(source).toContain("{!visualFrame && !showBlockingLoader");
-		expect(source).toContain(
-			"const browserUrl = visualFrame?.devices?.[0]?.metadata?.browser_url;",
-		);
-	});
+	// The two gates themselves are covered behaviourally by
+	// `components/rewind/__tests__/timeline-empty-state.test.tsx`, which mounts
+	// Timeline and fails if either reverts to `currentFrame`. No source-string
+	// assertion for those — a render beats a grep.
 });
