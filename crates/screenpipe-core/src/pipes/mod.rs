@@ -7551,6 +7551,9 @@ mod tests {
         let agent_dir = root.join("pi-agent");
         std::fs::create_dir_all(&pipes_dir).unwrap();
         std::fs::create_dir_all(&agent_dir).unwrap();
+        // Pre-mark as seeded so pi_config_dir() never copies the dev
+        // machine's real ~/.pi/agent credentials into this hermetic dir.
+        std::fs::write(agent_dir.join(".migrated-from-global"), "test\n").unwrap();
         std::fs::write(
             root.join("store.bin"),
             serde_json::json!({

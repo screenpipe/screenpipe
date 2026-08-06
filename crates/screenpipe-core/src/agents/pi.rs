@@ -2497,9 +2497,14 @@ struct PiCredentialStore {
 
 impl PiCredentialStore {
     fn load() -> Self {
-        let Ok(dir) = pi_config_dir() else {
-            return Self::default();
-        };
+        match pi_config_dir() {
+            Ok(dir) => Self::load_from(&dir),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// Unreadable or corrupt files read as absent — they can't satisfy the guard.
+    fn load_from(dir: &Path) -> Self {
         let read = |name: &str| {
             std::fs::read_to_string(dir.join(name))
                 .ok()
@@ -2513,14 +2518,40 @@ impl PiCredentialStore {
 
     /// Whether any of pi's provider ids has a usable credential: an auth.json
     /// entry (tagged, legacy — upgraded before every spawn — or bare string)
-    /// or a non-empty literal (non-`$env`) apiKey in models.json.
-    fn has_credential_for(&self, pi_ids: &[&str]) -> bool {
+    /// or a usable apiKey in models.json. Each shape's required payload must
+    /// be present and non-empty — a blank or partially written entry must not
+    /// bypass the guard. `$NAME` references and the legacy `env` indirection
+    /// count only when the named env var resolves non-empty (pi resolves them
+    /// from the child process env at runtime).
+    fn has_credential_for(&self, pi_ids: &[&str], env: &impl Fn(&str) -> Option<String>) -> bool {
+        let env_ok = |name: &str| env(name).is_some_and(|v| !v.trim().is_empty());
+        let field = |obj: &serde_json::Map<String, serde_json::Value>, name: &str| {
+            obj.get(name)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string)
+        };
+        let non_empty = |obj: &serde_json::Map<String, serde_json::Value>, name: &str| {
+            field(obj, name).is_some()
+        };
+        let env_indirection =
+            |obj: &serde_json::Map<String, serde_json::Value>| field(obj, "env").is_some_and(|n| env_ok(&n));
         let auth_hit = self.auth.as_ref().is_some_and(|auth| {
             pi_ids.iter().any(|id| match auth.get(id) {
-                Some(serde_json::Value::Object(obj)) => match obj.get("type") {
-                    Some(t) => matches!(t.as_str(), Some("api_key") | Some("oauth")),
-                    None => obj.contains_key("apiKey") || obj.contains_key("key"),
-                },
+                Some(serde_json::Value::Object(obj)) => {
+                    match obj.get("type").and_then(|t| t.as_str()) {
+                        Some("api_key") => non_empty(obj, "key") || env_indirection(obj),
+                        // pi refreshes from either token: {access, refresh, expires}.
+                        Some("oauth") => non_empty(obj, "access") || non_empty(obj, "refresh"),
+                        Some(_) => false,
+                        // Legacy untagged shape (upgraded before every spawn).
+                        None => {
+                            non_empty(obj, "apiKey")
+                                || non_empty(obj, "key")
+                                || env_indirection(obj)
+                        }
+                    }
+                }
                 Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
                 _ => false,
             })
@@ -2530,7 +2561,10 @@ impl PiCredentialStore {
                 models
                     .pointer(&format!("/providers/{id}/apiKey"))
                     .and_then(|v| v.as_str())
-                    .is_some_and(|k| !k.trim().is_empty() && !k.starts_with('$'))
+                    .is_some_and(|k| match k.trim().strip_prefix('$') {
+                        Some(name) => env_ok(name),
+                        None => !k.trim().is_empty(),
+                    })
             })
         });
         auth_hit || models_hit
@@ -2555,7 +2589,7 @@ fn enforce_byok_api_key_with_sources(
     if process_env(env_name).is_some_and(|v| !v.trim().is_empty()) {
         return Ok(None);
     }
-    if pi_credentials.has_credential_for(pi_ids) {
+    if pi_credentials.has_credential_for(pi_ids, &process_env) {
         return Ok(None);
     }
     Err(format!(
@@ -3889,6 +3923,17 @@ mod tests {
             enforce_byok_api_key_with_sources("openai", None, |_| None, &legacy),
             Ok(None)
         );
+        // OAuth credentials count when they carry a token.
+        let oauth = PiCredentialStore {
+            auth: Some(json!({
+                "anthropic": { "type": "oauth", "access": "a", "refresh": "r", "expires": 1 }
+            })),
+            models: None,
+        };
+        assert_eq!(
+            enforce_byok_api_key_with_sources("anthropic", None, |_| None, &oauth),
+            Ok(None)
+        );
         // A credential for an unrelated provider does not satisfy the guard.
         let other = PiCredentialStore {
             auth: Some(json!({ "screenpipe": { "type": "api_key", "key": "jwt" } })),
@@ -3896,6 +3941,44 @@ mod tests {
         };
         enforce_byok_api_key_with_sources("anthropic", None, |_| None, &other)
             .expect_err("unrelated auth.json entry must not satisfy the guard");
+    }
+
+    #[test]
+    fn byok_guard_rejects_blank_or_malformed_auth_json_credentials() {
+        // Blank or partially written entries must not bypass the guard —
+        // pi would still fail every message with its raw provider error.
+        let cases = [
+            json!({ "type": "api_key", "key": "" }),   // blank payload
+            json!({ "type": "api_key", "key": "  " }), // whitespace payload
+            json!({ "type": "api_key" }),              // missing payload
+            json!({ "type": "api_key", "key": 42 }),   // wrong payload type
+            json!({ "type": "oauth", "expires": 1 }),  // oauth without tokens
+            json!({ "type": "oauth", "access": "", "refresh": "" }),
+            json!({ "type": "session" }),              // unknown tag
+            json!({ "apiKey": "" }),                   // legacy, blank
+            json!({ "key": "" }),                      // legacy alias, blank
+            json!({}),                                 // empty object
+            json!(""),                                 // blank bare string
+            json!(null),
+            json!(42),
+        ];
+        for cred in cases {
+            let store = PiCredentialStore {
+                auth: Some(json!({ "anthropic-byok": cred })),
+                models: None,
+            };
+            enforce_byok_api_key_with_sources("anthropic", None, |_| None, &store).expect_err(
+                &format!("malformed credential must not satisfy the guard: {cred}"),
+            );
+        }
+        // Corrupt files on disk read as absent and never satisfy the guard.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("auth.json"), "{not json").unwrap();
+        std::fs::write(dir.path().join("models.json"), "also not json").unwrap();
+        let store = PiCredentialStore::load_from(dir.path());
+        assert!(store.auth.is_none() && store.models.is_none());
+        enforce_byok_api_key_with_sources("anthropic", None, |_| None, &store)
+            .expect_err("corrupt credential files must not satisfy the guard");
     }
 
     #[test]
@@ -3909,15 +3992,23 @@ mod tests {
             enforce_byok_api_key_with_sources("openai", None, |_| None, &pinned),
             Ok(None)
         );
-        // …but our own `$ENV_NAME` reference does not (the env check owns that).
+        // A `$NAME` reference counts only when the named env var resolves…
         let env_ref = PiCredentialStore {
             auth: None,
             models: Some(
-                json!({ "providers": { "anthropic-byok": { "apiKey": "$ANTHROPIC_API_KEY" } } }),
+                json!({ "providers": { "anthropic-byok": { "apiKey": "$MY_CLAUDE_KEY" } } }),
             ),
         };
+        assert_eq!(
+            enforce_byok_api_key_with_sources("anthropic", None, |name| {
+                (name == "MY_CLAUDE_KEY").then(|| "sk".to_string())
+            }, &env_ref),
+            Ok(None)
+        );
+        // …and not when it is unset (our own writer's `$ANTHROPIC_API_KEY`
+        // placeholder must not satisfy the guard by itself).
         enforce_byok_api_key_with_sources("anthropic", None, |_| None, &env_ref)
-            .expect_err("$env reference in models.json must not satisfy the guard");
+            .expect_err("unresolved $env reference must not satisfy the guard");
     }
 
     #[test]
