@@ -4881,6 +4881,12 @@ impl PipeManager {
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
             let mut meeting_end_rx =
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+            // Re-transcription needs to refresh only the meeting-summary pipe.
+            // It must not rebroadcast meeting_ended to lifecycle consumers or
+            // unrelated user pipes that also subscribe to meeting ends.
+            let mut meeting_summary_refresh_rx = screenpipe_events::subscribe_to_event::<
+                serde_json::Value,
+            >("meeting_summary_refresh_requested");
             let mut workflow_rx =
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("workflow_event");
             // pipe_completed:* uses subscribe_to_all with prefix filtering below
@@ -4899,7 +4905,7 @@ impl PipeManager {
             // Triggers that matched a pipe which was already busy. They used to be
             // dropped on the floor; instead they wait for the next tick, where the
             // idempotency claim decides whether they still need to run.
-            let mut carryover: Vec<(String, serde_json::Value)> = Vec::new();
+            let mut carryover: Vec<PendingEvent> = Vec::new();
 
             // Claims are pruned once per process rather than every tick.
             if let Some(ref store) = store {
@@ -4949,19 +4955,28 @@ impl PipeManager {
                 let mut connection_triggered: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 // Triggers held back this tick, carried into the next one.
-                let mut deferred: Vec<(String, serde_json::Value)> = Vec::new();
+                let mut deferred: Vec<PendingEvent> = Vec::new();
                 {
                     use futures::FutureExt;
 
                     // Collect events from all targeted subscriptions into one vec,
                     // starting with anything held back from the previous tick.
-                    let mut pending_events: Vec<(String, serde_json::Value)> =
-                        std::mem::take(&mut carryover);
+                    let mut pending_events: Vec<PendingEvent> = std::mem::take(&mut carryover);
                     while let Some(e) = meeting_start_rx.next().now_or_never().flatten() {
-                        pending_events.push((e.name, e.data));
+                        pending_events.push(PendingEvent::broadcast(e.name, e.data));
                     }
                     while let Some(e) = meeting_end_rx.next().now_or_never().flatten() {
-                        pending_events.push((e.name, e.data));
+                        pending_events.push(PendingEvent::broadcast(e.name, e.data));
+                    }
+                    while let Some(e) = meeting_summary_refresh_rx.next().now_or_never().flatten() {
+                        // This private event has exactly one consumer. Keep pipe
+                        // addressing in scheduler metadata so arbitrary public
+                        // event payload fields cannot change delivery semantics.
+                        pending_events.push(PendingEvent::targeted(
+                            "meeting_ended".to_string(),
+                            e.data,
+                            "meeting-summary",
+                        ));
                     }
                     while let Some(e) = workflow_rx.next().now_or_never().flatten() {
                         // For workflow_event, expose the inner event_type as the match key
@@ -4971,12 +4986,12 @@ impl PipeManager {
                             .and_then(|v| v.as_str())
                             .unwrap_or("workflow_event")
                             .to_string();
-                        pending_events.push((event_type, e.data));
+                        pending_events.push(PendingEvent::broadcast(event_type, e.data));
                     }
                     // pipe_completed:* — filter from all-events subscription
                     while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
                         if is_pipe_completed_event(&e.name) {
-                            pending_events.push((e.name, e.data));
+                            pending_events.push(PendingEvent::broadcast(e.name, e.data));
                         }
                     }
 
@@ -4999,6 +5014,8 @@ impl PipeManager {
                                         EventTrigger {
                                             name: e.name.clone(),
                                             key: None,
+                                            dedupe_key: None,
+                                            target_pipe: None,
                                             data: e.data.clone(),
                                         },
                                     );
@@ -5011,9 +5028,14 @@ impl PipeManager {
                     // Expire old chain cooldowns
                     recent_chain.retain(|_, ts| ts.elapsed() < CHAIN_COOLDOWN);
 
-                    for (event_name, data) in &pending_events {
+                    for pending in &pending_events {
+                        let event_name = &pending.name;
+                        let data = &pending.data;
                         for (name, config, _body) in &pipe_snapshot {
                             if !config.enabled {
+                                continue;
+                            }
+                            if !pending.targets(name) {
                                 continue;
                             }
                             if let Some(ref trigger) = config.trigger {
@@ -5055,7 +5077,7 @@ impl PipeManager {
                                         "scheduler: event '{}' deferred for pipe '{}' (busy)",
                                         event_name, name
                                     );
-                                    deferred.push((event_name.clone(), data.clone()));
+                                    deferred.push(pending.clone());
                                     continue;
                                 }
                                 info!(
@@ -5068,6 +5090,8 @@ impl PipeManager {
                                     EventTrigger {
                                         name: event_name.clone(),
                                         key: event_identity_key(data),
+                                        dedupe_key: event_dedupe_key(event_name, data),
+                                        target_pipe: pending.target_pipe.clone(),
                                         data: data.clone(),
                                     },
                                 );
@@ -5142,7 +5166,11 @@ impl PipeManager {
                             // already retries uncommitted fires.
                             if !connection_triggered.contains(name) {
                                 if let Some(t) = event_triggered.get(name) {
-                                    deferred.push((t.name.clone(), t.data.clone()));
+                                    deferred.push(PendingEvent {
+                                        name: t.name.clone(),
+                                        data: t.data.clone(),
+                                        target_pipe: t.target_pipe.clone(),
+                                    });
                                 }
                             }
                             continue;
@@ -5295,11 +5323,10 @@ impl PipeManager {
                         }
                     }
 
-                    // Claim this (pipe, event, key) before committing to a run. A
-                    // second delivery of the same logical event — `meeting_ended`
-                    // fires again for a meeting the user rejoined — loses the claim
-                    // and is suppressed here instead of starting a duplicate run
-                    // (#5481).
+                    // Claim this (pipe, event, generation) before committing to a
+                    // run. Duplicate delivery of one meeting-end generation loses
+                    // the claim, while a later end after the same meeting row was
+                    // resumed is distinct work and can run again (#5481).
                     //
                     // Claimed after the guards above, not when the event was
                     // matched, so a trigger that lost one of those races is still
@@ -5308,7 +5335,7 @@ impl PipeManager {
                     // marked as queued forever.
                     let mut event_claim: Option<(String, String)> = None;
                     if let (Some(t), Some(store)) = (event_triggered.get(name), store.as_ref()) {
-                        if let Some(key) = t.key.clone() {
+                        if let Some(key) = t.dedupe_key.clone() {
                             match store.claim_event_run(name, &t.name, &key).await {
                                 Ok(true) => event_claim = Some((t.name.clone(), key)),
                                 Ok(false) => {
@@ -5548,8 +5575,11 @@ impl PipeManager {
                     }
 
                     let claim_for_release = event_claim.clone();
-                    let trigger_event_name = event_claim.as_ref().map(|(e, _)| e.clone());
-                    let trigger_event_key = event_claim.as_ref().map(|(_, k)| k.clone());
+                    // Execution metadata and the pipe-facing context keep the
+                    // stable logical key (meeting id). The generation-aware key
+                    // is an internal scheduler claim only.
+                    let trigger_event_name = event_triggered.get(name).map(|t| t.name.clone());
+                    let trigger_event_key = event_triggered.get(name).and_then(|t| t.key.clone());
 
                     tokio::spawn(async move {
                         // Scheduled pipes wait for the previous one to finish
@@ -6650,7 +6680,48 @@ struct EventTrigger {
     /// The event's own identity, if it has one — a meeting id for `meeting_*`.
     /// Events without one can only be deduplicated within a single tick.
     key: Option<String>,
+    /// Scheduler-only idempotency key. A meeting end includes the persisted
+    /// end timestamp so resume/end cycles on one meeting row remain distinct.
+    dedupe_key: Option<String>,
+    /// Scheduler-owned addressing metadata retained when a busy pipe defers
+    /// this delivery. Public event payload fields never affect routing.
+    target_pipe: Option<String>,
     data: serde_json::Value,
+}
+
+/// One event waiting to be matched against pipe trigger configuration.
+///
+/// Addressing is scheduler-owned metadata. Keeping it outside `data` prevents
+/// an arbitrary public event payload from accidentally becoming pipe-scoped.
+#[derive(Clone, Debug)]
+struct PendingEvent {
+    name: String,
+    data: serde_json::Value,
+    target_pipe: Option<String>,
+}
+
+impl PendingEvent {
+    fn broadcast(name: String, data: serde_json::Value) -> Self {
+        Self {
+            name,
+            data,
+            target_pipe: None,
+        }
+    }
+
+    fn targeted(name: String, data: serde_json::Value, target_pipe: &str) -> Self {
+        Self {
+            name,
+            data,
+            target_pipe: Some(target_pipe.to_string()),
+        }
+    }
+
+    fn targets(&self, pipe_name: &str) -> bool {
+        self.target_pipe
+            .as_deref()
+            .is_none_or(|target| target == pipe_name)
+    }
 }
 
 /// Read the identity of an event out of its payload.
@@ -6665,6 +6736,30 @@ fn event_identity_key(data: &serde_json::Value) -> Option<String> {
             Some(serde_json::Value::Number(n)) => Some(n.to_string()),
             _ => None,
         })
+}
+
+/// Return the durable claim key for an event delivery.
+///
+/// A meeting row can be reopened within the merge window. In that case its id
+/// intentionally stays stable but each persisted end timestamp represents a
+/// new transcript generation that needs its own summary. Legacy emitters that
+/// do not include `meeting_end` retain the old meeting-id-only behavior.
+fn event_dedupe_key(event_name: &str, data: &serde_json::Value) -> Option<String> {
+    let identity = event_identity_key(data)?;
+    if event_name != "meeting_ended" {
+        return Some(identity);
+    }
+
+    let generation = ["summary_generation", "meeting_end"]
+        .iter()
+        .find_map(|field| match data.get(field) {
+            Some(serde_json::Value::String(value)) if !value.is_empty() => Some(value),
+            _ => None,
+        });
+    Some(match generation {
+        Some(value) => format!("{}@{}", identity, value),
+        None => identity,
+    })
 }
 
 fn pipe_completed_source(event_name: &str) -> Option<&str> {
@@ -7538,14 +7633,108 @@ mod tests {
 
     // -- event trigger identity (#5481) -------------------------------------
 
-    /// Both deliveries of a rejoined meeting's end must produce the same key,
-    /// otherwise the claim can't recognize the second one as a duplicate.
+    /// Duplicate deliveries of one persisted meeting end share a claim key.
     #[test]
-    fn duplicate_meeting_ended_yields_same_key() {
-        let first = serde_json::json!({ "meeting_id": 42 });
-        let second = serde_json::json!({ "meeting_id": 42 });
+    fn duplicate_meeting_end_generation_yields_same_key() {
+        let first = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:08:56.000Z"
+        });
+        let second = first.clone();
         assert_eq!(event_identity_key(&first).as_deref(), Some("42"));
-        assert_eq!(event_identity_key(&first), event_identity_key(&second));
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &first),
+            event_dedupe_key("meeting_ended", &second)
+        );
+    }
+
+    /// Ending a resumed meeting is new work even though the merged row id is
+    /// deliberately unchanged.
+    #[test]
+    fn resumed_meeting_end_generation_yields_new_key() {
+        let first = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:08:56.000Z"
+        });
+        let final_end = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:51:37.000Z"
+        });
+        assert_ne!(
+            event_dedupe_key("meeting_ended", &first),
+            event_dedupe_key("meeting_ended", &final_end)
+        );
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &final_end).as_deref(),
+            Some("42@2026-08-05T16:51:37.000Z")
+        );
+    }
+
+    #[test]
+    fn legacy_meeting_end_without_generation_keeps_identity_key() {
+        let data = serde_json::json!({ "meeting_id": 42 });
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &data).as_deref(),
+            Some("42")
+        );
+    }
+
+    #[test]
+    fn non_meeting_event_dedupe_ignores_meeting_end_field() {
+        let data = serde_json::json!({
+            "event_id": "abc-123",
+            "meeting_end": "2026-08-05T16:51:37.000Z"
+        });
+        assert_eq!(
+            event_dedupe_key("workflow_event", &data).as_deref(),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn summary_refresh_addressing_is_scheduler_owned() {
+        let refresh = PendingEvent::targeted(
+            "meeting_ended".to_string(),
+            serde_json::json!({ "meeting_id": 42 }),
+            "meeting-summary",
+        );
+        assert!(refresh.targets("meeting-summary"));
+        assert!(!refresh.targets("commitments"));
+
+        let public = PendingEvent::broadcast(
+            "workflow_event".to_string(),
+            serde_json::json!({ "target_pipe": "meeting-summary" }),
+        );
+        assert!(public.targets("meeting-summary"));
+        assert!(public.targets("commitments"));
+    }
+
+    #[test]
+    fn transcript_replacement_generation_supersedes_meeting_end() {
+        let data = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:51:37.000Z",
+            "summary_generation": "2026-08-05T17:10:00.000Z"
+        });
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &data).as_deref(),
+            Some("42@2026-08-05T17:10:00.000Z")
+        );
+    }
+
+    #[test]
+    fn malformed_transcript_generation_falls_back_to_meeting_end() {
+        for summary_generation in [serde_json::json!(""), serde_json::json!(17)] {
+            let data = serde_json::json!({
+                "meeting_id": 42,
+                "meeting_end": "2026-08-05T16:51:37.000Z",
+                "summary_generation": summary_generation,
+            });
+            assert_eq!(
+                event_dedupe_key("meeting_ended", &data).as_deref(),
+                Some("42@2026-08-05T16:51:37.000Z")
+            );
+        }
     }
 
     #[test]
@@ -7588,7 +7777,12 @@ mod tests {
         let trigger = EventTrigger {
             name: "meeting_ended".to_string(),
             key: Some("42".to_string()),
-            data: serde_json::json!({ "meeting_id": 42 }),
+            dedupe_key: Some("42@2026-08-05T16:51:37.000Z".to_string()),
+            target_pipe: None,
+            data: serde_json::json!({
+                "meeting_id": 42,
+                "meeting_end": "2026-08-05T16:51:37.000Z"
+            }),
         };
         write_event_trigger_context(&dir, &trigger);
 
@@ -7597,6 +7791,7 @@ mod tests {
         assert_eq!(ctx["event"], "meeting_ended");
         assert_eq!(ctx["key"], "42");
         assert_eq!(ctx["data"]["meeting_id"], 42);
+        assert_eq!(ctx["data"]["meeting_end"], "2026-08-05T16:51:37.000Z");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

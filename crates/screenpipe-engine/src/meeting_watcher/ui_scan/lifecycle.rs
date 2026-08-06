@@ -241,13 +241,16 @@ pub(crate) async fn handle_no_apps_path(
             .end_meeting_with_typed_text(meeting_id, &now, true, None)
             .await
         {
-            Ok(()) => {
+            Ok(persisted_end) => {
                 // End-detection health telemetry (privacy-safe buckets only).
                 capture_meeting_outcome(db, meeting_id, "auto_timeout", *flap_count).await;
                 *flap_count = 0;
                 if let Err(e) = screenpipe_events::send_event(
                     "meeting_ended",
-                    serde_json::json!({ "meeting_id": meeting_id }),
+                    serde_json::json!({
+                        "meeting_id": meeting_id,
+                        "meeting_end": persisted_end,
+                    }),
                 ) {
                     warn!("meeting v2: failed to emit meeting_ended event: {}", e);
                 }
@@ -432,7 +435,7 @@ pub(crate) async fn apply_state_action(
                     .end_meeting_with_typed_text(meeting_id, &now, true, None)
                     .await
                 {
-                    Ok(()) => {
+                    Ok(persisted_end) => {
                         info!("meeting v2: meeting ended (id={})", meeting_id);
                         // End-detection health telemetry (privacy-safe buckets only).
                         capture_meeting_outcome(db, meeting_id, "auto_timeout", *flap_count).await;
@@ -440,7 +443,10 @@ pub(crate) async fn apply_state_action(
                         // Emit event so triggered pipes can react
                         if let Err(e) = screenpipe_events::send_event(
                             "meeting_ended",
-                            serde_json::json!({ "meeting_id": meeting_id }),
+                            serde_json::json!({
+                                "meeting_id": meeting_id,
+                                "meeting_end": persisted_end,
+                            }),
                         ) {
                             warn!("meeting v2: failed to emit meeting_ended event: {}", e);
                         }

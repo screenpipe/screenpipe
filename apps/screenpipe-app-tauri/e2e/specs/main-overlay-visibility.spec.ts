@@ -38,7 +38,7 @@ async function expectMainOverlayVisible(expected: boolean, timeoutMs = t(15_000)
       if ((await browser.getWindowHandles()).includes("home")) {
         await browser.switchToWindow("home");
       }
-      const visible = await invokeOrThrow<boolean>("e2e_main_overlay_visible");
+      const visible = await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible");
       return visible === expected;
     } catch {
       // Transient during a window switch / IPC-not-ready — retry rather than
@@ -48,7 +48,7 @@ async function expectMainOverlayVisible(expected: boolean, timeoutMs = t(15_000)
   }, {
     timeout: timeoutMs,
     interval: 250,
-    timeoutMsg: `Expected e2e_main_overlay_visible=${expected}`,
+    timeoutMsg: `Expected plugin:e2e|main_overlay_visible=${expected}`,
   });
 }
 

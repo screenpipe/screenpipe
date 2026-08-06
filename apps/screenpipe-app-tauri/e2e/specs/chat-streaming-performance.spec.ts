@@ -274,11 +274,11 @@ async function runStreamingStress(
           if (!invoke) {
             throw new Error("Tauri invoke is not available in this context");
           }
-          const commandResult = (await invoke("e2e_emit_agent_stream", {
+          const commandResult = (await invoke("plugin:e2e|emit_agent_stream", {
             sessionId: sid,
             deltaCount: count,
           }).catch(() =>
-            invoke("e2e_emit_agent_stream", {
+            invoke("plugin:e2e|emit_agent_stream", {
               session_id: sid,
               delta_count: count,
             }),
@@ -429,12 +429,12 @@ async function runBackgroundPipeBurst(deltaCount: number): Promise<PipeBurstPerf
           if (!invoke) {
             throw new Error("Tauri invoke is not available in this context");
           }
-          const commandResult = (await invoke("e2e_emit_pipe_stream", {
+          const commandResult = (await invoke("plugin:e2e|emit_pipe_stream", {
             pipeName: "e2e-background-pipe",
             executionId: Math.floor(performance.timeOrigin + performance.now()),
             deltaCount: count,
           }).catch(() =>
-            invoke("e2e_emit_pipe_stream", {
+            invoke("plugin:e2e|emit_pipe_stream", {
               pipe_name: "e2e-background-pipe",
               execution_id: Math.floor(performance.timeOrigin + performance.now()),
               delta_count: count,

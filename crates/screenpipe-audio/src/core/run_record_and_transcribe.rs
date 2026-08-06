@@ -670,8 +670,9 @@ async fn recv_audio_chunk(
 /// silence can be told apart from a dead anchor display (#3901).
 ///
 /// No-op except on macOS SCK-backed output streams: the CoreAudio Process Tap is
-/// anchored to the default output *device* (not a display) and has its own
-/// silence watchdog, and no other platform uses the display-topology signal.
+/// unscoped, follows process output without a display anchor, and treats
+/// zero-filled callbacks as legitimate idle. No other platform uses the
+/// display-topology signal.
 #[inline]
 fn note_output_topology_if_flowing(
     audio_stream: &Arc<AudioStream>,

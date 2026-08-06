@@ -397,6 +397,7 @@ fn install_tray_menu(tray: &TrayIcon, menu: tauri::menu::Menu<Wry>) -> Result<()
     Ok(())
 }
 
+#[cfg(feature = "e2e")]
 pub(crate) fn installed_recording_status_text() -> Result<Option<String>> {
     let menu = ACTIVE_TRAY_MENU
         .lock()
@@ -1859,6 +1860,7 @@ async fn update_menu_if_needed(
     Ok(())
 }
 
+#[cfg(feature = "e2e")]
 pub(crate) async fn refresh_tray_menu_now(app: &AppHandle) -> Result<()> {
     let update_item = UPDATE_MENU_ITEM
         .lock()
@@ -1867,11 +1869,11 @@ pub(crate) async fn refresh_tray_menu_now(app: &AppHandle) -> Result<()> {
     update_menu_if_needed(app, update_item.as_ref()).await
 }
 
-pub(crate) async fn set_tray_recording_status_for_e2e(
+#[cfg(feature = "e2e")]
+pub(crate) async fn set_recording_status_from_harness(
     app: &AppHandle,
     status: RecordingStatus,
 ) -> Result<()> {
-    anyhow::ensure!(cfg!(feature = "e2e"), "E2E feature is disabled");
     crate::health::set_recording_status(status);
     set_optimistic_status(status);
     refresh_tray_menu_now(app).await

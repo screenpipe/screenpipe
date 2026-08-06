@@ -262,7 +262,7 @@ describe('Settings sections', () => {
     const toggle = await $('[data-testid="low-disk-recording-guard-toggle"]');
     await toggle.waitForExist({ timeout: t(8_000) });
     expect(await toggle.getAttribute('data-state')).toBe('checked');
-    expect(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')).toBe(true);
+    expect(await invokeOrThrow<boolean>('plugin:e2e|low_disk_guard_enabled')).toBe(true);
     const config = await invokeOrThrow<{
       thresholdBytes: number;
       checkIntervalSeconds: number;
@@ -291,14 +291,14 @@ describe('Settings sections', () => {
       // Model active capture without depending on a physical CI display or
       // audio device. The Windows recording lane separately proves a real
       // CaptureSession is torn down.
-      await invokeOrThrow('e2e_mark_capture_intended');
+      await invokeOrThrow('plugin:e2e|mark_capture_intended');
       expect(await invokeOrThrow<boolean>('is_capture_paused')).toBe(false);
 
       // An explicit user opt-out remains authoritative even though missing
       // settings now fail safe to enabled.
       await toggle.click();
       await browser.waitUntil(
-        async () => !(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')),
+        async () => !(await invokeOrThrow<boolean>('plugin:e2e|low_disk_guard_enabled')),
         {
           timeout: t(8_000),
           interval: 200,
@@ -306,7 +306,7 @@ describe('Settings sections', () => {
         },
       );
       expect(
-        await invokeOrThrow<string>('e2e_handle_disk_space_low', {
+        await invokeOrThrow<string>('plugin:e2e|handle_disk_space_low', {
           availableBytes: 1024 * 1024 * 1024,
         }),
       ).toBe('guard_disabled');
@@ -319,7 +319,7 @@ describe('Settings sections', () => {
 
       await toggle.click();
       await browser.waitUntil(
-        async () => await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled'),
+        async () => await invokeOrThrow<boolean>('plugin:e2e|low_disk_guard_enabled'),
         {
           timeout: t(8_000),
           interval: 200,
@@ -329,10 +329,10 @@ describe('Settings sections', () => {
 
       // Critical recording-stopped alerts must remain visible even if the
       // ordinary notification master switch is off.
-      await invokeOrThrow('e2e_set_notification_master_enabled', {
+      await invokeOrThrow('plugin:e2e|set_notification_master_enabled', {
         enabled: false,
       });
-      await invokeOrThrow('e2e_emit_disk_space_low', {
+      await invokeOrThrow('plugin:e2e|emit_disk_space_low', {
         availableBytes: 1024 * 1024 * 1024,
       });
       await browser.waitUntil(
@@ -368,8 +368,8 @@ describe('Settings sections', () => {
     } finally {
       // Leave the isolated E2E store at production defaults for later specs,
       // including when an assertion above fails.
-      await invokeOrThrow('e2e_set_low_disk_guard_enabled', { enabled: true });
-      await invokeOrThrow('e2e_set_notification_master_enabled', {
+      await invokeOrThrow('plugin:e2e|set_low_disk_guard_enabled', { enabled: true });
+      await invokeOrThrow('plugin:e2e|set_notification_master_enabled', {
         enabled: true,
       });
     }

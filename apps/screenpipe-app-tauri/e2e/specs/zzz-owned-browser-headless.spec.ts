@@ -31,9 +31,9 @@
  * (its filename sorts after `zzz-browser-state-chat-switch`). To stay robust
  * regardless, every Tauri command is issued from a separate `search` window,
  * every browser command goes over the local HTTP API (context-independent), and
- * visibility is read via the global `e2e_owned_browser_visible` probe. A fresh
+ * visibility is read via the global `plugin:e2e|owned_browser_visible` probe. A fresh
  * "no child attached" baseline is established with the e2e-only
- * `e2e_owned_browser_detach` command so the first eval genuinely exercises fresh
+ * `plugin:e2e|owned_browser_detach` command so the first eval genuinely exercises fresh
  * creation, not a child a prior spec left behind.
  *
  * Linux/WebKitGTK drops the parent window context on `add_child` (and rejects
@@ -164,7 +164,7 @@ async function ownedBrowserReady(
 
 async function expectHidden(label: string): Promise<void> {
   expect(
-    await invokeOrThrow<boolean>("e2e_owned_browser_visible"),
+    await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible"),
   ).toBe(false);
   // label is purely for failure readability in the assertion above.
   void label;
@@ -196,7 +196,7 @@ describe("Owned browser — headless background drive", function () {
 
       // 1. Deterministic baseline: detach any child a prior spec attached, so
       //    the first eval below exercises FRESH headless creation.
-      await invokeOrThrow("e2e_owned_browser_detach");
+      await invokeOrThrow("plugin:e2e|owned_browser_detach");
       await browser.pause(t(400));
       await invokeOrThrow("owned_browser_hide");
       await expectHidden("baseline");
@@ -253,7 +253,7 @@ describe("Owned browser — headless background drive", function () {
       const { port, key } = await getLocalApiConfig();
 
       // Fresh headless child, sidebar never opened — the path a snapshot takes.
-      await invokeOrThrow("e2e_owned_browser_detach");
+      await invokeOrThrow("plugin:e2e|owned_browser_detach");
       await browser.pause(t(400));
       await invokeOrThrow("owned_browser_hide");
 
@@ -397,7 +397,7 @@ describe("Owned browser — headless background drive", function () {
       });
       await browser.pause(t(800));
       expect(
-        await invokeOrThrow<boolean>("e2e_owned_browser_visible"),
+        await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible"),
       ).toBe(true);
 
       // Same webview: the marker set during the headless run is still there.

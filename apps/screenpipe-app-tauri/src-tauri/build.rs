@@ -349,6 +349,66 @@ fn generate_and_validate_tauri_commands() {
             "generated Tauri command registry is missing required command {required}"
         );
     }
+    if let Some(command) = commands.lines().find(|command| {
+        command
+            .rsplit("::")
+            .next()
+            .is_some_and(|name| name.starts_with("e2e_") || name.starts_with("get_e2e_"))
+    }) {
+        panic!("generated production Tauri command registry contains E2E-only command {command}");
+    }
+}
+
+const E2E_COMMANDS: &[&str] = &[
+    "main_overlay_visible",
+    "mark_capture_intended",
+    "emit_disk_space_low",
+    "handle_disk_space_low",
+    "capture_session_running",
+    "set_low_disk_guard_enabled",
+    "set_notification_master_enabled",
+    "low_disk_guard_enabled",
+    "set_tray_recording_status",
+    "installed_tray_recording_status",
+    "shortcut_reminder_visible",
+    "emit_agent_stream",
+    "emit_settled_agent_follow_up",
+    "emit_pipe_stream",
+    "arm_capture_loop_silent_fault",
+    "arm_sck_lookup_hang_fault",
+    "screen_is_locked",
+    "recording_health_return_race",
+    "owned_browser_visible",
+    "owned_browser_detach",
+    "inject_db_hard_fault",
+    "db_hard_fault_state",
+    "seed_flags",
+];
+
+fn validate_e2e_command_inventory() {
+    let source_path = std::path::Path::new("src/e2e/commands.rs");
+    println!("cargo:rerun-if-changed={}", source_path.display());
+    let source = std::fs::read_to_string(source_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to read E2E command inventory at {}: {error}",
+            source_path.display()
+        )
+    });
+    let handler = source
+        .split_once("tauri::generate_handler![")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(handler, _)| handler)
+        .unwrap_or_else(|| panic!("missing E2E generate_handler inventory"));
+    let runtime_commands = handler
+        .split(',')
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        runtime_commands, E2E_COMMANDS,
+        "E2E runtime handler and feature-only ACL command inventories diverged"
+    );
 }
 
 fn main() {
@@ -510,7 +570,23 @@ fn main() {
         }
     }
 
-    tauri_build::build()
+    let mut attributes = tauri_build::Attributes::new();
+    if std::env::var_os("CARGO_FEATURE_E2E").is_some() {
+        validate_e2e_command_inventory();
+        attributes = attributes
+            .plugin(
+                "e2e",
+                tauri_build::InlinedPlugin::new()
+                    .commands(E2E_COMMANDS)
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            )
+            .capabilities_path_pattern("capabilities/*.json");
+    } else {
+        attributes = attributes.capabilities_path_pattern("capabilities/main.json");
+    }
+
+    tauri_build::try_build(attributes)
+        .unwrap_or_else(|error| panic!("failed to build Tauri configuration: {error:#}"));
 }
 
 /// Build the `screenpipe-wer-dump-helper` cdylib with a nested cargo
