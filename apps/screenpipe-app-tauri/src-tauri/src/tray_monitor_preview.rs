@@ -58,6 +58,29 @@ enum PreviewUpdate {
     Unchanged,
 }
 
+/// Why a bootstrap attempt ended the way it did. Returned so tests can assert
+/// *which* branch ran, rather than only that `preview_capture_expected_from`
+/// computes the right boolean: the tray preview is the only caller of
+/// `ensure_monitor_stream` in the tree, so "did this reach SCK?" is the whole
+/// DRM-pause invariant and it needs to be observable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootstrapOutcome {
+    /// An intentional pause (screen lock, post-wake, DRM, schedule) is active,
+    /// so no SCK stream was opened.
+    SkippedPaused,
+    /// The user switched this display off in the tray, so it must never get a
+    /// preview stream regardless of pause state.
+    UserDisabled,
+    /// A latched frame already exists — a stream is live, nothing to do.
+    AlreadyStreaming,
+    /// A previous attempt failed and its backoff window has not elapsed.
+    BackoffPending,
+    /// Monitor is not present (disconnected, or a synthetic id in tests).
+    MonitorMissing,
+    /// `ensure_monitor_stream` was actually called.
+    Attempted { started: bool },
+}
+
 static CACHE: Lazy<Mutex<HashMap<u32, CachedPreview>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static PLACEHOLDER: Lazy<Image<'static>> = Lazy::new(|| {
     let mut rgba = vec![36u8; (PREVIEW_WIDTH * PREVIEW_HEIGHT * 4) as usize];
@@ -264,7 +287,7 @@ async fn drain_bootstrap_requests(rx: &mpsc::Receiver<u32>, app: &AppHandle) {
         return;
     }
     for monitor_id in pending {
-        bootstrap_sck_stream(monitor_id).await;
+        let _ = bootstrap_sck_stream(monitor_id).await;
         if should_refresh_menu(refresh_monitor_from_sck(monitor_id)) {
             queue_menu_refresh(app);
         }
@@ -327,22 +350,22 @@ fn queue_sck_bootstrap(monitor_id: u32) {
     }
 }
 
-async fn bootstrap_sck_stream(monitor_id: u32) {
+async fn bootstrap_sck_stream(monitor_id: u32) -> BootstrapOutcome {
     if !preview_capture_expected() {
-        return;
+        return BootstrapOutcome::SkippedPaused;
     }
     if user_disabled_monitor_ids().contains(&monitor_id) {
-        return;
+        return BootstrapOutcome::UserDisabled;
     }
     if screenpipe_screen::stream_invalidation::peek_monitor_frame(monitor_id).is_some() {
         clear_bootstrap_backoff(monitor_id);
-        return;
+        return BootstrapOutcome::AlreadyStreaming;
     }
     // Re-checked here as well as at queue time: a request can sit in the
     // channel across a tick, and this is the only place that actually touches
     // ScreenCaptureKit.
     if !bootstrap_ready(monitor_id, Instant::now()) {
-        return;
+        return BootstrapOutcome::BackoffPending;
     }
     let Some(monitor) = screenpipe_screen::monitor::get_monitor_by_id(monitor_id).await else {
         let delay = record_bootstrap_failure(monitor_id, Instant::now());
@@ -350,16 +373,16 @@ async fn bootstrap_sck_stream(monitor_id: u32) {
             "tray preview: monitor {} not found for SCK bootstrap (retrying in {:?})",
             monitor_id, delay
         );
-        return;
+        return BootstrapOutcome::MonitorMissing;
     };
-    if screenpipe_screen::stream_invalidation::ensure_monitor_stream(
+    let started = screenpipe_screen::stream_invalidation::ensure_monitor_stream(
         monitor_id,
         monitor.width(),
         monitor.height(),
         &[],
     )
-    .await
-    {
+    .await;
+    if started {
         clear_bootstrap_backoff(monitor_id);
     } else {
         let delay = record_bootstrap_failure(monitor_id, Instant::now());
@@ -368,6 +391,7 @@ async fn bootstrap_sck_stream(monitor_id: u32) {
             monitor_id, delay
         );
     }
+    BootstrapOutcome::Attempted { started }
 }
 
 fn apply_rgba_preview(monitor_id: u32, frame: &RgbaImage) -> PreviewUpdate {
@@ -452,6 +476,28 @@ mod tests {
     use super::*;
     use image::Rgba;
 
+    /// Serializes every test that touches `CACHE` or the process-global DRM
+    /// flag. Required because the pause path calls `clear_cached_previews()`,
+    /// which wipes the whole map — without this, the lifecycle test below can
+    /// clear an entry another test just seeded and turn its expected
+    /// `Unchanged` into a `FirstFrame`.
+    static PREVIEW_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn preview_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        PREVIEW_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Restores the global DRM flag when the lifecycle test ends, including on
+    /// a failed assertion — a leaked `drm_content_paused() == true` would
+    /// silently disable previews for every later test in this binary.
+    struct DrmStateGuard;
+
+    impl Drop for DrmStateGuard {
+        fn drop(&mut self) {
+            screenpipe_engine::drm_detector::set_drm_paused(false);
+        }
+    }
+
     #[test]
     fn preview_dimensions_match_icon_height() {
         assert_eq!(PREVIEW_HEIGHT as f64, PREVIEW_ICON_HEIGHT);
@@ -476,6 +522,7 @@ mod tests {
 
     #[test]
     fn apply_preview_distinguishes_first_update_and_unchanged_frames() {
+        let _lock = preview_test_lock();
         let monitor_id = u32::MAX - 17;
         CACHE
             .lock()
@@ -506,6 +553,7 @@ mod tests {
 
     #[test]
     fn background_poll_stops_after_first_preview_is_cached() {
+        let _lock = preview_test_lock();
         let monitor_id = u32::MAX - 18;
         CACHE
             .lock()
@@ -544,6 +592,7 @@ mod tests {
 
     #[test]
     fn disabling_a_display_drops_its_cached_preview() {
+        let _lock = preview_test_lock();
         let kept = u32::MAX - 31;
         let disabled_id = u32::MAX - 32;
         let frame = RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255]));
@@ -575,6 +624,7 @@ mod tests {
     /// attempt must wait, and a success must restore immediate readiness.
     #[test]
     fn failed_bootstrap_defers_the_next_attempt() {
+        let _lock = preview_test_lock();
         let monitor_id = u32::MAX - 33;
         clear_bootstrap_backoff(monitor_id);
         let now = Instant::now();
@@ -601,6 +651,7 @@ mod tests {
 
     #[test]
     fn resuming_from_an_intentional_pause_clears_backoff() {
+        let _lock = preview_test_lock();
         let monitor_id = u32::MAX - 34;
         clear_bootstrap_backoff(monitor_id);
         let now = Instant::now();
@@ -611,5 +662,119 @@ mod tests {
         clear_cached_previews();
 
         assert!(bootstrap_ready(monitor_id, now));
+    }
+
+    /// Full `normal -> DRM -> clear` lifecycle over the *real* process-global
+    /// DRM flag, asserting the two properties that matter:
+    ///
+    ///   1. While DRM is active, nothing can reopen a capture stream. The tray
+    ///      preview thread is the only caller of `ensure_monitor_stream` in the
+    ///      tree, so gating it is what makes the DRM pause a real pause rather
+    ///      than a teardown the tray immediately undoes on its next 400ms tick.
+    ///   2. When DRM clears, the preview path fully recovers — nothing is
+    ///      permanently torn down, and no relaunch is needed.
+    ///
+    /// The predicate truth-table lives in
+    /// `preview_never_bootstraps_capture_during_intentional_pause_states`; this
+    /// test covers the transition sequence and the recovery that a truth-table
+    /// cannot express.
+    ///
+    /// Uses a synthetic monitor id so the post-clear phase stops at the monitor
+    /// lookup (`MonitorMissing`) instead of opening a real ScreenCaptureKit
+    /// stream on CI. Reaching `MonitorMissing` is itself the assertion: it is
+    /// strictly past the pause gate, so the gate let it through.
+    ///
+    /// The bootstrap backoff added in #6121 is reset explicitly between phases.
+    /// A failed lookup records a retry window, and `BackoffPending` would
+    /// otherwise mask the outcome this test is actually asserting.
+    #[tokio::test]
+    async fn drm_lifecycle_blocks_stream_reopen_during_pause_and_recovers_after() {
+        let _lock = preview_test_lock();
+        let _drm_guard = DrmStateGuard;
+        let monitor_id = u32::MAX - 19;
+        clear_bootstrap_backoff(monitor_id);
+
+        // ── normal ────────────────────────────────────────────────────────
+        screenpipe_engine::drm_detector::set_drm_paused(false);
+        assert!(
+            preview_capture_expected(),
+            "baseline must be unpaused — another test leaked a pause flag, \
+             or this machine reported screen-locked/post-wake/schedule-paused"
+        );
+        assert_eq!(
+            bootstrap_sck_stream(monitor_id).await,
+            BootstrapOutcome::MonitorMissing,
+            "with no pause active, bootstrap must get past the gate"
+        );
+
+        let frame = RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255]));
+        assert_eq!(
+            apply_rgba_preview(monitor_id, &frame),
+            PreviewUpdate::FirstFrame
+        );
+        assert!(has_cached_preview(monitor_id));
+
+        // ── DRM ───────────────────────────────────────────────────────────
+        // Drop the retry window the failed lookup above earned, so a
+        // SkippedPaused below can only come from the DRM gate. The gates are
+        // ordered pause-before-backoff, and this keeps the assertion honest if
+        // that order ever changes.
+        clear_bootstrap_backoff(monitor_id);
+        screenpipe_engine::drm_detector::set_drm_paused(true);
+        assert!(!preview_capture_expected());
+        assert_eq!(
+            bootstrap_sck_stream(monitor_id).await,
+            BootstrapOutcome::SkippedPaused,
+            "DRM pause must stop the tray from reopening an SCK stream that \
+             the monitor watcher just tore down"
+        );
+
+        // The menu-rebuild path must also refuse, and must drop the stale
+        // frames so the tray can't keep showing DRM content post-pause.
+        sync_refresh_monitors(&[monitor_id]);
+        assert!(
+            !has_cached_preview(monitor_id),
+            "cached previews must be dropped while DRM is paused"
+        );
+
+        // Still blocked after repeated ticks — the gate is state-based, not a
+        // one-shot that a later poll can slip past.
+        assert_eq!(
+            bootstrap_sck_stream(monitor_id).await,
+            BootstrapOutcome::SkippedPaused
+        );
+
+        // ── clear ─────────────────────────────────────────────────────────
+        screenpipe_engine::drm_detector::set_drm_paused(false);
+        assert!(
+            preview_capture_expected(),
+            "clearing DRM must re-enable preview capture"
+        );
+        // Tearing down for the pause also dropped the retry window, so
+        // recovery is immediate rather than gated behind a backoff the
+        // monitor earned before the pause began.
+        assert!(
+            bootstrap_ready(monitor_id, Instant::now()),
+            "resuming from a DRM pause must not serve out a stale backoff"
+        );
+        assert_eq!(
+            bootstrap_sck_stream(monitor_id).await,
+            BootstrapOutcome::MonitorMissing,
+            "bootstrap must be permitted again after DRM clears — the pause \
+             is reversible, not a permanent shutdown"
+        );
+
+        // And the cache is usable again, not wedged by the pause.
+        assert_eq!(
+            apply_rgba_preview(monitor_id, &frame),
+            PreviewUpdate::FirstFrame
+        );
+        assert!(has_cached_preview(monitor_id));
+
+        CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&monitor_id);
+        clear_bootstrap_backoff(monitor_id);
     }
 }
