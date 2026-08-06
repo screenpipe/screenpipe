@@ -1601,7 +1601,10 @@ export function BrainOverview({
             ? (generated.periodPolicy ?? reference.periodPolicy)
             : null,
         );
-        setProposalFocusSlotId(proposals[0].id);
+        setProposalFocusSlotId(
+          proposals.find((proposal) => proposal.kind === "add")?.id ??
+            proposals[0].id,
+        );
       }
       posthog.capture("live_view_builder_agent_handoff_completed", {
         ...analyticsProperties,
@@ -2147,12 +2150,19 @@ export function BrainOverview({
         destination,
         dashboard_count: views.length,
       });
-      setDraft(null);
-      setEditing(false);
-      setAiPreview(false);
-      setPreviewSource(null);
-      setAiNote(null);
-      setReplaceConfirmationOpen(false);
+      // A new-dashboard agent run leaves its generated definition in the
+      // review preview. Clearing it here would send the user straight back to
+      // the empty dashboard after a successful generation. Replacement runs
+      // review proposals on the existing Canvas, so only those should close
+      // the template preview.
+      if (!creatingNew) {
+        setDraft(null);
+        setEditing(false);
+        setAiPreview(false);
+        setPreviewSource(null);
+        setAiNote(null);
+        setReplaceConfirmationOpen(false);
+      }
     } finally {
       setSaving(false);
     }
@@ -2489,33 +2499,38 @@ export function BrainOverview({
     return (
       <div
         data-testid="brain-overview-empty"
-        className="mx-auto flex min-h-80 w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
+        className="h-full min-h-0 w-full overflow-y-auto [scrollbar-gutter:stable]"
       >
-        <LiveViewAiComposer
-          busy={builderFeedback?.tone === "working"}
-          feedback={builderFeedback}
-          onCancel={() => builderAbortRef.current?.abort()}
-          selectedPresetId={selectedAiPreset?.id ?? null}
-          onSelectedPresetIdChange={selectAiPreset}
-          onGenerate={generateFromComposer}
-        />
-        {templateKits.length > 0 && (
-          <div className="mt-8 w-full border-t border-border pt-6 text-left">
-            <LiveViewTemplateGallery
-              kits={templateKits}
-              installedPipeNames={installedPipeNames}
-              onPreview={previewTemplate}
-            />
-          </div>
-        )}
-        <button
-          data-testid="overview-create"
-          type="button"
-          className="mt-4 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-          onClick={beginManualCreate}
+        <div
+          data-testid="brain-overview-empty-content"
+          className="mx-auto flex min-h-full w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
         >
-          or build it manually
-        </button>
+          <LiveViewAiComposer
+            busy={builderFeedback?.tone === "working"}
+            feedback={builderFeedback}
+            onCancel={() => builderAbortRef.current?.abort()}
+            selectedPresetId={selectedAiPreset?.id ?? null}
+            onSelectedPresetIdChange={selectAiPreset}
+            onGenerate={generateFromComposer}
+          />
+          {templateKits.length > 0 && (
+            <div className="mt-8 w-full border-t border-border pt-6 text-left">
+              <LiveViewTemplateGallery
+                kits={templateKits}
+                installedPipeNames={installedPipeNames}
+                onPreview={previewTemplate}
+              />
+            </div>
+          )}
+          <button
+            data-testid="overview-create"
+            type="button"
+            className="mt-4 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            onClick={beginManualCreate}
+          >
+            or build it manually
+          </button>
+        </div>
       </div>
     );
   }

@@ -140,6 +140,7 @@ export class PiConversationHarness {
 
   async restartPi(): Promise<void> {
     await invokePi("pi_stop", { sessionId: this.sessionId }).catch(() => {});
+    await this.clearCaptures();
     await invokePi("pi_start", {
       sessionId: this.sessionId,
       projectDir: join(E2E_DATA_DIR, "pi-history-wire"),
@@ -153,7 +154,21 @@ export class PiConversationHarness {
         systemPrompt: "Reply briefly for a local E2E test.",
       },
     });
-    await this.clearCaptures();
+  }
+
+  async waitForRuntimeReady(label: string): Promise<void> {
+    await browser.waitUntil(
+      async () =>
+        (await this.agentEvents()).some((payload) => {
+          const event = payload as { sessionId?: unknown };
+          return event?.sessionId === this.sessionId;
+        }),
+      {
+        timeout: t(20_000),
+        interval: 100,
+        timeoutMsg: `${label} Pi runtime did not emit a ready event`,
+      },
+    );
   }
 
   /**

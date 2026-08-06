@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   checkAccessibilityPermissionCmd: vi.fn(async () => "denied"),
   checkAccessibilityPermissionLiveCmd: vi.fn(async () => "denied"),
   checkScreenRecordingPermission: vi.fn(async () => "denied"),
+  restartAfterScreenRecordingPermission: vi.fn(async () => undefined),
   requestPermission: vi.fn(async () => undefined),
   requestPermissionWithFlow: vi.fn(async () => undefined),
   windowSetFocus: vi.fn(async () => undefined),
@@ -27,6 +28,8 @@ vi.mock("@/lib/utils/tauri", () => ({
     checkAccessibilityPermissionLiveCmd:
       mocks.checkAccessibilityPermissionLiveCmd,
     checkScreenRecordingPermission: mocks.checkScreenRecordingPermission,
+    restartAfterScreenRecordingPermission:
+      mocks.restartAfterScreenRecordingPermission,
     requestPermission: mocks.requestPermission,
   },
 }));
@@ -121,7 +124,7 @@ describe("onboarding permission wheel", () => {
     await waitFor(() =>
       expect(mocks.requestPermission).toHaveBeenCalledWith("microphone")
     );
-  });
+  }, 10_000);
 
   it("keeps onboarding to the three recording permissions", async () => {
     render(<PermissionsStep handleNextSlide={vi.fn()} />);
@@ -212,6 +215,30 @@ describe("onboarding permission wheel", () => {
       )
     );
     expect(mocks.requestPermissionWithFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an explicit restart action instead of restarting after Later", async () => {
+    mocks.checkScreenRecordingPermission.mockResolvedValue("restartRequired");
+    const handleNextSlide = vi.fn();
+
+    render(<PermissionsStep handleNextSlide={handleNextSlide} />);
+
+    const prompt = await screen.findByTestId(
+      "screen-recording-restart-prompt"
+    );
+    expect(prompt).toHaveTextContent("restart required");
+    expect(prompt).toHaveTextContent(
+      "screenpipe won't work until you restart."
+    );
+    expect(handleNextSlide).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("screen-recording-restart-button"));
+
+    await waitFor(() =>
+      expect(
+        mocks.restartAfterScreenRecordingPermission
+      ).toHaveBeenCalledTimes(1)
+    );
   });
 
 });

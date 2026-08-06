@@ -59,6 +59,13 @@ interface CanvasDocument {
   strokes: Array<{ id: string }>;
 }
 
+interface CanvasViewportSample {
+  atMs: number;
+  x: number;
+  y: number;
+  zoom: number;
+}
+
 const SELECTABLE_VIEW_ID = "my-overview";
 const FIXED_VIEW_ID = "daily-memory-fixed";
 const RANGE_TRUTH_VIEW_ID = "range-truth-e2e";
@@ -136,8 +143,88 @@ async function selectDashboard(viewId: string) {
 }
 
 async function openDashboardMenu() {
-  await pointerPressTestId("overview-dashboard-menu");
-  await waitForTestId("overview-new-dashboard", 10_000);
+  await browser.waitUntil(
+    async () => {
+      for (const candidate of await $$(
+        "[data-testid='overview-dashboard-menu']",
+      )) {
+        if (
+          (await candidate.isDisplayed()) &&
+          (await candidate.isEnabled())
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
+    {
+      timeout: t(10_000),
+      timeoutMsg: "enabled dashboard menu trigger not found",
+    },
+  );
+  const menuItemIsVisible = () =>
+    browser.execute(() => {
+      const candidate = document.querySelector<HTMLElement>(
+        "[data-testid='overview-new-dashboard']",
+      );
+      if (!candidate) return false;
+      const rect = candidate.getBoundingClientRect();
+      const style = getComputedStyle(candidate);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    });
+  const waitForMenuItem = async (timeoutMs: number) => {
+    const deadline = Date.now() + t(timeoutMs);
+    while (Date.now() < deadline) {
+      if (await menuItemIsVisible()) return true;
+      await browser.pause(100);
+    }
+    return false;
+  };
+  const focusTrigger = () =>
+    browser.execute(() => {
+      document
+        .querySelector<HTMLElement>(
+          "[data-testid='overview-dashboard-menu']",
+        )
+        ?.focus();
+    });
+
+  await focusTrigger();
+  await browser.keys(["Enter"]);
+  if (await waitForMenuItem(2_000)) return;
+
+  await focusTrigger();
+  await browser.keys([" "]);
+  if (await waitForMenuItem(2_000)) return;
+
+  const trigger = await waitForTestId("overview-dashboard-menu", 5_000);
+  await trigger.click();
+  if (await waitForMenuItem(3_000)) return;
+
+  const diagnostic = await browser.execute(() => {
+    const trigger = document.querySelector<HTMLElement>(
+      "[data-testid='overview-dashboard-menu']",
+    );
+    return {
+      activeTestId:
+        document.activeElement instanceof HTMLElement
+          ? (document.activeElement.dataset.testid ?? null)
+          : null,
+      ariaExpanded: trigger?.getAttribute("aria-expanded") ?? null,
+      dataState: trigger?.getAttribute("data-state") ?? null,
+      disabled:
+        trigger instanceof HTMLButtonElement ? trigger.disabled : null,
+      menuItemCount: document.querySelectorAll(
+        "[data-testid='overview-new-dashboard']",
+      ).length,
+    };
+  });
+  throw new Error(`dashboard menu did not open: ${JSON.stringify(diagnostic)}`);
 }
 
 async function openHomeWithDiagnostics() {
@@ -180,6 +267,8 @@ async function seedEntitledAccount() {
   await browser.switchToWindow(homeHandle as string);
   const writeStartedAt = (await browser.execute(
     (key: string, eventName: string) => {
+      const startedAt = performance.now();
+      delete document.documentElement.dataset.e2eSettingsWriteFinishedAt;
       const originalFetch = window.fetch.bind(window);
       window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const url =
@@ -221,7 +310,7 @@ async function seedEntitledAccount() {
         }),
       );
       window.dispatchEvent(new Event(eventName));
-      return performance.now();
+      return startedAt;
     },
     E2E_ACCOUNT_USER_KEY,
     E2E_ACCOUNT_USER_EVENT,
@@ -236,7 +325,7 @@ async function seedEntitledAccount() {
         writeStartedAt,
       )) as boolean,
     {
-      timeout: t(10_000),
+      timeout: t(15_000),
       timeoutMsg: "E2E account settings write did not finish",
     },
   );
@@ -358,6 +447,24 @@ async function clickTestId(testId: string) {
   await target.click();
 }
 
+async function restartPiAfterInstallSettles(
+  piConversation: PiConversationHarness,
+  label: string,
+) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      await piConversation.restartPi();
+      await piConversation.waitForRuntimeReady(label);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 4) await browser.pause(t(10_000));
+    }
+  }
+  throw new Error(`${label} Pi did not settle after install: ${lastError}`);
+}
+
 async function resizeCanvasBlockBottomRight(
   testId: string,
   delta: { x: number; y: number },
@@ -467,53 +574,332 @@ async function resizeCanvasBlockBottomRight(
   return geometry!.block;
 }
 
+async function startCanvasViewportTrace() {
+  await browser.execute(() => {
+    const global = globalThis as any;
+    if (global.__e2eCanvasViewportTraceTimer) {
+      clearInterval(global.__e2eCanvasViewportTraceTimer);
+    }
+    global.__e2eCanvasViewportTrace = [];
+    const startedAt = performance.now();
+    const sample = () => {
+      const viewport = Array.from(
+        document.querySelectorAll<HTMLElement>(".react-flow__viewport"),
+      ).find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      if (viewport) {
+        const transform = getComputedStyle(viewport).transform;
+        const matrix =
+          transform === "none"
+            ? new DOMMatrixReadOnly()
+            : new DOMMatrixReadOnly(transform);
+        const next = {
+          atMs: performance.now() - startedAt,
+          x: matrix.m41,
+          y: matrix.m42,
+          zoom: Math.hypot(matrix.m11, matrix.m12),
+        };
+        const trace = global.__e2eCanvasViewportTrace as Array<{
+          atMs: number;
+          x: number;
+          y: number;
+          zoom: number;
+        }>;
+        const previous = trace.at(-1);
+        if (
+          !previous ||
+          Math.abs(previous.x - next.x) > 0.05 ||
+          Math.abs(previous.y - next.y) > 0.05 ||
+          Math.abs(previous.zoom - next.zoom) > 0.0005
+        ) {
+          trace.push(next);
+        }
+      }
+    };
+    sample();
+    global.__e2eCanvasViewportTraceSample = sample;
+    global.__e2eCanvasViewportTraceTimer = window.setInterval(sample, 16);
+  });
+}
+
+async function stopCanvasViewportTrace(): Promise<CanvasViewportSample[]> {
+  return (await browser.execute(() => {
+    const global = globalThis as any;
+    global.__e2eCanvasViewportTraceSample?.();
+    if (global.__e2eCanvasViewportTraceTimer) {
+      clearInterval(global.__e2eCanvasViewportTraceTimer);
+      global.__e2eCanvasViewportTraceTimer = null;
+    }
+    global.__e2eCanvasViewportTraceSample = null;
+    return global.__e2eCanvasViewportTrace ?? [];
+  })) as CanvasViewportSample[];
+}
+
+function viewportDistance(
+  left: CanvasViewportSample,
+  right: CanvasViewportSample,
+): number {
+  return Math.hypot(
+    right.x - left.x,
+    right.y - left.y,
+    (right.zoom - left.zoom) * 200,
+  );
+}
+
+async function readCanvasBlockCenterOffset(testId: string) {
+  return (await browser.execute((id: string) => {
+    const visibleElement = (selector: string) =>
+      Array.from(document.querySelectorAll<HTMLElement>(selector)).find(
+        (candidate) => {
+          const rect = candidate.getBoundingClientRect();
+          const style = getComputedStyle(candidate);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        },
+      );
+    const canvas = visibleElement("[data-testid='live-view-canvas']");
+    const block = visibleElement(`[data-testid='${id}']`);
+    if (!canvas || !block) return null;
+    const canvasRect = canvas.getBoundingClientRect();
+    const blockRect = block.getBoundingClientRect();
+    return {
+      deltaX: Math.abs(
+        canvasRect.left +
+          canvasRect.width / 2 -
+          (blockRect.left + blockRect.width / 2),
+      ),
+      deltaY: Math.abs(
+        canvasRect.top +
+          canvasRect.height / 2 -
+          (blockRect.top + blockRect.height / 2),
+      ),
+    };
+  }, testId)) as { deltaX: number; deltaY: number } | null;
+}
+
 describe("Brain Live Views", function () {
   this.timeout(120_000);
 
-  it("creates a starter dashboard on first open", async () => {
+  it("keeps the delete-last-dashboard template journey scrollable and reviewable", async () => {
     await waitForAppReady();
+    await seedEntitledAccount();
     await openHomeWithDiagnostics();
+    const piConversation = new PiConversationHarness(
+      "e2e-live-view-template-recovery",
+    );
+    await piConversation.initialize();
+    await piConversation.configureAppPreset();
+    await restartPiAfterInstallSettles(piConversation, "Template model");
+    await piConversation.prompt("reply with ready", "Template model preflight");
+    await piConversation.waitForRequestCount(1, "Template model preflight");
+    await piConversation.clearCaptures();
+    piConversation.setResponseDelay(350);
+    piConversation.setTextResponse(
+      JSON.stringify({
+        title: "Recovered template view",
+        timeRange: "today",
+        timeRangeBehavior: "selectable",
+        blocks: [
+          {
+            id: "recovered-summary",
+            title: "Recovered summary",
+            component: "markdown.v1",
+            width: 12,
+            intent: "Summarize source-backed work for the selected outcome.",
+            pipeName: null,
+          },
+        ],
+        note: "The generated dashboard is ready for review.",
+      }),
+    );
 
-    const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
-    for (const existingView of existingViews) {
-      await invokeOrThrow("delete_brain_view", { id: existingView.id });
-    }
+    try {
+      const existingViews =
+        await invokeOrThrow<BrainView[]>("list_brain_views");
+      for (const existingView of existingViews) {
+        await invokeOrThrow("delete_brain_view", { id: existingView.id });
+      }
 
-    // A WDIO retry reuses the same app process. Leave Brain before opening it
-    // so its view state is rebuilt from the now-empty backend instead of
-    // retaining the previous attempt's selected dashboard.
-    const pipesNav = await $("[data-testid=nav-pipes]");
-    await pipesNav.waitForExist({ timeout: t(10_000) });
-    await pipesNav.click();
-    await waitForTestId("section-pipes", 15_000);
+      // A WDIO retry reuses the same app process. Leave Brain before opening it
+      // so its view state is rebuilt from the now-empty backend instead of
+      // retaining the previous attempt's selected dashboard.
+      const pipesNav = await $("[data-testid=nav-pipes]");
+      await pipesNav.waitForExist({ timeout: t(10_000) });
+      await pipesNav.click();
+      await waitForTestId("section-pipes", 15_000);
 
-    const brainNav = await $("[data-testid=nav-brain]");
-    await brainNav.waitForExist({ timeout: t(10_000) });
-    await brainNav.click();
-    await waitForTestId("section-brain", 15_000);
-    const selector = await waitForTestId("overview-dashboard-selector", 15_000);
-    expect(await selector.getValue()).toBe("my-dashboard");
-    expect(await selector.getText()).toContain("My dashboard");
+      const brainNav = await $("[data-testid=nav-brain]");
+      await brainNav.waitForExist({ timeout: t(10_000) });
+      await brainNav.click();
+      await waitForTestId("section-brain", 15_000);
+      const selector = await waitForTestId(
+        "overview-dashboard-selector",
+        15_000,
+      );
+      expect(await selector.getValue()).toBe("my-dashboard");
+      expect(await selector.getText()).toContain("My dashboard");
 
-    await setCssWindowSize(1366, 768);
-    await saveScreenshot("brain-first-open-windows");
+      await setCssWindowSize(800, 600);
+      await openDashboardMenu();
+      const deleteClicked = await browser.execute(() => {
+        const item = Array.from(
+          document.querySelectorAll<HTMLElement>("[role='menuitem']"),
+        ).find((candidate) => candidate.textContent?.trim() === "delete");
+        item?.click();
+        return Boolean(item);
+      });
+      expect(deleteClicked).toBe(true);
+      await browser.waitUntil(
+        () =>
+          browser.execute(() => {
+            const button = document.querySelector<HTMLButtonElement>(
+              "[data-testid='overview-confirm-delete']",
+            );
+            if (!button) return false;
+            const rect = button.getBoundingClientRect();
+            const style = getComputedStyle(button);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              !button.disabled
+            );
+          }),
+        {
+          timeout: t(10_000),
+          timeoutMsg: "delete confirmation did not become visible and enabled",
+        },
+      );
+      const confirmClicked = await browser.execute(() => {
+        const button = document.querySelector<HTMLButtonElement>(
+          "[data-testid='overview-confirm-delete']",
+        );
+        button?.click();
+        return Boolean(button);
+      });
+      expect(confirmClicked).toBe(true);
+      await waitForTestId("brain-overview-empty", 15_000);
+      await waitForTestId("live-view-template-gallery", 15_000);
 
-    await pipesNav.click();
-    await waitForTestId("section-pipes", 15_000);
-    const starterViews = await invokeOrThrow<BrainView[]>("list_brain_views");
-    if (starterViews.some((candidate) => candidate.id === "my-dashboard")) {
-      await invokeOrThrow("delete_brain_view", { id: "my-dashboard" });
+      const scrollState = (await browser.execute(() => {
+        const emptyState = document.querySelector<HTMLElement>(
+          "[data-testid='brain-overview-empty']",
+        );
+        const previewButtons = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            "[data-testid^='preview-live-view-template-']",
+          ),
+        );
+        const lastButton = previewButtons.at(-1);
+        if (!emptyState || !lastButton) return null;
+        emptyState.scrollTop = emptyState.scrollHeight;
+        const containerRect = emptyState.getBoundingClientRect();
+        const buttonRect = lastButton.getBoundingClientRect();
+        return {
+          clientHeight: emptyState.clientHeight,
+          scrollHeight: emptyState.scrollHeight,
+          scrollTop: emptyState.scrollTop,
+          lastButtonTestId: lastButton.dataset.testid ?? "",
+          lastButtonVisible:
+            buttonRect.top >= containerRect.top &&
+            buttonRect.bottom <= containerRect.bottom,
+        };
+      })) as {
+        clientHeight: number;
+        scrollHeight: number;
+        scrollTop: number;
+        lastButtonTestId: string;
+        lastButtonVisible: boolean;
+      } | null;
+      expect(scrollState).not.toBeNull();
+      expect(scrollState!.scrollHeight).toBeGreaterThan(
+        scrollState!.clientHeight,
+      );
+      expect(scrollState!.scrollTop).toBeGreaterThan(0);
+      expect(scrollState!.lastButtonVisible).toBe(true);
+      expect(scrollState!.lastButtonTestId).toContain(
+        "preview-live-view-template-",
+      );
+      const emptyStateScreenshot = await saveScreenshot(
+        "brain-empty-state-template-scroll",
+      );
+      expect(existsSync(emptyStateScreenshot)).toBe(true);
+
+      await clickTestId(scrollState!.lastButtonTestId);
+      await waitForTestId("brain-overview-ai-preview", 10_000);
+      await clickTestId("overview-apply-template");
+      await waitForTestId("live-view-generation-progress", 20_000);
+      await piConversation.waitForRequestCount(1, "Template builder request");
+      await browser.waitUntil(
+        async () => {
+          const preview = await $("[data-testid='brain-overview-ai-preview']");
+          if (!(await preview.isExisting())) return false;
+          const text = await preview.getText();
+          return (
+            text.includes("Recovered template view") &&
+            text.includes("The generated dashboard is ready for review.")
+          );
+        },
+        {
+          timeout: t(45_000),
+          interval: 200,
+          timeoutMsg: "template generation did not remain on the review screen",
+        },
+      );
+      expect(await $("[data-testid='overview-apply-ai']").getText()).toContain(
+        "create dashboard",
+      );
+      expect(await $("button=add your first Block").isExisting()).toBe(false);
+      const reviewScreenshot = await saveScreenshot(
+        "brain-template-generated-review",
+      );
+      expect(existsSync(reviewScreenshot)).toBe(true);
+
+      await clickTestId("overview-apply-ai");
+      await browser.waitUntil(
+        async () => {
+          const views = await invokeOrThrow<BrainView[]>("list_brain_views");
+          return views.some(
+            (view) =>
+              view.title === "Recovered template view" &&
+              view.slots.some((slot) => slot.id === "recovered-summary"),
+          );
+        },
+        {
+          timeout: t(15_000),
+          interval: 200,
+          timeoutMsg: "reviewed template dashboard was not saved",
+        },
+      );
+      await waitForTestId("canvas-block-recovered-summary", 15_000);
+      const savedScreenshot = await saveScreenshot(
+        "brain-template-generated-saved",
+      );
+      expect(existsSync(savedScreenshot)).toBe(true);
+    } finally {
+      await piConversation.dispose();
+      const remainingViews = await invokeOrThrow<BrainView[]>(
+        "list_brain_views",
+      ).catch(() => []);
+      for (const remainingView of remainingViews) {
+        await invokeOrThrow("delete_brain_view", { id: remainingView.id });
+      }
     }
   });
 
   it("reviews Canvas edits per Block without opening Chat", async () => {
-    await openHomeWithDiagnostics();
     await waitForAppReady();
-    // Seed after the Home window has finished its initial auth resume. The
-    // E2E gate intentionally skips the next resume for this event; reloading
-    // Home after seeding would exercise cloud-session rejection instead of the
-    // Canvas editor under test.
+    // Seed the isolated account before Home navigation so the current
+    // app-entitlement gate does not replace the product surface.
     await seedEntitledAccount();
+    await openHomeWithDiagnostics();
     const piConversation = new PiConversationHarness(
       "e2e-live-view-inline-builder",
     );
@@ -521,7 +907,7 @@ describe("Brain Live Views", function () {
     await piConversation.configureAppPreset();
     // Prove the bundled Pi runtime and local model endpoint are ready before
     // exercising the dynamically-created private Canvas session.
-    await piConversation.restartPi();
+    await restartPiAfterInstallSettles(piConversation, "Canvas model");
     await piConversation.prompt("reply with ready", "Canvas model preflight");
     await piConversation.waitForRequestCount(1, "Canvas model preflight");
     await piConversation.clearCaptures();
@@ -529,6 +915,18 @@ describe("Brain Live Views", function () {
     piConversation.setTextResponse(
       JSON.stringify({
         operations: [
+          {
+            op: "add",
+            block: {
+              id: "ownership-lane",
+              title: "Ownership lane",
+              component: "list.v1",
+              width: 12,
+              intent:
+                "Show each accountable owner and the next source-backed handoff.",
+              pipeName: null,
+            },
+          },
           {
             op: "update",
             blockId: "trigger-and-outcome",
@@ -553,7 +951,7 @@ describe("Brain Live Views", function () {
             },
           },
         ],
-        note: "Two Block edits are ready for review.",
+        note: "Three Block changes are ready for review.",
       }),
     );
 
@@ -596,12 +994,17 @@ describe("Brain Live Views", function () {
         },
       });
 
+      const pipesNav = await waitForTestId("nav-pipes", 10_000);
+      await pipesNav.click();
+      await waitForTestId("section-pipes", 15_000);
       const brainNav = await waitForTestId("nav-brain", 10_000);
       await brainNav.click();
       await waitForTestId("section-brain", 15_000);
       await selectDashboard("process-map");
       const chatsDir = await invokeOrThrow<string>("get_chats_dir");
-      expect(chatsDir.replaceAll("\\", "/")).toContain(".e2e/chats");
+      expect(chatsDir.replaceAll("\\", "/")).toBe(
+        join(E2E_DATA_DIR, "chats").replaceAll("\\", "/"),
+      );
       const prompt = await waitForTestId("live-view-ai-prompt", 10_000);
       await prompt.click();
       const selectedModel = await $(
@@ -609,6 +1012,9 @@ describe("Brain Live Views", function () {
       ).getText();
       expect(selectedModel.toLowerCase()).toContain("screenpipe-e2e");
       await prompt.setValue("add ownership and improve both Blocks");
+      await setCssWindowSize(800, 600);
+      await browser.pause(150);
+      await startCanvasViewportTrace();
       await waitForTestId("live-view-ai-generate", 10_000).then((element) =>
         element.click(),
       );
@@ -711,32 +1117,79 @@ describe("Brain Live Views", function () {
       ).toBeNull();
 
       await waitForTestId("live-view-ai-review", 10_000);
-      const focusedProposal = (await browser.execute(() => {
-        const canvas = document.querySelector<HTMLElement>(
-          "[data-testid='live-view-canvas']",
+      // WebKit can defer requestAnimationFrame work while WebDriver is issuing
+      // commands. Let the real renderer advance before checking the final
+      // target; the component test proves the intermediate easing path.
+      await browser.pause(750);
+      try {
+        await browser.waitUntil(
+          async () => {
+            const offset = await readCanvasBlockCenterOffset(
+              "canvas-block-ownership-lane",
+            );
+            return Boolean(offset && offset.deltaX < 80 && offset.deltaY < 80);
+          },
+          {
+            timeout: t(5_000),
+            interval: 100,
+            timeoutMsg: "Canvas focus animation did not settle on the new Block",
+          },
         );
-        const block = document.querySelector<HTMLElement>(
-          "[data-testid='canvas-block-trigger-and-outcome']",
+      } catch (error) {
+        const offset = await readCanvasBlockCenterOffset(
+          "canvas-block-ownership-lane",
         );
-        if (!canvas || !block) return null;
-        const canvasRect = canvas.getBoundingClientRect();
-        const blockRect = block.getBoundingClientRect();
-        return {
-          deltaX: Math.abs(
-            canvasRect.left +
-              canvasRect.width / 2 -
-              (blockRect.left + blockRect.width / 2),
-          ),
-          deltaY: Math.abs(
-            canvasRect.top +
-              canvasRect.height / 2 -
-              (blockRect.top + blockRect.height / 2),
-          ),
-        };
-      })) as { deltaX: number; deltaY: number } | null;
+        const trace = await stopCanvasViewportTrace();
+        const geometry = await browser.execute(() =>
+          Array.from(
+            document.querySelectorAll<HTMLElement>(
+              "[data-testid='live-view-canvas'], [data-testid='canvas-block-ownership-lane'], .react-flow__viewport",
+            ),
+          ).map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              testId: element.dataset.testid ?? null,
+              className: element.className,
+              rect: {
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+              },
+              display: getComputedStyle(element).display,
+              visibility: getComputedStyle(element).visibility,
+              transform: getComputedStyle(element).transform,
+            };
+          }),
+        );
+        throw new Error(
+          `${String(error)}\n${JSON.stringify({ offset, trace, geometry })}`,
+        );
+      }
+      const focusedProposal = await readCanvasBlockCenterOffset(
+        "canvas-block-ownership-lane",
+      );
       expect(focusedProposal).not.toBeNull();
       expect(focusedProposal!.deltaX).toBeLessThan(80);
       expect(focusedProposal!.deltaY).toBeLessThan(80);
+      const viewportTrace = await stopCanvasViewportTrace();
+      expect(viewportTrace.length).toBeGreaterThanOrEqual(2);
+      const traceStart = viewportTrace[0];
+      const traceEnd = viewportTrace.at(-1)!;
+      const totalViewportTravel = viewportDistance(traceStart, traceEnd);
+      const changedSamples = viewportTrace.filter(
+        (sample) => viewportDistance(traceStart, sample) > 1,
+      );
+      console.log("Canvas viewport focus trace", {
+        sampleCount: viewportTrace.length,
+        changedSampleCount: changedSamples.length,
+        durationMs: traceEnd.atMs - (changedSamples[0]?.atMs ?? traceEnd.atMs),
+        totalTravel: totalViewportTravel,
+        start: traceStart,
+        end: traceEnd,
+      });
+      expect(totalViewportTravel).toBeGreaterThan(60);
+      expect(changedSamples.length).toBeGreaterThanOrEqual(1);
       const beforeReview = (
         await invokeOrThrow<BrainView[]>("list_brain_views")
       ).find((candidate) => candidate.id === "process-map");
@@ -749,6 +1202,9 @@ describe("Brain Live Views", function () {
       );
       expect(existsSync(reviewScreenshot)).toBe(true);
 
+      await waitForTestId("canvas-proposal-accept-ownership-lane", 10_000).then(
+        (element) => element.click(),
+      );
       await waitForTestId(
         "canvas-proposal-accept-trigger-and-outcome",
         10_000,
@@ -780,6 +1236,9 @@ describe("Brain Live Views", function () {
         afterApply?.slots.find((slot) => slot.id === "safe-improvement-path")
           ?.title,
       ).toBe("Safe improvement path");
+      expect(
+        afterApply?.slots.find((slot) => slot.id === "ownership-lane")?.title,
+      ).toBe("Ownership lane");
 
       await waitForTestId("overview-undo", 10_000).then((element) =>
         element.click(),
@@ -791,7 +1250,8 @@ describe("Brain Live Views", function () {
           ).find((candidate) => candidate.id === "process-map");
           return (
             restored?.slots.find((slot) => slot.id === "trigger-and-outcome")
-              ?.title === "Trigger and outcome"
+              ?.title === "Trigger and outcome" &&
+            !restored?.slots.some((slot) => slot.id === "ownership-lane")
           );
         },
         { timeout: t(10_000), interval: 200 },
@@ -1626,8 +2086,27 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(compactCanvasLayout!.hintOverlapsComposer).toBe(false);
 
       await clickTestId("canvas-tools-toggle");
-      const toolsPanel = await waitForTestId("canvas-tools-panel", 10_000);
-      await toolsPanel.waitForDisplayed({ timeout: t(10_000) });
+      await browser.waitUntil(
+        () =>
+          browser.execute(() => {
+            const panel = document.querySelector<HTMLElement>(
+              "[data-testid='canvas-tools-panel']",
+            );
+            if (!panel) return false;
+            const rect = panel.getBoundingClientRect();
+            const style = getComputedStyle(panel);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden"
+            );
+          }),
+        {
+          timeout: t(10_000),
+          timeoutMsg: "canvas tools panel did not become visible",
+        },
+      );
       expect(
         await $("[data-testid='canvas-interaction-hint']").isExisting(),
       ).toBe(false);
@@ -1685,7 +2164,27 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(canvasLayout!.toolbarBottom).toBeLessThanOrEqual(
         canvasLayout!.canvasBottom,
       );
-      await clickTestId("canvas-tools-close");
+      const toolsClosed = await browser.execute(() => {
+        const button = document.querySelector<HTMLButtonElement>(
+          "[data-testid='canvas-tools-close']",
+        );
+        button?.click();
+        return Boolean(button);
+      });
+      expect(toolsClosed).toBe(true);
+      await browser.waitUntil(
+        () =>
+          browser.execute(
+            () =>
+              !document.querySelector(
+                "[data-testid='canvas-tools-panel']",
+              ),
+          ),
+        {
+          timeout: t(5_000),
+          timeoutMsg: "canvas tools panel did not close",
+        },
+      );
       await canvas.moveTo({ xOffset: 0, yOffset: 160 });
       await browser.keys(["Escape"]);
       await browser.pause(250);

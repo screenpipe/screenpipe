@@ -127,6 +127,7 @@ export default function PermissionRecoveryPage() {
   const [keychainStatus, setKeychainStatus] = useState<"granted" | "denied" | "checking">("checking");
   const { isMac: isMacOS } = usePlatform();
   const restartTriggeredRef = useRef(false);
+  const [restartingApp, setRestartingApp] = useState(false);
 
   const checkPermissions = useCallback(async () => {
     try {
@@ -212,7 +213,19 @@ export default function PermissionRecoveryPage() {
     await checkKeychain();
   };
 
+  const handleScreenRecordingRestart = async () => {
+    if (restartingApp) return;
+    setRestartingApp(true);
+    try {
+      await commands.restartAfterScreenRecordingPermission();
+    } catch {
+      setRestartingApp(false);
+    }
+  };
+
   type PermissionStatus = "granted" | "denied" | "checking";
+  const screenRestartRequired =
+    permissions?.screenRecording === "restartRequired";
   const screenStatus: PermissionStatus = permissions?.screenRecording === "granted" || permissions?.screenRecording === "notNeeded"
     ? "granted" : permissions === null ? "checking" : "denied";
   const micStatus: PermissionStatus = permissions?.microphone === "granted" || permissions?.microphone === "notNeeded"
@@ -304,7 +317,29 @@ export default function PermissionRecoveryPage() {
       <div className="w-full h-8 shrink-0" data-tauri-drag-region />
 
       <div className="flex-1 flex flex-col items-center justify-center px-8 pb-6">
-        {allOk ? (
+        {screenRestartRequired ? (
+          <div
+            className="w-full max-w-sm border border-foreground px-5 py-5 text-center"
+            data-testid="permission-recovery-restart-prompt"
+          >
+            <h2 className="font-mono text-sm font-semibold">restart required</h2>
+            <p className="mt-1 font-mono text-xs text-muted-foreground">
+              screenpipe won&apos;t work until you restart.
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleScreenRecordingRestart()}
+              disabled={restartingApp}
+              data-testid="permission-recovery-restart-button"
+              className="mt-4 inline-flex items-center gap-2 border border-foreground bg-foreground px-5 py-2 text-xs font-medium text-background transition-colors hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${restartingApp ? "animate-spin" : ""}`}
+              />
+              {restartingApp ? "restarting..." : "restart screenpipe"}
+            </button>
+          </div>
+        ) : allOk ? (
           <div className="text-center space-y-2" data-testid="permission-recovery-all-fixed">
             <Check className="w-5 h-5 mx-auto text-muted-foreground" />
             <p className="font-mono text-sm">all fixed — resuming</p>
