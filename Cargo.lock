@@ -8342,7 +8342,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8407,7 +8407,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8446,9 +8446,10 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "dirs 6.0.0",
+ "screenpipe-cpu-features",
  "serde",
  "serde_json",
  "specta",
@@ -8459,7 +8460,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -8507,7 +8508,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8537,6 +8538,7 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "reqwest 0.13.3",
+ "screenpipe-cpu-features",
  "screenpipe-events",
  "screenpipe-secrets",
  "screenpipe-sync",
@@ -8558,8 +8560,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-cpu-features"
+version = "0.4.37"
+
+[[package]]
 name = "screenpipe-db"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8590,7 +8596,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8613,6 +8619,7 @@ dependencies = [
  "futures",
  "hostname",
  "http-body-util",
+ "hyper-util",
  "image",
  "libc",
  "lru",
@@ -8625,6 +8632,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.3",
  "rpassword",
+ "rusqlite",
  "screenpipe-a11y",
  "screenpipe-audio",
  "screenpipe-capture",
@@ -8638,6 +8646,7 @@ dependencies = [
  "screenpipe-screen",
  "screenpipe-secrets",
  "screenpipe-semantic",
+ "screenpipe-sqlite-recovery",
  "screenpipe-vault",
  "sentry",
  "serde",
@@ -8651,6 +8660,7 @@ dependencies = [
  "tikv-jemallocator",
  "tinfoil",
  "tokio",
+ "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
  "tower 0.4.13",
@@ -8667,7 +8677,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8685,7 +8695,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-gateway"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "async-trait",
  "axum",
@@ -8715,7 +8725,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "anyhow",
  "clap",
@@ -8727,7 +8737,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -8748,6 +8758,7 @@ dependencies = [
  "reqwest 0.13.3",
  "screenpipe-resource",
  "screenpipe-rfdetr-mlx",
+ "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -8765,7 +8776,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "serde",
  "sysinfo",
@@ -8785,7 +8796,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -8835,7 +8846,6 @@ dependencies = [
  "chrono",
  "keyring",
  "rand 0.9.4",
- "screenpipe-config",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -8867,17 +8877,31 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "libsqlite3-sys",
+ "serde",
+ "serde_json",
+ "sqlx",
  "tempfile",
  "tokio",
  "tracing",
+ "windows 0.58.0",
+]
+
+[[package]]
+name = "screenpipe-sqlite-recovery"
+version = "0.4.37"
+dependencies = [
+ "cc",
+ "libsqlite3-sys",
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8899,7 +8923,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -8908,7 +8932,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-telemetry-wire"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "serde",
  "serde_json",
@@ -8918,7 +8942,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.34"
+version = "0.4.37"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -10704,6 +10728,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

@@ -57,10 +57,12 @@ async fn setup_db() -> (tempfile::TempDir, DatabaseManager) {
     let db = DatabaseManager::new(&path, Default::default())
         .await
         .unwrap();
+    let writer = db.coordinated_writer().lock().await.unwrap();
     sqlx::migrate!("../screenpipe-db/src/migrations")
-        .run(&db.pool)
+        .run(writer.pool())
         .await
         .unwrap();
+    drop(writer);
     (dir, db)
 }
 

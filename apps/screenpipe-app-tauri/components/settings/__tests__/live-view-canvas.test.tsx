@@ -4,8 +4,12 @@
 
 import React, { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { LiveViewCanvas } from "../live-view-canvas";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  interpolateCanvasFocusViewport,
+  isTrustedCanvasMove,
+  LiveViewCanvas,
+} from "../live-view-canvas";
 import { createCanvasDocument } from "@/lib/live-views/canvas-layout";
 import type {
   BrainViewCanvasDocument,
@@ -108,6 +112,11 @@ function CanvasHarness({
   );
 }
 
+function openCanvasTools() {
+  fireEvent.click(screen.getByTestId("canvas-tools-toggle"));
+  return screen.getByTestId("canvas-tools-panel");
+}
+
 beforeEach(() => {
   vi.stubGlobal("PointerEvent", PointerEventMock);
   HTMLElement.prototype.setPointerCapture = vi.fn();
@@ -132,6 +141,183 @@ afterEach(() => {
 });
 
 describe("LiveViewCanvas", () => {
+  it("eases AI proposal focus instead of jumping and respects reduced motion", () => {
+    const from = { x: 0, y: 0, zoom: 1 };
+    const to = { x: -1_720, y: -790, zoom: 0.75 };
+
+    const animationFrames = Array.from({ length: 11 }, (_, index) =>
+      interpolateCanvasFocusViewport(from, to, index / 10),
+    );
+    for (let index = 1; index < animationFrames.length; index += 1) {
+      expect(animationFrames[index].x).toBeLessThan(
+        animationFrames[index - 1].x,
+      );
+      expect(animationFrames[index].y).toBeLessThan(
+        animationFrames[index - 1].y,
+      );
+      expect(animationFrames[index].zoom).toBeLessThan(
+        animationFrames[index - 1].zoom,
+      );
+    }
+    const halfway = interpolateCanvasFocusViewport(from, to, 0.5);
+    expect(halfway.x).toBeLessThan(from.x);
+    expect(halfway.x).toBeGreaterThan(to.x);
+    expect(halfway.y).toBeLessThan(from.y);
+    expect(halfway.y).toBeGreaterThan(to.y);
+    expect(halfway.zoom).toBeLessThan(from.zoom);
+    expect(halfway.zoom).toBeGreaterThan(to.zoom);
+    expect(interpolateCanvasFocusViewport(from, to, -1)).toEqual(from);
+    expect(interpolateCanvasFocusViewport(from, to, 1)).toEqual(to);
+    expect(interpolateCanvasFocusViewport(from, to, 2)).toEqual(to);
+    expect(interpolateCanvasFocusViewport(from, to, 0.01, true)).toEqual(to);
+  });
+
+  it("cancels focus only for real user-driven Canvas movement", () => {
+    expect(isTrustedCanvasMove(null)).toBe(false);
+    expect(isTrustedCanvasMove({ isTrusted: false } as MouseEvent)).toBe(false);
+    expect(isTrustedCanvasMove({ isTrusted: true } as MouseEvent)).toBe(true);
+  });
+
+  it("focuses a proposal that is added after its focus request", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const onChange = vi.fn();
+    const initialDocument = createCanvasDocument(view);
+    const proposedSlot = {
+      ...view.slots[0],
+      id: "late-proposal",
+      title: "Late proposal",
+      order: view.slots.length,
+    };
+    const props = {
+      timeRange: "today" as const,
+      refreshingSlotIds: new Set<string>(),
+      aiEditingSlotId: null,
+      onChange,
+      onFeedback: vi.fn().mockResolvedValue(true),
+      onRegenerate: vi.fn(),
+      onAiEdit: vi.fn().mockResolvedValue(true),
+      focusSlotId: proposedSlot.id,
+    };
+    const result = render(
+      <LiveViewCanvas
+        {...props}
+        document={initialDocument}
+        slots={view.slots}
+      />,
+    );
+    onChange.mockClear();
+
+    result.rerender(
+      <LiveViewCanvas
+        {...props}
+        document={{
+          ...initialDocument,
+          blocks: [
+            ...initialDocument.blocks,
+            {
+              slotId: proposedSlot.id,
+              x: 1_200,
+              y: 800,
+              width: 660,
+              height: 320,
+            },
+          ],
+        }}
+        slots={[...view.slots, proposedSlot]}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewport: { x: -1_030, y: -610, zoom: 1 },
+        }),
+        { persist: false },
+      ),
+    );
+  });
+
+  it("does not restart proposal focus when the parent callback changes", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const firstOnChange = vi.fn();
+    const nextOnChange = vi.fn();
+    const document = createCanvasDocument(view);
+    const props = {
+      document,
+      slots: view.slots,
+      timeRange: "today" as const,
+      refreshingSlotIds: new Set<string>(),
+      aiEditingSlotId: null,
+      onFeedback: vi.fn().mockResolvedValue(true),
+      onRegenerate: vi.fn(),
+      onAiEdit: vi.fn().mockResolvedValue(true),
+      focusSlotId: "focus-time",
+    };
+    const result = render(
+      <LiveViewCanvas {...props} onChange={firstOnChange} />,
+    );
+    await waitFor(() => expect(firstOnChange).toHaveBeenCalledTimes(1));
+
+    result.rerender(<LiveViewCanvas {...props} onChange={nextOnChange} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(nextOnChange).not.toHaveBeenCalled();
+  });
+
+  it("settles proposal focus when animation frames are throttled", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false })),
+    );
+    const onChange = vi.fn();
+    const props = {
+      document: createCanvasDocument(view),
+      slots: view.slots,
+      timeRange: "today" as const,
+      refreshingSlotIds: new Set<string>(),
+      aiEditingSlotId: null,
+      onChange,
+      onFeedback: vi.fn().mockResolvedValue(true),
+      onRegenerate: vi.fn(),
+      onAiEdit: vi.fn().mockResolvedValue(true),
+    };
+    const result = render(
+      <LiveViewCanvas {...props} focusSlotId={null} />,
+    );
+    onChange.mockClear();
+
+    vi.useFakeTimers();
+    try {
+      const requestAnimationFrame = vi.fn(() => 41);
+      const cancelAnimationFrame = vi.fn();
+      vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
+      vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+
+      result.rerender(
+        <LiveViewCanvas {...props} focusSlotId="focus-time" />,
+      );
+
+      expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+      expect(onChange).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(360));
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewport: { x: 216, y: 146, zoom: 1 },
+        }),
+        { persist: false },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the source-backed Live View cards interactive inside the canvas", () => {
     render(<CanvasHarness />);
 
@@ -147,6 +333,37 @@ describe("LiveViewCanvas", () => {
     ).toBeTruthy();
   });
 
+  it("keeps canvas tools compact until opened and preserves the active tool", () => {
+    render(<CanvasHarness />);
+
+    const toggle = screen.getByTestId("canvas-tools-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-label")).toContain("select tool active");
+    expect(toggle.getAttribute("title")).toContain("select active");
+    expect(toggle.textContent).toBe("");
+    expect(toggle.className).toContain("w-8");
+    expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
+    expect(screen.getByTestId("canvas-interaction-hint")).toBeTruthy();
+
+    const panel = openCanvasTools();
+    expect(panel).toBeTruthy();
+    expect(screen.getByTestId("canvas-tool-pan")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-interaction-hint")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("canvas-tool-pan"));
+    expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
+    expect(
+      screen.getByTestId("canvas-tools-toggle").getAttribute("aria-label"),
+    ).toContain("pan tool active");
+    expect(screen.getByTestId("canvas-interaction-hint")).toBeTruthy();
+
+    openCanvasTools();
+    fireEvent.keyDown(screen.getByTestId("canvas-tools-panel"), {
+      key: "Escape",
+    });
+    expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
+  });
+
   it("does not persist React Flow's programmatic mount viewport", async () => {
     const onPersist = vi.fn();
     render(<CanvasHarness onPersist={onPersist} />);
@@ -155,7 +372,7 @@ describe("LiveViewCanvas", () => {
     expect(onPersist).not.toHaveBeenCalled();
   });
 
-  it("ignores React Flow's delayed move-end callback after unmount", async () => {
+  it("ignores React Flow's untrusted move callbacks", async () => {
     const onChange = vi.fn();
     const result = render(
       <React.StrictMode>
@@ -177,13 +394,13 @@ describe("LiveViewCanvas", () => {
       deltaX: 24,
       deltaY: 24,
     });
-    await waitFor(() => expect(onChange).toHaveBeenCalled());
-    const callsBeforeUnmount = onChange.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onChange).not.toHaveBeenCalled();
 
     result.unmount();
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    expect(onChange).toHaveBeenCalledTimes(callsBeforeUnmount);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("resizes a Block from its current size on the first drag", async () => {
@@ -259,6 +476,7 @@ describe("LiveViewCanvas", () => {
     const onPersist = vi.fn();
     render(<CanvasHarness onPersist={onPersist} />);
 
+    openCanvasTools();
     fireEvent.click(screen.getByTestId("canvas-tool-note"));
     fireEvent.pointerDown(screen.getByTestId("live-view-canvas-surface"), {
       clientX: 320,
@@ -277,6 +495,7 @@ describe("LiveViewCanvas", () => {
       );
     });
 
+    openCanvasTools();
     fireEvent.click(screen.getByTestId("canvas-delete-selection"));
     expect(screen.queryByLabelText("Canvas note")).toBeNull();
     expect(onPersist).toHaveBeenLastCalledWith(
@@ -288,6 +507,7 @@ describe("LiveViewCanvas", () => {
     const onPersist = vi.fn();
     render(<CanvasHarness onPersist={onPersist} />);
 
+    openCanvasTools();
     fireEvent.click(screen.getByTestId("canvas-tool-arrow"));
     fireEvent.pointerDown(screen.getByTestId("canvas-move-focus-time"), {
       pointerId: 3,
@@ -310,6 +530,7 @@ describe("LiveViewCanvas", () => {
     });
     const arrow = screen.getByTestId(/^canvas-arrow-/);
     fireEvent.pointerDown(arrow, { pointerId: 5 });
+    openCanvasTools();
     fireEvent.click(screen.getByTestId("canvas-delete-selection"));
     expect(screen.queryByTestId(/^canvas-arrow-/)).toBeNull();
   });
@@ -347,6 +568,7 @@ describe("LiveViewCanvas", () => {
       }),
     );
 
+    openCanvasTools();
     fireEvent.click(screen.getByTestId("canvas-tool-draw"));
     fireEvent.pointerDown(surface, {
       pointerId: 10,
@@ -365,6 +587,7 @@ describe("LiveViewCanvas", () => {
     });
     expect(screen.getByTestId(/^canvas-stroke-/)).toBeTruthy();
 
+    openCanvasTools();
     for (let index = 0; index < 20; index += 1) {
       fireEvent.click(screen.getByLabelText("zoom out"));
     }
@@ -376,6 +599,7 @@ describe("LiveViewCanvas", () => {
     const surface = screen.getByTestId("live-view-canvas-surface");
     const pane = surface.querySelector<HTMLElement>(".react-flow__pane");
     expect(pane).toBeTruthy();
+    openCanvasTools();
 
     fireEvent.wheel(pane!, { deltaY: -100, clientX: 500, clientY: 350 });
     expect(screen.getByText("100%")).toBeTruthy();

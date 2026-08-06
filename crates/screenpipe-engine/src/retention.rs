@@ -678,7 +678,10 @@ async fn do_local_cleanup(
         // becomes real if/when the DB is migrated to incremental auto_vacuum.
         if matches!(mode, RetentionMode::All | RetentionMode::Lean) {
             info!("retention: running incremental vacuum (reclaims pages only under auto_vacuum=incremental)");
-            if let Err(e) = db.execute_raw_sql("PRAGMA incremental_vacuum(1000)").await {
+            if let Err(e) = db
+                .execute_raw_sql_write("PRAGMA incremental_vacuum(1000)")
+                .await
+            {
                 warn!("retention: incremental vacuum failed: {}", e);
             }
         }
@@ -919,7 +922,9 @@ mod tests {
         // instantly: `begin_immediate_with_retry` only retries
         // connection-acquisition errors, not query errors after BEGIN, so a
         // missing table surfaces immediately as Err, no backoff needed.
-        db.execute_raw_sql("DROP TABLE video_chunks").await.unwrap();
+        db.execute_raw_sql_write("DROP TABLE video_chunks")
+            .await
+            .unwrap();
 
         let now = Utc::now();
         let start = now - Duration::hours(2);

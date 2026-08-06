@@ -7,7 +7,7 @@ import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
 import { commands, type Result } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
-import { buildProviderErrorMessage, preflightChatProvider } from "@/lib/chat/provider-errors";
+import { buildProviderErrorPresentation, preflightChatProvider } from "@/lib/chat/provider-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";
@@ -563,7 +563,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         let errorMsg: string;
         let retryPrompt: string | undefined;
         const currentPreset = getActivePreset();
-        const providerError = buildProviderErrorMessage(rawError, currentPreset);
+        const providerError = buildProviderErrorPresentation(rawError, currentPreset);
 
         if (isPiPromptStartTimeout(rawError)) {
           errorMsg = piPromptStartTimeoutMessage();
@@ -578,8 +578,8 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
             : "AI agent crashed — restarting automatically...";
           retryPrompt = userMessage;
         } else if (providerError) {
-          errorMsg = providerError;
-          retryPrompt = userMessage;
+          errorMsg = providerError.message;
+          retryPrompt = providerError.retryable ? userMessage : undefined;
         } else if (rawError.includes("not found")) {
           errorMsg = `Model "${currentPreset?.model}" not found. Check your AI preset in settings.`;
         } else {
@@ -622,21 +622,21 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       if (timeoutId) clearTimeout(timeoutId);
       piMessageIdRef.current = null;
       const rawError = error instanceof Error ? error.message : "Unknown error";
-      const providerError = buildProviderErrorMessage(rawError, getActivePreset());
+      const providerError = buildProviderErrorPresentation(rawError, getActivePreset());
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMessageId
-            ? { ...m, content: providerError || `Error: ${rawError}` }
+            ? { ...m, content: providerError?.message || `Error: ${rawError}` }
             : m
-          )
+        )
       );
       if (sidNow) {
-        const content = providerError || `Error: ${rawError}`;
+        const content = providerError?.message || `Error: ${rawError}`;
         const storeState = useChatStore.getState();
         storeState.actions.patchMessage(sidNow, assistantMessageId, (message: any) => ({
           ...message,
           content,
-          retryPrompt: userMessage,
+          retryPrompt: providerError?.retryable === false ? undefined : userMessage,
         }));
         storeState.actions.setStreaming(sidNow, {
           streamingMessageId: null,

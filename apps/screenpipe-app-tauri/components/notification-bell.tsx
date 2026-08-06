@@ -24,14 +24,17 @@ import {
 } from "@/components/ui/popover";
 import { useRouter } from "next/navigation";
 import { showChatWithPrefill } from "@/lib/chat-utils";
-import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
+import {
+  notificationActionAnalyticsProperties,
+  notificationAnalyticsProperties,
+} from "@/lib/notification-analytics";
 import { NotificationFeedback } from "@/components/notification-feedback";
 import {
   isHighPriorityNotification,
   type NotificationPriority,
 } from "@/lib/notifications/priority";
+import { appServerFetch } from "@/lib/notifications/app-server";
 
 interface NotificationEntry {
   id: string;
@@ -46,10 +49,6 @@ interface NotificationEntry {
   read: boolean;
   priority?: NotificationPriority | string;
   actions?: NotificationAction[];
-}
-
-interface AppServerConfig {
-  port: number;
 }
 
 // Actions worth rendering as buttons in the bell. `dismiss` is excluded — the
@@ -73,23 +72,6 @@ function SectionLabel({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
-}
-
-let appServerBaseUrl: Promise<string> | null = null;
-
-async function getAppServerBaseUrl(): Promise<string> {
-  appServerBaseUrl ??= invoke<AppServerConfig>("get_app_server_config")
-    .then((config) => `http://localhost:${config.port || 11435}`)
-    .catch(() => "http://localhost:11435");
-  return appServerBaseUrl;
-}
-
-async function notificationFetch(
-  path: string,
-  init?: RequestInit,
-): Promise<Response> {
-  const baseUrl = await getAppServerBaseUrl();
-  return fetch(`${baseUrl}${path.startsWith("/") ? path : `/${path}`}`, init);
 }
 
 async function openNotificationLink(href: string) {
@@ -186,7 +168,7 @@ export function NotificationInboxPanel({
 
   const loadHistory = useCallback(async () => {
     try {
-      const res = await notificationFetch("/notifications");
+      const res = await appServerFetch("/notifications");
       if (res.ok) {
         const entries: NotificationEntry[] = await res.json();
         setHistory(entries);
@@ -214,7 +196,7 @@ export function NotificationInboxPanel({
     );
     if (!wasUnread) return;
     try {
-      await notificationFetch(`/notifications/${encodeURIComponent(id)}/read`, {
+      await appServerFetch(`/notifications/${encodeURIComponent(id)}/read`, {
         method: "POST",
       });
     } catch {}
@@ -224,7 +206,7 @@ export function NotificationInboxPanel({
     posthog.capture("notification_bell_clear_all", { count: history.length, surface });
     setHistory([]);
     try {
-      await notificationFetch("/notifications", { method: "DELETE" });
+      await appServerFetch("/notifications", { method: "DELETE" });
     } catch {}
   };
 
@@ -232,7 +214,7 @@ export function NotificationInboxPanel({
     setHistory((prev) => prev.filter((n) => n.id !== id));
     setExpandedId((prev) => (prev === id ? null : prev));
     try {
-      await notificationFetch(`/notifications/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await appServerFetch(`/notifications/${encodeURIComponent(id)}`, { method: "DELETE" });
     } catch {}
   }, []);
 
@@ -247,8 +229,7 @@ export function NotificationInboxPanel({
 
   const runAction = async (entry: NotificationEntry, action: NotificationAction) => {
     posthog.capture("notification_bell_action", {
-      action: action.action,
-      action_type: action.type,
+      ...notificationActionAnalyticsProperties(action.type),
       ...notificationAnalyticsProperties(entry, "bell"),
       surface,
     });
@@ -275,10 +256,8 @@ export function NotificationInboxPanel({
       // user it worked when the pipe never ran. Surface it instead.
       console.error("notification action failed", { action: action.action, type: action.type }, err);
       posthog.capture("notification_bell_action_error", {
-        action: action.action,
-        action_type: action.type,
+        ...notificationActionAnalyticsProperties(action.type),
         ...notificationAnalyticsProperties(entry, "bell"),
-        error: String(err),
         surface,
       });
       return;
@@ -657,7 +636,7 @@ export function NotificationBell() {
   // own full history while open.
   const pollUnread = useCallback(async () => {
     try {
-      const res = await notificationFetch("/notifications");
+      const res = await appServerFetch("/notifications");
       if (res.ok) {
         const entries: NotificationEntry[] = await res.json();
         setUnreadCount(entries.filter((n) => !n.read && isHighPriorityNotification(n)).length);

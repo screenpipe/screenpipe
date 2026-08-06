@@ -39,6 +39,7 @@ import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
 } from "./managed-settings";
+import { isResolvedConsumerBuild } from "./use-is-enterprise-build";
 import {
 	clearLegacyUserGoalCategory,
 	DEFAULT_USER_GOAL_CATEGORY,
@@ -46,6 +47,14 @@ import {
 	readLegacyUserGoalCategory,
 	type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
+import {
+	LOCAL_DESKTOP_REMOTE_POLICY,
+	NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
+	normalizeDesktopRemotePolicySnapshot,
+	normalizeDesktopRemotePreferences,
+	type DesktopRemotePolicySnapshot,
+	type DesktopRemotePreferences,
+} from "@/lib/desktop-remote-control";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -243,6 +252,12 @@ export type Settings = SettingsStore & {
 	deviceId?: string;
 	/** Device-key values enforced by the current enterprise policy. */
 	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
+	/** @deprecated PR #5878 transition field; migrated into remoteControlPreferences. */
+	semanticContextPreference?: boolean | null;
+	/** Explicit local choices. null means inherit that control's remote rollout default. */
+	remoteControlPreferences?: DesktopRemotePreferences;
+	/** Last valid bounded policies, persisted for offline restarts and Rust enforcement. */
+	remoteControlPolicy?: DesktopRemotePolicySnapshot;
 	updateChannel?: UpdateChannel;
 	chatHistory?: ChatHistoryStore;
 	ignoredUrls?: string[];
@@ -252,7 +267,7 @@ export type Settings = SettingsStore & {
 	useSystemDefaultAudio?: boolean;
 	/** Enable AI workflow event detection (cloud, triggers event-based pipes) */
 	enableWorkflowEvents?: boolean;
-	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
+	/** Audio transcription scheduling: "batch" (default, longer chunks for quality) or "realtime". */
 	transcriptionMode?: "realtime" | "smart" | "batch";
 	/** Live notes for manually-started meetings. Separate from background 24/7 transcription. */
 	meetingLiveTranscriptionEnabled?: boolean;
@@ -325,8 +340,9 @@ export type Settings = SettingsStore & {
 	disableKeyboardCapture?: boolean;
 	/** Skip mouse-click rows in the UI recorder. Defaults to false (click capture ON) — clicks carry no text payload and drive workflow/task mining. Clicks still wake event-driven capture when disabled. */
 	disableClickCapture?: boolean;
-	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
-	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
+	/** Capture System Audio via CoreAudio Process Tap on macOS 14.4+ instead of ScreenCaptureKit.
+	 *  Desktop migration V3 enables it automatically. Initial tap failures fall back to SCK;
+	 *  ignored on macOS <14.4 and non-macOS. */
 	experimentalCoreaudioSystemAudio?: boolean;
 	/** Beta ("Smart recording" in the app): during meetings, capture only the meeting app's audio
 	 *  and the microphone it actually uses (per-process piggyback). Off by default. Engages in ANY
@@ -687,7 +703,7 @@ let DEFAULT_SETTINGS: Settings = {
 				port: 11434,
 			},
 		updateChannel: "stable",
-			autoUpdate: false,
+			autoUpdate: true,
 			autoUpdatePipes: true,
 			autoStartEnabled: true,
 			platform: "unknown",
@@ -725,6 +741,31 @@ let DEFAULT_SETTINGS: Settings = {
 			disableVision: false,
 			disableScreenshots: false,
 			enableSemanticContext: false,
+			remoteControlPreferences: {
+				...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
+			},
+			remoteControlPolicy: {
+				schemaVersion: 1,
+				boolean: {
+					semanticContext: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.semanticContext,
+					},
+					coreAudioSystemAudio: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.coreAudioSystemAudio,
+					},
+					smartRecording: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.smartRecording,
+					},
+					filterMusic: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.filterMusic,
+					},
+					prioritizeInputLatency: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.prioritizeInputLatency,
+					},
+				},
+				aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
+				autoUpdate: { ...LOCAL_DESKTOP_REMOTE_POLICY.autoUpdate },
+			},
 			semanticContextMode: "memory",
 			useAllMonitors: true,
 			showShortcutOverlay: true,
@@ -742,7 +783,8 @@ let DEFAULT_SETTINGS: Settings = {
 			cloudArchiveEnabled: false,
 			cloudArchiveRetentionDays: 7,
 			meetingSummaryPipeSlug: "meeting-summary",
-			filterMusic: false,
+			filterMusic: true,
+			prioritizeInputLatency: false,
 			ignoreIncognitoWindows: true,
 			enhancedIncognitoDetection: false,
 			pauseOnDrmContent: false,
@@ -751,7 +793,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableClickCapture: false,
 			keepComputerAwake: false,
 			showRestartNotifications: false,
-			experimentalCoreaudioSystemAudio: false,
+			experimentalCoreaudioSystemAudio: true,
 			experimentalMeetingPiggyback: false,
 			alwaysRecordBluetoothMic: false,
 			windowsInputAecEnabled: false,
@@ -957,6 +999,30 @@ async function hydrateCloudToken(settings: Settings): Promise<Settings> {
 	return settings;
 }
 
+/**
+ * The managed values that should actually be enforced right now, or `undefined`
+ * on a confirmed consumer build.
+ *
+ * Enterprise and consumer installs share `~/.screenpipe`, so a machine that ran
+ * the enterprise binary once keeps its `enterpriseManagedSettings` blob. The UI
+ * layer gates on `isEnterprise` (`use-enterprise-policy`), but this persistence
+ * layer did not — so on a consumer build the switch rendered as a normal,
+ * interactive control while every write was clamped straight back on both write
+ * and read, with no lock shown and no way to clear the blob. Toggling
+ * "screenshot images" off simply did nothing, forever.
+ *
+ * Fails closed: `isResolvedConsumerBuild` only reports true on an authoritative
+ * `false` from Rust, so an unresolved or failed check keeps enforcing policy and
+ * a managed device cannot escape it by racing the IPC.
+ */
+async function activeManagedValues(
+	settings: Partial<Settings>
+): Promise<Record<string, ManagedSettingValue> | undefined> {
+	const managed = settings.enterpriseManagedSettings;
+	if (!managed) return undefined;
+	return (await isResolvedConsumerBuild()) ? undefined : managed;
+}
+
 // Store utilities similar to Cap's implementation
 function createSettingsStore() {
 	const get = async (): Promise<Settings> => {
@@ -1009,6 +1075,67 @@ function createSettingsStore() {
 		if (!(settings as any).coreaudioTapMigrationV2) {
 			settings.experimentalCoreaudioSystemAudio = false;
 			(settings as any).coreaudioTapMigrationV2 = true;
+			needsUpdate = true;
+		}
+
+		// One-time migration (V3 — supersedes V2): flip CoreAudio Process Tap
+		// back ON. The toggle was removed from the UI and the runtime falls back
+		// through normal backend selection if tap initialization fails (#5236).
+		if (!(settings as any).coreaudioTapMigrationV3) {
+			settings.experimentalCoreaudioSystemAudio = true;
+			(settings as any).coreaudioTapMigrationV3 = true;
+			needsUpdate = true;
+		}
+
+		// Existing installs predate the typed remote-control registry. Preserve
+		// the post-migration effective values as explicit choices. Rust seeds an
+		// all-null object for genuinely new installs, so those can inherit rollout
+		// defaults without changing any established user preference.
+		const normalizedRemotePreferences = normalizeDesktopRemotePreferences(settings);
+		if (
+			JSON.stringify(settings.remoteControlPreferences) !==
+			JSON.stringify(normalizedRemotePreferences)
+		) {
+			settings.remoteControlPreferences = normalizedRemotePreferences;
+			needsUpdate = true;
+		}
+		const legacyRemoteSettings = settings as Settings & {
+			semanticContextRemoteDefault?: boolean;
+			semanticContextRemoteForceDisabled?: boolean;
+		};
+		const normalizedRemotePolicy = normalizeDesktopRemotePolicySnapshot(
+			settings.remoteControlPolicy,
+			{
+				defaultEnabled: legacyRemoteSettings.semanticContextRemoteDefault,
+				forceDisabled:
+					legacyRemoteSettings.semanticContextRemoteForceDisabled,
+			},
+		);
+		if (
+			JSON.stringify(settings.remoteControlPolicy) !==
+			JSON.stringify(normalizedRemotePolicy)
+		) {
+			settings.remoteControlPolicy = normalizedRemotePolicy;
+			needsUpdate = true;
+		}
+		if (settings.semanticContextPreference !== undefined) {
+			delete settings.semanticContextPreference;
+			needsUpdate = true;
+		}
+		if (legacyRemoteSettings.semanticContextRemoteDefault !== undefined) {
+			delete legacyRemoteSettings.semanticContextRemoteDefault;
+			needsUpdate = true;
+		}
+		if (legacyRemoteSettings.semanticContextRemoteForceDisabled !== undefined) {
+			delete legacyRemoteSettings.semanticContextRemoteForceDisabled;
+			needsUpdate = true;
+		}
+
+		// One-time migration: default filterMusic to ON — transcribing music
+		// as speech is noise, users can turn it off in advanced settings (#5236).
+		if (!(settings as any).filterMusicDefaultedOn) {
+			settings.filterMusic = true;
+			(settings as any).filterMusicDefaultedOn = true;
 			needsUpdate = true;
 		}
 
@@ -1225,7 +1352,7 @@ function createSettingsStore() {
 
 			// Migrations may touch recording defaults. Enterprise values are the
 			// final authority and must survive reads as well as explicit writes.
-			const managedValues = settings.enterpriseManagedSettings;
+			const managedValues = await activeManagedValues(settings);
 			if (managedValues) {
 				const managedChanged = Object.entries(managedValues).some(
 					([key, value]) => JSON.stringify(settings[key]) !== JSON.stringify(value)
@@ -1234,6 +1361,11 @@ function createSettingsStore() {
 					Object.assign(settings, applyManagedOverrides(settings, managedValues));
 					needsUpdate = true;
 				}
+			} else if (settings.enterpriseManagedSettings) {
+				// Confirmed consumer build carrying a stale policy blob: drop it so
+				// the machine stops re-clamping on every read.
+				delete settings.enterpriseManagedSettings;
+				needsUpdate = true;
 			}
 
 		// Save migrations if needed
@@ -1254,7 +1386,7 @@ function createSettingsStore() {
 		enqueueSettingsStoreWrite(async () => {
 			const store = await getStore();
 			const current = await get();
-			const managedValues = current.enterpriseManagedSettings;
+			const managedValues = await activeManagedValues(current);
 			let newSettings = { ...current, ...value } as Settings;
 			if ("user" in value) {
 				// On logout / Pro→non-Pro transition, clear the V2 marker so a future
@@ -1269,6 +1401,7 @@ function createSettingsStore() {
 				managedValues
 			) as Settings;
 			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
+			else delete newSettings.enterpriseManagedSettings;
 			await setSettingsStripped(store, newSettings);
 			await saveAndEncrypt(store);
 		});
@@ -1277,7 +1410,7 @@ function createSettingsStore() {
 		enqueueSettingsStoreWrite(async () => {
 			const store = await getStore();
 			const current = await get();
-			const managedValues = current.enterpriseManagedSettings;
+			const managedValues = await activeManagedValues(current);
 			const defaults = applyManagedOverrides(
 				createDefaultSettingsObject() as Record<string, unknown>,
 				managedValues

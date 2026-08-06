@@ -51,25 +51,11 @@ pub struct ChatGptOAuthStatus {
     pub error: Option<String>,
 }
 
-/// Open a connection to the secrets store (same DB as the screenpipe server).
-///
-/// Uses [`SecretStore::open`], which hands back the process-wide shared pool
-/// (engine-matched pragmas: WAL + busy_timeout + mmap off). This replaces the
-/// old per-call `SqlitePool::connect(?mode=rwc)` that coexisted with the
-/// engine's own pool on the busy main `db.sqlite` and intermittently failed
-/// with "database is locked" / "failed to create secrets table" — symptoms of
-/// the ad-hoc-pool WAL-index churn that corrupts the db (#4263). Errors still
-/// use `{:#}` so the full sqlx chain reaches the log.
+/// Open the dedicated credential database. Errors use `{:#}` so the complete
+/// SQLx chain reaches the log.
 async fn open_secret_store() -> Result<screenpipe_secrets::SecretStore, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let db_path = data_dir.join("db.sqlite");
-
-    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-        crate::secrets::KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-
-    screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), secret_key)
+    screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
         .await
         .map_err(|e| format!("failed to init secret store: {:#}", e))
 }

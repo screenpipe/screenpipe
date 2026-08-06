@@ -421,12 +421,6 @@ mod timeline_performance_tests {
         let db = DatabaseManager::new(path, Default::default())
             .await
             .unwrap();
-
-        sqlx::migrate!("./src/migrations")
-            .run(&db.pool)
-            .await
-            .expect("Failed to run migrations");
-
         db
     }
 
@@ -451,10 +445,7 @@ mod timeline_performance_tests {
         println!("Insert time: {:?}", insert_start.elapsed());
 
         // Force flush to disk
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(&db.pool)
-            .await
-            .ok();
+        db.wal_checkpoint().await.ok();
 
         let query_start = Instant::now();
         let result = db.find_video_chunks(start_time, end_time).await.unwrap();

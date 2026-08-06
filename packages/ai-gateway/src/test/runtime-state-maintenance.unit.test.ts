@@ -6,6 +6,8 @@ import { describe, expect, it } from 'bun:test';
 import {
   EPHEMERAL_USAGE_RETENTION_DAYS,
   MAINTENANCE_DELETE_BATCH,
+  SETTLEMENT_DELETE_BATCH,
+  SETTLEMENT_RETENTION_DAYS,
   TELEMETRY_RETENTION_DAYS,
   USAGE_RETENTION_DAYS,
   pruneRuntimeState,
@@ -37,14 +39,17 @@ describe('runtime state maintenance', () => {
     } as any;
 
     await pruneRuntimeState(env);
-    expect(batched).toHaveLength(7);
+    expect(batched).toHaveLength(8);
     expect(prepared.map((statement) => statement.sql).join('\n')).toContain('cost_daily');
     expect(prepared.map((statement) => statement.sql).join('\n')).toContain('transcription_daily');
     expect(prepared.map((statement) => statement.sql).join('\n')).toContain('model_health_window');
-    expect(prepared.filter((statement) => statement.sql.includes('LIMIT ?'))).toHaveLength(4);
+    expect(prepared.map((statement) => statement.sql).join('\n')).toContain('hosted_ai_settlements');
+    expect(prepared.filter((statement) => statement.sql.includes('LIMIT ?'))).toHaveLength(5);
     expect(prepared.flatMap((statement) => statement.bindings)).toContain(MAINTENANCE_DELETE_BATCH);
+    expect(prepared.flatMap((statement) => statement.bindings)).toContain(SETTLEMENT_DELETE_BATCH);
     expect(prepared.flatMap((statement) => statement.bindings)).toContain(`-${TELEMETRY_RETENTION_DAYS} days`);
     expect(prepared.flatMap((statement) => statement.bindings)).toContain(`-${USAGE_RETENTION_DAYS} days`);
     expect(prepared.flatMap((statement) => statement.bindings)).toContain(`-${EPHEMERAL_USAGE_RETENTION_DAYS} days`);
+    expect(prepared.flatMap((statement) => statement.bindings)).toContain(`-${SETTLEMENT_RETENTION_DAYS} days`);
   });
 });

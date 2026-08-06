@@ -1,0 +1,21 @@
+{
+	"fixture": "Cloudflare AI Gateway staging spend-limit response",
+	"captured_at": "2026-08-03",
+	"status": 429,
+	"body": {
+		"success": false,
+		"result": [],
+		"messages": [],
+		"error": [
+			{
+				"code": 2041,
+				"message": "Spend limit exceeded: rule 'REDACTED' (cost limit 0.01 per 86400s, sliding) for openai openai/gpt-5.6-sol"
+			}
+		],
+		"name": "AiGatewayError",
+		"httpCode": 429,
+		"internalCode": 2041,
+		"message": "Spend limit exceeded: rule 'REDACTED' (cost limit 0.01 per 86400s, sliding) for openai openai/gpt-5.6-sol",
+		"description": "Spend limit exceeded: rule 'REDACTED' (cost limit 0.01 per 86400s, sliding) for openai openai/gpt-5.6-sol"
+	}
+}

@@ -39,6 +39,9 @@ export interface ToolCall {
   isRunning: boolean;
   startedAtMs?: number;
   endedAtMs?: number;
+  /** Rolling tail of the tool's streamed partial output while it runs, from
+   *  pi's tool_execution_update.partialResult (capped). */
+  progress?: string;
 }
 
 export type ContentBlock =

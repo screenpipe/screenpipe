@@ -8,6 +8,17 @@ export function isTerminalPipeExecutionStatus(status: string): boolean {
   return !ACTIVE_PIPE_EXECUTION_STATUSES.has(status.trim().toLowerCase());
 }
 
+export function shouldReloadPipeExecutionHistory(
+  loadedLatestExecutionId: number | undefined,
+  inventoryLatestExecutionId: number | undefined,
+): boolean {
+  return (
+    inventoryLatestExecutionId != null &&
+    (loadedLatestExecutionId == null ||
+      inventoryLatestExecutionId > loadedLatestExecutionId)
+  );
+}
+
 export function buildPipeExecutionHistoryPage<
   T extends { id: number; status: string },
 >(executions: T[], pageSize: number): {

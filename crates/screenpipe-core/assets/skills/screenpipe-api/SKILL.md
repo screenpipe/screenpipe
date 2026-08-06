@@ -20,8 +20,14 @@ Local REST API at `http://localhost:3030`.
 3. curl fails instantly (`Failed to connect ... after 0 ms`) even though screenpipe is running → your shell is network-sandboxed; stop retrying curl and use the MCP tools.
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/..."
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/..."
 ```
+
+The fixed `X-Screenpipe-Client: api` value attributes a successful, nonempty
+external retrieval to the API surface. Never put an agent name, customer name,
+project, prompt, or other dynamic value in this header.
 
 No-auth endpoints: `/health`, `/ws/health`, `/audio/device/status`, `/connections/oauth/callback`, `/frames/*`, `/notify`, `/pipes/store/*`.
 
@@ -38,7 +44,9 @@ Cut tokens at the source on list endpoints (`/search`, `/elements`): add `&forma
 Default broad-context call. Bundles apps, windows, key_texts, audio, edited_files, recording health, top memories, deduped screen+audio snippets, and a `data_status`/`query_status`/`guidance` triple.
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/activity-summary?start_time=30m%20ago&end_time=now"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/activity-summary?start_time=30m%20ago&end_time=now"
 ```
 
 Required: `start_time`, `end_time`. Optional: `app_name`, `q` (filters memories+snippets, drives `query_status`); `include_recording|memories|snippets|guidance=false` to slim (each defaults true); `max_snippets`, `max_snippet_chars`, `max_memories`. For a lean time-tracking sweep also set `include_key_texts=false` (biggest win), `include_apps=false`, `include_windows=false` — `total_active_minutes` + per-app/window `minutes` + the status triple still return.
@@ -54,7 +62,9 @@ Required: `start_time`, `end_time`. Optional: `app_name`, `q` (filters memories+
 Use when `/activity-summary` says `ok` but you need verbatim quotes, media paths, frame IDs, or a specific match.
 
 ```bash
-curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
 ```
 
 | Parameter | Required | Description |
@@ -212,19 +222,18 @@ Patterns: `GROUP BY date(timestamp)` (daily), `GROUP BY strftime('%H:00', timest
 
 ```bash
 curl http://localhost:3030/connections            # list all integrations (40+)
-curl http://localhost:3030/connections/telegram   # saved creds for a webhook/token integration
+curl http://localhost:3030/connections/telegram   # status + non-secret settings
 ```
 
 Each entry's `description` is self-describing — for control surfaces (browsers, gateways, OAuth proxies) it includes the exact endpoint + body shape. Read it before guessing. If not connected, tell the user to set it up from the Connections page in the desktop app.
 
-**Credential integrations** — `GET /connections/<id>` returns fields to call the service directly:
-- **Telegram**: `bot_token`+`chat_id` → `POST https://api.telegram.org/bot{token}/sendMessage`
-- **Slack** / **Teams**: `webhook_url` → `POST {webhook_url}` with `{"text":...}`
-- **Discord**: `webhook_url` → `POST {webhook_url}` with `{"content":...}`
-- **Todoist**: `api_token` → `POST https://api.todoist.com/api/v1/tasks` (Bearer)
-- **Email**: `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `from_address`
+Connection reads return status and declared non-secret settings only. Stored secrets never appear in API responses. Use local boundaries:
+- **Telegram**: `POST /connections/telegram/send` with `{"text":"..."}`
+- **n8n / Zapier / Make**: `POST /connections/<id>/proxy` with arbitrary JSON
+- **Discord**: `POST /connections/discord/proxy` with `{"content":"..."}`
+- **Teams webhook**: `POST /connections/teams/proxy` with `{"text":"..."}`
 
-**OAuth/proxy integrations** — tokens live in SecretStore, never exposed via `GET`. Call the local proxy; it injects auth and forwards upstream. There is no `/connections/<id>/token` endpoint.
+**API proxy integrations** — credentials stay server-side. Call the local wildcard proxy; it injects auth and forwards upstream. There is no `/connections/<id>/token` endpoint.
 
 ```bash
 # GitHub create issue (repo from pipe settings). Same shape for comments: .../issues/42/comments {"body":...}

@@ -45,14 +45,7 @@ pub struct OAuthInstanceInfo {
 
 async fn open_secret_store() -> Option<screenpipe_secrets::SecretStore> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let db_path = data_dir.join("db.sqlite");
-    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-        crate::secrets::KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-    // Shared, engine-matched pool — never an ad-hoc per-call connection, which
-    // churns the WAL-index and corrupts db.sqlite (#4263).
-    screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), secret_key)
+    screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
         .await
         .ok()
 }

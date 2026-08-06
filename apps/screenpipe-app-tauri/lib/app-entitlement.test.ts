@@ -285,6 +285,32 @@ describe("app entitlement", () => {
     ).toBe(false);
   });
 
+  it.each(["pro_max", "pro_ultra"] as const)(
+    "recognizes %s as a consumer plan when the user also belongs to an enterprise workspace",
+    (plan) => {
+      const capacityUser = user({
+        cloud_subscribed: true,
+        app_entitled: true,
+        subscription_plan: plan,
+        entitlement: {
+          active: true,
+          plan,
+          checked_at: "2026-06-05T11:00:00.000Z",
+          source: "manual",
+          features: { app: true, cloud: true, enterprise: false },
+        },
+        enterprise_account: {
+          org_name: "Screenpipe",
+          role: "admin",
+          requires_enterprise_app: true,
+        },
+      });
+
+      expect(getLocalPlanPolicy(capacityUser)).toBe("verified-paid");
+      expect(hasConsumerAppSubscription(capacityUser)).toBe(true);
+    },
+  );
+
   it("does not unlock new cloud features from stale entitlement data", () => {
     expect(
       hasCloudEntitlement(user({ cloud_subscribed: true, entitlement: null })),
@@ -340,6 +366,96 @@ describe("app entitlement", () => {
     });
     expect(hasAppEntitlement(normalized)).toBe(true);
     expect(hasCloudEntitlement(normalized)).toBe(true);
+  });
+
+  // The server computes `subscription_plan` per request and may omit it while
+  // still returning a complete entitlement. Falling back to an invented label
+  // ("pro"/"standard") then contradicted the entitlement's own plan, and
+  // hasVerifiedPaidPlanAt requires the two to match exactly — so a fully paid
+  // account collapsed to "unknown" policy and was shown the enterprise-app gate.
+  it("adopts entitlement.plan when the API omits subscription_plan", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "user_lifetime",
+        app_entitled: true,
+        cloud_subscribed: false,
+        entitlement: {
+          active: true,
+          plan: "lifetime",
+          source: "lifetime",
+          checked_at: NOW.toISOString(),
+          features: { app: true },
+        },
+      },
+      "token",
+    );
+
+    expect(normalized.subscription_plan).toBe("lifetime");
+    expect(getLocalPlanPolicy(normalized)).toBe("verified-paid");
+    expect(hasConsumerAppSubscription(normalized)).toBe(true);
+  });
+
+  it("does not fabricate 'pro' over a richer entitlement plan", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "user_pro_ultra",
+        app_entitled: true,
+        cloud_subscribed: true,
+        entitlement: {
+          active: true,
+          plan: "pro_ultra",
+          source: "subscription",
+          checked_at: NOW.toISOString(),
+          features: { app: true, cloud: true },
+        },
+      },
+      "token",
+    );
+
+    expect(normalized.subscription_plan).toBe("pro_ultra");
+    expect(getLocalPlanPolicy(normalized)).toBe("verified-paid");
+  });
+
+  it("still prefers an explicit server subscription_plan over the entitlement", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "user_explicit",
+        app_entitled: true,
+        subscription_plan: "team",
+        entitlement: {
+          active: true,
+          plan: "team",
+          source: "subscription",
+          checked_at: NOW.toISOString(),
+          features: { app: true },
+        },
+      },
+      "token",
+    );
+
+    expect(normalized.subscription_plan).toBe("team");
+    expect(getLocalPlanPolicy(normalized)).toBe("verified-paid");
+  });
+
+  it("keeps explicit server denial at 'none' even when the entitlement names a plan", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "user_revoked",
+        app_entitled: false,
+        cloud_subscribed: false,
+        entitlement: {
+          active: true,
+          plan: "lifetime",
+          source: "lifetime",
+          checked_at: NOW.toISOString(),
+          features: { app: true },
+        },
+      },
+      "token",
+    );
+
+    expect(normalized.subscription_plan).toBe("none");
+    expect(hasAppEntitlement(normalized)).toBe(false);
   });
 
   it("does not let cloud_subscribed override explicit server app denial", () => {

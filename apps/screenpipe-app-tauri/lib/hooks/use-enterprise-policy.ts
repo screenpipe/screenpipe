@@ -822,9 +822,9 @@ export function useEnterprisePolicyRuntime() {
       }
 
       // Push per-stream sync toggles to Rust so the enterprise sync task
-      // gates each upload kind. Defaults to all-true server-side, so an
-      // older server that doesn't return syncStreams ends up here as
-      // undefined → all true (no behavior change).
+      // gates each upload kind. Existing text/event streams default on.
+      // Parsed app data is a new, richer data class and fails closed when an
+      // older server does not return the flag.
       try {
         const streams = (data.syncStreams ?? {}) as Record<string, unknown>;
         const pickBool = (key: string): boolean =>
@@ -849,6 +849,7 @@ export function useEnterprisePolicyRuntime() {
           "enterprise setSyncStreams",
           commands.setSyncStreams(
             pickBool("frames"),
+            streams.parsed === true,
             pickBool("audio"),
             pickBool("ui_events"),
             pickBool("memories"),
@@ -863,8 +864,9 @@ export function useEnterprisePolicyRuntime() {
       }
 
       // Persist admin status into ~/.screenpipe/enterprise.json so the
-      // pi-agent can decide whether to install the screenpipe-team skill
-      // on its next boot. Only meaningful when we sent a cloud token in
+      // Enterprise app can decide whether to inject the screenpipe-team
+      // skill on its next native Pi boot. Only meaningful when we sent a
+      // cloud token in
       // the request — without one, the server has no way to identify the
       // user, so `data.isAdmin` is always false (don't accidentally wipe
       // an existing admin marker just because the user was signed-out at

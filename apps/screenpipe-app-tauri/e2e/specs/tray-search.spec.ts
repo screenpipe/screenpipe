@@ -84,7 +84,7 @@ describe("Tray: Search window", function () {
     if ((await browser.getWindowHandles()).includes("home")) {
       await browser.switchToWindow("home");
     }
-    await browser.waitUntil(async () => await invokeOrThrow<boolean>("e2e_main_overlay_visible"), {
+    await browser.waitUntil(async () => await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible"), {
       timeout: t(20_000),
       interval: 250,
       timeoutMsg: "Main overlay never became visible after show_main_window",
@@ -103,7 +103,7 @@ describe("Tray: Search window", function () {
       await browser.switchToWindow("home");
     }
     await browser.waitUntil(
-      async () => !(await invokeOrThrow<boolean>("e2e_main_overlay_visible")),
+      async () => !(await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible")),
       {
         timeout: t(15_000),
         interval: 250,

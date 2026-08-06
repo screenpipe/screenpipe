@@ -1411,9 +1411,6 @@ struct AiResult {
     tags: Vec<String>,
 }
 
-/// Screenpipe cloud API endpoint for enhanced AI suggestions.
-const SCREENPIPE_CLOUD_API: &str = "https://api.screenpipe.com/v1";
-
 async fn generate_ai_suggestions(
     api: &LocalApiContext,
     mode: &str,
@@ -1439,9 +1436,16 @@ async fn generate_ai_suggestions(
     );
 
     let client = reqwest::Client::new();
+    let gateway_url = match crate::config::screenpipe_ai_gateway_url() {
+        Ok(url) => url,
+        Err(error) => {
+            warn!("suggestions: invalid hosted-AI gateway configuration: {error}");
+            return None;
+        }
+    };
 
     let resp = client
-        .post(format!("{}/chat/completions", SCREENPIPE_CLOUD_API))
+        .post(format!("{gateway_url}/chat/completions"))
         .header("Authorization", format!("Bearer {}", config.token))
         // Suggestions run in the background (no user waiting) -> flex tier.
         .header("x-screenpipe-latency", "background")

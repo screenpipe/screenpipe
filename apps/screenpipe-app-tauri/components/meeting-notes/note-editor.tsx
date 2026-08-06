@@ -132,6 +132,8 @@ export interface NoteEditorProps {
   placeholder?: string;
   className?: string;
   autoFocus?: boolean;
+  readOnly?: boolean;
+  summaryRevealKey?: number;
 }
 
 export interface NoteEditorHandle {
@@ -271,6 +273,8 @@ function NoteEditor(
     placeholder,
     className,
     autoFocus,
+    readOnly = false,
+    summaryRevealKey = 0,
   },
   ref,
 ) {
@@ -354,6 +358,7 @@ function NoteEditor(
 
   const editor = useEditor({
     immediatelyRender: false,
+    editable: !readOnly,
     extensions: createMeetingNoteEditorExtensions(placeholder ?? ""),
     content: value,
     autofocus: autoFocus ? "end" : false,
@@ -403,6 +408,10 @@ function NoteEditor(
     };
   }, [editor]);
 
+  useEffect(() => {
+    editor?.setEditable(!readOnly);
+  }, [editor, readOnly]);
+
   // Sync external value → editor without clobbering the user's caret.
   // Skip when the incoming value is what the editor just emitted (avoids
   // a needless setContent → reparse cycle that can corrupt base64 images
@@ -424,8 +433,36 @@ function NoteEditor(
     }
   }, [value, editor]);
 
+  useEffect(() => {
+    if (!editor || summaryRevealKey === 0) return;
+    const root = editor.view.dom;
+    const blocks = meetingSummaryRevealBlocks(root);
+    if (blocks.length === 0) return;
+
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    blocks.forEach((block, index) => {
+      block.animate(
+        reduceMotion
+          ? [{ opacity: 1 }]
+          : [
+              { opacity: 0, transform: "translateY(10px)" },
+              { opacity: 1, transform: "translateY(0)" },
+            ],
+        {
+          duration: reduceMotion ? 0 : 500,
+          delay: reduceMotion ? 0 : Math.min(index * 70, 560),
+          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+          fill: "both",
+        },
+      );
+    });
+  }, [editor, summaryRevealKey]);
+
   const handleShellClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
+      if (readOnly) return;
       const target = event.target;
       if (
         target instanceof Element &&
@@ -436,21 +473,22 @@ function NoteEditor(
 
       editor?.chain().focus("end").run();
     },
-    [editor],
+    [editor, readOnly],
   );
 
   return (
     <div
       className={cn("relative", className)}
       data-testid="note-editor-shell"
+      aria-busy={readOnly}
       // Click shell-only whitespace into the note, while letting ProseMirror own
       // clicks that start inside the editable surface so caret placement stays
       // tied to the user's actual click target.
       onClick={handleShellClick}
     >
       <EditorContent editor={editor} />
-      <SlashCommandMenu editor={editor} />
-      <FormatToolbar editor={editor} />
+      {!readOnly && <SlashCommandMenu editor={editor} />}
+      {!readOnly && <FormatToolbar editor={editor} />}
     </div>
   );
 });
@@ -458,6 +496,18 @@ function NoteEditor(
 NoteEditorImpl.displayName = "NoteEditor";
 
 export const NoteEditor = React.memo(NoteEditorImpl);
+
+export function meetingSummaryRevealBlocks(root: ParentNode): HTMLElement[] {
+  const children = Array.from(root.children).filter(
+    (child): child is HTMLElement => child instanceof HTMLElement,
+  );
+  const summaryHeadingIndex = children.findLastIndex(
+    (child) =>
+      /^H[1-3]$/.test(child.tagName) &&
+      child.textContent?.trim().toLowerCase() === "summary",
+  );
+  return summaryHeadingIndex === -1 ? [] : children.slice(summaryHeadingIndex);
+}
 
 /** Escape a string for use inside a double-quoted HTML attribute. */
 function escAttr(value: string): string {

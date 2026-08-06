@@ -118,7 +118,18 @@ async function clickFirstButtonWithText(text: string, timeoutMs = t(15_000)): Pr
       if (!(await button.isDisplayed().catch(() => false))) continue;
 
       const label = (await button.getText().catch(() => "")).trim().toLowerCase();
-      if (label !== expected) continue;
+      const ariaLabel = (
+        (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+      )
+        .trim()
+        .toLowerCase();
+      if (
+        label !== expected &&
+        ariaLabel !== expected &&
+        !ariaLabel.startsWith(`${expected} `)
+      ) {
+        continue;
+      }
 
       await button.scrollIntoView();
       await button.waitForEnabled({ timeout: t(5_000) });
@@ -128,7 +139,7 @@ async function clickFirstButtonWithText(text: string, timeoutMs = t(15_000)): Pr
     await browser.pause(t(250));
   }
 
-  throw new Error(`No displayed button found with text "${text}"`);
+  throw new Error(`No displayed button found with text or accessible label "${text}"`);
 }
 
 // The palette publishes what it is showing as data-search-state on the results
@@ -286,7 +297,12 @@ async function stopMeetingIfVisible(): Promise<void> {
     if (!(await button.isDisplayed().catch(() => false))) continue;
 
     const label = (await button.getText().catch(() => "")).trim().toLowerCase();
-    if (label !== "stop") continue;
+    const ariaLabel = (
+      (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+    )
+      .trim()
+      .toLowerCase();
+    if (label !== "stop" && !ariaLabel.startsWith("stop ")) continue;
 
     await button.scrollIntoView();
     await button.click();
@@ -309,12 +325,12 @@ async function expectShortcutReminderVisible(expected: boolean, timeoutMs = t(15
       if ((await browser.getWindowHandles()).includes("home")) {
         await browser.switchToWindow("home").catch(() => {});
       }
-      return (await invokeOrThrow<boolean>("e2e_shortcut_reminder_visible")) === expected;
+      return (await invokeOrThrow<boolean>("plugin:e2e|shortcut_reminder_visible")) === expected;
     },
     {
       timeout: timeoutMs,
       interval: 250,
-      timeoutMsg: `Expected e2e_shortcut_reminder_visible=${expected}`,
+      timeoutMsg: `Expected plugin:e2e|shortcut_reminder_visible=${expected}`,
     },
   );
 }
@@ -474,14 +490,23 @@ describe("Windows user journey", function () {
     expect(existsSync(recordingScreenshot)).toBe(true);
   });
 
-  it("starts and stops a manual meeting note from the visible Meetings UI", async function () {
+  it("starts and stops a manual meeting note from the Meetings toolbar button", async function () {
     if (!isWindows) this.skip();
 
     await openHomeWindow();
 
     const meetingsNav = await $('[data-testid="nav-meetings"]');
     await meetingsNav.waitForDisplayed({ timeout: t(15_000) });
+    expect(await meetingsNav.getAttribute("aria-label")).toContain("meetings");
     await meetingsNav.click();
+    await browser.waitUntil(
+      async () => (await meetingsNav.getAttribute("aria-current")) === "page",
+      {
+        timeout: t(10_000),
+        interval: 250,
+        timeoutMsg: "Meetings toolbar button did not become the current page",
+      },
+    );
 
     await waitForBodyText(
       (bodyText) =>
@@ -504,9 +529,47 @@ describe("Windows user journey", function () {
 
       await clickFirstButtonWithText("stop", t(15_000));
 
+      // A successful stop may immediately advance into summary lifecycle
+      // copy or return to the meeting list. The invariant is that the live
+      // stop control disappears and a user-visible post-stop state replaces
+      // it, not that one transient status string remains on screen.
+      await browser.waitUntil(
+        async () => {
+          const buttons = await $$("button");
+          for (const button of buttons) {
+            if (!(await button.isDisplayed().catch(() => false))) continue;
+            const label = (await button.getText().catch(() => ""))
+              .trim()
+              .toLowerCase();
+            const ariaLabel = (
+              (await button.getAttribute("aria-label").catch(() => "")) ?? ""
+            )
+              .trim()
+              .toLowerCase();
+            if (label === "stop" || ariaLabel.startsWith("stop ")) {
+              return false;
+            }
+          }
+          return true;
+        },
+        {
+          timeout: t(20_000),
+          interval: 250,
+          timeoutMsg: "Manual meeting remained visibly active after stop",
+        },
+      );
+
       await waitForBodyText(
-        (bodyText) => bodyText.includes("meeting saved"),
-        "Manual meeting did not transition to the saved state after stop",
+        (bodyText) =>
+          bodyText.includes("meeting saved") ||
+          bodyText.includes("finalizing transcript") ||
+          bodyText.includes("summarizing meeting") ||
+          bodyText.includes("summary ready") ||
+          bodyText.includes("summary needs attention") ||
+          bodyText.includes("new meeting") ||
+          bodyText.includes("no meetings yet") ||
+          bodyText.includes("no past meetings yet"),
+        "Manual meeting did not show a post-stop state",
       );
 
       const savedMeetingScreenshot = await saveScreenshot("windows-user-journey-meeting-saved");

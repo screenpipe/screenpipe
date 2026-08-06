@@ -820,7 +820,7 @@ pub(crate) async fn stop_meeting_handler(
     // Persist the end best-effort. The runtime is already released above, so
     // even if this times out (pool wedged), the deferral drains and a retry —
     // or the detector's own grace-timeout end — completes persistence.
-    state
+    let persisted_end = state
         .db
         .end_meeting_with_typed_text(
             id,
@@ -841,9 +841,13 @@ pub(crate) async fn stop_meeting_handler(
     }
 
     // Emit event so triggered pipes can react
-    if let Err(e) =
-        screenpipe_events::send_event("meeting_ended", serde_json::json!({ "meeting_id": id }))
-    {
+    if let Err(e) = screenpipe_events::send_event(
+        "meeting_ended",
+        serde_json::json!({
+            "meeting_id": id,
+            "meeting_end": persisted_end,
+        }),
+    ) {
         tracing::warn!("failed to emit meeting_ended event: {}", e);
     }
 

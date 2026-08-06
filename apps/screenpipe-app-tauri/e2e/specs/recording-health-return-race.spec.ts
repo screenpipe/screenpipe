@@ -34,7 +34,7 @@ describe("recording health after idle capture recovery", function () {
 
     await waitForAppReady();
     const result = await invokeOrThrow<ReturnRaceResult>(
-      "e2e_recording_health_return_race",
+      "plugin:e2e|recording_health_return_race",
     );
 
     expect(result.idleConfirmed).toBe(false);

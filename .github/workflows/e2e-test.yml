@@ -239,6 +239,11 @@ jobs:
           Write-Host "$($_.Name)  $($_.Length) bytes"
         }
 
+    - name: Verify background AI-tool connection
+      shell: pwsh
+      working-directory: ./apps/screenpipe-app-tauri
+      run: bun run test:e2e:onboarding-background-ai-tools
+
     - name: Run E2E Tests
       shell: pwsh
       working-directory: ./apps/screenpipe-app-tauri
@@ -561,6 +566,8 @@ jobs:
         export DISPLAY=:99
         export RECORD_VIDEO=1
 
+        bun run test:e2e:onboarding-background-ai-tools
+        rm -rf ./e2e/results
         bun run test:e2e
 
     - name: Generate E2E Coverage Report
@@ -831,6 +838,11 @@ jobs:
       run: |
         bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/spotlight-exclusion.spec.ts
         sleep 2
+
+    - name: Verify background AI-tool connection
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      run: bun run test:e2e:onboarding-background-ai-tools
 
     - name: Run E2E Tests
       # ADVISORY (non-blocking): the full serial suite (maxInstances:1) with

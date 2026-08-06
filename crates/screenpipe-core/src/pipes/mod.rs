@@ -20,7 +20,7 @@ pub mod sync;
 pub(crate) mod trajectory;
 
 use crate::agents::{
-    pi::{pi_package_enabled, PiExecutor, SCREENPIPE_API_URL},
+    pi::{pi_event_protocol_error, pi_package_enabled, PiExecutor},
     AgentExecutor, ExecutionHandle, SharedPid, STOP_REQUESTED_PID,
 };
 use crate::pipes::connections::parse_mcp_connection_id;
@@ -1347,15 +1347,15 @@ pub trait PipeStore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Resolved model + provider from an AI preset.
-struct ResolvedPreset {
-    model: String,
-    provider: Option<String>,
+pub struct ResolvedPreset {
+    pub model: String,
+    pub provider: Option<String>,
     /// Provider base URL (e.g. `http://localhost:11434/v1` for Ollama).
-    url: Option<String>,
+    pub url: Option<String>,
     /// API key for the provider (custom / openai BYOK).
-    api_key: Option<String>,
+    pub api_key: Option<String>,
     /// System prompt from the preset (injected before the pipe body).
-    prompt: Option<String>,
+    pub prompt: Option<String>,
 }
 
 /// Read the ChatGPT OAuth access token, with auto-refresh if expired.
@@ -1406,30 +1406,20 @@ fn read_chatgpt_token_from_legacy_file() -> Option<String> {
 /// Read and refresh ChatGPT token from the encrypted secrets store.
 #[cfg(feature = "secrets")]
 fn read_chatgpt_token_from_secrets() -> Option<String> {
-    use screenpipe_secrets::keychain::{get_key, KeyResult};
-
     let data_dir = crate::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
-    if !db_path.exists() {
+    if !db_path.exists() && !screenpipe_secrets::secrets_database_path(&data_dir).exists() {
         return None;
     }
-
-    let secret_key = match get_key() {
-        KeyResult::Found(k) => Some(k),
-        _ => None,
-    };
-
-    let db_path_str = db_path.to_string_lossy().into_owned();
 
     // We're in a sync context but need async for sqlx. Use block_in_place
     // since the caller is always on a tokio runtime.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            // Shared, engine-matched pool — not an ad-hoc per-call connection,
-            // which churns the WAL-index and corrupts db.sqlite (#4263).
-            let store = screenpipe_secrets::SecretStore::open(&db_path_str, secret_key)
-                .await
-                .ok()?;
+            let store =
+                screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(&data_dir)
+                    .await
+                    .ok()?;
             let bytes = store.get("oauth:chatgpt").await.ok()??;
             let mut token_data: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
 
@@ -1754,6 +1744,21 @@ fn classify_pipe_process_result(
         };
     }
 
+    if let Some(protocol_error) = pipe_stdout_protocol_error(filtered_stdout) {
+        let classified_stderr = if stderr.trim().is_empty() {
+            protocol_error.to_string()
+        } else {
+            format!("{}\n{}", stderr.trim_end(), protocol_error)
+        };
+        return ClassifiedPipeProcessResult {
+            status: "failed",
+            success: false,
+            stderr: classified_stderr,
+            error_type: Some("provider_protocol".to_string()),
+            error_message: Some("provider returned an unusable tool-call response".to_string()),
+        };
+    }
+
     if process_success {
         return ClassifiedPipeProcessResult {
             status: "completed",
@@ -1782,6 +1787,13 @@ fn classify_pipe_process_result(
         error_type,
         error_message,
     }
+}
+
+fn pipe_stdout_protocol_error(stdout: &str) -> Option<&'static str> {
+    stdout.lines().find_map(|line| {
+        let event = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+        pi_event_protocol_error(&event)
+    })
 }
 
 fn is_post_completion_continue_error(stderr: &str, stdout: &str) -> bool {
@@ -1891,6 +1903,18 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     let lower = stderr.to_lowercase();
     if let Some(parsed) = parse_structured_llm_error(stderr) {
         return parsed;
+    }
+    if has_safety_refusal_token(&lower) {
+        return (
+            Some("safety_refusal".to_string()),
+            Some("AI provider declined this Pipe under its safety policy".to_string()),
+        );
+    }
+    if lower.contains("provider_protocol_error") {
+        return (
+            Some("provider_protocol".to_string()),
+            Some("provider returned an unusable tool-call response".to_string()),
+        );
     }
     if lower.contains("daily_cost_limit_exceeded") || lower.contains("daily_limit_exceeded") {
         return (
@@ -2014,6 +2038,14 @@ fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>
     .join(" ")
     .to_lowercase();
 
+    if has_safety_refusal_token(&combined) {
+        return Some((
+            Some("safety_refusal".to_string()),
+            Some(message.unwrap_or_else(|| {
+                "AI provider declined this Pipe under its safety policy".to_string()
+            })),
+        ));
+    }
     if combined.contains("daily_cost_limit_exceeded") || combined.contains("daily_limit_exceeded") {
         return Some((
             Some("daily_limit".to_string()),
@@ -2054,6 +2086,16 @@ fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
     value.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
+fn has_safety_refusal_token(text: &str) -> bool {
+    text.contains("content_filter")
+        || text.contains("content filter")
+        || text.contains("safety_refusal")
+        || text.contains("safety refusal")
+        || ((text.contains("finish_reason") || text.contains("stop_reason"))
+            && text.contains("refusal"))
+        || text.contains("flagged for possible cybersecurity risk")
+}
+
 fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
     !matches!(
         error_type,
@@ -2063,6 +2105,7 @@ fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
                 | "daily_limit"
                 | "model_not_allowed"
                 | "quota_exhausted"
+                | "safety_refusal"
         )
     )
 }
@@ -2408,6 +2451,14 @@ impl PipeManager {
     }
 
     /// Set a callback to be invoked for each stdout line from a running pipe.
+    /// Resolves a named AI preset (provider, model, base url, key) from the
+    /// user's own store. Exposed so the local HTTP surface can serve plain chat
+    /// with the same credentials the desktop app uses, without going through a
+    /// pipe or the hosted gateway.
+    pub fn resolve_ai_preset(&self, preset_id: &str) -> Option<ResolvedPreset> {
+        resolve_preset(&self.pipes_dir, preset_id)
+    }
+
     pub fn set_on_output_line(&mut self, cb: OnPipeOutputLine) {
         self.on_output_line = Some(cb);
     }
@@ -2938,6 +2989,26 @@ impl PipeManager {
             .unwrap_or_default()
     }
 
+    /// Whether runs can be correlated with persisted execution rows.
+    pub fn has_execution_store(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// Get one exact execution row for a pipe.
+    pub async fn get_execution(
+        &self,
+        name: &str,
+        execution_id: i64,
+    ) -> Result<Option<PipeExecution>> {
+        let before_id = execution_id
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("execution id is out of range"))?;
+        let mut executions = self.get_executions(name, 1, Some(before_id)).await?;
+        Ok(executions
+            .pop()
+            .filter(|execution| execution.id == execution_id))
+    }
+
     /// Get execution history from the DB store.
     pub async fn get_executions(
         &self,
@@ -3069,6 +3140,7 @@ impl PipeManager {
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, "manual", None)
             .await
+            .map(|_| ())
     }
 
     /// Start one manual run with request-scoped context. Unlike the manager's
@@ -3081,6 +3153,7 @@ impl PipeManager {
     ) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, "manual", run_context)
             .await
+            .map(|_| ())
     }
 
     /// Start a pipe in the background with an explicit, low-cardinality trigger type.
@@ -3091,6 +3164,7 @@ impl PipeManager {
     ) -> Result<()> {
         self.start_pipe_background_with_trigger_and_context(name, trigger, None)
             .await
+            .map(|_| ())
     }
 
     /// Start a Pipe with both low-cardinality telemetry and execution-scoped
@@ -3101,7 +3175,7 @@ impl PipeManager {
         name: &str,
         trigger: &str,
         run_context: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<i64>> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
             match pipes.get(name).cloned() {
@@ -3233,8 +3307,9 @@ impl PipeManager {
                     Some(id)
                 }
                 Err(e) => {
-                    warn!("failed to create execution row: {}", e);
-                    None
+                    remove_pid_file(&self.pipes_dir, name);
+                    self.running.lock().await.remove(name);
+                    return Err(anyhow!("failed to create execution row: {}", e));
                 }
             }
         } else {
@@ -3295,7 +3370,7 @@ impl PipeManager {
             let cloud_token = executor.user_token();
             if let Err(e) = PiExecutor::ensure_pi_config(
                 cloud_token.as_deref(),
-                SCREENPIPE_API_URL,
+                executor.screenpipe_api_url(),
                 run_provider.as_deref(),
                 Some(&run_model),
                 run_provider_url.as_deref(),
@@ -3603,7 +3678,7 @@ impl PipeManager {
             }
         });
 
-        Ok(())
+        Ok(exec_id)
     }
 
     /// Run a pipe once with an explicit trigger type.
@@ -3844,7 +3919,7 @@ impl PipeManager {
             if config.agent == "pi" {
                 if let Err(e) = PiExecutor::ensure_pi_config(
                     None,
-                    SCREENPIPE_API_URL,
+                    executor.screenpipe_api_url(),
                     run_provider.as_deref(),
                     Some(&run_model),
                     run_provider_url.as_deref(),
@@ -4806,6 +4881,12 @@ impl PipeManager {
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
             let mut meeting_end_rx =
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+            // Re-transcription needs to refresh only the meeting-summary pipe.
+            // It must not rebroadcast meeting_ended to lifecycle consumers or
+            // unrelated user pipes that also subscribe to meeting ends.
+            let mut meeting_summary_refresh_rx = screenpipe_events::subscribe_to_event::<
+                serde_json::Value,
+            >("meeting_summary_refresh_requested");
             let mut workflow_rx =
                 screenpipe_events::subscribe_to_event::<serde_json::Value>("workflow_event");
             // pipe_completed:* uses subscribe_to_all with prefix filtering below
@@ -4824,7 +4905,7 @@ impl PipeManager {
             // Triggers that matched a pipe which was already busy. They used to be
             // dropped on the floor; instead they wait for the next tick, where the
             // idempotency claim decides whether they still need to run.
-            let mut carryover: Vec<(String, serde_json::Value)> = Vec::new();
+            let mut carryover: Vec<PendingEvent> = Vec::new();
 
             // Claims are pruned once per process rather than every tick.
             if let Some(ref store) = store {
@@ -4874,19 +4955,28 @@ impl PipeManager {
                 let mut connection_triggered: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 // Triggers held back this tick, carried into the next one.
-                let mut deferred: Vec<(String, serde_json::Value)> = Vec::new();
+                let mut deferred: Vec<PendingEvent> = Vec::new();
                 {
                     use futures::FutureExt;
 
                     // Collect events from all targeted subscriptions into one vec,
                     // starting with anything held back from the previous tick.
-                    let mut pending_events: Vec<(String, serde_json::Value)> =
-                        std::mem::take(&mut carryover);
+                    let mut pending_events: Vec<PendingEvent> = std::mem::take(&mut carryover);
                     while let Some(e) = meeting_start_rx.next().now_or_never().flatten() {
-                        pending_events.push((e.name, e.data));
+                        pending_events.push(PendingEvent::broadcast(e.name, e.data));
                     }
                     while let Some(e) = meeting_end_rx.next().now_or_never().flatten() {
-                        pending_events.push((e.name, e.data));
+                        pending_events.push(PendingEvent::broadcast(e.name, e.data));
+                    }
+                    while let Some(e) = meeting_summary_refresh_rx.next().now_or_never().flatten() {
+                        // This private event has exactly one consumer. Keep pipe
+                        // addressing in scheduler metadata so arbitrary public
+                        // event payload fields cannot change delivery semantics.
+                        pending_events.push(PendingEvent::targeted(
+                            "meeting_ended".to_string(),
+                            e.data,
+                            "meeting-summary",
+                        ));
                     }
                     while let Some(e) = workflow_rx.next().now_or_never().flatten() {
                         // For workflow_event, expose the inner event_type as the match key
@@ -4896,12 +4986,12 @@ impl PipeManager {
                             .and_then(|v| v.as_str())
                             .unwrap_or("workflow_event")
                             .to_string();
-                        pending_events.push((event_type, e.data));
+                        pending_events.push(PendingEvent::broadcast(event_type, e.data));
                     }
                     // pipe_completed:* — filter from all-events subscription
                     while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
                         if is_pipe_completed_event(&e.name) {
-                            pending_events.push((e.name, e.data));
+                            pending_events.push(PendingEvent::broadcast(e.name, e.data));
                         }
                     }
 
@@ -4924,6 +5014,8 @@ impl PipeManager {
                                         EventTrigger {
                                             name: e.name.clone(),
                                             key: None,
+                                            dedupe_key: None,
+                                            target_pipe: None,
                                             data: e.data.clone(),
                                         },
                                     );
@@ -4936,9 +5028,14 @@ impl PipeManager {
                     // Expire old chain cooldowns
                     recent_chain.retain(|_, ts| ts.elapsed() < CHAIN_COOLDOWN);
 
-                    for (event_name, data) in &pending_events {
+                    for pending in &pending_events {
+                        let event_name = &pending.name;
+                        let data = &pending.data;
                         for (name, config, _body) in &pipe_snapshot {
                             if !config.enabled {
+                                continue;
+                            }
+                            if !pending.targets(name) {
                                 continue;
                             }
                             if let Some(ref trigger) = config.trigger {
@@ -4980,7 +5077,7 @@ impl PipeManager {
                                         "scheduler: event '{}' deferred for pipe '{}' (busy)",
                                         event_name, name
                                     );
-                                    deferred.push((event_name.clone(), data.clone()));
+                                    deferred.push(pending.clone());
                                     continue;
                                 }
                                 info!(
@@ -4993,6 +5090,8 @@ impl PipeManager {
                                     EventTrigger {
                                         name: event_name.clone(),
                                         key: event_identity_key(data),
+                                        dedupe_key: event_dedupe_key(event_name, data),
+                                        target_pipe: pending.target_pipe.clone(),
                                         data: data.clone(),
                                     },
                                 );
@@ -5067,7 +5166,11 @@ impl PipeManager {
                             // already retries uncommitted fires.
                             if !connection_triggered.contains(name) {
                                 if let Some(t) = event_triggered.get(name) {
-                                    deferred.push((t.name.clone(), t.data.clone()));
+                                    deferred.push(PendingEvent {
+                                        name: t.name.clone(),
+                                        data: t.data.clone(),
+                                        target_pipe: t.target_pipe.clone(),
+                                    });
                                 }
                             }
                             continue;
@@ -5220,11 +5323,10 @@ impl PipeManager {
                         }
                     }
 
-                    // Claim this (pipe, event, key) before committing to a run. A
-                    // second delivery of the same logical event — `meeting_ended`
-                    // fires again for a meeting the user rejoined — loses the claim
-                    // and is suppressed here instead of starting a duplicate run
-                    // (#5481).
+                    // Claim this (pipe, event, generation) before committing to a
+                    // run. Duplicate delivery of one meeting-end generation loses
+                    // the claim, while a later end after the same meeting row was
+                    // resumed is distinct work and can run again (#5481).
                     //
                     // Claimed after the guards above, not when the event was
                     // matched, so a trigger that lost one of those races is still
@@ -5233,7 +5335,7 @@ impl PipeManager {
                     // marked as queued forever.
                     let mut event_claim: Option<(String, String)> = None;
                     if let (Some(t), Some(store)) = (event_triggered.get(name), store.as_ref()) {
-                        if let Some(key) = t.key.clone() {
+                        if let Some(key) = t.dedupe_key.clone() {
                             match store.claim_event_run(name, &t.name, &key).await {
                                 Ok(true) => event_claim = Some((t.name.clone(), key)),
                                 Ok(false) => {
@@ -5397,7 +5499,7 @@ impl PipeManager {
                         let cloud_token = executor.user_token();
                         if let Err(e) = PiExecutor::ensure_pi_config(
                             cloud_token.as_deref(),
-                            SCREENPIPE_API_URL,
+                            executor.screenpipe_api_url(),
                             provider.as_deref(),
                             Some(&model),
                             provider_url.as_deref(),
@@ -5473,8 +5575,11 @@ impl PipeManager {
                     }
 
                     let claim_for_release = event_claim.clone();
-                    let trigger_event_name = event_claim.as_ref().map(|(e, _)| e.clone());
-                    let trigger_event_key = event_claim.as_ref().map(|(_, k)| k.clone());
+                    // Execution metadata and the pipe-facing context keep the
+                    // stable logical key (meeting id). The generation-aware key
+                    // is an internal scheduler claim only.
+                    let trigger_event_name = event_triggered.get(name).map(|t| t.name.clone());
+                    let trigger_event_key = event_triggered.get(name).and_then(|t| t.key.clone());
 
                     tokio::spawn(async move {
                         // Scheduled pipes wait for the previous one to finish
@@ -6575,7 +6680,48 @@ struct EventTrigger {
     /// The event's own identity, if it has one — a meeting id for `meeting_*`.
     /// Events without one can only be deduplicated within a single tick.
     key: Option<String>,
+    /// Scheduler-only idempotency key. A meeting end includes the persisted
+    /// end timestamp so resume/end cycles on one meeting row remain distinct.
+    dedupe_key: Option<String>,
+    /// Scheduler-owned addressing metadata retained when a busy pipe defers
+    /// this delivery. Public event payload fields never affect routing.
+    target_pipe: Option<String>,
     data: serde_json::Value,
+}
+
+/// One event waiting to be matched against pipe trigger configuration.
+///
+/// Addressing is scheduler-owned metadata. Keeping it outside `data` prevents
+/// an arbitrary public event payload from accidentally becoming pipe-scoped.
+#[derive(Clone, Debug)]
+struct PendingEvent {
+    name: String,
+    data: serde_json::Value,
+    target_pipe: Option<String>,
+}
+
+impl PendingEvent {
+    fn broadcast(name: String, data: serde_json::Value) -> Self {
+        Self {
+            name,
+            data,
+            target_pipe: None,
+        }
+    }
+
+    fn targeted(name: String, data: serde_json::Value, target_pipe: &str) -> Self {
+        Self {
+            name,
+            data,
+            target_pipe: Some(target_pipe.to_string()),
+        }
+    }
+
+    fn targets(&self, pipe_name: &str) -> bool {
+        self.target_pipe
+            .as_deref()
+            .is_none_or(|target| target == pipe_name)
+    }
 }
 
 /// Read the identity of an event out of its payload.
@@ -6590,6 +6736,30 @@ fn event_identity_key(data: &serde_json::Value) -> Option<String> {
             Some(serde_json::Value::Number(n)) => Some(n.to_string()),
             _ => None,
         })
+}
+
+/// Return the durable claim key for an event delivery.
+///
+/// A meeting row can be reopened within the merge window. In that case its id
+/// intentionally stays stable but each persisted end timestamp represents a
+/// new transcript generation that needs its own summary. Legacy emitters that
+/// do not include `meeting_end` retain the old meeting-id-only behavior.
+fn event_dedupe_key(event_name: &str, data: &serde_json::Value) -> Option<String> {
+    let identity = event_identity_key(data)?;
+    if event_name != "meeting_ended" {
+        return Some(identity);
+    }
+
+    let generation = ["summary_generation", "meeting_end"]
+        .iter()
+        .find_map(|field| match data.get(field) {
+            Some(serde_json::Value::String(value)) if !value.is_empty() => Some(value),
+            _ => None,
+        });
+    Some(match generation {
+        Some(value) => format!("{}@{}", identity, value),
+        None => identity,
+    })
 }
 
 fn pipe_completed_source(event_name: &str) -> Option<&str> {
@@ -7463,14 +7633,108 @@ mod tests {
 
     // -- event trigger identity (#5481) -------------------------------------
 
-    /// Both deliveries of a rejoined meeting's end must produce the same key,
-    /// otherwise the claim can't recognize the second one as a duplicate.
+    /// Duplicate deliveries of one persisted meeting end share a claim key.
     #[test]
-    fn duplicate_meeting_ended_yields_same_key() {
-        let first = serde_json::json!({ "meeting_id": 42 });
-        let second = serde_json::json!({ "meeting_id": 42 });
+    fn duplicate_meeting_end_generation_yields_same_key() {
+        let first = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:08:56.000Z"
+        });
+        let second = first.clone();
         assert_eq!(event_identity_key(&first).as_deref(), Some("42"));
-        assert_eq!(event_identity_key(&first), event_identity_key(&second));
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &first),
+            event_dedupe_key("meeting_ended", &second)
+        );
+    }
+
+    /// Ending a resumed meeting is new work even though the merged row id is
+    /// deliberately unchanged.
+    #[test]
+    fn resumed_meeting_end_generation_yields_new_key() {
+        let first = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:08:56.000Z"
+        });
+        let final_end = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:51:37.000Z"
+        });
+        assert_ne!(
+            event_dedupe_key("meeting_ended", &first),
+            event_dedupe_key("meeting_ended", &final_end)
+        );
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &final_end).as_deref(),
+            Some("42@2026-08-05T16:51:37.000Z")
+        );
+    }
+
+    #[test]
+    fn legacy_meeting_end_without_generation_keeps_identity_key() {
+        let data = serde_json::json!({ "meeting_id": 42 });
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &data).as_deref(),
+            Some("42")
+        );
+    }
+
+    #[test]
+    fn non_meeting_event_dedupe_ignores_meeting_end_field() {
+        let data = serde_json::json!({
+            "event_id": "abc-123",
+            "meeting_end": "2026-08-05T16:51:37.000Z"
+        });
+        assert_eq!(
+            event_dedupe_key("workflow_event", &data).as_deref(),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn summary_refresh_addressing_is_scheduler_owned() {
+        let refresh = PendingEvent::targeted(
+            "meeting_ended".to_string(),
+            serde_json::json!({ "meeting_id": 42 }),
+            "meeting-summary",
+        );
+        assert!(refresh.targets("meeting-summary"));
+        assert!(!refresh.targets("commitments"));
+
+        let public = PendingEvent::broadcast(
+            "workflow_event".to_string(),
+            serde_json::json!({ "target_pipe": "meeting-summary" }),
+        );
+        assert!(public.targets("meeting-summary"));
+        assert!(public.targets("commitments"));
+    }
+
+    #[test]
+    fn transcript_replacement_generation_supersedes_meeting_end() {
+        let data = serde_json::json!({
+            "meeting_id": 42,
+            "meeting_end": "2026-08-05T16:51:37.000Z",
+            "summary_generation": "2026-08-05T17:10:00.000Z"
+        });
+        assert_eq!(
+            event_dedupe_key("meeting_ended", &data).as_deref(),
+            Some("42@2026-08-05T17:10:00.000Z")
+        );
+    }
+
+    #[test]
+    fn malformed_transcript_generation_falls_back_to_meeting_end() {
+        for summary_generation in [serde_json::json!(""), serde_json::json!(17)] {
+            let data = serde_json::json!({
+                "meeting_id": 42,
+                "meeting_end": "2026-08-05T16:51:37.000Z",
+                "summary_generation": summary_generation,
+            });
+            assert_eq!(
+                event_dedupe_key("meeting_ended", &data).as_deref(),
+                Some("42@2026-08-05T16:51:37.000Z")
+            );
+        }
     }
 
     #[test]
@@ -7513,7 +7777,12 @@ mod tests {
         let trigger = EventTrigger {
             name: "meeting_ended".to_string(),
             key: Some("42".to_string()),
-            data: serde_json::json!({ "meeting_id": 42 }),
+            dedupe_key: Some("42@2026-08-05T16:51:37.000Z".to_string()),
+            target_pipe: None,
+            data: serde_json::json!({
+                "meeting_id": 42,
+                "meeting_end": "2026-08-05T16:51:37.000Z"
+            }),
         };
         write_event_trigger_context(&dir, &trigger);
 
@@ -7522,6 +7791,7 @@ mod tests {
         assert_eq!(ctx["event"], "meeting_ended");
         assert_eq!(ctx["key"], "42");
         assert_eq!(ctx["data"]["meeting_id"], 42);
+        assert_eq!(ctx["data"]["meeting_end"], "2026-08-05T16:51:37.000Z");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -8400,6 +8670,32 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_error_type_safety_refusal_is_terminal() {
+        let (etype, msg) = parse_error_type("Error: Provider finish_reason: content_filter");
+        assert_eq!(etype.as_deref(), Some("safety_refusal"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("AI provider declined this Pipe under its safety policy")
+        );
+        assert!(!should_try_fallback_preset(etype.as_deref()));
+
+        let (json_type, _) = parse_error_type(r#"{"choices":[{"finish_reason":"refusal"}]}"#);
+        assert_eq!(json_type.as_deref(), Some("safety_refusal"));
+    }
+
+    #[test]
+    fn test_parse_error_type_structured_safety_refusal() {
+        let (etype, msg) = parse_error_type(
+            r#"{"error":{"code":"content_filter","message":"Request blocked by provider safety policy"}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("safety_refusal"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("Request blocked by provider safety policy")
+        );
+    }
+
+    #[test]
     fn test_parse_error_type_daily_cost_limit_json() {
         let (etype, msg) = parse_error_type(
             r#"429 "{\"error\":\"daily_cost_limit_exceeded\",\"message\":\"You've hit today's AI usage limit.\",\"tier\":\"subscribed\"}""#,
@@ -8521,6 +8817,29 @@ mod tests {
         let (etype, msg) = parse_error_type("completed successfully, output saved");
         assert_eq!(etype, None);
         assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn test_parse_error_type_provider_protocol_failure() {
+        let (error_type, message) = parse_error_type(
+            "provider_protocol_error: assistant ended with toolUse but emitted no executable tool call",
+        );
+        assert_eq!(error_type.as_deref(), Some("provider_protocol"));
+        assert_eq!(
+            message.as_deref(),
+            Some("provider returned an unusable tool-call response")
+        );
+    }
+
+    #[test]
+    fn malformed_tool_use_cannot_be_classified_as_completed() {
+        let stdout = r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"toolUse"}}"#;
+        let classified = classify_pipe_process_result(true, false, "", stdout);
+
+        assert_eq!(classified.status, "failed");
+        assert!(!classified.success);
+        assert_eq!(classified.error_type.as_deref(), Some("provider_protocol"));
+        assert!(classified.stderr.contains("provider_protocol_error"));
     }
 
     fn successful_agent_then_compaction_retry_stdout() -> String {

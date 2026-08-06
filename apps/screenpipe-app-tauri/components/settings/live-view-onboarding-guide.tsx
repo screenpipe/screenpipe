@@ -135,7 +135,7 @@ export function LiveViewOnboardingGuide({
 
   return (
     <FocusedSpotlight
-      targetSelector='[data-testid="brain-overview-grid"]'
+      targetSelector='[data-testid="live-view-canvas"]'
       eyebrow="your first result"
       step="3 of 3"
       title="check it and help it improve"

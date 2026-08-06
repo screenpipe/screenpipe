@@ -399,6 +399,30 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
 }
 
 // Single tool call row in the progress rail
+function formatElapsedSeconds(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** A tool's elapsed time as a short label: ticking while it runs, then frozen
+ *  to its final duration. Empty for tools too quick to be worth showing. */
+function useToolElapsedLabel(toolCall: ToolCall): string | null {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!toolCall.isRunning) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [toolCall.isRunning]);
+
+  if (!toolCall.startedAtMs) return null;
+  const endMs = toolCall.isRunning ? nowMs : toolCall.endedAtMs ?? nowMs;
+  const elapsed = (endMs - toolCall.startedAtMs) / 1000;
+  // Quiet for quick tools; the group header already shows the turn total.
+  if (elapsed < 3) return null;
+  return formatElapsedSeconds(elapsed);
+}
+
 function ToolCallRailItem({
   toolCall,
   isLast,
@@ -411,6 +435,7 @@ function ToolCallRailItem({
   const [expanded, setExpanded] = useState(false);
   const presentation = presentToolActivity(toolCall);
   const label = toolCall.isRunning ? presentation.runningLabel : presentation.completedLabel;
+  const elapsedLabel = useToolElapsedLabel(toolCall);
   const appName = extractAppFromToolCall(toolCall);
   const connectionIconName = extractConnectionIconFromToolCall(toolCall);
   const webTarget = extractWebTargetFromToolCall(toolCall);
@@ -469,6 +494,11 @@ function ToolCallRailItem({
             <span className="truncate flex-1 text-xs text-foreground/70 group-hover:text-foreground transition-colors duration-150">
               {label}
             </span>
+            {elapsedLabel && (
+              <span className="flex-shrink-0 font-mono text-[10px] tabular-nums text-foreground/40">
+                {elapsedLabel}
+              </span>
+            )}
             {expanded ? (
               <ChevronDown className="h-3 w-3 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
             ) : (
@@ -487,6 +517,16 @@ function ToolCallRailItem({
             >
               <div className="border-l border-border ml-0 pl-3 mt-1 mb-1">
                 <FriendlyToolDetails toolCall={toolCall} />
+                {/* Streamed output: live while running, and kept after the tool
+                    finishes so what streamed doesn't vanish. Only for bash once
+                    done, since other tools already show their full result below. */}
+                {toolCall.progress && (toolCall.isRunning || toolCall.toolName === "bash") && (
+                  <div className="mt-1 pt-1 border-t border-border/50">
+                    <pre className="whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono text-foreground/50">
+                      {toolCall.progress}
+                    </pre>
+                  </div>
+                )}
                 {toolCall.result !== undefined && toolCall.toolName !== "bash" && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className={cn(

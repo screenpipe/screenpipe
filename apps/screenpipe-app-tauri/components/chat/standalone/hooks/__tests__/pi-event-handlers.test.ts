@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   firstAgentEndAssistantError,
   isPiPromptStartTimeout,
+  isTerminalQuotaError,
   piPromptStartTimeoutMessage,
   textFromAssistantMessages,
   textFromToolResult,
@@ -69,5 +70,31 @@ describe("pi steering helpers", () => {
     expect(prompt).toContain("Original user request:\nwrite a summary");
     expect(prompt).toContain("1. make it shorter\n2. focus on risks");
     expect(prompt).toContain("Final steering message:\nfocus on risks");
+  });
+});
+
+describe("isTerminalQuotaError", () => {
+  it("treats usage-limit and plan-gate rejections as terminal", () => {
+    for (const error of [
+      'HTTP 429 {"error":"daily_cost_limit_exceeded","required_plan":"business"}',
+      'HTTP 429 {"error":"hosted_ai_allowance_exceeded","lane":"auto"}',
+      '{"error":"credits_exhausted"}',
+      "free_chat_limit_exceeded",
+      '{"error":"model_not_allowed","required_plan":"business"}',
+    ]) {
+      expect(isTerminalQuotaError(error)).toBe(true);
+    }
+  });
+
+  it("keeps transient failures retryable", () => {
+    for (const error of [
+      "HTTP 429 Too Many Requests",
+      "rate limit exceeded. Please wait 9 seconds.",
+      '{"error":"priced_request_in_flight"}',
+      "HTTP 503 service unavailable",
+      "socket hang up",
+    ]) {
+      expect(isTerminalQuotaError(error)).toBe(false);
+    }
   });
 });

@@ -184,6 +184,127 @@ describe("parseGeneratedLiveView", () => {
     expect(result.blocks[0].title).toBe("First");
   });
 
+  it("applies targeted edit operations while preserving omitted fields and bindings", () => {
+    const currentView = {
+      title: "Daily",
+      timeRange: "7d" as const,
+      periodPolicy: {
+        type: "selectable.v1" as const,
+        values: ["today", "7d"] as const,
+      },
+      blocks: [
+        {
+          id: "focus",
+          title: "Focus",
+          intent: "Show focused time.",
+          component: "metric.v1" as const,
+          width: 6 as const,
+          pipeName: "time-tracker",
+        },
+      ],
+    };
+    const result = parseGeneratedLiveView(
+      JSON.stringify({
+        operations: [
+          {
+            op: "update",
+            blockId: "focus",
+            block: { title: "Deep focus" },
+          },
+          {
+            op: "add",
+            block: {
+              id: "meetings",
+              title: "Meetings",
+              intent: "List meetings in the selected period.",
+              component: "list.v1",
+              width: 6,
+              pipeName: "meeting-summary",
+            },
+          },
+        ],
+        note: "Updated two Blocks.",
+      }),
+      ["time-tracker", "meeting-summary"],
+      "dashboard",
+      currentView,
+    );
+
+    expect(result.title).toBe("Daily");
+    expect(result.timeRange).toBe("7d");
+    expect(result.periodPolicy).toEqual(currentView.periodPolicy);
+    expect(result.blocks).toEqual([
+      expect.objectContaining({
+        id: "focus",
+        title: "Deep focus",
+        intent: "Show focused time.",
+        pipeName: "time-tracker",
+      }),
+      expect.objectContaining({
+        id: "meetings",
+        pipeName: "meeting-summary",
+      }),
+    ]);
+  });
+
+  it("rejects a Block edit that targets a different Block", () => {
+    expect(() =>
+      parseGeneratedLiveView(
+        JSON.stringify({
+          operations: [
+            {
+              op: "update",
+              blockId: "other",
+              block: { title: "Changed" },
+            },
+          ],
+        }),
+        [],
+        "block",
+        {
+          title: "Daily",
+          timeRange: "today",
+          blocks: [
+            {
+              id: "focus",
+              title: "Focus",
+              intent: "Show focus.",
+              component: "metric.v1",
+              width: 6,
+              pipeName: null,
+            },
+            {
+              id: "other",
+              title: "Other",
+              intent: "Show other.",
+              component: "metric.v1",
+              width: 6,
+              pipeName: null,
+            },
+          ],
+        },
+        "focus",
+      ),
+    ).toThrow("outside the requested target focus");
+  });
+
+  it("rejects whole-dashboard output for an existing Live View", () => {
+    expect(() =>
+      parseGeneratedLiveView(
+        JSON.stringify({
+          blocks: [{ title: "Replacement", component: "metric.v1" }],
+        }),
+        [],
+        "dashboard",
+        {
+          title: "Existing",
+          timeRange: "today",
+          blocks: [],
+        },
+      ),
+    ).toThrow("targeted Live View changes");
+  });
+
   it("rejects arbitrary or unusable output", () => {
     expect(() =>
       parseGeneratedLiveView(
@@ -223,7 +344,11 @@ describe("parseGeneratedLiveView", () => {
     });
 
     expect(prompt).toContain('"id":"daily","revision":7');
-    expect(prompt).toContain("Preserve every existing section");
+    expect(prompt).toContain(
+      "Do not restate, remove, or update unrelated Blocks",
+    );
+    expect(prompt).toContain('"op":"add"');
+    expect(prompt).toContain("Never return a complete blocks array");
     expect(prompt).not.toContain("Current Live View:\n{");
     expect(prompt).not.toContain("Focus time");
   });

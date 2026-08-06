@@ -304,13 +304,18 @@ export function AppEntitlementGate({
     gateReportedRef.current = true;
     posthog.capture("app_entitlement_gate_shown", {
       logged_in: Boolean(user?.token),
+      // Must follow the same precedence as the render branches below (and as
+      // `gate_path`). Checking unknown-policy before enterprise-app reported
+      // "plan_verification_required" for users who were actually looking at the
+      // "enterprise app required" screen — both flags are true at once, since an
+      // unknown plan is what clears hasConsumerAppSubscription in the first place.
       reason: shouldGateForEnterpriseLogin
         ? "enterprise_login_required"
-        : shouldGateForConsumerLogin
-          ? "consumer_login_required"
-          : shouldGateForUnknownConsumerPolicy
-            ? "plan_verification_required"
-            : "enterprise_app_required",
+        : shouldGateForEnterpriseApp
+          ? "enterprise_app_required"
+          : shouldGateForConsumerLogin
+            ? "consumer_login_required"
+            : "plan_verification_required",
       plan: user?.subscription_plan ?? null,
       app_entitled: user?.app_entitled ?? null,
       // Diagnostics for the enterprise post-update loop (SCR-132).
