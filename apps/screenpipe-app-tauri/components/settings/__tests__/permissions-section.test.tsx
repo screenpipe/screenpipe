@@ -15,6 +15,7 @@ const commandMocks = vi.hoisted(() => ({
   calendarStatus: vi.fn(),
   resetAndRequestPermission: vi.fn(),
   openPermissionSettings: vi.fn(),
+  restartAfterScreenRecordingPermission: vi.fn(),
 }));
 
 const flowMocks = vi.hoisted(() => ({
@@ -94,6 +95,31 @@ describe("PermissionsSection", () => {
     await waitFor(() => {
       expect(flowMocks.requestPermissionWithFlow).toHaveBeenCalledWith("accessibility");
     });
+  });
+
+  it("offers restart instead of requesting Screen Recording again", async () => {
+    commandMocks.doPermissionsCheck.mockResolvedValue({
+      screenRecording: "restartRequired",
+      microphone: "granted",
+      accessibility: "granted",
+    });
+    commandMocks.checkAccessibilityPermissionLiveCmd.mockResolvedValue(
+      "granted"
+    );
+
+    render(<PermissionsSection />);
+
+    fireEvent.click(
+      await screen.findByTestId("permission-restart-screen-recording")
+    );
+    await waitFor(() => {
+      expect(
+        commandMocks.restartAfterScreenRecordingPermission
+      ).toHaveBeenCalledTimes(1);
+    });
+    expect(flowMocks.requestPermissionWithFlow).not.toHaveBeenCalledWith(
+      "screenRecording"
+    );
   });
 
   it("opens System Settings from Manage on a granted permission", async () => {

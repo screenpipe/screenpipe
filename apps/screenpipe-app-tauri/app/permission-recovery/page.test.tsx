@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   stopScreenpipe: vi.fn(async () => undefined),
   spawnScreenpipe: vi.fn(async () => undefined),
   closeWindow: vi.fn(async () => undefined),
+  restartAfterScreenRecordingPermission: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/lib/hooks/use-platform", () => ({
@@ -38,6 +39,8 @@ vi.mock("@/lib/utils/tauri", () => ({
     stopScreenpipe: mocks.stopScreenpipe,
     spawnScreenpipe: mocks.spawnScreenpipe,
     closeWindow: mocks.closeWindow,
+    restartAfterScreenRecordingPermission:
+      mocks.restartAfterScreenRecordingPermission,
   },
 }));
 
@@ -137,6 +140,32 @@ describe("permission recovery wheel", () => {
       expect(mocks.requestPermissionWithFlow).toHaveBeenCalledWith(
         "screenRecording"
       )
+    );
+  });
+
+  it("replaces the permission wheel with a restart action after grant", async () => {
+    mocks.doPermissionsCheck.mockResolvedValue({
+      microphone: "granted",
+      accessibility: "granted",
+      screenRecording: "restartRequired",
+    });
+
+    render(<PermissionRecoveryPage />);
+
+    const prompt = await screen.findByTestId(
+      "permission-recovery-restart-prompt"
+    );
+    expect(prompt).toHaveTextContent("restart required");
+    expect(prompt).toHaveTextContent(
+      "screenpipe won't work until you restart."
+    );
+    expect(screen.queryByTestId("permission-row-screen")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("permission-recovery-restart-button"));
+    await waitFor(() =>
+      expect(
+        mocks.restartAfterScreenRecordingPermission
+      ).toHaveBeenCalledTimes(1)
     );
   });
 });

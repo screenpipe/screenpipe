@@ -377,6 +377,8 @@ const E2E_COMMANDS: &[&str] = &[
     "arm_capture_loop_silent_fault",
     "arm_sck_lookup_hang_fault",
     "screen_is_locked",
+    "set_screen_recording_restart_required",
+    "screen_recording_restart_requested",
     "recording_health_return_race",
     "owned_browser_visible",
     "owned_browser_detach",

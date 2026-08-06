@@ -9,6 +9,7 @@ import {
   Check,
   ChevronRight,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,7 @@ export const searchIndex: SettingsField[] = [
   },
 ];
 
-type RowStatus = "checking" | "granted" | "missing";
+type RowStatus = "checking" | "granted" | "missing" | "restart-required";
 
 function isGranted(status: OSPermissionStatus | undefined): boolean {
   return status === "granted" || status === "notNeeded";
@@ -72,24 +73,25 @@ function PermissionRow({
   secondaryAction?: React.ReactNode;
 }) {
   const missing = status === "missing";
+  const restartRequired = status === "restart-required";
   const granted = status === "granted";
 
   return (
     <Card
       data-testid={`permission-row-${id}`}
-      className={cn(missing && "border-destructive/40")}
+      className={cn((missing || restartRequired) && "border-destructive/40")}
     >
       <CardContent className="px-3 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              {missing ? (
+              {missing || restartRequired ? (
                 <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
               ) : null}
               <h3
                 className={cn(
                   "text-sm font-medium",
-                  missing && "text-destructive",
+                  (missing || restartRequired) && "text-destructive",
                 )}
               >
                 {title}
@@ -120,6 +122,17 @@ function PermissionRow({
                   Manage
                 </Button>
               </>
+            ) : restartRequired ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2.5 text-xs gap-1"
+                onClick={onEnable}
+                data-testid={`permission-restart-${id}`}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Restart
+              </Button>
             ) : (
               <Button
                 variant="outline"
@@ -207,6 +220,7 @@ function RequiredPermissions() {
 
   const rowStatus = (perm: OSPermissionStatus | undefined): RowStatus => {
     if (!statuses) return "checking";
+    if (perm === "restartRequired") return "restart-required";
     return isGranted(perm) ? "granted" : "missing";
   };
 
@@ -248,18 +262,27 @@ function RequiredPermissions() {
       <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
         Required
       </h2>
-      {rows.map((row) => (
-        <PermissionRow
-          key={row.id}
-          id={row.id}
-          title={row.title}
-          description={row.description}
-          status={rowStatus(statuses?.[row.statusKey])}
-          busy={busyId === row.id}
-          onEnable={() => void runAction(row.id, row.permission, "request")}
-          onManage={() => void runAction(row.id, row.permission, "open")}
-        />
-      ))}
+      {rows.map((row) => {
+        const status = rowStatus(statuses?.[row.statusKey]);
+        return (
+          <PermissionRow
+            key={row.id}
+            id={row.id}
+            title={row.title}
+            description={row.description}
+            status={status}
+            busy={busyId === row.id}
+            onEnable={() => {
+              if (status === "restart-required") {
+                void commands.restartAfterScreenRecordingPermission();
+              } else {
+                void runAction(row.id, row.permission, "request");
+              }
+            }}
+            onManage={() => void runAction(row.id, row.permission, "open")}
+          />
+        );
+      })}
     </div>
   );
 }

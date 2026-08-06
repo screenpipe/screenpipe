@@ -709,6 +709,16 @@
       "notes": "Opt-in no-onboarding seed verifies onboarding redirect."
     },
     {
+      "spec": "screen-recording-restart.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["onboarding", "os-integration", "real-ui-e2e", "tauri-command"],
+      "features": ["onboarding", "permission-recovery"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "A deterministic post-Later TCC mismatch drives the packaged onboarding UI through the explicit restart button and into the native restart command without destroying the WebDriver session."
+    },
+    {
       "spec": "owned-browser.spec.ts",
       "platforms": ["windows", "macos"],
       "layers": ["os-integration", "window-lifecycle"],

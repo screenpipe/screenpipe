@@ -401,6 +401,20 @@ async fn screen_is_locked() -> Result<bool, String> {
     Ok(screenpipe_engine::sleep_monitor::screen_is_locked())
 }
 
+/// Force the post-grant Screen Recording state without changing the runner's
+/// real macOS TCC database.
+#[command]
+fn set_screen_recording_restart_required(required: bool) -> Result<(), String> {
+    crate::permissions::e2e_set_screen_recording_restart_required(required);
+    Ok(())
+}
+
+/// Read back whether the explicit restart button reached the native command.
+#[command]
+fn screen_recording_restart_requested() -> bool {
+    crate::permissions::e2e_screen_recording_restart_requested()
+}
+
 /// E2E-only accelerated reproduction of an idle capture heartbeat pause that
 /// recovers as the user returns. The real incident accumulated 114 idle stale
 /// checks, then the first input both woke capture and crossed the attended
@@ -504,6 +518,8 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             arm_capture_loop_silent_fault,
             arm_sck_lookup_hang_fault,
             screen_is_locked,
+            set_screen_recording_restart_required,
+            screen_recording_restart_requested,
             recording_health_return_race,
             owned_browser_visible,
             owned_browser_detach,
