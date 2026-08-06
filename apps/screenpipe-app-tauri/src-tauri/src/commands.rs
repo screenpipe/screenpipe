@@ -285,6 +285,22 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
     is_enterprise_build(&app_handle)
 }
 
+/// Whether an automated environment has force-disabled telemetry
+/// (`SCREENPIPE_DISABLE_TELEMETRY` / `GITHUB_ACTIONS` / `CI`).
+///
+/// The Rust senders already consult
+/// [`screenpipe_engine::analytics::telemetry_disabled_by_env`] directly, but the
+/// webview cannot: its PostHog gate in `app/providers.tsx` only sees build-time
+/// `process.env`, so a runtime env var never reaches it. Without this command a
+/// CI run of the shipped bundle still fires `$identify` and mints a real
+/// PostHog person — which is exactly how the Docker AppImage smoke test came to
+/// account for a quarter of weekly "app users".
+#[tauri::command]
+#[specta::specta]
+pub fn is_telemetry_disabled_by_env() -> bool {
+    screenpipe_engine::analytics::telemetry_disabled_by_env()
+}
+
 /// Return the macOS bundle identifier of the running app
 /// (e.g. `screenpi.pe`, `screenpi.pe.beta`, `screenpi.pe.dev`,
 /// `screenpi.pe.enterprise`). The onboarding stuck-screen surfaces this so

@@ -16,6 +16,7 @@ import {
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
+import { resolveTelemetryDisabledByEnv, shouldIdentifyInPostHog } from "@/lib/telemetry-env";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
@@ -1659,36 +1660,65 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// PostHog opt-in/out on the next boot. See lib/analytics-id.
 		cacheAnalyticsEnabled(settings.analyticsEnabled);
 
-		const clerkId = settings.user?.clerk_id || undefined;
-		const distinctId = clerkId || settings.analyticsId;
+		let cancelled = false;
 
-		if (clerkId) {
-			try { posthog.alias(clerkId); } catch {}
-		}
+		const identifyNow = () => {
+			const clerkId = settings.user?.clerk_id || undefined;
+			const distinctId = clerkId || settings.analyticsId;
 
-		const baseProps = {
-			email: settings.user?.email,
-			name: settings.user?.name,
-			user_id: settings.user?.id,
-			clerk_id: clerkId,
-			github_username: settings.user?.github_username,
-			website: settings.user?.website,
-			contact: settings.user?.contact,
-			cloud_subscribed: !!settings.user?.cloud_subscribed,
-			app_entitled: !!(settings.user as any)?.app_entitled,
-			subscription_plan: (settings.user as any)?.subscription_plan,
-			machine_analytics_id: settings.analyticsId,
+			if (clerkId) {
+				try { posthog.alias(clerkId); } catch {}
+			}
+
+			const baseProps = {
+				email: settings.user?.email,
+				name: settings.user?.name,
+				user_id: settings.user?.id,
+				clerk_id: clerkId,
+				github_username: settings.user?.github_username,
+				website: settings.user?.website,
+				contact: settings.user?.contact,
+				cloud_subscribed: !!settings.user?.cloud_subscribed,
+				app_entitled: !!(settings.user as any)?.app_entitled,
+				subscription_plan: (settings.user as any)?.subscription_plan,
+				machine_analytics_id: settings.analyticsId,
+			};
+
+			getVersion()
+				.then((appVersion) => {
+					if (cancelled) return;
+					posthog.identify(distinctId, { ...baseProps, app_version: appVersion });
+				})
+				.catch(() => {
+					if (cancelled) return;
+					posthog.identify(distinctId, baseProps);
+				});
 		};
 
-		getVersion()
-			.then((appVersion) => {
-				posthog.identify(distinctId, { ...baseProps, app_version: appVersion });
-			})
-			.catch(() => {
-				posthog.identify(distinctId, baseProps);
-			});
+		// alias()/identify() are what actually mint a PostHog person under
+		// `person_profiles: "identified_only"`, so they must clear BOTH opt-out
+		// signals before running:
+		//
+		//  - settings.analyticsEnabled — the user's own preference. providers.tsx
+		//    can only read the localStorage cache, which is EMPTY on a fresh
+		//    profile, so it opt_in's by default. Without this check a user who
+		//    has analytics turned off is still identified once on first boot.
+		//  - the environment guard (CI / SCREENPIPE_DISABLE_TELEMETRY), which is
+		//    known only to Rust. See lib/telemetry-env.
+		void resolveTelemetryDisabledByEnv().then((envDisabled) => {
+			if (cancelled) return;
+			if (!shouldIdentifyInPostHog({ analyticsEnabled: settings.analyticsEnabled, envDisabled })) {
+				try { posthog.opt_out_capturing(); } catch {}
+				return;
+			}
+			identifyNow();
+		});
+
+		return () => {
+			cancelled = true;
+		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settings.analyticsId, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
+	}, [settings.analyticsId, settings.analyticsEnabled, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
 	useEffect(() => {

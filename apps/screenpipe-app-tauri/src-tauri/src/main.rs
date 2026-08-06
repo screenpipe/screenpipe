@@ -528,7 +528,9 @@ async fn main() {
         .map(|enabled| !enabled)
         .unwrap_or(false)
         || screenpipe_engine::analytics::telemetry_disabled_by_env();
-    let _posthog_disabled = telemetry_disabled;
+    // The webview gets this same decision through the
+    // `is_telemetry_disabled_by_env` command (see commands.rs); it cannot read
+    // the process env itself.
 
     let app_version = env!("CARGO_PKG_VERSION");
     let sentry_guard = if !telemetry_disabled {
